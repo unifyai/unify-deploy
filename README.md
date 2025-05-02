@@ -13,7 +13,7 @@ This project provides a communication API with multiple Twilio and Google integr
 2. Run locally with Uvicorn:
 
    ```bash
-   uvicorn main:app --reload --port 8000
+   uvicorn main:app --reload --port 8080
    ```
 
 3. The root health endpoint is available at:
