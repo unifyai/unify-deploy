@@ -4,5 +4,6 @@ twilio
 httpx
 python-dotenv
 livekit
+livekit-api
 google-api-python-client
 unify
