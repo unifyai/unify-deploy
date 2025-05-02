@@ -17,10 +17,16 @@ load_dotenv()
 
 router = APIRouter()
 
+with open(os.environ["GCP_SA_KEY"], "r") as f:
+    creds_json = json.load(f)
+
 # Google Admin Directory API settings
 def get_admin_service():
-    creds, _ = default(scopes=["https://www.googleapis.com/auth/admin.directory.user"])
-    creds = creds.with_subject("dan@unify.ai")
+    creds = Credentials.from_service_account_info(
+        creds_json, 
+        scopes=["https://www.googleapis.com/auth/admin.directory.user"], 
+        subject="dan@unify.ai"
+    )
     service = build("admin", "directory_v1", credentials=creds)
     return service
 
@@ -31,8 +37,11 @@ def get_gmail_service(sender_email: str):
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/gmail.readonly",
     ]
-    creds, _ = default(scopes=scopes)
-    creds = creds.with_subject(sender_email)
+    creds = Credentials.from_service_account_info(
+        creds_json, 
+        scopes=scopes,
+        subject=sender_email
+    )
     return build("gmail", "v1", credentials=creds)
 
 @router.post("/create", status_code=201)
