@@ -6,4 +6,4 @@ python-dotenv
 livekit
 livekit-api
 google-api-python-client
-unify
+git+https://github.com/unifyai/unify
