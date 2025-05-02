@@ -25,22 +25,30 @@ jobs:
         project_id: ${{ env.GCP_PROJECT }}
         service_account_key: ${{ secrets.GCP_SA_KEY }}
         export_default_credentials: true
+      
+    - name: Create Artifact Registry Repository
+      run: |
+        gcloud artifacts repositories create ${{ env.SERVICE_NAME }}-repo \
+          --repository-format=docker \
+          --location=$REGION \
+          --description="FastAPI Docker image"
 
-    - name: Configure Docker for Artifact Registry
-      run: gcloud auth configure-docker gcr.io
+    - name: Configure Docker for GCR
+      run: |
+        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
 
     - name: Build Docker image
       run: |
-        docker build -t gcr.io/${{ env.GCP_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+        docker build -t gcr.io/${{ env.GCP_PROJECT }}/${{ env.SERVICE_NAME }}-repo/${{ env.IMAGE_NAME }}:${{ github.sha }} .
 
     - name: Push Docker image
       run: |
-        docker push gcr.io/${{ env.GCP_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        docker push gcr.io/${{ env.GCP_PROJECT }}/${{ env.SERVICE_NAME }}-repo/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
     - name: Deploy to Cloud Run
       run: |
         gcloud run deploy $SERVICE_NAME \
-          --image gcr.io/${{ env.GCP_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --image gcr.io/${{ env.GCP_PROJECT }}/${{ env.SERVICE_NAME }}-repo/${{ env.IMAGE_NAME }}:${{ github.sha }} \
           --region $REGION \
           --platform managed \
           --allow-unauthenticated \
