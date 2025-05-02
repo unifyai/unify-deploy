@@ -41,7 +41,9 @@ COPY . .
 RUN python main.py download-files
 
 # expose healthcheck port
-EXPOSE 8081
+# EXPOSE 8081
+
+EXPOSE 8080
 
 # Run the application.
 CMD ["python", "main.py", "start"]

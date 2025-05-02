@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'livekit/**'
 
 env:
   SERVICE_NAME: unity-comms-app
