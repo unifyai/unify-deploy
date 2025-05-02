@@ -17,21 +17,6 @@ load_dotenv()
 
 router = APIRouter()
 
-# Load and validate service account JSON from env var
-# key_json = os.getenv("GMAIL_KEY")
-# if not key_json:
-#     logging.error("Missing GMAIL_KEY environment variable")
-#     raise Exception("Missing GMAIL_KEY environment variable")
-# try:
-#     service_account_info = json.loads(key_json)
-#     client_email = service_account_info.get("client_email")
-#     private_key = service_account_info.get("private_key")
-#     if not client_email or not private_key:
-#         raise ValueError("Invalid GMAIL_KEY contents: client_email or private_key missing")
-# except Exception as e:
-#     logging.error("Error parsing GMAIL_KEY: %s", e)
-#     raise
-
 # Google Admin Directory API settings
 def get_admin_service():
     creds, _ = default(scopes=["https://www.googleapis.com/auth/admin.directory.user"])
