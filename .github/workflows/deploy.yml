@@ -1,0 +1,44 @@
+name: Build and Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  SERVICE_NAME: unity-comms-app
+  IMAGE_NAME: unity-comms-app-image
+  REGION: us-central1
+  GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        project_id: ${{ env.GCP_PROJECT }}
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        export_default_credentials: true
+
+    - name: Build Docker image
+      run: |
+        docker build -t gcr.io/${{ env.GCP_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+    - name: Push Docker image
+      run: |
+        docker push gcr.io/${{ env.GCP_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy $SERVICE_NAME \
+          --image gcr.io/${{ env.GCP_PROJECT }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --region $REGION \
+          --platform managed \
+          --allow-unauthenticated \
+          --set-env-vars TWLIO_ACCOUNT_SID=${{ secrets.TWLIO_ACCOUNT_SID }},TWLIO_AUTH_TOKEN=${{ secrets.TWLIO_AUTH_TOKEN }},TWLIO_API_SID=${{ secrets.TWLIO_API_SID }},TWLIO_API_SECRET=${{ secrets.TWLIO_API_SECRET }},TWIML_SIP_USERNAME=${{ secrets.TWIML_SIP_USERNAME }},TWIML_SIP_PASSWORD=${{ secrets.TWIML_SIP_PASSWORD }},LIVEKIT_URL=${{ secrets.LIVEKIT_URL }},LIVEKIT_API_KEY=${{ secrets.LIVEKIT_API_KEY }},LIVEKIT_API_SECRET=${{ secrets.LIVEKIT_API_SECRET }},LIVEKIT_SIP_URI=${{ secrets.LIVEKIT_SIP_URI }},UNIFY_KEY=${{ secrets.UNIFY_KEY }},UNIFY_COMMS_URL=${{ secrets.UNIFY_COMMS_URL }},GMAIL_KEY=${{ secrets.GMAIL_SA_KEY }}

@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+twilio
+httpx
+python-dotenv
+livekit
+google-api-python-client
+unify
