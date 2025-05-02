@@ -11,7 +11,7 @@ env:
   IMAGE_NAME: unity-comms-app-image
   REGION: us-central1
   GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
-  GMAIL_KEY='${{ secrets.GCP_SA_KEY }}'
+  GMAIL_KEY: '${{ secrets.GCP_SA_KEY }}'
 
 jobs:
   build-and-deploy:
