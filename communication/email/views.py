@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 import httpx
 from google.oauth2.service_account import Credentials
+from google.auth import default
 from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -17,27 +18,24 @@ load_dotenv()
 router = APIRouter()
 
 # Load and validate service account JSON from env var
-key_json = os.getenv("GMAIL_KEY")
-if not key_json:
-    logging.error("Missing GMAIL_KEY environment variable")
-    raise Exception("Missing GMAIL_KEY environment variable")
-try:
-    service_account_info = json.loads(key_json)
-    client_email = service_account_info.get("client_email")
-    private_key = service_account_info.get("private_key")
-    if not client_email or not private_key:
-        raise ValueError("Invalid GMAIL_KEY contents: client_email or private_key missing")
-except Exception as e:
-    logging.error("Error parsing GMAIL_KEY: %s", e)
-    raise
+# key_json = os.getenv("GMAIL_KEY")
+# if not key_json:
+#     logging.error("Missing GMAIL_KEY environment variable")
+#     raise Exception("Missing GMAIL_KEY environment variable")
+# try:
+#     service_account_info = json.loads(key_json)
+#     client_email = service_account_info.get("client_email")
+#     private_key = service_account_info.get("private_key")
+#     if not client_email or not private_key:
+#         raise ValueError("Invalid GMAIL_KEY contents: client_email or private_key missing")
+# except Exception as e:
+#     logging.error("Error parsing GMAIL_KEY: %s", e)
+#     raise
 
 # Google Admin Directory API settings
 def get_admin_service():
-    creds = Credentials.from_service_account_info(
-        service_account_info,
-        scopes=["https://www.googleapis.com/auth/admin.directory.user"],
-        subject="dan@unify.ai",
-    )
+    creds, _ = default(scopes=["https://www.googleapis.com/auth/admin.directory.user"])
+    creds = creds.with_subject("dan@unify.ai")
     service = build("admin", "directory_v1", credentials=creds)
     return service
 
@@ -48,11 +46,8 @@ def get_gmail_service(sender_email: str):
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/gmail.readonly",
     ]
-    creds = Credentials.from_service_account_info(
-        service_account_info,
-        scopes=scopes,
-        subject=sender_email,
-    )
+    creds, _ = default(scopes=scopes)
+    creds = creds.with_subject(sender_email)
     return build("gmail", "v1", credentials=creds)
 
 @router.post("/create", status_code=201)
