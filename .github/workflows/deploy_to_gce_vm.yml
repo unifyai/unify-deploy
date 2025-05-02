@@ -1,0 +1,56 @@
+name: Build and Deploy Minimal LiveKit to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'livekit/**'
+
+env:
+  SERVICE_NAME: unity-livekit-app
+  AR_NAME: unity-livekit-app-repo
+  IMAGE_NAME: unity-livekit-app-image
+  REGION: us-central1
+  GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Auth into Google Cloud
+      uses: 'google-github-actions/auth@v2'
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        version: 'latest'
+        project_id: ${{ env.GCP_PROJECT }}
+
+    - name: Configure Docker for Artifact Registry
+      run: |
+        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+    - name: Build Docker image
+      run: |
+        docker build -t ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+    - name: Push Docker image
+      run: |
+        docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy $SERVICE_NAME \
+          --image ${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_NAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --region $REGION \
+          --platform managed \
+          --allow-unauthenticated \
+          --service-account ${{ secrets.SA_EMAIL }} \
+          --set-env-vars LIVEKIT_URL=${{ secrets.LIVEKIT_URL }},LIVEKIT_API_KEY=${{ secrets.LIVEKIT_API_KEY }},LIVEKIT_API_SECRET=${{ secrets.LIVEKIT_API_SECRET }},DEEPGRAM_API_KEY=${{ secrets.DEEPGRAM_API_KEY }},CARTESIA_API_KEY=${{ secrets.CARTESIA_API_KEY }},OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
