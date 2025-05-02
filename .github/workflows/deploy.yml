@@ -11,6 +11,7 @@ env:
   IMAGE_NAME: unity-comms-app-image
   REGION: us-central1
   GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+  GMAIL_KEY='${{ secrets.GCP_SA_KEY }}'
 
 jobs:
   build-and-deploy:
@@ -23,19 +24,13 @@ jobs:
     - name: Auth into Google Cloud
       uses: 'google-github-actions/auth@v2'
       with:
-        credentials_json: '${{ secrets.GCP_SA_KEY }}'
+        credentials_json: ${{ env.GMAIL_KEY }}
 
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
       with:
         version: 'latest'
         project_id: ${{ env.GCP_PROJECT }}
-
-    # - name: Login to Docker Hub
-    #   uses: docker/login-action@v2
-    #   with:
-    #     username: ${{ secrets.DOCKERHUB_USERNAME }}
-    #     password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     - name: Configure Docker for Artifact Registry
       run: |
@@ -56,4 +51,4 @@ jobs:
           --region $REGION \
           --platform managed \
           --allow-unauthenticated \
-          --set-env-vars TWILIO_ACCOUNT_SID=${{ secrets.TWILIO_ACCOUNT_SID }},TWILIO_AUTH_TOKEN=${{ secrets.TWILIO_AUTH_TOKEN }},TWILIO_API_SID=${{ secrets.TWILIO_API_SID }},TWILIO_API_SECRET=${{ secrets.TWILIO_API_SECRET }},TWIML_SIP_USERNAME=${{ secrets.TWIML_SIP_USERNAME }},TWIML_SIP_PASSWORD=${{ secrets.TWIML_SIP_PASSWORD }},LIVEKIT_URL=${{ secrets.LIVEKIT_URL }},LIVEKIT_API_KEY=${{ secrets.LIVEKIT_API_KEY }},LIVEKIT_API_SECRET=${{ secrets.LIVEKIT_API_SECRET }},LIVEKIT_SIP_URI=${{ secrets.LIVEKIT_SIP_URI }},UNIFY_KEY=${{ secrets.UNIFY_KEY }},UNIFY_COMMS_URL=${{ secrets.UNIFY_COMMS_URL }},GMAIL_KEY='${{ secrets.GCP_SA_KEY }}'
+          --set-env-vars TWILIO_ACCOUNT_SID=${{ secrets.TWILIO_ACCOUNT_SID }},TWILIO_AUTH_TOKEN=${{ secrets.TWILIO_AUTH_TOKEN }},TWILIO_API_SID=${{ secrets.TWILIO_API_SID }},TWILIO_API_SECRET=${{ secrets.TWILIO_API_SECRET }},TWIML_SIP_USERNAME=${{ secrets.TWIML_SIP_USERNAME }},TWIML_SIP_PASSWORD=${{ secrets.TWIML_SIP_PASSWORD }},LIVEKIT_URL=${{ secrets.LIVEKIT_URL }},LIVEKIT_API_KEY=${{ secrets.LIVEKIT_API_KEY }},LIVEKIT_API_SECRET=${{ secrets.LIVEKIT_API_SECRET }},LIVEKIT_SIP_URI=${{ secrets.LIVEKIT_SIP_URI }},UNIFY_KEY=${{ secrets.UNIFY_KEY }},UNIFY_COMMS_URL=${{ secrets.UNIFY_COMMS_URL }},GMAIL_KEY=${{ env.GMAIL_KEY }}
