@@ -8,7 +8,7 @@ on:
 env:
   SERVICE_NAME: unity-comms-app
   IMAGE_NAME: unity-comms-app-image
-  REGION: europe-west1-b
+  REGION: us-central1
   GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
 
 jobs:
@@ -25,6 +25,9 @@ jobs:
         project_id: ${{ env.GCP_PROJECT }}
         service_account_key: ${{ secrets.GCP_SA_KEY }}
         export_default_credentials: true
+
+    - name: Configure Docker for Artifact Registry
+      run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
 
     - name: Build Docker image
       run: |
