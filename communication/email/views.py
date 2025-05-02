@@ -18,7 +18,7 @@ load_dotenv()
 router = APIRouter()
 
 # with open(os.environ["GCP_SA_KEY"], "r") as f:
-creds_json = json.loads(os.environ["GCP_SA_KEY_JSON"])
+creds_json = json.loads(os.environ["GCP_SA_KEY"])
 
 # Google Admin Directory API settings
 def get_admin_service():
