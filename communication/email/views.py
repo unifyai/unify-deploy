@@ -37,6 +37,7 @@ def get_gmail_service(sender_email: str):
     scopes = [
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
     ]
     creds = Credentials.from_service_account_info(
         creds_json, 
@@ -132,12 +133,12 @@ async def reply_email(request: Request):
 
     # search for unread messages newer than 1 day
     query = "is:unread newer_than:1d"
-    res = service.users().messages().list(userId="me", q=query, maxResults=1).execute()
+    res = service.users().messages().list(userId="me", q=query).execute()
     msgs = res.get("messages", [])
     logging.warning(f"Full response obtained: {len(msgs)}")
     if not msgs:
         return {"success": False, "error": "No unread messages."}
-    msg_id = msgs[0]["id"]
+    msg_id = msgs[-1]["id"]
     # get full message
     orig = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
     thread_id = orig.get("threadId")
@@ -159,11 +160,13 @@ async def reply_email(request: Request):
         data_b = payload.get("body", {}).get("data", "")
         if data_b:
             body = base64.urlsafe_b64decode(data_b).decode()
+
     # mark as read
     logging.warning(f"Message body: {body}")
     service.users().messages().modify(
         userId="me", id=msg_id, body={"removeLabelIds":["UNREAD"]}
     ).execute()
+    logging.warning(f"Message marked as read: {msg_id}")
     # build threaded reply
     reply_subj = subj if subj.lower().startswith("re:") else f"Re: {subj}"
     mime = MIMEMultipart()
