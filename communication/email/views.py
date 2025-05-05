@@ -132,11 +132,14 @@ async def reply_email(request: Request):
     # fetch history entries
     service = get_gmail_service(email_address)
     history_resp = service.users().history().list(
-        userId="me", startHistoryId=int(history_id) - 1
+        userId="me", startHistoryId=int(history_id), historyTypes=["messageAdded"]
     ).execute()
-    msg_ids = [added["message"]["id"]
-               for h in history_resp.get("history", [])
-               for added in h.get("messagesAdded", [])]
+    logging.warning("Full history response: %s", json.dumps(history_resp, indent=2))
+    msg_ids = [
+        added["message"]["id"]
+        for h in history_resp.get("history", [])
+        for added in h.get("messagesAdded", [])
+    ]
     logging.warning(f"Found {len(msg_ids)} new messages to reply")
     if not msg_ids:
         return {"success": False, "error": "No new messages to reply"}
