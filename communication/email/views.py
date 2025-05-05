@@ -120,6 +120,7 @@ async def send_email(request: Request):
 async def reply_email(request: Request):
     envelope = await request.json()
     pub_message = envelope.get("message")
+    logging.warning("Full envelope: %s", json.dumps(envelope, indent=2))
     if not pub_message or "data" not in pub_message:
         raise HTTPException(status_code=400, detail="Invalid Pub/Sub message")
     data_str = base64.urlsafe_b64decode(pub_message["data"]).decode()
