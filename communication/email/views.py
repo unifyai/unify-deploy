@@ -12,11 +12,13 @@ from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import base64
-import time
-
+import unify
 load_dotenv()
 
 router = APIRouter()
+client = unify.Unify(traced=True)
+client.set_endpoint("o4-mini@openai")
+client.set_system_message("You are a helpful assistant.")
 
 # with open(os.environ["GCP_SA_KEY"], "r") as f:
 creds_json = json.loads(os.environ["GCP_SA_KEY"])
@@ -162,11 +164,19 @@ async def reply_email(request: Request):
             body = base64.urlsafe_b64decode(data_b).decode()
 
     # mark as read
-    logging.warning(f"Message body: {body}")
     service.users().messages().modify(
         userId="me", id=msg_id, body={"removeLabelIds":["UNREAD"]}
     ).execute()
-    logging.warning(f"Message marked as read: {msg_id}")
+
+    # generate reply
+    messages = [
+        {"role": "user", "content": body},
+    ]
+    # Call Unify ChatCompletion
+    response = client.generate(
+        messages=messages,
+    )
+
     # build threaded reply
     reply_subj = subj if subj.lower().startswith("re:") else f"Re: {subj}"
     mime = MIMEMultipart()
@@ -177,13 +187,12 @@ async def reply_email(request: Request):
     if orig_msg_id:
         mime["In-Reply-To"] = orig_msg_id
         mime["References"] = orig_msg_id
-    reply_body = f"Automated reply:\n\nYou wrote:\n{body}"
+    reply_body = f"Automated reply:\n{response}"
     mime.attach(MIMEText(reply_body, "plain"))
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
     sent = service.users().messages().send(
         userId="me", body={"raw": raw, "threadId": thread_id}
     ).execute()
-    logging.warning(f"Reply sent: {sent}")
     return {"success": True, "replyId": sent.get("id")}
 
 @router.post("/watch")
