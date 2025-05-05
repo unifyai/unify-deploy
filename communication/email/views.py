@@ -126,6 +126,7 @@ async def reply_email(request: Request):
     push_data = json.loads(data_str)
     history_id = push_data.get("historyId")
     email_address = push_data.get("emailAddress")
+    logging.info(f"Received email reply from {email_address} with historyId {history_id}")
     if not history_id or not email_address:
         raise HTTPException(status_code=400, detail="Missing historyId or emailAddress")
     # fetch history entries
@@ -144,16 +145,17 @@ async def reply_email(request: Request):
     ).execute()
     thread_id = orig_msg.get("threadId")
     headers = orig_msg.get("payload", {}).get("headers", [])
-    to = next((h["value"] for h in headers if h.get("name") == "From"), None)
-    frm = next((h["value"] for h in headers if h.get("name") == "To"), None)
+    frm = next((h["value"] for h in headers if h.get("name") == "From"), None)
+    to = next((h["value"] for h in headers if h.get("name") == "To"), None)
     subj = next((h["value"] for h in headers if h.get("name") == "Subject"), "")
     orig_msg_id = next((h["value"] for h in headers if h.get("name") == "Message-ID"), None)
     snippet = orig_msg.get("snippet", "")
+    logging.info(f"Received email reply from {frm} to {to} with subject {subj}")
     # build threaded reply
     reply_subj = subj if subj.lower().startswith("re:") else f"Re: {subj}"
     mime = MIMEMultipart()
-    mime["to"] = to
-    mime["from"] = frm
+    mime["to"] = frm
+    mime["from"] = to
     mime["subject"] = reply_subj
     if orig_msg_id:
         mime["In-Reply-To"] = orig_msg_id
