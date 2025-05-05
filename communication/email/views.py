@@ -12,6 +12,7 @@ from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import base64
+import time
 
 load_dotenv()
 
@@ -69,7 +70,7 @@ async def create_email_user(request: Request):
         # optional watch call
         async with httpx.AsyncClient() as client_http:
             watch_res = await client_http.post(
-                f"{os.getenv("UNIFY_COMMS_URL")}/api/email/watch",
+                f"{os.getenv('UNIFY_COMMS_URL')}/api/email/watch",
                 json={"userEmail": primary_email},
             )
         return {"success": True, "user": res}
@@ -120,58 +121,66 @@ async def send_email(request: Request):
 async def reply_email(request: Request):
     envelope = await request.json()
     pub_message = envelope.get("message")
-    logging.warning("Full envelope: %s", json.dumps(envelope, indent=2))
     if not pub_message or "data" not in pub_message:
         raise HTTPException(status_code=400, detail="Invalid Pub/Sub message")
     data_str = base64.urlsafe_b64decode(pub_message["data"]).decode()
     push_data = json.loads(data_str)
-    logging.warning("Full history response: %s", data_str)
-    history_id = push_data.get("historyId")
     email_address = push_data.get("emailAddress")
-    logging.warning(f"Received email reply from {email_address} with historyId {history_id}")
-    if not history_id or not email_address:
-        raise HTTPException(status_code=400, detail="Missing historyId or emailAddress")
-    # fetch history entries
+    if not email_address:
+        raise HTTPException(status_code=400, detail="Missing emailAddress")
     service = get_gmail_service(email_address)
-    history_resp = service.users().history().list(
-        userId="me", startHistoryId=int(history_id), historyTypes=["messageAdded"]
+
+    # search for unread messages newer than 1 day
+    query = "is:unread newer_than:1d"
+    res = service.users().messages().list(userId="me", q=query, maxResults=1).execute()
+    msgs = res.get("messages", [])
+    logging.warning(f"Full response obtained: {len(msgs)}")
+    if not msgs:
+        return {"success": False, "error": "No unread messages."}
+    msg_id = msgs[0]["id"]
+    # get full message
+    orig = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+    thread_id = orig.get("threadId")
+    headers = orig.get("payload", {}).get("headers", [])
+    frm = next((h["value"] for h in headers if h.get("name")=="From"), None)
+    to = next((h["value"] for h in headers if h.get("name")=="To"), None)
+    subj = next((h["value"] for h in headers if h.get("name")=="Subject"), "")
+    # decode message body
+    body = ""
+    payload = orig.get("payload", {})
+    if payload.get("parts"):
+        for part in payload["parts"]:
+            if part.get("mimeType")=="text/plain":
+                data_b = part.get("body", {}).get("data", "")
+                if data_b:
+                    body = base64.urlsafe_b64decode(data_b).decode()
+                    break
+    else:
+        data_b = payload.get("body", {}).get("data", "")
+        if data_b:
+            body = base64.urlsafe_b64decode(data_b).decode()
+    # mark as read
+    logging.warning(f"Message body: {body}")
+    service.users().messages().modify(
+        userId="me", id=msg_id, body={"removeLabelIds":["UNREAD"]}
     ).execute()
-    logging.warning("Full history response: %s", json.dumps(history_resp, indent=2))
-    msg_ids = [
-        added["message"]["id"]
-        for h in history_resp.get("history", [])
-        for added in h.get("messagesAdded", [])
-    ]
-    logging.warning(f"Found {len(msg_ids)} new messages to reply")
-    if not msg_ids:
-        return {"success": False, "error": "No new messages to reply"}
-    latest_id = msg_ids[-1]
-    orig_msg = service.users().messages().get(
-        userId="me", id=latest_id, format="full"
-    ).execute()
-    thread_id = orig_msg.get("threadId")
-    headers = orig_msg.get("payload", {}).get("headers", [])
-    frm = next((h["value"] for h in headers if h.get("name") == "From"), None)
-    to = next((h["value"] for h in headers if h.get("name") == "To"), None)
-    subj = next((h["value"] for h in headers if h.get("name") == "Subject"), "")
-    orig_msg_id = next((h["value"] for h in headers if h.get("name") == "Message-ID"), None)
-    snippet = orig_msg.get("snippet", "")
-    logging.warning(f"Received email reply from {frm} to {to} with subject {subj}")
     # build threaded reply
     reply_subj = subj if subj.lower().startswith("re:") else f"Re: {subj}"
     mime = MIMEMultipart()
     mime["to"] = frm
-    mime["from"] = to
+    mime["from"] = email_address
     mime["subject"] = reply_subj
+    orig_msg_id = next((h["value"] for h in headers if h.get("name")=="Message-ID"), None)
     if orig_msg_id:
         mime["In-Reply-To"] = orig_msg_id
         mime["References"] = orig_msg_id
-    reply_body = f"Automated reply:\n\nYou wrote:\n{snippet}"
+    reply_body = f"Automated reply:\n\nYou wrote:\n{body}"
     mime.attach(MIMEText(reply_body, "plain"))
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
     sent = service.users().messages().send(
         userId="me", body={"raw": raw, "threadId": thread_id}
     ).execute()
+    logging.warning(f"Reply sent: {sent}")
     return {"success": True, "replyId": sent.get("id")}
 
 @router.post("/watch")
