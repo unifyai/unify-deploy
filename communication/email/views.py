@@ -122,8 +122,9 @@ async def reply_email(request: Request):
     pub_message = envelope.get("message")
     if not pub_message or "data" not in pub_message:
         raise HTTPException(status_code=400, detail="Invalid Pub/Sub message")
-    data_str = base64.urlsafe_b64decode(pub_message["data"].encode()).decode()
+    data_str = base64.urlsafe_b64decode(pub_message["data"]).decode()
     push_data = json.loads(data_str)
+    logging.warning("Full history response: %s", data_str)
     history_id = push_data.get("historyId")
     email_address = push_data.get("emailAddress")
     logging.warning(f"Received email reply from {email_address} with historyId {history_id}")
