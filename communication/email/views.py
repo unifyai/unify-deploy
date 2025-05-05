@@ -67,15 +67,11 @@ async def create_email_user(request: Request):
         }
         res = service.users().insert(body=user_body).execute()
         # optional watch call
-        # watch_data = None
-        # watch_url = os.getenv("UNIFY_COMMS_URL")
-        # if watch_url:
-        #     async with httpx.AsyncClient() as client_http:
-        #         watch_res = await client_http.post(
-        #             f"{watch_url}/api/email/watch",
-        #             json={"userEmail": primary_email},
-        #         )
-        #         watch_data = watch_res.json()
+        async with httpx.AsyncClient() as client_http:
+            watch_res = await client_http.post(
+                f"{os.getenv("UNIFY_COMMS_URL")}/api/email/watch",
+                json={"userEmail": primary_email},
+            )
         return {"success": True, "user": res}
     except Exception as e:
         logging.error("Failed to create user: %s", e)
@@ -132,40 +128,62 @@ async def reply_email(request: Request):
     email_address = push_data.get("emailAddress")
     if not history_id or not email_address:
         raise HTTPException(status_code=400, detail="Missing historyId or emailAddress")
+    # fetch history entries
     service = get_gmail_service(email_address)
-    # Fetch history events since this historyId
-    history_resp = service.users().history().list(userId="me", startHistoryId=int(history_id)).execute()
-    histories = history_resp.get("history", [])
-    # Collect new message IDs
-    msg_ids = []
-    for h in histories:
-        for added in h.get("messagesAdded", []):
-            msg_ids.append(added["message"]["id"])
+    history_resp = service.users().history().list(
+        userId="me", startHistoryId=int(history_id)
+    ).execute()
+    msg_ids = [added["message"]["id"]
+               for h in history_resp.get("history", [])
+               for added in h.get("messagesAdded", [])]
     if not msg_ids:
         return {"success": False, "error": "No new messages to reply"}
     latest_id = msg_ids[-1]
-    # Get the full message
-    orig_msg = service.users().messages().get(userId="me", id=latest_id, format="full").execute()
+    orig_msg = service.users().messages().get(
+        userId="me", id=latest_id, format="full"
+    ).execute()
     thread_id = orig_msg.get("threadId")
     headers = orig_msg.get("payload", {}).get("headers", [])
-    # Extract important headers
     orig_msg_id = next((h["value"] for h in headers if h.get("name") == "Message-ID"), None)
     subj = next((h["value"] for h in headers if h.get("name") == "Subject"), "")
-    frm = next((h["value"] for h in headers if h.get("name") == "From"), None)
-    if not frm:
-        raise HTTPException(status_code=500, detail="Original From header not found")
-    # Build reply MIME
-    reply_body = "This is an automated threaded reply."
+    snippet = orig_msg.get("snippet", "")
+    # build threaded reply
     reply_subj = subj if subj.lower().startswith("re:") else f"Re: {subj}"
     mime = MIMEMultipart()
-    mime["to"] = frm
+    mime["to"] = email_address
     mime["from"] = email_address
     mime["subject"] = reply_subj
     if orig_msg_id:
         mime["In-Reply-To"] = orig_msg_id
         mime["References"] = orig_msg_id
+    reply_body = f"Automated reply:\n\nYou wrote:\n{snippet}"
     mime.attach(MIMEText(reply_body, "plain"))
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
-    sent = service.users().messages().send(userId="me", body={"raw": raw, "threadId": thread_id}).execute()
+    sent = service.users().messages().send(
+        userId="me", body={"raw": raw, "threadId": thread_id}
+    ).execute()
     return {"success": True, "replyId": sent.get("id")}
 
+@router.post("/watch")
+async def watch_email(request: Request):
+    data = await request.json()
+    user_email = data.get("userEmail")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Missing userEmail")
+    # Delegate credentials for the target Gmail user
+    creds = Credentials.from_service_account_info(
+        creds_json,
+        scopes=["https://www.googleapis.com/auth/gmail.modify"],
+        subject=user_email,
+    )
+    gmail_service = build("gmail", "v1", credentials=creds)
+    topic_name = "projects/gcp-project-runtime/topics/email-notifications"
+    watch_request = {
+        "labelIds": ["INBOX"],
+        "topicName": topic_name
+    }
+    watch_resp = gmail_service.users().watch(
+        userId="me",
+        body=watch_request,
+    ).execute()
+    return {"success": True, "historyId": watch_resp.get("historyId")}
