@@ -132,7 +132,7 @@ async def reply_email(request: Request):
     # fetch history entries
     service = get_gmail_service(email_address)
     history_resp = service.users().history().list(
-        userId="me", startHistoryId=int(history_id)
+        userId="me", startHistoryId=int(history_id) - 1
     ).execute()
     msg_ids = [added["message"]["id"]
                for h in history_resp.get("history", [])
