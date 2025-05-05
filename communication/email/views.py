@@ -144,14 +144,16 @@ async def reply_email(request: Request):
     ).execute()
     thread_id = orig_msg.get("threadId")
     headers = orig_msg.get("payload", {}).get("headers", [])
-    orig_msg_id = next((h["value"] for h in headers if h.get("name") == "Message-ID"), None)
+    to = next((h["value"] for h in headers if h.get("name") == "From"), None)
+    frm = next((h["value"] for h in headers if h.get("name") == "To"), None)
     subj = next((h["value"] for h in headers if h.get("name") == "Subject"), "")
+    orig_msg_id = next((h["value"] for h in headers if h.get("name") == "Message-ID"), None)
     snippet = orig_msg.get("snippet", "")
     # build threaded reply
     reply_subj = subj if subj.lower().startswith("re:") else f"Re: {subj}"
     mime = MIMEMultipart()
-    mime["to"] = email_address
-    mime["from"] = email_address
+    mime["to"] = to
+    mime["from"] = frm
     mime["subject"] = reply_subj
     if orig_msg_id:
         mime["In-Reply-To"] = orig_msg_id
