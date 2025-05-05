@@ -137,6 +137,7 @@ async def reply_email(request: Request):
     msg_ids = [added["message"]["id"]
                for h in history_resp.get("history", [])
                for added in h.get("messagesAdded", [])]
+    logging.warning(f"Found {len(msg_ids)} new messages to reply")
     if not msg_ids:
         return {"success": False, "error": "No new messages to reply"}
     latest_id = msg_ids[-1]
