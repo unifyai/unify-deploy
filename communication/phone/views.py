@@ -15,17 +15,93 @@ client = unify.Unify(traced=True)
 client.set_endpoint("o4-mini@openai")
 client.set_system_message("You are a helpful assistant.")
 
-@router.post("/call")
-async def call(To: str = Form(...)):
-    phone_number = To or ""
-    resp = VoiceResponse()
-    dial = resp.dial()
-    dial.sip(
-        f"sip:+{phone_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}",
-        username=os.getenv('TWIML_SIP_USERNAME'),
-        password=os.getenv('TWIML_SIP_PASSWORD')
+
+def get_twilio_client():
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    if not account_sid or not auth_token:
+        raise RuntimeError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set")
+    return TwilioClient(account_sid, auth_token)
+
+def add_user_to_conference(conference_name, from_number, to_number_uri):
+    twilio_client = get_twilio_client()
+
+    response = VoiceResponse()
+    dial = response.dial()
+    dial.conference(
+        conference_name,
+        startConferenceOnEnter=True,
+        endConferenceOnExit=True,
+        muted=False,
+        record="record-from-start",
+        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/conference-status",
+        status_callback_event=["leave", "end"],
+        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording-status",
+        recording_status_callback_event='completed',
     )
-    return Response(content=str(resp), media_type="text/xml")
+    response.append(dial)
+
+    call = twilio_client.calls.create(
+        to=to_number_uri,
+        from_=from_number, 
+        twiml=str(response)
+    )
+    return call.sid
+
+# @router.post("/call")
+# async def call(To: str = Form(...)):
+#     phone_number = To or ""
+#     resp = VoiceResponse()
+#     dial = resp.dial()
+#     dial.sip(
+#         f"sip:+{phone_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}",
+#         username=os.getenv('TWIML_SIP_USERNAME'),
+#         password=os.getenv('TWIML_SIP_PASSWORD')
+#     )
+#     return Response(content=str(resp), media_type="text/xml")
+
+@router.post("/call")
+async def call(To: str = Form(...), From: str = Form(...)):
+    twilio_number = To or ""
+    caller_number = From or ""
+
+    conference_name = f"Unity_{twilio_number[1:]}"
+    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+
+    # Put inbound caller into conference
+    resp_user = VoiceResponse()
+    dial_user = resp_user.dial()
+    dial_user.conference(
+        conference_name,
+        startConferenceOnEnter=True,
+        endConferenceOnExit=True,
+        muted=False,
+        record="record-from-start",
+        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/conference-status",
+        status_callback_event=["leave", "end"],
+        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording-status",
+        recording_status_callback_event='completed'
+    )
+
+    call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
+    return Response(content=str(resp_user), media_type="text/xml")
+
+@router.post("/call-out")
+async def call_out(request: Request):
+    data = await request.json()
+    phone_number = data.get("To")
+    twilio_number = data.get("From")
+    new_call = data.get("NewCall")
+    
+    new_call = new_call.lower() == "true"
+    conference_name = f"Unity_{twilio_number[1:]}"
+
+    if new_call:
+        sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+        call_sid = add_user_to_conference(conference_name, twilio_number, sip_uri)
+    
+    call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
+    return {"success": True, "call_sid": call_sid}
 
 @router.post("/text")
 async def text_message(Body: str = Form(...)):
@@ -47,21 +123,34 @@ async def text_message(Body: str = Form(...)):
     # Return XML
     return Response(content=str(twiml_resp), media_type="text/xml")
 
+@router.post("/send-text")
+async def send_text(request: Request):
+    data = await request.json()
+    To = data.get("To")
+    From = data.get("From")
+    Body = data.get("Body")
+
+    twilio_client = get_twilio_client()
+    twilio_client.messages.create(
+        to=To,
+        from_=From,
+        body=Body
+    )
+    return {"success": True}
+
 @router.post("/create")
 async def create_phone_number():
     # Initialize Twilio client
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-    client = TwilioClient(account_sid, auth_token)
+    twilio_client = get_twilio_client()
     # Search for available US mobile number
-    numbers = client.available_phone_numbers("US").local.list(
+    numbers = twilio_client.available_phone_numbers("US").local.list(
         limit=1, sms_enabled=True, voice_enabled=True
     )
     if not numbers:
         raise HTTPException(status_code=404, detail="No suitable phone numbers found.")
     record = numbers[0]
     # Purchase the number and configure webhooks
-    incoming = client.incoming_phone_numbers.create(
+    incoming = twilio_client.incoming_phone_numbers.create(
         phone_number=record.phone_number,
         voice_url=f"{os.getenv('UNIFY_COMMS_URL')}/phone/call",
         voice_method="POST",
@@ -91,11 +180,9 @@ async def delete_phone_number(request: Request):
     # Expect JSON body: { "phoneNumber": "+1234567890" }
     data = await request.json()
     phone_number = data.get("phoneNumber")
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-    client = TwilioClient(account_sid, auth_token)
+    twilio_client = get_twilio_client()
     # Find the purchased number by E.164
-    incoming_list = client.incoming_phone_numbers.list(
+    incoming_list = twilio_client.incoming_phone_numbers.list(
         phone_number=phone_number,
         limit=1
     )
@@ -103,5 +190,40 @@ async def delete_phone_number(request: Request):
         raise HTTPException(status_code=404, detail="Phone number not found")
     phone_sid = incoming_list[0].sid
     # Delete the number
-    client.incoming_phone_numbers(phone_sid).delete()
+    twilio_client.incoming_phone_numbers(phone_sid).delete()
     return {"success": True, "sid": phone_sid}
+
+@router.post("/conference-status")
+async def check_conference_status(ConferenceSid: str = Form(...)):
+    conference_sid = ConferenceSid or ""
+    if not conference_sid:
+        return {"success": False, "error": "ConferenceSid is required"}
+    
+    twilio_client = get_twilio_client()
+
+    participants = twilio_client.conferences(conference_sid).participants.list()
+    if len(participants) == 1:
+        twilio_client.conferences(conference_sid).update(status='completed')
+    return {"success": True}
+
+@router.post("/recording-status")
+async def check_recording_status(RecordingUrl: str = Form(...), CallSid: str = Form(...)):
+    recording_url = RecordingUrl or ""
+    call_sid = CallSid or ""
+    if not recording_url or not call_sid:
+        return {"success": False, "error": "RecordingUrl and CallSid are required"}
+    
+    # download link = recording_url, call db endpoint to store
+    return {"success": True, "recording_url": recording_url}
+
+@router.post("/send-digits")
+async def send_digits(request: Request):
+    data = await request.json()
+    To = data.get("To")
+    From = data.get("From")
+    Digits = data.get("Digits")
+    call_sid = data.get("CallSid") # todo!
+
+    twilio_client = get_twilio_client()
+    twilio_client.calls(call_sid).update(send_digits=Digits)
+    return {"success": True}

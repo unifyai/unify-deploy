@@ -172,6 +172,30 @@ async def reply_email(request: Request):
     messages = [
         {"role": "user", "content": body},
     ]
+    # messages = {
+    #         "latest_message": messages[-1],
+    #         "message_history": messages[:-1],
+    #     }
+    # resp = FirstTaskResponse.model_validate_json(resp)
+    # if not resp.task_was_requested:
+    # generate as usual
+    #         return
+    #     first_task = resp.first_task
+    #     self._task_log = unify.log(
+    #         context="Tasks",
+    #         session_id=SESSION_ID,
+    #         title=first_task.title,
+    #         description=first_task.description,
+    #         status="in progress",
+    #         start_at=first_task.start_at,
+    #         recurring=first_task.recurring,
+    #         new=True,
+    #     )
+    #     if first_task.should_create:
+    #         self._text_task_q.put(
+    #             (self._task_log.to_json(), first_task.description),
+    #         )
+
     # Call Unify ChatCompletion
     response = client.generate(
         messages=messages,
