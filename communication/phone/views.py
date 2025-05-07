@@ -34,9 +34,9 @@ def add_user_to_conference(conference_name, from_number, to_number_uri):
         endConferenceOnExit=True,
         muted=False,
         record="record-from-start",
-        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/conference-status",
-        status_callback_event=["leave", "end"],
-        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording-status",
+        # status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/conference-status",
+        # status_callback_event=["leave", "end"],
+        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
         recording_status_callback_event='completed',
     )
     response.append(dial)
@@ -54,7 +54,7 @@ def add_user_to_conference(conference_name, from_number, to_number_uri):
 #     resp = VoiceResponse()
 #     dial = resp.dial(
 #         record="record-from-start",
-#         recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording-status",
+#         recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
 #     )
 #     dial.sip(
 #         f"sip:+{phone_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}",
@@ -80,9 +80,9 @@ async def call(To: str = Form(...), From: str = Form(...)):
         endConferenceOnExit=True,
         muted=False,
         record="record-from-start",
-        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/conference-status",
-        status_callback_event=["leave", "end"],
-        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording-status",
+        # status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/conference-status",
+        # status_callback_event=["leave", "end"],
+        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
         recording_status_callback_event='completed'
     )
 
@@ -208,26 +208,28 @@ async def delete_phone_number(request: Request):
 
     return {"success": True, "sid": phone_sid}
 
-@router.post("/conference-status")
-async def check_conference_status(ConferenceSid: str = Form(...)):
-    conference_sid = ConferenceSid or ""
-    if not conference_sid:
-        return {"success": False, "error": "ConferenceSid is required"}
+# @router.post("/conference-status")
+# async def check_conference_status(ConferenceSid: str = Form(...)):
+#     conference_sid = ConferenceSid or ""
+#     if not conference_sid:
+#         return {"success": False, "error": "ConferenceSid is required"}
     
-    twilio_client = get_twilio_client()
+#     twilio_client = get_twilio_client()
 
-    participants = twilio_client.conferences(conference_sid).participants.list()
-    if len(participants) == 1:
-        twilio_client.conferences(conference_sid).update(status='completed')
-    return {"success": True}
+#     participants = twilio_client.conferences(conference_sid).participants.list()
+#     if len(participants) == 1:
+#         twilio_client.conferences(conference_sid).update(status='completed')
+#     return {"success": True}
 
-@router.post("/recording-status")
-async def check_recording_status(RecordingUrl: str = Form(...), CallSid: str = Form(...)):
+@router.post("/recording")
+async def check_recording_status(RecordingUrl: str = Form(...), ConferenceSid: str = Form(...)):
     recording_url = RecordingUrl or ""
-    call_sid = CallSid or ""
-    if not recording_url or not call_sid:
+    conference_sid = ConferenceSid or ""
+    if not recording_url or not conference_sid:
         return {"success": False, "error": "RecordingUrl and CallSid are required"}
     
+    twilio_client = get_twilio_client()
+    twilio_client.conferences(conference_sid).update(status='completed')
     # download link = recording_url, call db endpoint to store
     return {"success": True, "recording_url": recording_url}
 
