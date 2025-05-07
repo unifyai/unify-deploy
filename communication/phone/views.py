@@ -44,7 +44,9 @@ def add_user_to_conference(conference_name, from_number, to_number_uri):
     call = twilio_client.calls.create(
         to=to_number_uri,
         from_=from_number, 
-        twiml=str(response)
+        twiml=str(response),
+        sip_auth_username=os.getenv('TWIML_SIP_USERNAME'),
+        sip_auth_password=os.getenv('TWIML_SIP_PASSWORD'),
     )
     return call.sid
 
@@ -52,7 +54,10 @@ def add_user_to_conference(conference_name, from_number, to_number_uri):
 # async def call(To: str = Form(...)):
 #     phone_number = To or ""
 #     resp = VoiceResponse()
-#     dial = resp.dial()
+#     dial = resp.dial(
+#         record="record-from-start",
+#         recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording-status",
+#     )
 #     dial.sip(
 #         f"sip:+{phone_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}",
 #         username=os.getenv('TWIML_SIP_USERNAME'),
