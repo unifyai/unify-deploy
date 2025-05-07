@@ -4,8 +4,8 @@ from fastapi import APIRouter, Form, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
-from livekit.api import LiveKitAPI
-from livekit.api.sip_service import CreateSIPInboundTrunkRequest
+from livekit.api import LiveKitAPI, SIPInboundTrunkInfo, CreateSIPInboundTrunkRequest
+from livekit.protocol.sip import ListSIPInboundTrunkRequest, DeleteSIPTrunkRequest
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -45,8 +45,6 @@ def add_user_to_conference(conference_name, from_number, to_number_uri):
         to=to_number_uri,
         from_=from_number, 
         twiml=str(response),
-        sip_auth_username=os.getenv('TWIML_SIP_USERNAME'),
-        sip_auth_password=os.getenv('TWIML_SIP_PASSWORD'),
     )
     return call.sid
 
@@ -170,14 +168,13 @@ async def create_phone_number():
     )
     provider_numbers = [record.phone_number]
     trunk_name = f"Unity_{record.phone_number[1:]}"
-    sip_req = CreateSIPInboundTrunkRequest(
+    sip_trunk = SIPInboundTrunkInfo(
         name=trunk_name,
         numbers=provider_numbers,
         krisp_enabled=True,
-        auth_username=os.getenv("TWIML_SIP_USERNAME"),
-        auth_password=os.getenv("TWIML_SIP_PASSWORD"),
     )
-    lkapi.sip.create_sip_inbound_trunk(sip_req)
+    sip_req = CreateSIPInboundTrunkRequest(trunk=sip_trunk)
+    await lkapi.sip.create_sip_inbound_trunk(sip_req)
     return {"success": True, "phoneNumber": incoming.phone_number}
 
 @router.delete("/delete")
@@ -196,6 +193,19 @@ async def delete_phone_number(request: Request):
     phone_sid = incoming_list[0].sid
     # Delete the number
     twilio_client.incoming_phone_numbers(phone_sid).delete()
+
+    # Delete LiveKit SIP Trunk
+    lkapi = LiveKitAPI(
+        os.getenv("LIVEKIT_URL"),
+        os.getenv("LIVEKIT_API_KEY"),
+        os.getenv("LIVEKIT_API_SECRET"),
+    )
+    sip_its = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
+    for item in sip_its.items:
+        if phone_number[1:] in item.name:
+            await lkapi.sip.delete_sip_trunk(DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id))
+            break
+
     return {"success": True, "sid": phone_sid}
 
 @router.post("/conference-status")
