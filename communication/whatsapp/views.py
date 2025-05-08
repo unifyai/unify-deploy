@@ -4,7 +4,6 @@ import base64
 import httpx
 from fastapi import APIRouter, Form, Response, Request, HTTPException
 from dotenv import load_dotenv
-from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
 
 load_dotenv()
@@ -87,7 +86,7 @@ async def send_text(request: Request):
     )
     return {"success": True}
 
-@router.post("/senders")
+@router.post("/create")
 async def create_whatsapp_sender(request: Request):
     data = await request.json()
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
@@ -95,27 +94,27 @@ async def create_whatsapp_sender(request: Request):
     url = "https://messaging.twilio.com/v2/Channels/Senders"
     payload = {
         "sender_id": f"whatsapp:{data.get('phone_number')}",
+        # "waba_id": "",
         "profile": {"name": f"{data.get('first_name')} {data.get('last_name')}"},
         "webhook": {
             "callback_method": "POST",
-            "callback_url": f"{os.getenv('UNIFY_COMMS_URL')}/phone/text"
+            "callback_url": f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/text"
         }
     }
     auth_str = f"{account_sid}:{auth_token}"
     b64_auth = base64.b64encode(auth_str.encode()).decode()
     headers = {
-        "Authorization": f"Bearer {b64_auth}",
+        "Authorization": f"Basic {b64_auth}",
         "Content-Type": "application/json"
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers)
     if resp.status_code >= 400:
-        text = await resp.text()
-        raise HTTPException(status_code=resp.status_code, detail=f"Failed to create WhatsApp sender: {text}")
+        raise HTTPException(status_code=resp.status_code, detail=f"Failed to create WhatsApp sender: {resp.text}")
     resp_data = resp.json()
     return {"sid": resp_data.get("sid")}
 
-@router.delete("/senders")
+@router.delete("/delete")
 async def delete_whatsapp_sender(request: Request):
     data = await request.json()
     sid = data.get("sid")
