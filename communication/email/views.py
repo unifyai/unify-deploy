@@ -23,7 +23,7 @@ client.set_system_message("You are a helpful assistant.")
 # with open(os.environ["GCP_SA_KEY"], "r") as f:
 creds_json = json.loads(os.environ["GCP_SA_KEY"])
 
-# Google Admin Directory API settings
+# Helpers
 def get_admin_service():
     creds = Credentials.from_service_account_info(
         creds_json, 
@@ -33,7 +33,6 @@ def get_admin_service():
     service = build("admin", "directory_v1", credentials=creds)
     return service
 
-# Gmail send endpoint
 def get_gmail_service(sender_email: str):
     # include send and readonly scopes for reading history and replying
     scopes = [
@@ -48,6 +47,7 @@ def get_gmail_service(sender_email: str):
     )
     return build("gmail", "v1", credentials=creds)
 
+# Endpoints - JSON format
 @router.post("/create", status_code=201)
 async def create_email_user(request: Request):
     data = await request.json()

@@ -16,6 +16,7 @@ client.set_endpoint("o4-mini@openai")
 client.set_system_message("You are a helpful assistant.")
 
 
+# Helpers
 def get_twilio_client():
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
@@ -34,8 +35,6 @@ def add_user_to_conference(conference_name, from_number, to_number_uri):
         endConferenceOnExit=True,
         muted=False,
         record="record-from-start",
-        # status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/conference-status",
-        # status_callback_event=["leave", "end"],
         recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
         recording_status_callback_event='completed',
     )
@@ -48,23 +47,9 @@ def add_user_to_conference(conference_name, from_number, to_number_uri):
     )
     return call.sid
 
-# @router.post("/call")
-# async def call(To: str = Form(...)):
-#     phone_number = To or ""
-#     resp = VoiceResponse()
-#     dial = resp.dial(
-#         record="record-from-start",
-#         recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
-#     )
-#     dial.sip(
-#         f"sip:+{phone_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}",
-#         username=os.getenv('TWIML_SIP_USERNAME'),
-#         password=os.getenv('TWIML_SIP_PASSWORD')
-#     )
-#     return Response(content=str(resp), media_type="text/xml")
-
+# Endpoints - Form format
 @router.post("/call")
-async def call(To: str = Form(...), From: str = Form(...)):
+async def receive_call(To: str = Form(...), From: str = Form(...)):
     twilio_number = To or ""
     caller_number = From or ""
 
@@ -80,8 +65,6 @@ async def call(To: str = Form(...), From: str = Form(...)):
         endConferenceOnExit=True,
         muted=False,
         record="record-from-start",
-        # status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/conference-status",
-        # status_callback_event=["leave", "end"],
         recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
         recording_status_callback_event='completed'
     )
@@ -89,25 +72,8 @@ async def call(To: str = Form(...), From: str = Form(...)):
     call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
     return Response(content=str(resp_user), media_type="text/xml")
 
-@router.post("/call-out")
-async def call_out(request: Request):
-    data = await request.json()
-    phone_number = data.get("To")
-    twilio_number = data.get("From")
-    new_call = data.get("NewCall")
-    
-    new_call = new_call.lower() == "true"
-    conference_name = f"Unity_{twilio_number[1:]}"
-
-    if new_call:
-        sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-        call_sid = add_user_to_conference(conference_name, twilio_number, sip_uri)
-    
-    call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
-    return {"success": True, "call_sid": call_sid}
-
 @router.post("/text")
-async def text_message(Body: str = Form(...)):
+async def receive_text(Body: str = Form(...)):
     # Extract message body
     body = Body or ""
     # Prepare chat messages
@@ -125,6 +91,33 @@ async def text_message(Body: str = Form(...)):
     twiml_resp.message(reply_text)
     # Return XML
     return Response(content=str(twiml_resp), media_type="text/xml")
+
+@router.post("/recording")
+async def check_recording_status(RecordingUrl: str = Form(...)):
+    recording_url = RecordingUrl or ""
+    if not recording_url:
+        return {"success": False, "error": "RecordingUrl and CallSid are required"}
+    
+    # todo: download link = recording_url, call db endpoint to store
+    return {"success": True, "recording_url": recording_url}
+
+# Endpoints - JSON format
+@router.post("/send-call")
+async def send_call(request: Request):
+    data = await request.json()
+    phone_number = data.get("To")
+    twilio_number = data.get("From")
+    new_call = data.get("NewCall")
+    
+    new_call = new_call.lower() == "true"
+    conference_name = f"Unity_{twilio_number[1:]}"
+
+    if new_call:
+        sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+        call_sid = add_user_to_conference(conference_name, twilio_number, sip_uri)
+    
+    call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
+    return {"success": True, "call_sid": call_sid}
 
 @router.post("/send-text")
 async def send_text(request: Request):
@@ -208,33 +201,8 @@ async def delete_phone_number(request: Request):
 
     return {"success": True, "sid": phone_sid}
 
-# @router.post("/conference-status")
-# async def check_conference_status(ConferenceSid: str = Form(...)):
-#     conference_sid = ConferenceSid or ""
-#     if not conference_sid:
-#         return {"success": False, "error": "ConferenceSid is required"}
-    
-#     twilio_client = get_twilio_client()
-
-#     participants = twilio_client.conferences(conference_sid).participants.list()
-#     if len(participants) == 1:
-#         twilio_client.conferences(conference_sid).update(status='completed')
-#     return {"success": True}
-
-@router.post("/recording")
-async def check_recording_status(RecordingUrl: str = Form(...), ConferenceSid: str = Form(...)):
-    recording_url = RecordingUrl or ""
-    conference_sid = ConferenceSid or ""
-    if not recording_url or not conference_sid:
-        return {"success": False, "error": "RecordingUrl and CallSid are required"}
-    
-    twilio_client = get_twilio_client()
-    twilio_client.conferences(conference_sid).update(status='completed')
-    # download link = recording_url, call db endpoint to store
-    return {"success": True, "recording_url": recording_url}
-
-@router.post("/send-digits")
-async def send_digits(request: Request):
+@router.post("/press")
+async def press_key(request: Request):
     data = await request.json()
     To = data.get("To")
     From = data.get("From")
