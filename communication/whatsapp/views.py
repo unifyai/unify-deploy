@@ -30,8 +30,8 @@ async def receive_text(
     Body: str = Form(...),
 ):
     # Extract message body
-    to = To or ""
-    frm = From or ""
+    twilio_number = To or ""
+    sender_number = From or ""
     body = Body or ""
 
     # Prepare chat messages
@@ -46,8 +46,8 @@ async def receive_text(
     # Send message with Twilio client to ensure status monitoring
     twilio_client = get_twilio_client()
     twilio_client.messages.create(
-        to=From,
-        from_=To,
+        to=sender_number,
+        from_=twilio_number,
         body=response,
         status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/status",
     )
@@ -60,28 +60,28 @@ async def check_whatsapp_status(
     To: str = Form(...), 
     From: str = Form(...),
 ):
-    To = To or ""
-    From = From or ""
-    MessageStatus = MessageStatus or ""
+    to = To or ""
+    frm = From or ""
+    msg_status = MessageStatus or ""
     return {
         "status": True, 
-        "message_status": MessageStatus, 
-        "to_number": To, 
-        "from_number": From,
+        "message_status": msg_status, 
+        "to_number": to, 
+        "from_number": frm,
     }
 
 # Endpoints - JSON format
 @router.post("/send-text")
 async def send_text(request: Request):
     data = await request.json()
-    to = data.get("to")
-    frm = data.get("from")
+    receiver_number = data.get("to")
+    twilio_number = data.get("from")
     body = data.get("body")
 
     twilio_client = get_twilio_client()
     twilio_client.messages.create(
-        to=f"whatsapp:{to}",
-        from_=f"whatsapp:{frm}",
+        to=f"whatsapp:{receiver_number}",
+        from_=f"whatsapp:{twilio_number}",
         body=body,
         status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/status",
     )
@@ -95,7 +95,7 @@ async def create_whatsapp_sender(request: Request):
     url = "https://messaging.twilio.com/v2/Channels/Senders"
     payload = {
         "sender_id": f"whatsapp:{data.get('phone_number')}",
-        "profile": {"name": f"{data.get('first_name')} {data.get('surname')}"},
+        "profile": {"name": f"{data.get('first_name')} {data.get('last_name')}"},
         "webhook": {
             "callback_method": "POST",
             "callback_url": f"{os.getenv('UNIFY_COMMS_URL')}/phone/text"

@@ -51,10 +51,10 @@ def get_gmail_service(sender_email: str):
 @router.post("/create", status_code=201)
 async def create_email_user(request: Request):
     data = await request.json()
-    first_name = data.get("firstName")
-    last_name = data.get("lastName")
+    first_name = data.get("first_name")
+    last_name = data.get("last_name")
     if not first_name or not last_name:
-        raise HTTPException(status_code=400, detail="Missing required fields: firstName, lastName")
+        raise HTTPException(status_code=400, detail="Missing required fields: first_name, last_name")
     domain = "unify.ai"
     local = f"{first_name}.{last_name}".lower()
     # sanitize local part
@@ -84,9 +84,9 @@ async def create_email_user(request: Request):
 @router.delete("/delete")
 async def delete_email_user(request: Request):
     data = await request.json()
-    primary_email = data.get("primaryEmail")
+    primary_email = data.get("primary_email")
     if not primary_email:
-        raise HTTPException(status_code=400, detail="Missing primaryEmail")
+        raise HTTPException(status_code=400, detail="Missing primary_email")
     try:
         service = get_admin_service()
         service.users().delete(userKey=primary_email).execute()
@@ -222,9 +222,9 @@ async def reply_email(request: Request):
 @router.post("/watch")
 async def watch_email(request: Request):
     data = await request.json()
-    user_email = data.get("userEmail")
+    user_email = data.get("primary_email")
     if not user_email:
-        raise HTTPException(status_code=400, detail="Missing userEmail")
+        raise HTTPException(status_code=400, detail="Missing primary_email")
     # Delegate credentials for the target Gmail user
     creds = Credentials.from_service_account_info(
         creds_json,
