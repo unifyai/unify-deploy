@@ -20,6 +20,24 @@ This project provides a communication API with multiple Twilio and Google integr
 
    GET `/` → `{ "message": "success!" }`
 
+## Demos
+
+1. Phone Call
+- Note: Temporarily best to use the livekit demos `make_call.py` script. I've also put the file in this repo.
+- In `unity`, execute `python3 make_call.py dev`. Wait for about 10 seconds for the agent to complete launching.
+- Call `+15550100001`. After the ringing tune, the assistant will pick up the phone and start greeting. Start having a conversation like in the console.
+- Moving forward, it should be out of the box with `unity` so task logging and context handling should be in place.
+
+2. Email
+- Send mails to `unity.agent@unify.ai`.
+- Wait for awhile for auto reply. The `Automated reply:` phrase is temporarily kept in the replies for testing purposes.
+- Simple LLM generation for now, further integration with `unity` is required for task logging and context.
+
+3. SMS
+- Text `+15550100001`. Due to Twilio trial, there's limitation so simple conversation is suggested, e.g., How are you doing?
+- The reply will be through a 5-digit business number, assumed it's due to trial. Otherwise, will investigate later on.
+- Simple LLM generation for now, further integration with `unity` is required for task logging and context.
+
 ## API Endpoints
 
 ### Phone (prefix `/phone`)
@@ -74,27 +92,3 @@ This project provides a communication API with multiple Twilio and Google integr
 
 Use GitHub Actions or Cloud Build to build and deploy this app. See `.github/workflows` for examples targeting Cloud Run and GCE VM.
 
-## Demos
-
-1. SMS
-- Text +15086824873. Due to Twilio trial, there's limitation so simple conversation is suggested, e.g., How are you doing?
-- The reply will be through a 5-digit business number, assumed it's due to trial. Otherwise, will investigate later on.
-- Simple LLM generation for now, further integration with `unity` is required for task logging and context.
-
-2. Phone Call
-- The below LIVEKIT keys are required temporarily before config are made in the new shared account.
-
-`LIVEKIT_URL=wss://unity-test-czi67ew5.livekit.cloud`
-
-`LIVEKIT_API_KEY=REDACTED_LIVEKIT_VALUE`
-
-`LIVEKIT_API_SECRET=REDACTED_LIVEKIT_VALUE`
-
-- In `unity`, execute `python make_call.py dev`. Wait for about 10 seconds in case the launch is pending.
-- Call the same number above. The assistant will start greeting and have a conversation like in the console.
-- Out of the box with `unity` so task logging and context handling should be in place.
-
-3. Email
-- Send mails to `unity.agent@unify.ai`.
-- Wait for awhile for auto reply. The `Automated reply:` phrase is temporarily kept in the replies for testing purposes.
-- Simple LLM generation for now, further integration with `unity` is required for task logging and context.
