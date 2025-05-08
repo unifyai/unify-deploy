@@ -155,9 +155,9 @@ async def create_phone_number():
     )
     # Set up LiveKit inbound SIP trunk
     lkapi = LiveKitAPI(
-        os.getenv("LIVEKIT_URL"),
-        os.getenv("LIVEKIT_API_KEY"),
-        os.getenv("LIVEKIT_API_SECRET"),
+        url=os.getenv("LIVEKIT_URL"),
+        api_key=os.getenv("LIVEKIT_API_KEY"),
+        api_secret=os.getenv("LIVEKIT_API_SECRET"),
     )
     provider_numbers = [record.phone_number]
     trunk_name = f"Unity_{record.phone_number[1:]}"
@@ -168,6 +168,7 @@ async def create_phone_number():
     )
     sip_req = CreateSIPInboundTrunkRequest(trunk=sip_trunk)
     await lkapi.sip.create_sip_inbound_trunk(sip_req)
+    await lkapi.aclose()
     return {"success": True, "phoneNumber": incoming.phone_number}
 
 @router.delete("/delete")
@@ -189,26 +190,27 @@ async def delete_phone_number(request: Request):
 
     # Delete LiveKit SIP Trunk
     lkapi = LiveKitAPI(
-        os.getenv("LIVEKIT_URL"),
-        os.getenv("LIVEKIT_API_KEY"),
-        os.getenv("LIVEKIT_API_SECRET"),
+        url=os.getenv("LIVEKIT_URL"),
+        api_key=os.getenv("LIVEKIT_API_KEY"),
+        api_secret=os.getenv("LIVEKIT_API_SECRET"),
     )
     sip_its = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
     for item in sip_its.items:
         if phone_number[1:] in item.name:
             await lkapi.sip.delete_sip_trunk(DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id))
             break
-
+    
+    await lkapi.aclose()
     return {"success": True, "sid": phone_sid}
 
 @router.post("/press")
 async def press_key(request: Request):
     data = await request.json()
-    To = data.get("To")
-    From = data.get("From")
-    Digits = data.get("Digits")
+    to = data.get("To")
+    frm = data.get("From")
+    digits = data.get("Digits")
     call_sid = data.get("CallSid") # todo!
 
     twilio_client = get_twilio_client()
-    twilio_client.calls(call_sid).update(send_digits=Digits)
+    twilio_client.calls(call_sid).update(send_digits=digits)
     return {"success": True}
