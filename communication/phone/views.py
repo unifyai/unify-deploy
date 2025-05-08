@@ -96,7 +96,7 @@ async def receive_text(Body: str = Form(...)):
 async def check_recording_status(RecordingUrl: str = Form(...)):
     recording_url = RecordingUrl or ""
     if not recording_url:
-        return {"success": False, "error": "RecordingUrl and CallSid are required"}
+        return {"success": False, "error": "RecordingUrl is required"}
     
     # todo: download link = recording_url, call db endpoint to store
     return {"success": True, "recording_url": recording_url}

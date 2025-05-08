@@ -24,9 +24,16 @@ def get_twilio_client():
 
 # Endpoints - Form format
 @router.post("/text")
-async def receive_text(Body: str = Form(...)):
+async def receive_text(
+    To: str = Form(...),
+    From: str = Form(...),
+    Body: str = Form(...),
+):
     # Extract message body
+    to = To or ""
+    frm = From or ""
     body = Body or ""
+
     # Prepare chat messages
     messages = [
         {"role": "user", "content": body},
@@ -35,13 +42,17 @@ async def receive_text(Body: str = Form(...)):
     response = client.generate(
         messages=messages,
     )
-    # Extract AI reply
-    reply_text = response
-    # Build TwiML messaging response
-    twiml_resp = MessagingResponse()
-    twiml_resp.message(reply_text)
-    # Return XML
-    return Response(content=str(twiml_resp), media_type="text/xml")
+
+    # Send message with Twilio client to ensure status monitoring
+    twilio_client = get_twilio_client()
+    twilio_client.messages.create(
+        to=From,
+        from_=To,
+        body=response,
+        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/status",
+    )
+
+    return Response(status=200)
 
 @router.post("/status")
 async def check_whatsapp_status(
@@ -49,8 +60,15 @@ async def check_whatsapp_status(
     To: str = Form(...), 
     From: str = Form(...),
 ):
+    To = To or ""
+    From = From or ""
     MessageStatus = MessageStatus or ""
-    return {"status": True, "message_status": MessageStatus}
+    return {
+        "status": True, 
+        "message_status": MessageStatus, 
+        "to_number": To, 
+        "from_number": From,
+    }
 
 # Endpoints - JSON format
 @router.post("/send-text")
