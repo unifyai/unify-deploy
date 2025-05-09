@@ -6,7 +6,7 @@ from communication.email.views import router as email_router
 import uvicorn
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 app = FastAPI()
 app.include_router(phone_router, prefix="/phone")

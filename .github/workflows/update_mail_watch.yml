@@ -1,0 +1,30 @@
+name: Update Mail Watch (every ~5 days)
+
+on:
+  schedule:
+    # At 00:00 UTC on every 5th day of the month (5, 10, 15, 20, 25, 30)
+    - cron: '0 0 */5 * *'
+  workflow_dispatch: {}
+
+jobs:
+  run-maintenance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f mail_watch/requirements.txt ]; then pip install -r mail_watch/requirements.txt; fi
+
+      - name: Run scheduled script
+        # Adjust the path to the script you want to execute
+        run: |
+          python mail_watch/update.py 
