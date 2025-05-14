@@ -4,7 +4,7 @@ import functions_framework
 from google.auth import default
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from helpers import get_thread_id
+from helpers import get_thread_id, publish_thread_id
 
 
 @functions_framework.http
@@ -88,6 +88,7 @@ def process_notification(cloud_event):
             # ToDo: check if the conversation stored for this thread_id has changed
             # send the thread_id to a different channel
             print(f"Successfully processed conversation for user {user_id}")
+            publish_thread_id(thread_id, user_id)
             return "OK"
         else:
             print(f"No new conversations found for user {user_id}")

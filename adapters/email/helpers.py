@@ -1,6 +1,14 @@
 import base64
 import json
 import re
+import os
+from google.cloud import pubsub_v1
+
+
+# Default GCP project ID; override via env var if needed
+PROJECT_ID = os.environ.get("GCP_PROJECT", "gcp-project-runtime")
+# Pub/Sub topic where processed thread IDs will be published
+OUTPUT_TOPIC_ID = os.environ.get("EMAILS_TOPIC", "emails")
 
 
 def _strip_quoted_text(text: str) -> str:
@@ -88,10 +96,40 @@ def get_thread_id(user_id, history_id, gmail_service):
             
             # Get the thread for this message
             thread_id = message["threadId"]
+            thread = gmail_service.users().threads().get(
+                userId=user_id, id=thread_id, format="full"
+            ).execute()
             
-            # Return the thread_id
+            # Convert to conversation format
+            conversation = _gmail_thread_to_conversation(thread)
+            
+            # ToDo: check if the conversation has changed
+            # if it has, send the thread_id to a different channel
+            # if it hasn't, return None
+            
+            # Return the conversation (or process it further as needed)
             return thread_id
             
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
         return None
+
+
+def publish_thread_id(thread_id, user_id):
+    """Publish the thread_id and user_id to a different pub/sub topic."""
+    try:
+        publisher = pubsub_v1.PublisherClient()
+        topic_path = publisher.topic_path(PROJECT_ID, OUTPUT_TOPIC_ID)
+
+        message_dict = {
+            "thread_id": thread_id,
+            "email": user_id,
+        }
+        data = json.dumps(message_dict).encode("utf-8")
+
+        # Publish asynchronously
+        future = publisher.publish(topic_path, data=data)
+        future.result()  # Wait for publish to complete
+        print(f"Published thread_id {thread_id} for user {user_id} to {topic_path}")
+    except Exception as e:
+        print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
