@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths-ignore:
-      - 'livekit/**'
+      - 'mail_watch/**'
 
 env:
   SERVICE_NAME: unity-comms-app

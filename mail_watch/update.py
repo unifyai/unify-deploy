@@ -2,7 +2,7 @@ import os
 import requests
 
 watch_response = requests.post(
-    f"{os.getenv("UNIFY_COMMS_URL")}/email/watch",
+    f'{os.getenv("UNIFY_COMMS_URL")}/email/watch',
     json={
         "primary_email": "unity.agent@unify.ai",
     }
