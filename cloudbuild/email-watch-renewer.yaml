@@ -1,0 +1,19 @@
+steps:
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    args:
+      - gcloud
+      - functions
+      - deploy
+      - email-watch-renewer
+      - --runtime=python310
+      - --region=us-central1
+      - --source=adapters/email
+      - --entry-point=renew_watch
+      - --trigger-http
+      - --memory=256MB
+      - --timeout=60s
+      - --service-account=service-account@example.iam.gserviceaccount.com
+      - --set-env-vars=GCP_SA_KEY_SECRET=gmail-service-key
+      - --set-secrets=GCP_SA_KEY=gmail-service-key:latest
+      - --min-instances=0
+      - --max-instances=1

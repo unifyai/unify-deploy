@@ -1,0 +1,17 @@
+steps:
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    args:
+      - gcloud
+      - functions
+      - deploy
+      - email-notification-processor
+      - --runtime=python310
+      - --region=us-central1
+      - --source=adapters/email
+      - --entry-point=process_notification
+      - --trigger-topic=email-notifications-test
+      - --memory=512MB
+      - --timeout=540s
+      - --service-account=service-account@example.iam.gserviceaccount.com
+      - --min-instances=0
+      - --max-instances=10 
