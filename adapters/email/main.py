@@ -4,7 +4,7 @@ import functions_framework
 from google.auth import default
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from helpers import process_history_and_thread
+from helpers import get_thread_id
 
 
 @functions_framework.http
@@ -79,15 +79,14 @@ def process_notification(cloud_event):
         gmail_service = build("gmail", "v1", credentials=credentials)
         
         # Process the history and thread
-        conversation, thread_id = process_history_and_thread(user_id, history_id, gmail_service)
+        thread_id = get_thread_id(user_id, history_id, gmail_service)
         
         # Here you would add your business logic to do something with the conversation
         # For example, send it to another service, store it in a database, etc.
         
-        if conversation:
+        if thread_id:
             # ToDo: check if the conversation stored for this thread_id has changed
-            # if it has, send a message to the user
-            # if it hasn't, do nothing
+            # send the thread_id to a different channel
             print(f"Successfully processed conversation for user {user_id}")
             return "OK"
         else:

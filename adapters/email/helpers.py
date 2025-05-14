@@ -60,7 +60,7 @@ def _gmail_thread_to_conversation(thread):
     return convo
 
 
-def process_history_and_thread(user_id, history_id, gmail_service):
+def get_thread_id(user_id, history_id, gmail_service):
     """Process Gmail history and thread to extract conversation data."""
     try:
         # Get history events for label changes
@@ -88,19 +88,9 @@ def process_history_and_thread(user_id, history_id, gmail_service):
             
             # Get the thread for this message
             thread_id = message["threadId"]
-            thread = gmail_service.users().threads().get(
-                userId=user_id, id=thread_id, format="full"
-            ).execute()
             
-            # Convert to conversation format
-            conversation = _gmail_thread_to_conversation(thread)
-            
-            # Log the conversation for debugging
-            print(f"Thread {thread_id} conversation:")
-            print(json.dumps(conversation, indent=2))
-            
-            # Return the conversation (or process it further as needed)
-            return conversation, thread_id
+            # Return the thread_id
+            return thread_id
             
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
