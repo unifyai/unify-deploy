@@ -5,7 +5,7 @@ steps:
       - functions
       - deploy
       - email-watch-renewer
-      - --runtime=python310
+      - --runtime=python311
       - --region=us-central1
       - --source=adapters/email
       - --entry-point=renew_watch
