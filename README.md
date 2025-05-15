@@ -33,7 +33,11 @@ This project provides a communication API with multiple Twilio and Google integr
 - Wait for awhile for auto reply. The `Automated reply:` phrase is temporarily kept in the replies for testing purposes.
 - Simple LLM generation for now, further integration with `unity` is required for task logging and context.
 
-3. SMS
+3. Whatsapp Text
+- Text `+15550100002` on Whatsapp and wait for a reply.
+- Simple LLM generation for now, further integration with `unity` is required for task logging and context.
+
+4. SMS - WIP
 - Text `+15550100001`. Due to Twilio trial, there's limitation so simple conversation is suggested, e.g., How are you doing?
 - The reply will be through a 5-digit business number, assumed it's due to trial. Otherwise, will investigate later on.
 - Simple LLM generation for now, further integration with `unity` is required for task logging and context.

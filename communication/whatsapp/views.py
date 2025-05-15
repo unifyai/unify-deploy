@@ -9,7 +9,7 @@ from twilio.rest import Client as TwilioClient
 load_dotenv()
 
 router = APIRouter()
-client = unify.Unify(traced=True)
+client = unify.Unify()
 client.set_endpoint("o4-mini@openai")
 client.set_system_message("You are a helpful assistant.")
 
