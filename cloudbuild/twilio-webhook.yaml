@@ -1,12 +1,4 @@
-# Cloud Build configuration to build and deploy the `twilio_webhook` Cloud Function
-# -----------------------------------------------------------------------------
-# Trigger this build manually or from your preferred CI trigger (e.g., push to
-# main). The build installs dependencies (if required) and then deploys the
-# function using gcloud. Adjust the substitution values at the bottom as needed.
-# -----------------------------------------------------------------------------
-
 steps:
-  # Deploy the Cloud Function (2nd gen). If you prefer Gen 1, remove `--gen2`.
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: "Deploy Cloud Function"
     entrypoint: bash
@@ -22,12 +14,10 @@ steps:
           --trigger-http \
           --allow-unauthenticated \
           --set-env-vars="LIVEKIT_SIP_URI=$LIVEKIT_SIP_URI,PROJECT_ID=$PROJECT_ID"
-
 timeout: "1200s"
-
-# -----------------------------------------------------------------------------
-# Substitutions let you override values at trigger time without editing the file
-# -----------------------------------------------------------------------------
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 substitutions:
   _FUNCTION_NAME: twilio-webhook
   _REGION: us-central1
