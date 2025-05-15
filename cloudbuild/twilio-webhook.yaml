@@ -13,7 +13,7 @@ steps:
           --entry-point=twilio_webhook \
           --trigger-http \
           --allow-unauthenticated \
-          --set-env-vars="LIVEKIT_SIP_URI=$LIVEKIT_SIP_URI,PROJECT_ID=$PROJECT_ID"
+          --set-env-vars="LIVEKIT_SIP_URI=$$LIVEKIT_SIP_URI,PROJECT_ID=$PROJECT_ID"
     secretEnv: ['LIVEKIT_SIP_URI']
 timeout: "1200s"
 options:
