@@ -3,12 +3,12 @@
 # ---------------------------------------------------------------------------
 
 import json
-from flask import Request
+from flask import Request, Response
 import functions_framework
 from google.cloud import pubsub_v1
 import os
-from twilio.rest import Client as TwilioClient
-from twilio.twiml.voice_response import VoiceResponse
+# from twilio.rest import Client as TwilioClient
+# from twilio.twiml.voice_response import VoiceResponse
 
 
 # def get_twilio_client():
@@ -88,3 +88,6 @@ def twilio_webhook(request: Request):
         "caller_number": caller_number,
         "sip_uri": sip_uri
     }).encode("utf-8"))
+
+    empty_twiml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>"
+    return Response(empty_twiml, mimetype="text/xml")
