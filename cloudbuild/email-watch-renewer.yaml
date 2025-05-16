@@ -15,6 +15,23 @@ steps:
           --allow-unauthenticated \
           --set-env-vars="ORCHESTRA_ADMIN_KEY=$$ORCHESTRA_ADMIN_KEY"
     secretEnv: ['ORCHESTRA_ADMIN_KEY']
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Create/Update Scheduler"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud scheduler jobs create http email-watch-renewer \
+          --schedule "0 0 * * *" \
+          --uri "https://$REGION-$PROJECT_ID.cloudfunctions.net/$_FUNCTION_NAME" \
+          --http-method POST \
+          --time-zone "UTC" \
+        || \
+        gcloud scheduler jobs update http email-watch-renewer \
+          --schedule "0 0 * * *" \
+          --uri "https://$REGION-$PROJECT_ID.cloudfunctions.net/$_FUNCTION_NAME" \
+          --http-method POST \
+          --time-zone "UTC"
 timeout: "1200s"
 options:
   substitutionOption: ALLOW_LOOSE
