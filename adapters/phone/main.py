@@ -105,4 +105,4 @@ def twilio_webhook(request: Request):
             }
         ).encode("utf-8"),
     )
-    return Response(response=str(resp_user), media_type="text/xml")
+    return Response(response=str(resp_user), mimetype="text/xml")
