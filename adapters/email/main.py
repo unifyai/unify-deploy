@@ -5,16 +5,18 @@ from google.auth import default
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from helpers import get_thread_id, publish_thread_id
+import os
+import requests
 
 
 @functions_framework.http
 def renew_watch():
     """Cloud Function that renews Gmail watches for multiple users."""
     # ToDo: make orchestra admin call to get all assistant emails
-    emails = ["ved@unify.ai"]
-
-    if isinstance(emails, str):
-        emails = [email.strip() for email in emails.split(",")]
+    emails = requests.get(
+        "https://api.unify.ai/v0/admin/assistant/emails",
+        headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+    ).json()["info"]
 
     results = {}
 
