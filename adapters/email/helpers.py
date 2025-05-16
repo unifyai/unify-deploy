@@ -1,14 +1,7 @@
 import base64
 import json
 import re
-import os
 from google.cloud import pubsub_v1
-
-
-# Default GCP project ID; override via env var if needed
-PROJECT_ID = os.environ.get("GCP_PROJECT", "gcp-project-runtime")
-# Pub/Sub topic where processed thread IDs will be published
-OUTPUT_TOPIC_ID = os.environ.get("EMAILS_TOPIC", "emails")
 
 
 def _strip_quoted_text(text: str) -> str:
@@ -138,7 +131,7 @@ def publish_thread_id(thread_id, user_id):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
-        topic_path = publisher.topic_path(PROJECT_ID, OUTPUT_TOPIC_ID)
+        topic_path = publisher.topic_path("gcp-project-runtime", "email")
 
         message_dict = {
             "thread_id": thread_id,

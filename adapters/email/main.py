@@ -1,8 +1,6 @@
 import json
 import base64
 import functions_framework
-from google.auth import default
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 from helpers import get_thread_id, publish_thread_id
