@@ -21,17 +21,19 @@ steps:
     args:
       - "-c"
       - |
-        gcloud scheduler jobs create http email-watch-renewer \
+        gcloud scheduler jobs create http "$_FUNCTION_NAME" \
           --schedule "0 0 * * *" \
           --uri "https://$_REGION-$PROJECT_ID.cloudfunctions.net/$_FUNCTION_NAME" \
           --http-method POST \
           --time-zone "UTC" \
+          --location="$_REGION" \
         || \
-        gcloud scheduler jobs update http email-watch-renewer \
+        gcloud scheduler jobs update http "$_FUNCTION_NAME" \
           --schedule "0 0 * * *" \
           --uri "https://$_REGION-$PROJECT_ID.cloudfunctions.net/$_FUNCTION_NAME" \
           --http-method POST \
-          --time-zone "UTC"
+          --time-zone "UTC" \
+          --location="$_REGION"
 timeout: "1200s"
 options:
   substitutionOption: ALLOW_LOOSE

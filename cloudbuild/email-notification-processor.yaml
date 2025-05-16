@@ -1,17 +1,26 @@
 steps:
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Cloud Function"
+    entrypoint: bash
     args:
-      - gcloud
-      - functions
-      - deploy
-      - email-notification-processor
-      - --runtime=python310
-      - --region=us-central1
-      - --source=adapters/email
-      - --entry-point=process_notification
-      - --trigger-topic=email-notifications-test
-      - --memory=512MB
-      - --timeout=540s
-      - --service-account=service-account@example.iam.gserviceaccount.com
-      - --min-instances=0
-      - --max-instances=10 
+      - "-c"
+      - |
+        gcloud functions deploy "$_FUNCTION_NAME" \
+          --gen2 \
+          --region="$_REGION" \
+          --runtime=python311 \
+          --source="adapters/email" \
+          --entry-point=process_notification \
+          --trigger-topic=email-notifications-test \
+          --allow-unauthenticated
+timeout: "1200s"
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+substitutions:
+  _FUNCTION_NAME: email-notification-processor
+  _REGION: us-central1
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
+      env: 'ORCHESTRA_ADMIN_KEY'
