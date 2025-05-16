@@ -23,13 +23,13 @@ steps:
       - |
         gcloud scheduler jobs create http email-watch-renewer \
           --schedule "0 0 * * *" \
-          --uri "https://$REGION-$PROJECT_ID.cloudfunctions.net/$_FUNCTION_NAME" \
+          --uri "https://$_REGION-$PROJECT_ID.cloudfunctions.net/$_FUNCTION_NAME" \
           --http-method POST \
           --time-zone "UTC" \
         || \
         gcloud scheduler jobs update http email-watch-renewer \
           --schedule "0 0 * * *" \
-          --uri "https://$REGION-$PROJECT_ID.cloudfunctions.net/$_FUNCTION_NAME" \
+          --uri "https://$_REGION-$PROJECT_ID.cloudfunctions.net/$_FUNCTION_NAME" \
           --http-method POST \
           --time-zone "UTC"
 timeout: "1200s"
