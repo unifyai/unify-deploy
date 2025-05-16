@@ -13,8 +13,8 @@ steps:
           --entry-point=process_notification \
           --trigger-topic=email-notifications-test \
           --allow-unauthenticated \
-          --set-env-vars="GCP_SA_KEY=$$GCP_SA_KEY"
-    secretEnv: ['GCP_SA_KEY']
+          --set-env-vars="GCP_SA_KEY=$$gcp-sa-key"
+    secretEnv: ['gcp-sa-key']
 timeout: "1200s"
 options:
   substitutionOption: ALLOW_LOOSE
@@ -25,4 +25,4 @@ substitutions:
 availableSecrets:
   secretManager:
     - versionName: projects/$PROJECT_ID/secrets/gcp-sa-key/versions/latest
-      env: 'GCP_SA_KEY'
+      env: 'gcp-sa-key'
