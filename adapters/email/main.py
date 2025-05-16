@@ -4,6 +4,7 @@ import functions_framework
 from google.auth import default
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+from google.oauth2.service_account import Credentials
 from helpers import get_thread_id, publish_thread_id
 import os
 import requests
@@ -23,18 +24,14 @@ def renew_watch():
     # Process each email
     for email in emails:
         try:
-            # Get credentials from Application Default Credentials
-            credentials, _ = default()
-
-            # Configure for this specific email
-            credentials = credentials.with_subject(email)
-            credentials = credentials.with_scopes(
-                ["https://www.googleapis.com/auth/gmail.modify"]
+            # Get credentials
+            creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+            creds = Credentials.from_service_account_info(
+                creds_json,
+                scopes=["https://www.googleapis.com/auth/gmail.modify"],
+                subject=email,
             )
-            credentials.refresh(Request())
-
-            # Build Gmail service for this email
-            gmail_service = build("gmail", "v1", credentials=credentials)
+            gmail_service = build("gmail", "v1", credentials=creds)
 
             # Configure watch request
             watch_request = {
@@ -76,25 +73,22 @@ def process_notification(cloud_event):
         user_id = envelope["emailAddress"]
         history_id = envelope["historyId"]
 
-        # Get credentials for this specific email
-        credentials, _ = default()
-        credentials = credentials.with_subject(user_id)
-        credentials = credentials.with_scopes(
-            [
-                "https://www.googleapis.com/auth/gmail.readonly",
-                "https://www.googleapis.com/auth/gmail.modify",
-            ]
+        # Get credentials
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        scopes = [
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.modify",
+        ]
+        gmail_creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=scopes,
+            subject=user_id,
         )
-        credentials.refresh(Request())
-
-        # Build Gmail service for this specific user
-        gmail_service = build("gmail", "v1", credentials=credentials)
+        gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # Process the history and thread
         thread_id = get_thread_id(user_id, history_id, gmail_service)
-
-        # Here you would add your business logic to do something with the conversation
-        # For example, send it to another service, store it in a database, etc.
 
         if thread_id:
             # ToDo: check if the conversation stored for this thread_id has changed
