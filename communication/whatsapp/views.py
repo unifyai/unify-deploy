@@ -94,7 +94,6 @@ async def create_whatsapp_sender(request: Request):
     url = "https://messaging.twilio.com/v2/Channels/Senders"
     payload = {
         "sender_id": f"whatsapp:{data.get('phone_number')}",
-        # "waba_id": "",
         "profile": {"name": f"{data.get('first_name')} {data.get('last_name')}"},
         "webhook": {
             "callback_method": "POST",
