@@ -9,6 +9,7 @@ from google.cloud import pubsub_v1
 import os
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
+from twilio.twiml.messaging_response import MessagingResponse
 
 
 def get_twilio_client():
@@ -78,7 +79,7 @@ def add_user_to_conference(
 
 
 @functions_framework.http
-def twilio_webhook(request: Request):
+def twilio_call_webhook(request: Request):
     # get twilio number and caller number
     to_number = request.form.get("To", "")
     from_number = request.form.get("From", "")
@@ -92,9 +93,10 @@ def twilio_webhook(request: Request):
     # set up conference
     resp_user = create_conference_response(conference_name)
     add_user_to_conference(conference_name, caller_number, sip_uri)
+
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "phone")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "call")
     pubsub_client.publish(
         topic_path,
         json.dumps(
@@ -102,6 +104,32 @@ def twilio_webhook(request: Request):
                 "conference_name": conference_name,
                 "caller_number": caller_number,
                 "sip_uri": sip_uri,
+            }
+        ).encode("utf-8"),
+    )
+    return Response(response=str(resp_user), mimetype="text/xml")
+
+
+@functions_framework.http
+def twilio_msg_webhook(request: Request):
+    # get twilio number and caller number
+    to_number = request.form.get("To", "") or ""
+    from_number = request.form.get("From", "") or ""
+    body = request.form.get("Body", "") or ""
+
+    # set up conference
+    resp_user = MessagingResponse()
+    
+    # publish to pubsub
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "msg")
+    pubsub_client.publish(
+        topic_path,
+        json.dumps(
+            {
+                "to_number": to_number,
+                "from_number": from_number,
+                "body": body,
             }
         ).encode("utf-8"),
     )

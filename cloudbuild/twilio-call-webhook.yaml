@@ -10,7 +10,7 @@ steps:
           --region="$_REGION" \
           --runtime=python311 \
           --source="adapters/phone" \
-          --entry-point=twilio_webhook \
+          --entry-point=twilio_call_webhook \
           --trigger-http \
           --allow-unauthenticated
 timeout: "1200s"
@@ -18,5 +18,5 @@ options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 substitutions:
-  _FUNCTION_NAME: twilio-webhook
+  _FUNCTION_NAME: twilio-call-webhook
   _REGION: us-central1
