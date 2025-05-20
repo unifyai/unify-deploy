@@ -119,7 +119,7 @@ def twilio_msg_webhook(request: Request):
 
     # set up conference
     resp_user = MessagingResponse()
-    
+
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "msg")
