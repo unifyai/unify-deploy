@@ -12,7 +12,8 @@ steps:
           --source="adapters/whatsapp" \
           --entry-point=twilio_whatsapp_webhook \
           --trigger-http \
-          --allow-unauthenticated
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$_PROJECT_ID
 timeout: "1200s"
 options:
   substitutionOption: ALLOW_LOOSE

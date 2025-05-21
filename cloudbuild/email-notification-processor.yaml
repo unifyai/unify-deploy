@@ -12,7 +12,8 @@ steps:
           --source="adapters/email" \
           --entry-point=process_notification \
           --trigger-topic=email-notifications-test \
-          --allow-unauthenticated
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$_PROJECT_ID
 timeout: "1200s"
 options:
   substitutionOption: ALLOW_LOOSE
