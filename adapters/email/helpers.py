@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import re
 from google.cloud import pubsub_v1
 
@@ -131,7 +132,7 @@ def publish_thread_id(thread_id, user_id):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
-        topic_path = publisher.topic_path("gcp-project-runtime", "email")
+        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), "email")
 
         message_dict = {
             "thread_id": thread_id,

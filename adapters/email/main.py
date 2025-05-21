@@ -34,7 +34,7 @@ def renew_watch():
             # Configure watch request
             watch_request = {
                 "labelIds": ["INBOX"],
-                "topicName": "projects/gcp-project-runtime/topics/email-notifications-test",
+                "topicName": f"projects/{os.getenv('PROJECT_ID')}/topics/email-notifications-test",
             }
 
             # Execute watch request
