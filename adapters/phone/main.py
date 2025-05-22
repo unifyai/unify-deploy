@@ -80,57 +80,75 @@ def add_user_to_conference(
 
 @functions_framework.http
 def twilio_call_webhook(request: Request):
+    print("twilio_call_webhook function started")
     # get twilio number and caller number
     to_number = request.form.get("To", "")
     from_number = request.form.get("From", "")
     twilio_number = to_number or ""
     caller_number = from_number or ""
+    print(f"Received call from {caller_number} to {twilio_number}")
 
     # get conference name and sip uri
     conference_name = f"Unity_{twilio_number[1:]}"
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
 
     # set up conference
     resp_user = create_conference_response(conference_name)
     add_user_to_conference(conference_name, caller_number, sip_uri)
+    print("Conference setup completed")
 
     # publish to pubsub
+    print("Publishing call to Pub/Sub")
     pubsub_client = pubsub_v1.PublisherClient()
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "call")
-    pubsub_client.publish(
-        topic_path,
-        json.dumps(
-            {
-                "conference_name": conference_name,
-                "caller_number": caller_number,
-                "sip_uri": sip_uri,
-            }
-        ).encode("utf-8"),
-    )
+    try:
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "conference_name": conference_name,
+                    "caller_number": caller_number,
+                    "sip_uri": sip_uri,
+                }
+            ).encode("utf-8"),
+        )
+        print("Call published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing to Pub/Sub: {str(e)}")
+    print("Returning TwiML response")
     return Response(response=str(resp_user), mimetype="text/xml")
 
 
 @functions_framework.http
 def twilio_msg_webhook(request: Request):
+    print("twilio_msg_webhook function started")
     # get twilio number and caller number
     to_number = request.form.get("To", "") or ""
     from_number = request.form.get("From", "") or ""
     body = request.form.get("Body", "") or ""
+    print(f"Received message from {from_number} to {to_number} with body: {body}")
 
     # set up conference
     resp_user = MessagingResponse()
 
     # publish to pubsub
+    print("Publishing message to Pub/Sub")
     pubsub_client = pubsub_v1.PublisherClient()
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "msg")
-    pubsub_client.publish(
-        topic_path,
-        json.dumps(
-            {
-                "to_number": to_number,
-                "from_number": from_number,
-                "body": body,
-            }
-        ).encode("utf-8"),
-    )
+    try:
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "to_number": to_number,
+                    "from_number": from_number,
+                    "body": body,
+                }
+            ).encode("utf-8"),
+        )
+        print("Message published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing to Pub/Sub: {str(e)}")
+    print("Returning TwiML response")
     return Response(response=str(resp_user), mimetype="text/xml")
