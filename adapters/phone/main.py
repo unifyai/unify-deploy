@@ -99,9 +99,9 @@ def twilio_call_webhook(request: Request):
     print("Conference setup completed")
 
     # publish to pubsub
-    print("Publishing call to Pub/Sub")
     pubsub_client = pubsub_v1.PublisherClient()
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "call")
+    print(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
         pubsub_client.publish(
             topic_path,
@@ -133,9 +133,9 @@ def twilio_msg_webhook(request: Request):
     resp_user = MessagingResponse()
 
     # publish to pubsub
-    print("Publishing message to Pub/Sub")
     pubsub_client = pubsub_v1.PublisherClient()
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "msg")
+    print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         pubsub_client.publish(
             topic_path,
