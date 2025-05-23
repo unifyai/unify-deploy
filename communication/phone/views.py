@@ -247,9 +247,9 @@ async def create_phone_number():
 
 @router.delete("/delete")
 async def delete_phone_number(request: Request):
-    # Expect JSON body: { "phoneNumber": "+1234567890" }
+    # Expect JSON body: { "PhoneNumber": "+1234567890" }
     data = await request.json()
-    phone_number = data.get("phoneNumber")
+    phone_number = data.get("PhoneNumber")
     twilio_client = get_twilio_client()
     # Find the purchased number by E.164
     incoming_list = twilio_client.incoming_phone_numbers.list(
@@ -288,6 +288,15 @@ async def delete_phone_number(request: Request):
 #     twilio_client = get_twilio_client()
 #     twilio_client.calls(call_sid).update(send_digits=digits)
 #     return {"success": True}
+
+@router.post("/hang-up")
+async def call_status(request: Request):
+    data = await request.json()
+    call_sid = data.get("CallSid")
+
+    twilio_client = get_twilio_client()
+    conference = twilio_client.conferences(call_sid).update(status="completed")
+    return {"success": True, "status": conference.status}
 
 @router.post("/call-status")
 async def call_status(request: Request):
