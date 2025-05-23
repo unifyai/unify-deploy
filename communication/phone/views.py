@@ -290,12 +290,24 @@ async def delete_phone_number(request: Request):
 #     return {"success": True}
 
 @router.post("/hang-up")
-async def call_status(request: Request):
+async def hang_up(request: Request):
     data = await request.json()
     call_sid = data.get("CallSid")
+    conference_name = data.get("ConferenceName")
 
     twilio_client = get_twilio_client()
-    conference = twilio_client.conferences(call_sid).update(status="completed")
+    conferences = twilio_client.conferences.list(friendly_name=conference_name, status="in-progress")
+    conference = twilio_client.conferences(conferences[0].sid).participants(call_sid).delete()
+    return Response(status=200)
+
+@router.post("/end-conference")
+async def end_conference(request: Request):
+    data = await request.json()
+    conference_name = data.get("ConferenceName")
+
+    twilio_client = get_twilio_client()
+    conferences = twilio_client.conferences.list(friendly_name=conference_name, status="in-progress")
+    conference = twilio_client.conferences(conferences[0].sid).update(status="completed")
     return {"success": True, "status": conference.status}
 
 @router.post("/call-status")
