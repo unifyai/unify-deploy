@@ -54,7 +54,7 @@ async def create_email_user(request: Request):
     local = data.get("local")
     first_name = data.get("first_name")
     last_name = data.get("last_name")
-    if not local:
+    if not local or not first_name or not last_name:
         raise HTTPException(status_code=400, detail="Missing required fields: local, first_name, last_name")
     domain = "unify.ai"
     # sanitize local part
