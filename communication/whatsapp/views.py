@@ -1,4 +1,5 @@
 import os
+import json
 import unify
 import base64
 import httpx
@@ -86,6 +87,27 @@ async def send_text(request: Request):
     )
     return {"success": True}
 
+@router.post("/send-greeting")
+async def send_greeting(request: Request):
+    data = await request.json()
+    receiver_number = data.get("to")
+    twilio_number = data.get("from")
+    user_name = data.get("user_name")
+    agent_name = data.get("agent_name")
+
+    twilio_client = get_twilio_client()
+    twilio_client.messages.create(
+        content_sid="HXe1624dc6761e564cf974d214278d0a6f",
+        to=f"whatsapp:{receiver_number}",
+        from_=f"whatsapp:{twilio_number}",
+        content_variables=json.dumps({
+            "user_name": user_name,
+            "agent_name": agent_name
+        }),
+        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/status",
+    )
+    return {"success": True}
+
 @router.post("/create")
 async def create_whatsapp_sender(request: Request):
     data = await request.json()
@@ -131,3 +153,4 @@ async def delete_whatsapp_sender(request: Request):
         text = await resp.text()
         raise HTTPException(status_code=resp.status_code, detail=f"Failed to delete WhatsApp sender: {text}")
     return {"success": True}
+
