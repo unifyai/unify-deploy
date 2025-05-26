@@ -3,6 +3,7 @@ import base64
 import functions_framework
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
+from adapters.helpers import get_assistant_id
 from helpers import get_thread_id, publish_thread_id
 import os
 import requests
@@ -71,6 +72,9 @@ def process_notification(cloud_event):
         user_id = envelope["emailAddress"]
         history_id = envelope["historyId"]
 
+        # get assistant id from email id
+        assistant_id = get_assistant_id(email_id=user_id)
+
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
         scopes = [
@@ -92,7 +96,7 @@ def process_notification(cloud_event):
             # ToDo: check if the conversation stored for this thread_id has changed
             # send the thread_id to a different channel
             print(f"Successfully processed conversation for user {user_id}")
-            publish_thread_id(thread_id, user_id)
+            publish_thread_id(assistant_id, thread_id, user_id)
             return "OK"
         else:
             print(f"No new conversations found for user {user_id}")

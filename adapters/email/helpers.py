@@ -128,15 +128,18 @@ def get_thread_id(user_id, history_id, gmail_service):
         return None
 
 
-def publish_thread_id(thread_id, user_id):
+def publish_thread_id(assistant_id, thread_id, user_id):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
-        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), "email")
+        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), assistant_id)
 
         message_dict = {
-            "thread_id": thread_id,
-            "email": user_id,
+            "thread": "email",
+            "event": {
+                "thread_id": thread_id,
+                "email": user_id,
+            },
         }
         data = json.dumps(message_dict).encode("utf-8")
 
