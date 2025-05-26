@@ -57,8 +57,6 @@ async def create_email_user(request: Request):
     if not local or not first_name or not last_name:
         raise HTTPException(status_code=400, detail="Missing required fields: local, first_name, last_name")
     domain = "unify.ai"
-    # sanitize local part
-    local = ''.join(c for c in local if c.isalnum() or c == '.')
     primary_email = f"{local}@{domain}"
     # generate secure password
     password = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(32))
