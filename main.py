@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from communication.phone.views import router as phone_router
 from communication.whatsapp.views import router as whatsapp_router
 from communication.email.views import router as email_router
+from communication.infra.views import router as infra_router
 import uvicorn
 
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ app = FastAPI()
 app.include_router(phone_router, prefix="/phone")
 app.include_router(whatsapp_router, prefix="/whatsapp")
 app.include_router(email_router, prefix="/email")
+app.include_router(infra_router, prefix="/infra")
 
 @app.get("/")
 async def read_root():
