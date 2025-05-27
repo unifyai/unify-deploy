@@ -209,9 +209,18 @@ async def send_text(request: Request):
     return {"success": True}
 
 @router.post("/create")
-async def create_phone_number():
+async def create_phone_number(request: Request):
+    data = await request.json()
+
+    # Extract customizable parameters from request
+    voice_url = data.get("voice_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/call")
+    voice_method = data.get("voice_method", "POST")
+    sms_url = data.get("sms_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/text")
+    sms_method = data.get("sms_method", "POST")
+
     # Initialize Twilio client
     twilio_client = get_twilio_client()
+
     # Search for available US mobile number
     numbers = twilio_client.available_phone_numbers("US").local.list(
         limit=1, sms_enabled=True, voice_enabled=True
@@ -219,14 +228,23 @@ async def create_phone_number():
     if not numbers:
         raise HTTPException(status_code=404, detail="No suitable phone numbers found.")
     record = numbers[0]
+
     # Purchase the number and configure webhooks
     incoming = twilio_client.incoming_phone_numbers.create(
         phone_number=record.phone_number,
-        voice_url=f"{os.getenv('UNIFY_COMMS_URL')}/phone/call",
-        voice_method="POST",
-        sms_url=f"{os.getenv('UNIFY_COMMS_URL')}/phone/text",
-        sms_method="POST",
+        voice_url=voice_url,
+        voice_method=voice_method,
+        sms_url=sms_url,
+        sms_method=sms_method,
     )
+
+    # Set up the messaing service
+    services = twilio_client.messaging.v1.services.list()
+    for service in services:
+        if service.friendly_name == "Unity":
+            service.phone_numbers.create(phone_number_sid=incoming.sid)
+            break
+
     # Set up LiveKit inbound SIP trunk
     lkapi = LiveKitAPI(
         url=os.getenv("LIVEKIT_URL"),
@@ -251,6 +269,7 @@ async def delete_phone_number(request: Request):
     data = await request.json()
     phone_number = data.get("PhoneNumber")
     twilio_client = get_twilio_client()
+
     # Find the purchased number by E.164
     incoming_list = twilio_client.incoming_phone_numbers.list(
         phone_number=phone_number,
@@ -259,6 +278,7 @@ async def delete_phone_number(request: Request):
     if not incoming_list:
         raise HTTPException(status_code=404, detail="Phone number not found")
     phone_sid = incoming_list[0].sid
+
     # Delete the number
     twilio_client.incoming_phone_numbers(phone_sid).delete()
 
