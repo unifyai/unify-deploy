@@ -326,69 +326,49 @@ async def control_cloudrun_job(
             }
 
         elif action == "stop":
-            # First, we need to get the running executions
+            # Get the executions client
             executions_client = run_v2.ExecutionsClient(credentials=creds)
 
             # List executions for this job
             executions = executions_client.list_executions(parent=job_path)
 
             cancelled_executions = []
+            failed_cancellations = []
             for execution in executions:
-                # Only cancel running executions
-                if execution.status.conditions:
-                    # Check if execution is still running (not completed, failed, or cancelled)
-                    is_running = True
-                    for condition in execution.status.conditions:
-                        if condition.type == "Completed" and condition.status == "True":
-                            is_running = False
-                            break
-                        elif condition.type == "Failed" and condition.status == "True":
-                            is_running = False
-                            break
+                try:
+                    # Try to cancel the execution - API will handle if it's already completed/failed/cancelled
+                    cancel_operation = executions_client.cancel_execution(
+                        name=execution.name
+                    )
+                    cancel_operation.result()  # Wait for cancellation to complete
+                    cancelled_executions.append(execution.name)
+                except Exception as cancel_error:
+                    # If cancellation fails (e.g., already completed), just log and continue
+                    failed_cancellations.append(
+                        {"execution": execution.name, "error": str(cancel_error)}
+                    )
 
-                    if is_running:
-                        try:
-                            # Cancel the execution
-                            cancel_operation = executions_client.cancel_execution(
-                                name=execution.name
-                            )
-                            cancel_operation.result()  # Wait for cancellation to complete
-                            cancelled_executions.append(execution.name)
-                        except Exception as cancel_error:
-                            # Continue with other executions even if one fails to cancel
-                            print(
-                                f"Failed to cancel execution {execution.name}: {cancel_error}"
-                            )
-
-            if cancelled_executions:
-                return {
-                    "success": True,
-                    "message": f"Cloud Run job executions stopped successfully",
-                    "action": "stop",
-                    "job_name": job_path,
-                    "cancelled_executions": cancelled_executions,
-                    "assistant_id": assistant_id,
-                    "project_id": PROJECT_ID,
-                    "region": DEFAULT_REGION,
-                }
-            else:
-                return {
-                    "success": True,
-                    "message": f"No running executions found to stop",
-                    "action": "stop",
-                    "job_name": job_path,
-                    "cancelled_executions": [],
-                    "assistant_id": assistant_id,
-                    "project_id": PROJECT_ID,
-                    "region": DEFAULT_REGION,
-                }
+            return {
+                "success": True,
+                "message": f"Cloud Run job stop operation completed",
+                "action": "stop",
+                "job_name": job_path,
+                "cancelled_executions": cancelled_executions,
+                "failed_cancellations": failed_cancellations,
+                "assistant_id": assistant_id,
+                "project_id": PROJECT_ID,
+                "region": DEFAULT_REGION,
+            }
 
     except Exception as e:
         # Handle various error cases
         if "not found" in str(e).lower():
             raise HTTPException(
                 status_code=404,
-                detail=f"Cloud Run job 'unity_{assistant_id}' not found. Please create the job first.",
+                detail=(
+                    f"Cloud Run job 'unity-{assistant_id}' not found. "
+                    "Please create the job first."
+                ),
             )
         else:
             raise HTTPException(
@@ -439,49 +419,83 @@ async def get_cloudrun_job_status(assistant_id: str):
         # Get recent executions
         executions = executions_client.list_executions(parent=job_path)
 
-        execution_statuses = []
-        running_count = 0
-        completed_count = 0
-        failed_count = 0
+        # Get the latest execution (most recent)
+        latest_execution = None
+        latest_execution_status = "no_executions"
 
-        for execution in executions:
-            status = "unknown"
-            if execution.status.conditions:
-                for condition in execution.status.conditions:
-                    if condition.type == "Completed" and condition.status == "True":
-                        status = "completed"
-                        completed_count += 1
-                        break
-                    elif condition.type == "Failed" and condition.status == "True":
-                        status = "failed"
-                        failed_count += 1
-                        break
-                    elif condition.type == "Running" and condition.status == "True":
-                        status = "running"
-                        running_count += 1
-                        break
+        try:
+            # Get the first execution from the list (they're ordered by creation time, newest first)
+            executions_list = list(executions)
+            if executions_list:
+                latest_execution = executions_list[0]
 
-            execution_statuses.append(
-                {
-                    "name": execution.name,
-                    "status": status,
-                    "create_time": (
-                        execution.create_time.isoformat()
-                        if execution.create_time
-                        else None
-                    ),
-                    "start_time": (
-                        execution.start_time.isoformat()
-                        if execution.start_time
-                        else None
-                    ),
-                    "completion_time": (
-                        execution.completion_time.isoformat()
-                        if execution.completion_time
-                        else None
-                    ),
-                }
-            )
+                # Debug: Log what we're getting from the API
+                print(f"DEBUG: Latest execution object: {latest_execution}")
+                if hasattr(latest_execution, "conditions"):
+                    print(f"DEBUG: Execution conditions: {latest_execution.conditions}")
+                    for condition in latest_execution.conditions:
+                        print(
+                            f"DEBUG: Condition type: {condition.type}, status: {condition.status}"
+                        )
+
+                # Determine status of latest execution
+                if (
+                    hasattr(latest_execution, "conditions")
+                    and latest_execution.conditions
+                ):
+                    for condition in latest_execution.conditions:
+                        if condition.type == "Completed" and condition.status == "True":
+                            latest_execution_status = "completed"
+                            break
+                        elif condition.type == "Failed" and condition.status == "True":
+                            latest_execution_status = "failed"
+                            break
+                        elif (
+                            condition.type == "Cancelled" and condition.status == "True"
+                        ):
+                            latest_execution_status = "cancelled"
+                            break
+                        elif (
+                            condition.type == "Cancelling"
+                            and condition.status == "True"
+                        ):
+                            latest_execution_status = "cancelling"
+                            break
+                    # If no terminal condition found, assume running
+                    if latest_execution_status == "no_executions":
+                        latest_execution_status = "running"
+                else:
+                    # No conditions available, assume running
+                    latest_execution_status = "running"
+        except Exception as status_error:
+            print(f"Could not determine status for latest execution: {status_error}")
+            latest_execution_status = "unknown"
+
+        # Prepare latest execution info
+        latest_execution_info = None
+        if latest_execution:
+            latest_execution_info = {
+                "name": latest_execution.name,
+                "status": latest_execution_status,
+                "create_time": (
+                    latest_execution.create_time.isoformat()
+                    if hasattr(latest_execution, "create_time")
+                    and latest_execution.create_time
+                    else None
+                ),
+                "start_time": (
+                    latest_execution.start_time.isoformat()
+                    if hasattr(latest_execution, "start_time")
+                    and latest_execution.start_time
+                    else None
+                ),
+                "completion_time": (
+                    latest_execution.completion_time.isoformat()
+                    if hasattr(latest_execution, "completion_time")
+                    and latest_execution.completion_time
+                    else None
+                ),
+            }
 
         return {
             "success": True,
@@ -495,13 +509,11 @@ async def get_cloudrun_job_status(assistant_id: str):
                 "create_time": job.create_time.isoformat() if job.create_time else None,
                 "update_time": job.update_time.isoformat() if job.update_time else None,
             },
-            "execution_summary": {
-                "total_executions": len(execution_statuses),
-                "running": running_count,
-                "completed": completed_count,
-                "failed": failed_count,
-            },
-            "recent_executions": execution_statuses[:10],  # Show last 10 executions
+            "latest_execution": latest_execution_info,
+            "execution_status": latest_execution_status,
+            "total_executions": (
+                len(executions_list) if "executions_list" in locals() else 0
+            ),
         }
 
     except Exception as e:
