@@ -112,7 +112,6 @@ async def create_cloudrun_job(assistant_id: str = Form(...)):
 
         # Define the job configuration
         job = run_v2.Job(
-            name=f"unity_{assistant_id}",
             labels={"cloud.googleapis.com/location": DEFAULT_REGION},
             template=run_v2.ExecutionTemplate(
                 template=run_v2.TaskTemplate(
