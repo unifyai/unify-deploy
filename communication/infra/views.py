@@ -312,15 +312,14 @@ async def control_cloudrun_job(
             # Execute the job
             operation = jobs_client.run_job(name=job_path)
 
-            # Wait for the operation to complete (this creates the execution)
-            result = operation.result()
-
+            # Return immediately after starting the execution (don't wait for completion)
+            # The job will run indefinitely until stopped
             return {
                 "success": True,
                 "message": f"Cloud Run job execution started successfully",
                 "action": "start",
                 "job_name": job_path,
-                "execution_name": result.name,
+                "operation_name": operation.name,
                 "assistant_id": assistant_id,
                 "project_id": PROJECT_ID,
                 "region": DEFAULT_REGION,
