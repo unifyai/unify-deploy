@@ -305,7 +305,7 @@ async def control_cloudrun_job(
         jobs_client = run_v2.JobsClient(credentials=creds)
 
         # Create the job name with unity_ prefix
-        job_name = f"unity_{assistant_id}"
+        job_name = f"unity-{assistant_id}"
         job_path = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/jobs/{job_name}"
 
         if action == "start":
@@ -416,7 +416,7 @@ async def get_cloudrun_job_status(assistant_id: str):
         executions_client = run_v2.ExecutionsClient(credentials=creds)
 
         # Create the job name with unity_ prefix
-        job_name = f"unity_{assistant_id}"
+        job_name = f"unity-{assistant_id}"
         job_path = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/jobs/{job_name}"
 
         # Get job details
@@ -431,7 +431,7 @@ async def get_cloudrun_job_status(assistant_id: str):
             return {
                 "success": True,
                 "job_exists": False,
-                "message": f"Cloud Run job 'unity_{assistant_id}' not found",
+                "message": f"Cloud Run job 'unity-{assistant_id}' not found",
                 "assistant_id": assistant_id,
                 "project_id": PROJECT_ID,
                 "region": DEFAULT_REGION,
@@ -526,7 +526,7 @@ async def delete_cloudrun_job(assistant_id: str = Form(...)):
         jobs_client = run_v2.JobsClient(credentials=creds)
 
         # Create the job name with unity_ prefix
-        job_name = f"unity_{assistant_id}"
+        job_name = f"unity-{assistant_id}"
         job_path = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/jobs/{job_name}"
 
         # Delete the job
