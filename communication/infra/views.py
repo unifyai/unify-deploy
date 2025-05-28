@@ -111,22 +111,138 @@ async def create_cloudrun_job(assistant_id: str = Form(...)):
 
         # Define the job configuration
         job = run_v2.Job(
+            name=f"unity_{assistant_id}",
+            labels={"cloud.googleapis.com/location": DEFAULT_REGION},
             template=run_v2.ExecutionTemplate(
                 template=run_v2.TaskTemplate(
                     containers=[
                         run_v2.Container(
-                            # Using a simple hello-world image as default
-                            # This can be updated later with the actual Unity container image
-                            image="us-docker.pkg.dev/cloudrun/container/job:latest",
+                            name="unity-1",
+                            image=(
+                                "us-central1-docker.pkg.dev/gcp-project-runtime"
+                                "/unity/unity:latest"
+                            ),
+                            env=[
+                                run_v2.EnvVar(
+                                    name="UNITY_COMMS_URL",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="UNIFY_COMMS_URL",
+                                            version="latest",
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="TWILIO_ACCOUNT_SID",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="TWILIO_ACCOUNT_SID",
+                                            version="latest",
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="TWILIO_AUTH_TOKEN",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="TWILIO_AUTH_TOKEN", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="TWILIO_API_SID",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="TWILIO_API_SID", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="TWILIO_API_SECRET",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="TWILIO_API_SECRET", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="LIVEKIT_SIP_URI",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="LIVEKIT_SIP_URI", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="LIVEKIT_URL",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="LIVEKIT_URL", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="LIVEKIT_API_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="LIVEKIT_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="LIVEKIT_API_SECRET",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="LIVEKIT_API_SECRET",
+                                            version="latest",
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="DEEPGRAM_API_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="DEEPGRAM_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="CARTESIA_API_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="CARTESIA_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="UNIFY_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="ORCHESTRA_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="OPENAI_API_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="OPENAI_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                            ],
                             resources=run_v2.ResourceRequirements(
-                                limits={"cpu": "1", "memory": "512Mi"}
+                                limits={"cpu": "1", "memory": "2Gi"}
                             ),
                         )
                     ],
-                    max_retries=3,
-                    task_timeout="600s",  # 10 minutes
+                    max_retries=0,
+                    timeout=43200,
+                    service_account=(
+                        "service-account@example.iam.gserviceaccount.com"
+                    ),
                 )
-            )
+            ),
         )
 
         # Create the job
