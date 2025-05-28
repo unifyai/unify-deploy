@@ -119,7 +119,10 @@ async def create_whatsapp_sender(request: Request):
         "profile": {"name": f"{data.get('first_name')} {data.get('last_name')}"},
         "webhook": {
             "callback_method": "POST",
-            "callback_url": f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/text"
+            "callback_url": data.get(
+                "callback_url",
+                f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/text"
+            )
         }
     }
     auth_str = f"{account_sid}:{auth_token}"
