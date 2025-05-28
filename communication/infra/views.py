@@ -105,7 +105,7 @@ async def create_cloudrun_job(assistant_id: str = Form(...)):
         jobs_client = run_v2.JobsClient(credentials=creds)
 
         # Create the job name with unity_ prefix
-        job_name = f"unity_{assistant_id}"
+        job_name = f"unity-{assistant_id}"
 
         # Create the parent path
         parent = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}"
