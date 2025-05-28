@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Form, Request, HTTPException
 from google.cloud import pubsub_v1, run_v2
 from google.oauth2.service_account import Credentials
+from google.protobuf.duration_pb2 import Duration
 import json
 import os
 
@@ -237,7 +238,7 @@ async def create_cloudrun_job(assistant_id: str = Form(...)):
                         )
                     ],
                     max_retries=0,
-                    timeout=43200,
+                    timeout=Duration(seconds=43200),
                     service_account=(
                         "service-account@example.iam.gserviceaccount.com"
                     ),
