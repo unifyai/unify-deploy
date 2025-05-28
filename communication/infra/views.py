@@ -4,6 +4,7 @@ from google.oauth2.service_account import Credentials
 from google.protobuf.duration_pb2 import Duration
 import json
 import os
+import asyncio
 
 
 router = APIRouter()
@@ -330,21 +331,62 @@ async def control_cloudrun_job(
 
             # List executions for this job
             executions = executions_client.list_executions(parent=job_path)
+            executions_list = list(executions)
 
+            if not executions_list:
+                return {
+                    "success": True,
+                    "message": "No executions found to cancel",
+                    "action": "stop",
+                    "job_name": job_path,
+                    "cancelled_executions": [],
+                    "failed_cancellations": [],
+                    "assistant_id": assistant_id,
+                    "project_id": PROJECT_ID,
+                    "region": DEFAULT_REGION,
+                }
+
+            async def cancel_execution_async(execution):
+                """Cancel a single execution asynchronously"""
+                try:
+                    # Run the synchronous cancel operation in a thread pool
+                    loop = asyncio.get_event_loop()
+                    cancel_operation = await loop.run_in_executor(
+                        None,
+                        lambda: executions_client.cancel_execution(name=execution.name),
+                    )
+                    # Wait for cancellation to complete
+                    await loop.run_in_executor(None, cancel_operation.result)
+                    return {"success": True, "execution": execution.name}
+                except Exception as cancel_error:
+                    return {
+                        "success": False,
+                        "execution": execution.name,
+                        "error": str(cancel_error),
+                    }
+
+            # Cancel all executions concurrently
+            cancellation_tasks = [
+                cancel_execution_async(execution) for execution in executions_list
+            ]
+            cancellation_results = await asyncio.gather(
+                *cancellation_tasks, return_exceptions=True
+            )
+
+            # Process results
             cancelled_executions = []
             failed_cancellations = []
-            for execution in executions:
-                try:
-                    # Try to cancel the execution - API will handle if it's already completed/failed/cancelled
-                    cancel_operation = executions_client.cancel_execution(
-                        name=execution.name
-                    )
-                    cancel_operation.result()  # Wait for cancellation to complete
-                    cancelled_executions.append(execution.name)
-                except Exception as cancel_error:
-                    # If cancellation fails (e.g., already completed), just log and continue
+
+            for result in cancellation_results:
+                if isinstance(result, Exception):
                     failed_cancellations.append(
-                        {"execution": execution.name, "error": str(cancel_error)}
+                        {"execution": "unknown", "error": str(result)}
+                    )
+                elif result["success"]:
+                    cancelled_executions.append(result["execution"])
+                else:
+                    failed_cancellations.append(
+                        {"execution": result["execution"], "error": result["error"]}
                     )
 
             return {
@@ -354,6 +396,7 @@ async def control_cloudrun_job(
                 "job_name": job_path,
                 "cancelled_executions": cancelled_executions,
                 "failed_cancellations": failed_cancellations,
+                "total_executions": len(executions_list),
                 "assistant_id": assistant_id,
                 "project_id": PROJECT_ID,
                 "region": DEFAULT_REGION,
