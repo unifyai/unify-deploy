@@ -98,7 +98,6 @@ async def create_cloudrun_job(
     user_name: str = Form(...),
     assistant_number: str = Form(...),
     user_number: str = Form(...),
-    user_phone_number: str = Form(...),
 ):
     """
     Create a Google Cloud Run job named unity_<assistant_id>.
@@ -108,7 +107,6 @@ async def create_cloudrun_job(
         user_name: The user's name
         assistant_number: The assistant's phone number
         user_number: The user's phone number
-        user_phone_number: The user's phone number
     """
     try:
         # Get credentials from environment variable
@@ -151,10 +149,6 @@ async def create_cloudrun_job(
                                 run_v2.EnvVar(
                                     name="USER_NUMBER",
                                     value=user_number,
-                                ),
-                                run_v2.EnvVar(
-                                    name="USER_PHONE_NUMBER",
-                                    value=user_phone_number,
                                 ),
                                 run_v2.EnvVar(
                                     name="UNITY_COMMS_URL",
