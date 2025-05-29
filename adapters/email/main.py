@@ -6,8 +6,7 @@ from google.oauth2.service_account import Credentials
 import os
 import requests
 
-from ..helpers import get_assistant_id
-from .helpers import get_thread_id, publish_thread_id
+from .helpers import get_assistant_id, get_thread_id, publish_thread_id
 
 
 @functions_framework.http

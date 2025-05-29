@@ -7,11 +7,39 @@ from flask import Request, Response
 import functions_framework
 from google.cloud import pubsub_v1
 import os
+import requests
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
 
-from ..helpers import get_assistant_id
+
+def get_assistant_id(
+    email_id: str = None,
+    phone_number: str = None,
+) -> str:
+    """
+    Get the assistant id from the email id or phone number.
+
+    Args:
+        email_id: The email id of the assistant.
+        phone_number: The phone number of the assistant.
+
+    Returns:
+        The assistant id.
+    """
+    params = dict()
+    if email_id:
+        params["email"] = email_id
+    if phone_number:
+        params["phone_number"] = phone_number
+    assistants = requests.get(
+        "https://api.unify.ai/v0/admin/assistant",
+        params=params,
+        headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+    ).json()["info"]
+    if len(assistants) == 0:
+        return "default_assistant"
+    return assistants[0]["agent_id"]
 
 
 def get_twilio_client():
@@ -110,14 +138,16 @@ def twilio_call_webhook(request: Request):
     try:
         pubsub_client.publish(
             topic_path,
-            json.dumps({
-                "thread": "call",
-                "event": {
-                    "conference_name": conference_name,
-                    "caller_number": caller_number,
-                    "sip_uri": sip_uri,
-                },
-            }).encode("utf-8"),
+            json.dumps(
+                {
+                    "thread": "call",
+                    "event": {
+                        "conference_name": conference_name,
+                        "caller_number": caller_number,
+                        "sip_uri": sip_uri,
+                    },
+                }
+            ).encode("utf-8"),
         )
         print("Call published to Pub/Sub successfully")
     except Exception as e:
@@ -148,14 +178,16 @@ def twilio_msg_webhook(request: Request):
     try:
         pubsub_client.publish(
             topic_path,
-            json.dumps({
-                "thread": "msg",
-                "event": {
-                    "to_number": to_number,
-                    "from_number": from_number,
-                    "body": body,
-                },
-            }).encode("utf-8"),
+            json.dumps(
+                {
+                    "thread": "msg",
+                    "event": {
+                        "to_number": to_number,
+                        "from_number": from_number,
+                        "body": body,
+                    },
+                }
+            ).encode("utf-8"),
         )
         print("Message published to Pub/Sub successfully")
     except Exception as e:
