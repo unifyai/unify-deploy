@@ -130,9 +130,25 @@ def twilio_call_webhook(request: Request):
     print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
 
     # set up conference
-    resp_user = create_conference_response(conference_name)
-    add_user_to_conference(conference_name, caller_number, sip_uri)
-    print("Conference setup completed")
+    try:
+        resp_user = create_conference_response(conference_name)
+        if resp_user:
+            print("Conference response created successfully")
+        else:
+            print("Error: Failed to create conference response")
+            return Response(response="Error creating conference", status=500)
+
+        call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
+        if call_sid:
+            print(f"User added to conference successfully. Call SID: {call_sid}")
+        else:
+            print("Error: Failed to add user to conference")
+            return Response(response="Error adding user to conference", status=500)
+
+        print("Conference setup completed")
+    except Exception as e:
+        print(f"Error during conference setup: {str(e)}")
+        return Response(response="Error setting up conference", status=500)
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
