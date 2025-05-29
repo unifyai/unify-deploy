@@ -177,11 +177,14 @@ def get_assistant_id(
         params["email"] = email_id
     if phone_number:
         params["phone_number"] = phone_number
-    assistants = requests.get(
+    response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-    ).json()["info"]
+    ).json()
+    if "detail" in response:
+        return "default_assistant"
+    assistants = response["info"]
     if len(assistants) == 0:
         return "default_assistant"
     return assistants[0]["agent_id"]
