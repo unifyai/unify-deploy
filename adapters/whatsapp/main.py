@@ -5,7 +5,8 @@ from google.cloud import pubsub_v1
 import os
 from twilio.twiml.messaging_response import MessagingResponse
 
-from adapters.helpers import get_assistant_id
+from ..helpers import get_assistant_id
+
 
 @functions_framework.http
 def twilio_whatsapp_webhook(request: Request):

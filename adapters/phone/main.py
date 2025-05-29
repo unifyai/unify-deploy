@@ -11,7 +11,7 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
 
-from adapters.helpers import get_assistant_id
+from ..helpers import get_assistant_id
 
 
 def get_twilio_client():

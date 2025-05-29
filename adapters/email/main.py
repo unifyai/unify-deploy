@@ -3,10 +3,11 @@ import base64
 import functions_framework
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
-from adapters.helpers import get_assistant_id
-from helpers import get_thread_id, publish_thread_id
 import os
 import requests
+
+from ..helpers import get_assistant_id
+from .helpers import get_thread_id, publish_thread_id
 
 
 @functions_framework.http
