@@ -137,6 +137,10 @@ async def create_cloudrun_job(
                             ),
                             env=[
                                 run_v2.EnvVar(
+                                    name="ASSISTANT_ID",
+                                    value=assistant_id,
+                                ),
+                                run_v2.EnvVar(
                                     name="USER_NAME",
                                     value=user_name,
                                 ),
