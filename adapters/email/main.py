@@ -3,6 +3,7 @@ import base64
 import functions_framework
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
+from adapters.helpers import get_assistant_id
 from helpers import get_thread_id, publish_thread_id
 import os
 import requests
@@ -70,6 +71,9 @@ def process_notification(cloud_event):
         # Extract Gmail notification details
         user_id = envelope["emailAddress"]
         history_id = envelope["historyId"]
+
+        # get assistant id from email id
+        assistant_id = get_assistant_id(email_id=user_id)
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))

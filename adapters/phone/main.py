@@ -11,6 +11,8 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
 
+from adapters.helpers import get_assistant_id
+
 
 def get_twilio_client():
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
@@ -88,6 +90,9 @@ def twilio_call_webhook(request: Request):
     caller_number = from_number or ""
     print(f"Received call from {caller_number} to {twilio_number}")
 
+    # get assistant id from email id
+    assistant_id = get_assistant_id(phone_number=to_number)
+
     # get conference name and sip uri
     conference_name = f"Unity_{twilio_number[1:]}"
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
@@ -100,18 +105,19 @@ def twilio_call_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "call")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), assistant_id)
     print(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
         pubsub_client.publish(
             topic_path,
-            json.dumps(
-                {
+            json.dumps({
+                "thread": "call",
+                "event": {
                     "conference_name": conference_name,
                     "caller_number": caller_number,
                     "sip_uri": sip_uri,
-                }
-            ).encode("utf-8"),
+                },
+            }).encode("utf-8"),
         )
         print("Call published to Pub/Sub successfully")
     except Exception as e:
@@ -129,23 +135,27 @@ def twilio_msg_webhook(request: Request):
     body = request.form.get("Body", "") or ""
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
+    # get assistant id from email id
+    assistant_id = get_assistant_id(phone_number=to_number)
+
     # set up conference
     resp_user = MessagingResponse()
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), "msg")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), assistant_id)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         pubsub_client.publish(
             topic_path,
-            json.dumps(
-                {
+            json.dumps({
+                "thread": "msg",
+                "event": {
                     "to_number": to_number,
                     "from_number": from_number,
                     "body": body,
-                }
-            ).encode("utf-8"),
+                },
+            }).encode("utf-8"),
         )
         print("Message published to Pub/Sub successfully")
     except Exception as e:
