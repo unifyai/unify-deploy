@@ -93,9 +93,22 @@ async def delete_pubsub_topic(assistant_id: str = Form(...)):
 
 # create cloud run job
 @router.post("/job/create")
-async def create_cloudrun_job(assistant_id: str = Form(...)):
+async def create_cloudrun_job(
+    assistant_id: str = Form(...),
+    user_name: str = Form(...),
+    assistant_number: str = Form(...),
+    user_number: str = Form(...),
+    user_phone_number: str = Form(...),
+):
     """
     Create a Google Cloud Run job named unity_<assistant_id>.
+
+    Args:
+        assistant_id: The assistant ID (job will be unity_<assistant_id>)
+        user_name: The user's name
+        assistant_number: The assistant's phone number
+        user_number: The user's phone number
+        user_phone_number: The user's phone number
     """
     try:
         # Get credentials from environment variable
@@ -123,6 +136,22 @@ async def create_cloudrun_job(assistant_id: str = Form(...)):
                                 "/unity/unity:latest"
                             ),
                             env=[
+                                run_v2.EnvVar(
+                                    name="USER_NAME",
+                                    value=user_name,
+                                ),
+                                run_v2.EnvVar(
+                                    name="ASSISTANT_NUMBER",
+                                    value=assistant_number,
+                                ),
+                                run_v2.EnvVar(
+                                    name="USER_NUMBER",
+                                    value=user_number,
+                                ),
+                                run_v2.EnvVar(
+                                    name="USER_PHONE_NUMBER",
+                                    value=user_phone_number,
+                                ),
                                 run_v2.EnvVar(
                                     name="UNITY_COMMS_URL",
                                     value_source=run_v2.EnvVarSource(
