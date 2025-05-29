@@ -19,44 +19,58 @@ DEFAULT_REGION = "us-central1"
 @router.post("/pubsub/topic")
 async def create_pubsub_topic(assistant_id: str = Form(...)):
     """
-    Create a Google Cloud Pub/Sub topic with the assistant_id as the topic name.
+    Create a Google Cloud Pub/Sub topic and subscription with the assistant_id as
+    the name.
     """
     try:
         # Get credentials from environment variable
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
         creds = Credentials.from_service_account_info(creds_json)
 
-        # Initialize the publisher client
+        # Initialize the publisher and subscriber clients
         publisher = pubsub_v1.PublisherClient(credentials=creds)
+        subscriber = pubsub_v1.SubscriberClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
         topic_path = publisher.topic_path(PROJECT_ID, assistant_id)
+        subscription_path = subscriber.subscription_path(
+            PROJECT_ID, f"{assistant_id}-sub"
+        )
 
-        # Create the topic
-        topic = publisher.create_topic(request={"name": topic_path})
-
-        return {
-            "success": True,
-            "message": f"Topic created successfully",
-            "topic_name": topic.name,
-            "assistant_id": assistant_id,
-            "project_id": PROJECT_ID,
-        }
-
-    except Exception as e:
-        # Handle case where topic already exists or other errors
-        if "already exists" in str(e).lower():
+        # Try to create the topic
+        try:
+            publisher.create_topic(request={"name": topic_path})
+            subscriber.create_subscription(
+                request={
+                    "name": subscription_path,
+                    "topic": topic_path,
+                }
+            )
             return {
                 "success": True,
-                "message": f"Topic already exists",
-                "topic_name": f"projects/{PROJECT_ID}/topics/{assistant_id}",
+                "message": "Topic and subscription created successfully",
+                "topic_name": topic_path,
+                "subscription_name": subscription_path,
                 "assistant_id": assistant_id,
                 "project_id": PROJECT_ID,
             }
-        else:
-            raise HTTPException(
-                status_code=500, detail=f"Failed to create topic: {str(e)}"
-            )
+        except Exception as e:
+            # Handle case where topic already exists
+            if "already exists" in str(e).lower():
+                return {
+                    "success": True,
+                    "message": "Topic and subscription already exist",
+                    "topic_name": topic_path,
+                    "subscription_name": subscription_path,
+                    "assistant_id": assistant_id,
+                    "project_id": PROJECT_ID,
+                }
+            else:
+                raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create topic and subscription: {str(e)}"
+        )
 
 
 # delete pubsub topic
@@ -64,6 +78,7 @@ async def create_pubsub_topic(assistant_id: str = Form(...)):
 async def delete_pubsub_topic(assistant_id: str = Form(...)):
     """
     Delete a Google Cloud Pub/Sub topic with the assistant_id as the topic name.
+    Note: Deleting a topic automatically deletes all subscriptions attached to it.
     """
     try:
         # Get credentials from environment variable
