@@ -21,12 +21,11 @@ def get_assistant_id(
     Returns:
         The assistant id.
     """
-    return "default-assistant"
     params = dict()
     if email_id:
         params["email"] = email_id
     if phone_number:
-        params["phone_number"] = phone_number
+        params["phone"] = phone_number
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
