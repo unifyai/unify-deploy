@@ -11,7 +11,7 @@ steps:
           --runtime=python311 \
           --source="adapters/email" \
           --entry-point=process_notification \
-          --trigger-topic=email-notifications-test \
+          --trigger-topic=email-notifications \
           --allow-unauthenticated \
           --set-env-vars=PROJECT_ID=$PROJECT_ID
 timeout: "1200s"

@@ -214,9 +214,7 @@ async def create_phone_number(request: Request):
 
     # Extract customizable parameters from request
     voice_url = data.get("voice_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/call")
-    voice_method = data.get("voice_method", "POST")
     sms_url = data.get("sms_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/text")
-    sms_method = data.get("sms_method", "POST")
 
     # Initialize Twilio client
     twilio_client = get_twilio_client()
@@ -233,9 +231,9 @@ async def create_phone_number(request: Request):
     incoming = twilio_client.incoming_phone_numbers.create(
         phone_number=record.phone_number,
         voice_url=voice_url,
-        voice_method=voice_method,
+        voice_method="POST",
         sms_url=sms_url,
-        sms_method=sms_method,
+        sms_method="POST",
     )
 
     # Set up the messaing service

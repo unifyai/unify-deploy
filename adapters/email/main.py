@@ -35,7 +35,7 @@ def renew_watch():
             # Configure watch request
             watch_request = {
                 "labelIds": ["INBOX"],
-                "topicName": f"projects/{os.getenv('PROJECT_ID')}/topics/email-notifications-test",
+                "topicName": f"projects/{os.getenv('PROJECT_ID')}/topics/email-notifications",
             }
 
             # Execute watch request
@@ -96,7 +96,8 @@ def process_notification(cloud_event):
             # ToDo: check if the conversation stored for this thread_id has changed
             # send the thread_id to a different channel
             print(f"Successfully processed conversation for user {user_id}")
-            publish_thread_id(assistant_id, thread_id, user_id)
+            # ToDo: disabled for now
+            # publish_thread_id(thread_id, user_id)
             return "OK"
         else:
             print(f"No new conversations found for user {user_id}")

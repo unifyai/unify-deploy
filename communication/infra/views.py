@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Form, Request, HTTPException
 from google.cloud import pubsub_v1, run_v2
 from google.oauth2.service_account import Credentials
+from google.protobuf.duration_pb2 import Duration
 import json
 import os
+import asyncio
 
 
 router = APIRouter()
@@ -91,9 +93,22 @@ async def delete_pubsub_topic(assistant_id: str = Form(...)):
 
 # create cloud run job
 @router.post("/job/create")
-async def create_cloudrun_job(assistant_id: str = Form(...)):
+async def create_cloudrun_job(
+    assistant_id: str = Form(...),
+    user_name: str = Form(...),
+    assistant_number: str = Form(...),
+    user_number: str = Form(...),
+    user_phone_number: str = Form(...),
+):
     """
     Create a Google Cloud Run job named unity_<assistant_id>.
+
+    Args:
+        assistant_id: The assistant ID (job will be unity_<assistant_id>)
+        user_name: The user's name
+        assistant_number: The assistant's phone number
+        user_number: The user's phone number
+        user_phone_number: The user's phone number
     """
     try:
         # Get credentials from environment variable
@@ -104,7 +119,7 @@ async def create_cloudrun_job(assistant_id: str = Form(...)):
         jobs_client = run_v2.JobsClient(credentials=creds)
 
         # Create the job name with unity_ prefix
-        job_name = f"unity_{assistant_id}"
+        job_name = f"unity-{assistant_id}"
 
         # Create the parent path
         parent = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}"
@@ -115,18 +130,148 @@ async def create_cloudrun_job(assistant_id: str = Form(...)):
                 template=run_v2.TaskTemplate(
                     containers=[
                         run_v2.Container(
-                            # Using a simple hello-world image as default
-                            # This can be updated later with the actual Unity container image
-                            image="us-docker.pkg.dev/cloudrun/container/job:latest",
+                            name="unity-1",
+                            image=(
+                                "us-central1-docker.pkg.dev/gcp-project-runtime"
+                                "/unity/unity:latest"
+                            ),
+                            env=[
+                                run_v2.EnvVar(
+                                    name="USER_NAME",
+                                    value=user_name,
+                                ),
+                                run_v2.EnvVar(
+                                    name="ASSISTANT_NUMBER",
+                                    value=assistant_number,
+                                ),
+                                run_v2.EnvVar(
+                                    name="USER_NUMBER",
+                                    value=user_number,
+                                ),
+                                run_v2.EnvVar(
+                                    name="USER_PHONE_NUMBER",
+                                    value=user_phone_number,
+                                ),
+                                run_v2.EnvVar(
+                                    name="UNITY_COMMS_URL",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="UNIFY_COMMS_URL",
+                                            version="latest",
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="TWILIO_ACCOUNT_SID",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="TWILIO_ACCOUNT_SID",
+                                            version="latest",
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="TWILIO_AUTH_TOKEN",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="TWILIO_AUTH_TOKEN", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="TWILIO_API_SID",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="TWILIO_API_SID", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="TWILIO_API_SECRET",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="TWILIO_API_SECRET", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="LIVEKIT_SIP_URI",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="LIVEKIT_SIP_URI", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="LIVEKIT_URL",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="LIVEKIT_URL", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="LIVEKIT_API_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="LIVEKIT_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="LIVEKIT_API_SECRET",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="LIVEKIT_API_SECRET",
+                                            version="latest",
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="DEEPGRAM_API_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="DEEPGRAM_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="CARTESIA_API_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="CARTESIA_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="UNIFY_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="ORCHESTRA_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                                run_v2.EnvVar(
+                                    name="OPENAI_API_KEY",
+                                    value_source=run_v2.EnvVarSource(
+                                        secret_key_ref=run_v2.SecretKeySelector(
+                                            secret="OPENAI_API_KEY", version="latest"
+                                        )
+                                    ),
+                                ),
+                            ],
                             resources=run_v2.ResourceRequirements(
-                                limits={"cpu": "1", "memory": "512Mi"}
+                                limits={"cpu": "1", "memory": "2Gi"}
                             ),
                         )
                     ],
-                    max_retries=3,
-                    task_timeout="600s",  # 10 minutes
+                    max_retries=0,
+                    timeout=Duration(seconds=43200),
+                    service_account=(
+                        "service-account@example.iam.gserviceaccount.com"
+                    ),
                 )
-            )
+            ),
         )
 
         # Create the job
@@ -190,91 +335,111 @@ async def control_cloudrun_job(
         jobs_client = run_v2.JobsClient(credentials=creds)
 
         # Create the job name with unity_ prefix
-        job_name = f"unity_{assistant_id}"
+        job_name = f"unity-{assistant_id}"
         job_path = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/jobs/{job_name}"
 
         if action == "start":
             # Execute the job
-            operation = jobs_client.run_job(name=job_path)
+            jobs_client.run_job(name=job_path)
 
-            # Wait for the operation to complete (this creates the execution)
-            result = operation.result()
-
+            # Return immediately after starting the execution (don't wait for completion)
+            # The job will run indefinitely until stopped
             return {
                 "success": True,
                 "message": f"Cloud Run job execution started successfully",
                 "action": "start",
                 "job_name": job_path,
-                "execution_name": result.name,
                 "assistant_id": assistant_id,
                 "project_id": PROJECT_ID,
                 "region": DEFAULT_REGION,
             }
 
         elif action == "stop":
-            # First, we need to get the running executions
+            # Get the executions client
             executions_client = run_v2.ExecutionsClient(credentials=creds)
 
             # List executions for this job
             executions = executions_client.list_executions(parent=job_path)
+            executions_list = list(executions)
 
-            cancelled_executions = []
-            for execution in executions:
-                # Only cancel running executions
-                if execution.status.conditions:
-                    # Check if execution is still running (not completed, failed, or cancelled)
-                    is_running = True
-                    for condition in execution.status.conditions:
-                        if condition.type == "Completed" and condition.status == "True":
-                            is_running = False
-                            break
-                        elif condition.type == "Failed" and condition.status == "True":
-                            is_running = False
-                            break
-
-                    if is_running:
-                        try:
-                            # Cancel the execution
-                            cancel_operation = executions_client.cancel_execution(
-                                name=execution.name
-                            )
-                            cancel_operation.result()  # Wait for cancellation to complete
-                            cancelled_executions.append(execution.name)
-                        except Exception as cancel_error:
-                            # Continue with other executions even if one fails to cancel
-                            print(
-                                f"Failed to cancel execution {execution.name}: {cancel_error}"
-                            )
-
-            if cancelled_executions:
+            if not executions_list:
                 return {
                     "success": True,
-                    "message": f"Cloud Run job executions stopped successfully",
-                    "action": "stop",
-                    "job_name": job_path,
-                    "cancelled_executions": cancelled_executions,
-                    "assistant_id": assistant_id,
-                    "project_id": PROJECT_ID,
-                    "region": DEFAULT_REGION,
-                }
-            else:
-                return {
-                    "success": True,
-                    "message": f"No running executions found to stop",
+                    "message": "No executions found to cancel",
                     "action": "stop",
                     "job_name": job_path,
                     "cancelled_executions": [],
+                    "failed_cancellations": [],
                     "assistant_id": assistant_id,
                     "project_id": PROJECT_ID,
                     "region": DEFAULT_REGION,
                 }
+
+            async def cancel_execution_async(execution):
+                """Cancel a single execution asynchronously"""
+                try:
+                    # Run the synchronous cancel operation in a thread pool
+                    loop = asyncio.get_event_loop()
+                    cancel_operation = await loop.run_in_executor(
+                        None,
+                        lambda: executions_client.cancel_execution(name=execution.name),
+                    )
+                    # Wait for cancellation to complete
+                    await loop.run_in_executor(None, cancel_operation.result)
+                    return {"success": True, "execution": execution.name}
+                except Exception as cancel_error:
+                    return {
+                        "success": False,
+                        "execution": execution.name,
+                        "error": str(cancel_error),
+                    }
+
+            # Cancel all executions concurrently
+            cancellation_tasks = [
+                cancel_execution_async(execution) for execution in executions_list
+            ]
+            cancellation_results = await asyncio.gather(
+                *cancellation_tasks, return_exceptions=True
+            )
+
+            # Process results
+            cancelled_executions = []
+            failed_cancellations = []
+
+            for result in cancellation_results:
+                if isinstance(result, Exception):
+                    failed_cancellations.append(
+                        {"execution": "unknown", "error": str(result)}
+                    )
+                elif result["success"]:
+                    cancelled_executions.append(result["execution"])
+                else:
+                    failed_cancellations.append(
+                        {"execution": result["execution"], "error": result["error"]}
+                    )
+
+            return {
+                "success": True,
+                "message": f"Cloud Run job stop operation completed",
+                "action": "stop",
+                "job_name": job_path,
+                "cancelled_executions": cancelled_executions,
+                "failed_cancellations": failed_cancellations,
+                "total_executions": len(executions_list),
+                "assistant_id": assistant_id,
+                "project_id": PROJECT_ID,
+                "region": DEFAULT_REGION,
+            }
 
     except Exception as e:
         # Handle various error cases
         if "not found" in str(e).lower():
             raise HTTPException(
                 status_code=404,
-                detail=f"Cloud Run job 'unity_{assistant_id}' not found. Please create the job first.",
+                detail=(
+                    f"Cloud Run job 'unity-{assistant_id}' not found. "
+                    "Please create the job first."
+                ),
             )
         else:
             raise HTTPException(
@@ -301,7 +466,7 @@ async def get_cloudrun_job_status(assistant_id: str):
         executions_client = run_v2.ExecutionsClient(credentials=creds)
 
         # Create the job name with unity_ prefix
-        job_name = f"unity_{assistant_id}"
+        job_name = f"unity-{assistant_id}"
         job_path = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/jobs/{job_name}"
 
         # Get job details
@@ -316,7 +481,7 @@ async def get_cloudrun_job_status(assistant_id: str):
             return {
                 "success": True,
                 "job_exists": False,
-                "message": f"Cloud Run job 'unity_{assistant_id}' not found",
+                "message": f"Cloud Run job 'unity-{assistant_id}' not found",
                 "assistant_id": assistant_id,
                 "project_id": PROJECT_ID,
                 "region": DEFAULT_REGION,
@@ -325,49 +490,83 @@ async def get_cloudrun_job_status(assistant_id: str):
         # Get recent executions
         executions = executions_client.list_executions(parent=job_path)
 
-        execution_statuses = []
-        running_count = 0
-        completed_count = 0
-        failed_count = 0
+        # Get the latest execution (most recent)
+        latest_execution = None
+        latest_execution_status = "no_executions"
 
-        for execution in executions:
-            status = "unknown"
-            if execution.status.conditions:
-                for condition in execution.status.conditions:
-                    if condition.type == "Completed" and condition.status == "True":
-                        status = "completed"
-                        completed_count += 1
-                        break
-                    elif condition.type == "Failed" and condition.status == "True":
-                        status = "failed"
-                        failed_count += 1
-                        break
-                    elif condition.type == "Running" and condition.status == "True":
-                        status = "running"
-                        running_count += 1
-                        break
+        try:
+            # Get the first execution from the list (they're ordered by creation time, newest first)
+            executions_list = list(executions)
+            if executions_list:
+                latest_execution = executions_list[0]
 
-            execution_statuses.append(
-                {
-                    "name": execution.name,
-                    "status": status,
-                    "create_time": (
-                        execution.create_time.isoformat()
-                        if execution.create_time
-                        else None
-                    ),
-                    "start_time": (
-                        execution.start_time.isoformat()
-                        if execution.start_time
-                        else None
-                    ),
-                    "completion_time": (
-                        execution.completion_time.isoformat()
-                        if execution.completion_time
-                        else None
-                    ),
-                }
-            )
+                # Debug: Log what we're getting from the API
+                print(f"DEBUG: Latest execution object: {latest_execution}")
+                if hasattr(latest_execution, "conditions"):
+                    print(f"DEBUG: Execution conditions: {latest_execution.conditions}")
+                    for condition in latest_execution.conditions:
+                        print(
+                            f"DEBUG: Condition type: {condition.type}, status: {condition.status}"
+                        )
+
+                # Determine status of latest execution
+                if (
+                    hasattr(latest_execution, "conditions")
+                    and latest_execution.conditions
+                ):
+                    for condition in latest_execution.conditions:
+                        if condition.type == "Completed" and condition.status == "True":
+                            latest_execution_status = "completed"
+                            break
+                        elif condition.type == "Failed" and condition.status == "True":
+                            latest_execution_status = "failed"
+                            break
+                        elif (
+                            condition.type == "Cancelled" and condition.status == "True"
+                        ):
+                            latest_execution_status = "cancelled"
+                            break
+                        elif (
+                            condition.type == "Cancelling"
+                            and condition.status == "True"
+                        ):
+                            latest_execution_status = "cancelling"
+                            break
+                    # If no terminal condition found, assume running
+                    if latest_execution_status == "no_executions":
+                        latest_execution_status = "running"
+                else:
+                    # No conditions available, assume running
+                    latest_execution_status = "running"
+        except Exception as status_error:
+            print(f"Could not determine status for latest execution: {status_error}")
+            latest_execution_status = "unknown"
+
+        # Prepare latest execution info
+        latest_execution_info = None
+        if latest_execution:
+            latest_execution_info = {
+                "name": latest_execution.name,
+                "status": latest_execution_status,
+                "create_time": (
+                    latest_execution.create_time.isoformat()
+                    if hasattr(latest_execution, "create_time")
+                    and latest_execution.create_time
+                    else None
+                ),
+                "start_time": (
+                    latest_execution.start_time.isoformat()
+                    if hasattr(latest_execution, "start_time")
+                    and latest_execution.start_time
+                    else None
+                ),
+                "completion_time": (
+                    latest_execution.completion_time.isoformat()
+                    if hasattr(latest_execution, "completion_time")
+                    and latest_execution.completion_time
+                    else None
+                ),
+            }
 
         return {
             "success": True,
@@ -381,13 +580,11 @@ async def get_cloudrun_job_status(assistant_id: str):
                 "create_time": job.create_time.isoformat() if job.create_time else None,
                 "update_time": job.update_time.isoformat() if job.update_time else None,
             },
-            "execution_summary": {
-                "total_executions": len(execution_statuses),
-                "running": running_count,
-                "completed": completed_count,
-                "failed": failed_count,
-            },
-            "recent_executions": execution_statuses[:10],  # Show last 10 executions
+            "latest_execution": latest_execution_info,
+            "execution_status": latest_execution_status,
+            "total_executions": (
+                len(executions_list) if "executions_list" in locals() else 0
+            ),
         }
 
     except Exception as e:
@@ -411,7 +608,7 @@ async def delete_cloudrun_job(assistant_id: str = Form(...)):
         jobs_client = run_v2.JobsClient(credentials=creds)
 
         # Create the job name with unity_ prefix
-        job_name = f"unity_{assistant_id}"
+        job_name = f"unity-{assistant_id}"
         job_path = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/jobs/{job_name}"
 
         # Delete the job
