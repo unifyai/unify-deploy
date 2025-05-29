@@ -27,5 +27,5 @@ def get_assistant_id(
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()["info"]
     if len(assistants) == 0:
-        raise ValueError("No assistants found")
+        return "default_assistant"
     return assistants[0]["agent_id"]
