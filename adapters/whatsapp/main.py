@@ -21,6 +21,7 @@ def get_assistant_id(
     Returns:
         The assistant id.
     """
+    return "default-assistant"
     params = dict()
     if email_id:
         params["email"] = email_id
