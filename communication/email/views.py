@@ -226,7 +226,11 @@ async def watch_email(request: Request):
     # Delegate credentials for the target Gmail user
     creds = Credentials.from_service_account_info(
         creds_json,
-        scopes=["https://www.googleapis.com/auth/gmail.modify"],
+        scopes=[
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.modify",
+        ],
         subject=user_email,
     )
     gmail_service = build("gmail", "v1", credentials=creds)
