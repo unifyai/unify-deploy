@@ -139,7 +139,9 @@ def publish_thread_id(assistant_id, thread_id, user_id):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
-        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), assistant_id)
+        topic_path = publisher.topic_path(
+            os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
+        )
 
         message_dict = {
             "thread": "email",

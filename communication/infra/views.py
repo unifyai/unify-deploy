@@ -32,9 +32,10 @@ async def create_pubsub_topic(assistant_id: str = Form(...)):
         subscriber = pubsub_v1.SubscriberClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_path = publisher.topic_path(PROJECT_ID, assistant_id)
+        topic_name = f"unity-{assistant_id}"
+        topic_path = publisher.topic_path(PROJECT_ID, topic_name)
         subscription_path = subscriber.subscription_path(
-            PROJECT_ID, f"{assistant_id}-sub"
+            PROJECT_ID, f"{topic_name}-sub"
         )
 
         # Try to create the topic
@@ -89,7 +90,9 @@ async def delete_pubsub_topic(assistant_id: str = Form(...)):
         publisher = pubsub_v1.PublisherClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_path = publisher.topic_path(PROJECT_ID, assistant_id)
+        topic_path = publisher.topic_path(
+            PROJECT_ID, f"unity-{assistant_id}"
+        )
 
         # Delete the topic
         publisher.delete_topic(request={"topic": topic_path})

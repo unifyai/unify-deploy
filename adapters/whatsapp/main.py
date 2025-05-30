@@ -56,7 +56,9 @@ def twilio_whatsapp_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), assistant_id)
+    topic_path = pubsub_client.topic_path(
+        os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
+    )
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         pubsub_client.publish(
