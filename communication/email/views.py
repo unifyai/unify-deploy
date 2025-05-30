@@ -223,17 +223,8 @@ async def watch_email(request: Request):
     user_email = data.get("primary_email")
     if not user_email:
         raise HTTPException(status_code=400, detail="Missing primary_email")
-    # Delegate credentials for the target Gmail user
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=[
-            "https://www.googleapis.com/auth/gmail.send",
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/gmail.modify",
-        ],
-        subject=user_email,
-    )
-    gmail_service = build("gmail", "v1", credentials=creds)
+    # Use the same Gmail service function that works for other operations
+    gmail_service = get_gmail_service(user_email)
     topic_name = "projects/gcp-project-runtime/topics/email-notifications"
     watch_request = {
         "labelIds": ["INBOX"],
