@@ -167,6 +167,7 @@ def twilio_call_webhook(request: Request):
                         "conference_name": conference_name,
                         "caller_number": caller_number,
                         "sip_uri": sip_uri,
+                        "call_sid": call_sid,
                     },
                 }
             ).encode("utf-8"),
