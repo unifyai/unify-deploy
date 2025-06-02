@@ -132,6 +132,7 @@ def twilio_call_webhook(request: Request):
     # set up conference
     try:
         resp_user = create_conference_response(conference_name)
+        print(f"Conference response: {resp_user.to_xml()}")
         if resp_user:
             print("Conference response created successfully")
         else:
