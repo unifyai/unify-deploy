@@ -11,6 +11,8 @@ import requests
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
+from livekit import api
+import time
 
 
 def get_assistant_id(
@@ -51,6 +53,78 @@ def get_twilio_client():
     if not account_sid or not auth_token:
         raise RuntimeError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set")
     return TwilioClient(account_sid, auth_token)
+
+
+def get_livekit_api():
+    """Get LiveKit API client"""
+    url = os.getenv("LIVEKIT_URL")
+    api_key = os.getenv("LIVEKIT_API_KEY")
+    api_secret = os.getenv("LIVEKIT_API_SECRET")
+
+    if not url or not api_key or not api_secret:
+        raise RuntimeError(
+            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set"
+        )
+
+    return api.LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
+
+
+async def dispatch_agent_to_existing_room(
+    room_name: str, agent_name: str, metadata: dict = None
+):
+    """Dispatch an agent to an existing LiveKit room"""
+    livekit_api = get_livekit_api()
+
+    try:
+        # Create dispatch request for existing room
+        dispatch_request = api.CreateAgentDispatchRequest(
+            agent_name=agent_name,
+            room=room_name,
+            metadata=json.dumps(metadata) if metadata else None,
+        )
+
+        # Dispatch agent to existing room
+        dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
+        print(
+            f"Successfully dispatched agent '{agent_name}' to existing room '{room_name}'"
+        )
+        print(f"Dispatch ID: {dispatch.id}")
+
+        return dispatch
+    except Exception as e:
+        print(f"Error dispatching agent to room: {str(e)}")
+        raise
+    finally:
+        await livekit_api.aclose()
+
+
+async def create_room_and_dispatch_agent(
+    room_name: str, agent_name: str, metadata: dict = None
+):
+    """Create a LiveKit room and dispatch an agent to it"""
+    livekit_api = get_livekit_api()
+
+    try:
+        # Create dispatch request - this will create the room if it doesn't exist
+        dispatch_request = api.CreateAgentDispatchRequest(
+            agent_name=agent_name,
+            room=room_name,
+            metadata=json.dumps(metadata) if metadata else None,
+        )
+
+        # Dispatch agent to room (creates room automatically if needed)
+        dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
+        print(
+            f"Successfully created room '{room_name}' and dispatched agent '{agent_name}'"
+        )
+        print(f"Dispatch ID: {dispatch.id}")
+
+        return dispatch
+    except Exception as e:
+        print(f"Error creating room and dispatching agent: {str(e)}")
+        raise
+    finally:
+        await livekit_api.aclose()
 
 
 def create_conference_response(conference_name, with_status=False):
@@ -126,10 +200,49 @@ def twilio_call_webhook(request: Request):
 
     # get conference name and sip uri
     conference_name = f"Unity_{twilio_number[1:]}"
+    room_name = f"call-{twilio_number[1:]}-{caller_number[1:]}"  # Unique room name
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
+    print(f"LiveKit room will be: {room_name}")
 
-    # set up conference
+    # Create LiveKit room and dispatch agent immediately
+    try:
+        import asyncio
+
+        # Create metadata for the agent
+        agent_metadata = {
+            "caller_number": caller_number,
+            "twilio_number": twilio_number,
+            "conference_name": conference_name,
+            "call_type": "inbound",
+            "call_sid": None,  # Will be updated after conference setup
+            "timestamp": int(time.time() * 1000),
+        }
+
+        # Create room and dispatch agent using LiveKit API
+        # Agent dispatch will queue until worker comes online
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            dispatch = loop.run_until_complete(
+                create_room_and_dispatch_agent(
+                    room_name=room_name,
+                    agent_name=assistant_id,
+                    metadata=agent_metadata,
+                )
+            )
+            print(f"LiveKit room created and agent dispatched successfully")
+            print(
+                f"Agent will join when worker comes online. Dispatch ID: {dispatch.id}"
+            )
+        finally:
+            loop.close()
+
+    except Exception as e:
+        print(f"Error creating LiveKit room and dispatching agent: {str(e)}")
+        # Continue with Twilio conference setup even if LiveKit dispatch fails
+
+    # set up conference (this remains the same for Twilio bridging)
     try:
         resp_user = create_conference_response(conference_name)
         print(f"Conference response: {resp_user.to_xml()}")
@@ -151,26 +264,35 @@ def twilio_call_webhook(request: Request):
         print(f"Error during conference setup: {str(e)}")
         return Response(response="Error setting up conference", status=500)
 
-    # publish to pubsub
+    # publish to pubsub - let the pubsub handler dispatch the agent when worker is ready
     pubsub_client = pubsub_v1.PublisherClient()
     topic_path = pubsub_client.topic_path(
         os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
     )
     print(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
+        pubsub_message = {
+            "thread": "call",
+            "event": {
+                "conference_name": conference_name,
+                "caller_number": caller_number,
+                "sip_uri": sip_uri,
+                "call_sid": call_sid,
+                "livekit_room": room_name,  # Include LiveKit room name
+                "assistant_id": assistant_id,  # Include for agent dispatch
+                "action": "start_worker",  # Signal that worker should start (agent already dispatched)
+                "timestamp": int(time.time() * 1000),  # For timing analysis
+                "call_metadata": {
+                    "twilio_number": twilio_number,
+                    "call_type": "inbound",
+                    "room_created": True,  # Confirms room was created
+                    "bridge_established": True,  # Confirms SIP bridge is ready
+                },
+            },
+        }
         pubsub_client.publish(
             topic_path,
-            json.dumps(
-                {
-                    "thread": "call",
-                    "event": {
-                        "conference_name": conference_name,
-                        "caller_number": caller_number,
-                        "sip_uri": sip_uri,
-                        "call_sid": call_sid,
-                    },
-                }
-            ).encode("utf-8"),
+            json.dumps(pubsub_message).encode("utf-8"),
         )
         print("Call published to Pub/Sub successfully")
     except Exception as e:
