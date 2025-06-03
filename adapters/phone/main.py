@@ -69,35 +69,6 @@ def get_livekit_api():
     return api.LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
 
 
-async def dispatch_agent_to_existing_room(
-    room_name: str, agent_name: str, metadata: dict = None
-):
-    """Dispatch an agent to an existing LiveKit room"""
-    livekit_api = get_livekit_api()
-
-    try:
-        # Create dispatch request for existing room
-        dispatch_request = api.CreateAgentDispatchRequest(
-            agent_name=agent_name,
-            room=room_name,
-            metadata=json.dumps(metadata) if metadata else None,
-        )
-
-        # Dispatch agent to existing room
-        dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
-        print(
-            f"Successfully dispatched agent '{agent_name}' to existing room '{room_name}'"
-        )
-        print(f"Dispatch ID: {dispatch.id}")
-
-        return dispatch
-    except Exception as e:
-        print(f"Error dispatching agent to room: {str(e)}")
-        raise
-    finally:
-        await livekit_api.aclose()
-
-
 async def create_room_and_dispatch_agent(
     room_name: str, agent_name: str, metadata: dict = None
 ):
@@ -227,7 +198,7 @@ def twilio_call_webhook(request: Request):
             dispatch = loop.run_until_complete(
                 create_room_and_dispatch_agent(
                     room_name=room_name,
-                    agent_name=assistant_id,
+                    agent_name=f"unity-{twilio_number.replace('+', '')}",
                     metadata=agent_metadata,
                 )
             )
