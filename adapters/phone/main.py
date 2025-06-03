@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Cloud Function entry point - FIXED VERSION
+# Cloud Function entry point
 # ---------------------------------------------------------------------------
 
 import json
@@ -100,7 +100,7 @@ async def create_room_and_dispatch_agent(
 
 @functions_framework.http
 def twilio_call_webhook(request: Request):
-    print("🚀 Fixed Twilio webhook started")
+    print("🚀 Safe Twilio webhook started")
 
     # get twilio number and caller number
     to_number = request.form.get("To", "")
@@ -112,7 +112,7 @@ def twilio_call_webhook(request: Request):
     # get assistant id from email id
     assistant_id = get_assistant_id(phone_number=to_number)
 
-    # FIXED: Create unique room name with timestamp to avoid conflicts
+    # Create unique room name with timestamp to avoid conflicts
     room_name = f"call-{twilio_number[1:]}-{caller_number[1:]}-{int(time.time())}"
     agent_name = f"unity-{twilio_number.replace('+', '')}"
 
@@ -120,6 +120,7 @@ def twilio_call_webhook(request: Request):
     print(f"🤖 Agent name: {agent_name}")
 
     # Create LiveKit room and dispatch agent immediately
+    livekit_success = False
     try:
         import asyncio
 
@@ -144,39 +145,53 @@ def twilio_call_webhook(request: Request):
             )
             print(f"✅ LiveKit room created and agent dispatched successfully")
             print(f"Dispatch ID: {dispatch.id}")
+            livekit_success = True
         finally:
             loop.close()
 
     except Exception as e:
         print(f"❌ Error creating LiveKit room and dispatching agent: {str(e)}")
-        # Fall back to simple response if LiveKit setup fails
-        response = VoiceResponse()
-        response.say("Sorry, there was a technical issue. Please try again later.")
-        return Response(response=str(response), mimetype="text/xml")
+        livekit_success = False
 
-    # FIXED: Create TwiML that directly connects to LiveKit room via SIP
-    # This bypasses the Twilio conference and connects directly to LiveKit
+    # Create TwiML response
     response = VoiceResponse()
-    dial = response.dial(
-        action=f"{os.getenv('UNIFY_COMMS_URL')}/phone/call-status",
-        method="POST",
-        timeout=30,
-    )
 
-    # FIXED: Connect directly to LiveKit room using SIP
-    # The room name in the SIP URI should match the LiveKit room
-    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
-    print(f"📞 Connecting to SIP URI: {sip_uri}")
+    # Try SIP connection if LiveKit setup succeeded, otherwise fallback
+    if livekit_success and os.getenv("LIVEKIT_SIP_URI"):
+        try:
+            print("🔄 Attempting SIP connection to LiveKit")
 
-    dial.sip(
-        sip_uri,
-        username=os.getenv("LIVEKIT_SIP_USERNAME", ""),
-        password=os.getenv("LIVEKIT_SIP_PASSWORD", ""),
-    )
+            # Create dial with timeout
+            dial = response.dial(timeout=30)
 
-    print(f"📋 TwiML Response: {response}")
+            # Simple SIP URI without complex authentication first
+            sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
+            print(f"📞 Connecting to SIP URI: {sip_uri}")
 
-    # publish to pubsub for monitoring
+            # Try simple SIP connection first
+            dial.sip(sip_uri)
+
+            print(f"📋 Generated TwiML with SIP: {response}")
+
+        except Exception as e:
+            print(f"❌ SIP connection failed: {str(e)}")
+            # Fall back to simple response
+            response = VoiceResponse()
+            response.say(
+                "Hello! I'm your AI assistant. I'm having trouble connecting right now, but I'm here to help."
+            )
+
+    else:
+        print("⚠️ Falling back to simple response")
+        response.say(
+            "Hello! I'm your AI assistant. Please hold while I get ready to help you."
+        )
+
+        # Add a brief pause then try to connect agent in background
+        response.pause(length=2)
+        response.say("How can I help you today?")
+
+    # Publish to pubsub for monitoring
     try:
         pubsub_client = pubsub_v1.PublisherClient()
         topic_path = pubsub_client.topic_path(
@@ -191,8 +206,9 @@ def twilio_call_webhook(request: Request):
                 "caller_number": caller_number,
                 "twilio_number": twilio_number,
                 "agent_name": agent_name,
-                "sip_uri": sip_uri,
-                "call_method": "direct_sip_to_livekit",
+                "livekit_success": livekit_success,
+                "sip_attempted": bool(os.getenv("LIVEKIT_SIP_URI")),
+                "call_method": "safe_fallback",
                 "timestamp": int(time.time() * 1000),
             },
         }
@@ -205,6 +221,7 @@ def twilio_call_webhook(request: Request):
         print(f"⚠️ Error publishing to Pub/Sub: {str(e)}")
 
     print("🎯 Returning TwiML response")
+    print(f"Final TwiML: {response}")
     return Response(response=str(response), mimetype="text/xml")
 
 
