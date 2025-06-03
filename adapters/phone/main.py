@@ -192,22 +192,22 @@ def twilio_call_webhook(request: Request):
 
         # Create room and dispatch agent using LiveKit API
         # Agent dispatch will queue until worker comes online
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            dispatch = loop.run_until_complete(
-                create_room_and_dispatch_agent(
-                    room_name=room_name,
-                    agent_name=f"unity-{twilio_number.replace('+', '')}",
-                    metadata=agent_metadata,
-                )
-            )
-            print(f"LiveKit room created and agent dispatched successfully")
-            print(
-                f"Agent will join when worker comes online. Dispatch ID: {dispatch.id}"
-            )
-        finally:
-            loop.close()
+        # loop = asyncio.new_event_loop()
+        # asyncio.set_event_loop(loop)
+        # try:
+        #     dispatch = loop.run_until_complete(
+        #         create_room_and_dispatch_agent(
+        #             room_name=room_name,
+        #             agent_name=f"unity-{twilio_number.replace('+', '')}",
+        #             metadata=agent_metadata,
+        #         )
+        #     )
+        #     print(f"LiveKit room created and agent dispatched successfully")
+        #     print(
+        #         f"Agent will join when worker comes online. Dispatch ID: {dispatch.id}"
+        #     )
+        # finally:
+        #     loop.close()
 
     except Exception as e:
         print(f"Error creating LiveKit room and dispatching agent: {str(e)}")
