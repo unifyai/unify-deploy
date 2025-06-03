@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Cloud Function entry point
+# Cloud Function entry point - FIXED VERSION
 # ---------------------------------------------------------------------------
 
 import json
@@ -11,6 +11,8 @@ import requests
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
+from livekit import api
+import time
 
 
 def get_assistant_id(
@@ -53,130 +55,157 @@ def get_twilio_client():
     return TwilioClient(account_sid, auth_token)
 
 
-def create_conference_response(conference_name, with_status=False):
-    resp_user = VoiceResponse()
-    dial_user = resp_user.dial()
-    if with_status:
-        dial_user.conference(
-            conference_name,
-            startConferenceOnEnter=True,
-            endConferenceOnExit=True,
-            muted=False,
-            record="record-from-start",
-            recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
-            recording_status_callback_event="completed",
-            status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/call-status",
-            status_callback_event=["completed"],
+def get_livekit_api():
+    """Get LiveKit API client"""
+    url = os.getenv("LIVEKIT_URL")
+    api_key = os.getenv("LIVEKIT_API_KEY")
+    api_secret = os.getenv("LIVEKIT_API_SECRET")
+
+    if not url or not api_key or not api_secret:
+        raise RuntimeError(
+            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set"
         )
-        return resp_user
-    dial_user.conference(
-        conference_name,
-        startConferenceOnEnter=True,
-        endConferenceOnExit=True,
-        muted=False,
-        record="record-from-start",
-        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
-        recording_status_callback_event="completed",
-    )
-    return resp_user
+
+    return api.LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
 
 
-def add_user_to_conference(
-    conference_name, from_number, to_number_uri, connect_third_party=False
+async def create_room_and_dispatch_agent(
+    room_name: str, agent_name: str, metadata: dict = None
 ):
-    twilio_client = get_twilio_client()
+    """Create a LiveKit room and dispatch an agent to it"""
+    livekit_api = get_livekit_api()
 
-    if connect_third_party:
-        conferences = twilio_client.conferences.list(
-            friendly_name=conference_name, status="in-progress"
+    try:
+        # Create dispatch request - this will create the room if it doesn't exist
+        dispatch_request = api.CreateAgentDispatchRequest(
+            agent_name=agent_name,
+            room=room_name,
+            metadata=json.dumps(metadata) if metadata else None,
         )
-        participants = twilio_client.conferences(conferences[0].sid).participants.list()
-        for participant in participants:
-            call = twilio_client.calls(participant.call_sid).fetch()
-            # Identify Livekit Agent and mute
-            if "livekit.cloud" in call.to:
-                twilio_client.conferences(conferences[0].sid).participants(
-                    participant.sid
-                ).update(muted=True)
-                break
-        response = create_conference_response(conference_name, with_status=True)
-    else:
-        response = create_conference_response(conference_name)
 
-    call = twilio_client.calls.create(
-        to=to_number_uri,
-        from_=from_number,
-        twiml=str(response),
-    )
-    return call.sid
+        # Dispatch agent to room (creates room automatically if needed)
+        dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
+        print(
+            f"Successfully created room '{room_name}' and dispatched agent '{agent_name}'"
+        )
+        print(f"Dispatch ID: {dispatch.id}")
+
+        return dispatch
+    except Exception as e:
+        print(f"Error creating room and dispatching agent: {str(e)}")
+        raise
+    finally:
+        await livekit_api.aclose()
 
 
 @functions_framework.http
 def twilio_call_webhook(request: Request):
-    print("twilio_call_webhook function started")
+    print("🚀 Fixed Twilio webhook started")
+
     # get twilio number and caller number
     to_number = request.form.get("To", "")
     from_number = request.form.get("From", "")
     twilio_number = to_number or ""
     caller_number = from_number or ""
-    print(f"Received call from {caller_number} to {twilio_number}")
+    print(f"📞 Received call from {caller_number} to {twilio_number}")
 
     # get assistant id from email id
     assistant_id = get_assistant_id(phone_number=to_number)
 
-    # get conference name and sip uri
-    conference_name = f"Unity_{twilio_number[1:]}"
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
+    # FIXED: Create unique room name with timestamp to avoid conflicts
+    room_name = f"call-{twilio_number[1:]}-{caller_number[1:]}-{int(time.time())}"
+    agent_name = f"unity-{twilio_number.replace('+', '')}"
 
-    # set up conference
+    print(f"🏠 LiveKit room: {room_name}")
+    print(f"🤖 Agent name: {agent_name}")
+
+    # Create LiveKit room and dispatch agent immediately
     try:
-        resp_user = create_conference_response(conference_name)
-        print(f"Conference response: {resp_user.to_xml()}")
-        if resp_user:
-            print("Conference response created successfully")
-        else:
-            print("Error: Failed to create conference response")
-            return Response(response="Error creating conference", status=500)
+        import asyncio
 
-        call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
-        if call_sid:
-            print(f"User added to conference successfully. Call SID: {call_sid}")
-        else:
-            print("Error: Failed to add user to conference")
-            return Response(response="Error adding user to conference", status=500)
+        # Create metadata for the agent
+        agent_metadata = {
+            "caller_number": caller_number,
+            "twilio_number": twilio_number,
+            "call_type": "inbound",
+            "timestamp": int(time.time() * 1000),
+        }
 
-        print("Conference setup completed")
+        # Create room and dispatch agent using LiveKit API
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            dispatch = loop.run_until_complete(
+                create_room_and_dispatch_agent(
+                    room_name=room_name,
+                    agent_name=agent_name,
+                    metadata=agent_metadata,
+                )
+            )
+            print(f"✅ LiveKit room created and agent dispatched successfully")
+            print(f"Dispatch ID: {dispatch.id}")
+        finally:
+            loop.close()
+
     except Exception as e:
-        print(f"Error during conference setup: {str(e)}")
-        return Response(response="Error setting up conference", status=500)
+        print(f"❌ Error creating LiveKit room and dispatching agent: {str(e)}")
+        # Fall back to simple response if LiveKit setup fails
+        response = VoiceResponse()
+        response.say("Sorry, there was a technical issue. Please try again later.")
+        return Response(response=str(response), mimetype="text/xml")
 
-    # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_path = pubsub_client.topic_path(
-        os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
+    # FIXED: Create TwiML that directly connects to LiveKit room via SIP
+    # This bypasses the Twilio conference and connects directly to LiveKit
+    response = VoiceResponse()
+    dial = response.dial(
+        action=f"{os.getenv('UNIFY_COMMS_URL')}/phone/call-status",
+        method="POST",
+        timeout=30,
     )
-    print(f"Publishing call to Pub/Sub at path: {topic_path}")
+
+    # FIXED: Connect directly to LiveKit room using SIP
+    # The room name in the SIP URI should match the LiveKit room
+    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
+    print(f"📞 Connecting to SIP URI: {sip_uri}")
+
+    dial.sip(
+        sip_uri,
+        username=os.getenv("LIVEKIT_SIP_USERNAME", ""),
+        password=os.getenv("LIVEKIT_SIP_PASSWORD", ""),
+    )
+
+    print(f"📋 TwiML Response: {response}")
+
+    # publish to pubsub for monitoring
     try:
+        pubsub_client = pubsub_v1.PublisherClient()
+        topic_path = pubsub_client.topic_path(
+            os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
+        )
+        print(f"📨 Publishing call to Pub/Sub at path: {topic_path}")
+
+        pubsub_message = {
+            "thread": "call",
+            "event": {
+                "room_name": room_name,
+                "caller_number": caller_number,
+                "twilio_number": twilio_number,
+                "agent_name": agent_name,
+                "sip_uri": sip_uri,
+                "call_method": "direct_sip_to_livekit",
+                "timestamp": int(time.time() * 1000),
+            },
+        }
         pubsub_client.publish(
             topic_path,
-            json.dumps(
-                {
-                    "thread": "call",
-                    "event": {
-                        "conference_name": conference_name,
-                        "caller_number": caller_number,
-                        "sip_uri": sip_uri,
-                        "call_sid": call_sid,
-                    },
-                }
-            ).encode("utf-8"),
+            json.dumps(pubsub_message).encode("utf-8"),
         )
-        print("Call published to Pub/Sub successfully")
+        print("✅ Call published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
-    print("Returning TwiML response")
-    return Response(response=str(resp_user), mimetype="text/xml")
+        print(f"⚠️ Error publishing to Pub/Sub: {str(e)}")
+
+    print("🎯 Returning TwiML response")
+    return Response(response=str(response), mimetype="text/xml")
 
 
 @functions_framework.http
