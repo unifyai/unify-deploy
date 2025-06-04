@@ -169,6 +169,10 @@ async def create_cloudrun_job(
                                     value=user_number,
                                 ),
                                 run_v2.EnvVar(
+                                    name="USER_PHONE_NUMBER",
+                                    value=user_number,
+                                ),
+                                run_v2.EnvVar(
                                     name="UNITY_COMMS_URL",
                                     value_source=run_v2.EnvVarSource(
                                         secret_key_ref=run_v2.SecretKeySelector(
