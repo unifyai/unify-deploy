@@ -34,9 +34,9 @@ def get_assistant_id(
         params["email"] = email_id
     if phone_number:
         params["phone"] = phone_number
-    if phone_number == "+15550100002":
+    if "+15550100002" in phone_number:
         return "default-assistant"
-    if phone_number == "+15550100001":
+    if "+15550100001" in phone_number:
         return "default-assistant-2"
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
