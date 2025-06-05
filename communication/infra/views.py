@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Form, Request, HTTPException
+from fastapi import APIRouter, Form, HTTPException
 from google.cloud import pubsub_v1, run_v2
+from google.iam.v1 import iam_policy_pb2, policy_pb2
 from google.oauth2.service_account import Credentials
 from google.protobuf.duration_pb2 import Duration
 import json
@@ -13,6 +14,67 @@ router = APIRouter()
 PROJECT_ID = "gcp-project-runtime"
 # Default region for Cloud Run jobs
 DEFAULT_REGION = "us-central1"
+
+
+async def set_allow_unauthenticated_policy(resource_path: str, creds: Credentials):
+    """
+    Set IAM policy to allow unauthenticated access to a Cloud Run service.
+
+    Args:
+        resource_path: Full resource path (e.g., projects/.../services/... or projects/.../jobs/...)
+        creds: Google Cloud credentials
+    """
+    try:
+        services_client = run_v2.ServicesClient(credentials=creds)
+
+        # Get current IAM policy
+        try:
+            request = iam_policy_pb2.GetIamPolicyRequest(resource=resource_path)
+            policy = services_client.get_iam_policy(request=request)
+            print("✅ Successfully retrieved current IAM policy")
+        except Exception as e:
+            print(f"❌ Failed to get IAM policy: {e}")
+            print(
+                "This likely means the service doesn't exist. Check the service list above."
+            )
+            return
+
+        # Check if allUsers already has Cloud Run Invoker role
+        invoker_binding = None
+        for binding in policy.bindings:
+            if binding.role == "roles/run.invoker":
+                invoker_binding = binding
+                break
+
+        # Add allUsers to Cloud Run Invoker role
+        if not invoker_binding:
+            invoker_binding = policy_pb2.Binding(
+                role="roles/run.invoker", members=["allUsers"]
+            )
+            policy.bindings.append(invoker_binding)
+            print("➕ Added new binding for roles/run.invoker")
+        elif "allUsers" not in invoker_binding.members:
+            invoker_binding.members.append("allUsers")
+            print("➕ Added allUsers to existing roles/run.invoker binding")
+        else:
+            print("✅ allUsers already has roles/run.invoker access")
+
+        # Set the updated policy using the correct request approach
+        try:
+            request = iam_policy_pb2.SetIamPolicyRequest(
+                resource=resource_path, policy=policy
+            )
+            services_client.set_iam_policy(request=request)
+            print(
+                "✅ Successfully updated IAM policy - service now allows unauthenticated access"
+            )
+        except Exception as e:
+            print(f"❌ Failed to set IAM policy: {e}")
+    except Exception as e:
+        print(
+            f"Warning: Could not set allow unauthenticated policy for service: {str(e)}"
+        )
+        # Don't fail the entire operation if IAM policy setting fails
 
 
 # create pubsub topic
@@ -853,6 +915,11 @@ async def create_cloudrun_service(
 
         # Wait for the operation to complete
         result = operation.result()
+
+        # Set allow unauthenticated policy
+        await set_allow_unauthenticated_policy(
+            f"{parent}/services/{service_name}", creds
+        )
 
         return {
             "success": True,
