@@ -90,9 +90,7 @@ async def delete_pubsub_topic(assistant_id: str = Form(...)):
         publisher = pubsub_v1.PublisherClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_path = publisher.topic_path(
-            PROJECT_ID, f"unity-{assistant_id}"
-        )
+        topic_path = publisher.topic_path(PROJECT_ID, f"unity-{assistant_id}")
 
         # Delete the topic
         publisher.delete_topic(request={"topic": topic_path})
@@ -645,4 +643,520 @@ async def delete_cloudrun_job(assistant_id: str = Form(...)):
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to delete Cloud Run job: {str(e)}"
+        )
+
+
+# create cloud run service
+@router.post("/service/create")
+async def create_cloudrun_service(
+    assistant_id: str = Form(...),
+    user_name: str = Form(...),
+    assistant_number: str = Form(...),
+    user_number: str = Form(...),
+    port: int = Form(8000),  # Default HTTP port
+):
+    """
+    Create a Google Cloud Run service named unity-<assistant_id>.
+
+    Args:
+        assistant_id: The assistant ID (service will be unity-<assistant_id>)
+        user_name: The user's name
+        assistant_number: The assistant's phone number
+        user_number: The user's phone number
+        port: The port the service listens on (default: 8000)
+    """
+    try:
+        # Get credentials from environment variable
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        creds = Credentials.from_service_account_info(creds_json)
+
+        # Initialize the Cloud Run Services client
+        services_client = run_v2.ServicesClient(credentials=creds)
+
+        # Create the service name with unity- prefix
+        service_name = f"unity-{assistant_id}"
+
+        # Create the parent path
+        parent = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}"
+
+        # Define the service configuration
+        service = run_v2.Service(
+            template=run_v2.RevisionTemplate(
+                containers=[
+                    run_v2.Container(
+                        name="unity-1",
+                        image=(
+                            "us-central1-docker.pkg.dev/gcp-project-runtime"
+                            "/unity/unity:latest"
+                        ),
+                        ports=[
+                            run_v2.ContainerPort(
+                                name="http1",
+                                container_port=port,
+                            )
+                        ],
+                        env=[
+                            run_v2.EnvVar(
+                                name="ASSISTANT_ID",
+                                value=assistant_id,
+                            ),
+                            run_v2.EnvVar(
+                                name="USER_NAME",
+                                value=user_name,
+                            ),
+                            run_v2.EnvVar(
+                                name="ASSISTANT_NUMBER",
+                                value=assistant_number,
+                            ),
+                            run_v2.EnvVar(
+                                name="USER_NUMBER",
+                                value=user_number,
+                            ),
+                            run_v2.EnvVar(
+                                name="USER_PHONE_NUMBER",
+                                value=user_number,
+                            ),
+                            run_v2.EnvVar(
+                                name="PORT",
+                                value=str(port),
+                            ),
+                            run_v2.EnvVar(
+                                name="UNITY_COMMS_URL",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="UNIFY_COMMS_URL",
+                                        version="latest",
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="TWILIO_ACCOUNT_SID",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="TWILIO_ACCOUNT_SID",
+                                        version="latest",
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="TWILIO_AUTH_TOKEN",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="TWILIO_AUTH_TOKEN", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="TWILIO_API_SID",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="TWILIO_API_SID", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="TWILIO_API_SECRET",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="TWILIO_API_SECRET", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="LIVEKIT_SIP_URI",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="LIVEKIT_SIP_URI", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="LIVEKIT_URL",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="LIVEKIT_URL", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="LIVEKIT_API_KEY",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="LIVEKIT_API_KEY", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="LIVEKIT_API_SECRET",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="LIVEKIT_API_SECRET",
+                                        version="latest",
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="DEEPGRAM_API_KEY",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="DEEPGRAM_API_KEY", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="CARTESIA_API_KEY",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="CARTESIA_API_KEY", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="UNIFY_KEY",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="ORCHESTRA_API_KEY", version="latest"
+                                    )
+                                ),
+                            ),
+                            run_v2.EnvVar(
+                                name="OPENAI_API_KEY",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="OPENAI_API_KEY", version="latest"
+                                    )
+                                ),
+                            ),
+                        ],
+                        resources=run_v2.ResourceRequirements(
+                            limits={"cpu": "1", "memory": "2Gi"}
+                        ),
+                    )
+                ],
+                timeout=Duration(seconds=3600),  # 1 hour timeout for services
+                service_account=(
+                    "service-account@example.iam.gserviceaccount.com"
+                ),
+                scaling=run_v2.RevisionScaling(
+                    min_instance_count=0,
+                    max_instance_count=10,
+                ),
+            ),
+            traffic=[
+                run_v2.TrafficTarget(
+                    type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST,
+                    percent=100,
+                )
+            ],
+        )
+
+        # Create the service
+        operation = services_client.create_service(
+            parent=parent, service=service, service_id=service_name
+        )
+
+        # Wait for the operation to complete
+        result = operation.result()
+
+        return {
+            "success": True,
+            "message": f"Cloud Run service created successfully",
+            "service_name": result.name,
+            "service_url": result.uri,
+            "assistant_id": assistant_id,
+            "project_id": PROJECT_ID,
+            "region": DEFAULT_REGION,
+            "full_service_name": service_name,
+            "port": port,
+        }
+
+    except Exception as e:
+        # Handle case where service already exists or other errors
+        if "already exists" in str(e).lower():
+            return {
+                "success": True,
+                "message": f"Cloud Run service already exists",
+                "service_name": f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/services/unity-{assistant_id}",
+                "assistant_id": assistant_id,
+                "project_id": PROJECT_ID,
+                "region": DEFAULT_REGION,
+                "full_service_name": service_name,
+            }
+        else:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to create Cloud Run service: {str(e)}"
+            )
+
+
+# update cloud run service traffic
+@router.post("/service/control")
+async def control_cloudrun_service(
+    assistant_id: str = Form(...),
+    action: str = Form(...),  # "update_traffic", "scale"
+    traffic_percent: int = Form(100),  # For traffic updates
+    min_instances: int = Form(0),  # For scaling
+    max_instances: int = Form(10),  # For scaling
+):
+    """
+    Control a Google Cloud Run service (update traffic allocation or scaling).
+
+    Args:
+        assistant_id: The assistant ID (service will be unity-<assistant_id>)
+        action: Either "update_traffic" or "scale"
+        traffic_percent: Percentage of traffic to latest revision (0-100)
+        min_instances: Minimum number of instances
+        max_instances: Maximum number of instances
+    """
+    try:
+        # Validate action parameter
+        if action not in ["update_traffic", "scale"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Action must be either 'update_traffic' or 'scale'",
+            )
+
+        # Get credentials from environment variable
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        creds = Credentials.from_service_account_info(creds_json)
+
+        # Initialize the Cloud Run Services client
+        services_client = run_v2.ServicesClient(credentials=creds)
+
+        # Create the service name with unity- prefix
+        service_name = f"unity-{assistant_id}"
+        service_path = (
+            f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/services/{service_name}"
+        )
+
+        # Get current service configuration
+        current_service = services_client.get_service(name=service_path)
+
+        if action == "update_traffic":
+            # Validate traffic percent
+            if not 0 <= traffic_percent <= 100:
+                raise HTTPException(
+                    status_code=400, detail="Traffic percent must be between 0 and 100"
+                )
+
+            # Update traffic allocation
+            current_service.traffic = [
+                run_v2.TrafficTarget(
+                    type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST,
+                    percent=traffic_percent,
+                )
+            ]
+
+            # Update the service
+            operation = services_client.update_service(service=current_service)
+            result = operation.result()
+
+            return {
+                "success": True,
+                "message": f"Cloud Run service traffic updated successfully",
+                "action": "update_traffic",
+                "service_name": service_path,
+                "traffic_percent": traffic_percent,
+                "service_url": result.uri,
+                "assistant_id": assistant_id,
+                "project_id": PROJECT_ID,
+                "region": DEFAULT_REGION,
+            }
+
+        elif action == "scale":
+            # Validate instance counts
+            if min_instances < 0 or max_instances < 1 or min_instances > max_instances:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid scaling parameters. Min must be >= 0, max must be >= 1, and min <= max",
+                )
+
+            # Update scaling configuration
+            current_service.template.scaling = run_v2.RevisionScaling(
+                min_instance_count=min_instances,
+                max_instance_count=max_instances,
+            )
+
+            # Update the service
+            operation = services_client.update_service(service=current_service)
+            result = operation.result()
+
+            return {
+                "success": True,
+                "message": f"Cloud Run service scaling updated successfully",
+                "action": "scale",
+                "service_name": service_path,
+                "min_instances": min_instances,
+                "max_instances": max_instances,
+                "service_url": result.uri,
+                "assistant_id": assistant_id,
+                "project_id": PROJECT_ID,
+                "region": DEFAULT_REGION,
+            }
+
+    except Exception as e:
+        # Handle various error cases
+        if "not found" in str(e).lower():
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Cloud Run service 'unity-{assistant_id}' not found. "
+                    "Please create the service first."
+                ),
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to {action} Cloud Run service: {str(e)}",
+            )
+
+
+# get cloud run service status
+@router.get("/service/status")
+async def get_cloudrun_service_status(assistant_id: str):
+    """
+    Get the status of a Google Cloud Run service and its configuration.
+
+    Args:
+        assistant_id: The assistant ID (service will be unity-<assistant_id>)
+    """
+    try:
+        # Get credentials from environment variable
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        creds = Credentials.from_service_account_info(creds_json)
+
+        # Initialize the Cloud Run Services client
+        services_client = run_v2.ServicesClient(credentials=creds)
+
+        # Create the service name with unity- prefix
+        service_name = f"unity-{assistant_id}"
+        service_path = (
+            f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/services/{service_name}"
+        )
+
+        # Get service details
+        try:
+            service = services_client.get_service(name=service_path)
+            service_exists = True
+        except Exception:
+            service_exists = False
+            service = None
+
+        if not service_exists:
+            return {
+                "success": True,
+                "service_exists": False,
+                "message": f"Cloud Run service 'unity-{assistant_id}' not found",
+                "assistant_id": assistant_id,
+                "project_id": PROJECT_ID,
+                "region": DEFAULT_REGION,
+            }
+
+        # Extract service status information
+        service_status = "unknown"
+        service_url = service.uri if service.uri else None
+
+        # Get conditions to determine status
+        if hasattr(service, "conditions") and service.conditions:
+            for condition in service.conditions:
+                if condition.type == "Ready":
+                    if condition.status == "True":
+                        service_status = "ready"
+                    else:
+                        service_status = "not_ready"
+                    break
+
+        # Get traffic allocation
+        traffic_info = []
+        if hasattr(service, "traffic") and service.traffic:
+            for traffic_target in service.traffic:
+                traffic_info.append(
+                    {
+                        "type": str(traffic_target.type_),
+                        "percent": traffic_target.percent,
+                        "revision": (
+                            traffic_target.revision
+                            if traffic_target.revision
+                            else "latest"
+                        ),
+                    }
+                )
+
+        # Get scaling configuration
+        scaling_info = {}
+        if (
+            hasattr(service, "template")
+            and hasattr(service.template, "scaling")
+            and service.template.scaling
+        ):
+            scaling_info = {
+                "min_instances": service.template.scaling.min_instance_count,
+                "max_instances": service.template.scaling.max_instance_count,
+            }
+
+        return {
+            "success": True,
+            "service_exists": True,
+            "service_name": service_path,
+            "service_url": service_url,
+            "assistant_id": assistant_id,
+            "project_id": PROJECT_ID,
+            "region": DEFAULT_REGION,
+            "service_status": {
+                "name": service.name,
+                "status": service_status,
+                "create_time": (
+                    service.create_time.isoformat() if service.create_time else None
+                ),
+                "update_time": (
+                    service.update_time.isoformat() if service.update_time else None
+                ),
+                "generation": service.generation,
+            },
+            "traffic_allocation": traffic_info,
+            "scaling_configuration": scaling_info,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get Cloud Run service status: {str(e)}"
+        )
+
+
+# delete cloud run service
+@router.delete("/service/delete")
+async def delete_cloudrun_service(assistant_id: str = Form(...)):
+    """
+    Delete a Google Cloud Run service with the assistant_id as the service name.
+    """
+    try:
+        # Get credentials from environment variable
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        creds = Credentials.from_service_account_info(creds_json)
+
+        # Initialize the Cloud Run Services client
+        services_client = run_v2.ServicesClient(credentials=creds)
+
+        # Create the service name with unity- prefix
+        service_name = f"unity-{assistant_id}"
+        service_path = (
+            f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/services/{service_name}"
+        )
+
+        # Delete the service
+        operation = services_client.delete_service(name=service_path)
+
+        # Wait for the operation to complete
+        operation.result()
+
+        return {
+            "success": True,
+            "message": f"Cloud Run service deleted successfully",
+            "service_name": service_path,
+            "assistant_id": assistant_id,
+            "project_id": PROJECT_ID,
+            "region": DEFAULT_REGION,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete Cloud Run service: {str(e)}"
         )
