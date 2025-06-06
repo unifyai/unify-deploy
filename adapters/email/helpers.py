@@ -179,6 +179,10 @@ def get_assistant_id(
         params["email"] = email_id
     if phone_number:
         params["phone"] = phone_number
+    if "+15550100002" in phone_number:
+        return "default-assistant"
+    if "+15550100001" in phone_number:
+        return "default-assistant-2"
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
@@ -190,3 +194,15 @@ def get_assistant_id(
     if len(assistants) == 0:
         return "default-assistant"
     return assistants[0]["agent_id"]
+
+
+def start_service_if_not_running(assistant_id: str):
+    """
+    Start the service if it is not running.
+    """
+    service_url = f"https://unity-{assistant_id}-000000000000.us-central1.run.app"
+    response = requests.get(f"{service_url}/status").json()
+    if not response["running"]:
+        response = requests.post(f"{service_url}/start")
+        if response.status_code != 200:
+            print(f"Failed to start service for assistant {assistant_id}")

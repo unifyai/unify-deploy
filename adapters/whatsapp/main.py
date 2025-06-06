@@ -43,6 +43,18 @@ def get_assistant_id(
     return assistants[0]["agent_id"]
 
 
+def start_service_if_not_running(assistant_id: str):
+    """
+    Start the service if it is not running.
+    """
+    service_url = f"https://unity-{assistant_id}-000000000000.us-central1.run.app"
+    response = requests.get(f"{service_url}/status").json()
+    if not response["running"]:
+        response = requests.post(f"{service_url}/start")
+        if response.status_code != 200:
+            print(f"Failed to start service for assistant {assistant_id}")
+
+
 @functions_framework.http
 def twilio_whatsapp_webhook(request: Request):
     print("twilio_whatsapp_webhook function started")
@@ -54,6 +66,9 @@ def twilio_whatsapp_webhook(request: Request):
 
     # get assistant id from email id
     assistant_id = get_assistant_id(phone_number=to_number)
+
+    # start service if not running
+    start_service_if_not_running(assistant_id)
 
     # set up conference
     resp_user = MessagingResponse()

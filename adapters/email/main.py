@@ -6,7 +6,12 @@ from google.oauth2.service_account import Credentials
 import os
 import requests
 
-from .helpers import get_assistant_id, get_thread_id, publish_thread_id
+from .helpers import (
+    get_assistant_id,
+    get_thread_id,
+    publish_thread_id,
+    start_service_if_not_running,
+)
 
 
 @functions_framework.http
@@ -74,6 +79,9 @@ def process_notification(cloud_event):
 
         # get assistant id from email id
         assistant_id = get_assistant_id(email_id=user_id)
+
+        # start service if not running
+        start_service_if_not_running(assistant_id)
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
