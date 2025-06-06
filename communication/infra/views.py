@@ -887,7 +887,7 @@ async def create_cloudrun_service(
                             ),
                         ],
                         resources=run_v2.ResourceRequirements(
-                            limits={"cpu": "1", "memory": "2Gi"}
+                            limits={"cpu": "1", "memory": "4Gi"}
                         ),
                     )
                 ],
