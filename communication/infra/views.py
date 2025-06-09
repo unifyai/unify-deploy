@@ -885,6 +885,14 @@ async def create_cloudrun_service(
                                     )
                                 ),
                             ),
+                            run_v2.EnvVar(
+                                name="ORCHESTRA_ADMIN_KEY",
+                                value_source=run_v2.EnvVarSource(
+                                    secret_key_ref=run_v2.SecretKeySelector(
+                                        secret="ORCHESTRA_ADMIN_KEY", version="latest"
+                                    )
+                                ),
+                            ),
                         ],
                         resources=run_v2.ResourceRequirements(
                             limits={"cpu": "1", "memory": "4Gi"}
