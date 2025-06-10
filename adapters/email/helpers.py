@@ -200,10 +200,11 @@ def start_service_if_not_running(assistant_id: str):
     """
     Start the service if it is not running.
     """
-    service_url = f"https://unity-{assistant_id}-000000000000.us-central1.run.app"
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.get(f"{service_url}/status", headers=headers).json()
-    if not response["running"]:
-        response = requests.post(f"{service_url}/start", headers=headers)
-        if response.status_code != 200:
-            print(f"Failed to start service for assistant {assistant_id}")
+    if assistant_id != "default-assistant":
+        service_url = f"https://unity-{assistant_id}-000000000000.us-central1.run.app"
+        headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+        response = requests.get(f"{service_url}/status", headers=headers).json()
+        if not response["running"]:
+            response = requests.post(f"{service_url}/start", headers=headers)
+            if response.status_code != 200:
+                print(f"Failed to start service for assistant {assistant_id}")
