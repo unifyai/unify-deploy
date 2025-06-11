@@ -160,7 +160,7 @@ def publish_thread_id(assistant_id, thread_id, user_id):
         print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
 
 
-def get_assistant_id(
+def get_assistant_and_voice_id(
     email_id: str = None,
     phone_number: str = None,
 ) -> str:
@@ -180,20 +180,20 @@ def get_assistant_id(
     if phone_number:
         params["phone"] = phone_number
     if "+15550100002" in phone_number:
-        return "default-assistant"
+        return "default-assistant", None
     if "+15550100001" in phone_number:
-        return "default-assistant-2"
+        return "default-assistant-2", None
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
     if "detail" in response:
-        return "default-assistant"
+        return "default-assistant", None
     assistants = response["info"]
     if len(assistants) == 0:
-        return "default-assistant"
-    return assistants[0]["agent_id"]
+        return "default-assistant", None
+    return assistants[0]["agent_id"], assistants[0]["voice_id"]
 
 
 def start_service_if_not_running(assistant_id: str):
