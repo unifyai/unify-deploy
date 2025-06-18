@@ -215,14 +215,40 @@ async def create_phone_number(request: Request):
     # Extract customizable parameters from request
     voice_url = data.get("voice_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/call")
     sms_url = data.get("sms_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/text")
+    country = data.get("country", "US") # US/GB/AU/CA/FI/NL/PL/PR/TH
+
+    # Additional args for country
+    additional_args = {}
+    if country == "GB":
+        additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
+    elif country in ["NL", "FI"]:
+        additional_args["address_sid"] = "AD742b83eb0aab7a249e7a3f2f5fb615c0"
+    # elif country == "AU":
+    #     additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
+    # elif country == "PL":
+    #     additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
+    # elif country == "TH":
+    #     additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
 
     # Initialize Twilio client
     twilio_client = get_twilio_client()
 
-    # Search for available US mobile number
-    numbers = twilio_client.available_phone_numbers("US").local.list(
-        limit=1, sms_enabled=True, voice_enabled=True
-    )
+    # Search for available mobile number
+    numbers = []
+    try:
+        numbers += twilio_client.available_phone_numbers(country).local.list(
+            limit=1, sms_enabled=True, voice_enabled=True, beta=False
+        )
+    except Exception as e:
+        pass
+
+    try:
+        numbers += twilio_client.available_phone_numbers(country).mobile.list(
+            limit=1, sms_enabled=True, voice_enabled=True, beta=False
+        )
+    except Exception as e:
+        pass
+
     if not numbers:
         raise HTTPException(status_code=404, detail="No suitable phone numbers found.")
     record = numbers[0]
@@ -234,9 +260,10 @@ async def create_phone_number(request: Request):
         voice_method="POST",
         sms_url=sms_url,
         sms_method="POST",
+        **additional_args,
     )
 
-    # Set up the messaing service
+    # Set up the messaging service
     services = twilio_client.messaging.v1.services.list()
     for service in services:
         if service.friendly_name == "Unity":
