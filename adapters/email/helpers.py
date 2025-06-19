@@ -183,6 +183,8 @@ def get_assistant_and_voice_id(
         return "default-assistant", None
     if "+15550100001" in phone_number:
         return "default-assistant-2", None
+    if "+15550100005" in phone_number:
+        return "default-assistant-3", None
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
