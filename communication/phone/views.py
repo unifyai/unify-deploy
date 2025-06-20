@@ -223,8 +223,9 @@ async def create_phone_number(request: Request):
         additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
     elif country in ["NL", "FI"]:
         additional_args["address_sid"] = "AD742b83eb0aab7a249e7a3f2f5fb615c0"
-    # elif country == "AU":
-    #     additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
+    elif country == "AU":
+        additional_args["bundle_sid"] = "BUd8f2d4e2fe905d85653f738d7323c88b"
+        additional_args["address_sid"] = "AD828c09f385dea4f977464da90006bfd7"
     # elif country == "PL":
     #     additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
     # elif country == "TH":
