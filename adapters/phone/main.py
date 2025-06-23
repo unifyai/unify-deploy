@@ -15,7 +15,7 @@ from livekit import api
 import time
 
 
-def get_assistant_and_voice_id(
+def get_assistant_and_voice_info(
     email_id: str = None,
     phone_number: str = None,
 ) -> str:
@@ -50,7 +50,11 @@ def get_assistant_and_voice_id(
     assistants = response["info"]
     if len(assistants) == 0:
         return "default-assistant", None
-    return assistants[0]["agent_id"], assistants[0]["voice_id"]
+    return (
+        assistants[0]["agent_id"],
+        "cartesia",#assistants[0]["tts_provider"],
+        assistants[0]["voice_id"],
+    )
 
 
 def start_service_if_not_running(assistant_id: str):
@@ -187,7 +191,7 @@ def twilio_call_webhook(request: Request):
     print(f"Received call from {caller_number} to {twilio_number}")
 
     # get assistant id from email id
-    assistant_id, voice_id = get_assistant_and_voice_id(phone_number=to_number)
+    assistant_id, tts_provider, voice_id = get_assistant_and_voice_info(phone_number=to_number)
 
     # start service if not running
     start_service_if_not_running(assistant_id)
@@ -274,6 +278,7 @@ def twilio_call_webhook(request: Request):
                 "call_sid": call_sid,
                 "livekit_room": room_name,  # Include LiveKit room name
                 "assistant_id": assistant_id,  # Include for agent dispatch
+                "tts_provider": tts_provider,
                 "voice_id": voice_id,  # Include for agent dispatch
                 "action": "start_worker",  # Signal that worker should start (agent already dispatched)
                 "timestamp": int(time.time() * 1000),  # For timing analysis
@@ -306,7 +311,7 @@ def twilio_msg_webhook(request: Request):
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
     # get assistant id from email id
-    assistant_id, _ = get_assistant_and_voice_id(phone_number=to_number)
+    assistant_id, _, _ = get_assistant_and_voice_info(phone_number=to_number)
 
     # start service if not running
     start_service_if_not_running(assistant_id)

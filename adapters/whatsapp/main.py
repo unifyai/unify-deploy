@@ -7,7 +7,7 @@ import requests
 from twilio.twiml.messaging_response import MessagingResponse
 
 
-def get_assistant_and_voice_id(
+def get_assistant_and_voice_info(
     email_id: str = None,
     phone_number: str = None,
 ) -> str:
@@ -42,7 +42,11 @@ def get_assistant_and_voice_id(
     assistants = response["info"]
     if len(assistants) == 0:
         return "default-assistant", None
-    return assistants[0]["agent_id"], assistants[0]["voice_id"]
+    return (
+        assistants[0]["agent_id"],
+        "cartesia",#assistants[0]["tts_provider"],
+        assistants[0]["voice_id"],
+    )
 
 
 def start_service_if_not_running(assistant_id: str):
@@ -69,7 +73,7 @@ def twilio_whatsapp_webhook(request: Request):
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
     # get assistant id from email id
-    assistant_id, _ = get_assistant_and_voice_id(phone_number=to_number)
+    assistant_id, _, _ = get_assistant_and_voice_info(phone_number=to_number)
 
     # start service if not running
     start_service_if_not_running(assistant_id)
