@@ -180,21 +180,21 @@ def get_assistant_and_voice_info(
     if phone_number:
         params["phone"] = phone_number
     if "+15550100002" in phone_number:
-        return "default-assistant", None
+        return "default-assistant", "cartesia", None
     if "+15550100001" in phone_number:
-        return "default-assistant-2", None
+        return "default-assistant-2", "cartesia", None
     if "+15550100005" in phone_number:
-        return "default-assistant-3", None
+        return "default-assistant-3", "cartesia", None
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
     if "detail" in response:
-        return "default-assistant", None
+        return "default-assistant", "cartesia", None
     assistants = response["info"]
     if len(assistants) == 0:
-        return "default-assistant", None
+        return "default-assistant", "cartesia", None
     return (
         assistants[0]["agent_id"],
         "cartesia",#assistants[0]["tts_provider"],
