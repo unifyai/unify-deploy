@@ -210,7 +210,7 @@ async def send_text(request: Request):
 
 @router.get("/available-countries")
 async def available_countries():
-    return {"success": True, "countries": ["US", "GB", "AU", "CA", "FI", "NL", "PR", "TH"]}
+    return {"success": True, "countries": "US,GB,AU,CA,FI,NL,PR,TH"}
 
 @router.post("/create")
 async def create_phone_number(request: Request):
