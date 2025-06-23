@@ -49,7 +49,7 @@ def start_service_if_not_running(assistant_id: str):
     """
     Start the service if it is not running.
     """
-    if assistant_id not in ["default-assistant", "default-assistant-2", "default-assistant-3"]:
+    if assistant_id not in ["default-assistant"]:#, "default-assistant-2", "default-assistant-3"]:
         service_url = f"https://unity-{assistant_id}-000000000000.us-central1.run.app"
         headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
         response = requests.get(f"{service_url}/status", headers=headers).json()
