@@ -208,6 +208,10 @@ async def send_text(request: Request):
     )
     return {"success": True}
 
+@router.get("/available-countries")
+async def available_countries():
+    return {"success": True, "countries": ["US", "GB", "AU", "CA", "FI", "NL", "PR", "TH"]}
+
 @router.post("/create")
 async def create_phone_number(request: Request):
     data = await request.json()
@@ -215,7 +219,7 @@ async def create_phone_number(request: Request):
     # Extract customizable parameters from request
     voice_url = data.get("voice_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/call")
     sms_url = data.get("sms_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/text")
-    country = data.get("country", "US") # US/GB/AU/CA/FI/NL/PL/PR/TH
+    country = data.get("country", "US")
 
     # Additional args for country
     additional_args = {}
@@ -226,10 +230,11 @@ async def create_phone_number(request: Request):
     elif country == "AU":
         additional_args["bundle_sid"] = "BUd8f2d4e2fe905d85653f738d7323c88b"
         additional_args["address_sid"] = "AD828c09f385dea4f977464da90006bfd7"
+    elif country == "TH":
+        additional_args["bundle_sid"] = "BUadbcfca4db22f76c6840ced254c10a11"
+        additional_args["address_sid"] = "ADdf839edff37d001d2634edc9b0c4a304"
     # elif country == "PL":
-    #     additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
-    # elif country == "TH":
-    #     additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
+    #     additional_args["bundle_sid"] = "BU0864466d980ebd9df91768d9123110b2"
 
     # Initialize Twilio client
     twilio_client = get_twilio_client()
