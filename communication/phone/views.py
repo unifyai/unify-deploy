@@ -210,7 +210,7 @@ async def send_text(request: Request):
 
 @router.get("/available-countries")
 async def available_countries():
-    return {"success": True, "countries": "US,GB,AU,CA,FI,NL,PR,TH"}
+    return {"success": True, "countries": "US,GB,AU,CA,FI,NL,PR,TH,PL"}
 
 @router.post("/create")
 async def create_phone_number(request: Request):
@@ -233,8 +233,9 @@ async def create_phone_number(request: Request):
     elif country == "TH":
         additional_args["bundle_sid"] = "BUadbcfca4db22f76c6840ced254c10a11"
         additional_args["address_sid"] = "ADdf839edff37d001d2634edc9b0c4a304"
-    # elif country == "PL":
-    #     additional_args["bundle_sid"] = "BU0864466d980ebd9df91768d9123110b2"
+    elif country == "PL":
+        additional_args["bundle_sid"] = "BU0864466d980ebd9df91768d9123110b2"
+        additional_args["address_sid"] = "ADdf839edff37d001d2634edc9b0c4a304"
 
     # Initialize Twilio client
     twilio_client = get_twilio_client()
