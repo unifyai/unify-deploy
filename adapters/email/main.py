@@ -71,6 +71,7 @@ def process_notification(cloud_event):
         envelope = json.loads(
             base64.b64decode(cloud_event.data["message"]["data"]).decode("utf-8")
         )
+        print(f"Received notification: {envelope}")
 
         # Extract Gmail notification details
         user_id = envelope["emailAddress"]
