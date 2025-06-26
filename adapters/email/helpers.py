@@ -87,22 +87,22 @@ def get_thread_id(user_id, history_id, gmail_service):
             .list(
                 userId=user_id,
                 startHistoryId=history_id,
-                historyTypes=["messageAdded", "labelAdded"],
+                # historyTypes=["messageAdded", "labelAdded"],
             )
             .execute()
         )
 
-        if not histories or "history" not in histories or not histories["history"]:
-            histories = (
-                gmail_service.users()
-                .history()
-                .list(
-                    userId=user_id,
-                    startHistoryId=history_id,
-                    labelId="UNREAD",
-                )
-                .execute()
-            )
+        # if not histories or "history" not in histories or not histories["history"]:
+        #     histories = (
+        #         gmail_service.users()
+        #         .history()
+        #         .list(
+        #             userId=user_id,
+        #             startHistoryId=history_id,
+        #             labelId="UNREAD",
+        #         )
+        #         .execute()
+        #     )
 
         if not histories or "history" not in histories or not histories["history"]:
             print(f"No history found for user {user_id} with history id {history_id}")
