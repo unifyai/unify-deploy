@@ -94,7 +94,7 @@ def get_thread_id(user_id, history_id, gmail_service):
 
         # Safeguard for thread replies
         if not histories or "history" not in histories or not histories["history"]:
-            histories["history"] = (
+            histories["history"] = [(
                 gmail_service.users()
                 .messages()
                 .list(
@@ -102,7 +102,7 @@ def get_thread_id(user_id, history_id, gmail_service):
                     q="is:unread newer_than:1d",
                 )
                 .execute()
-            )
+            )]
 
         if not histories or "history" not in histories or not histories["history"]:
             print(f"No history found for user {user_id} with history id {history_id}")
