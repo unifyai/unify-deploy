@@ -195,7 +195,7 @@ def get_assistant_and_voice_info(
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
-    if "detail" in response:
+    if response and "detail" in response:
         return "default-assistant", "cartesia", None
     assistants = response["info"]
     if len(assistants) == 0:
