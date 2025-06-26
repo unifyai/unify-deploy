@@ -124,14 +124,14 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .execute()
             )
 
-            labels = message.get("labelIds", [])
-            if labels and "UNREAD" not in labels:
-                print(f"Message {msg_id} is read, skipping")
-                continue
+            # labels = message.get("labelIds", [])
+            # if (labels and "UNREAD" not in labels) or (msg_id == messages[-1]["threadId"]):
+            #     print(f"Message {msg_id} is read, skipping")
+            #     continue
 
-            gmail_service.users().messages().modify(
-                userId=user_id, id=msg_id, body={"removeLabelIds":["UNREAD"]}
-            ).execute()
+            # gmail_service.users().messages().modify(
+            #     userId=user_id, id=msg_id, body={"removeLabelIds":["UNREAD"]}
+            # ).execute()
 
             # Get the thread for this message
             thread_id = message["threadId"]
@@ -141,6 +141,17 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .get(userId=user_id, id=thread_id, format="full")
                 .execute()
             )
+
+            thread_msg = thread.get("messages", [])
+            if not thread_msg or (thread_msg and thread_msg[-1]["labelIds"] and "UNREAD" not in thread_msg[-1]["labelIds"]):
+                print(f"Message {thread_msg[-1]['id']} is read, skipping")
+                continue
+
+            gmail_service.users().messages().modify(
+                userId=user_id, id=thread_msg[-1]["id"], body={"removeLabelIds":["UNREAD"]}
+            ).execute()
+
+            print("Thread: ", thread_msg)
 
             # Convert to conversation format
             conversation = _gmail_thread_to_conversation(thread)
