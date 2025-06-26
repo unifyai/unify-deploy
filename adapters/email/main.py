@@ -80,8 +80,12 @@ def process_notification(cloud_event):
         # get assistant id from email id
         assistant_id, _ = get_assistant_and_voice_info(email_id=user_id)
 
+        print(f"DEBUG: Assistant done.")
+
         # start service if not running
         start_service_if_not_running(assistant_id)
+
+        print(f"DEBUG: Start service done.")
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
@@ -96,6 +100,8 @@ def process_notification(cloud_event):
             subject=user_id,
         )
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
+
+        print(f"DEBUG: Credentials done.")
 
         # Process the history and thread
         thread_id = get_thread_id(user_id, history_id, gmail_service)
