@@ -87,7 +87,7 @@ def get_thread_id(user_id, history_id, gmail_service):
             .list(
                 userId=user_id,
                 startHistoryId=history_id,
-                labelId="UNREAD",
+                historyTypes=["messageAdded", "labelAdded"],
             )
             .execute()
         )
@@ -99,7 +99,7 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .list(
                     userId=user_id,
                     startHistoryId=history_id,
-                    historyTypes=["labelAdded"],
+                    labelId="UNREAD",
                 )
                 .execute()
             )
