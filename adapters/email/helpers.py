@@ -109,13 +109,14 @@ def get_thread_id(user_id, history_id, gmail_service):
             return None
 
         # Process each history entry
+        print(f"History: {histories}")
         for history in histories["history"]:
             messages = history.get("messages", [])
             if len(messages) == 0:
                 continue
 
             # Get the message details
-            msg_id = messages[0]["id"]
+            msg_id = messages[-1]["id"]
             message = (
                 gmail_service.users()
                 .messages()
