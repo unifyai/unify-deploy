@@ -87,7 +87,7 @@ def get_thread_id(user_id, history_id, gmail_service):
             .list(
                 userId=user_id,
                 startHistoryId=history_id,
-                historyTypes=["messageAdded"],
+                labelId="UNREAD",
             )
             .execute()
         )
@@ -110,6 +110,11 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .get(userId=user_id, id=msg_id)
                 .execute()
             )
+
+            labels = message.get("labelIds", [])
+            if labels and "UNREAD" not in labels:
+                print(f"Message {msg_id} is read, skipping")
+                continue
 
             gmail_service.users().messages().modify(
                 userId=user_id, id=msg_id, body={"removeLabelIds":["UNREAD"]}
