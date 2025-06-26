@@ -184,12 +184,12 @@ def get_assistant_and_voice_info(
         params["email"] = email_id
     if phone_number:
         params["phone"] = phone_number
-    if "+15550100002" in phone_number:
-        return "default-assistant", "cartesia", None
-    if "+15550100001" in phone_number:
-        return "default-assistant-2", "cartesia", None
-    if "+15550100005" in phone_number:
-        return "default-assistant-3", "cartesia", None
+        if "+15550100002" in phone_number:
+            return "default-assistant", "cartesia", None
+        if "+15550100001" in phone_number:
+            return "default-assistant-2", "cartesia", None
+        if "+15550100005" in phone_number:
+            return "default-assistant-3", "cartesia", None
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
