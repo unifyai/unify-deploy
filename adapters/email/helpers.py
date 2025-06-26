@@ -92,15 +92,14 @@ def get_thread_id(user_id, history_id, gmail_service):
             .execute()
         )
 
-        # First fallback in case histories are missed
+        # Safeguard for thread replies
         if not histories or "history" not in histories or not histories["history"]:
             histories = (
                 gmail_service.users()
-                .history()
+                .messages()
                 .list(
                     userId=user_id,
-                    startHistoryId=history_id,
-                    labelId="UNREAD",
+                    q="is:unread newer_than:1d",
                 )
                 .execute()
             )
