@@ -91,7 +91,6 @@ def get_thread_id(user_id, history_id, gmail_service):
             )
             .execute()
         )
-        print(f"History: {histories}")
 
         if not histories or "history" not in histories or not histories["history"]:
             print(f"No history found for user {user_id} with history id {history_id}")
