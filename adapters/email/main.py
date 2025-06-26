@@ -78,7 +78,7 @@ def process_notification(cloud_event):
         history_id = envelope["historyId"]
 
         # get assistant id from email id
-        assistant_id, _, _ = get_assistant_and_voice_info(email_id=user_id)
+        assistant_id, _ = get_assistant_and_voice_info(email_id=user_id)
 
         # start service if not running
         start_service_if_not_running(assistant_id)
