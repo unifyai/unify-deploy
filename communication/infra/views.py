@@ -172,6 +172,7 @@ async def delete_pubsub_topic(assistant_id: str = Form(...)):
 # create cloud run job
 @router.post("/job/create")
 async def create_cloudrun_job(
+    api_key: str = Form(...),
     assistant_id: str = Form(...),
     user_name: str = Form(...),
     assistant_number: str = Form(...),
@@ -181,6 +182,7 @@ async def create_cloudrun_job(
     Create a Google Cloud Run job named unity_<assistant_id>.
 
     Args:
+        api_key: The API key for the assistant
         assistant_id: The assistant ID (job will be unity_<assistant_id>)
         user_name: The user's name
         assistant_number: The assistant's phone number
@@ -212,6 +214,10 @@ async def create_cloudrun_job(
                                 "/unity/unity:latest"
                             ),
                             env=[
+                                run_v2.EnvVar(
+                                    name="UNIFY_KEY",
+                                    value=api_key,
+                                ),
                                 run_v2.EnvVar(
                                     name="ASSISTANT_ID",
                                     value=assistant_id,
@@ -324,10 +330,10 @@ async def create_cloudrun_job(
                                     ),
                                 ),
                                 run_v2.EnvVar(
-                                    name="UNIFY_KEY",
+                                    name="ELEVEN_API_KEY",
                                     value_source=run_v2.EnvVarSource(
                                         secret_key_ref=run_v2.SecretKeySelector(
-                                            secret="ORCHESTRA_API_KEY", version="latest"
+                                            secret="ELEVEN_API_KEY", version="latest"
                                         )
                                     ),
                                 ),
