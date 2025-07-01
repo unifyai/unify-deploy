@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-from phone.views import get_twilio_client
+from communication.phone.views import get_twilio_client
 
 load_dotenv()
 
