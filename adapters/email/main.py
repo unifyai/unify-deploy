@@ -22,6 +22,11 @@ def renew_watch():
         "https://api.unify.ai/v0/admin/assistant/emails",
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()["info"]
+    emails += [
+        "default-assistant@unify.ai",
+        "default-assistant-2@unify.ai",
+        "default-assistant-3@unify.ai",
+    ]
 
     results = {}
 

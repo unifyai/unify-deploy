@@ -201,6 +201,12 @@ def get_assistant_and_voice_info(
     params = dict()
     if email_id:
         params["email"] = email_id
+        if email_id == "default-assistant@unify.ai":
+            return "default-assistant", "cartesia", None
+        if email_id == "default-assistant-2@unify.ai":
+            return "default-assistant-2", "cartesia", None
+        if email_id == "default-assistant-3@unify.ai":
+            return "default-assistant-3", "cartesia", None
     if phone_number:
         params["phone"] = phone_number
         if "+15550100002" in phone_number:
