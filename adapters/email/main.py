@@ -31,35 +31,15 @@ def renew_watch(request):
     results = {}
 
     # Process each email
+    comms_url = "https://unity-comms-app-000000000000.us-central1.run.app"
     for email in emails:
         try:
-            # Get credentials
-            creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-            creds = Credentials.from_service_account_info(
-                creds_json,
-                scopes=["https://www.googleapis.com/auth/gmail.modify"],
-                subject=email,
-            )
-            gmail_service = build("gmail", "v1", credentials=creds)
-
-            # Configure watch request
-            watch_request = {
-                "labelIds": ["INBOX"],
-                "topicName": f"projects/{os.getenv('PROJECT_ID')}/topics/email-notifications",
-            }
-
-            # Execute watch request
-            watch_resp = (
-                gmail_service.users()
-                .watch(
-                    userId="me",
-                    body=watch_request,
-                )
-                .execute()
-            )
-
-            results[email] = {"success": True, "response": watch_resp}
-
+            admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+            results[email] = requests.post(
+                f"{comms_url}/email/watch",
+                json={"primary_email": email},
+                headers={"Authorization": f"Bearer {admin_key}"},
+            ).json()
         except Exception as e:
             error_message = f"Error renewing Gmail watch for {email}: {str(e)}"
             print(error_message)
