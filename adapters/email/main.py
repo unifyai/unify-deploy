@@ -15,7 +15,7 @@ from .helpers import (
 
 
 @functions_framework.http
-def renew_watch():
+def renew_watch(request):
     """Cloud Function that renews Gmail watches for multiple users."""
     # ToDo: make orchestra admin call to get all assistant emails
     emails = requests.get(
