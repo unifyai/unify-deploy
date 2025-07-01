@@ -23,8 +23,8 @@ def renew_watch(request):
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()["info"]
     emails += [
-        "default-assistant@unify.ai",
-        "default-assistant-2@unify.ai",
+        # "default-assistant@unify.ai",
+        # "default-assistant-2@unify.ai",
         "default-assistant-3@unify.ai",
     ]
 
