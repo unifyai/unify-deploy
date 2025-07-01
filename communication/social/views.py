@@ -25,13 +25,12 @@ def generate_verification_code(length: int = 6) -> str:
 
 
 # --- API Endpoints ---
-@router.get("/available-platforms", tags=["Social Verification"])
+@router.get("/available-platforms", tags=["Verification"])
 async def get_social_platforms():
     """
     Fetches the list of available social media platforms for verification.
     """
-    supported_platforms = ["whatsapp"]
-    return {"platforms": supported_platforms}
+    return {"success": True, "platforms": "whatsapp"}
 
 @router.post("/verify", tags=["Verification"])
 async def send_verification_message(request: VerificationRequest):
