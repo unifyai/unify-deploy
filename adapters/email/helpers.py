@@ -144,20 +144,17 @@ def get_thread_id(user_id, history_id, gmail_service):
 
             # Convert to conversation format
             conversation = _gmail_thread_to_conversation(thread)
-
-            # ToDo: check if the conversation has changed
-            # if it has, send the thread_id to a different channel
-            # if it hasn't, return None
+            last_message = conversation[-1]
 
             # Return the conversation (or process it further as needed)
-            return thread_id
+            return thread_id, last_message
 
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
         return None
 
 
-def publish_thread_id(assistant_id, thread_id, user_id):
+def publish_thread_id(assistant_id, thread_id, user_id, last_message):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
@@ -169,7 +166,12 @@ def publish_thread_id(assistant_id, thread_id, user_id):
             "thread": "email",
             "event": {
                 "thread_id": thread_id,
-                "email": user_id,
+                "from": last_message["sender"],
+                "to": last_message["to"],
+                "cc": last_message["cc"],
+                "bcc": last_message["bcc"],
+                "subject": last_message["subject"],
+                "body": last_message["content"],
             },
         }
         data = json.dumps(message_dict).encode("utf-8")

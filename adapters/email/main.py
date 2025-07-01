@@ -98,14 +98,11 @@ def process_notification(cloud_event):
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # Process the history and thread
-        thread_id = get_thread_id(user_id, history_id, gmail_service)
+        thread_id, last_message = get_thread_id(user_id, history_id, gmail_service)
 
         if thread_id:
-            # ToDo: check if the conversation stored for this thread_id has changed
-            # send the thread_id to a different channel
             print(f"Successfully processed conversation for user {user_id}")
-            # ToDo: disabled for now
-            # publish_thread_id(thread_id, user_id)
+            publish_thread_id(assistant_id, thread_id, user_id, last_message)
             return "OK"
         else:
             print(f"No new conversations found for user {user_id}")
