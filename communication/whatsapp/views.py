@@ -163,7 +163,10 @@ async def assign_whatsapp_sender(request: Request):
     user_whatsapp_number = data.get("user_whatsapp_number")
     conflict_whatsapp_number = data.get("conflict_whatsapp_number", None)
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"https://api.unify.ai/v0/admin/assistant?user_whatsapp_number={user_whatsapp_number}")
+        resp = await client.get(
+            f"https://api.unify.ai/v0/admin/assistant?user_whatsapp_number={user_whatsapp_number}",
+            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+        )
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch assistants: {resp.text}")
     resp_data = resp.json()
@@ -194,7 +197,10 @@ async def get_conflict_whatsapp_number(request: Request):
 
     # search if target has an assistant with the same whatsapp number
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"https://api.unify.ai/v0/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}")
+        resp = await client.get(
+            f"https://api.unify.ai/v0/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}",
+            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+        )
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch assistants: {resp.text}")
     resp_data = resp.json()
@@ -204,7 +210,10 @@ async def get_conflict_whatsapp_number(request: Request):
     
     # search if target is in any other user's contact list
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"https://api.unify.ai/v0/admin/contacts?whatsapp_number={target_whatsapp_number}")
+        resp = await client.get(
+            f"https://api.unify.ai/v0/admin/contacts?whatsapp_number={target_whatsapp_number}",
+            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+        )
     if resp.status_code >= 400:
         raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch assistants: {resp.text}")
     found_contacts = resp.json()
@@ -215,7 +224,10 @@ async def get_conflict_whatsapp_number(request: Request):
                 continue
             # check if user has an assistant
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"https://api.unify.ai/v0/admin/assistant?user_id={uid}&assistant_whatsapp_number={assistant_whatsapp_number}")
+                resp = await client.get(
+                    f"https://api.unify.ai/v0/admin/assistant/user/{uid}&assistant_whatsapp_number={assistant_whatsapp_number}",
+                    headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+                )
             if resp.status_code >= 400:
                 raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch assistants: {resp.text}")
             resp_data = resp.json()
