@@ -28,9 +28,11 @@ def generate_verification_code(length: int = 6) -> str:
 @router.get("/available-platforms", tags=["Verification"])
 async def get_social_platforms():
     """
-    Fetches the list of available social media platforms for verification.
+    Fetches the available social media platforms 
+    and their respective account creation cost.
     """
-    return {"success": True, "platforms": "whatsapp"}
+    platforms = {"whatsapp": 10.0}
+    return {"success": True, "platforms": platforms}
 
 @router.post("/verify", tags=["Verification"])
 async def send_verification_message(request: VerificationRequest):
