@@ -10,7 +10,7 @@ from twilio.rest import Client as TwilioClient
 load_dotenv()
 
 router = APIRouter()
-client = unify.Unify()
+client = unify.Unify(api_key=os.getenv("UNIFY_KEY"))
 client.set_endpoint("o4-mini@openai")
 client.set_system_message("You are a helpful assistant.")
 
@@ -157,3 +157,70 @@ async def delete_whatsapp_sender(request: Request):
         raise HTTPException(status_code=resp.status_code, detail=f"Failed to delete WhatsApp sender: {text}")
     return {"success": True}
 
+@router.post("/assign")
+async def assign_whatsapp_sender(request: Request):
+    data = await request.json()
+    user_whatsapp_number = data.get("user_whatsapp_number")
+    conflict_whatsapp_number = data.get("conflict_whatsapp_number", None)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"https://api.unify.ai/v0/admin/assistant?user_whatsapp_number={user_whatsapp_number}")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch assistants: {resp.text}")
+    resp_data = resp.json()
+    assistants_whatsapp_numbers = [assistant["whatsapp_number"] for assistant in resp_data["info"]]
+    if conflict_whatsapp_number:
+        assistants_whatsapp_numbers += [conflict_whatsapp_number]
+    
+    # no twilio api for listing whatsapp numbers, manual for now
+    all_whatsapp_numbers = ["+15550100001", "+15550100002"]
+    available_whatsapp_number = None
+    for number in all_whatsapp_numbers:
+        if number not in assistants_whatsapp_numbers:
+            print(f"Whatsapp number {number} is not assigned to any assistant")
+            available_whatsapp_number = number
+            break
+
+    if not available_whatsapp_number:
+        raise HTTPException(status_code=400, detail="No available WhatsApp number found")
+
+    return {"whatsapp_number": available_whatsapp_number}
+
+@router.get("/conflict")
+async def get_conflict_whatsapp_number(request: Request):
+    data = await request.json()
+    user_id = data.get("user_id")
+    assistant_whatsapp_number = data.get("assistant_whatsapp_number")
+    target_whatsapp_number = data.get("target_whatsapp_number")
+
+    # search if target has an assistant with the same whatsapp number
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"https://api.unify.ai/v0/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch assistants: {resp.text}")
+    resp_data = resp.json()
+    found_assistants = resp_data.get("info", [])
+    if found_assistants:
+        return {"conflict": "both"}
+    
+    # search if target is in any other user's contact list
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"https://api.unify.ai/v0/admin/contacts?whatsapp_number={target_whatsapp_number}")
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch assistants: {resp.text}")
+    found_contacts = resp.json()
+    if found_contacts:
+        found_target_user_ids = set([contact["user_id"] for contact in found_contacts])
+        for uid in found_target_user_ids:
+            if uid == user_id:
+                continue
+            # check if user has an assistant
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"https://api.unify.ai/v0/admin/assistant?user_id={uid}&assistant_whatsapp_number={assistant_whatsapp_number}")
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=resp.status_code, detail=f"Failed to fetch assistants: {resp.text}")
+            resp_data = resp.json()
+            if resp_data.get("info", []):
+                return {"conflict": "single"}
+    
+    # no conflict found
+    return {"conflict": "none"}
