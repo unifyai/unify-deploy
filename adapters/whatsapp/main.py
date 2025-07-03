@@ -10,6 +10,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 def get_assistant_and_voice_info(
     email_id: str = None,
     phone_number: str = None,
+    user_number: str = None,
 ) -> str:
     """
     Get the assistant id from the email id or phone number.
@@ -17,6 +18,7 @@ def get_assistant_and_voice_info(
     Args:
         email_id: The email id of the assistant.
         phone_number: The phone number of the assistant.
+        user_number: The user number of the assistant.
 
     Returns:
         The assistant id.
@@ -26,6 +28,11 @@ def get_assistant_and_voice_info(
         params["email"] = email_id
     if phone_number:
         params["phone"] = phone_number
+    # if phone_number:
+    #     params["assistant_whatsapp_number"] = phone_number
+    # if user_number:
+    #     params["user_whatsapp_number"] = user_number
+    
     if "+15550100002" in phone_number:
         return "default-assistant", "cartesia", None
     if "+15550100001" in phone_number:
@@ -73,7 +80,13 @@ def twilio_whatsapp_webhook(request: Request):
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
     # get assistant id from email id
-    assistant_id, _, _ = get_assistant_and_voice_info(phone_number=to_number)
+    assistant_id, _, _ = get_assistant_and_voice_info(phone_number=to_number, user_number=from_number)
+
+    # cold message is only for user to their own assistant
+    if not assistant_id:
+        resp_user = MessagingResponse()
+        resp_user.message("This number is no longer active. Please visit console.unify.ai to view your assistant details.")
+        return Response(response=str(resp_user), mimetype="text/xml")
 
     # start service if not running
     start_service_if_not_running(assistant_id)
