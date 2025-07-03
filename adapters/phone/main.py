@@ -204,41 +204,6 @@ def twilio_call_webhook(request: Request):
     print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
     print(f"LiveKit room will be: {room_name}")
 
-    # publish to pubsub - let the pubsub handler dispatch the agent when worker is ready
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_path = pubsub_client.topic_path(
-        os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
-    )
-    print(f"Publishing call to Pub/Sub at path: {topic_path}")
-    try:
-        pubsub_message = {
-            "thread": "call",
-            "event": {
-                "conference_name": conference_name,
-                "caller_number": caller_number,
-                "sip_uri": sip_uri,
-                "livekit_room": room_name,  # Include LiveKit room name
-                "assistant_id": assistant_id,  # Include for agent dispatch
-                "tts_provider": tts_provider,
-                "voice_id": voice_id,  # Include for agent dispatch
-                "action": "start_worker",  # Signal that worker should start (agent already dispatched)
-                "timestamp": int(time.time() * 1000),  # For timing analysis
-                "call_metadata": {
-                    "twilio_number": twilio_number,
-                    "call_type": "inbound",
-                    "room_created": True,  # Confirms room was created
-                    "bridge_established": True,  # Confirms SIP bridge is ready
-                },
-            },
-        }
-        pubsub_client.publish(
-            topic_path,
-            json.dumps(pubsub_message).encode("utf-8"),
-        )
-        print("Call published to Pub/Sub successfully")
-    except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
-
     # Create LiveKit room and dispatch agent immediately
     try:
         # Create metadata for the agent
@@ -273,6 +238,41 @@ def twilio_call_webhook(request: Request):
     except Exception as e:
         print(f"Error creating LiveKit room and dispatching agent: {str(e)}")
         # Continue with Twilio conference setup even if LiveKit dispatch fails
+
+    # publish to pubsub - let the pubsub handler dispatch the agent when worker is ready
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_path = pubsub_client.topic_path(
+        os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
+    )
+    print(f"Publishing call to Pub/Sub at path: {topic_path}")
+    try:
+        pubsub_message = {
+            "thread": "call",
+            "event": {
+                "conference_name": conference_name,
+                "caller_number": caller_number,
+                "sip_uri": sip_uri,
+                "livekit_room": room_name,  # Include LiveKit room name
+                "assistant_id": assistant_id,  # Include for agent dispatch
+                "tts_provider": tts_provider,
+                "voice_id": voice_id,  # Include for agent dispatch
+                "action": "start_worker",  # Signal that worker should start (agent already dispatched)
+                "timestamp": int(time.time() * 1000),  # For timing analysis
+                "call_metadata": {
+                    "twilio_number": twilio_number,
+                    "call_type": "inbound",
+                    "room_created": True,  # Confirms room was created
+                    "bridge_established": True,  # Confirms SIP bridge is ready
+                },
+            },
+        }
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(pubsub_message).encode("utf-8"),
+        )
+        print("Call published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing to Pub/Sub: {str(e)}")
 
     # UNCHANGED: Keep the original conference setup (this works)
     try:
