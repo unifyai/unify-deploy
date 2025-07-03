@@ -347,7 +347,7 @@ async def create_cloudrun_job(
                                 ),
                             ],
                             resources=run_v2.ResourceRequirements(
-                                limits={"cpu": "1", "memory": "2Gi"}
+                                limits={"cpu": "2", "memory": "8Gi"}
                             ),
                         )
                     ],
