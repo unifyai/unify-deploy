@@ -207,41 +207,6 @@ def twilio_call_webhook(request: Request):
     print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
     print(f"LiveKit room will be: {room_name}")
 
-    # Create LiveKit room and dispatch agent immediately
-    try:
-        # Create metadata for the agent
-        agent_metadata = {
-            "caller_number": caller_number,
-            "twilio_number": twilio_number,
-            "conference_name": conference_name,
-            "call_type": "inbound",
-            "call_sid": None,  # Will be updated after conference setup
-            "timestamp": int(time.time() * 1000),
-        }
-
-        # Create room and dispatch agent using LiveKit API
-        # Agent dispatch will queue until worker comes online
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            dispatch = loop.run_until_complete(
-                create_room_and_dispatch_agent(
-                    room_name=room_name,
-                    agent_name=room_name,
-                    metadata=agent_metadata,
-                )
-            )
-            print(f"LiveKit room created and agent dispatched successfully")
-            print(
-                f"Agent will join when worker comes online. Dispatch ID: {dispatch.id}"
-            )
-        finally:
-            loop.close()
-
-    except Exception as e:
-        print(f"Error creating LiveKit room and dispatching agent: {str(e)}")
-        # Continue with Twilio conference setup even if LiveKit dispatch fails
-
     # publish to pubsub - let the pubsub handler dispatch the agent when worker is ready
     pubsub_client = pubsub_v1.PublisherClient()
     topic_path = pubsub_client.topic_path(
@@ -276,6 +241,42 @@ def twilio_call_webhook(request: Request):
         print("Call published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing to Pub/Sub: {str(e)}")
+
+
+    # Create LiveKit room and dispatch agent immediately
+    try:
+        # Create metadata for the agent
+        agent_metadata = {
+            "caller_number": caller_number,
+            "twilio_number": twilio_number,
+            "conference_name": conference_name,
+            "call_type": "inbound",
+            "call_sid": None,  # Will be updated after conference setup
+            "timestamp": int(time.time() * 1000),
+        }
+
+        # Create room and dispatch agent using LiveKit API
+        # Agent dispatch will queue until worker comes online
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            dispatch = loop.run_until_complete(
+                create_room_and_dispatch_agent(
+                    room_name=room_name,
+                    agent_name=room_name,
+                    metadata=agent_metadata,
+                )
+            )
+            print(f"LiveKit room created and agent dispatched successfully")
+            print(
+                f"Agent will join when worker comes online. Dispatch ID: {dispatch.id}"
+            )
+        finally:
+            loop.close()
+
+    except Exception as e:
+        print(f"Error creating LiveKit room and dispatching agent: {str(e)}")
+        # Continue with Twilio conference setup even if LiveKit dispatch fails
 
     # UNCHANGED: Keep the original conference setup (this works)
     try:
