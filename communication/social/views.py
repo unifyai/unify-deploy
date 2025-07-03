@@ -14,8 +14,8 @@ router = APIRouter()
 
 # --- Schema ---
 class VerificationRequest(BaseModel):
-    platform: str = Field(..., description="The social media platform to verify (e.g., 'whatsapp', 'signal').")
-    account_identifier: str = Field(..., description="The user's account identifier (e.g., phone number, email linked to an account).")
+    platform: str = Field(..., description="The platform to verify (e.g., 'whatsapp', 'phone').")
+    account_identifier: str = Field(..., description="The user's account identifier (e.g., phone number).")
 
 
 # --- Helper Functions ---
@@ -37,7 +37,7 @@ async def get_social_platforms():
 @router.post("/verify", tags=["Verification"])
 async def send_verification_message(request: VerificationRequest):
     """
-    Triggers a verification for a user account on a given social media platform.
+    Triggers a verification for a user account on a given social media platform or phone number.
     
     This endpoint sends a verification code to the specified account. If the message
     is sent successfully, it returns the code and the sending timestamp.
@@ -65,10 +65,28 @@ async def send_verification_message(request: VerificationRequest):
             print(f"ERROR sending WhatsApp verification: {e}")
             raise HTTPException(status_code=500, detail="Failed to send WhatsApp verification message.")
 
+    elif platform == "phone":
+        message = f"Your Unify verification code is: {code}"
+        try:
+            twilio_client = get_twilio_client()
+
+            from_number = os.getenv("TWILIO_VERIFICATION_NUMBER")
+            if not from_number:
+                raise HTTPException(status_code=500, detail="TWILIO_VERIFICATION_NUMBER environment variable is not configured.")
+
+            twilio_client.messages.create(
+                to=identifier,
+                from_=from_number,
+                body=message,
+            )
+        except Exception as e:
+            print(f"ERROR sending phone verification: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to send phone verification sms.")
+
     else:
         raise HTTPException(
             status_code=400, 
-            detail=f"Platform '{platform}' is not supported. Supported platforms are: 'whatsapp'."
+            detail=f"Platform '{platform}' is not supported. Supported platforms are: 'whatsapp', 'phone'."
         )
         
     # If sending was successful, return the code and a UTC timestamp.
