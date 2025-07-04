@@ -226,6 +226,10 @@ async def create_cloudrun_service(
                                 value=api_key,
                             ),
                             run_v2.EnvVar(
+                                name="UNIFY_BASE_URL",
+                                value="https://api.unify.ai/v0",
+                            ),
+                            run_v2.EnvVar(
                                 name="ASSISTANT_ID",
                                 value=assistant_id,
                             ),
