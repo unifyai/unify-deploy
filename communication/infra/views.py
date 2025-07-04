@@ -343,7 +343,7 @@ async def create_cloudrun_service(
                 ),
                 scaling=run_v2.RevisionScaling(
                     min_instance_count=0,
-                    max_instance_count=10,
+                    max_instance_count=1,
                 ),
             ),
             traffic=[
