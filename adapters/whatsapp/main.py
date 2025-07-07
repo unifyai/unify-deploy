@@ -7,18 +7,13 @@ import requests
 from twilio.twiml.messaging_response import MessagingResponse
 
 
-def get_assistant_and_voice_info(
-    email_id: str = None,
-    phone_number: str = None,
-    user_number: str = None,
-) -> str:
+def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, str]:
     """
     Get the assistant id from the email id or phone number.
 
     Args:
         email_id: The email id of the assistant.
         phone_number: The phone number of the assistant.
-        user_number: The user number of the assistant.
 
     Returns:
         The assistant id.
@@ -28,32 +23,43 @@ def get_assistant_and_voice_info(
         params["email"] = email_id
     if phone_number:
         params["phone"] = phone_number
-    # if phone_number:
-    #     params["assistant_whatsapp_number"] = phone_number
-    # if user_number:
-    #     params["user_whatsapp_number"] = user_number
-    
+
+    default_assistant_data = {
+        "assistant_id": "default-assistant",
+        "tts_provider": "cartesia",
+        "voice_id": None,
+    }
     if "+15550100002" in phone_number:
-        return "default-assistant", "cartesia", None
+        return default_assistant_data
     if "+15550100001" in phone_number:
-        return "default-assistant-2", "cartesia", None
+        return {**default_assistant_data, "assistant_id": "default-assistant-2"}
     if "+15550100005" in phone_number:
-        return "default-assistant-3", "cartesia", None
+        return {**default_assistant_data, "assistant_id": "default-assistant-3"}
+
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
+
     if "detail" in response:
-        return "default-assistant", "cartesia", None
+        return default_assistant_data
     assistants = response["info"]
     if len(assistants) == 0:
-        return "default-assistant", "cartesia", None
-    return (
-        assistants[0]["agent_id"],
-        "cartesia",#assistants[0]["tts_provider"],
-        assistants[0]["voice_id"],
-    )
+        return default_assistant_data
+
+    return {
+        "assistant_id": assistants[0]["agent_id"],
+        "api_key": assistants[0]["api_key"],
+        "user_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
+        "assistant_number": assistants[0]["phone"],
+        "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"],
+        "assistant_email": assistants[0]["email"],
+        "user_number": assistants[0]["user_phone"],
+        "user_whatsapp_number": assistants[0]["user_whatsapp_number"],
+        "tts_provider": assistants[0]["tts_provider"],
+        "voice_id": assistants[0]["voice_id"],
+    }
 
 
 def start_service_if_not_running(assistant_id: str):
@@ -83,7 +89,7 @@ def twilio_whatsapp_webhook(request: Request):
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
     # get assistant id from email id
-    assistant_id, _, _ = get_assistant_and_voice_info(phone_number=to_number, user_number=from_number)
+    assistant_id = get_assistant(phone_number=to_number)["assistant_id"]
 
     # cold message is only for user to their own assistant
     if not assistant_id:

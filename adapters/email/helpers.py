@@ -184,10 +184,7 @@ def publish_thread_id(assistant_id, thread_id, user_id, last_message):
         print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
 
 
-def get_assistant_and_voice_info(
-    email_id: str = None,
-    phone_number: str = None,
-) -> str:
+def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, str]:
     """
     Get the assistant id from the email id or phone number.
 
@@ -201,35 +198,45 @@ def get_assistant_and_voice_info(
     params = dict()
     if email_id:
         params["email"] = email_id
-        if email_id == "default-assistant@unify.ai":
-            return "default-assistant", "cartesia", None
-        if email_id == "default-assistant-2@unify.ai":
-            return "default-assistant-2", "cartesia", None
-        if email_id == "default-assistant-3@unify.ai":
-            return "default-assistant-3", "cartesia", None
     if phone_number:
         params["phone"] = phone_number
-        if "+15550100002" in phone_number:
-            return "default-assistant", "cartesia", None
-        if "+15550100001" in phone_number:
-            return "default-assistant-2", "cartesia", None
-        if "+15550100005" in phone_number:
-            return "default-assistant-3", "cartesia", None
+
+    default_assistant_data = {
+        "assistant_id": "default-assistant",
+        "tts_provider": "cartesia",
+        "voice_id": None,
+    }
+    if "+15550100002" in phone_number:
+        return default_assistant_data
+    if "+15550100001" in phone_number:
+        return {**default_assistant_data, "assistant_id": "default-assistant-2"}
+    if "+15550100005" in phone_number:
+        return {**default_assistant_data, "assistant_id": "default-assistant-3"}
+
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
-    if response and "detail" in response:
-        return "default-assistant", "cartesia", None
+
+    if "detail" in response:
+        return default_assistant_data
     assistants = response["info"]
     if len(assistants) == 0:
-        return "default-assistant", "cartesia", None
-    return (
-        assistants[0]["agent_id"],
-        "cartesia",#assistants[0]["tts_provider"],
-        assistants[0]["voice_id"],
-    )
+        return default_assistant_data
+
+    return {
+        "assistant_id": assistants[0]["agent_id"],
+        "api_key": assistants[0]["api_key"],
+        "user_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
+        "assistant_number": assistants[0]["phone"],
+        "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"],
+        "assistant_email": assistants[0]["email"],
+        "user_number": assistants[0]["user_phone"],
+        "user_whatsapp_number": assistants[0]["user_whatsapp_number"],
+        "tts_provider": assistants[0]["tts_provider"],
+        "voice_id": assistants[0]["voice_id"],
+    }
 
 
 def start_service_if_not_running(assistant_id: str):

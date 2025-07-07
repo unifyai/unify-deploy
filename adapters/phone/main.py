@@ -16,10 +16,7 @@ from livekit import api
 import time
 
 
-def get_assistant_and_voice_info(
-    email_id: str = None,
-    phone_number: str = None,
-) -> str:
+def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, str]:
     """
     Get the assistant id from the email id or phone number.
 
@@ -35,27 +32,43 @@ def get_assistant_and_voice_info(
         params["email"] = email_id
     if phone_number:
         params["phone"] = phone_number
+
+    default_assistant_data = {
+        "assistant_id": "default-assistant",
+        "tts_provider": "cartesia",
+        "voice_id": None,
+    }
     if "+15550100002" in phone_number:
-        return "default-assistant", "cartesia", None
+        return default_assistant_data
     if "+15550100001" in phone_number:
-        return "default-assistant-2", "cartesia", None
+        return {**default_assistant_data, "assistant_id": "default-assistant-2"}
     if "+15550100005" in phone_number:
-        return "default-assistant-3", "cartesia", None
+        return {**default_assistant_data, "assistant_id": "default-assistant-3"}
+
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
+
     if "detail" in response:
-        return "default-assistant", "cartesia", None
+        return default_assistant_data
     assistants = response["info"]
     if len(assistants) == 0:
-        return "default-assistant", "cartesia", None
-    return (
-        assistants[0]["agent_id"],
-        "cartesia",#assistants[0]["tts_provider"],
-        assistants[0]["voice_id"],
-    )
+        return default_assistant_data
+
+    return {
+        "assistant_id": assistants[0]["agent_id"],
+        "api_key": assistants[0]["api_key"],
+        "user_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
+        "assistant_number": assistants[0]["phone"],
+        "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"],
+        "assistant_email": assistants[0]["email"],
+        "user_number": assistants[0]["user_phone"],
+        "user_whatsapp_number": assistants[0]["user_whatsapp_number"],
+        "tts_provider": assistants[0]["tts_provider"],
+        "voice_id": assistants[0]["voice_id"],
+    }
 
 
 def start_service_if_not_running(assistant_id: str):
@@ -195,7 +208,10 @@ def twilio_call_webhook(request: Request):
     print(f"Received call from {caller_number} to {twilio_number}")
 
     # get assistant id from email id
-    assistant_id, tts_provider, voice_id = get_assistant_and_voice_info(phone_number=to_number)
+    assistant_data = get_assistant(phone_number=to_number)
+    assistant_id = assistant_data["assistant_id"]
+    tts_provider = assistant_data["tts_provider"]
+    voice_id = assistant_data["voice_id"]
 
     # start service if not running
     start_service_if_not_running(assistant_id)
@@ -314,7 +330,7 @@ def twilio_msg_webhook(request: Request):
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
     # get assistant id from email id
-    assistant_id, _, _ = get_assistant_and_voice_info(phone_number=to_number)
+    assistant_id = get_assistant(phone_number=to_number)["assistant_id"]
 
     # start service if not running
     start_service_if_not_running(assistant_id)
