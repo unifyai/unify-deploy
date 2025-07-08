@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
     lsb-release \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install gcloud CLI
@@ -15,10 +16,9 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
+
+RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8080
 
