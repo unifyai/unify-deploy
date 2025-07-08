@@ -3,10 +3,15 @@ from google.cloud import pubsub_v1, run_v2
 from google.iam.v1 import iam_policy_pb2, policy_pb2
 from google.oauth2.service_account import Credentials
 from google.protobuf.duration_pb2 import Duration
+from kubernetes.client.rest import ApiException
 import json
 import os
-import asyncio
-
+from .helpers import (
+    setup_kubernetes_client,
+    check_job_exists,
+    create_unity_job,
+    delete_job,
+)
 
 router = APIRouter()
 
@@ -169,269 +174,196 @@ async def delete_pubsub_topic(assistant_id: str = Form(...)):
         raise HTTPException(status_code=500, detail=f"Failed to delete topic: {str(e)}")
 
 
-# create cloud run service
-@router.post("/service/create")
-async def create_cloudrun_service(
+# create kubernetes job
+@router.post("/job/create")
+async def create_kubernetes_job(
     api_key: str = Form(...),
     assistant_id: str = Form(...),
     user_name: str = Form(...),
-    assistant_number: str = Form(...),
     user_number: str = Form(...),
-    port: int = Form(8000),  # Default HTTP port
+    assistant_number: str = Form(""),
+    user_phone_number: str = Form(""),
+    namespace: str = Form("default"),
+    image: str = Form(
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
+    ),
 ):
     """
-    Create a Google Cloud Run service named unity-<assistant_id>.
+    Create a Kubernetes Job for a Unity assistant.
 
     Args:
-        api_key: The API key for the assistant
-        assistant_id: The assistant ID (service will be unity-<assistant_id>)
-        user_name: The user's name
-        assistant_number: The assistant's phone number
-        user_number: The user's phone number
-        port: The port the service listens on (default: 8000)
+        api_key: API key for authentication (required)
+        assistant_id: Unique assistant identifier (required)
+        user_name: User's name (required)
+        user_number: User's phone number (required)
+        assistant_number: Assistant's phone number (optional, defaults to empty string)
+        user_phone_number: User's phone for calls (optional, defaults to user_number)
+        namespace: Kubernetes namespace (optional, defaults to "default")
+        image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
-        # Get credentials from environment variable
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        creds = Credentials.from_service_account_info(creds_json)
+        # Initialize Kubernetes client
+        batch_api, core_api = setup_kubernetes_client()
+        if not batch_api or not core_api:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster. Make sure gcloud CLI is installed and configured.",
+            )
 
-        # Initialize the Cloud Run Services client
-        services_client = run_v2.ServicesClient(credentials=creds)
-
-        # Create the service name with unity- prefix
-        service_name = f"unity-{assistant_id}"
-
-        # Create the parent path
-        parent = f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}"
-
-        # Define the service configuration
-        service = run_v2.Service(
-            template=run_v2.RevisionTemplate(
-                containers=[
-                    run_v2.Container(
-                        name="unity-1",
-                        image=(
-                            "us-central1-docker.pkg.dev/gcp-project-runtime"
-                            "/unity/unity:latest"
-                        ),
-                        ports=[
-                            run_v2.ContainerPort(
-                                name="http1",
-                                container_port=port,
-                            )
-                        ],
-                        env=[
-                            run_v2.EnvVar(
-                                name="UNIFY_KEY",
-                                value=api_key,
-                            ),
-                            run_v2.EnvVar(
-                                name="UNIFY_BASE_URL",
-                                value="https://api.unify.ai/v0",
-                            ),
-                            run_v2.EnvVar(
-                                name="ASSISTANT_ID",
-                                value=assistant_id,
-                            ),
-                            run_v2.EnvVar(
-                                name="USER_NAME",
-                                value=user_name,
-                            ),
-                            run_v2.EnvVar(
-                                name="ASSISTANT_NUMBER",
-                                value=assistant_number,
-                            ),
-                            run_v2.EnvVar(
-                                name="USER_NUMBER",
-                                value=user_number,
-                            ),
-                            run_v2.EnvVar(
-                                name="USER_PHONE_NUMBER",
-                                value=user_number,
-                            ),
-                            run_v2.EnvVar(
-                                name="UNITY_COMMS_URL",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="UNIFY_COMMS_URL",
-                                        version="latest",
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="LIVEKIT_SIP_URI",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="LIVEKIT_SIP_URI", version="latest"
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="LIVEKIT_URL",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="LIVEKIT_URL", version="latest"
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="LIVEKIT_API_KEY",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="LIVEKIT_API_KEY", version="latest"
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="LIVEKIT_API_SECRET",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="LIVEKIT_API_SECRET",
-                                        version="latest",
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="DEEPGRAM_API_KEY",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="DEEPGRAM_API_KEY", version="latest"
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="CARTESIA_API_KEY",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="CARTESIA_API_KEY", version="latest"
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="ELEVEN_API_KEY",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="ELEVEN_API_KEY", version="latest"
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="OPENAI_API_KEY",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="OPENAI_API_KEY", version="latest"
-                                    )
-                                ),
-                            ),
-                            run_v2.EnvVar(
-                                name="ORCHESTRA_ADMIN_KEY",
-                                value_source=run_v2.EnvVarSource(
-                                    secret_key_ref=run_v2.SecretKeySelector(
-                                        secret="ORCHESTRA_ADMIN_KEY", version="latest"
-                                    )
-                                ),
-                            ),
-                        ],
-                        resources=run_v2.ResourceRequirements(
-                            limits={"cpu": "2", "memory": "8Gi"}
-                        ),
-                    )
-                ],
-                timeout=Duration(seconds=3600),  # 1 hour timeout for services
-                service_account=(
-                    "service-account@example.iam.gserviceaccount.com"
-                ),
-                scaling=run_v2.RevisionScaling(
-                    min_instance_count=0,
-                    max_instance_count=1,
-                ),
-            ),
-            traffic=[
-                run_v2.TrafficTarget(
-                    type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST,
-                    percent=100,
-                )
-            ],
-        )
-
-        # Create the service
-        operation = services_client.create_service(
-            parent=parent, service=service, service_id=service_name
-        )
-
-        # Wait for the operation to complete
-        result = operation.result()
-
-        # Set allow unauthenticated policy
-        await set_allow_unauthenticated_policy(
-            f"{parent}/services/{service_name}", creds
-        )
-
-        return {
-            "success": True,
-            "message": f"Cloud Run service created successfully",
-            "service_name": result.name,
-            "service_url": result.uri,
-            "assistant_id": assistant_id,
-            "project_id": PROJECT_ID,
-            "region": DEFAULT_REGION,
-            "full_service_name": service_name,
-            "port": port,
-        }
-
-    except Exception as e:
-        # Handle case where service already exists or other errors
-        if "already exists" in str(e).lower():
+        # Check if job already exists and is running
+        exists, status = check_job_exists(batch_api, assistant_id, namespace)
+        if exists and status == "running":
             return {
                 "success": True,
-                "message": f"Cloud Run service already exists",
-                "service_name": f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/services/unity-{assistant_id}",
+                "message": f"Assistant {assistant_id} is already running",
                 "assistant_id": assistant_id,
-                "project_id": PROJECT_ID,
-                "region": DEFAULT_REGION,
-                "full_service_name": service_name,
+                "namespace": namespace,
+                "status": "already_running",
+            }
+
+        # Use user_phone_number if provided, otherwise use user_number
+        phone_number = user_phone_number if user_phone_number else user_number
+
+        # Create the job
+        job = create_unity_job(
+            batch_api=batch_api,
+            api_key=api_key,
+            assistant_id=assistant_id,
+            user_name=user_name,
+            user_number=user_number,
+            assistant_number=assistant_number,
+            user_phone_number=phone_number,
+            namespace=namespace,
+            image=image,
+        )
+
+        if job:
+            return {
+                "success": True,
+                "message": "Kubernetes job created successfully",
+                "job_name": job.metadata.name,
+                "job_uid": job.metadata.uid,
+                "assistant_id": assistant_id,
+                "namespace": namespace,
+                "image": image,
+                "creation_timestamp": (
+                    job.metadata.creation_timestamp.isoformat()
+                    if job.metadata.creation_timestamp
+                    else None
+                ),
             }
         else:
             raise HTTPException(
-                status_code=500, detail=f"Failed to create Cloud Run service: {str(e)}"
+                status_code=500,
+                detail=f"Failed to create job for assistant {assistant_id}",
             )
 
-
-# delete cloud run service
-@router.delete("/service/delete")
-async def delete_cloudrun_service(assistant_id: str = Form(...)):
-    """
-    Delete a Google Cloud Run service with the assistant_id as the service name.
-    """
-    try:
-        # Get credentials from environment variable
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        creds = Credentials.from_service_account_info(creds_json)
-
-        # Initialize the Cloud Run Services client
-        services_client = run_v2.ServicesClient(credentials=creds)
-
-        # Create the service name with unity- prefix
-        service_name = f"unity-{assistant_id}"
-        service_path = (
-            f"projects/{PROJECT_ID}/locations/{DEFAULT_REGION}/services/{service_name}"
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create Kubernetes job: {str(e)}"
         )
 
-        # Delete the service
-        operation = services_client.delete_service(name=service_path)
 
-        # Wait for the operation to complete
-        operation.result()
+# delete kubernetes job
+@router.delete("/job/delete")
+async def delete_kubernetes_job(
+    assistant_id: str = Form(...), namespace: str = Form("default")
+):
+    """
+    Delete a Kubernetes Job for a Unity assistant.
+
+    Args:
+        assistant_id: Unique assistant identifier (required)
+        namespace: Kubernetes namespace (optional, defaults to "default")
+    """
+    try:
+        # Initialize Kubernetes client
+        batch_api, core_api = setup_kubernetes_client()
+        if not batch_api or not core_api:
+            raise HTTPException(
+                status_code=500, detail="Failed to connect to Kubernetes cluster"
+            )
+
+        # Delete the job
+        success = delete_job(batch_api, assistant_id, namespace)
+
+        if success:
+            return {
+                "success": True,
+                "message": f"Job deleted successfully: unity-{assistant_id}",
+                "assistant_id": assistant_id,
+                "namespace": namespace,
+            }
+        else:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to delete job: unity-{assistant_id}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
+
+
+# list kubernetes jobs
+@router.get("/jobs")
+async def list_kubernetes_jobs(namespace: str = "default"):
+    """
+    List all Unity Kubernetes jobs in the namespace.
+
+    Args:
+        namespace: Kubernetes namespace (optional, defaults to "default")
+    """
+    try:
+        # Initialize Kubernetes client
+        batch_api, core_api = setup_kubernetes_client()
+        if not batch_api or not core_api:
+            raise HTTPException(
+                status_code=500, detail="Failed to connect to Kubernetes cluster"
+            )
+
+        # List jobs
+        jobs = batch_api.list_namespaced_job(
+            namespace=namespace, label_selector="app=unity"
+        )
+
+        job_list = []
+        for job in jobs.items:
+            assistant_id = job.metadata.labels.get("assistant-id", "unknown")
+            status = "Unknown"
+
+            if job.status.active:
+                status = "Running"
+            elif job.status.succeeded:
+                status = "Completed"
+            elif job.status.failed:
+                status = "Failed"
+
+            job_info = {
+                "job_name": job.metadata.name,
+                "assistant_id": assistant_id,
+                "status": status,
+                "creation_timestamp": (
+                    job.metadata.creation_timestamp.isoformat()
+                    if job.metadata.creation_timestamp
+                    else None
+                ),
+                "active": job.status.active or 0,
+                "succeeded": job.status.succeeded or 0,
+                "failed": job.status.failed or 0,
+            }
+            job_list.append(job_info)
 
         return {
             "success": True,
-            "message": f"Cloud Run service deleted successfully",
-            "service_name": service_path,
-            "assistant_id": assistant_id,
-            "project_id": PROJECT_ID,
-            "region": DEFAULT_REGION,
+            "jobs": job_list,
+            "namespace": namespace,
+            "total_jobs": len(job_list),
         }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete Cloud Run service: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to list jobs: {str(e)}")
