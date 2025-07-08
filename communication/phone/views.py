@@ -2,12 +2,14 @@ import os
 import unify
 import httpx
 import base64
+import json
+import time
 from fastapi import APIRouter, Form, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
-from livekit.api import LiveKitAPI, SIPInboundTrunkInfo, CreateSIPInboundTrunkRequest
-from livekit.protocol.sip import ListSIPInboundTrunkRequest, DeleteSIPTrunkRequest
+from livekit.api import LiveKitAPI, SIPInboundTrunkInfo, CreateSIPInboundTrunkRequest, CreateAgentDispatchRequest
+from livekit.protocol.sip import ListSIPInboundTrunkRequest, DeleteSIPTrunkRequest, CreateSIPParticipantRequest
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -175,6 +177,47 @@ async def check_recording_status(
         raise HTTPException(resp.status.code)
     return {"success": True, "recording_url": recording_url}
 
+def get_livekit_api():
+    """Get LiveKit API client"""
+    url = os.getenv("LIVEKIT_URL")
+    api_key = os.getenv("LIVEKIT_API_KEY")
+    api_secret = os.getenv("LIVEKIT_API_SECRET")
+
+    if not url or not api_key or not api_secret:
+        raise RuntimeError(
+            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set"
+        )
+
+    return LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
+
+async def create_room_and_dispatch_agent(
+    room_name: str, agent_name: str, metadata: dict = None
+):
+    """Create a LiveKit room and dispatch an agent to it"""
+    livekit_api = get_livekit_api()
+
+    try:
+        # Create dispatch request - this will create the room if it doesn't exist
+        dispatch_request = CreateAgentDispatchRequest(
+            agent_name=agent_name,
+            room=room_name,
+            metadata=json.dumps(metadata) if metadata else None,
+        )
+
+        # Dispatch agent to room (creates room automatically if needed)
+        dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
+        print(
+            f"Successfully created room '{room_name}' and dispatched agent '{agent_name}'"
+        )
+        print(f"Dispatch ID: {dispatch.id}")
+
+        return dispatch
+    except Exception as e:
+        print(f"Error creating room and dispatching agent: {str(e)}")
+        raise
+    finally:
+        await livekit_api.aclose()
+
 # Endpoints - JSON format
 @router.post("/send-call")
 async def send_call(request: Request):
@@ -185,13 +228,40 @@ async def send_call(request: Request):
     
     new_call = new_call.lower() == "true"
     conference_name = f"Unity_{twilio_number[1:]}"
+    room_name = f"unity_{twilio_number}"
 
-    if new_call:
-        sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-        call_sid = add_user_to_conference(conference_name, twilio_number, sip_uri)
+    # dispatch agent
+    await create_room_and_dispatch_agent(
+        room_name=room_name,
+        agent_name=room_name,
+        metadata={
+            "caller_number": phone_number,
+            "twilio_number": twilio_number,
+            "conference_name": conference_name,
+            "call_type": "inbound",
+            "call_sid": None,  # Will be updated after conference setup
+            "timestamp": int(time.time() * 1000),
+        },
+    )
     
-    call_sid = add_user_to_conference(conference_name, twilio_number, phone_number, connect_third_party=(not new_call))
-    return {"success": True, "call_sid": call_sid}
+    # create livekit agent participant
+    lkapi = LiveKitAPI()
+    trunk = CreateSIPParticipantRequest(
+        sip_trunk_id="ST_knkas2oxiawB",
+        sip_number=twilio_number,
+        sip_call_to=phone_number,
+        room_name=room_name,
+        participant_identity=f"user_{phone_number}",
+        participant_name="User",
+        wait_until_answered=True,
+    )
+    call = await lkapi.sip.create_sip_participant(trunk)
+
+    # add user to twilio conference
+    # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    # # call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
+    # call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
+    return {"success": True}#, "call_sid": call_sid}
 
 @router.post("/send-text")
 async def send_text(request: Request):
