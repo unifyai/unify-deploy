@@ -1,7 +1,7 @@
 fastapi
 google-api-python-client
 google-cloud-pubsub
-google-cloud-run
+google-cloud-storage
 httpx
 kubernetes
 livekit
