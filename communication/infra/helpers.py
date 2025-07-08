@@ -1,119 +1,47 @@
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
-import subprocess
-import tempfile
 import json
 import os
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 
 def setup_kubernetes_client():
-    """Initialize Kubernetes client using Google Cloud SDK"""
+    """Initialize Kubernetes client using service account authentication"""
     try:
-        # Get cluster credentials using gcloud
-        project_id = "gcp-project-runtime"
-        region = "us-central1"  # Use region instead of zone
+        # Set the service account credentials as environment variable
+        creds_json = os.getenv("GCP_SA_KEY")
+        if not creds_json:
+            print("❌ GCP_SA_KEY environment variable not set")
+            return None, None
+
+        # Parse credentials to get project ID
+        creds_data = json.loads(creds_json)
+        project_id = creds_data.get("project_id", "gcp-project-runtime")
+
+        # Set up cluster configuration
         cluster_name = "unity"
+        region = "us-central1"
 
-        print(f"🔗 Connecting to GKE cluster: {cluster_name}")
+        # Try in-cluster config first (if running inside Kubernetes)
+        try:
+            print("🔗 Attempting to use in-cluster Kubernetes config...")
+            config.load_incluster_config()
+            print("✅ Successfully loaded in-cluster config")
+        except Exception as incluster_error:
+            print(f"⚠️  In-cluster config failed: {incluster_error}")
+            print("🔄 Falling back to kubeconfig...")
 
-        # Run gcloud command to get cluster credentials
-        result = subprocess.run(
-            [
-                "gcloud",
-                "container",
-                "clusters",
-                "get-credentials",
-                cluster_name,
-                "--region",
-                region,
-                "--project",
-                project_id,
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if result.returncode != 0:
-            print(f"❌ Failed to get cluster credentials: {result.stderr}")
-            print("💡 Make sure you have:")
-            print("   1. gcloud CLI installed")
-            print("   2. Access to the GKE cluster")
-            print("   3. GOOGLE_APPLICATION_CREDENTIALS set correctly")
-            return None, None
-
-        print("✅ Got cluster credentials")
-
-        # Get the cluster endpoint and token directly
-        cluster_info = subprocess.run(
-            [
-                "gcloud",
-                "container",
-                "clusters",
-                "describe",
-                cluster_name,
-                "--region",
-                region,
-                "--project",
-                project_id,
-                "--format",
-                "json",
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if cluster_info.returncode != 0:
-            print(f"❌ Failed to get cluster info: {cluster_info.stderr}")
-            return None, None
-
-        cluster_data = json.loads(cluster_info.stdout)
-        cluster_endpoint = cluster_data["endpoint"]
-        cluster_ca_cert = cluster_data["masterAuth"]["clusterCaCertificate"]
-
-        # Get access token using service account
-        token_result = subprocess.run(
-            ["gcloud", "auth", "print-access-token"], capture_output=True, text=True
-        )
-
-        if token_result.returncode != 0:
-            print(f"❌ Failed to get access token: {token_result.stderr}")
-            return None, None
-
-        access_token = token_result.stdout.strip()
-
-        # Create a temporary kubeconfig
-        kubeconfig = {
-            "apiVersion": "v1",
-            "kind": "Config",
-            "clusters": [
-                {
-                    "name": "unity-cluster",
-                    "cluster": {
-                        "server": f"https://{cluster_endpoint}",
-                        "certificate-authority-data": cluster_ca_cert,
-                    },
-                }
-            ],
-            "users": [{"name": "unity-user", "user": {"token": access_token}}],
-            "contexts": [
-                {
-                    "name": "unity-context",
-                    "context": {"cluster": "unity-cluster", "user": "unity-user"},
-                }
-            ],
-            "current-context": "unity-context",
-        }
-
-        # Write to temporary file
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
-            json.dump(kubeconfig, f)
-            temp_config = f.name
-
-        # Load the temporary config
-        config.load_kube_config(config_file=temp_config)
-
-        # Clean up
-        os.unlink(temp_config)
+            # Fallback: try to use default kubeconfig
+            try:
+                config.load_kube_config()
+                print("✅ Successfully loaded kubeconfig")
+            except Exception as kubeconfig_error:
+                print(f"❌ Kubeconfig also failed: {kubeconfig_error}")
+                print("💡 Make sure you have:")
+                print("   1. Valid kubeconfig file (~/.kube/config)")
+                print(
+                    "   2. Or run 'gcloud container clusters get-credentials unity --region us-central1'"
+                )
+                return None, None
 
         return client.BatchV1Api(), client.CoreV1Api()
 
@@ -247,7 +175,6 @@ def create_unity_job(
                                 ],
                                 "env": [
                                     # Assistant-specific environment variables
-                                    {"name": "UNIFY_KEY", "value": api_key},
                                     {"name": "ASSISTANT_ID", "value": assistant_id},
                                     {"name": "USER_NAME", "value": user_name},
                                     {
@@ -259,6 +186,7 @@ def create_unity_job(
                                         "name": "USER_PHONE_NUMBER",
                                         "value": user_phone_number or user_number,
                                     },
+                                    {"name": "UNIFY_KEY", "value": api_key},
                                     {
                                         "name": "GOOGLE_APPLICATION_CREDENTIALS",
                                         "value": "/secrets/key.json",
