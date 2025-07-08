@@ -37,13 +37,26 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_id": "default-assistant",
         "tts_provider": "cartesia",
         "voice_id": None,
+        "api_key": "",
+        "user_name": "",
+        "user_number": "",
+        "assistant_number": "",
+        "user_phone_number": "",
     }
     if "+15550100002" in phone_number:
         return default_assistant_data
     if "+15550100001" in phone_number:
         return {**default_assistant_data, "assistant_id": "default-assistant-2"}
     if "+15550100005" in phone_number:
-        return {**default_assistant_data, "assistant_id": "default-assistant-3"}
+        return {
+            **default_assistant_data,
+            "api_key": "",
+            "assistant_id": "default-assistant-3",
+            "user_name": "Ved",
+            "user_number": "+15550100004",
+            "assistant_number": "+15550100005",
+            "user_phone_number": "+15550100004",
+        }
 
     response = requests.get(
         "https://api.unify.ai/v0/admin/assistant",
@@ -90,6 +103,10 @@ def start_unity_job(
         assistant_number: The phone number of the assistant.
         user_phone_number: The phone number of the user.
     """
+    # default option when api key isn't set
+    if user_name == "":
+        return
+
     comms_url = "https://unity-comms-app-000000000000.us-central1.run.app"
 
     # get commit hash
