@@ -7,10 +7,10 @@ import os
 import requests
 
 from .helpers import (
-    get_assistant_and_voice_info,
+    get_assistant,
     get_thread_id,
     publish_thread_id,
-    start_service_if_not_running,
+    start_unity_job,
 )
 
 
@@ -63,10 +63,23 @@ def process_notification(cloud_event):
         history_id = envelope["historyId"]
 
         # get assistant id from email id
-        assistant_id = get_assistant_and_voice_info(email_id=user_id)["assistant_id"]
+        assistant_data = get_assistant(email_id=user_id)
+        api_key = assistant_data["api_key"]
+        assistant_id = assistant_data["assistant_id"]
+        user_name = assistant_data["user_name"]
+        user_number = assistant_data["user_number"]
+        assistant_number = assistant_data["assistant_number"]
+        user_phone_number = assistant_data["user_phone_number"]
 
-        # start service if not running
-        start_service_if_not_running(assistant_id)
+        # start unity job
+        start_unity_job(
+            api_key,
+            assistant_id,
+            user_name,
+            user_number,
+            assistant_number,
+            user_phone_number,
+        )
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))

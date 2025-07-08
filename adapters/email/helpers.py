@@ -94,15 +94,17 @@ def get_thread_id(user_id, history_id, gmail_service):
 
         # Safeguard for thread replies
         if not histories or "history" not in histories or not histories["history"]:
-            histories["history"] = [(
-                gmail_service.users()
-                .messages()
-                .list(
-                    userId=user_id,
-                    q="is:unread newer_than:1d",
+            histories["history"] = [
+                (
+                    gmail_service.users()
+                    .messages()
+                    .list(
+                        userId=user_id,
+                        q="is:unread newer_than:1d",
+                    )
+                    .execute()
                 )
-                .execute()
-            )]
+            ]
 
         if not histories or "history" not in histories or not histories["history"]:
             print(f"No history found for user {user_id} with history id {history_id}")
@@ -130,7 +132,7 @@ def get_thread_id(user_id, history_id, gmail_service):
                 continue
 
             gmail_service.users().messages().modify(
-                userId=user_id, id=msg_id, body={"removeLabelIds":["UNREAD"]}
+                userId=user_id, id=msg_id, body={"removeLabelIds": ["UNREAD"]}
             ).execute()
 
             # Get the thread for this message
@@ -239,18 +241,55 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
     }
 
 
-def start_service_if_not_running(assistant_id: str):
+def start_unity_job(
+    api_key: str,
+    assistant_id: str,
+    user_name: str,
+    user_number: str,
+    assistant_number: str,
+    user_phone_number: str,
+):
     """
     Start the service if it is not running.
+
+    Args:
+        api_key: The API key for the assistant.
+        assistant_id: The ID of the assistant.
+        user_name: The name of the user.
+        user_number: The phone number of the user.
+        assistant_number: The phone number of the assistant.
+        user_phone_number: The phone number of the user.
     """
-    service_url = f"https://unity-{assistant_id}-000000000000.us-central1.run.app"
+    comms_url = "https://unity-comms-app-000000000000.us-central1.run.app"
+
+    # get commit hash
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.get(f"{service_url}/status", headers=headers)
+    response = requests.get(
+        f"{comms_url}/infra/image",
+        headers=headers,
+    )
     if response.status_code != 200:
-        print(f"Failed to get service status for assistant {assistant_id}")
+        print(f"Failed to get commit hash for assistant {assistant_id}")
         return
-    json_response = response.json()
-    if not json_response["running"]:
-        response = requests.post(f"{service_url}/start", headers=headers)
-        if response.status_code != 200:
-            print(f"Failed to start service for assistant {assistant_id}")
+    commit_hash = response.json()["commit_hash"]
+    image = (
+        "us-central1-docker.pkg.dev/gcp-project-runtime"
+        f"/unity/unity:{commit_hash}"
+    )
+
+    # create job
+    response = requests.post(
+        f"{comms_url}/infra/job/create",
+        headers=headers,
+        data={
+            "api_key": api_key,
+            "assistant_id": assistant_id,
+            "user_name": user_name,
+            "user_number": user_number,
+            "assistant_number": assistant_number,
+            "user_phone_number": user_phone_number,
+            "image": image,
+        },
+    )
+    if response.status_code != 200:
+        print(f"Failed to create job for assistant {assistant_id}")

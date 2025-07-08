@@ -62,21 +62,58 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
     }
 
 
-def start_service_if_not_running(assistant_id: str):
+def start_unity_job(
+    api_key: str,
+    assistant_id: str,
+    user_name: str,
+    user_number: str,
+    assistant_number: str,
+    user_phone_number: str,
+):
     """
     Start the service if it is not running.
+
+    Args:
+        api_key: The API key for the assistant.
+        assistant_id: The ID of the assistant.
+        user_name: The name of the user.
+        user_number: The phone number of the user.
+        assistant_number: The phone number of the assistant.
+        user_phone_number: The phone number of the user.
     """
-    service_url = f"https://unity-{assistant_id}-000000000000.us-central1.run.app"
+    comms_url = "https://unity-comms-app-000000000000.us-central1.run.app"
+
+    # get commit hash
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.get(f"{service_url}/status", headers=headers)
+    response = requests.get(
+        f"{comms_url}/infra/image",
+        headers=headers,
+    )
     if response.status_code != 200:
-        print(f"Failed to get service status for assistant {assistant_id}")
+        print(f"Failed to get commit hash for assistant {assistant_id}")
         return
-    json_response = response.json()
-    if not json_response["running"]:
-        response = requests.post(f"{service_url}/start", headers=headers)
-        if response.status_code != 200:
-            print(f"Failed to start service for assistant {assistant_id}")
+    commit_hash = response.json()["commit_hash"]
+    image = (
+        "us-central1-docker.pkg.dev/gcp-project-runtime"
+        f"/unity/unity:{commit_hash}"
+    )
+
+    # create job
+    response = requests.post(
+        f"{comms_url}/infra/job/create",
+        headers=headers,
+        data={
+            "api_key": api_key,
+            "assistant_id": assistant_id,
+            "user_name": user_name,
+            "user_number": user_number,
+            "assistant_number": assistant_number,
+            "user_phone_number": user_phone_number,
+            "image": image,
+        },
+    )
+    if response.status_code != 200:
+        print(f"Failed to create job for assistant {assistant_id}")
 
 
 @functions_framework.http
@@ -89,16 +126,31 @@ def twilio_whatsapp_webhook(request: Request):
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
     # get assistant id from email id
-    assistant_id = get_assistant(phone_number=to_number)["assistant_id"]
+    assistant_data = get_assistant(phone_number=to_number)
+    api_key = assistant_data["api_key"]
+    assistant_id = assistant_data["assistant_id"]
+    user_name = assistant_data["user_name"]
+    user_number = assistant_data["user_number"]
+    assistant_number = assistant_data["assistant_number"]
+    user_phone_number = assistant_data["user_phone_number"]
 
     # cold message is only for user to their own assistant
     if not assistant_id:
         resp_user = MessagingResponse()
-        resp_user.message("This number is no longer active. Please visit console.unify.ai to view your assistant details.")
+        resp_user.message(
+            "This number is no longer active. Please visit console.unify.ai to view your assistant details."
+        )
         return Response(response=str(resp_user), mimetype="text/xml")
 
-    # start service if not running
-    start_service_if_not_running(assistant_id)
+    # start unity job
+    start_unity_job(
+        api_key,
+        assistant_id,
+        user_name,
+        user_number,
+        assistant_number,
+        user_phone_number,
+    )
 
     # set up conference
     resp_user = MessagingResponse()
