@@ -215,6 +215,7 @@ def create_unity_job(
                                 "name": "unity-assistant",
                                 "image": image,
                                 "imagePullPolicy": "IfNotPresent",  # Use cached images for faster startup
+                                "priorityClassName": "unity-critical",
                                 "ports": [
                                     {"containerPort": 8000},
                                     {"containerPort": 6379},
@@ -251,8 +252,8 @@ def create_unity_job(
                                     {"name": "MKL_NUM_THREADS", "value": "2"},
                                 ],
                                 "resources": {
-                                    "requests": {"cpu": "2", "memory": "8Gi"},
-                                    "limits": {"cpu": "4", "memory": "16Gi"},
+                                    "requests": {"cpu": "1", "memory": "4Gi"},
+                                    "limits": {"cpu": "1", "memory": "4Gi"},
                                 },
                                 "volumeMounts": [
                                     {
