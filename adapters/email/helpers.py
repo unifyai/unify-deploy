@@ -211,7 +211,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "user_name": "",
         "user_number": "",
         "assistant_number": "",
-        "user_phone_number": "",
+        # "user_phone_number": "",
     }
     if "+15550100002" in phone_number:
         return default_assistant_data
@@ -225,7 +225,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "user_name": "Ved",
             "user_number": "+15550100004",
             "assistant_number": "+15550100005",
-            "user_phone_number": "+15550100004",
+            # "user_phone_number": "+15550100004",
         }
 
     response = requests.get(
