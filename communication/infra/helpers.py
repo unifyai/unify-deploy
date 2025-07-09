@@ -210,12 +210,12 @@ def create_unity_job(
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
                         "terminationGracePeriodSeconds": 30,  # Faster termination
+                        "priorityClassName": "unity-critical",
                         "containers": [
                             {
                                 "name": "unity-assistant",
                                 "image": image,
                                 "imagePullPolicy": "IfNotPresent",  # Use cached images for faster startup
-                                "priorityClassName": "unity-critical",
                                 "ports": [
                                     {"containerPort": 8000},
                                     {"containerPort": 6379},
