@@ -1,0 +1,23 @@
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Cloud Function"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "$_FUNCTION_NAME" \
+          --gen2 \
+          --region="$_REGION" \
+          --runtime=python311 \
+          --source="adapters/whatsapp" \
+          --entry-point=twilio_whatsapp_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID
+timeout: "1200s"
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+substitutions:
+  _FUNCTION_NAME: twilio-whatsapp-webhook-staging
+  _REGION: us-central1
