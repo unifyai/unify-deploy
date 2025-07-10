@@ -16,6 +16,7 @@ router = APIRouter()
 PROJECT_ID = "gcp-project-runtime"
 # Default region for Cloud Run jobs
 DEFAULT_REGION = "us-central1"
+STAGING = os.getenv("STAGING")
 
 
 # create pubsub topic
@@ -142,8 +143,13 @@ async def create_kubernetes_job(
                 detail="Failed to connect to Kubernetes cluster. Make sure gcloud CLI is installed and configured.",
             )
 
+        # Create the job name with unity- prefix
+        job_name = (
+            f"unity-{assistant_id}" if not STAGING else f"unity-{assistant_id}-staging"
+        )
+
         # Check if job already exists and is running
-        exists, status = check_job_exists(batch_api, assistant_id, namespace)
+        exists, status = check_job_exists(batch_api, job_name, namespace)
         if exists and status == "running":
             return {
                 "success": True,
@@ -161,12 +167,14 @@ async def create_kubernetes_job(
             batch_api=batch_api,
             api_key=api_key,
             assistant_id=assistant_id,
+            job_name=job_name,
             user_name=user_name,
             user_number=user_number,
             assistant_number=assistant_number,
             user_phone_number=phone_number,
             namespace=namespace,
             image=image,
+            is_staging=bool(STAGING),
         )
 
         if job:
@@ -320,7 +328,7 @@ async def get_latest_unity_image_commit():
 
         # Define the bucket and file path
         bucket_name = "unity-image-hash"
-        blob_name = "image_hash.txt"
+        blob_name = "image_hash.txt" if STAGING else "image_hash_staging.txt"
 
         try:
             # Get the bucket

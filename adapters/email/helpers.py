@@ -6,6 +6,19 @@ import requests
 from google.cloud import pubsub_v1
 
 
+STAGING = os.getenv("STAGING")
+ORCHESTRA_URL = (
+    "https://api.unify.ai/v0"
+    if STAGING
+    else "https://orchestra-staging-000000000000.europe-west1.run.app/v0"
+)
+COMMS_URL = (
+    "https://unity-comms-app-000000000000.us-central1.run.app"
+    if STAGING
+    else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+)
+
+
 def _strip_quoted_text(text: str) -> str:
     """Remove quoted text and signatures from email content."""
     lines = text.splitlines()
@@ -160,9 +173,8 @@ def publish_thread_id(assistant_id, thread_id, user_id, last_message):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
-        topic_path = publisher.topic_path(
-            os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
-        )
+        topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), topic_name)
 
         message_dict = {
             "thread": "email",
@@ -229,7 +241,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         }
 
     response = requests.get(
-        "https://api.unify.ai/v0/admin/assistant",
+        f"{ORCHESTRA_URL}/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
@@ -277,12 +289,10 @@ def start_unity_job(
     if user_name == "":
         return
 
-    comms_url = "https://unity-comms-app-000000000000.us-central1.run.app"
-
     # get commit hash
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(
-        f"{comms_url}/infra/image",
+        f"{COMMS_URL}/infra/image",
         headers=headers,
     )
     if response.status_code != 200:
@@ -290,13 +300,14 @@ def start_unity_job(
         return
     commit_hash = response.json()["commit_hash"]
     image = (
-        "us-central1-docker.pkg.dev/gcp-project-runtime"
-        f"/unity/unity:{commit_hash}"
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
+        + ("/unity:" if STAGING else "/unity-staging:")
+        + commit_hash
     )
 
     # create job
     response = requests.post(
-        f"{comms_url}/infra/job/create",
+        f"{COMMS_URL}/infra/job/create",
         headers=headers,
         data={
             "api_key": api_key,

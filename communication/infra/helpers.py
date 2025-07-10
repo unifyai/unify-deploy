@@ -100,10 +100,9 @@ def setup_kubernetes_client():
         return None, None
 
 
-def check_job_exists(batch_api, assistant_id: str, namespace: str = "default"):
+def check_job_exists(batch_api, job_name: str, namespace: str = "default"):
     """Check if a job for this assistant already exists and is running"""
     try:
-        job_name = f"unity-{assistant_id}"
         job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
 
         # Check if job is active (has running pods)
@@ -123,12 +122,10 @@ def check_job_exists(batch_api, assistant_id: str, namespace: str = "default"):
             raise e
 
 
-def delete_job(batch_api, assistant_id: str, namespace: str = "default"):
+def delete_job(batch_api, job_name: str, namespace: str = "default"):
     """Delete a Unity job"""
     try:
-        job_name = f"unity-{assistant_id}"
-
-        api_response = batch_api.delete_namespaced_job(
+        batch_api.delete_namespaced_job(
             name=job_name,
             namespace=namespace,
             propagation_policy="Background",  # Delete pods as well
@@ -139,7 +136,7 @@ def delete_job(batch_api, assistant_id: str, namespace: str = "default"):
 
     except ApiException as e:
         if e.status == 404:
-            print(f"⚠️  Job not found (already deleted): unity-{assistant_id}")
+            print(f"⚠️  Job not found (already deleted): {job_name}")
             return True
         else:
             print(f"❌ Error deleting job: {e}")
@@ -150,12 +147,14 @@ def create_unity_job(
     batch_api,
     api_key: str,
     assistant_id: str,
+    job_name: str,
     user_name: str,
     user_number: str,
     assistant_number: str = "",
     user_phone_number: str = "",
     namespace: str = "default",
     image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
+    is_staging: bool = False,
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
@@ -170,20 +169,48 @@ def create_unity_job(
         user_phone_number: User's phone for calls (defaults to user_number)
         namespace: Kubernetes namespace
         image: Docker image to use
+        is_staging: Whether to use staging image
     """
     try:
         # Check if job already exists and is running
-        exists, status = check_job_exists(batch_api, assistant_id, namespace)
+        exists, status = check_job_exists(batch_api, job_name, namespace)
 
         if exists and status == "running":
             print(f"✅ Assistant {assistant_id} is already running")
             return None
         elif exists and status in ["completed", "failed"]:
             print(f"🗑️  Cleaning up old job for {assistant_id} (status: {status})")
-            delete_job(batch_api, assistant_id, namespace)
+            delete_job(batch_api, job_name, namespace)
 
-        # Create the job name with unity- prefix
-        job_name = f"unity-{assistant_id}"
+        # Define the assistant-specific environment variables
+        env_vars = [
+            {"name": "ASSISTANT_ID", "value": assistant_id},
+            {"name": "USER_NAME", "value": user_name},
+            {
+                "name": "ASSISTANT_NUMBER",
+                "value": assistant_number,
+            },
+            {"name": "USER_NUMBER", "value": user_number},
+            {
+                "name": "USER_PHONE_NUMBER",
+                "value": user_phone_number or user_number,
+            },
+            {"name": "UNIFY_KEY", "value": api_key},
+            {
+                "name": "GOOGLE_APPLICATION_CREDENTIALS",
+                "value": "/secrets/key.json",
+            },
+            # Startup optimizations
+            {"name": "PYTHONUNBUFFERED", "value": "1"},
+            {
+                "name": "TOKENIZERS_PARALLELISM",
+                "value": "false",
+            },
+            {"name": "OMP_NUM_THREADS", "value": "2"},
+            {"name": "MKL_NUM_THREADS", "value": "2"},
+        ]
+        if is_staging:
+            env_vars = [{"name": "STAGING", "value": "true"}] + env_vars
 
         # Define the job manifest
         job_manifest = {
@@ -224,33 +251,7 @@ def create_unity_job(
                                     {"configMapRef": {"name": "unity-config"}},
                                     {"secretRef": {"name": "unity-secrets"}},
                                 ],
-                                "env": [
-                                    # Assistant-specific environment variables
-                                    {"name": "ASSISTANT_ID", "value": assistant_id},
-                                    {"name": "USER_NAME", "value": user_name},
-                                    {
-                                        "name": "ASSISTANT_NUMBER",
-                                        "value": assistant_number,
-                                    },
-                                    {"name": "USER_NUMBER", "value": user_number},
-                                    {
-                                        "name": "USER_PHONE_NUMBER",
-                                        "value": user_phone_number or user_number,
-                                    },
-                                    {"name": "UNIFY_KEY", "value": api_key},
-                                    {
-                                        "name": "GOOGLE_APPLICATION_CREDENTIALS",
-                                        "value": "/secrets/key.json",
-                                    },
-                                    # Startup optimizations
-                                    {"name": "PYTHONUNBUFFERED", "value": "1"},
-                                    {
-                                        "name": "TOKENIZERS_PARALLELISM",
-                                        "value": "false",
-                                    },
-                                    {"name": "OMP_NUM_THREADS", "value": "2"},
-                                    {"name": "MKL_NUM_THREADS", "value": "2"},
-                                ],
+                                "env": env_vars,
                                 "resources": {
                                     "requests": {"cpu": "2", "memory": "8Gi"},
                                     "limits": {"cpu": "2", "memory": "8Gi"},

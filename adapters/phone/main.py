@@ -16,6 +16,19 @@ from livekit import api
 import time
 
 
+STAGING = os.getenv("STAGING")
+ORCHESTRA_URL = (
+    "https://api.unify.ai/v0"
+    if STAGING
+    else "https://orchestra-staging-000000000000.europe-west1.run.app/v0"
+)
+COMMS_URL = (
+    "https://unity-comms-app-000000000000.us-central1.run.app"
+    if STAGING
+    else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+)
+
+
 def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, str]:
     """
     Get the assistant id from the email id or phone number.
@@ -59,7 +72,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         }
 
     response = requests.get(
-        "https://api.unify.ai/v0/admin/assistant",
+        f"{ORCHESTRA_URL}/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
@@ -107,12 +120,10 @@ def start_unity_job(
     if user_name == "":
         return
 
-    comms_url = "https://unity-comms-app-000000000000.us-central1.run.app"
-
     # get commit hash
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(
-        f"{comms_url}/infra/image",
+        f"{COMMS_URL}/infra/image",
         headers=headers,
     )
     if response.status_code != 200:
@@ -120,13 +131,14 @@ def start_unity_job(
         return
     commit_hash = response.json()["commit_hash"]
     image = (
-        "us-central1-docker.pkg.dev/gcp-project-runtime"
-        f"/unity/unity:{commit_hash}"
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
+        + ("/unity:" if STAGING else "/unity-staging:")
+        + commit_hash
     )
 
     # create job
     response = requests.post(
-        f"{comms_url}/infra/job/create",
+        f"{COMMS_URL}/infra/job/create",
         headers=headers,
         data={
             "api_key": api_key,
@@ -291,9 +303,8 @@ def twilio_call_webhook(request: Request):
 
     # publish to pubsub - let the pubsub handler dispatch the agent when worker is ready
     pubsub_client = pubsub_v1.PublisherClient()
-    topic_path = pubsub_client.topic_path(
-        os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
-    )
+    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
     print(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
         pubsub_message = {
@@ -418,9 +429,8 @@ def twilio_msg_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
-    topic_path = pubsub_client.topic_path(
-        os.getenv("PROJECT_ID"), f"unity-{assistant_id}"
-    )
+    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         pubsub_client.publish(
