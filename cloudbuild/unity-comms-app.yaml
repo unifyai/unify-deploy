@@ -43,6 +43,11 @@ steps:
   entrypoint: gcloud
   waitFor: ['push-sha-tag']
 
+# Options
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
 # Substitution variables
 substitutions:
   _REGION: 'us-central1'
