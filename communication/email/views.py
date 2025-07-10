@@ -71,7 +71,7 @@ async def create_email_user(request: Request):
         # optional watch call
         async with httpx.AsyncClient() as client_http:
             watch_res = await client_http.post(
-                f"{os.getenv('UNIFY_COMMS_URL')}/api/email/watch",
+                f"{os.getenv('UNITY_COMMS_URL')}/api/email/watch",
                 json={"userEmail": primary_email},
             )
         return {"success": True, "user": res}

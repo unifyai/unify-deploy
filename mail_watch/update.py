@@ -2,7 +2,7 @@ import os
 import requests
 
 watch_response = requests.post(
-    f'{os.getenv("UNIFY_COMMS_URL")}/email/watch',
+    f'{os.getenv("UNITY_COMMS_URL")}/email/watch',
     json={
         "primary_email": "unity.agent@unify.ai",
     }
@@ -29,7 +29,7 @@ if watch_response.status_code >= 400:
 #     for assistant in assistants_response:
 #         email = assistant["email"]
 #         watch_response = requests.post(
-#             f"{os.getenv("UNIFY_COMMS_URL")}/email/watch",
+#             f"{os.getenv("UNITY_COMMS_URL")}/email/watch",
 #             json={
 #                 "primary_email": email,
 #             }

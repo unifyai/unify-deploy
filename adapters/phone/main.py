@@ -203,9 +203,9 @@ def create_conference_response(conference_name, with_status=False):
             endConferenceOnExit=True,
             muted=False,
             record="record-from-start",
-            recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
+            recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
             recording_status_callback_event="completed",
-            status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/call-status",
+            status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
             status_callback_event=["completed"],
         )
         return resp_user
@@ -215,7 +215,7 @@ def create_conference_response(conference_name, with_status=False):
         endConferenceOnExit=True,
         muted=False,
         record="record-from-start",
-        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
+        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
         recording_status_callback_event="completed",
     )
     return resp_user

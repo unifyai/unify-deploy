@@ -38,9 +38,9 @@ def create_conference_response(conference_name, with_status=False):
             endConferenceOnExit=True,
             muted=False,
             record="record-from-start",
-            recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
+            recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
             recording_status_callback_event='completed',
-            status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/call-status",
+            status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
             status_callback_event=["completed"]
         )
         return resp_user
@@ -51,7 +51,7 @@ def create_conference_response(conference_name, with_status=False):
         endConferenceOnExit=True,
         muted=False,
         record="record-from-start",
-        recording_status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/phone/recording",
+        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
         recording_status_callback_event='completed'
     )
     return resp_user
@@ -287,8 +287,8 @@ async def create_phone_number(request: Request):
     data = await request.json()
 
     # Extract customizable parameters from request
-    voice_url = data.get("voice_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/call")
-    sms_url = data.get("sms_url", f"{os.getenv('UNIFY_COMMS_URL')}/phone/text")
+    voice_url = data.get("voice_url", f"{os.getenv('UNITY_COMMS_URL')}/phone/call")
+    sms_url = data.get("sms_url", f"{os.getenv('UNITY_COMMS_URL')}/phone/text")
     country = data.get("country", "US")
 
     # Additional args for country
