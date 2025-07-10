@@ -10,12 +10,12 @@ from twilio.twiml.messaging_response import MessagingResponse
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
     "https://api.unify.ai/v0"
-    if STAGING
+    if not STAGING
     else "https://orchestra-staging-000000000000.europe-west1.run.app/v0"
 )
 COMMS_URL = (
     "https://unity-comms-app-000000000000.us-central1.run.app"
-    if STAGING
+    if not STAGING
     else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
 )
 
@@ -123,7 +123,7 @@ def start_unity_job(
     commit_hash = response.json()["commit_hash"]
     image = (
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if STAGING else "/unity-staging:")
+        + ("/unity:" if not STAGING else "/unity-staging:")
         + commit_hash
     )
 
@@ -186,7 +186,7 @@ def twilio_whatsapp_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
-    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:

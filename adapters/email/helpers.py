@@ -9,12 +9,12 @@ from google.cloud import pubsub_v1
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
     "https://api.unify.ai/v0"
-    if STAGING
+    if not STAGING
     else "https://orchestra-staging-000000000000.europe-west1.run.app/v0"
 )
 COMMS_URL = (
     "https://unity-comms-app-000000000000.us-central1.run.app"
-    if STAGING
+    if not STAGING
     else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
 )
 
@@ -173,7 +173,7 @@ def publish_thread_id(assistant_id, thread_id, user_id, last_message):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
-        topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), topic_name)
 
         message_dict = {
@@ -301,7 +301,7 @@ def start_unity_job(
     commit_hash = response.json()["commit_hash"]
     image = (
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if STAGING else "/unity-staging:")
+        + ("/unity:" if not STAGING else "/unity-staging:")
         + commit_hash
     )
 
