@@ -20,7 +20,7 @@ DEFAULT_REGION = "us-central1"
 
 # create pubsub topic
 @router.post("/pubsub/topic")
-async def create_pubsub_topic(assistant_id: str = Form(...)):
+async def create_pubsub_topic(topic_name: str = Form(...)):
     """
     Create a Google Cloud Pub/Sub topic and subscription with the assistant_id as
     the name.
@@ -35,7 +35,6 @@ async def create_pubsub_topic(assistant_id: str = Form(...)):
         subscriber = pubsub_v1.SubscriberClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_name = f"unity-{assistant_id}"
         topic_path = publisher.topic_path(PROJECT_ID, topic_name)
         subscription_path = subscriber.subscription_path(
             PROJECT_ID, f"{topic_name}-sub"
@@ -55,7 +54,6 @@ async def create_pubsub_topic(assistant_id: str = Form(...)):
                 "message": "Topic and subscription created successfully",
                 "topic_name": topic_path,
                 "subscription_name": subscription_path,
-                "assistant_id": assistant_id,
                 "project_id": PROJECT_ID,
             }
         except Exception as e:
@@ -66,7 +64,6 @@ async def create_pubsub_topic(assistant_id: str = Form(...)):
                     "message": "Topic and subscription already exist",
                     "topic_name": topic_path,
                     "subscription_name": subscription_path,
-                    "assistant_id": assistant_id,
                     "project_id": PROJECT_ID,
                 }
             else:
@@ -79,7 +76,7 @@ async def create_pubsub_topic(assistant_id: str = Form(...)):
 
 # delete pubsub topic
 @router.delete("/pubsub/topic")
-async def delete_pubsub_topic(assistant_id: str = Form(...)):
+async def delete_pubsub_topic(topic_name: str = Form(...)):
     """
     Delete a Google Cloud Pub/Sub topic with the assistant_id as the topic name.
     Note: Deleting a topic automatically deletes all subscriptions attached to it.
@@ -93,7 +90,7 @@ async def delete_pubsub_topic(assistant_id: str = Form(...)):
         publisher = pubsub_v1.PublisherClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_path = publisher.topic_path(PROJECT_ID, f"unity-{assistant_id}")
+        topic_path = publisher.topic_path(PROJECT_ID, topic_name)
 
         # Delete the topic
         publisher.delete_topic(request={"topic": topic_path})
@@ -102,7 +99,6 @@ async def delete_pubsub_topic(assistant_id: str = Form(...)):
             "success": True,
             "message": f"Topic deleted successfully",
             "topic_name": topic_path,
-            "assistant_id": assistant_id,
             "project_id": PROJECT_ID,
         }
 

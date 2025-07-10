@@ -229,7 +229,10 @@ async def watch_email(request: Request):
         subject=user_email,
     )
     gmail_service = build("gmail", "v1", credentials=creds)
-    topic_name = "projects/gcp-project-runtime/topics/email-notifications"
+    topic_name = (
+        "projects/gcp-project-runtime/topics/"
+        + data.get("topic_name", "email-notifications")
+    )
     watch_request = {
         "labelIds": ["INBOX"],
         "topicName": topic_name
