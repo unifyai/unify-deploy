@@ -35,7 +35,6 @@ steps:
     --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}
   - '--region=${_REGION}'
   - '--quiet'
-  - '--vpc-connector=orchestra-connector'
   - '--vpc-egress=all-traffic'
   - '--no-cpu-throttling'
   - '--cpu-boost'
