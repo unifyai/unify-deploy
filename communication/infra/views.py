@@ -328,7 +328,7 @@ async def get_latest_unity_image_commit():
 
         # Define the bucket and file path
         bucket_name = "unity-image-hash"
-        blob_name = "image_hash.txt" if STAGING else "image_hash_staging.txt"
+        blob_name = "image_hash.txt" if not STAGING else "image_hash_staging.txt"
 
         try:
             # Get the bucket
