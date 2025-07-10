@@ -11,7 +11,7 @@ STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
     "https://api.unify.ai/v0"
     if not STAGING
-    else "https://orchestra-staging-000000000000.europe-west1.run.app/v0"
+    else "https://service.a.run.app/v0"
 )
 COMMS_URL = (
     "https://unity-comms-app-000000000000.us-central1.run.app"
