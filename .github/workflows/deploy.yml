@@ -1,11 +1,12 @@
 name: Build and Deploy to Cloud Run
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - 'mail_watch/**'
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
+  #   paths-ignore:
+  #     - 'mail_watch/**'
 
 env:
   SERVICE_NAME: unity-comms-app
