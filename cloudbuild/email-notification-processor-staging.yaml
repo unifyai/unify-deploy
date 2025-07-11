@@ -13,7 +13,7 @@ steps:
           --entry-point=process_notification \
           --trigger-topic=email-notifications \
           --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID
+          --set-env-vars=PROJECT_ID=$PROJECT_ID,STAGING=true
 timeout: "1200s"
 options:
   substitutionOption: ALLOW_LOOSE
