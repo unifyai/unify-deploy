@@ -116,7 +116,10 @@ async def create_whatsapp_sender(request: Request):
     url = "https://messaging.twilio.com/v2/Channels/Senders"
     payload = {
         "sender_id": f"whatsapp:{data.get('phone_number')}",
-        "profile": {"name": "Unify Assistant"},
+        "profile": {
+            "name": "Unify Assistant",
+            "logo_url": "https://console.unify.ai/ivy_logo_only.png",
+        },
         "webhook": {
             "callback_method": "POST",
             "callback_url": data.get(
