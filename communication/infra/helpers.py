@@ -152,6 +152,7 @@ def create_unity_job(
     assistant_name: str,
     assistant_age: str,
     assistant_region: str,
+    assistant_about: str,
     user_number: str,
     assistant_number: str = "",
     user_phone_number: str = "",
@@ -170,6 +171,7 @@ def create_unity_job(
         assistant_name: Assistant's name
         assistant_age: Assistant's age
         assistant_region: Assistant's region
+        assistant_about: Assistant's about
         user_number: User's phone number
         assistant_number: Assistant's phone number (optional)
         user_phone_number: User's phone for calls (defaults to user_number)
@@ -195,6 +197,7 @@ def create_unity_job(
             {"name": "ASSISTANT_NAME", "value": assistant_name},
             {"name": "ASSISTANT_AGE", "value": assistant_age},
             {"name": "ASSISTANT_REGION", "value": assistant_region},
+            {"name": "ASSISTANT_ABOUT", "value": assistant_about},
             {
                 "name": "ASSISTANT_NUMBER",
                 "value": assistant_number,

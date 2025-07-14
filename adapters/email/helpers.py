@@ -262,6 +262,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
         "assistant_age": assistants[0]["age"],
         "assistant_region": assistants[0]["region"],
+        "assistant_about": assistants[0]["about"],
         "assistant_number": assistants[0]["phone"],
         "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"],
         "assistant_email": assistants[0]["email"],
@@ -279,6 +280,7 @@ def start_unity_job(
     assistant_name: str,
     assistant_age: str,
     assistant_region: str,
+    assistant_about: str,
     user_number: str,
     assistant_number: str,
     user_phone_number: str,
@@ -293,6 +295,7 @@ def start_unity_job(
         assistant_name: The name of the assistant.
         assistant_age: The age of the assistant.
         assistant_region: The region of the assistant.
+        assistant_about: The about of the assistant.
         user_number: The phone number of the user.
         assistant_number: The phone number of the assistant.
         user_phone_number: The phone number of the user.
@@ -329,6 +332,7 @@ def start_unity_job(
             "assistant_name": assistant_name,
             "assistant_age": assistant_age,
             "assistant_region": assistant_region,
+            "assistant_about": assistant_about,
             "user_number": user_number,
             "assistant_number": assistant_number,
             "user_phone_number": user_phone_number,

@@ -71,6 +71,7 @@ def process_notification(cloud_event):
         assistant_name = assistant_data["assistant_name"]
         assistant_age = assistant_data["assistant_age"]
         assistant_region = assistant_data["assistant_region"]
+        assistant_about = assistant_data["assistant_about"]
         user_number = assistant_data["user_number"]
         assistant_number = assistant_data["assistant_number"]
         # user_phone_number = assistant_data["user_phone_number"]
@@ -83,6 +84,7 @@ def process_notification(cloud_event):
             assistant_name,
             assistant_age,
             assistant_region,
+            assistant_about,
             user_number,
             assistant_number,
             user_number,  # user_phone_number,

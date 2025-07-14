@@ -53,6 +53,9 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "api_key": "",
         "user_name": "",
         "assistant_name": "Default Assistant",
+        "assistant_age": "20",
+        "assistant_region": "United States",
+        "assistant_about": "Default Assistant",
         "user_number": "",
         "assistant_number": "",
         # "user_phone_number": "",
@@ -93,6 +96,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
         "assistant_age": assistants[0]["age"],
         "assistant_region": assistants[0]["region"],
+        "assistant_about": assistants[0]["about"],
         "assistant_number": assistants[0]["phone"],
         "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"],
         "assistant_email": assistants[0]["email"],
@@ -110,6 +114,7 @@ def start_unity_job(
     assistant_name: str,
     assistant_age: str,
     assistant_region: str,
+    assistant_about: str,
     user_number: str,
     assistant_number: str,
     user_phone_number: str,
@@ -160,6 +165,7 @@ def start_unity_job(
             "assistant_name": assistant_name,
             "assistant_age": assistant_age,
             "assistant_region": assistant_region,
+            "assistant_about": assistant_about,
             "user_number": user_number,
             "assistant_number": assistant_number,
             "user_phone_number": user_phone_number,
@@ -297,6 +303,7 @@ def twilio_call_webhook(request: Request):
     assistant_name = assistant_data["assistant_name"]
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
+    assistant_about = assistant_data["assistant_about"]
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
     # user_phone_number = assistant_data["user_phone_number"]
@@ -311,6 +318,7 @@ def twilio_call_webhook(request: Request):
         assistant_name,
         assistant_age,
         assistant_region,
+        assistant_about,
         user_number,
         assistant_number,
         user_number,  # user_phone_number,
@@ -435,6 +443,7 @@ def twilio_msg_webhook(request: Request):
     assistant_name = assistant_data["assistant_name"]
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
+    assistant_about = assistant_data["assistant_about"]
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
     user_phone_number = assistant_data["user_phone_number"]
@@ -447,6 +456,7 @@ def twilio_msg_webhook(request: Request):
         assistant_name,
         assistant_age,
         assistant_region,
+        assistant_about,
         user_number,
         assistant_number,
         user_phone_number,
