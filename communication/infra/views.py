@@ -113,6 +113,7 @@ async def create_kubernetes_job(
     api_key: str = Form(...),
     assistant_id: str = Form(...),
     user_name: str = Form(...),
+    assistant_name: str = Form(...),
     user_number: str = Form(...),
     assistant_number: str = Form(""),
     user_phone_number: str = Form(""),
@@ -128,6 +129,7 @@ async def create_kubernetes_job(
         api_key: API key for authentication (required)
         assistant_id: Unique assistant identifier (required)
         user_name: User's name (required)
+        assistant_name: Assistant's name (required)
         user_number: User's phone number (required)
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         user_phone_number: User's phone for calls (optional, defaults to user_number)
@@ -169,6 +171,7 @@ async def create_kubernetes_job(
             assistant_id=assistant_id,
             job_name=job_name,
             user_name=user_name,
+            assistant_name=assistant_name,
             user_number=user_number,
             assistant_number=assistant_number,
             user_phone_number=phone_number,

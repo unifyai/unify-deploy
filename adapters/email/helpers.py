@@ -221,6 +221,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "voice_id": None,
         "api_key": "",
         "user_name": "",
+        "assistant_name": "Default Assistant",
         "user_number": "",
         "assistant_number": "",
         # "user_phone_number": "",
@@ -257,7 +258,8 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
     return {
         "assistant_id": assistants[0]["agent_id"],
         "api_key": assistants[0]["api_key"],
-        "user_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
+        "user_name": f"{assistants[0]['user_first_name']} {assistants[0]['user_last_name']}",
+        "assistant_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
         "assistant_number": assistants[0]["phone"],
         "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"],
         "assistant_email": assistants[0]["email"],
@@ -272,6 +274,7 @@ def start_unity_job(
     api_key: str,
     assistant_id: str,
     user_name: str,
+    assistant_name: str,
     user_number: str,
     assistant_number: str,
     user_phone_number: str,
@@ -283,12 +286,14 @@ def start_unity_job(
         api_key: The API key for the assistant.
         assistant_id: The ID of the assistant.
         user_name: The name of the user.
+        assistant_name: The name of the assistant.
         user_number: The phone number of the user.
         assistant_number: The phone number of the assistant.
         user_phone_number: The phone number of the user.
     """
     # default option when api key isn't set
     if user_name == "":
+        print(f"No user name for assistant {assistant_id}")
         return
 
     # get commit hash
@@ -315,6 +320,7 @@ def start_unity_job(
             "api_key": api_key,
             "assistant_id": assistant_id,
             "user_name": user_name,
+            "assistant_name": assistant_name,
             "user_number": user_number,
             "assistant_number": assistant_number,
             "user_phone_number": user_phone_number,

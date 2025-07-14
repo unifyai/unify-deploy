@@ -149,6 +149,7 @@ def create_unity_job(
     assistant_id: str,
     job_name: str,
     user_name: str,
+    assistant_name: str,
     user_number: str,
     assistant_number: str = "",
     user_phone_number: str = "",
@@ -164,6 +165,7 @@ def create_unity_job(
         api_key: API key for authentication
         assistant_id: Unique assistant identifier
         user_name: User's name
+        assistant_name: Assistant's name
         user_number: User's phone number
         assistant_number: Assistant's phone number (optional)
         user_phone_number: User's phone for calls (defaults to user_number)
@@ -186,6 +188,7 @@ def create_unity_job(
         env_vars = [
             {"name": "ASSISTANT_ID", "value": assistant_id},
             {"name": "USER_NAME", "value": user_name},
+            {"name": "ASSISTANT_NAME", "value": assistant_name},
             {
                 "name": "ASSISTANT_NUMBER",
                 "value": assistant_number,

@@ -11,6 +11,8 @@ from .helpers import (
     get_thread_id,
     publish_thread_id,
     start_unity_job,
+    ORCHESTRA_URL,
+    COMMS_URL,
 )
 
 
@@ -19,7 +21,7 @@ def renew_watch(request):
     """Cloud Function that renews Gmail watches for multiple users."""
     # ToDo: make orchestra admin call to get all assistant emails
     emails = requests.get(
-        "https://api.unify.ai/v0/admin/assistant/emails",
+        f"{ORCHESTRA_URL}/admin/assistant/emails",
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()["info"]
     emails += [
@@ -31,12 +33,11 @@ def renew_watch(request):
     results = {}
 
     # Process each email
-    comms_url = "https://unity-comms-app-000000000000.us-central1.run.app"
     for email in emails:
         try:
             admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
             results[email] = requests.post(
-                f"{comms_url}/email/watch",
+                f"{COMMS_URL}/email/watch",
                 json={"primary_email": email},
                 headers={"Authorization": f"Bearer {admin_key}"},
             ).json()
@@ -67,6 +68,7 @@ def process_notification(cloud_event):
         api_key = assistant_data["api_key"]
         assistant_id = assistant_data["assistant_id"]
         user_name = assistant_data["user_name"]
+        assistant_name = assistant_data["assistant_name"]
         user_number = assistant_data["user_number"]
         assistant_number = assistant_data["assistant_number"]
         # user_phone_number = assistant_data["user_phone_number"]
@@ -76,6 +78,7 @@ def process_notification(cloud_event):
             api_key,
             assistant_id,
             user_name,
+            assistant_name,
             user_number,
             assistant_number,
             user_number,  # user_phone_number,
