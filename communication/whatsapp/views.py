@@ -49,7 +49,7 @@ async def receive_text(
         to=sender_number,
         from_=twilio_number,
         body=response,
-        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/status",
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/status",
     )
 
     return Response(status=200)
@@ -83,7 +83,7 @@ async def send_text(request: Request):
         to=f"whatsapp:{receiver_number}",
         from_=f"whatsapp:{twilio_number}",
         body=body,
-        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/status",
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/status",
     )
     return {"success": True}
 
@@ -104,7 +104,7 @@ async def send_greeting(request: Request):
             "user_name": user_name,
             "agent_name": agent_name
         }),
-        status_callback=f"{os.getenv('UNIFY_COMMS_URL')}/whatsapp/status",
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/status",
     )
     return {"success": True}
 
