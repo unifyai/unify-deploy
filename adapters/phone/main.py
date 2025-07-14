@@ -134,7 +134,7 @@ def start_unity_job(
         user_phone_number: The phone number of the user.
     """
     # default option when api key isn't set
-    if user_name == "":
+    if api_key == "":
         print(f"No user name for assistant {assistant_id}")
         return
 
