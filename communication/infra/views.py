@@ -114,6 +114,8 @@ async def create_kubernetes_job(
     assistant_id: str = Form(...),
     user_name: str = Form(...),
     assistant_name: str = Form(...),
+    assistant_age: str = Form(...),
+    assistant_region: str = Form(...),
     user_number: str = Form(...),
     assistant_number: str = Form(""),
     user_phone_number: str = Form(""),
@@ -130,6 +132,8 @@ async def create_kubernetes_job(
         assistant_id: Unique assistant identifier (required)
         user_name: User's name (required)
         assistant_name: Assistant's name (required)
+        assistant_age: Assistant's age (required)
+        assistant_region: Assistant's region (required)
         user_number: User's phone number (required)
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         user_phone_number: User's phone for calls (optional, defaults to user_number)
@@ -172,6 +176,8 @@ async def create_kubernetes_job(
             job_name=job_name,
             user_name=user_name,
             assistant_name=assistant_name,
+            assistant_age=assistant_age,
+            assistant_region=assistant_region,
             user_number=user_number,
             assistant_number=assistant_number,
             user_phone_number=phone_number,
