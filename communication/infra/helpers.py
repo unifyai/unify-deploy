@@ -156,6 +156,7 @@ def create_unity_job(
     assistant_about: str,
     user_number: str,
     assistant_number: str = "",
+    assistant_email: str = "",
     user_phone_number: str = "",
     namespace: str = "default",
     image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
@@ -176,6 +177,7 @@ def create_unity_job(
         assistant_about: Assistant's about
         user_number: User's phone number
         assistant_number: Assistant's phone number (optional)
+        assistant_email: Assistant's email (optional)
         user_phone_number: User's phone for calls (defaults to user_number)
         namespace: Kubernetes namespace
         image: Docker image to use
@@ -205,6 +207,7 @@ def create_unity_job(
                 "name": "ASSISTANT_NUMBER",
                 "value": assistant_number,
             },
+            {"name": "ASSISTANT_EMAIL", "value": assistant_email},
             {"name": "USER_NUMBER", "value": user_number},
             {
                 "name": "USER_PHONE_NUMBER",

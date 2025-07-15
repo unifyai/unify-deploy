@@ -75,6 +75,7 @@ def process_notification(cloud_event):
         assistant_about = assistant_data["assistant_about"]
         user_number = assistant_data["user_number"]
         assistant_number = assistant_data["assistant_number"]
+        assistant_email = assistant_data["assistant_email"]
         # user_phone_number = assistant_data["user_phone_number"]
 
         # start unity job
@@ -88,6 +89,7 @@ def process_notification(cloud_event):
             assistant_about,
             user_number,
             assistant_number,
+            assistant_email,
             user_number,  # user_phone_number,
             user_email,
         )

@@ -119,6 +119,7 @@ def start_unity_job(
     assistant_about: str,
     user_number: str,
     assistant_number: str,
+    assistant_email: str,
     user_phone_number: str,
     user_email: str,
 ):
@@ -134,6 +135,7 @@ def start_unity_job(
         assistant_region: The region of the assistant.
         user_number: The phone number of the user.
         assistant_number: The phone number of the assistant.
+        assistant_email: The email of the assistant.
         user_phone_number: The phone number of the user.
         user_email: The email of the user.
     """
@@ -173,6 +175,7 @@ def start_unity_job(
             "assistant_about": assistant_about,
             "user_number": user_number,
             "assistant_number": assistant_number,
+            "assistant_email": assistant_email,
             "user_phone_number": user_phone_number,
             "image": image,
         },
@@ -311,6 +314,7 @@ def twilio_call_webhook(request: Request):
     assistant_about = assistant_data["assistant_about"]
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
+    assistant_email = assistant_data["assistant_email"]
     # user_phone_number = assistant_data["user_phone_number"]
     user_email = assistant_data["user_email"]
     tts_provider = assistant_data["tts_provider"]
@@ -327,6 +331,7 @@ def twilio_call_webhook(request: Request):
         assistant_about,
         user_number,
         assistant_number,
+        assistant_email,
         user_number,  # user_phone_number,
         user_email,
     )
@@ -454,6 +459,7 @@ def twilio_msg_webhook(request: Request):
     assistant_about = assistant_data["assistant_about"]
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
+    assistant_email = assistant_data["assistant_email"]
     user_phone_number = assistant_data["user_phone_number"]
 
     # start unity job
@@ -467,6 +473,7 @@ def twilio_msg_webhook(request: Request):
         assistant_about,
         user_number,
         assistant_number,
+        assistant_email,
         user_phone_number,
         user_email,
     )

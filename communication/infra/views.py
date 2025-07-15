@@ -120,6 +120,7 @@ async def create_kubernetes_job(
     assistant_about: str = Form(...),
     user_number: str = Form(...),
     assistant_number: str = Form(""),
+    assistant_email: str = Form(""),
     user_phone_number: str = Form(""),
     namespace: str = Form("default"),
     image: str = Form(
@@ -140,6 +141,7 @@ async def create_kubernetes_job(
         assistant_about: Assistant's about (required)
         user_number: User's phone number (required)
         assistant_number: Assistant's phone number (optional, defaults to empty string)
+        assistant_email: Assistant's email (optional, defaults to empty string)
         user_phone_number: User's phone for calls (optional, defaults to user_number)
         namespace: Kubernetes namespace (optional, defaults to "default")
         image: Docker image to use (optional, defaults to latest unity image)
@@ -186,6 +188,7 @@ async def create_kubernetes_job(
             assistant_about=assistant_about,
             user_number=user_number,
             assistant_number=assistant_number,
+            assistant_email=assistant_email,
             user_phone_number=phone_number,
             namespace=namespace,
             image=image,
