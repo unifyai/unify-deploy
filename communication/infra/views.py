@@ -113,6 +113,7 @@ async def create_kubernetes_job(
     api_key: str = Form(...),
     assistant_id: str = Form(...),
     user_name: str = Form(...),
+    user_email: str = Form(...),
     assistant_name: str = Form(...),
     assistant_age: str = Form(...),
     assistant_region: str = Form(...),
@@ -132,6 +133,7 @@ async def create_kubernetes_job(
         api_key: API key for authentication (required)
         assistant_id: Unique assistant identifier (required)
         user_name: User's name (required)
+        user_email: User's email (required)
         assistant_name: Assistant's name (required)
         assistant_age: Assistant's age (required)
         assistant_region: Assistant's region (required)
@@ -177,6 +179,7 @@ async def create_kubernetes_job(
             assistant_id=assistant_id,
             job_name=job_name,
             user_name=user_name,
+            user_email=user_email,
             assistant_name=assistant_name,
             assistant_age=assistant_age,
             assistant_region=assistant_region,

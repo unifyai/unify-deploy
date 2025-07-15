@@ -56,6 +56,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_age": "20",
         "assistant_region": "United States",
         "assistant_about": "Default Assistant",
+        "assistant_email": "unity.agent@unify.ai",
         "user_number": "",
         "assistant_number": "",
         # "user_phone_number": "",
@@ -102,6 +103,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_email": assistants[0]["email"],
         "user_number": assistants[0]["user_phone"],
         "user_whatsapp_number": assistants[0]["user_whatsapp_number"],
+        "user_email": assistants[0]["user_email"],
         "tts_provider": assistants[0]["tts_provider"],
         "voice_id": assistants[0]["voice_id"],
     }
@@ -118,6 +120,7 @@ def start_unity_job(
     user_number: str,
     assistant_number: str,
     user_phone_number: str,
+    user_email: str,
 ):
     """
     Start the service if it is not running.
@@ -132,6 +135,7 @@ def start_unity_job(
         user_number: The phone number of the user.
         assistant_number: The phone number of the assistant.
         user_phone_number: The phone number of the user.
+        user_email: The email of the user.
     """
     # default option when api key isn't set
     if api_key == "":
@@ -162,6 +166,7 @@ def start_unity_job(
             "api_key": api_key,
             "assistant_id": assistant_id,
             "user_name": user_name,
+            "user_email": user_email,
             "assistant_name": assistant_name,
             "assistant_age": assistant_age,
             "assistant_region": assistant_region,
@@ -307,6 +312,7 @@ def twilio_call_webhook(request: Request):
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
     # user_phone_number = assistant_data["user_phone_number"]
+    user_email = assistant_data["user_email"]
     tts_provider = assistant_data["tts_provider"]
     voice_id = assistant_data["voice_id"]
 
@@ -322,6 +328,7 @@ def twilio_call_webhook(request: Request):
         user_number,
         assistant_number,
         user_number,  # user_phone_number,
+        user_email,
     )
 
     # FIXED: Create conference name and sip uri with unique timestamp
@@ -440,6 +447,7 @@ def twilio_msg_webhook(request: Request):
     api_key = assistant_data["api_key"]
     assistant_id = assistant_data["assistant_id"]
     user_name = assistant_data["user_name"]
+    user_email = assistant_data["user_email"]
     assistant_name = assistant_data["assistant_name"]
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
@@ -460,6 +468,7 @@ def twilio_msg_webhook(request: Request):
         user_number,
         assistant_number,
         user_phone_number,
+        user_email,
     )
 
     # set up conference
