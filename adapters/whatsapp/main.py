@@ -65,7 +65,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "assistant_email": "unity.agent@unify.ai",
             # "user_phone_number": "+15550100004",
             "tts_provider": "cartesia",
-            "voice_id": "alloy",
+            "voice_id": None,
         }
     if "+15550100005" in phone_number:
         return {
