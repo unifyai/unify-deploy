@@ -94,7 +94,7 @@ async def send_greeting(request: Request):
     twilio_number = data.get("from")
     user_name = data.get("user_name")
     agent_name = data.get("agent_name")
-    message = data.get("message")
+    body = data.get("body")
 
     twilio_client = get_twilio_client()
     twilio_client.messages.create(
@@ -104,7 +104,7 @@ async def send_greeting(request: Request):
         content_variables=json.dumps({
             "user_name": user_name,
             "agent_name": agent_name,
-            "message": message,
+            "message": body,
         }),
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/status",
     )
