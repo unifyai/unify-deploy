@@ -52,7 +52,21 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
     if "+15550100002" in phone_number:
         return default_assistant_data
     if "+15550100001" in phone_number:
-        return {**default_assistant_data, "assistant_id": "default-assistant-2"}
+        return {
+            **default_assistant_data,
+            "api_key": "",
+            "assistant_id": "default-assistant-2",
+            "user_name": "Julia",
+            "user_number": "+18125625087",
+            "user_email": "julia@unify.ai",
+            "assistant_name": "Lily",
+            "assistant_age": "25",
+            "assistant_number": "+15550100001",
+            "assistant_email": "unity.agent@unify.ai",
+            # "user_phone_number": "+15550100004",
+            "tts_provider": "cartesia",
+            "voice_id": "alloy",
+        }
     if "+15550100005" in phone_number:
         return {
             **default_assistant_data,
