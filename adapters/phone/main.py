@@ -460,7 +460,8 @@ def twilio_msg_webhook(request: Request):
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
     assistant_email = assistant_data["assistant_email"]
-    user_phone_number = assistant_data["user_phone_number"]
+    # todo: fix name and change one to whatsapp_number
+    user_phone_number = assistant_data["user_number"]
 
     # start unity job
     start_unity_job(
