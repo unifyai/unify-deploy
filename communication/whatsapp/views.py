@@ -97,7 +97,7 @@ async def send_greeting(request: Request):
 
     twilio_client = get_twilio_client()
     twilio_client.messages.create(
-        content_sid="HXe1624dc6761e564cf974d214278d0a6f",
+        content_sid="HX8f626deb83316ab8fd355a2866dddc24",
         to=f"whatsapp:{receiver_number}",
         from_=f"whatsapp:{twilio_number}",
         content_variables=json.dumps({
