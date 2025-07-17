@@ -265,6 +265,97 @@ async def delete_kubernetes_job(
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 
+# start job via pubsub
+@router.post("/job/start")
+async def start_job_via_pubsub(
+    api_key: str = Form(...),
+    assistant_id: str = Form(...),
+    user_name: str = Form(...),
+    user_email: str = Form(...),
+    assistant_name: str = Form(...),
+    assistant_age: str = Form(...),
+    assistant_region: str = Form(...),
+    assistant_about: str = Form(...),
+    user_number: str = Form(...),
+    assistant_number: str = Form(""),
+    assistant_email: str = Form(""),
+    user_phone_number: str = Form(""),
+    namespace: str = Form("default"),
+    image: str = Form(
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
+    ),
+):
+    """
+    Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
+
+    Args:
+        api_key: API key for authentication (required)
+        assistant_id: Unique assistant identifier (required)
+        user_name: User's name (required)
+        user_email: User's email (required)
+        assistant_name: Assistant's name (required)
+        assistant_age: Assistant's age (required)
+        assistant_region: Assistant's region (required)
+        assistant_about: Assistant's about (required)
+        user_number: User's phone number (required)
+        assistant_number: Assistant's phone number (optional, defaults to empty string)
+        assistant_email: Assistant's email (optional, defaults to empty string)
+        user_phone_number: User's phone for calls (optional, defaults to user_number)
+        namespace: Kubernetes namespace (optional, defaults to "default")
+        image: Docker image to use (optional, defaults to latest unity image)
+    """
+    try:
+        # Get credentials from environment variable
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        creds = Credentials.from_service_account_info(creds_json)
+
+        # Initialize the publisher client
+        publisher = pubsub_v1.PublisherClient(credentials=creds)
+
+        # Create the topic path
+        topic_path = publisher.topic_path(PROJECT_ID, "unity-startup")
+
+        # Prepare the job data
+        job_data = {
+            "api_key": api_key,
+            "assistant_id": assistant_id,
+            "user_name": user_name,
+            "user_email": user_email,
+            "assistant_name": assistant_name,
+            "assistant_age": assistant_age,
+            "assistant_region": assistant_region,
+            "assistant_about": assistant_about,
+            "user_number": user_number,
+            "assistant_number": assistant_number,
+            "assistant_email": assistant_email,
+            "user_phone_number": user_phone_number if user_phone_number else user_number,
+            "namespace": namespace,
+            "image": image,
+            "is_staging": bool(STAGING),
+        }
+
+        # Convert to JSON string
+        message_data = json.dumps(job_data).encode("utf-8")
+
+        # Publish the message
+        future = publisher.publish(topic_path, data=message_data)
+        message_id = future.result()
+
+        return {
+            "success": True,
+            "message": "Job start request published to Pub/Sub successfully",
+            "message_id": message_id,
+            "topic_path": topic_path,
+            "assistant_id": assistant_id,
+            "project_id": PROJECT_ID,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to publish job start request: {str(e)}"
+        )
+
+
 # list kubernetes jobs
 @router.get("/jobs")
 async def list_kubernetes_jobs(namespace: str = "default"):
