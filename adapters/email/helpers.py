@@ -222,9 +222,12 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "api_key": "",
         "user_name": "",
         "assistant_name": "Default Assistant",
+        "assistant_age": "20",
+        "assistant_region": "United States",
+        "assistant_about": "Default Assistant",
+        "assistant_email": "unity.agent@unify.ai",
         "user_number": "",
         "assistant_number": "",
-        "assistant_email": "unity.agent@unify.ai",
         # "user_phone_number": "",
     }
     if "+15550100002" in phone_number:
