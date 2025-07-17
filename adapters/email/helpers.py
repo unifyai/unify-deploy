@@ -232,7 +232,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
     }
     if "+15550100002" in phone_number:
         return default_assistant_data
-    if "+15550100001" in phone_number:
+    if "+15550100001" in phone_number or "julia@unify.ai" in email_id:
         return {
             **default_assistant_data,
             "api_key": "",
