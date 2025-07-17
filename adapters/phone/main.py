@@ -57,6 +57,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_region": "United States",
         "assistant_about": "Default Assistant",
         "assistant_email": "unity.agent@unify.ai",
+        "user_email": "unity.agent@unify.ai",
         "user_number": "",
         "assistant_number": "",
         # "user_phone_number": "",
