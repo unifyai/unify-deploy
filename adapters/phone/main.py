@@ -175,9 +175,9 @@ def start_unity_job(
         + commit_hash
     )
 
-    # create job
+    # start job
     response = requests.post(
-        f"{COMMS_URL}/infra/job/create",
+        f"{COMMS_URL}/infra/job/start",
         headers=headers,
         data={
             "api_key": api_key,
@@ -192,8 +192,16 @@ def start_unity_job(
             "assistant_number": assistant_number,
             "assistant_email": assistant_email,
             "user_phone_number": user_phone_number,
-            "image": image,
         },
+    )
+    if response.status_code != 200:
+        print(f"Failed to start job for assistant {assistant_id}")
+
+    # create job
+    response = requests.post(
+        f"{COMMS_URL}/infra/job/create",
+        headers=headers,
+        data={"image": image},
     )
     if response.status_code != 200:
         print(f"Failed to create job for assistant {assistant_id}")
