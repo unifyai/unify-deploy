@@ -168,13 +168,13 @@ def create_unity_job(
                 "value": "/secrets/key.json",
             },
             # Startup optimizations
-            {"name": "PYTHONUNBUFFERED", "value": "1"},
-            {
-                "name": "TOKENIZERS_PARALLELISM",
-                "value": "false",
-            },
-            {"name": "OMP_NUM_THREADS", "value": "2"},
-            {"name": "MKL_NUM_THREADS", "value": "2"},
+            # {"name": "PYTHONUNBUFFERED", "value": "1"},
+            # {
+            #     "name": "TOKENIZERS_PARALLELISM",
+            #     "value": "false",
+            # },
+            # {"name": "OMP_NUM_THREADS", "value": "2"},
+            # {"name": "MKL_NUM_THREADS", "value": "2"},
         ]
         if is_staging:
             env_vars = [{"name": "STAGING", "value": "true"}] + env_vars
