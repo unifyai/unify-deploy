@@ -193,7 +193,6 @@ def create_unity_job(
             },
             "spec": {
                 "backoffLimit": 1,  # Allow 1 retry for resource issues
-                "activeDeadlineSeconds": 7200,  # 2 hours max runtime
                 "ttlSecondsAfterFinished": 0,  # Auto-delete job and pods after specified delay
                 "template": {
                     "metadata": {
