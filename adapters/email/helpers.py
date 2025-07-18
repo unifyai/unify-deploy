@@ -1,8 +1,10 @@
+import asyncio
 import base64
 import json
 import os
 import re
 import requests
+import httpx
 from google.cloud import pubsub_v1
 
 
@@ -366,11 +368,21 @@ def start_unity_job(
     if response.status_code != 200:
         print(f"Failed to start job for assistant {assistant_id}")
 
-    # create job
-    response = requests.post(
-        f"{COMMS_URL}/infra/job/create",
-        headers=headers,
-        data={"image": image},
-    )
-    if response.status_code != 200:
-        print(f"Failed to create job for assistant {assistant_id}")
+    # create job asynchronously
+    async def create_job_async():
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{COMMS_URL}/infra/job/create",
+                    headers=headers,
+                    data={"image": image},
+                )
+                if response.status_code != 200:
+                    print(f"Failed to create job for assistant {assistant_id}")
+                else:
+                    print(f"Job creation initiated for assistant {assistant_id}")
+        except Exception as e:
+            print(f"Error creating job for assistant {assistant_id}: {e}")
+
+    # Start job creation asynchronously without waiting
+    asyncio.create_task(create_job_async())
