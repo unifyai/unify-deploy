@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Form, HTTPException
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
@@ -5,7 +6,6 @@ import json
 import os
 from .helpers import (
     setup_kubernetes_client,
-    check_job_exists,
     create_unity_job,
     delete_job,
 )
@@ -110,18 +110,6 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 # create kubernetes job
 @router.post("/job/create")
 async def create_kubernetes_job(
-    api_key: str = Form(...),
-    assistant_id: str = Form(...),
-    user_name: str = Form(...),
-    user_email: str = Form(...),
-    assistant_name: str = Form(...),
-    assistant_age: str = Form(...),
-    assistant_region: str = Form(...),
-    assistant_about: str = Form(...),
-    user_number: str = Form(...),
-    assistant_number: str = Form(""),
-    assistant_email: str = Form(""),
-    user_phone_number: str = Form(""),
     namespace: str = Form("default"),
     image: str = Form(
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
@@ -131,18 +119,6 @@ async def create_kubernetes_job(
     Create a Kubernetes Job for a Unity assistant.
 
     Args:
-        api_key: API key for authentication (required)
-        assistant_id: Unique assistant identifier (required)
-        user_name: User's name (required)
-        user_email: User's email (required)
-        assistant_name: Assistant's name (required)
-        assistant_age: Assistant's age (required)
-        assistant_region: Assistant's region (required)
-        assistant_about: Assistant's about (required)
-        user_number: User's phone number (required)
-        assistant_number: Assistant's phone number (optional, defaults to empty string)
-        assistant_email: Assistant's email (optional, defaults to empty string)
-        user_phone_number: User's phone for calls (optional, defaults to user_number)
         namespace: Kubernetes namespace (optional, defaults to "default")
         image: Docker image to use (optional, defaults to latest unity image)
     """
@@ -156,40 +132,13 @@ async def create_kubernetes_job(
             )
 
         # Create the job name with unity- prefix
-        job_name = (
-            f"unity-{assistant_id}" if not STAGING else f"unity-{assistant_id}-staging"
-        )
-
-        # Check if job already exists and is running
-        exists, status = check_job_exists(batch_api, job_name, namespace)
-        if exists and status == "running":
-            return {
-                "success": True,
-                "message": f"Assistant {assistant_id} is already running",
-                "assistant_id": assistant_id,
-                "namespace": namespace,
-                "status": "already_running",
-            }
-
-        # Use user_phone_number if provided, otherwise use user_number
-        phone_number = user_phone_number if user_phone_number else user_number
+        timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        job_name = f"unity-{timestamp_str}" if not STAGING else f"unity-{timestamp_str}-staging"
 
         # Create the job
         job = create_unity_job(
             batch_api=batch_api,
-            api_key=api_key,
-            assistant_id=assistant_id,
             job_name=job_name,
-            user_name=user_name,
-            user_email=user_email,
-            assistant_name=assistant_name,
-            assistant_age=assistant_age,
-            assistant_region=assistant_region,
-            assistant_about=assistant_about,
-            user_number=user_number,
-            assistant_number=assistant_number,
-            assistant_email=assistant_email,
-            user_phone_number=phone_number,
             namespace=namespace,
             image=image,
             is_staging=bool(STAGING),
@@ -201,7 +150,6 @@ async def create_kubernetes_job(
                 "message": "Kubernetes job created successfully",
                 "job_name": job.metadata.name,
                 "job_uid": job.metadata.uid,
-                "assistant_id": assistant_id,
                 "namespace": namespace,
                 "image": image,
                 "creation_timestamp": (
@@ -213,7 +161,7 @@ async def create_kubernetes_job(
         else:
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to create job for assistant {assistant_id}",
+                detail=f"Failed to create job for assistant: {job_name}",
             )
 
     except HTTPException:
@@ -227,13 +175,13 @@ async def create_kubernetes_job(
 # delete kubernetes job
 @router.delete("/job/delete")
 async def delete_kubernetes_job(
-    assistant_id: str = Form(...), namespace: str = Form("default")
+    job_name: str = Form(...), namespace: str = Form("default")
 ):
     """
     Delete a Kubernetes Job for a Unity assistant.
 
     Args:
-        assistant_id: Unique assistant identifier (required)
+        job_name: Name of the job (required)
         namespace: Kubernetes namespace (optional, defaults to "default")
     """
     try:
@@ -245,18 +193,18 @@ async def delete_kubernetes_job(
             )
 
         # Delete the job
-        success = delete_job(batch_api, assistant_id, namespace)
+        success = delete_job(batch_api, job_name, namespace)
 
         if success:
             return {
                 "success": True,
-                "message": f"Job deleted successfully: unity-{assistant_id}",
-                "assistant_id": assistant_id,
+                "message": f"Job deleted successfully: {job_name}",
+                "job_name": job_name,
                 "namespace": namespace,
             }
         else:
             raise HTTPException(
-                status_code=500, detail=f"Failed to delete job: unity-{assistant_id}"
+                status_code=500, detail=f"Failed to delete job: {job_name}"
             )
 
     except HTTPException:
@@ -267,7 +215,7 @@ async def delete_kubernetes_job(
 
 # start job via pubsub
 @router.post("/job/start")
-async def start_job_via_pubsub(
+async def start_job(
     api_key: str = Form(...),
     assistant_id: str = Form(...),
     user_name: str = Form(...),
@@ -280,10 +228,6 @@ async def start_job_via_pubsub(
     assistant_number: str = Form(""),
     assistant_email: str = Form(""),
     user_phone_number: str = Form(""),
-    namespace: str = Form("default"),
-    image: str = Form(
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
-    ),
 ):
     """
     Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
@@ -301,8 +245,6 @@ async def start_job_via_pubsub(
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         assistant_email: Assistant's email (optional, defaults to empty string)
         user_phone_number: User's phone for calls (optional, defaults to user_number)
-        namespace: Kubernetes namespace (optional, defaults to "default")
-        image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
         # Get credentials from environment variable
@@ -313,25 +255,28 @@ async def start_job_via_pubsub(
         publisher = pubsub_v1.PublisherClient(credentials=creds)
 
         # Create the topic path
-        topic_path = publisher.topic_path(PROJECT_ID, "unity-startup")
+        topic_path = publisher.topic_path(
+            PROJECT_ID,
+            "unity-startup" if not STAGING else "unity-startup-staging",
+        )
 
         # Prepare the job data
         job_data = {
-            "api_key": api_key,
-            "assistant_id": assistant_id,
-            "user_name": user_name,
-            "user_email": user_email,
-            "assistant_name": assistant_name,
-            "assistant_age": assistant_age,
-            "assistant_region": assistant_region,
-            "assistant_about": assistant_about,
-            "user_number": user_number,
-            "assistant_number": assistant_number,
-            "assistant_email": assistant_email,
-            "user_phone_number": user_phone_number if user_phone_number else user_number,
-            "namespace": namespace,
-            "image": image,
-            "is_staging": bool(STAGING),
+            "thread": "startup",
+            "event": {
+                "api_key": api_key,
+                "assistant_id": assistant_id,
+                "user_name": user_name,
+                "user_email": user_email,
+                "assistant_name": assistant_name,
+                "assistant_age": assistant_age,
+                "assistant_region": assistant_region,
+                "assistant_about": assistant_about,
+                "user_number": user_number,
+                "assistant_number": assistant_number,
+                "assistant_email": assistant_email,
+                "user_phone_number": user_phone_number if user_phone_number else user_number,
+            }
         }
 
         # Convert to JSON string
@@ -347,6 +292,7 @@ async def start_job_via_pubsub(
             "message_id": message_id,
             "topic_path": topic_path,
             "assistant_id": assistant_id,
+            "is_staging": bool(STAGING),
             "project_id": PROJECT_ID,
         }
 

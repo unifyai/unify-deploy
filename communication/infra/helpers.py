@@ -145,19 +145,7 @@ def delete_job(batch_api, job_name: str, namespace: str = "default"):
 
 def create_unity_job(
     batch_api,
-    api_key: str,
-    assistant_id: str,
     job_name: str,
-    user_name: str,
-    user_email: str,
-    assistant_name: str,
-    assistant_age: str,
-    assistant_region: str,
-    assistant_about: str,
-    user_number: str,
-    assistant_number: str = "",
-    assistant_email: str = "",
-    user_phone_number: str = "",
     namespace: str = "default",
     image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
     is_staging: bool = False,
@@ -167,53 +155,14 @@ def create_unity_job(
 
     Args:
         batch_api: Kubernetes Batch API client
-        api_key: API key for authentication
-        assistant_id: Unique assistant identifier
-        user_name: User's name
-        user_email: User's email
-        assistant_name: Assistant's name
-        assistant_age: Assistant's age
-        assistant_region: Assistant's region
-        assistant_about: Assistant's about
-        user_number: User's phone number
-        assistant_number: Assistant's phone number (optional)
-        assistant_email: Assistant's email (optional)
-        user_phone_number: User's phone for calls (defaults to user_number)
+        job_name: Name of the job
         namespace: Kubernetes namespace
         image: Docker image to use
         is_staging: Whether to use staging image
     """
     try:
-        # Check if job already exists and is running
-        exists, status = check_job_exists(batch_api, job_name, namespace)
-
-        if exists and status == "running":
-            print(f"✅ Assistant {assistant_id} is already running")
-            return None
-        elif exists and status in ["completed", "failed"]:
-            print(f"🗑️  Cleaning up old job for {assistant_id} (status: {status})")
-            delete_job(batch_api, job_name, namespace)
-
         # Define the assistant-specific environment variables
         env_vars = [
-            {"name": "ASSISTANT_ID", "value": assistant_id},
-            {"name": "USER_NAME", "value": user_name},
-            {"name": "USER_EMAIL", "value": user_email},
-            {"name": "ASSISTANT_NAME", "value": assistant_name},
-            {"name": "ASSISTANT_AGE", "value": assistant_age},
-            {"name": "ASSISTANT_REGION", "value": assistant_region},
-            {"name": "ASSISTANT_ABOUT", "value": assistant_about},
-            {
-                "name": "ASSISTANT_NUMBER",
-                "value": assistant_number,
-            },
-            {"name": "ASSISTANT_EMAIL", "value": assistant_email},
-            {"name": "USER_NUMBER", "value": user_number},
-            {
-                "name": "USER_PHONE_NUMBER",
-                "value": user_phone_number or user_number,
-            },
-            {"name": "UNIFY_KEY", "value": api_key},
             {
                 "name": "GOOGLE_APPLICATION_CREDENTIALS",
                 "value": "/secrets/key.json",
@@ -239,7 +188,6 @@ def create_unity_job(
                 "namespace": namespace,
                 "labels": {
                     "app": "unity",
-                    "assistant-id": assistant_id,
                     "created-by": "create_job_script",
                 },
             },
@@ -249,7 +197,7 @@ def create_unity_job(
                 "ttlSecondsAfterFinished": 0,  # Auto-delete job and pods after specified delay
                 "template": {
                     "metadata": {
-                        "labels": {"app": "unity", "assistant-id": assistant_id}
+                        "labels": {"app": "unity"}
                     },
                     "spec": {
                         "restartPolicy": "Never",
@@ -300,7 +248,6 @@ def create_unity_job(
             print(f"✅ Job created successfully!")
             print(f"   Job name: {api_response.metadata.name}")
             print(f"   Job UID: {api_response.metadata.uid}")
-            print(f"   Assistant ID: {assistant_id}")
             print(f"   Namespace: {namespace}")
             print(f"   Image: {image}")
 
