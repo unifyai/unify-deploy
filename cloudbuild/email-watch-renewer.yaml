@@ -12,7 +12,14 @@ steps:
           --source="adapters/email" \
           --entry-point=renew_watch \
           --trigger-http \
-          --allow-unauthenticated
+          --allow-unauthenticated \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80 \
+          --set-env-vars=PORT=8080
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: "Create/Update Scheduler"
     entrypoint: bash
