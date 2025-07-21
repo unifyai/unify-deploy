@@ -56,3 +56,5 @@ def renew_idle_job(request):
             data={"job_name": job_name},
             headers=headers,
         )
+
+    return idle_jobs
