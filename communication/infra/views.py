@@ -8,6 +8,7 @@ from .helpers import (
     setup_kubernetes_client,
     create_unity_job,
     delete_job,
+    get_job_logs,
 )
 
 router = APIRouter()
@@ -133,7 +134,11 @@ async def create_kubernetes_job(
 
         # Create the job name with unity- prefix
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        job_name = f"unity-{timestamp_str}" if not STAGING else f"unity-{timestamp_str}-staging"
+        job_name = (
+            f"unity-{timestamp_str}"
+            if not STAGING
+            else f"unity-{timestamp_str}-staging"
+        )
 
         # Create the job
         job = create_unity_job(
@@ -275,8 +280,10 @@ async def start_job(
                 "user_number": user_number,
                 "assistant_number": assistant_number,
                 "assistant_email": assistant_email,
-                "user_phone_number": user_phone_number if user_phone_number else user_number,
-            }
+                "user_phone_number": (
+                    user_phone_number if user_phone_number else user_number
+                ),
+            },
         }
 
         # Convert to JSON string
@@ -362,6 +369,46 @@ async def list_kubernetes_jobs(namespace: str = "default"):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list jobs: {str(e)}")
+
+
+# get job logs
+@router.get("/job/logs")
+async def get_job_logs_endpoint(
+    job_name: str, namespace: str = "default", tail_lines: int = 10
+):
+    """
+    Get logs from a Kubernetes Job.
+
+    Args:
+        job_name: Name of the job (required)
+        namespace: Kubernetes namespace (optional, defaults to "default")
+        tail_lines: Number of lines to tail (optional, defaults to 10)
+    """
+    try:
+        # Initialize Kubernetes client
+        batch_api, core_api = setup_kubernetes_client()
+        if not batch_api or not core_api:
+            raise HTTPException(
+                status_code=500, detail="Failed to connect to Kubernetes cluster"
+            )
+
+        # Get logs
+        result = get_job_logs(
+            core_api=core_api,
+            job_name=job_name,
+            namespace=namespace,
+            tail_lines=tail_lines,
+        )
+
+        if result["success"]:
+            return result
+        else:
+            raise HTTPException(status_code=404, detail=result["message"])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get job logs: {str(e)}")
 
 
 # get latest unity image commit hash

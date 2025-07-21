@@ -195,9 +195,7 @@ def create_unity_job(
                 "backoffLimit": 1,  # Allow 1 retry for resource issues
                 "ttlSecondsAfterFinished": 0,  # Auto-delete job and pods after specified delay
                 "template": {
-                    "metadata": {
-                        "labels": {"app": "unity"}
-                    },
+                    "metadata": {"labels": {"app": "unity"}},
                     "spec": {
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
@@ -262,3 +260,81 @@ def create_unity_job(
     except Exception as e:
         print(f"❌ Error creating job: {e}")
         return None
+
+
+def get_job_logs(
+    core_api, job_name: str, namespace: str = "default", tail_lines: int = 10
+):
+    """
+    Get logs from pods associated with a Kubernetes job.
+
+    Args:
+        core_api: Kubernetes CoreV1Api client
+        job_name: Name of the job
+        namespace: Kubernetes namespace
+        tail_lines: Number of lines to tail (default: 10)
+    """
+    try:
+        # Find pods associated with the job
+        pods = core_api.list_namespaced_pod(
+            namespace=namespace,
+            label_selector=f"job-name={job_name}",
+        )
+
+        if not pods.items:
+            return {
+                "success": False,
+                "message": f"No pods found for job: {job_name}",
+                "job_name": job_name,
+                "namespace": namespace,
+                "logs": [],
+            }
+
+        # Get logs from each pod
+        pod = pods.items[0]
+        pod_name = pod.metadata.name
+        pod_status = pod.status.phase
+
+        # Count ready containers properly
+        ready_containers = 0
+        if pod.status.container_statuses:
+            ready_containers = sum(
+                1 for container in pod.status.container_statuses if container.ready
+            )
+
+        pod_data = {
+            "pod_name": pod_name,
+            "status": pod_status,
+            "ready_containers": ready_containers,
+            "total_containers": len(pod.spec.containers),
+        }
+
+        # Get logs from the pod
+        logs = core_api.read_namespaced_pod_log(
+            name=pod_name,
+            namespace=namespace,
+            tail_lines=tail_lines,
+        )
+
+        if logs:
+            pod_data["logs"] = logs
+        else:
+            pod_data["logs"] = "(no logs available)\n"
+
+        return {
+            "success": True,
+            "message": f"Retrieved logs for job: {job_name}",
+            "job_name": job_name,
+            "namespace": namespace,
+            "tail_lines": tail_lines,
+            "logs": pod_data["logs"].split("\n"),
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error accessing job {job_name}: {str(e)}",
+            "job_name": job_name,
+            "namespace": namespace,
+            "logs": [],
+        }
