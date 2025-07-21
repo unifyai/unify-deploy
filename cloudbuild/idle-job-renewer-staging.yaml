@@ -13,13 +13,7 @@ steps:
           --entry-point=renew_idle_job \
           --trigger-http \
           --allow-unauthenticated \
-          --set-env-vars=STAGING=true \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
+          --set-env-vars=STAGING=true
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: "Create/Update Scheduler"
     entrypoint: bash
