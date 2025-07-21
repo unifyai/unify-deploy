@@ -35,17 +35,6 @@ steps:
     --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}
   - '--region=${_REGION}'
   - '--quiet'
-  - '--timeout=300'
-  - '--memory=512Mi'
-  - '--cpu=1'
-  - '--min-instances=0'
-  - '--max-instances=100'
-  - '--concurrency=80'
-  - '--port=8080'
-  - '--set-env-vars=PORT=8080'
-  - '--health-check-timeout=300'
-  - '--health-check-interval=5'
-  - '--health-check-initial-delay=10'
   id: Deploy Unity Comms App
   entrypoint: gcloud
   waitFor: ['push-sha-tag']
