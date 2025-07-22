@@ -149,6 +149,7 @@ def create_unity_job(
     namespace: str = "default",
     image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
     is_staging: bool = False,
+    ttl_seconds_after_finished: int = 86400,  # 24 hours default, set to None to disable
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
@@ -159,6 +160,7 @@ def create_unity_job(
         namespace: Kubernetes namespace
         image: Docker image to use
         is_staging: Whether to use staging image
+        ttl_seconds_after_finished: Seconds after job completion before cleanup (None to disable)
     """
     try:
         # Define the assistant-specific environment variables
@@ -193,7 +195,6 @@ def create_unity_job(
             },
             "spec": {
                 "backoffLimit": 1,  # Allow 1 retry for resource issues
-                "ttlSecondsAfterFinished": 0,  # Auto-delete job and pods after specified delay
                 "template": {
                     "metadata": {"labels": {"app": "unity"}},
                     "spec": {
@@ -235,6 +236,12 @@ def create_unity_job(
                 },
             },
         }
+
+        # Add TTL if specified
+        if ttl_seconds_after_finished is not None:
+            job_manifest["spec"]["ttlSecondsAfterFinished"] = (
+                ttl_seconds_after_finished
+            )
 
         # Create the job
         try:
