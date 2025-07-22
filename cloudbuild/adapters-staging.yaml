@@ -182,4 +182,4 @@ steps:
 timeout: "3600s"
 options:
   substitutionOption: ALLOW_LOOSE
-  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET 
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
