@@ -1,5 +1,5 @@
 """Phone API."""
 
-from communication.phone.views import router
+from communication.phone.views import auth_router, unauth_router
 
-__all__ = ["router"]
+__all__ = ["auth_router", "unauth_router"]
