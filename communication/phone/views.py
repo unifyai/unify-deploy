@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-router = APIRouter()
+auth_router = APIRouter()
+unauth_router = APIRouter()
 client = unify.Unify(traced=True)
 client.set_endpoint("o4-mini@openai")
 client.set_system_message("You are a helpful assistant.")
@@ -80,7 +81,7 @@ def add_user_to_conference(conference_name, from_number, to_number_uri, connect_
     return call.sid
 
 # Endpoints - Form format
-@router.post("/call")
+@auth_router.post("/call")
 async def receive_call(To: str = Form(...), From: str = Form(...)):
     twilio_number = To or ""
     caller_number = From or ""
@@ -94,7 +95,7 @@ async def receive_call(To: str = Form(...), From: str = Form(...)):
     call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
     return Response(content=str(resp_user), media_type="text/xml")
 
-@router.post("/text")
+@auth_router.post("/text")
 async def receive_text(Body: str = Form(...)):
     # Extract message body
     body = Body or ""
@@ -114,7 +115,7 @@ async def receive_text(Body: str = Form(...)):
     # Return XML
     return Response(content=str(twiml_resp), media_type="text/xml")
 
-@router.post("/recording")
+@unauth_router.post("/recording")
 async def check_recording_status(
     RecordingUrl: str = Form(...), 
     ConferenceSid: str = Form(...), 
@@ -219,7 +220,7 @@ async def create_room_and_dispatch_agent(
         await livekit_api.aclose()
 
 # Endpoints - JSON format
-@router.post("/send-call")
+@auth_router.post("/send-call")
 async def send_call(request: Request):
     data = await request.json()
     phone_number = data.get("To")
@@ -263,7 +264,7 @@ async def send_call(request: Request):
     # call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
     return {"success": True}#, "call_sid": call_sid}
 
-@router.post("/send-text")
+@auth_router.post("/send-text")
 async def send_text(request: Request):
     data = await request.json()
     To = data.get("To")
@@ -278,7 +279,7 @@ async def send_text(request: Request):
     )
     return {"success": True}
 
-@router.post("/meet-call")
+@auth_router.post("/meet-call")
 async def send_meet_call(request: Request):
     data = await request.json()
     meet_id = data.get("meet_id")
@@ -324,11 +325,11 @@ async def send_meet_call(request: Request):
     # call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
     return {"success": True}#, "call_sid": call_sid}
 
-@router.get("/available-countries")
+@auth_router.get("/available-countries")
 async def available_countries():
     return {"success": True, "countries": "US,GB,AU,CA,FI,NL,PR,TH,PL"}
 
-@router.post("/create")
+@auth_router.post("/create")
 async def create_phone_number(request: Request):
     data = await request.json()
 
@@ -411,7 +412,7 @@ async def create_phone_number(request: Request):
     await lkapi.aclose()
     return {"success": True, "phoneNumber": incoming.phone_number}
 
-@router.delete("/delete")
+@auth_router.delete("/delete")
 async def delete_phone_number(request: Request):
     # Expect JSON body: { "PhoneNumber": "+1234567890" }
     data = await request.json()
@@ -457,7 +458,7 @@ async def delete_phone_number(request: Request):
 #     twilio_client.calls(call_sid).update(send_digits=digits)
 #     return {"success": True}
 
-@router.post("/hang-up")
+@auth_router.post("/hang-up")
 async def hang_up(request: Request):
     data = await request.json()
     call_sid = data.get("CallSid")
@@ -468,7 +469,7 @@ async def hang_up(request: Request):
     conference = twilio_client.conferences(conferences[0].sid).participants(call_sid).delete()
     return Response(status=200)
 
-@router.post("/end-conference")
+@auth_router.post("/end-conference")
 async def end_conference(request: Request):
     data = await request.json()
     conference_name = data.get("ConferenceName")
@@ -478,7 +479,7 @@ async def end_conference(request: Request):
     conference = twilio_client.conferences(conferences[0].sid).update(status="completed")
     return {"success": True, "status": conference.status}
 
-@router.post("/call-status")
+@unauth_router.post("/call-status")
 async def call_status(request: Request):
     data = await request.json()
     call_status = data.get("CallStatus")
