@@ -1,0 +1,185 @@
+steps:
+  # Twilio WhatsApp Webhook Staging
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Twilio WhatsApp Webhook Staging"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "twilio-whatsapp-webhook-staging" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/whatsapp" \
+          --entry-point=twilio_whatsapp_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID,STAGING=true \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Twilio Message Webhook Staging
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Twilio Message Webhook Staging"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "twilio-msg-webhook-staging" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/phone" \
+          --entry-point=twilio_msg_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID,STAGING=true \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Twilio Call Webhook Staging
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Twilio Call Webhook Staging"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "twilio-call-webhook-staging" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/phone" \
+          --entry-point=twilio_call_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID,STAGING=true \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Email Notification Processor Staging
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Email Notification Processor Staging"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "email-notification-processor-staging" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/email" \
+          --entry-point=process_notification \
+          --trigger-topic=email-notifications \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID,STAGING=true \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Email Watch Renewer Staging
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Email Watch Renewer Staging"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "email-watch-renewer-staging" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/email" \
+          --entry-point=renew_watch \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=STAGING=true \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Create/Update Email Watch Renewer Staging Scheduler
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Create/Update Email Watch Renewer Staging Scheduler"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud scheduler jobs create http "email-watch-renewer-staging" \
+          --schedule "0 0 * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/email-watch-renewer-staging" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1" \
+        || \
+        gcloud scheduler jobs update http "email-watch-renewer-staging" \
+          --schedule "0 0 * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/email-watch-renewer-staging" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1"
+
+  # Idle Job Renewer Staging
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Idle Job Renewer Staging"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "idle-job-renewer-staging" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/infra" \
+          --entry-point=renew_idle_job \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=STAGING=true \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Create/Update Idle Job Renewer Staging Scheduler
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Create/Update Idle Job Renewer Staging Scheduler"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud scheduler jobs create http "idle-job-renewer-staging" \
+          --schedule "0 0 * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-renewer-staging" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1" \
+        || \
+        gcloud scheduler jobs update http "idle-job-renewer-staging" \
+          --schedule "0 0 * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-renewer-staging" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1"
+
+timeout: "3600s"
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET 

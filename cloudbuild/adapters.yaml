@@ -1,0 +1,183 @@
+steps:
+  # Twilio WhatsApp Webhook
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Twilio WhatsApp Webhook"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "twilio-whatsapp-webhook" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/whatsapp" \
+          --entry-point=twilio_whatsapp_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Twilio Message Webhook
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Twilio Message Webhook"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "twilio-msg-webhook" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/phone" \
+          --entry-point=twilio_msg_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Twilio Call Webhook
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Twilio Call Webhook"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "twilio-call-webhook" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/phone" \
+          --entry-point=twilio_call_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Email Notification Processor
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Email Notification Processor"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "email-notification-processor" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/email" \
+          --entry-point=process_notification \
+          --trigger-topic=email-notifications \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Email Watch Renewer
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Email Watch Renewer"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "email-watch-renewer" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/email" \
+          --entry-point=renew_watch \
+          --trigger-http \
+          --allow-unauthenticated \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Create/Update Email Watch Renewer Scheduler
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Create/Update Email Watch Renewer Scheduler"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud scheduler jobs create http "email-watch-renewer" \
+          --schedule "0 0 * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/email-watch-renewer" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1" \
+        || \
+        gcloud scheduler jobs update http "email-watch-renewer" \
+          --schedule "0 0 * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/email-watch-renewer" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1"
+
+  # Idle Job Renewer
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Idle Job Renewer"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "idle-job-renewer" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/infra" \
+          --entry-point=renew_idle_job \
+          --trigger-http \
+          --allow-unauthenticated \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Create/Update Idle Job Renewer Scheduler
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Create/Update Idle Job Renewer Scheduler"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud scheduler jobs create http "idle-job-renewer" \
+          --schedule "0 0 * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-renewer" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1" \
+        || \
+        gcloud scheduler jobs update http "idle-job-renewer" \
+          --schedule "0 0 * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-renewer" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1"
+
+timeout: "3600s"
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET 
