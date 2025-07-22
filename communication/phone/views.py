@@ -20,6 +20,13 @@ client = unify.Unify(traced=True)
 client.set_endpoint("o4-mini@openai")
 client.set_system_message("You are a helpful assistant.")
 
+STAGING = os.getenv("STAGING")
+ORCHESTRA_URL = (
+    "https://api.unify.ai/v0"
+    if not STAGING
+    else "https://service.a.run.app/v0"
+)
+
 
 # Helpers
 def get_twilio_client():
@@ -153,7 +160,7 @@ async def check_recording_status(
     # assistant_id (get from unify api thorugh phone number search)
     async with httpx.AsyncClient() as httpx_client:
         resp = httpx_client.post(
-            f"https://api.unify.ai/v0/assistant",
+            f"{ORCHESTRA_URL}/assistant",
             headers=headers,
         )
     if resp.status_code >= 400:
@@ -170,7 +177,7 @@ async def check_recording_status(
     }
     async with httpx.AsyncClient() as httpx_client:
         resp = httpx_client.post(
-            f"https://api.unify.ai/v0/assistant/{assistant_id}/recordings",
+            f"{ORCHESTRA_URL}/assistant/{assistant_id}/recordings",
             headers=headers,
             json=payload,
         )

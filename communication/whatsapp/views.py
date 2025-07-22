@@ -14,6 +14,13 @@ client = unify.Unify(api_key=os.getenv("UNIFY_KEY"))
 client.set_endpoint("o4-mini@openai")
 client.set_system_message("You are a helpful assistant.")
 
+STAGING = os.getenv("STAGING")
+ORCHESTRA_URL = (
+    "https://api.unify.ai/v0"
+    if not STAGING
+    else "https://service.a.run.app/v0"
+)
+
 # Helpers
 def get_twilio_client():
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
@@ -169,7 +176,7 @@ async def assign_whatsapp_sender(request: Request):
     conflict_whatsapp_number = data.get("conflict_whatsapp_number", None)
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"https://api.unify.ai/v0/admin/assistant?user_whatsapp_number={user_whatsapp_number}",
+            f"{ORCHESTRA_URL}/admin/assistant?user_whatsapp_number={user_whatsapp_number}",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
         )
     if resp.status_code >= 400:
@@ -203,7 +210,7 @@ async def get_conflict_whatsapp_number(request: Request):
     # search if target has an assistant with the same whatsapp number
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"https://api.unify.ai/v0/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}",
+            f"{ORCHESTRA_URL}/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
         )
     if resp.status_code >= 400:
@@ -216,7 +223,7 @@ async def get_conflict_whatsapp_number(request: Request):
     # search if target is in any other user's contact list
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"https://api.unify.ai/v0/admin/contacts?whatsapp_number={target_whatsapp_number}",
+            f"{ORCHESTRA_URL}/admin/contacts?whatsapp_number={target_whatsapp_number}",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
         )
     if resp.status_code >= 400:
@@ -230,7 +237,7 @@ async def get_conflict_whatsapp_number(request: Request):
             # check if user has an assistant
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
-                    f"https://api.unify.ai/v0/admin/assistant/user/{uid}&assistant_whatsapp_number={assistant_whatsapp_number}",
+                    f"{ORCHESTRA_URL}/admin/assistant/user/{uid}&assistant_whatsapp_number={assistant_whatsapp_number}",
                     headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
                 )
             if resp.status_code >= 400:
