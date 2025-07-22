@@ -278,6 +278,52 @@ async def send_text(request: Request):
     )
     return {"success": True}
 
+@router.post("/meet-call")
+async def send_meet_call(request: Request):
+    data = await request.json()
+    meet_id = data.get("meet_id")
+    phone_number = data.get("to")
+    twilio_number = data.get("from")
+    # new_call = data.get("NewCall")
+    
+    # new_call = new_call.lower() == "true"
+    conference_name = f"Unity_{twilio_number[1:]}"
+    # room_name = f"unity_{twilio_number}"
+    room_name = meet_id
+
+    # dispatch agent
+    await create_room_and_dispatch_agent(
+        room_name=room_name,
+        agent_name=room_name,
+        metadata={
+            "caller_number": phone_number,
+            "twilio_number": twilio_number,
+            "conference_name": conference_name,
+            "call_type": "inbound",
+            "call_sid": None,  # Will be updated after conference setup
+            "timestamp": int(time.time() * 1000),
+        },
+    )
+    
+    # create livekit agent participant
+    # lkapi = LiveKitAPI()
+    # trunk = CreateSIPParticipantRequest(
+    #     sip_trunk_id="ST_knkas2oxiawB",
+    #     sip_number=twilio_number,
+    #     sip_call_to=phone_number,
+    #     room_name=room_name,
+    #     participant_identity=f"user_{phone_number}",
+    #     participant_name="User",
+    #     wait_until_answered=True,
+    # )
+    # call = await lkapi.sip.create_sip_participant(trunk)
+
+    # add user to twilio conference
+    # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    # # call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
+    # call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
+    return {"success": True}#, "call_sid": call_sid}
+
 @router.get("/available-countries")
 async def available_countries():
     return {"success": True, "countries": "US,GB,AU,CA,FI,NL,PR,TH,PL"}
