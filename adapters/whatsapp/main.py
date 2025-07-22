@@ -84,6 +84,8 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         }
     if "+15550100007" in phone_number:
         return {**default_assistant_data, "assistant_id": "default-assistant-4"}
+    if "+15550100008" in phone_number:
+        return {**default_assistant_data, "assistant_id": "default-assistant-5"}
 
     response = requests.get(
         f"{ORCHESTRA_URL}/admin/assistant",
