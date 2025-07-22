@@ -32,7 +32,7 @@ def renew_idle_job(request):
         print(f"Logs: {logs}")
 
         # check if job is idle
-        if logs[0] == "Unity service started successfully":
+        if "ping received - keeping event manager alive" in logs:
             idle_jobs.append(job_name)
 
     print(f"Idle jobs: {idle_jobs}")
