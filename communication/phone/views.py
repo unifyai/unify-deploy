@@ -142,6 +142,7 @@ async def check_recording_status(request: Request):
     ) as httpx_client:
         resp = await httpx_client.get(recording_url)
     if resp.status_code >= 400:
+        print("Failed to get recording from Twilio")
         raise HTTPException(
             status_code=resp.status_code,
             detail="Failed to get recording from Twilio"
@@ -180,6 +181,7 @@ async def check_recording_status(request: Request):
             headers=headers,
         )
     if resp.status_code >= 400:
+        print("Failed to get assistants from Unify")
         raise HTTPException(
             status_code=resp.status_code,
             detail="Failed to get assistants from Unify"
@@ -201,6 +203,7 @@ async def check_recording_status(request: Request):
             json=payload,
         )
     if resp.status_code >= 400:
+        print("Failed to upload recording to Unify")
         raise HTTPException(
             status_code=resp.status_code,
             detail="Failed to upload recording to Unify"
