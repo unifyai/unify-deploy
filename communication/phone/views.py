@@ -131,7 +131,6 @@ async def check_recording_status(request: Request):
     for key, value in data.items():
         print(key, value)
     recording_url = data.get("RecordingUrl")
-    conference_sid = data.get("ConferenceSid")
 
     if not recording_url:
         return {"success": False, "error": "RecordingUrl is required"}
@@ -143,7 +142,10 @@ async def check_recording_status(request: Request):
     ) as httpx_client:
         resp = await httpx_client.get(recording_url)
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code)
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail="Failed to get recording from Twilio"
+        )
 
     # Extract recording bytes
     resp_bytes = resp.content
@@ -158,32 +160,10 @@ async def check_recording_status(request: Request):
     recording_sid = data.get("RecordingSid")
     call = None
 
-    if recording_sid:
-        try:
-            # Try to get call info from recording
-            recording = twilio_client.recordings(recording_sid).fetch()
-            call_sid = recording.call_sid
-            call = twilio_client.calls(call_sid).fetch()
-        except Exception as e:
-            print(f"Could not get call from recording: {e}")
-
-    if not call:
-        # Fallback: get call info from conference participants
-        try:
-            participants = twilio_client.conferences(conference_sid).participants.list()
-            if participants:
-                # Get the first participant's call (or you could iterate to find a specific one)
-                call_sid = participants[0].call_sid
-                call = twilio_client.calls(call_sid).fetch()
-            else:
-                raise HTTPException(
-                    status_code=400, detail="No participants found in conference"
-                )
-        except Exception as e:
-            print(f"Could not get call from conference participants: {e}")
-            raise HTTPException(
-                status_code=400, detail="Could not find call information"
-            )
+    # Get call info from recording
+    recording = twilio_client.recordings(recording_sid).fetch()
+    call_sid = recording.call_sid
+    call = twilio_client.calls(call_sid).fetch()
 
     print("Call: ", call)
     print("Call from: ", call._from)
@@ -200,7 +180,10 @@ async def check_recording_status(request: Request):
             headers=headers,
         )
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code)
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail="Failed to get assistants from Unify"
+        )
     assistants = resp.json()["info"]
     for assistant in assistants:
         if assistant["phone"] in (call.from_, call.to):
@@ -218,7 +201,10 @@ async def check_recording_status(request: Request):
             json=payload,
         )
     if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code)
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail="Failed to upload recording to Unify"
+        )
     return {"success": True, "recording_url": recording_url}
 
 
