@@ -209,7 +209,7 @@ def start_unity_job(
             print(f"Error creating job for assistant {assistant_id}: {e}")
 
     # Start job creation asynchronously without waiting
-    asyncio.create_task(create_job_async())
+    asyncio.run(create_job_async())
 
 
 @functions_framework.http
