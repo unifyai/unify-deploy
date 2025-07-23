@@ -127,8 +127,10 @@ async def receive_text(Body: str = Form(...)):
 async def check_recording_status_temp(
     request: Request
 ):
-    data = await request.json()
-    print("Recording data: ", data)
+    form_data = await request.form()
+    print("Recorded data")
+    for key, value in form_data.items():
+        print(key, value)
     return {"success": True}
 
 
