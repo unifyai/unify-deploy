@@ -335,21 +335,21 @@ async def send_meet_call(request: Request):
     # )
     # call = await lkapi.sip.create_sip_participant(trunk)
 
-    meet_token = (
-        rtc.AccessToken(
-            api_key=os.environ.get("LIVEKIT_API_KEY"),
-            api_secret=os.environ.get("LIVEKIT_API_SECRET"),
-            identity="meet-user",
-        )
-        .with_room_join(meet_id)
-        .to_jwt()
-    )
+    # meet_token = (
+    #     rtc.AccessToken(
+    #         api_key=os.environ.get("LIVEKIT_API_KEY"),
+    #         api_secret=os.environ.get("LIVEKIT_API_SECRET"),
+    #         identity="meet-user",
+    #     )
+    #     .with_room_join(meet_id)
+    #     .to_jwt()
+    # )
 
-    room = rtc.Room()
-    await room.connect(
-        url=os.environ.get("LIVEKIT_URL"),
-        token=meet_token,
-    )
+    # room = rtc.Room()
+    # await room.connect(
+    #     url=os.environ.get("LIVEKIT_URL"),
+    #     token=meet_token,
+    # )
 
     # add user to twilio conference
     # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
