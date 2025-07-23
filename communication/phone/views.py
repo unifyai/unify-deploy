@@ -176,7 +176,7 @@ async def check_recording_status(request: Request):
 
     # assistant_id (get from unify api thorugh phone number search)
     async with httpx.AsyncClient() as httpx_client:
-        resp = await httpx_client.post(
+        resp = await httpx_client.get(
             f"{ORCHESTRA_URL}/assistant",
             headers=headers,
         )
