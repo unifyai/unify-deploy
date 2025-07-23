@@ -124,6 +124,14 @@ async def receive_text(Body: str = Form(...)):
     return Response(content=str(twiml_resp), media_type="text/xml")
 
 @unauth_router.post("/recording")
+async def check_recording_status_temp(
+    request: Request
+):
+    data = await request.json()
+    print("Recording data: ", data)
+    return {"success": True}
+
+
 async def check_recording_status(
     RecordingUrl: str = Form(...), 
     ConferenceSid: str = Form(...), 
