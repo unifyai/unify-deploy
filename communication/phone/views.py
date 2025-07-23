@@ -124,27 +124,18 @@ async def receive_text(Body: str = Form(...)):
     return Response(content=str(twiml_resp), media_type="text/xml")
 
 @unauth_router.post("/recording")
-async def check_recording_status_temp(
-    request: Request
-):
-    form_data = await request.form()
+async def check_recording_status(request: Request):
+    data = await request.form()
+
     print("Recorded data")
-    for key, value in form_data.items():
+    for key, value in data.items():
         print(key, value)
-    return {"success": True}
+    recording_url = data.get("RecordingUrl")
+    conference_sid = data.get("ConferenceSid")
 
-
-async def check_recording_status(
-    RecordingUrl: str = Form(...), 
-    ConferenceSid: str = Form(...), 
-    ParticipantSid: str = Form(...),
-):
-    recording_url = RecordingUrl or ""
-    conference_sid = ConferenceSid or ""
-    participant_sid = ParticipantSid or ""
     if not recording_url:
         return {"success": False, "error": "RecordingUrl is required"}
-    
+
     # Get recording from Twilio
     recording_url = recording_url + ".mp3"
     async with httpx.AsyncClient(
@@ -153,20 +144,54 @@ async def check_recording_status(
         resp = httpx_client.get(recording_url)
     if resp.status_code >= 400:
         raise HTTPException(resp.status.code)
-    
+
     # Extract recording bytes
     resp_bytes = resp.content
-    resp_bytes = base64.b64encode(resp_bytes).decode('utf-8')
+    resp_bytes = base64.b64encode(resp_bytes).decode("utf-8")
     headers = {
         "Authorization": f"Bearer {os.environ["UNIFY_KEY"]}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
-    # Get number through Twilio ConferenceSid and ParticipantSid
+    # Get number through Twilio RecordingSid or Conference participants
     twilio_client = get_twilio_client()
-    participant = twilio_client.conferences(conference_sid).participants(participant_sid).fetch()
-    call_sid = participant.call_sid
-    call = twilio_client.calls(call_sid).fetch()
+    recording_sid = data.get("RecordingSid")
+    call = None
+
+    if recording_sid:
+        try:
+            # Try to get call info from recording
+            recording = twilio_client.recordings(recording_sid).fetch()
+            call_sid = recording.call_sid
+            call = twilio_client.calls(call_sid).fetch()
+        except Exception as e:
+            print(f"Could not get call from recording: {e}")
+
+    if not call:
+        # Fallback: get call info from conference participants
+        try:
+            participants = twilio_client.conferences(conference_sid).participants.list()
+            if participants:
+                # Get the first participant's call (or you could iterate to find a specific one)
+                call_sid = participants[0].call_sid
+                call = twilio_client.calls(call_sid).fetch()
+            else:
+                raise HTTPException(
+                    status_code=400, detail="No participants found in conference"
+                )
+        except Exception as e:
+            print(f"Could not get call from conference participants: {e}")
+            raise HTTPException(
+                status_code=400, detail="Could not find call information"
+            )
+
+    print("Call: ", call)
+    print("Call from: ", call.from_)
+    print("Call to: ", call.to)
+    print("Call sid: ", call.sid)
+    print("Call status: ", call.status)
+    print("Call duration: ", call.duration)
+    print("Call start time: ", call.start_time)
 
     # assistant_id (get from unify api thorugh phone number search)
     async with httpx.AsyncClient() as httpx_client:
@@ -181,7 +206,7 @@ async def check_recording_status(
         if assistant["phone"] in (call.from_, call.to):
             assistant_id = assistant["agent_id"]
             break
-    
+
     payload = {
         "recording_raw": resp_bytes,
         "content_type": "audio/mp3",
@@ -195,6 +220,7 @@ async def check_recording_status(
     if resp.status_code >= 400:
         raise HTTPException(resp.status.code)
     return {"success": True, "recording_url": recording_url}
+
 
 def get_livekit_api():
     """Get LiveKit API client"""
