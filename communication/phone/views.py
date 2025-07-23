@@ -186,7 +186,7 @@ async def check_recording_status(request: Request):
             )
 
     print("Call: ", call)
-    print("Call from: ", call.from_)
+    print("Call from: ", call._from)
     print("Call to: ", call.to)
     print("Call sid: ", call.sid)
     print("Call status: ", call.status)
