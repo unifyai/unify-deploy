@@ -214,6 +214,7 @@ async def check_recording_status(request: Request):
         )
     if resp.status_code >= 400:
         print("Failed to upload recording to Unify")
+        print(resp.text)
         raise HTTPException(
             status_code=resp.status_code,
             detail="Failed to upload recording to Unify"
