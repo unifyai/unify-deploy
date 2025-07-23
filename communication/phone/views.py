@@ -141,9 +141,9 @@ async def check_recording_status(request: Request):
     async with httpx.AsyncClient(
         auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
     ) as httpx_client:
-        resp = httpx_client.get(recording_url)
+        resp = await httpx_client.get(recording_url)
     if resp.status_code >= 400:
-        raise HTTPException(resp.status.code)
+        raise HTTPException(status_code=resp.status_code)
 
     # Extract recording bytes
     resp_bytes = resp.content
@@ -195,12 +195,12 @@ async def check_recording_status(request: Request):
 
     # assistant_id (get from unify api thorugh phone number search)
     async with httpx.AsyncClient() as httpx_client:
-        resp = httpx_client.post(
+        resp = await httpx_client.post(
             f"{ORCHESTRA_URL}/assistant",
             headers=headers,
         )
     if resp.status_code >= 400:
-        raise HTTPException(resp.status.code)
+        raise HTTPException(status_code=resp.status_code)
     assistants = resp.json()["info"]
     for assistant in assistants:
         if assistant["phone"] in (call.from_, call.to):
@@ -212,13 +212,13 @@ async def check_recording_status(request: Request):
         "content_type": "audio/mp3",
     }
     async with httpx.AsyncClient() as httpx_client:
-        resp = httpx_client.post(
+        resp = await httpx_client.post(
             f"{ORCHESTRA_URL}/assistant/{assistant_id}/recordings",
             headers=headers,
             json=payload,
         )
     if resp.status_code >= 400:
-        raise HTTPException(resp.status.code)
+        raise HTTPException(status_code=resp.status_code)
     return {"success": True, "recording_url": recording_url}
 
 
