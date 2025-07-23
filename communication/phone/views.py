@@ -177,18 +177,26 @@ async def check_recording_status(request: Request):
     # assistant_id (get from unify api thorugh phone number search)
     async with httpx.AsyncClient() as httpx_client:
         resp = await httpx_client.get(
-            f"{ORCHESTRA_URL}/assistant",
+            f"{ORCHESTRA_URL}/admin/assistant",
+            params={"phone": call._from},
             headers=headers,
         )
+        assistants = resp.json()["info"]
+        if len(assistants) == 0:
+            resp = await httpx_client.get(
+                f"{ORCHESTRA_URL}/admin/assistant",
+                params={"phone": call.to},
+                headers=headers,
+            )
+            assistants = resp.json()["info"]
     if resp.status_code >= 400:
         print("Failed to get assistants from Unify")
         raise HTTPException(
             status_code=resp.status_code,
             detail="Failed to get assistants from Unify"
         )
-    assistants = resp.json()["info"]
     for assistant in assistants:
-        if assistant["phone"] in (call.from_, call.to):
+        if assistant["phone"] in [call._from, call.to]:
             assistant_id = assistant["agent_id"]
             break
 
