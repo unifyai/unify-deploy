@@ -179,7 +179,9 @@ async def check_recording_status(request: Request):
         resp = await httpx_client.get(
             f"{ORCHESTRA_URL}/admin/assistant",
             params={"phone": call._from},
-            headers=headers,
+            headers={
+                "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"
+            },
         )
         assistants = resp.json()["info"]
         if len(assistants) == 0:
