@@ -152,8 +152,7 @@ async def check_recording_status(request: Request):
     resp_bytes = resp.content
     resp_bytes = base64.b64encode(resp_bytes).decode("utf-8")
     headers = {
-        "Authorization": f"Bearer {os.environ["UNIFY_KEY"]}",
-        "Content-Type": "application/json",
+        "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"
     }
 
     # Get number through Twilio RecordingSid or Conference participants
@@ -179,18 +178,14 @@ async def check_recording_status(request: Request):
         resp = await httpx_client.get(
             f"{ORCHESTRA_URL}/admin/assistant",
             params={"phone": call._from},
-            headers={
-                "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"
-            },
+            headers=headers,
         )
         assistants = resp.json()["info"]
         if len(assistants) == 0:
             resp = await httpx_client.get(
                 f"{ORCHESTRA_URL}/admin/assistant",
                 params={"phone": call.to},
-                headers={
-                    "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"
-                },
+                headers=headers,
             )
             assistants = resp.json()["info"]
     if resp.status_code >= 400:
@@ -202,15 +197,18 @@ async def check_recording_status(request: Request):
     for assistant in assistants:
         if assistant["phone"] in [call._from, call.to]:
             assistant_id = assistant["agent_id"]
+            user_id = assistant["user_id"]
             break
 
     payload = {
         "recording_raw": resp_bytes,
         "content_type": "audio/mp3",
+        "assistant_id": assistant_id,
+        "user_id": user_id
     }
     async with httpx.AsyncClient() as httpx_client:
         resp = await httpx_client.post(
-            f"{ORCHESTRA_URL}/assistant/{assistant_id}/recordings",
+            f"{ORCHESTRA_URL}/admin/assistant/recordings",
             headers=headers,
             json=payload,
         )
