@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import functions_framework
 import os
 import requests
@@ -12,7 +13,24 @@ COMMS_URL = (
 
 
 @functions_framework.http
-def renew_idle_job(request):
+def create_idle_job(request):
+    """Cloud Function that creates a new idle job."""
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    response = requests.get( f"{COMMS_URL}/infra/image", headers=headers)
+    commit_hash = response.json()["commit_hash"]
+    image = (
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
+        + ("/unity:" if not STAGING else "/unity-staging:")
+        + commit_hash
+    )
+    response =requests.post(
+        f"{COMMS_URL}/infra/job/create", data={"image": image}, headers=headers
+    )
+    return response.json()
+
+
+@functions_framework.http
+def clean_idle_jobs(request):
     """Cloud Function that renews idle jobs that have been around for >24 hours.."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     idle_jobs = []
@@ -23,6 +41,14 @@ def renew_idle_job(request):
     print(f"Job names: {job_names}")
 
     for job_name in job_names:
+        # check if job is older than 10 minutes
+        job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
+        job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
+        now = datetime.now()
+        delta = now - job_timestamp
+        if delta < timedelta(minutes=10):
+            continue
+
         # get logs
         logs = requests.get(
             f"{COMMS_URL}/infra/job/logs",
@@ -36,18 +62,6 @@ def renew_idle_job(request):
             idle_jobs.append(job_name)
 
     print(f"Idle jobs: {idle_jobs}")
-
-    # create new idle job
-    response = requests.get( f"{COMMS_URL}/infra/image", headers=headers)
-    commit_hash = response.json()["commit_hash"]
-    image = (
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if not STAGING else "/unity-staging:")
-        + commit_hash
-    )
-    requests.post(
-        f"{COMMS_URL}/infra/job/create", data={"image": image}, headers=headers
-    )
 
     # delete all old idle jobs
     for job_name in idle_jobs:

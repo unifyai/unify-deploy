@@ -135,19 +135,19 @@ steps:
           --time-zone "UTC" \
           --location="us-central1"
 
-  # Idle Job Renewer Staging
+  # Idle Job Creator Staging
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Idle Job Renewer Staging"
+    id: "Deploy Idle Job Creator Staging"
     entrypoint: bash
     args:
       - "-c"
       - |
-        gcloud functions deploy "idle-job-renewer-staging" \
+        gcloud functions deploy "idle-job-creator-staging" \
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
           --source="adapters/infra" \
-          --entry-point=renew_idle_job \
+          --entry-point=create_idle_job \
           --trigger-http \
           --allow-unauthenticated \
           --set-env-vars=STAGING=true \
@@ -158,23 +158,67 @@ steps:
           --max-instances=100 \
           --concurrency=80
 
-  # Create/Update Idle Job Renewer Staging Scheduler
+  # Create/Update Idle Job Creator Staging Scheduler
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Create/Update Idle Job Renewer Staging Scheduler"
+    id: "Create/Update Idle Job Creator Staging Scheduler"
     entrypoint: bash
     args:
       - "-c"
       - |
-        gcloud scheduler jobs create http "idle-job-renewer-staging" \
-          --schedule "0 0 * * *" \
-          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-renewer-staging" \
+        gcloud scheduler jobs create http "idle-job-creator-staging" \
+          --schedule "0 * * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-creator-staging" \
           --http-method POST \
           --time-zone "UTC" \
           --location="us-central1" \
         || \
-        gcloud scheduler jobs update http "idle-job-renewer-staging" \
-          --schedule "0 0 * * *" \
-          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-renewer-staging" \
+        gcloud scheduler jobs update http "idle-job-creator-staging" \
+          --schedule "0 * * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-creator-staging" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1"
+
+  # Idle Job Cleaner Staging
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Idle Job Cleaner Staging"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "idle-job-cleaner-staging" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters/infra" \
+          --entry-point=clean_idle_jobs \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=STAGING=true \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Create/Update Idle Job Cleaner Staging Scheduler
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Create/Update Idle Job Cleaner Staging Scheduler"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud scheduler jobs create http "idle-job-cleaner-staging" \
+          --schedule "10 * * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-cleaner-staging" \
+          --http-method POST \
+          --time-zone "UTC" \
+          --location="us-central1" \
+        || \
+        gcloud scheduler jobs update http "idle-job-cleaner-staging" \
+          --schedule "10 * * * *" \
+          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-cleaner-staging" \
           --http-method POST \
           --time-zone "UTC" \
           --location="us-central1"
