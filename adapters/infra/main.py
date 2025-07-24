@@ -41,14 +41,6 @@ def clean_idle_jobs(request):
     print(f"Job names: {job_names}")
 
     for job_name in job_names:
-        # check if job is older than 10 minutes
-        job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
-        job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
-        now = datetime.now()
-        delta = now - job_timestamp
-        if delta < timedelta(minutes=10):
-            continue
-
         # get logs
         logs = requests.get(
             f"{COMMS_URL}/infra/job/logs",
@@ -61,7 +53,21 @@ def clean_idle_jobs(request):
         if "ping received - keeping event manager alive" in logs:
             idle_jobs.append(job_name)
 
+    new_idle_jobs = []
+    for job_name in idle_jobs:
+        # check if job is older than 10 minutes
+        job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
+        job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
+        now = datetime.now()
+        delta = now - job_timestamp
+        if delta > timedelta(minutes=11):
+            new_idle_jobs.append(job_name)
+
     print(f"Idle jobs: {idle_jobs}")
+    print(f"New idle jobs: {new_idle_jobs}")
+    if len(new_idle_jobs) == 0:
+        if len(idle_jobs) != 0:
+            idle_jobs = sorted(idle_jobs)[:-1]
 
     # delete all old idle jobs
     for job_name in idle_jobs:
