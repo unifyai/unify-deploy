@@ -8,7 +8,6 @@ from fastapi import APIRouter, Form, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
-from livekit import rtc
 from livekit.api import LiveKitAPI, SIPInboundTrunkInfo, CreateSIPInboundTrunkRequest, CreateAgentDispatchRequest
 from livekit.protocol.sip import ListSIPInboundTrunkRequest, DeleteSIPTrunkRequest, CreateSIPParticipantRequest
 from dotenv import load_dotenv
@@ -329,11 +328,8 @@ async def send_meet_call(request: Request):
     meet_id = data.get("meet_id")
     phone_number = data.get("to")
     twilio_number = data.get("from")
-    # new_call = data.get("NewCall")
-    
-    # new_call = new_call.lower() == "true"
+
     conference_name = f"Unity_{twilio_number[1:]}"
-    # room_name = f"unity_{twilio_number}"
     room_name = meet_id
 
     # dispatch agent
@@ -350,40 +346,7 @@ async def send_meet_call(request: Request):
         },
     )
     
-    # create livekit agent participant
-    # lkapi = LiveKitAPI()
-    # trunk = CreateSIPParticipantRequest(
-    #     sip_trunk_id="ST_knkas2oxiawB",
-    #     sip_number=twilio_number,
-    #     sip_call_to=phone_number,
-    #     room_name=room_name,
-    #     participant_identity=f"user_{phone_number}",
-    #     participant_name="User",
-    #     wait_until_answered=True,
-    # )
-    # call = await lkapi.sip.create_sip_participant(trunk)
-
-    # meet_token = (
-    #     rtc.AccessToken(
-    #         api_key=os.environ.get("LIVEKIT_API_KEY"),
-    #         api_secret=os.environ.get("LIVEKIT_API_SECRET"),
-    #         identity="meet-user",
-    #     )
-    #     .with_room_join(meet_id)
-    #     .to_jwt()
-    # )
-
-    # room = rtc.Room()
-    # await room.connect(
-    #     url=os.environ.get("LIVEKIT_URL"),
-    #     token=meet_token,
-    # )
-
-    # add user to twilio conference
-    # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    # # call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
-    # call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
-    return {"success": True}#, "call_sid": call_sid}
+    return {"success": True}
 
 @auth_router.get("/available-countries")
 async def available_countries():
