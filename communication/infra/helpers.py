@@ -201,6 +201,7 @@ def create_unity_job(
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
                         "terminationGracePeriodSeconds": 30,  # Faster termination
+                        "activeDeadlineSeconds": 86400,  # 24 hours
                         "priorityClassName": "unity-critical",
                         "containers": [
                             {
