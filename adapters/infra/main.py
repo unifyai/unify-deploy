@@ -60,7 +60,7 @@ def clean_idle_jobs(request):
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
         delta = now - job_timestamp
-        if delta > timedelta(minutes=11):
+        if delta < timedelta(minutes=11):
             new_idle_jobs.append(job_name)
 
     print(f"Idle jobs: {idle_jobs}")
