@@ -179,7 +179,13 @@ def create_unity_job(
             {"name": "MKL_NUM_THREADS", "value": "2"},
         ]
         if is_staging:
-            env_vars = [{"name": "STAGING", "value": "true"}] + env_vars
+            env_vars = [
+                {"name": "STAGING", "value": "true"},
+                {
+                    "name": "UNIFY_BASE_URL",
+                    "value": "https://service.a.run.app/v0"
+                }
+            ] + env_vars
 
         # Define the job manifest
         job_manifest = {
