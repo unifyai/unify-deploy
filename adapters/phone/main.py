@@ -131,6 +131,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
 
 def start_unity_job(
     api_key: str,
+    medium: str,
     assistant_id: str,
     user_id: str,
     user_name: str,
@@ -149,6 +150,7 @@ def start_unity_job(
 
     Args:
         api_key: The API key for the assistant.
+        medium: The type of medium.
         assistant_id: The ID of the assistant.
         user_id: The ID of the user.
         user_name: The name of the user.
@@ -189,6 +191,7 @@ def start_unity_job(
         headers=headers,
         data={
             "api_key": api_key,
+            "medium": medium,
             "assistant_id": assistant_id,
             "user_id": user_id,
             "user_name": user_name,
@@ -366,6 +369,7 @@ def twilio_call_webhook(request: Request):
     # start unity job
     start_unity_job(
         api_key,
+        "phone",
         assistant_id,
         user_id,
         user_name,

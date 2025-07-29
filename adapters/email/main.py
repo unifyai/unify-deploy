@@ -82,6 +82,7 @@ def process_notification(cloud_event):
         # start unity job
         start_unity_job(
             api_key,
+            "email",
             assistant_id,
             user_id,
             user_name,
