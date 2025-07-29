@@ -41,6 +41,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
 
     default_assistant_data = {
         "assistant_id": "default-assistant",
+        "user_id": "default-user",
         "tts_provider": "cartesia",
         "voice_id": None,
         "api_key": "",
@@ -50,6 +51,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_region": "United States",
         "assistant_about": "Default Assistant",
         "assistant_email": "unity.agent@unify.ai",
+        "user_email": "unity.agent@unify.ai",
         "user_number": "",
         "assistant_number": "",
         # "user_phone_number": "",
@@ -101,9 +103,9 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
 
     return {
         "assistant_id": assistants[0]["agent_id"],
+        "user_id": assistants[0]["user_id"],
         "api_key": assistants[0]["api_key"],
         "user_name": f"{assistants[0]['user_first_name']} {assistants[0]['user_last_name']}",
-        "user_email": assistants[0]["user_email"],
         "assistant_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
         "assistant_age": assistants[0]["age"],
         "assistant_region": assistants[0]["region"],
@@ -113,6 +115,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_email": assistants[0]["email"],
         "user_number": assistants[0]["user_phone"],
         "user_whatsapp_number": assistants[0]["user_whatsapp_number"],
+        "user_email": assistants[0]["user_email"],
         "tts_provider": assistants[0]["tts_provider"],
         "voice_id": assistants[0]["voice_id"],
     }
@@ -121,6 +124,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
 def start_unity_job(
     api_key: str,
     assistant_id: str,
+    user_id: str,
     user_name: str,
     assistant_name: str,
     assistant_age: str,
@@ -138,6 +142,7 @@ def start_unity_job(
     Args:
         api_key: The API key for the assistant.
         assistant_id: The ID of the assistant.
+        user_id: The ID of the user.
         user_name: The name of the user.
         assistant_name: The name of the assistant.
         assistant_age: The age of the assistant.
@@ -177,6 +182,7 @@ def start_unity_job(
         data={
             "api_key": api_key,
             "assistant_id": assistant_id,
+            "user_id": user_id,
             "user_name": user_name,
             "user_email": user_email,
             "assistant_name": assistant_name,
@@ -225,6 +231,7 @@ def twilio_whatsapp_webhook(request: Request):
     assistant_data = get_assistant(phone_number=to_number)
     api_key = assistant_data["api_key"]
     assistant_id = assistant_data["assistant_id"]
+    user_id = assistant_data["user_id"]
     user_name = assistant_data["user_name"]
     user_email = assistant_data["user_email"]
     assistant_name = assistant_data["assistant_name"]
@@ -248,6 +255,7 @@ def twilio_whatsapp_webhook(request: Request):
     start_unity_job(
         api_key,
         assistant_id,
+        user_id,
         user_name,
         assistant_name,
         assistant_age,

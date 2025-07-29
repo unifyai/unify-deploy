@@ -67,6 +67,7 @@ def process_notification(cloud_event):
         assistant_data = get_assistant(email_id=user_id)
         api_key = assistant_data["api_key"]
         assistant_id = assistant_data["assistant_id"]
+        user_id = assistant_data["user_id"]
         user_name = assistant_data["user_name"]
         user_email = assistant_data["user_email"]
         assistant_name = assistant_data["assistant_name"]
@@ -82,6 +83,7 @@ def process_notification(cloud_event):
         start_unity_job(
             api_key,
             assistant_id,
+            user_id,
             user_name,
             assistant_name,
             assistant_age,
