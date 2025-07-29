@@ -222,7 +222,9 @@ async def delete_kubernetes_job(
 @router.post("/job/start")
 async def start_job(
     api_key: str = Form(...),
+    medium: str = Form(...),
     assistant_id: str = Form(...),
+    user_id: str = Form(...),
     user_name: str = Form(...),
     user_email: str = Form(...),
     assistant_name: str = Form(...),
@@ -239,7 +241,9 @@ async def start_job(
 
     Args:
         api_key: API key for authentication (required)
+        medium: The type of medium (required)
         assistant_id: Unique assistant identifier (required)
+        user_id: Unique user identifier (required)
         user_name: User's name (required)
         user_email: User's email (required)
         assistant_name: Assistant's name (required)
@@ -270,7 +274,9 @@ async def start_job(
             "thread": "startup",
             "event": {
                 "api_key": api_key,
+                "medium": medium,
                 "assistant_id": assistant_id,
+                "user_id": user_id,
                 "user_name": user_name,
                 "user_email": user_email,
                 "assistant_name": assistant_name,
