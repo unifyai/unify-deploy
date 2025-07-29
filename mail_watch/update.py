@@ -5,7 +5,7 @@ watch_response = requests.post(
     f'{os.getenv("UNITY_COMMS_URL")}/email/watch',
     json={
         "primary_email": "unity.agent@unify.ai",
-    }
+    },
 )
 if watch_response.status_code >= 400:
     # update watch failed!
@@ -37,4 +37,3 @@ if watch_response.status_code >= 400:
 #         if watch_response.status_code >= 400:
 #             # update watch failed!
 #             raise Exception(f"Update mail watch failed: {email}")
-        

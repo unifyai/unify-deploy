@@ -13,6 +13,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import base64
 import unify
+
 load_dotenv()
 
 router = APIRouter()
@@ -23,15 +24,17 @@ client.set_system_message("You are a helpful assistant.")
 # with open(os.environ["GCP_SA_KEY"], "r") as f:
 creds_json = json.loads(os.environ["GCP_SA_KEY"])
 
+
 # Helpers
 def get_admin_service():
     creds = Credentials.from_service_account_info(
-        creds_json, 
-        scopes=["https://www.googleapis.com/auth/admin.directory.user"], 
-        subject="dan@unify.ai"
+        creds_json,
+        scopes=["https://www.googleapis.com/auth/admin.directory.user"],
+        subject="dan@unify.ai",
     )
     service = build("admin", "directory_v1", credentials=creds)
     return service
+
 
 def get_gmail_service(sender_email: str):
     # include send and readonly scopes for reading history and replying
@@ -41,11 +44,10 @@ def get_gmail_service(sender_email: str):
         "https://www.googleapis.com/auth/gmail.modify",
     ]
     creds = Credentials.from_service_account_info(
-        creds_json, 
-        scopes=scopes,
-        subject=sender_email
+        creds_json, scopes=scopes, subject=sender_email
     )
     return build("gmail", "v1", credentials=creds)
+
 
 # Endpoints - JSON format
 @router.post("/create", status_code=201)
@@ -55,11 +57,16 @@ async def create_email_user(request: Request):
     first_name = data.get("first_name")
     last_name = data.get("last_name")
     if not local or not first_name or not last_name:
-        raise HTTPException(status_code=400, detail="Missing required fields: local, first_name, last_name")
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: local, first_name, last_name",
+        )
     domain = "unify.ai"
     primary_email = f"{local}@{domain}"
     # generate secure password
-    password = ''.join(random.choice(string.ascii_letters + string.digits) for _ in range(32))
+    password = "".join(
+        random.choice(string.ascii_letters + string.digits) for _ in range(32)
+    )
     try:
         service = get_admin_service()
         user_body = {
@@ -79,6 +86,7 @@ async def create_email_user(request: Request):
         logging.error("Failed to create user: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.delete("/delete")
 async def delete_email_user(request: Request):
     data = await request.json()
@@ -93,6 +101,7 @@ async def delete_email_user(request: Request):
         logging.error("Failed to delete user: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/send")
 async def send_email(request: Request):
     data = await request.json()
@@ -103,7 +112,9 @@ async def send_email(request: Request):
     subject = data.get("subject", "")
     body = data.get("body")
     if not sender or not to or body is None:
-        raise HTTPException(status_code=400, detail="Missing required fields: 'from', 'to', 'body'")
+        raise HTTPException(
+            status_code=400, detail="Missing required fields: 'from', 'to', 'body'"
+        )
     msg = MIMEMultipart()
     msg["from"] = sender
     msg["to"] = to if isinstance(to, str) else ",".join(to)
@@ -117,6 +128,7 @@ async def send_email(request: Request):
     service = get_gmail_service(sender)
     sent = service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
     return {"success": True, "id": sent.get("id")}
+
 
 @router.post("/reply")
 async def reply_email(request: Request):
@@ -140,18 +152,20 @@ async def reply_email(request: Request):
         return {"success": False, "error": "No unread messages."}
     msg_id = msgs[-1]["id"]
     # get full message
-    orig = service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+    orig = (
+        service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+    )
     thread_id = orig.get("threadId")
     headers = orig.get("payload", {}).get("headers", [])
-    frm = next((h["value"] for h in headers if h.get("name")=="From"), None)
-    to = next((h["value"] for h in headers if h.get("name")=="To"), None)
-    subj = next((h["value"] for h in headers if h.get("name")=="Subject"), "")
+    frm = next((h["value"] for h in headers if h.get("name") == "From"), None)
+    to = next((h["value"] for h in headers if h.get("name") == "To"), None)
+    subj = next((h["value"] for h in headers if h.get("name") == "Subject"), "")
     # decode message body
     body = ""
     payload = orig.get("payload", {})
     if payload.get("parts"):
         for part in payload["parts"]:
-            if part.get("mimeType")=="text/plain":
+            if part.get("mimeType") == "text/plain":
                 data_b = part.get("body", {}).get("data", "")
                 if data_b:
                     body = base64.urlsafe_b64decode(data_b).decode()
@@ -163,7 +177,7 @@ async def reply_email(request: Request):
 
     # mark as read
     service.users().messages().modify(
-        userId="me", id=msg_id, body={"removeLabelIds":["UNREAD"]}
+        userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
     ).execute()
 
     # generate reply
@@ -205,17 +219,23 @@ async def reply_email(request: Request):
     mime["to"] = frm
     mime["from"] = email_address
     mime["subject"] = reply_subj
-    orig_msg_id = next((h["value"] for h in headers if h.get("name")=="Message-ID"), None)
+    orig_msg_id = next(
+        (h["value"] for h in headers if h.get("name") == "Message-ID"), None
+    )
     if orig_msg_id:
         mime["In-Reply-To"] = orig_msg_id
         mime["References"] = orig_msg_id
     reply_body = f"Automated reply:\n{response}"
     mime.attach(MIMEText(reply_body, "plain"))
     raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
-    sent = service.users().messages().send(
-        userId="me", body={"raw": raw, "threadId": thread_id}
-    ).execute()
+    sent = (
+        service.users()
+        .messages()
+        .send(userId="me", body={"raw": raw, "threadId": thread_id})
+        .execute()
+    )
     return {"success": True, "replyId": sent.get("id")}
+
 
 @router.post("/watch")
 async def watch_email(request: Request):
@@ -229,16 +249,16 @@ async def watch_email(request: Request):
         subject=user_email,
     )
     gmail_service = build("gmail", "v1", credentials=creds)
-    topic_name = (
-        "projects/gcp-project-runtime/topics/"
-        + data.get("topic_name", "email-notifications")
+    topic_name = "projects/gcp-project-runtime/topics/" + data.get(
+        "topic_name", "email-notifications"
     )
-    watch_request = {
-        "labelIds": ["INBOX"],
-        "topicName": topic_name
-    }
-    watch_resp = gmail_service.users().watch(
-        userId="me",
-        body=watch_request,
-    ).execute()
+    watch_request = {"labelIds": ["INBOX"], "topicName": topic_name}
+    watch_resp = (
+        gmail_service.users()
+        .watch(
+            userId="me",
+            body=watch_request,
+        )
+        .execute()
+    )
     return {"success": True, "historyId": watch_resp.get("historyId")}

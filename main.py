@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from communication.phone.views import (
     auth_router as phone_auth_router,
-    unauth_router as phone_unauth_router
+    unauth_router as phone_unauth_router,
 )
 from communication.whatsapp.views import router as whatsapp_router
 from communication.email.views import router as email_router
@@ -22,9 +22,11 @@ app.include_router(email_router, prefix="/email", dependencies=admin_auth)
 app.include_router(infra_router, prefix="/infra", dependencies=admin_auth)
 app.include_router(social_router, prefix="/social", dependencies=admin_auth)
 
+
 @app.get("/")
 async def read_root():
     return {"message": "success!"}
 
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host='0.0.0.0', port=8080, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)

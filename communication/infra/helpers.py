@@ -183,8 +183,8 @@ def create_unity_job(
                 {"name": "STAGING", "value": "true"},
                 {
                     "name": "UNIFY_BASE_URL",
-                    "value": "https://service.a.run.app/v0"
-                }
+                    "value": "https://service.a.run.app/v0",
+                },
             ] + env_vars
 
         # Define the job manifest
@@ -246,9 +246,7 @@ def create_unity_job(
 
         # Add TTL if specified
         if ttl_seconds_after_finished is not None:
-            job_manifest["spec"]["ttlSecondsAfterFinished"] = (
-                ttl_seconds_after_finished
-            )
+            job_manifest["spec"]["ttlSecondsAfterFinished"] = ttl_seconds_after_finished
 
         # Create the job
         try:

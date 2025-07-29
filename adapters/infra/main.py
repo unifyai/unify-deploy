@@ -16,14 +16,14 @@ COMMS_URL = (
 def create_idle_job(request):
     """Cloud Function that creates a new idle job."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.get( f"{COMMS_URL}/infra/image", headers=headers)
+    response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
     image = (
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
         + ("/unity:" if not STAGING else "/unity-staging:")
         + commit_hash
     )
-    response =requests.post(
+    response = requests.post(
         f"{COMMS_URL}/infra/job/create", data={"image": image}, headers=headers
     )
     return response.json()
@@ -42,11 +42,15 @@ def clean_idle_jobs(request):
 
     for job_name in job_names:
         # get logs
-        logs = requests.get(
-            f"{COMMS_URL}/infra/job/logs",
-            params={"job_name": job_name},
-            headers=headers,
-        ).json().get("logs", [])
+        logs = (
+            requests.get(
+                f"{COMMS_URL}/infra/job/logs",
+                params={"job_name": job_name},
+                headers=headers,
+            )
+            .json()
+            .get("logs", [])
+        )
         print(f"Logs: {logs}")
 
         # check if job is idle

@@ -1,6 +1,7 @@
 from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 
+
 class FirstTask(BaseModel):
     """
     Details for the first task to be assigned.
@@ -26,6 +27,7 @@ class FirstTask(BaseModel):
         ...,
         description="Optional recurring schedule, as a list of days and times (['Monday:HH:MM:SS', 'Wednesday:HH:MM:SS'])",
     )
+
 
 class FirstTaskResponse(BaseModel):
     """
