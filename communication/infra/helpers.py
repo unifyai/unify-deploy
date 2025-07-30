@@ -149,7 +149,7 @@ def create_unity_job(
     namespace: str = "default",
     image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
     is_staging: bool = False,
-    ttl_seconds_after_finished: int = 86400,  # 24 hours default, set to None to disable
+    ttl_seconds_after_finished: int = None,
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
@@ -208,7 +208,6 @@ def create_unity_job(
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
                         "terminationGracePeriodSeconds": 30,  # Faster termination
-                        "activeDeadlineSeconds": 86400,  # 24 hours
                         "priorityClassName": "unity-critical",
                         "containers": [
                             {
