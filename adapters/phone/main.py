@@ -91,6 +91,8 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "user_number": "+15550100004",
             "assistant_number": "+15550100005",
             # "user_phone_number": "+15550100004",
+            "tts_provider": "elevenlabs",
+            "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
     if "+15550100007" in phone_number:
         return {**default_assistant_data, "assistant_id": "default-assistant-4"}
