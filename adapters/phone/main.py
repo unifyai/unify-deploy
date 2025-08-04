@@ -290,14 +290,14 @@ async def create_room_and_dispatch_agent(
 
 def create_conference_response(conference_name, with_status=False):
     resp_user = VoiceResponse()
-    dial_user = resp_user.dial()
+    dial_user = resp_user.dial(ring_tone="uk")
     if with_status:
         dial_user.conference(
             conference_name,
             startConferenceOnEnter=True,
             endConferenceOnExit=True,
             muted=False,
-            ring_tone="gb",
+            ring_tone="uk",
             record="record-from-start",
             recording_status_callback=f"{COMMS_URL}/phone/recording",
             recording_status_callback_event="completed",
@@ -310,7 +310,7 @@ def create_conference_response(conference_name, with_status=False):
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
-        ring_tone="gb",
+        ring_tone="uk",
         record="record-from-start",
         recording_status_callback=f"{COMMS_URL}/phone/recording",
         recording_status_callback_event="completed",
