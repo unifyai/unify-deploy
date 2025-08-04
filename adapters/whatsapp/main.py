@@ -83,6 +83,8 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "user_number": "+15550100004",
             "assistant_number": "+15550100005",
             # "user_phone_number": "+15550100004",
+            "tts_provider": "elevenlabs",
+            "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
     if "+15550100007" in phone_number:
         return {**default_assistant_data, "assistant_id": "default-assistant-4"}
@@ -136,6 +138,8 @@ def start_unity_job(
     assistant_email: str,
     user_phone_number: str,
     user_email: str,
+    voice_id: str,
+    tts_provider: str,
 ):
     """
     Start the service if it is not running.
@@ -155,6 +159,8 @@ def start_unity_job(
         assistant_email: The email of the assistant.
         user_phone_number: The phone number of the user.
         user_email: The email of the user.
+        voice_id: The voice id of the assistant.
+        tts_provider: The tts provider of the assistant.
     """
     # default option when api key isn't set
     if api_key == "":
@@ -196,6 +202,8 @@ def start_unity_job(
             "assistant_number": assistant_number,
             "assistant_email": assistant_email,
             "user_phone_number": user_phone_number,
+            "tts_provider": tts_provider,
+            "voice_id": voice_id,
         },
     )
     if response.status_code != 200:
@@ -245,6 +253,8 @@ def twilio_whatsapp_webhook(request: Request):
     assistant_number = assistant_data["assistant_number"]
     assistant_email = assistant_data["assistant_email"]
     # user_phone_number = assistant_data["user_phone_number"]
+    voice_id = assistant_data["voice_id"]
+    tts_provider = assistant_data["tts_provider"]
 
     # cold message is only for user to their own assistant
     if not assistant_id:
@@ -270,6 +280,8 @@ def twilio_whatsapp_webhook(request: Request):
         assistant_email,
         user_number,  # user_phone_number,
         user_email,
+        voice_id,
+        tts_provider,
     )
 
     # set up conference

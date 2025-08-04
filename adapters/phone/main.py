@@ -146,6 +146,8 @@ def start_unity_job(
     assistant_email: str,
     user_phone_number: str,
     user_email: str,
+    voice_id: str,
+    tts_provider: str,
 ):
     """
     Start the service if it is not running.
@@ -165,6 +167,8 @@ def start_unity_job(
         assistant_email: The email of the assistant.
         user_phone_number: The phone number of the user.
         user_email: The email of the user.
+        voice_id: The voice id of the assistant.
+        tts_provider: The tts provider of the assistant.
     """
     # default option when api key isn't set
     if api_key == "":
@@ -206,6 +210,8 @@ def start_unity_job(
             "assistant_number": assistant_number,
             "assistant_email": assistant_email,
             "user_phone_number": user_phone_number,
+            "tts_provider": tts_provider,
+            "voice_id": voice_id,
         },
     )
     if response.status_code != 200:
@@ -384,6 +390,8 @@ def twilio_call_webhook(request: Request):
         assistant_email,
         user_number,  # user_phone_number,
         user_email,
+        voice_id,
+        tts_provider,
     )
 
     # FIXED: Create conference name and sip uri with unique timestamp
@@ -407,8 +415,6 @@ def twilio_call_webhook(request: Request):
                 "sip_uri": sip_uri,
                 "livekit_room": room_name,  # Include LiveKit room name
                 "assistant_id": assistant_id,  # Include for agent dispatch
-                "tts_provider": tts_provider,
-                "voice_id": voice_id,  # Include for agent dispatch
                 "action": "start_worker",  # Signal that worker should start (agent already dispatched)
                 "timestamp": int(time.time() * 1000),  # For timing analysis
                 "call_metadata": {
@@ -512,6 +518,8 @@ def twilio_msg_webhook(request: Request):
     assistant_email = assistant_data["assistant_email"]
     # todo: fix name and change one to whatsapp_number
     user_phone_number = assistant_data["user_number"]
+    tts_provider = assistant_data["tts_provider"]
+    voice_id = assistant_data["voice_id"]
 
     # start unity job
     start_unity_job(
@@ -527,6 +535,8 @@ def twilio_msg_webhook(request: Request):
         assistant_email,
         user_phone_number,
         user_email,
+        voice_id,
+        tts_provider,
     )
 
     # set up conference
