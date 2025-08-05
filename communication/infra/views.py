@@ -235,6 +235,8 @@ async def start_job(
     assistant_number: str = Form(""),
     assistant_email: str = Form(""),
     user_phone_number: str = Form(""),
+    tts_provider: str = Form(""),
+    voice_id: str = Form(""),
 ):
     """
     Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
@@ -254,6 +256,8 @@ async def start_job(
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         assistant_email: Assistant's email (optional, defaults to empty string)
         user_phone_number: User's phone for calls (optional, defaults to user_number)
+        tts_provider: TTS provider (optional, defaults to empty string)
+        voice_id: Voice ID (optional, defaults to empty string)
     """
     try:
         # Get credentials from environment variable
@@ -289,6 +293,8 @@ async def start_job(
                 "user_phone_number": (
                     user_phone_number if user_phone_number else user_number
                 ),
+                "tts_provider": tts_provider,
+                "voice_id": voice_id,
             },
         }
 
