@@ -301,6 +301,22 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
     }
 
 
+def is_job_running(user_id: str, assistant_id: str):
+    response = requests.get(
+        f"{ORCHESTRA_URL}/logs",
+        params={
+            "project": "Debug",
+            "context": "startup_events",
+            "filter": f"user_id == '{user_id}' and assistant_id == '{assistant_id}' and running == 'true'",
+        },
+        headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
+    )
+    if response.status_code != 200:
+        return False
+    logs = response.json()["logs"]
+    return bool(logs)
+
+
 def start_unity_job(
     api_key: str,
     medium: str,

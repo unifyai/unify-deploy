@@ -9,6 +9,7 @@ import requests
 from .helpers import (
     get_assistant,
     get_thread_id,
+    is_job_running,
     publish_thread_id,
     start_unity_job,
     ORCHESTRA_URL,
@@ -69,7 +70,6 @@ def process_notification(cloud_event):
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
         user_name = assistant_data["user_name"]
-        user_email = assistant_data["user_email"]
         assistant_name = assistant_data["assistant_name"]
         assistant_age = assistant_data["assistant_age"]
         assistant_region = assistant_data["assistant_region"]
@@ -78,28 +78,30 @@ def process_notification(cloud_event):
         assistant_number = assistant_data["assistant_number"]
         assistant_email = assistant_data["assistant_email"]
         # user_phone_number = assistant_data["user_phone_number"]
+        user_email = assistant_data["user_email"]
         tts_provider = assistant_data["tts_provider"]
         voice_id = assistant_data["voice_id"]
 
-        # start unity job
-        start_unity_job(
-            api_key,
-            "email",
-            assistant_id,
-            user_id,
-            user_name,
-            assistant_name,
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_number,  # user_phone_number,
-            user_email,
-            tts_provider,
-            voice_id,
-        )
+        # start unity job if it is not running
+        if not is_job_running(user_id, assistant_id):
+            start_unity_job(
+                api_key,
+                "email",
+                assistant_id,
+                user_id,
+                user_name,
+                assistant_name,
+                assistant_age,
+                assistant_region,
+                assistant_about,
+                user_number,
+                assistant_number,
+                assistant_email,
+                user_number,  # user_phone_number,
+                user_email,
+                tts_provider,
+                voice_id,
+            )
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
