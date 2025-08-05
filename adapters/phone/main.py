@@ -146,8 +146,8 @@ def start_unity_job(
     assistant_email: str,
     user_phone_number: str,
     user_email: str,
-    voice_id: str,
     tts_provider: str,
+    voice_id: str,
 ):
     """
     Start the service if it is not running.
@@ -167,8 +167,8 @@ def start_unity_job(
         assistant_email: The email of the assistant.
         user_phone_number: The phone number of the user.
         user_email: The email of the user.
-        voice_id: The voice id of the assistant.
         tts_provider: The tts provider of the assistant.
+        voice_id: The voice id of the assistant.
     """
     # default option when api key isn't set
     if api_key == "":
@@ -392,8 +392,8 @@ def twilio_call_webhook(request: Request):
         assistant_email,
         user_number,  # user_phone_number,
         user_email,
-        voice_id,
         tts_provider,
+        voice_id,
     )
 
     # FIXED: Create conference name and sip uri with unique timestamp
@@ -537,8 +537,8 @@ def twilio_msg_webhook(request: Request):
         assistant_email,
         user_phone_number,
         user_email,
-        voice_id,
         tts_provider,
+        voice_id,
     )
 
     # set up conference

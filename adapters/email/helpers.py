@@ -316,8 +316,8 @@ def start_unity_job(
     assistant_email: str,
     user_phone_number: str,
     user_email: str,
-    voice_id: str,
     tts_provider: str,
+    voice_id: str,
 ):
     """
     Start the service if it is not running.
@@ -337,8 +337,8 @@ def start_unity_job(
         assistant_email: The email of the assistant.
         user_phone_number: The phone number of the user.
         user_email: The email of the user.
-        voice_id: The voice id of the assistant.
         tts_provider: The tts provider of the assistant.
+        voice_id: The voice id of the assistant.
     """
     # default option when api key isn't set
     if api_key == "":
