@@ -393,6 +393,8 @@ def twilio_call_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # start unity job if it is not running
+    running = is_job_running(user_id, assistant_id)
+    print(f"Job running: {running}")
     if not is_job_running(user_id, assistant_id):
         start_unity_job(
             api_key,
