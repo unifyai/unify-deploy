@@ -129,7 +129,11 @@ def is_job_running(user_id: str, assistant_id: str):
         params={
             "project": "Debug",
             "context": "startup_events",
-            "filter": f"user_id == '{user_id}' and assistant_id == '{assistant_id}' and running == 'true'",
+            "filter_expr": (
+                f"user_id == '{user_id}' and "
+                f"assistant_id == '{assistant_id}' and "
+                f"running == 'true'"
+            )
         },
         headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
     )
