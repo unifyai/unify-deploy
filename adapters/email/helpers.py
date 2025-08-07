@@ -406,22 +406,21 @@ def start_unity_job(
     )
     if response.status_code != 200:
         print(f"Failed to start job for assistant {assistant_id}")
+    else:
+        print(f"Job started for assistant {assistant_id}")
 
-    # create job asynchronously
-    async def create_job_async():
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{COMMS_URL}/infra/job/create",
-                    headers=headers,
-                    data={"image": image},
-                )
-                if response.status_code != 200:
-                    print(f"Failed to create job for assistant {assistant_id}")
-                else:
-                    print(f"Job creation initiated for assistant {assistant_id}")
-        except Exception as e:
-            print(f"Error creating job for assistant {assistant_id}: {e}")
+    # create job
+    def create_job():
+        response = requests.post(
+            f"{COMMS_URL}/infra/job/create",
+            headers=headers,
+            data={"image": image},
+        )
+        if response.status_code != 200:
+            print(f"Failed to create job for assistant {assistant_id}")
+            print(f"Error: {response.text}")
+        else:
+            print(f"Job creation initiated for assistant {assistant_id}")
 
     # Start job creation asynchronously without waiting
-    asyncio.run(create_job_async())
+    asyncio.run(asyncio.to_thread(create_job))
