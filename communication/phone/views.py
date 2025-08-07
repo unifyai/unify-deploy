@@ -280,6 +280,13 @@ async def create_room_and_dispatch_agent(
 
 
 # Endpoints - JSON format
+@auth_router.post("/dispatch-agent")
+async def dispatch_agent(request: Request):
+    data = await request.json()
+    agent_name = data.get("agent_name")
+    await create_room_and_dispatch_agent(agent_name, agent_name)
+
+
 @auth_router.post("/send-call")
 async def send_call(request: Request):
     data = await request.json()
