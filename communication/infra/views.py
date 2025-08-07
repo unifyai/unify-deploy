@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Form, HTTPException
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
@@ -323,12 +323,13 @@ async def start_job(
 
 # list kubernetes jobs
 @router.get("/jobs")
-async def list_kubernetes_jobs(namespace: str = "default"):
+async def list_kubernetes_jobs(namespace: str = "default", hours: int = 2):
     """
     List all Unity Kubernetes jobs in the namespace.
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to "default")
+        hours: Number of hours to filter jobs (optional, defaults to 2)
     """
     try:
         # Initialize Kubernetes client
@@ -342,9 +343,16 @@ async def list_kubernetes_jobs(namespace: str = "default"):
         jobs = batch_api.list_namespaced_job(
             namespace=namespace, label_selector="app=unity"
         )
+        job_items = list(filter(lambda job: (
+            datetime.now() - datetime.strptime(
+                job.metadata.name.replace("unity-", "").replace("-staging", ""),
+                "%Y-%m-%d-%H-%M-%S",
+            )
+        ) < timedelta(hours=hours), jobs.items))
+        print(f"Job items: {job_items}")
 
         job_list = []
-        for job in jobs.items:
+        for job in job_items:
             assistant_id = job.metadata.labels.get("assistant-id", "unknown")
             status = "Unknown"
 
