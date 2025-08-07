@@ -237,6 +237,8 @@ def start_unity_job(
     )
     if response.status_code != 200:
         print(f"Failed to start job for assistant {assistant_id}")
+    else:
+        print(f"Job started for assistant {assistant_id}")
 
     # create job
     def create_job():
