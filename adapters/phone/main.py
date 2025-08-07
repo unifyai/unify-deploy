@@ -15,6 +15,7 @@ from twilio.twiml.voice_response import VoiceResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from livekit import api
 import time
+import traceback
 
 
 STAGING = os.getenv("STAGING")
@@ -252,6 +253,7 @@ def start_unity_job(
                     print(f"Job creation initiated for assistant {assistant_id}")
         except Exception as e:
             print(f"Error creating job for assistant {assistant_id}: {e}")
+            traceback.print_exc()
 
     # Start job creation asynchronously without waiting
     asyncio.run(create_job_async())
