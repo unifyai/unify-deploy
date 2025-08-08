@@ -114,19 +114,19 @@ def process_notification(cloud_event):
         gmail_creds = Credentials.from_service_account_info(
             creds_json,
             scopes=scopes,
-            subject=user_id,
+            subject=email_id,
         )
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # Process the history and thread
-        thread_id, last_message = get_thread_id(user_id, history_id, gmail_service)
+        thread_id, last_message = get_thread_id(email_id, history_id, gmail_service)
 
         if thread_id:
-            print(f"Successfully processed conversation for user {user_id}")
+            print(f"Successfully processed conversation for user {email_id}")
             publish_thread_id(assistant_id, thread_id, user_id, last_message)
             return "OK"
         else:
-            print(f"No new conversations found for user {user_id}")
+            print(f"No new conversations found for user {email_id}")
             return "No new conversations"
 
     except Exception as e:
