@@ -166,6 +166,8 @@ def get_thread_id(user_id, history_id, gmail_service):
             # Return the conversation (or process it further as needed)
             return thread_id, last_message
 
+        return None, None
+
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
         return None, None
