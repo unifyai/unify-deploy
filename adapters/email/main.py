@@ -62,11 +62,11 @@ def process_notification(cloud_event):
         print(f"Received notification: {envelope}")
 
         # Extract Gmail notification details
-        user_id = envelope["emailAddress"]
+        email_id = envelope["emailAddress"]
         history_id = envelope["historyId"]
 
         # get assistant id from email id
-        assistant_data = get_assistant(email_id=user_id)
+        assistant_data = get_assistant(email_id=email_id)
         api_key = assistant_data["api_key"]
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]

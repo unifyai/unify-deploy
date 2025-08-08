@@ -216,6 +216,8 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         params["email"] = email_id
     if phone_number:
         params["phone"] = phone_number
+    email_check = email_id or ""
+    phone_check = phone_number or ""
 
     default_assistant_data = {
         "assistant_id": "default-assistant",
@@ -234,9 +236,9 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "assistant_number": "",
         # "user_phone_number": "",
     }
-    if "+15550100002" in phone_number:
+    if "+15550100002" in phone_check:
         return default_assistant_data
-    if "+15550100001" in phone_number or "julia@unify.ai" in email_id:
+    if "+15550100001" in phone_check or "julia@unify.ai" in email_check:
         return {
             **default_assistant_data,
             "api_key": "",
@@ -252,7 +254,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "tts_provider": "cartesia",
             "voice_id": None,
         }
-    if "+15550100005" in phone_number:
+    if "+15550100005" in phone_check or "user@example.com" in email_check:
         return {
             **default_assistant_data,
             "api_key": "",
@@ -264,9 +266,9 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "tts_provider": "elevenlabs",
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
-    if "+15550100007" in phone_number:
+    if "+15550100007" in phone_check:
         return {**default_assistant_data, "assistant_id": "default-assistant-4"}
-    if "+15550100008" in phone_number:
+    if "+15550100008" in phone_check:
         return {**default_assistant_data, "assistant_id": "default-assistant-5"}
 
     response = requests.get(
