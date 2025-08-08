@@ -123,7 +123,7 @@ def get_thread_id(user_id, history_id, gmail_service):
 
         if not histories or "history" not in histories or not histories["history"]:
             print(f"No history found for user {user_id} with history id {history_id}")
-            return None
+            return None, None
 
         # Process each history entry
         print(f"History: {histories}")
@@ -168,7 +168,7 @@ def get_thread_id(user_id, history_id, gmail_service):
 
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
-        return None
+        return None, None
 
 
 def publish_thread_id(assistant_id, thread_id, user_id, last_message):
@@ -254,14 +254,20 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "tts_provider": "cartesia",
             "voice_id": None,
         }
-    if "+15550100005" in phone_check or "user@example.com" in email_check:
+    if "+15550100005" in phone_check or "default-assistant-3@unify.ai" in email_check:
         return {
             **default_assistant_data,
             "api_key": "",
             "assistant_id": "default-assistant-3",
             "user_name": "Ved",
             "user_number": "+15550100004",
+            "user_email": "user@example.com",
+            "assistant_name": "Liz",
+            "assistant_age": "25",
+            "assistant_region": "United States",
+            "assistant_about": "Default Assistant",
             "assistant_number": "+15550100005",
+            "assistant_email": "default-assistant-3@unify.ai",
             # "user_phone_number": "+15550100004",
             "tts_provider": "elevenlabs",
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
