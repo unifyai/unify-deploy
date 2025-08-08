@@ -1,5 +1,6 @@
 import json
 import base64
+import traceback
 import functions_framework
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
@@ -130,5 +131,6 @@ def process_notification(cloud_event):
 
     except Exception as e:
         error_message = f"Error processing notification: {str(e)}"
+        traceback.print_exc()
         print(error_message)
         return error_message, 500
