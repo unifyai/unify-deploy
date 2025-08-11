@@ -7,19 +7,14 @@ from fastapi import APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 import httpx
 from google.oauth2.service_account import Credentials
-from google.auth import default
 from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import base64
-import unify
 
 load_dotenv()
 
 router = APIRouter()
-client = unify.Unify(traced=True)
-client.set_endpoint("o4-mini@openai")
-client.set_system_message("You are a helpful assistant.")
 
 # with open(os.environ["GCP_SA_KEY"], "r") as f:
 creds_json = json.loads(os.environ["GCP_SA_KEY"])
@@ -128,113 +123,6 @@ async def send_email(request: Request):
     service = get_gmail_service(sender)
     sent = service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
     return {"success": True, "id": sent.get("id")}
-
-
-@router.post("/reply")
-async def reply_email(request: Request):
-    envelope = await request.json()
-    pub_message = envelope.get("message")
-    if not pub_message or "data" not in pub_message:
-        raise HTTPException(status_code=400, detail="Invalid Pub/Sub message")
-    data_str = base64.urlsafe_b64decode(pub_message["data"]).decode()
-    push_data = json.loads(data_str)
-    email_address = push_data.get("emailAddress")
-    if not email_address:
-        raise HTTPException(status_code=400, detail="Missing emailAddress")
-    service = get_gmail_service(email_address)
-
-    # search for unread messages newer than 1 day
-    query = "is:unread newer_than:1d"
-    res = service.users().messages().list(userId="me", q=query).execute()
-    msgs = res.get("messages", [])
-    logging.warning(f"Full response obtained: {len(msgs)}")
-    if not msgs:
-        return {"success": False, "error": "No unread messages."}
-    msg_id = msgs[-1]["id"]
-    # get full message
-    orig = (
-        service.users().messages().get(userId="me", id=msg_id, format="full").execute()
-    )
-    thread_id = orig.get("threadId")
-    headers = orig.get("payload", {}).get("headers", [])
-    frm = next((h["value"] for h in headers if h.get("name") == "From"), None)
-    to = next((h["value"] for h in headers if h.get("name") == "To"), None)
-    subj = next((h["value"] for h in headers if h.get("name") == "Subject"), "")
-    # decode message body
-    body = ""
-    payload = orig.get("payload", {})
-    if payload.get("parts"):
-        for part in payload["parts"]:
-            if part.get("mimeType") == "text/plain":
-                data_b = part.get("body", {}).get("data", "")
-                if data_b:
-                    body = base64.urlsafe_b64decode(data_b).decode()
-                    break
-    else:
-        data_b = payload.get("body", {}).get("data", "")
-        if data_b:
-            body = base64.urlsafe_b64decode(data_b).decode()
-
-    # mark as read
-    service.users().messages().modify(
-        userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
-    ).execute()
-
-    # generate reply
-    messages = [
-        {"role": "user", "content": body},
-    ]
-    # messages = {
-    #         "latest_message": messages[-1],
-    #         "message_history": messages[:-1],
-    #     }
-    # resp = FirstTaskResponse.model_validate_json(resp)
-    # if not resp.task_was_requested:
-    # generate as usual
-    #         return
-    #     first_task = resp.first_task
-    #     self._task_log = unify.log(
-    #         context="Tasks",
-    #         session_id=SESSION_ID,
-    #         title=first_task.title,
-    #         description=first_task.description,
-    #         status="in progress",
-    #         start_at=first_task.start_at,
-    #         recurring=first_task.recurring,
-    #         new=True,
-    #     )
-    #     if first_task.should_create:
-    #         self._text_task_q.put(
-    #             (self._task_log.to_json(), first_task.description),
-    #         )
-
-    # Call Unify ChatCompletion
-    response = client.generate(
-        messages=messages,
-    )
-
-    # build threaded reply
-    reply_subj = subj if subj.lower().startswith("re:") else f"Re: {subj}"
-    mime = MIMEMultipart()
-    mime["to"] = frm
-    mime["from"] = email_address
-    mime["subject"] = reply_subj
-    orig_msg_id = next(
-        (h["value"] for h in headers if h.get("name") == "Message-ID"), None
-    )
-    if orig_msg_id:
-        mime["In-Reply-To"] = orig_msg_id
-        mime["References"] = orig_msg_id
-    reply_body = f"Automated reply:\n{response}"
-    mime.attach(MIMEText(reply_body, "plain"))
-    raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
-    sent = (
-        service.users()
-        .messages()
-        .send(userId="me", body={"raw": raw, "threadId": thread_id})
-        .execute()
-    )
-    return {"success": True, "replyId": sent.get("id")}
 
 
 @router.post("/watch")
