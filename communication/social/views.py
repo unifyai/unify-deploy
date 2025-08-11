@@ -2,11 +2,10 @@ import os
 import random
 import string
 from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from communication.helpers import get_twilio_client
 from dotenv import load_dotenv
-from communication.phone.views import get_twilio_client
 
 load_dotenv()
 

@@ -10,6 +10,7 @@ from .helpers import (
     delete_job,
     get_job_logs,
 )
+from communication.helpers import STAGING
 
 router = APIRouter()
 
@@ -17,7 +18,6 @@ router = APIRouter()
 PROJECT_ID = "gcp-project-runtime"
 # Default region for Cloud Run jobs
 DEFAULT_REGION = "us-central1"
-STAGING = os.getenv("STAGING")
 
 
 # create pubsub topic
