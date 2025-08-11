@@ -1,18 +1,18 @@
-import os
 import json
-import time
 import base64
-import requests
 import traceback
+import time
 import functions_framework
+import os
+import requests
 from datetime import datetime, timedelta
+from flask import Request, Response
 
 from google.cloud import pubsub_v1
-from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-
+from google.oauth2.service_account import Credentials
 from twilio.twiml.messaging_response import MessagingResponse
-from flask import Request, Response
+
 from .helpers import (
     get_assistant,
     is_job_running,
