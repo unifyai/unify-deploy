@@ -10,7 +10,7 @@ steps:
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
-          --source="adapters/whatsapp" \
+          --source="adapters" \
           --entry-point=twilio_whatsapp_webhook \
           --trigger-http \
           --allow-unauthenticated \
@@ -33,7 +33,7 @@ steps:
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
-          --source="adapters/phone" \
+          --source="adapters" \
           --entry-point=twilio_msg_webhook \
           --trigger-http \
           --allow-unauthenticated \
@@ -56,7 +56,7 @@ steps:
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
-          --source="adapters/phone" \
+          --source="adapters" \
           --entry-point=twilio_call_webhook \
           --trigger-http \
           --allow-unauthenticated \
@@ -79,7 +79,7 @@ steps:
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
-          --source="adapters/email" \
+          --source="adapters" \
           --entry-point=process_notification \
           --trigger-topic=email-notifications \
           --allow-unauthenticated \
@@ -102,7 +102,7 @@ steps:
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
-          --source="adapters/email" \
+          --source="adapters" \
           --entry-point=renew_watch \
           --trigger-http \
           --allow-unauthenticated \
@@ -145,7 +145,7 @@ steps:
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
-          --source="adapters/infra" \
+          --source="adapters" \
           --entry-point=create_idle_job \
           --trigger-http \
           --allow-unauthenticated \
@@ -188,7 +188,7 @@ steps:
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
-          --source="adapters/infra" \
+          --source="adapters" \
           --entry-point=clean_idle_jobs \
           --trigger-http \
           --allow-unauthenticated \

@@ -1,22 +1,14 @@
-# ---------------------------------------------------------------------------
-# Cloud Function entry point
-# ---------------------------------------------------------------------------
-
-import asyncio
-import json
-from flask import Request, Response
-import functions_framework
-from google.cloud import pubsub_v1
 import os
 import requests
+import asyncio
 import httpx
-from twilio.rest import Client as TwilioClient
+import json
+import base64
+import re
+from google.cloud import pubsub_v1
+from twilio.rest import TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
-from twilio.twiml.messaging_response import MessagingResponse
 from livekit import api
-import time
-import traceback
-
 
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
@@ -265,6 +257,7 @@ def start_unity_job(
     asyncio.run(asyncio.to_thread(create_job))
 
 
+# phone helpers
 def get_twilio_client():
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
@@ -376,194 +369,183 @@ def add_user_to_conference(
     return call.sid
 
 
-@functions_framework.http
-def twilio_call_webhook(request: Request):
-    print("🚀 Minimal change webhook started")
-    # get twilio number and caller number
-    to_number = request.form.get("To", "")
-    from_number = request.form.get("From", "")
-    twilio_number = to_number or ""
-    caller_number = from_number or ""
-    print(f"Received call from {caller_number} to {twilio_number}")
+# email helpers
+def _strip_quoted_text(text: str) -> str:
+    """Remove quoted text and signatures from email content."""
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(">"):
+            continue
+        if re.match(r"On .+wrote:", stripped) or stripped.startswith(
+            "-----Original Message-----"
+        ):
+            break
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
 
-    # get assistant id from email id
-    assistant_data = get_assistant(phone_number=to_number)
-    api_key = assistant_data["api_key"]
-    assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_name = assistant_data["assistant_name"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    # user_phone_number = assistant_data["user_phone_number"]
-    user_email = assistant_data["user_email"]
-    tts_provider = assistant_data["tts_provider"]
-    voice_id = assistant_data["voice_id"]
 
-    # start unity job if it is not running
-    running = is_job_running(user_id, assistant_id)
-    print(f"Job running: {running}")
-    if not is_job_running(user_id, assistant_id):
-        start_unity_job(
-            api_key,
-            "phone",
-            assistant_id,
-            user_id,
-            user_name,
-            assistant_name,
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_number,  # user_phone_number,
-            user_email,
-            tts_provider,
-            voice_id,
+def _header(headers, name: str) -> str:
+    """Extract a specific header from email headers."""
+    for h in headers:
+        if h["name"].lower() == name.lower():
+            return h["value"]
+    return ""
+
+
+def _payload_text(payload) -> str:
+    """Extract text content from email payload."""
+    mime_type = payload.get("mimeType", "")
+    if mime_type.startswith("text/") and payload.get("body", {}).get("data"):
+        data = payload["body"]["data"]
+        decoded = base64.urlsafe_b64decode(data.encode("utf-8"))
+        latest = _strip_quoted_text(decoded.decode("utf-8", errors="replace"))
+        return latest
+
+    for part in payload.get("parts", []):
+        txt = _payload_text(part)
+        if txt:
+            return txt
+    return ""
+
+
+def _gmail_thread_to_conversation(thread):
+    """Convert a Gmail thread to a structured conversation."""
+    convo = []
+    for msg in thread.get("messages", []):
+        payload = msg.get("payload", {})
+        headers = payload.get("headers", [])
+        convo.append(
+            {
+                "sender": _header(headers, "From"),
+                "to": (
+                    [_addr.strip() for _addr in _header(headers, "To").split(",")]
+                    if _header(headers, "To")
+                    else []
+                ),
+                "cc": (
+                    [_addr.strip() for _addr in _header(headers, "Cc").split(",")]
+                    if _header(headers, "Cc")
+                    else []
+                ),
+                "bcc": (
+                    [_addr.strip() for _addr in _header(headers, "Bcc").split(",")]
+                    if _header(headers, "Bcc")
+                    else []
+                ),
+                "subject": _header(headers, "Subject"),
+                "content": _payload_text(payload),
+            }
+        )
+    return convo
+
+
+def get_thread_id(user_id, history_id, gmail_service):
+    """Process Gmail history and thread to extract conversation data."""
+    try:
+        # Get history events for label changes
+        histories = (
+            gmail_service.users()
+            .history()
+            .list(
+                userId=user_id,
+                startHistoryId=history_id,
+                # historyTypes=["messageAdded", "labelAdded"],
+            )
+            .execute()
         )
 
-    # FIXED: Create conference name and sip uri with unique timestamp
-    conference_name = f"Unity_{twilio_number[1:]}"
-    room_name = f"unity_{twilio_number}"  # Consistent room per assistant
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
-    print(f"LiveKit room will be: {room_name}")
+        # Safeguard for thread replies
+        if not histories or "history" not in histories or not histories["history"]:
+            histories["history"] = [
+                (
+                    gmail_service.users()
+                    .messages()
+                    .list(
+                        userId=user_id,
+                        q="is:unread newer_than:1d",
+                    )
+                    .execute()
+                )
+            ]
 
-    # publish to pubsub - let the pubsub handler dispatch the agent when worker is ready
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing call to Pub/Sub at path: {topic_path}")
+        if not histories or "history" not in histories or not histories["history"]:
+            print(f"No history found for user {user_id} with history id {history_id}")
+            return None, None
+
+        # Process each history entry
+        print(f"History: {histories}")
+        for history in histories["history"]:
+            messages = history.get("messages", [])
+            if len(messages) == 0:
+                continue
+
+            # Get the message details
+            msg_id = messages[-1]["id"]
+            message = (
+                gmail_service.users()
+                .messages()
+                .get(userId=user_id, id=msg_id)
+                .execute()
+            )
+
+            labels = message.get("labelIds", [])
+            if labels and "UNREAD" not in labels:
+                print(f"Message {msg_id} is read, skipping")
+                continue
+
+            gmail_service.users().messages().modify(
+                userId=user_id, id=msg_id, body={"removeLabelIds": ["UNREAD"]}
+            ).execute()
+
+            # Get the thread for this message
+            thread_id = message["threadId"]
+            thread = (
+                gmail_service.users()
+                .threads()
+                .get(userId=user_id, id=thread_id, format="full")
+                .execute()
+            )
+
+            # Convert to conversation format
+            conversation = _gmail_thread_to_conversation(thread)
+            last_message = conversation[-1]
+
+            # Return the conversation (or process it further as needed)
+            return thread_id, last_message
+
+        return None, None
+
+    except Exception as e:
+        print(f"Error processing history for user {user_id}: {str(e)}")
+        return None, None
+
+
+def publish_thread_id(assistant_id, thread_id, user_id, last_message):
+    """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
-        pubsub_message = {
-            "thread": "call",
+        publisher = pubsub_v1.PublisherClient()
+        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), topic_name)
+
+        message_dict = {
+            "thread": "email",
             "event": {
-                "conference_name": conference_name,
-                "caller_number": caller_number,
-                "sip_uri": sip_uri,
-                "livekit_room": room_name,  # Include LiveKit room name
-                "assistant_id": assistant_id,  # Include for agent dispatch
-                "action": "start_worker",  # Signal that worker should start (agent already dispatched)
-                "timestamp": int(time.time() * 1000),  # For timing analysis
-                "call_metadata": {
-                    "twilio_number": twilio_number,
-                    "call_type": "inbound",
-                    "room_created": True,  # Confirms room was created
-                    "bridge_established": True,  # Confirms SIP bridge is ready
-                },
+                "thread_id": thread_id,
+                "from": last_message["sender"],
+                "to": last_message["to"],
+                "cc": last_message["cc"],
+                "bcc": last_message["bcc"],
+                "subject": last_message["subject"],
+                "body": last_message["content"],
             },
         }
-        pubsub_client.publish(
-            topic_path,
-            json.dumps(pubsub_message).encode("utf-8"),
-        )
-        print("Call published to Pub/Sub successfully")
+        data = json.dumps(message_dict).encode("utf-8")
+
+        # Publish asynchronously
+        future = publisher.publish(topic_path, data=data)
+        future.result()  # Wait for publish to complete
+        print(f"Published thread_id {thread_id} for user {user_id} to {topic_path}")
     except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
-
-    # UNCHANGED: Keep the original conference setup (this works)
-    try:
-        resp_user = create_conference_response(conference_name)
-        print(f"Conference response: {resp_user.to_xml()}")
-        if resp_user:
-            print("Conference response created successfully")
-        else:
-            print("Error: Failed to create conference response")
-            return Response(response="Error creating conference", status=500)
-
-        call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
-        if call_sid:
-            print(f"User added to conference successfully. Call SID: {call_sid}")
-        else:
-            print("Error: Failed to add user to conference")
-            return Response(response="Error adding user to conference", status=500)
-
-        print("Conference setup completed")
-    except Exception as e:
-        print(f"Error during conference setup: {str(e)}")
-        return Response(response="Error setting up conference", status=500)
-
-    print("Returning TwiML response")
-    return Response(response=str(resp_user), mimetype="text/xml")
-
-
-@functions_framework.http
-def twilio_msg_webhook(request: Request):
-    print("twilio_msg_webhook function started")
-    # get twilio number and caller number
-    to_number = request.form.get("To", "") or ""
-    from_number = request.form.get("From", "") or ""
-    body = request.form.get("Body", "") or ""
-    print(f"Received message from {from_number} to {to_number} with body: {body}")
-
-    # get assistant id from email id
-    assistant_data = get_assistant(phone_number=to_number)
-    api_key = assistant_data["api_key"]
-    assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_name = assistant_data["assistant_name"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    # user_phone_number = assistant_data["user_phone_number"]
-    user_email = assistant_data["user_email"]
-    tts_provider = assistant_data["tts_provider"]
-    voice_id = assistant_data["voice_id"]
-
-    # start unity job if it is not running
-    if not is_job_running(user_id, assistant_id):
-        start_unity_job(
-            api_key,
-            "msg",
-            assistant_id,
-            user_id,
-            user_name,
-            assistant_name,
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_number,  # user_phone_number,
-            user_email,
-            tts_provider,
-            voice_id,
-        )
-
-    # set up conference
-    resp_user = MessagingResponse()
-
-    # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing message to Pub/Sub at path: {topic_path}")
-    try:
-        pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "msg",
-                    "event": {
-                        "to_number": to_number,
-                        "from_number": from_number,
-                        "body": body,
-                    },
-                }
-            ).encode("utf-8"),
-        )
-        print("Message published to Pub/Sub successfully")
-    except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
-    print("Returning TwiML response")
-    return Response(response=str(resp_user), mimetype="text/xml")
+        print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
