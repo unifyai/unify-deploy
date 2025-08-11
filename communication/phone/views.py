@@ -1,12 +1,10 @@
 import os
-import unify
 import httpx
 import base64
 import json
 import time
 from fastapi import APIRouter, Form, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
-from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client as TwilioClient
 from livekit.api import (
     LiveKitAPI,
@@ -25,9 +23,6 @@ load_dotenv()
 
 auth_router = APIRouter()
 unauth_router = APIRouter()
-client = unify.Unify(traced=True)
-client.set_endpoint("o4-mini@openai")
-client.set_system_message("You are a helpful assistant.")
 
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
@@ -106,42 +101,6 @@ def add_user_to_conference(
 
 
 # Endpoints - Form format
-@auth_router.post("/call")
-async def receive_call(To: str = Form(...), From: str = Form(...)):
-    twilio_number = To or ""
-    caller_number = From or ""
-
-    conference_name = f"Unity_{twilio_number[1:]}"
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-
-    # Put inbound caller into conference
-    resp_user = create_conference_response(conference_name)
-    # Put user into conference
-    call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
-    return Response(content=str(resp_user), media_type="text/xml")
-
-
-@auth_router.post("/text")
-async def receive_text(Body: str = Form(...)):
-    # Extract message body
-    body = Body or ""
-    # Prepare chat messages
-    messages = [
-        {"role": "user", "content": body},
-    ]
-    # Call Unify ChatCompletion
-    response = client.generate(
-        messages=messages,
-    )
-    # Extract AI reply
-    reply_text = response
-    # Build TwiML messaging response
-    twiml_resp = MessagingResponse()
-    twiml_resp.message(reply_text)
-    # Return XML
-    return Response(content=str(twiml_resp), media_type="text/xml")
-
-
 @unauth_router.post("/recording")
 async def check_recording_status(request: Request):
     data = await request.form()
@@ -382,8 +341,8 @@ async def create_phone_number(request: Request):
     data = await request.json()
 
     # Extract customizable parameters from request
-    voice_url = data.get("voice_url", f"{os.getenv('UNITY_COMMS_URL')}/phone/call")
-    sms_url = data.get("sms_url", f"{os.getenv('UNITY_COMMS_URL')}/phone/text")
+    voice_url = data.get("voice_url", "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-call-webhook")
+    sms_url = data.get("sms_url", "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-msg-webhook")
     country = data.get("country", "US")
 
     # Additional args for country

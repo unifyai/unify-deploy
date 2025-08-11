@@ -1,18 +1,14 @@
 import os
 import json
-import unify
 import base64
 import httpx
-from fastapi import APIRouter, Form, Response, Request, HTTPException
+from fastapi import APIRouter, Form, Request, HTTPException
 from dotenv import load_dotenv
 from twilio.rest import Client as TwilioClient
 
 load_dotenv()
 
 router = APIRouter()
-client = unify.Unify(api_key=os.getenv("UNIFY_KEY"))
-client.set_endpoint("o4-mini@openai")
-client.set_system_message("You are a helpful assistant.")
 
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
@@ -32,38 +28,6 @@ def get_twilio_client():
 
 
 # Endpoints - Form format
-@router.post("/text")
-async def receive_text(
-    To: str = Form(...),
-    From: str = Form(...),
-    Body: str = Form(...),
-):
-    # Extract message body
-    twilio_number = To or ""
-    sender_number = From or ""
-    body = Body or ""
-
-    # Prepare chat messages
-    messages = [
-        {"role": "user", "content": body},
-    ]
-    # Call Unify ChatCompletion
-    response = client.generate(
-        messages=messages,
-    )
-
-    # Send message with Twilio client to ensure status monitoring
-    twilio_client = get_twilio_client()
-    twilio_client.messages.create(
-        to=sender_number,
-        from_=twilio_number,
-        body=response,
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/status",
-    )
-
-    return Response(status=200)
-
-
 @router.post("/status")
 async def check_whatsapp_status(
     MessageStatus: str = Form(...),
@@ -140,7 +104,7 @@ async def create_whatsapp_sender(request: Request):
         "webhook": {
             "callback_method": "POST",
             "callback_url": data.get(
-                "callback_url", f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/text"
+                "callback_url", "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-whatsapp-webhook"
             ),
         },
     }
