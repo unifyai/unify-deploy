@@ -290,9 +290,7 @@ async def start_job(
                 "user_number": user_number,
                 "assistant_number": assistant_number,
                 "assistant_email": assistant_email,
-                "user_whatsapp_number": (
-                    user_whatsapp_number if user_whatsapp_number else user_number
-                ),
+                "user_whatsapp_number": user_whatsapp_number,
                 "tts_provider": tts_provider,
                 "voice_id": voice_id,
             },
