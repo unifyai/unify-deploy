@@ -61,8 +61,8 @@ def twilio_call_webhook(request: Request):
 
     # check if contact is valid
     if not check_valid_contact(
-        email_id=assistant_email,
-        phone_number=assistant_number,
+        email_id="",
+        phone_number=caller_number,
         medium="phone",
         assistant_context=f"{assistant_first_name}{assistant_surname}",
         api_key=api_key,
@@ -196,8 +196,8 @@ def twilio_msg_webhook(request: Request):
 
     # check if contact is valid
     if not check_valid_contact(
-        email_id=assistant_email,
-        phone_number=assistant_number,
+        email_id="",
+        phone_number=from_number,
         medium="msg",
         assistant_context=f"{assistant_first_name}{assistant_surname}",
         api_key=api_key,
@@ -293,8 +293,8 @@ def twilio_whatsapp_webhook(request: Request):
 
     # check if contact is valid
     if not check_valid_contact(
-        email_id=assistant_email,
-        phone_number=assistant_number,
+        email_id="",
+        phone_number=from_number.replace("whatsapp:", ""),
         medium="whatsapp",
         assistant_context=f"{assistant_first_name}{assistant_surname}",
         api_key=api_key,
@@ -431,8 +431,8 @@ def process_notification(cloud_event):
 
         # check if contact is valid
         if not check_valid_contact(
-            email_id=assistant_email,
-            phone_number=assistant_number,
+            email_id=email_id,
+            phone_number="",
             medium="email",
             assistant_context=f"{assistant_first_name}{assistant_surname}",
             api_key=api_key,
