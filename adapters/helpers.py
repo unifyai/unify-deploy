@@ -210,6 +210,7 @@ def check_valid_contact(
     )
     if response.status_code != 200:
         print(f"Failed to get contacts for assistant {assistant_context}")
+        print(response.text)
         return False
     contacts = response.json()["logs"]
     print(f"Contacts: {contacts}")
