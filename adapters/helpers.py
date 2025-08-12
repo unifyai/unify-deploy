@@ -120,7 +120,8 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "user_id": assistants[0]["user_id"],
         "api_key": assistants[0]["api_key"],
         "user_name": f"{assistants[0]['user_first_name']} {assistants[0]['user_last_name']}",
-        "assistant_name": f"{assistants[0]['first_name']} {assistants[0]['surname']}",
+        "assistant_first_name": assistants[0]["first_name"],
+        "assistant_surname": assistants[0]["surname"],
         "assistant_age": assistants[0]["age"],
         "assistant_region": assistants[0]["region"],
         "assistant_about": assistants[0]["about"],
@@ -133,6 +134,94 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "tts_provider": assistants[0]["tts_provider"],
         "voice_id": assistants[0]["voice_id"],
     }
+
+
+def check_contact_details(
+    email_id: str = None,
+    phone_number: str = None,
+    medium: str = None,
+    user_number: str = None,
+    user_whatsapp_number: str = None,
+    user_email: str = None,
+) -> bool:
+    """
+    Check if the contact details are valid.
+
+    Args:
+        email_id: The email id of the contact.
+        phone_number: The phone number of the contact.
+        medium: The medium of the contact.
+        user_number: The phone number of the user.
+        user_whatsapp_number: The whatsapp number of the user.
+        user_email: The email of the user.
+    """
+    if medium == "email" and user_email == email_id:
+        return True
+    if medium == "phone" and user_number == phone_number:
+        return True
+    if medium == "whatsapp" and user_whatsapp_number == phone_number:
+        return True
+    return False
+
+
+def check_valid_contact(
+    email_id: str = None,
+    phone_number: str = None,
+    medium: str = None,
+    assistant_context: str = None,
+    api_key: str = None,
+    user_number: str = None,
+    user_whatsapp_number: str = None,
+    user_email: str = None,
+) -> bool:
+    """
+    Check if the contact is valid.
+
+    Args:
+        email_id: The email id of the contact.
+        phone_number: The phone number of the contact.
+        medium: The medium of the contact.
+        assistant_context: The context of the assistant.
+        api_key: The API key of the assistant.
+    """
+    # check for boss user
+    if check_contact_details(
+        email_id=email_id,
+        phone_number=phone_number,
+        medium=medium,
+        user_number=user_number,
+        user_whatsapp_number=user_whatsapp_number,
+        user_email=user_email,
+    ):
+        return True
+
+    # check for contact in assistant contacts
+    response = requests.get(
+        f"{ORCHESTRA_URL}/logs",
+        params={
+            "project": "Assistants",
+            "context": f"{assistant_context}/Contacts",
+        },
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    if response.status_code != 200:
+        return False
+    contacts = response.json()["logs"]
+    if len(contacts) == 0:
+        return False
+
+    # check all contacts
+    for contact in contacts:
+        if check_contact_details(
+            email_id=email_id,
+            phone_number=phone_number,
+            medium=medium,
+            user_number=contact["phone_number"],
+            user_whatsapp_number=contact["whatsapp_number"],
+            user_email=contact["email_address"],
+        ):
+            return True
+    return False
 
 
 def is_job_running(user_id: str, assistant_id: str):
@@ -168,7 +257,7 @@ def start_unity_job(
     user_number: str,
     assistant_number: str,
     assistant_email: str,
-    user_phone_number: str,
+    user_whatsapp_number: str,
     user_email: str,
     tts_provider: str,
     voice_id: str,
@@ -189,7 +278,7 @@ def start_unity_job(
         user_number: The phone number of the user.
         assistant_number: The phone number of the assistant.
         assistant_email: The email of the assistant.
-        user_phone_number: The phone number of the user.
+        user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
         tts_provider: The tts provider of the assistant.
         voice_id: The voice id of the assistant.
@@ -233,7 +322,7 @@ def start_unity_job(
             "user_number": user_number,
             "assistant_number": assistant_number,
             "assistant_email": assistant_email,
-            "user_phone_number": user_phone_number,
+            "user_whatsapp_number": user_whatsapp_number,
             "tts_provider": tts_provider,
             "voice_id": voice_id,
         },
