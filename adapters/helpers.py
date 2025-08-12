@@ -193,6 +193,10 @@ def check_valid_contact(
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
     ):
+        print(
+            f"Boss user found: {email_id}, {phone_number}, {medium}, "
+            f"{user_number}, {user_whatsapp_number}, {user_email}"
+        )
         return True
 
     # check for contact in assistant contacts
@@ -205,8 +209,10 @@ def check_valid_contact(
         headers={"Authorization": f"Bearer {api_key}"},
     )
     if response.status_code != 200:
+        print(f"Failed to get contacts for assistant {assistant_context}")
         return False
     contacts = response.json()["logs"]
+    print(f"Contacts: {contacts}")
     if len(contacts) == 0:
         return False
 
@@ -220,6 +226,7 @@ def check_valid_contact(
             user_whatsapp_number=contact["whatsapp_number"],
             user_email=contact["email_address"],
         ):
+            print(f"Contact found: {contact}")
             return True
     return False
 
