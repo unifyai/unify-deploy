@@ -48,7 +48,6 @@ def twilio_call_webhook(request: Request):
     user_name = assistant_data["user_name"]
     assistant_first_name = assistant_data["assistant_first_name"]
     assistant_surname = assistant_data["assistant_surname"]
-    assistant_name = f"{assistant_first_name} {assistant_surname}"
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
     assistant_about = assistant_data["assistant_about"]
@@ -88,7 +87,7 @@ def twilio_call_webhook(request: Request):
             assistant_id,
             user_id,
             user_name,
-            assistant_name,
+            f"{assistant_first_name} {assistant_surname}",
             assistant_age,
             assistant_region,
             assistant_about,
@@ -184,7 +183,6 @@ def twilio_msg_webhook(request: Request):
     user_name = assistant_data["user_name"]
     assistant_first_name = assistant_data["assistant_first_name"]
     assistant_surname = assistant_data["assistant_surname"]
-    assistant_name = f"{assistant_first_name} {assistant_surname}"
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
     assistant_about = assistant_data["assistant_about"]
@@ -222,7 +220,7 @@ def twilio_msg_webhook(request: Request):
             assistant_id,
             user_id,
             user_name,
-            assistant_name,
+            f"{assistant_first_name} {assistant_surname}",
             assistant_age,
             assistant_region,
             assistant_about,
@@ -282,7 +280,6 @@ def twilio_whatsapp_webhook(request: Request):
     user_name = assistant_data["user_name"]
     assistant_first_name = assistant_data["assistant_first_name"]
     assistant_surname = assistant_data["assistant_surname"]
-    assistant_name = f"{assistant_first_name} {assistant_surname}"
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
     assistant_about = assistant_data["assistant_about"]
@@ -320,7 +317,7 @@ def twilio_whatsapp_webhook(request: Request):
             assistant_id,
             user_id,
             user_name,
-            assistant_name,
+            f"{assistant_first_name} {assistant_surname}",
             assistant_age,
             assistant_region,
             assistant_about,
@@ -421,7 +418,6 @@ def process_notification(cloud_event):
         user_name = assistant_data["user_name"]
         assistant_first_name = assistant_data["assistant_first_name"]
         assistant_surname = assistant_data["assistant_surname"]
-        assistant_name = f"{assistant_first_name} {assistant_surname}"
         assistant_age = assistant_data["assistant_age"]
         assistant_region = assistant_data["assistant_region"]
         assistant_about = assistant_data["assistant_about"]
@@ -458,7 +454,7 @@ def process_notification(cloud_event):
                 assistant_id,
                 user_id,
                 user_name,
-                assistant_name,
+                f"{assistant_first_name} {assistant_surname}",
                 assistant_age,
                 assistant_region,
                 assistant_about,
