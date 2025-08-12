@@ -183,7 +183,14 @@ def check_valid_contact(
         medium: The medium of the contact.
         assistant_context: The context of the assistant.
         api_key: The API key of the assistant.
+        user_number: The phone number of the user.
+        user_whatsapp_number: The whatsapp number of the user.
+        user_email: The email of the user.
     """
+    print(
+        f"Checking valid contact: {email_id}, {phone_number}, "
+        f"{medium}, {user_number}, {user_whatsapp_number}, {user_email}"
+    )
     # check for boss user
     if check_contact_details(
         email_id=email_id,
