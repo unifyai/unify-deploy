@@ -230,9 +230,9 @@ def check_valid_contact(
             email_id=email_id,
             phone_number=phone_number,
             medium=medium,
-            user_number=contact["phone_number"],
-            user_whatsapp_number=contact["whatsapp_number"],
-            user_email=contact["email_address"],
+            user_number=contact["entries"]["phone_number"],
+            user_whatsapp_number=contact["entries"]["whatsapp_number"],
+            user_email=contact["entries"]["email_address"],
         ):
             print(f"Contact found: {contact}")
             return True
