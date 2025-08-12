@@ -60,7 +60,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
         "user_email": "unity.agent@unify.ai",
         "user_number": "",
         "assistant_number": "",
-        # "user_phone_number": "",
+        "user_whatsapp_number": "",
     }
     if "+15550100002" in phone_check:
         return default_assistant_data
@@ -76,7 +76,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "assistant_age": "25",
             "assistant_number": "+15550100001",
             "assistant_email": "unity.agent@unify.ai",
-            # "user_phone_number": "+15550100004",
+            "user_whatsapp_number": "+15550100004",
             "tts_provider": "cartesia",
             "voice_id": None,
         }
@@ -94,7 +94,7 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
             "assistant_about": "Default Assistant",
             "assistant_number": "+15550100005",
             "assistant_email": "default-assistant-3@unify.ai",
-            # "user_phone_number": "+15550100004",
+            "user_whatsapp_number": "+15550100004",
             "tts_provider": "elevenlabs",
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
