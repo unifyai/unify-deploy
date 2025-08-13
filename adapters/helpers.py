@@ -157,7 +157,7 @@ def check_contact_details(
     """
     if medium == "email" and user_email == email_id:
         return True
-    if medium == "phone" and user_number == phone_number:
+    if medium in ["msg", "phone"] and user_number == phone_number:
         return True
     if medium == "whatsapp" and user_whatsapp_number == phone_number:
         return True
