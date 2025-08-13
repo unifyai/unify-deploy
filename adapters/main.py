@@ -60,7 +60,7 @@ def twilio_call_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if not check_valid_contact(
+    if "default" not in assistant_id and not check_valid_contact(
         email_id="",
         phone_number=caller_number,
         medium="phone",
@@ -195,7 +195,7 @@ def twilio_msg_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if not check_valid_contact(
+    if "default" not in assistant_id and not check_valid_contact(
         email_id="",
         phone_number=from_number,
         medium="msg",
@@ -292,7 +292,7 @@ def twilio_whatsapp_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if not check_valid_contact(
+    if "default" not in assistant_id and not check_valid_contact(
         email_id="",
         phone_number=from_number.replace("whatsapp:", ""),
         medium="whatsapp",
@@ -430,7 +430,7 @@ def process_notification(cloud_event):
         voice_id = assistant_data["voice_id"]
 
         # check if contact is valid
-        if not check_valid_contact(
+        if "default" not in assistant_id and not check_valid_contact(
             email_id=email_id,
             phone_number="",
             medium="email",
