@@ -8,10 +8,25 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install gcloud CLI and GKE auth plugin
-RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list \
-    && curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - \
-    && apt-get update && apt-get install -y google-cloud-cli google-cloud-sdk-gke-gcloud-auth-plugin \
+# Install necessary tools for key management (curl, gnupg)
+# apt-get update and install should be in the same RUN command
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create the /etc/apt/keyrings directory if it doesn't exist
+RUN mkdir -m 0755 -p /etc/apt/keyrings
+
+# Download the Google Cloud GPG key, convert it, and store it
+RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /etc/apt/keyrings/cloud.google.gpg
+
+# Add the Google Cloud CLI distribution URI as a package source
+# Use the "signed-by" option to specify the GPG key file
+RUN echo "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | tee -a /etc/apt/sources.list.d/google-cloud-sdk.list > /dev/null
+
+# Update apt package index and install the gcloud CLI and GKE auth plugin
+RUN apt-get update && apt-get install -y google-cloud-cli google-cloud-sdk-gke-gcloud-auth-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 # Configure GKE auth plugin path
