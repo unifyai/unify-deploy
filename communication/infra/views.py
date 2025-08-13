@@ -234,7 +234,7 @@ async def start_job(
     user_number: str = Form(...),
     assistant_number: str = Form(""),
     assistant_email: str = Form(""),
-    user_phone_number: str = Form(""),
+    user_whatsapp_number: str = Form(""),
     tts_provider: str = Form(""),
     voice_id: str = Form(""),
 ):
@@ -255,7 +255,7 @@ async def start_job(
         user_number: User's phone number (required)
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         assistant_email: Assistant's email (optional, defaults to empty string)
-        user_phone_number: User's phone for calls (optional, defaults to user_number)
+        user_whatsapp_number: User's whatsapp number (optional, defaults to empty string)
         tts_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
     """
@@ -290,9 +290,7 @@ async def start_job(
                 "user_number": user_number,
                 "assistant_number": assistant_number,
                 "assistant_email": assistant_email,
-                "user_phone_number": (
-                    user_phone_number if user_phone_number else user_number
-                ),
+                "user_whatsapp_number": user_whatsapp_number,
                 "tts_provider": tts_provider,
                 "voice_id": voice_id,
             },

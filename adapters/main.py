@@ -12,8 +12,10 @@ from google.cloud import pubsub_v1
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 from twilio.twiml.messaging_response import MessagingResponse
+from twilio.twiml.voice_response import VoiceResponse
 
 from .helpers import (
+    check_valid_contact,
     get_assistant,
     is_job_running,
     start_unity_job,
@@ -44,17 +46,36 @@ def twilio_call_webhook(request: Request):
     assistant_id = assistant_data["assistant_id"]
     user_id = assistant_data["user_id"]
     user_name = assistant_data["user_name"]
-    assistant_name = assistant_data["assistant_name"]
+    assistant_first_name = assistant_data["assistant_first_name"]
+    assistant_surname = assistant_data["assistant_surname"]
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
     assistant_about = assistant_data["assistant_about"]
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
     assistant_email = assistant_data["assistant_email"]
-    # user_phone_number = assistant_data["user_phone_number"]
+    user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
     tts_provider = assistant_data["tts_provider"]
     voice_id = assistant_data["voice_id"]
+
+    # check if contact is valid
+    if not check_valid_contact(
+        email_id="",
+        phone_number=caller_number,
+        medium="phone",
+        assistant_context=f"{assistant_first_name}{assistant_surname}",
+        api_key=api_key,
+        user_number=user_number,
+        user_whatsapp_number=user_whatsapp_number,
+        user_email=user_email,
+    ):
+        resp_user = VoiceResponse()
+        resp_user.say(
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details."
+        )
+        return Response(response=str(resp_user), mimetype="text/xml")
 
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
@@ -66,14 +87,14 @@ def twilio_call_webhook(request: Request):
             assistant_id,
             user_id,
             user_name,
-            assistant_name,
+            f"{assistant_first_name} {assistant_surname}",
             assistant_age,
             assistant_region,
             assistant_about,
             user_number,
             assistant_number,
             assistant_email,
-            user_number,  # user_phone_number,
+            user_whatsapp_number,
             user_email,
             tts_provider,
             voice_id,
@@ -160,17 +181,36 @@ def twilio_msg_webhook(request: Request):
     assistant_id = assistant_data["assistant_id"]
     user_id = assistant_data["user_id"]
     user_name = assistant_data["user_name"]
-    assistant_name = assistant_data["assistant_name"]
+    assistant_first_name = assistant_data["assistant_first_name"]
+    assistant_surname = assistant_data["assistant_surname"]
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
     assistant_about = assistant_data["assistant_about"]
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
     assistant_email = assistant_data["assistant_email"]
-    # user_phone_number = assistant_data["user_phone_number"]
+    user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
     tts_provider = assistant_data["tts_provider"]
     voice_id = assistant_data["voice_id"]
+
+    # check if contact is valid
+    if not check_valid_contact(
+        email_id="",
+        phone_number=from_number,
+        medium="msg",
+        assistant_context=f"{assistant_first_name}{assistant_surname}",
+        api_key=api_key,
+        user_number=user_number,
+        user_whatsapp_number=user_whatsapp_number,
+        user_email=user_email,
+    ):
+        resp_user = MessagingResponse()
+        resp_user.message(
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details."
+        )
+        return Response(response=str(resp_user), mimetype="text/xml")
 
     # start unity job if it is not running
     if not is_job_running(user_id, assistant_id):
@@ -180,14 +220,14 @@ def twilio_msg_webhook(request: Request):
             assistant_id,
             user_id,
             user_name,
-            assistant_name,
+            f"{assistant_first_name} {assistant_surname}",
             assistant_age,
             assistant_region,
             assistant_about,
             user_number,
             assistant_number,
             assistant_email,
-            user_number,  # user_phone_number,
+            user_whatsapp_number,
             user_email,
             tts_provider,
             voice_id,
@@ -238,23 +278,34 @@ def twilio_whatsapp_webhook(request: Request):
     assistant_id = assistant_data["assistant_id"]
     user_id = assistant_data["user_id"]
     user_name = assistant_data["user_name"]
-    assistant_name = assistant_data["assistant_name"]
+    assistant_first_name = assistant_data["assistant_first_name"]
+    assistant_surname = assistant_data["assistant_surname"]
     assistant_age = assistant_data["assistant_age"]
     assistant_region = assistant_data["assistant_region"]
     assistant_about = assistant_data["assistant_about"]
     user_number = assistant_data["user_number"]
     assistant_number = assistant_data["assistant_number"]
     assistant_email = assistant_data["assistant_email"]
-    # user_phone_number = assistant_data["user_phone_number"]
+    user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
     tts_provider = assistant_data["tts_provider"]
     voice_id = assistant_data["voice_id"]
 
-    # cold message is only for user to their own assistant
-    if not assistant_id:
+    # check if contact is valid
+    if not check_valid_contact(
+        email_id="",
+        phone_number=from_number.replace("whatsapp:", ""),
+        medium="whatsapp",
+        assistant_context=f"{assistant_first_name}{assistant_surname}",
+        api_key=api_key,
+        user_number=user_number,
+        user_whatsapp_number=user_whatsapp_number,
+        user_email=user_email,
+    ):
         resp_user = MessagingResponse()
         resp_user.message(
-            "This number is no longer active. Please visit console.unify.ai to view your assistant details."
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details."
         )
         return Response(response=str(resp_user), mimetype="text/xml")
 
@@ -266,14 +317,14 @@ def twilio_whatsapp_webhook(request: Request):
             assistant_id,
             user_id,
             user_name,
-            assistant_name,
+            f"{assistant_first_name} {assistant_surname}",
             assistant_age,
             assistant_region,
             assistant_about,
             user_number,
             assistant_number,
             assistant_email,
-            user_number,  # user_phone_number,
+            user_whatsapp_number,
             user_email,
             tts_provider,
             voice_id,
@@ -365,17 +416,35 @@ def process_notification(cloud_event):
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
         user_name = assistant_data["user_name"]
-        assistant_name = assistant_data["assistant_name"]
+        assistant_first_name = assistant_data["assistant_first_name"]
+        assistant_surname = assistant_data["assistant_surname"]
         assistant_age = assistant_data["assistant_age"]
         assistant_region = assistant_data["assistant_region"]
         assistant_about = assistant_data["assistant_about"]
         user_number = assistant_data["user_number"]
         assistant_number = assistant_data["assistant_number"]
         assistant_email = assistant_data["assistant_email"]
-        # user_phone_number = assistant_data["user_phone_number"]
+        user_whatsapp_number = assistant_data["user_whatsapp_number"]
         user_email = assistant_data["user_email"]
         tts_provider = assistant_data["tts_provider"]
         voice_id = assistant_data["voice_id"]
+
+        # check if contact is valid
+        if not check_valid_contact(
+            email_id=email_id,
+            phone_number="",
+            medium="email",
+            assistant_context=f"{assistant_first_name}{assistant_surname}",
+            api_key=api_key,
+            user_number=user_number,
+            user_whatsapp_number=user_whatsapp_number,
+            user_email=user_email,
+        ):
+            error_message = (
+                "This email address is no longer active. Please visit "
+                "console.unify.ai to view your assistant details."
+            )
+            return error_message, 500
 
         # start unity job if it is not running
         if not is_job_running(user_id, assistant_id):
@@ -385,14 +454,14 @@ def process_notification(cloud_event):
                 assistant_id,
                 user_id,
                 user_name,
-                assistant_name,
+                f"{assistant_first_name} {assistant_surname}",
                 assistant_age,
                 assistant_region,
                 assistant_about,
                 user_number,
                 assistant_number,
                 assistant_email,
-                user_number,  # user_phone_number,
+                user_whatsapp_number,
                 user_email,
                 tts_provider,
                 voice_id,
