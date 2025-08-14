@@ -80,7 +80,7 @@ def twilio_call_webhook(request: Request):
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
     print(f"Job running: {running}")
-    if not is_job_running(user_id, assistant_id):
+    if not running:
         start_unity_job(
             api_key,
             "phone",
@@ -100,6 +100,7 @@ def twilio_call_webhook(request: Request):
             voice_id,
         )
 
+    # 1 second for all this
     # FIXED: Create conference name and sip uri with unique timestamp
     conference_name = f"Unity_{twilio_number[1:]}"
     room_name = f"unity_{twilio_number}"  # Consistent room per assistant
@@ -213,7 +214,9 @@ def twilio_msg_webhook(request: Request):
         return Response(response=str(resp_user), mimetype="text/xml")
 
     # start unity job if it is not running
-    if not is_job_running(user_id, assistant_id):
+    running = is_job_running(user_id, assistant_id)
+    print(f"Job running: {running}")
+    if not running:
         start_unity_job(
             api_key,
             "msg",
@@ -310,7 +313,9 @@ def twilio_whatsapp_webhook(request: Request):
         return Response(response=str(resp_user), mimetype="text/xml")
 
     # start unity job if it is not running
-    if not is_job_running(user_id, assistant_id):
+    running = is_job_running(user_id, assistant_id)
+    print(f"Job running: {running}")
+    if not running:
         start_unity_job(
             api_key,
             "whatsapp",
@@ -447,7 +452,9 @@ def process_notification(cloud_event):
             return error_message, 500
 
         # start unity job if it is not running
-        if not is_job_running(user_id, assistant_id):
+        running = is_job_running(user_id, assistant_id)
+        print(f"Job running: {running}")
+        if not running:
             start_unity_job(
                 api_key,
                 "email",

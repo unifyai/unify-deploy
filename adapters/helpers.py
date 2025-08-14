@@ -313,6 +313,7 @@ def start_unity_job(
         print(f"Failed to get commit hash for assistant {assistant_id}")
         return
     commit_hash = response.json()["commit_hash"]
+    print(f"Commit hash: {commit_hash}")
     image = (
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
         + ("/unity:" if not STAGING else "/unity-staging:")
