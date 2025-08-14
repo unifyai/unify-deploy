@@ -100,7 +100,6 @@ def twilio_call_webhook(request: Request):
             voice_id,
         )
 
-    # 1 second for all this
     # FIXED: Create conference name and sip uri with unique timestamp
     conference_name = f"Unity_{twilio_number[1:]}"
     room_name = f"unity_{twilio_number}"  # Consistent room per assistant
