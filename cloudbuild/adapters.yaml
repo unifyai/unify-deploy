@@ -80,7 +80,7 @@ steps:
           --region="us-central1" \
           --runtime=python311 \
           --source="adapters" \
-          --entry-point=process_notification \
+          --entry-point=email_notification_processor \
           --trigger-topic=email-notifications \
           --allow-unauthenticated \
           --set-env-vars=PROJECT_ID=$PROJECT_ID \
@@ -103,7 +103,7 @@ steps:
           --region="us-central1" \
           --runtime=python311 \
           --source="adapters" \
-          --entry-point=renew_watch \
+          --entry-point=email_watch_renewer \
           --trigger-http \
           --allow-unauthenticated \
           --timeout=300 \
