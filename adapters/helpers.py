@@ -4,6 +4,7 @@ import json
 import os
 import re
 import requests
+import threading
 
 from google.cloud import pubsub_v1
 
@@ -249,7 +250,7 @@ def is_job_running(user_id: str, assistant_id: str):
                 f"user_id == '{user_id}' and "
                 f"assistant_id == '{assistant_id}' and "
                 f"running == 'true'"
-            )
+            ),
         },
         headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
     )
@@ -303,24 +304,8 @@ def start_unity_job(
         print(f"No user name for assistant {assistant_id}")
         return
 
-    # get commit hash
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.get(
-        f"{COMMS_URL}/infra/image",
-        headers=headers,
-    )
-    if response.status_code != 200:
-        print(f"Failed to get commit hash for assistant {assistant_id}")
-        return
-    commit_hash = response.json()["commit_hash"]
-    print(f"Commit hash: {commit_hash}")
-    image = (
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if not STAGING else "/unity-staging:")
-        + commit_hash
-    )
-
     # start job
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.post(
         f"{COMMS_URL}/infra/job/start",
         headers=headers,
@@ -348,21 +333,56 @@ def start_unity_job(
     else:
         print(f"Job started for assistant {assistant_id}")
 
-    # create job
-    def create_job():
-        response = requests.post(
-            f"{COMMS_URL}/infra/job/create",
-            headers=headers,
-            data={"image": image},
-        )
-        if response.status_code != 200:
-            print(f"Failed to create job for assistant {assistant_id}")
-            print(f"Error: {response.text}")
-        else:
-            print(f"Job creation initiated for assistant {assistant_id}")
 
-    # Start job creation asynchronously without waiting
-    asyncio.run(asyncio.to_thread(create_job))
+def create_job_background(assistant_id: str):
+    """
+    Create job in background thread to avoid blocking the webhook.
+    Fetches image and creates job without waiting for completion.
+    """
+
+    def create_job():
+        try:
+            # Get commit hash and image
+            headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+            response = requests.get(
+                f"{COMMS_URL}/infra/image",
+                headers=headers,
+            )
+            if response.status_code != 200:
+                print(f"Failed to get commit hash for assistant {assistant_id}")
+                return
+            commit_hash = response.json()["commit_hash"]
+            image = (
+                "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
+                + ("/unity:" if not STAGING else "/unity-staging:")
+                + commit_hash
+            )
+
+            # Create the job with very short timeout (fire-and-forget)
+            job_response = requests.post(
+                f"{COMMS_URL}/infra/job/create",
+                headers=headers,
+                data={"image": image},
+                timeout=0.1,  # 100ms timeout - just send request, don't wait
+            )
+            if job_response.status_code != 200:
+                print(f"Failed to create job for assistant {assistant_id}")
+                print(f"Error: {job_response.text}")
+            else:
+                print(f"Job creation initiated for assistant {assistant_id}")
+
+        except requests.exceptions.Timeout:
+            # Expected - we don't want to wait for response
+            print(
+                f"Job creation request sent for assistant {assistant_id}"
+                " (fire-and-forget)"
+            )
+        except Exception as e:
+            print(f"Error creating job for assistant {assistant_id}: {e}")
+
+    # Run in background thread to avoid blocking
+    thread = threading.Thread(target=create_job, daemon=True)
+    thread.start()
 
 
 # phone helpers

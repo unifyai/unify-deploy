@@ -19,6 +19,7 @@ from .helpers import (
     get_assistant,
     is_job_running,
     start_unity_job,
+    create_job_background,
     create_conference_response,
     add_user_to_conference,
     get_thread_id,
@@ -99,6 +100,7 @@ def twilio_call_webhook(request: Request):
             tts_provider,
             voice_id,
         )
+        create_job_background(assistant_id)
 
     # FIXED: Create conference name and sip uri with unique timestamp
     conference_name = f"Unity_{twilio_number[1:]}"
@@ -234,6 +236,7 @@ def twilio_msg_webhook(request: Request):
             tts_provider,
             voice_id,
         )
+        create_job_background(assistant_id)
 
     # set up conference
     resp_user = MessagingResponse()
@@ -333,6 +336,7 @@ def twilio_whatsapp_webhook(request: Request):
             tts_provider,
             voice_id,
         )
+        create_job_background(assistant_id)
 
     # set up conference
     resp_user = MessagingResponse()
@@ -472,6 +476,7 @@ def process_notification(cloud_event):
                 tts_provider,
                 voice_id,
             )
+            create_job_background(assistant_id)
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
