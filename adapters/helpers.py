@@ -202,6 +202,9 @@ def check_valid_contact(
         },
         headers={"Authorization": f"Bearer {api_key}"},
     )
+    print("orchestra_url", ORCHESTRA_URL)
+    print("api_key", api_key)
+    print("context", f"{assistant_context}/Contacts")
     if response.status_code != 200:
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response.text)
