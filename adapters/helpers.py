@@ -239,7 +239,9 @@ def check_valid_contact(
         return None
 
     # check for boss user
-    boss_contact = [contact for contact in contacts if contact["entries"]["contact_id"] == 1]
+    boss_contact = [
+        contact for contact in contacts if contact["entries"]["contact_id"] == 1
+    ]
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
         user_number = boss_contact["entries"]["phone_number"]
