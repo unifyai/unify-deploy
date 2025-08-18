@@ -61,7 +61,7 @@ def twilio_call_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if "default" not in assistant_id and not check_valid_contact(
+    contact_id = check_valid_contact(
         email_id="",
         phone_number=caller_number,
         medium="phone",
@@ -70,7 +70,8 @@ def twilio_call_webhook(request: Request):
         user_number=user_number,
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
-    ):
+    )
+    if "default" not in assistant_id and contact_id == -1:
         resp_user = VoiceResponse()
         resp_user.say(
             "This number is no longer active. Please visit "
@@ -123,6 +124,7 @@ def twilio_call_webhook(request: Request):
                 "sip_uri": sip_uri,
                 "livekit_room": room_name,  # Include LiveKit room name
                 "assistant_id": assistant_id,  # Include for agent dispatch
+                "contact_id": contact_id,
                 "action": "start_worker",  # Signal that worker should start (agent already dispatched)
                 "timestamp": int(time.time() * 1000),  # For timing analysis
                 "call_metadata": {
@@ -197,7 +199,7 @@ def twilio_msg_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if "default" not in assistant_id and not check_valid_contact(
+    contact_id = check_valid_contact(
         email_id="",
         phone_number=from_number,
         medium="msg",
@@ -206,7 +208,8 @@ def twilio_msg_webhook(request: Request):
         user_number=user_number,
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
-    ):
+    )
+    if "default" not in assistant_id and contact_id == -1:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -253,6 +256,7 @@ def twilio_msg_webhook(request: Request):
                 {
                     "thread": "msg",
                     "event": {
+                        "contact_id": contact_id,
                         "to_number": to_number,
                         "from_number": from_number,
                         "body": body,
@@ -297,7 +301,7 @@ def twilio_whatsapp_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if "default" not in assistant_id and not check_valid_contact(
+    contact_id = check_valid_contact(
         email_id="",
         phone_number=from_number.replace("whatsapp:", ""),
         medium="whatsapp",
@@ -306,7 +310,8 @@ def twilio_whatsapp_webhook(request: Request):
         user_number=user_number,
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
-    ):
+    )
+    if "default" not in assistant_id and contact_id == -1:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -353,6 +358,7 @@ def twilio_whatsapp_webhook(request: Request):
                 {
                     "thread": "whatsapp",
                     "event": {
+                        "contact_id": contact_id,
                         "to_number": to_number,
                         "from_number": from_number,
                         "body": body,
@@ -438,7 +444,7 @@ def process_notification(cloud_event):
         voice_id = assistant_data["voice_id"]
 
         # check if contact is valid
-        if "default" not in assistant_id and not check_valid_contact(
+        contact_id = check_valid_contact(
             email_id=email_id,
             phone_number="",
             medium="email",
@@ -447,7 +453,8 @@ def process_notification(cloud_event):
             user_number=user_number,
             user_whatsapp_number=user_whatsapp_number,
             user_email=user_email,
-        ):
+        )
+        if "default" not in assistant_id and contact_id == -1:
             error_message = (
                 "This email address is no longer active. Please visit "
                 "console.unify.ai to view your assistant details."
@@ -497,7 +504,7 @@ def process_notification(cloud_event):
 
         if thread_id:
             print(f"Successfully processed conversation for user {email_id}")
-            publish_thread_id(assistant_id, thread_id, user_id, last_message)
+            publish_thread_id(assistant_id, thread_id, user_id, last_message, contact_id)
             return "OK"
         else:
             print(f"No new conversations found for user {email_id}")

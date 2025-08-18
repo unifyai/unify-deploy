@@ -205,7 +205,7 @@ def check_valid_contact(
             f"Boss user found: {email_id}, {phone_number}, {medium}, "
             f"{user_number}, {user_whatsapp_number}, {user_email}"
         )
-        return True
+        return 1
 
     # check for contact in assistant contacts
     response = requests.get(
@@ -219,11 +219,11 @@ def check_valid_contact(
     if response.status_code != 200:
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response.text)
-        return False
+        return -1
     contacts = response.json()["logs"]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
-        return False
+        return -1
 
     # check all contacts
     for contact in contacts:
@@ -236,8 +236,8 @@ def check_valid_contact(
             user_email=contact["entries"]["email_address"],
         ):
             print(f"Contact found: {contact}")
-            return True
-    return False
+            return contact["entries"]["contact_id"]
+    return -1
 
 
 def is_job_running(user_id: str, assistant_id: str):
@@ -650,7 +650,7 @@ def get_thread_id(user_id, history_id, gmail_service):
         return None, None
 
 
-def publish_thread_id(assistant_id, thread_id, user_id, last_message):
+def publish_thread_id(assistant_id, thread_id, user_id, last_message, contact_id):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
@@ -660,6 +660,7 @@ def publish_thread_id(assistant_id, thread_id, user_id, last_message):
         message_dict = {
             "thread": "email",
             "event": {
+                "contact_id": contact_id,
                 "thread_id": thread_id,
                 "from": last_message["sender"],
                 "to": last_message["to"],
