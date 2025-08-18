@@ -192,20 +192,6 @@ def check_valid_contact(
         f"Checking valid contact: {email_id}, {phone_number}, "
         f"{medium}, {user_number}, {user_whatsapp_number}, {user_email}"
     )
-    # check for boss user
-    if check_contact_details(
-        email_id=email_id,
-        phone_number=phone_number,
-        medium=medium,
-        user_number=user_number,
-        user_whatsapp_number=user_whatsapp_number,
-        user_email=user_email,
-    ):
-        print(
-            f"Boss user found: {email_id}, {phone_number}, {medium}, "
-            f"{user_number}, {user_whatsapp_number}, {user_email}"
-        )
-        return 1
 
     # check for contact in assistant contacts
     response = requests.get(
@@ -219,11 +205,32 @@ def check_valid_contact(
     if response.status_code != 200:
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response.text)
-        return -1
+        return None
     contacts = response.json()["logs"]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
-        return -1
+        return None
+
+    # check for boss user
+    boss_contact = [contact for contact in contacts if contact["entries"]["contact_id"] == 1]
+    if len(boss_contact) > 0:
+        boss_contact = boss_contact[0]
+        if check_contact_details(
+            email_id=email_id,
+            phone_number=phone_number,
+            medium=medium,
+            user_number=boss_contact["entries"]["phone_number"],
+            user_whatsapp_number=boss_contact["entries"]["whatsapp_number"],
+            user_email=boss_contact["entries"]["email_address"],
+        ):
+            print(
+                f"Boss user found: {email_id}, {phone_number}, {medium}, "
+                f"{user_number}, {user_whatsapp_number}, {user_email}"
+            )
+            return boss_contact["entries"]
+    else:
+        print("No boss user found")
+        return None
 
     # check all contacts
     for contact in contacts:
@@ -236,8 +243,8 @@ def check_valid_contact(
             user_email=contact["entries"]["email_address"],
         ):
             print(f"Contact found: {contact}")
-            return contact["entries"]["contact_id"]
-    return -1
+            return contact["entries"]
+    return None
 
 
 def is_job_running(user_id: str, assistant_id: str):
