@@ -205,7 +205,37 @@ def check_valid_contact(
     print("orchestra_url", ORCHESTRA_URL)
     print("api_key", api_key)
     print("context", f"{assistant_context}/Contacts")
+    context = f"{assistant_context}/Contacts"
     if response.status_code != 200:
+        # if the context isn't created yet (first time user)
+        if response.json()["detail"] == f"Context '{context}' not found":
+            # check for boss user
+            if check_contact_details(
+                email_id=email_id,
+                phone_number=phone_number,
+                medium=medium,
+                user_number=user_number,
+                user_whatsapp_number=user_whatsapp_number,
+                user_email=user_email,
+            ):
+                print(
+                    f"Boss user found: {email_id}, {phone_number}, {medium}, "
+                    f"{user_number}, {user_whatsapp_number}, {user_email}"
+                )
+                return {
+                    "contact_id": 1,
+                    "first_name": "",
+                    "surname": "",
+                    "email_adress": user_email,
+                    "phone_number": phone_number,
+                    "whatsapp_number": user_whatsapp_number,
+                    "bio": "",
+                    "rolling_summary": "",
+                    "respond_to": "",
+                    "response_policy": "",
+                }
+
+        # otherwise
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response.text)
         return None
@@ -218,13 +248,16 @@ def check_valid_contact(
     boss_contact = [contact for contact in contacts if contact["entries"]["contact_id"] == 1]
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
+        user_number = boss_contact["entries"]["phone_number"]
+        user_whatsapp_number = boss_contact["entries"]["whatsapp_number"]
+        user_email = boss_contact["entries"]["email_address"]
         if check_contact_details(
             email_id=email_id,
             phone_number=phone_number,
             medium=medium,
-            user_number=boss_contact["entries"]["phone_number"],
-            user_whatsapp_number=boss_contact["entries"]["whatsapp_number"],
-            user_email=boss_contact["entries"]["email_address"],
+            user_number=user_number,
+            user_whatsapp_number=user_whatsapp_number,
+            user_email=user_email,
         ):
             print(
                 f"Boss user found: {email_id}, {phone_number}, {medium}, "
