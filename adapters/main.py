@@ -504,7 +504,9 @@ def process_notification(cloud_event):
 
         if thread_id:
             print(f"Successfully processed conversation for user {email_id}")
-            publish_thread_id(assistant_id, thread_id, user_id, last_message, contact_id)
+            publish_thread_id(
+                assistant_id, thread_id, user_id, last_message, contact_id
+            )
             return "OK"
         else:
             print(f"No new conversations found for user {email_id}")
