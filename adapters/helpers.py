@@ -194,18 +194,12 @@ def check_valid_contact(
     )
 
     # check for contact in assistant contacts
+    context = f"{assistant_context}/Contacts"
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
-        params={
-            "project": "Assistants",
-            "context": f"{assistant_context}/Contacts",
-        },
+        params={"project": "Assistants", "context": context},
         headers={"Authorization": f"Bearer {api_key}"},
     )
-    print("orchestra_url", ORCHESTRA_URL)
-    print("api_key", api_key)
-    print("context", f"{assistant_context}/Contacts")
-    context = f"{assistant_context}/Contacts"
     if response.status_code != 200:
         # if the context isn't created yet (first time user)
         if response.json()["detail"] == f"Context '{context}' not found":
