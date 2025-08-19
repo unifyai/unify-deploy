@@ -568,7 +568,10 @@ def clean_idle_jobs(request):
         print(f"Logs: {logs}")
 
         # check if job is idle
-        if "ping received - keeping event manager alive" in logs:
+        if (
+            "ping received - keeping event manager alive" in logs
+            and "Graceful shutdown completed" not in logs
+        ):
             idle_jobs.append(job_name)
 
     new_idle_jobs = []
