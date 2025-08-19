@@ -546,6 +546,12 @@ def clean_idle_jobs(request):
     # get all jobs
     jobs = requests.get(f"{COMMS_URL}/infra/jobs", headers=headers).json()
     job_names = [job["job_name"] for job in jobs["jobs"]]
+    job_names = [
+        job_name
+        for job_name in job_names
+        if (STAGING and "staging" in job_name)
+        or (not STAGING and "staging" not in job_name)
+    ]
     print(f"Job names: {job_names}")
 
     for job_name in job_names:
