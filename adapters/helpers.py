@@ -386,6 +386,7 @@ def create_job_background(assistant_id: str):
             response = requests.get(
                 f"{COMMS_URL}/infra/image",
                 headers=headers,
+                timeout=30,  # Reasonable timeout for image fetch
             )
             if response.status_code != 200:
                 print(f"Failed to get commit hash for assistant {assistant_id}")
@@ -397,12 +398,12 @@ def create_job_background(assistant_id: str):
                 + commit_hash
             )
 
-            # Create the job with very short timeout (fire-and-forget)
+            # Create the job without blocking the main thread
             job_response = requests.post(
                 f"{COMMS_URL}/infra/job/create",
                 headers=headers,
                 data={"image": image},
-                timeout=0.1,  # 100ms timeout - just send request, don't wait
+                timeout=30
             )
             if job_response.status_code != 200:
                 print(f"Failed to create job for assistant {assistant_id}")
@@ -411,15 +412,11 @@ def create_job_background(assistant_id: str):
                 print(f"Job creation initiated for assistant {assistant_id}")
 
         except requests.exceptions.Timeout:
-            # Expected - we don't want to wait for response
-            print(
-                f"Job creation request sent for assistant {assistant_id}"
-                " (fire-and-forget)"
-            )
+            print(f"Timeout creating job for assistant {assistant_id}")
         except Exception as e:
             print(f"Error creating job for assistant {assistant_id}: {e}")
 
-    # Run in background thread to avoid blocking
+    # Run in background thread to avoid blocking the main webhook
     thread = threading.Thread(target=create_job, daemon=True)
     thread.start()
 
