@@ -1,10 +1,9 @@
-import asyncio
 import base64
 import json
 import os
 import re
 import requests
-import threading
+import concurrent.futures
 
 from google.cloud import pubsub_v1
 
@@ -373,13 +372,14 @@ def start_unity_job(
         print(f"Job started for assistant {assistant_id}")
 
 
-def create_job_background(assistant_id: str):
+def create_job(assistant_id: str):
     """
-    Create job in background thread to avoid blocking the webhook.
-    Fetches image and creates job without waiting for completion.
+    Create job in a non-blocking way that works for both Cloud Functions and long-running services.
+    Uses a thread pool executor to ensure HTTP requests complete before returning,
+    avoiding SSL errors while keeping the endpoint non-blocking.
     """
 
-    def create_job():
+    def _create_job():
         try:
             # Get commit hash and image
             headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
@@ -390,7 +390,7 @@ def create_job_background(assistant_id: str):
             )
             if response.status_code != 200:
                 print(f"Failed to get commit hash for assistant {assistant_id}")
-                return
+                return False
             commit_hash = response.json()["commit_hash"]
             image = (
                 "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
@@ -398,27 +398,36 @@ def create_job_background(assistant_id: str):
                 + commit_hash
             )
 
-            # Create the job without blocking the main thread
+            # Create the job
             job_response = requests.post(
                 f"{COMMS_URL}/infra/job/create",
                 headers=headers,
                 data={"image": image},
-                timeout=30
+                timeout=30,
             )
             if job_response.status_code != 200:
                 print(f"Failed to create job for assistant {assistant_id}")
                 print(f"Error: {job_response.text}")
+                return False
             else:
                 print(f"Job creation initiated for assistant {assistant_id}")
+                return True
 
         except requests.exceptions.Timeout:
             print(f"Timeout creating job for assistant {assistant_id}")
+            return False
         except Exception as e:
             print(f"Error creating job for assistant {assistant_id}: {e}")
+            return False
 
-    # Run in background thread to avoid blocking the main webhook
-    thread = threading.Thread(target=create_job, daemon=True)
-    thread.start()
+    # Use ThreadPoolExecutor to ensure the task completes
+    # This prevents SSL errors from Cloud Function termination
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_create_job)
+        # Wait for the task to complete before returning
+        # This ensures HTTP requests finish, avoiding SSL errors
+        result = future.result(timeout=60)  # 60 second timeout as safety
+        return result
 
 
 # phone helpers
