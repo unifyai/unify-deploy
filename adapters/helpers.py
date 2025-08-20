@@ -3,7 +3,6 @@ import json
 import os
 import re
 import requests
-import httpx
 
 from google.cloud import pubsub_v1
 
@@ -386,13 +385,12 @@ def create_job(assistant_id: str):
             else "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator-staging"
         )
         # Make request with 1 second timeout - just enough to send it
-        with httpx.Client(timeout=httpx.Timeout(1.0)) as client:
-            client.post(idle_job_url, data={"assistant_id": assistant_id})
-            print(f"Idle job creation request initiated for assistant {assistant_id}")
-            return True
-    except httpx.TimeoutException as e:
+        requests.post(idle_job_url, data={"assistant_id": assistant_id}, timeout=1.0)
+        print(f"Idle job creation request sent for assistant {assistant_id}")
+        return True
+    except requests.exceptions.Timeout as e:
         # timeout exception is expected, just return True
-        print(f"Idle job creation request initiated for assistant {assistant_id}")
+        print(f"Idle job creation request sent for assistant {assistant_id}")
         return True
     except Exception as e:
         print(
