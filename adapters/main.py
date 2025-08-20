@@ -104,7 +104,7 @@ def twilio_call_webhook(request: Request):
         create_job(assistant_id)
 
     # FIXED: Create conference name and sip uri with unique timestamp
-    date_time = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     room_name = f"unity_{twilio_number}"  # Consistent room per assistant
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
