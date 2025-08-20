@@ -5,6 +5,7 @@ import time
 import functions_framework
 import os
 import requests
+import asyncio
 from datetime import datetime, timedelta
 from flask import Request, Response
 
@@ -101,7 +102,7 @@ def twilio_call_webhook(request: Request):
             tts_provider,
             voice_id,
         )
-        create_job(assistant_id)
+        asyncio.run(create_job(assistant_id))
 
     # FIXED: Create conference name and sip uri with unique timestamp
     conference_name = f"Unity_{twilio_number[1:]}"
@@ -239,7 +240,7 @@ def twilio_msg_webhook(request: Request):
             tts_provider,
             voice_id,
         )
-        create_job(assistant_id)
+        asyncio.run(create_job(assistant_id))
 
     # set up conference
     resp_user = MessagingResponse()
@@ -341,7 +342,7 @@ def twilio_whatsapp_webhook(request: Request):
             tts_provider,
             voice_id,
         )
-        create_job(assistant_id)
+        asyncio.run(create_job(assistant_id))
 
     # set up conference
     resp_user = MessagingResponse()
@@ -483,7 +484,9 @@ def process_notification(cloud_event):
                 tts_provider,
                 voice_id,
             )
-            create_job(assistant_id)
+            import asyncio
+
+            asyncio.run(create_job(assistant_id))
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))

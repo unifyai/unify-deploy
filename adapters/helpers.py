@@ -3,7 +3,7 @@ import json
 import os
 import re
 import requests
-import concurrent.futures
+import httpx
 
 from google.cloud import pubsub_v1
 
@@ -372,62 +372,32 @@ def start_unity_job(
         print(f"Job started for assistant {assistant_id}")
 
 
-def create_job(assistant_id: str):
+async def create_job(assistant_id: str):
     """
-    Create job in a non-blocking way that works for both Cloud Functions and long-running services.
-    Uses a thread pool executor to ensure HTTP requests complete before returning,
-    avoiding SSL errors while keeping the endpoint non-blocking.
+    Create idle job by calling the dedicated Cloud Function.
+    Uses httpx.AsyncClient for truly non-blocking request.
     """
 
-    def _create_job():
-        try:
-            # Get commit hash and image
-            headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-            response = requests.get(
-                f"{COMMS_URL}/infra/image",
-                headers=headers,
-                timeout=30,  # Reasonable timeout for image fetch
-            )
-            if response.status_code != 200:
-                print(f"Failed to get commit hash for assistant {assistant_id}")
-                return False
-            commit_hash = response.json()["commit_hash"]
-            image = (
-                "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-                + ("/unity:" if not STAGING else "/unity-staging:")
-                + commit_hash
-            )
+    try:
+        # Determine the correct URL based on staging/prod
+        idle_job_url = (
+            "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator"
+            if not STAGING
+            else "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator-staging"
+        )
 
-            # Create the job
-            job_response = requests.post(
-                f"{COMMS_URL}/infra/job/create",
-                headers=headers,
-                data={"image": image},
-                timeout=30,
-            )
-            if job_response.status_code != 200:
-                print(f"Failed to create job for assistant {assistant_id}")
-                print(f"Error: {job_response.text}")
-                return False
-            else:
-                print(f"Job creation initiated for assistant {assistant_id}")
-                return True
+        # Use async client for fire-and-forget request
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+            # Don't await - just start the request and return immediately
+            client.post(idle_job_url, data={"assistant_id": assistant_id})
+            print(f"Idle job creation request initiated for assistant {assistant_id}")
+            return True
 
-        except requests.exceptions.Timeout:
-            print(f"Timeout creating job for assistant {assistant_id}")
-            return False
-        except Exception as e:
-            print(f"Error creating job for assistant {assistant_id}: {e}")
-            return False
-
-    # Use ThreadPoolExecutor to ensure the task completes
-    # This prevents SSL errors from Cloud Function termination
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_create_job)
-        # Wait for the task to complete before returning
-        # This ensures HTTP requests finish, avoiding SSL errors
-        result = future.result(timeout=60)  # 60 second timeout as safety
-        return result
+    except Exception as e:
+        print(
+            f"Error sending idle job creation request for assistant {assistant_id}: {e}"
+        )
+        return False
 
 
 # phone helpers
