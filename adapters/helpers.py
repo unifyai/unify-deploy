@@ -343,32 +343,36 @@ def start_unity_job(
 
     # start job
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.post(
-        f"{COMMS_URL}/infra/job/start",
-        headers=headers,
-        data={
-            "api_key": api_key,
-            "medium": medium,
-            "assistant_id": assistant_id,
-            "user_id": user_id,
-            "user_name": user_name,
-            "user_email": user_email,
-            "assistant_name": assistant_name,
-            "assistant_age": assistant_age,
-            "assistant_region": assistant_region,
-            "assistant_about": assistant_about,
-            "user_number": user_number,
-            "assistant_number": assistant_number,
-            "assistant_email": assistant_email,
-            "user_whatsapp_number": user_whatsapp_number,
-            "tts_provider": tts_provider,
-            "voice_id": voice_id,
-        },
-    )
-    if response.status_code != 200:
-        print(f"Failed to start job for assistant {assistant_id}")
-    else:
-        print(f"Job started for assistant {assistant_id}")
+    try:
+        response = requests.post(
+            f"{COMMS_URL}/infra/job/start",
+            headers=headers,
+            data={
+                "api_key": api_key,
+                "medium": medium,
+                "assistant_id": assistant_id,
+                "user_id": user_id,
+                "user_name": user_name,
+                "user_email": user_email,
+                "assistant_name": assistant_name,
+                "assistant_age": assistant_age,
+                "assistant_region": assistant_region,
+                "assistant_about": assistant_about,
+                "user_number": user_number,
+                "assistant_number": assistant_number,
+                "assistant_email": assistant_email,
+                "user_whatsapp_number": user_whatsapp_number,
+                "tts_provider": tts_provider,
+                "voice_id": voice_id,
+            },
+            timeout=1,
+        )
+        if response.status_code != 200:
+            print(f"Failed to start job for assistant {assistant_id}")
+        else:
+            print(f"Job started for assistant {assistant_id}")
+    except requests.exceptions.Timeout:
+        print(f"Job started for assistant {assistant_id} (timeout)")
 
 
 def create_job(assistant_id: str):
