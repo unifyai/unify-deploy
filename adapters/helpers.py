@@ -372,12 +372,12 @@ def start_unity_job(
         print(f"Job started for assistant {assistant_id}")
 
 
-async def create_job(assistant_id: str):
+def create_job(assistant_id: str):
     """
     Create idle job by calling the dedicated Cloud Function.
-    Uses httpx.AsyncClient for truly non-blocking request.
+    Uses httpx.Client with minimal timeout for fire-and-forget behavior.
     """
-
+    
     try:
         # Determine the correct URL based on staging/prod
         idle_job_url = (
@@ -385,14 +385,15 @@ async def create_job(assistant_id: str):
             if not STAGING
             else "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator-staging"
         )
-
-        # Use async client for fire-and-forget request
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-            # Don't await - just start the request and return immediately
+        # Make request with 1 second timeout - just enough to send it
+        with httpx.Client(timeout=httpx.Timeout(1.0)) as client:
             client.post(idle_job_url, data={"assistant_id": assistant_id})
             print(f"Idle job creation request initiated for assistant {assistant_id}")
             return True
-
+    except httpx.TimeoutException as e:
+        # timeout exception is expected, just return True
+        print(f"Idle job creation request initiated for assistant {assistant_id}")
+        return True
     except Exception as e:
         print(
             f"Error sending idle job creation request for assistant {assistant_id}: {e}"
