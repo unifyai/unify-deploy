@@ -106,7 +106,6 @@ async def send_email(request: Request):
     bcc = data.get("bcc")
     subject = data.get("subject", "")
     body = data.get("body")
-    thread_id = data.get("thread_id")  # thread_id to reply to
     in_reply_to = data.get("in_reply_to")  # message_id to reply to
 
     if not sender or not to or body is None:
@@ -137,21 +136,8 @@ async def send_email(request: Request):
     raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service = get_gmail_service(sender)
 
-    # if thread_id is provided, send as a reply to that thread
-    if thread_id:
-        sent = (
-            service.users()
-            .messages()
-            .send(userId="me", body={"raw": raw_msg, "threadId": thread_id})
-            .execute()
-        )
-    else:
-        sent = (
-            service.users()
-            .messages()
-            .send(userId="me", body={"raw": raw_msg})
-            .execute()
-        )
+    # send the email
+    sent = service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
 
     print(f"sent: {sent}")
     return {"success": True, "id": sent.get("id")}
