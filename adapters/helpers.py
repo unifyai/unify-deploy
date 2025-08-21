@@ -380,7 +380,7 @@ def create_job(assistant_id: str):
     Create idle job by calling the dedicated Cloud Function.
     Uses httpx.Client with minimal timeout for fire-and-forget behavior.
     """
-    
+
     try:
         # Determine the correct URL based on staging/prod
         idle_job_url = (
@@ -634,6 +634,13 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .get(userId=user_id, id=msg_id)
                 .execute()
             )
+            message_id_header = [
+                header
+                for header in message.get("headers", [])
+                if header.get("name") == "Message-Id"
+            ][0]
+            message_id = message_id_header.get("value")
+            print(f"message_id: {message_id}")
             print(f"message: {message} {msg_id}")
 
             labels = message.get("labelIds", [])
@@ -663,16 +670,18 @@ def get_thread_id(user_id, history_id, gmail_service):
             print(f"last_message: {last_message}")
 
             # Return the conversation (or process it further as needed)
-            return thread_id, last_message
+            return thread_id, message_id, last_message
 
-        return None, None
+        return None, None, None
 
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
-        return None, None
+        return None, None, None
 
 
-def publish_thread_id(assistant_id, thread_id, user_id, last_message, contact_id):
+def publish_thread_id(
+    assistant_id, user_id, thread_id, message_id, last_message, contact_details
+):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
@@ -682,8 +691,9 @@ def publish_thread_id(assistant_id, thread_id, user_id, last_message, contact_id
         message_dict = {
             "thread": "email",
             "event": {
-                "contact_id": contact_id,
+                "contact_details": contact_details,
                 "thread_id": thread_id,
+                "message_id": message_id,
                 "from": last_message["sender"],
                 "to": last_message["to"],
                 "cc": last_message["cc"],

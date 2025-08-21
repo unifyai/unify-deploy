@@ -502,13 +502,22 @@ def process_notification(cloud_event):
 
         # Process the history and thread
         print(f"email_id: {email_id}, history_id: {history_id}")
-        thread_id, last_message = get_thread_id(email_id, history_id, gmail_service)
-        print(f"thread_id: {thread_id}, last_message: {last_message}")
+        thread_id, message_id, last_message = get_thread_id(
+            email_id, history_id, gmail_service
+        )
+        print(
+            f"thread_id: {thread_id}, message_id: {message_id}, last_message: {last_message}"
+        )
 
         if thread_id:
             print(f"Successfully processed conversation for user {email_id}")
             publish_thread_id(
-                assistant_id, thread_id, user_id, last_message, contact_details
+                assistant_id,
+                user_id,
+                thread_id,
+                message_id,
+                last_message,
+                contact_details,
             )
             return "OK"
         else:
