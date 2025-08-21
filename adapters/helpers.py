@@ -601,6 +601,7 @@ def get_thread_id(user_id, history_id, gmail_service):
             )
             .execute()
         )
+        print(f"histories: {histories}")
 
         # Safeguard for thread replies
         if not histories or "history" not in histories or not histories["history"]:
@@ -615,6 +616,7 @@ def get_thread_id(user_id, history_id, gmail_service):
                     .execute()
                 )
             ]
+        print(f"histories: {histories}")
 
         if not histories or "history" not in histories or not histories["history"]:
             print(f"No history found for user {user_id} with history id {history_id}")
@@ -623,7 +625,9 @@ def get_thread_id(user_id, history_id, gmail_service):
         # Process each history entry
         print(f"History: {histories}")
         for history in histories["history"]:
+            print(f"history: {history}")
             messages = history.get("messages", [])
+            print(f"messages: {messages}")
             if len(messages) == 0:
                 continue
 
@@ -635,8 +639,10 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .get(userId=user_id, id=msg_id)
                 .execute()
             )
+            print(f"message: {message} {msg_id}")
 
             labels = message.get("labelIds", [])
+            print(f"labels: {labels}")
             if labels and "UNREAD" not in labels:
                 print(f"Message {msg_id} is read, skipping")
                 continue
@@ -653,10 +659,13 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .get(userId=user_id, id=thread_id, format="full")
                 .execute()
             )
+            print(f"thread: {thread} {thread_id}")
 
             # Convert to conversation format
             conversation = _gmail_thread_to_conversation(thread)
+            print(f"conversation: {conversation}")
             last_message = conversation[-1]
+            print(f"last_message: {last_message}")
 
             # Return the conversation (or process it further as needed)
             return thread_id, last_message

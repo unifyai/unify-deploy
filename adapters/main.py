@@ -501,7 +501,9 @@ def process_notification(cloud_event):
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # Process the history and thread
+        print(f"email_id: {email_id}, history_id: {history_id}")
         thread_id, last_message = get_thread_id(email_id, history_id, gmail_service)
+        print(f"thread_id: {thread_id}, last_message: {last_message}")
 
         if thread_id:
             print(f"Successfully processed conversation for user {email_id}")
