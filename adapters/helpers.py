@@ -601,10 +601,10 @@ def get_thread_id(user_id, history_id, gmail_service):
             )
             .execute()
         )
-        print(f"histories: {histories}")
+        print(f"pre-histories: {histories}")
 
         # Safeguard for thread replies
-        if not histories or "history" not in histories or not histories["history"]:
+        if "history" not in histories or not histories["history"]:
             histories["history"] = [
                 (
                     gmail_service.users()
@@ -616,14 +616,9 @@ def get_thread_id(user_id, history_id, gmail_service):
                     .execute()
                 )
             ]
-        print(f"histories: {histories}")
-
-        if not histories or "history" not in histories or not histories["history"]:
-            print(f"No history found for user {user_id} with history id {history_id}")
-            return None, None
 
         # Process each history entry
-        print(f"History: {histories}")
+        print(f"histories: {histories}")
         for history in histories["history"]:
             print(f"history: {history}")
             messages = history.get("messages", [])
