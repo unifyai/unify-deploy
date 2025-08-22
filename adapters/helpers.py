@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import traceback
 import requests
 
 from google.cloud import pubsub_v1
@@ -634,6 +635,7 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .get(userId=user_id, id=msg_id)
                 .execute()
             )
+            print(f"message: {message} {msg_id}")
             message_id_header = [
                 header
                 for header in message.get("headers", [])
@@ -641,7 +643,6 @@ def get_thread_id(user_id, history_id, gmail_service):
             ][0]
             message_id = message_id_header.get("value")
             print(f"message_id: {message_id}")
-            print(f"message: {message} {msg_id}")
 
             labels = message.get("labelIds", [])
             print(f"labels: {labels}")
@@ -676,6 +677,7 @@ def get_thread_id(user_id, history_id, gmail_service):
 
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
+        traceback.print_exc()
         return None, None, None
 
 
