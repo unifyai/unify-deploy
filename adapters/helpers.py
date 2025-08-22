@@ -640,7 +640,7 @@ def get_thread_id(user_id, history_id, gmail_service):
             print(f"message_headers: {message_headers}")
             message_id_header = [
                 header for header in message_headers
-                if header.get("name") == "Message-Id"
+                if header.get("name") == "Message-ID"
             ][0]
             message_id = message_id_header.get("value")
             print(f"message_id: {message_id}")
