@@ -475,6 +475,8 @@ async def call_status(request: Request):
     data = await request.json()
     print("status data:", data)
     print("status fields:", data.keys())
+    for key, value in data.items():
+        print(key, "->", value)
     # call_status = data.get("CallStatus")
     # conference_sid = data.get("ConferenceSid")
 
