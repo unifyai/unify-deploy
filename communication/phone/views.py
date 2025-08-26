@@ -244,6 +244,7 @@ async def send_call(request: Request):
 
     # create livekit agent participant
     lkapi = LiveKitAPI()
+    print("creating call")
     trunk = CreateSIPParticipantRequest(
         sip_trunk_id="ST_knkas2oxiawB",
         sip_number=twilio_number,
@@ -253,6 +254,7 @@ async def send_call(request: Request):
         participant_name="User",
         wait_until_answered=True,
     )
+    print("answered")
     call = await lkapi.sip.create_sip_participant(trunk)
 
     # add user to twilio conference
