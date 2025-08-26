@@ -473,19 +473,15 @@ async def end_conference(request: Request):
 @unauth_router.post("/call-status")
 async def call_status(request: Request):
     data = await request.json()
-    print("status data:", data)
-    print("status fields:", data.keys())
-    for key, value in data.items():
-        print(key, "->", value)
-    # call_status = data.get("CallStatus")
-    # conference_sid = data.get("ConferenceSid")
+    call_status = data.get("CallStatus")
+    conference_sid = data.get("ConferenceSid")
 
-    # twilio_client = get_twilio_client()
-    # if call_status == "completed":
-    #     # Unmute LiveKit agent (Agent A) after User B hangs up
-    #     participants = twilio_client.conferences(conference_sid).participants.list()
-    #     for participant in participants:
-    #         twilio_client.conferences(conference_sid).participants(
-    #             participant.sid
-    #         ).update(muted=False)
+    twilio_client = get_twilio_client()
+    if call_status == "completed":
+        # Unmute LiveKit agent (Agent A) after User B hangs up
+        participants = twilio_client.conferences(conference_sid).participants.list()
+        for participant in participants:
+            twilio_client.conferences(conference_sid).participants(
+                participant.sid
+            ).update(muted=False)
     return Response(status=200)
