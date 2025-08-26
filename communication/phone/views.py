@@ -240,22 +240,7 @@ async def send_call(request: Request):
     new_call = data.get("NewCall")
 
     new_call = new_call.lower() == "true"
-    conference_name = f"Unity_{twilio_number[1:]}"
     room_name = f"unity_{twilio_number}"
-
-    # dispatch agent
-    await create_room_and_dispatch_agent(
-        room_name=room_name,
-        agent_name=room_name,
-        metadata={
-            "caller_number": phone_number,
-            "twilio_number": twilio_number,
-            "conference_name": conference_name,
-            "call_type": "inbound",
-            "call_sid": None,  # Will be updated after conference setup
-            "timestamp": int(time.time() * 1000),
-        },
-    )
 
     # create livekit agent participant
     lkapi = LiveKitAPI()
