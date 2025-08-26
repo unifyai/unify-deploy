@@ -256,6 +256,7 @@ async def send_call(request: Request):
     )
     print("answered")
     call = await lkapi.sip.create_sip_participant(trunk)
+    print("call created")
 
     # add user to twilio conference
     # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
