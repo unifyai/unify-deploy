@@ -259,10 +259,11 @@ async def send_call(request: Request):
     print("call created")
 
     # add user to twilio conference
-    # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    # # call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
+    conference_name = f"Unity_{twilio_number[1:]}"
+    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
     # call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
-    return {"success": True}  # , "call_sid": call_sid}
+    return {"success": True, "call_sid": call_sid}
 
 
 @auth_router.post("/send-text")
