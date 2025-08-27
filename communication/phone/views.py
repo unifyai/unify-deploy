@@ -497,7 +497,6 @@ async def conference_status(request: Request):
 
 @unauth_router.post("/call-status")
 async def call_status(request: Request):
-    print("Query Params:", dict(request.query_params))
     data = await request.form()
     print("Call fields:", data.keys())
     for key, value in data.items():
