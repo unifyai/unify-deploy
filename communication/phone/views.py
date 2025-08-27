@@ -40,7 +40,7 @@ def create_conference_response(conference_name, with_status=False):
             recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
             recording_status_callback_event="completed",
             status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/conference-status",
-            status_callback_event="end",
+            status_callback_event="join",
         )
         return resp_user
 
@@ -77,7 +77,7 @@ def add_user_to_conference(
                 break
         response = create_conference_response(conference_name, with_status=True)
     else:
-        response = create_conference_response(conference_name)
+        response = create_conference_response(conference_name, with_status=True)
 
     call = twilio_client.calls.create(
         to=to_number_uri,
@@ -481,19 +481,24 @@ async def end_conference(request: Request):
 
 @unauth_router.post("/conference-status")
 async def conference_status(request: Request):
-    data = await request.json()
-    conference_status = data.get("StatusCallbackEvent")
-    conference_sid = data.get("ConferenceSid")
-
-    twilio_client = get_twilio_client()
-    if conference_status == "end":
-        # Unmute LiveKit agent (Agent A) after User B hangs up
-        participants = twilio_client.conferences(conference_sid).participants.list()
-        for participant in participants:
-            twilio_client.conferences(conference_sid).participants(
-                participant.sid
-            ).update(muted=False)
+    data = await request.form()
+    print("Call fields:", data.keys())
+    for key, value in data.items():
+        print(key, "-->", value)
     return Response(status_code=200)
+    # data = await request.json()
+    # conference_status = data.get("StatusCallbackEvent")
+    # conference_sid = data.get("ConferenceSid")
+
+    # twilio_client = get_twilio_client()
+    # if conference_status == "end":
+    #     # Unmute LiveKit agent (Agent A) after User B hangs up
+    #     participants = twilio_client.conferences(conference_sid).participants.list()
+    #     for participant in participants:
+    #         twilio_client.conferences(conference_sid).participants(
+    #             participant.sid
+    #         ).update(muted=False)
+    # return Response(status_code=200)
 
 
 @unauth_router.post("/call-status")
