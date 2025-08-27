@@ -35,11 +35,12 @@ def create_conference_response(conference_name, with_status=False):
             startConferenceOnEnter=True,
             endConferenceOnExit=True,
             muted=False,
+            wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
             record="record-from-start",
             recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
             recording_status_callback_event="completed",
-            status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-            status_callback_event=["completed"],
+            status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/conference-status",
+            status_callback_event="end",
         )
         return resp_user
 
@@ -48,6 +49,7 @@ def create_conference_response(conference_name, with_status=False):
         startConferenceOnEnter=True,
         endConferenceOnExit=True,
         muted=False,
+        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
         record="record-from-start",
         recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
         recording_status_callback_event="completed",
@@ -81,6 +83,8 @@ def add_user_to_conference(
         to=to_number_uri,
         from_=from_number,
         twiml=str(response),
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event=["initiated"],
     )
     return call.sid
 
@@ -474,18 +478,27 @@ async def end_conference(request: Request):
     return {"success": True, "status": conference.status}
 
 
-@unauth_router.post("/call-status")
-async def call_status(request: Request):
+@unauth_router.post("/conference-status")
+async def conference_status(request: Request):
     data = await request.json()
-    call_status = data.get("CallStatus")
+    conference_status = data.get("StatusCallbackEvent")
     conference_sid = data.get("ConferenceSid")
 
     twilio_client = get_twilio_client()
-    if call_status == "completed":
+    if conference_status == "end":
         # Unmute LiveKit agent (Agent A) after User B hangs up
         participants = twilio_client.conferences(conference_sid).participants.list()
         for participant in participants:
             twilio_client.conferences(conference_sid).participants(
                 participant.sid
             ).update(muted=False)
+    return Response(status=200)
+
+
+@unauth_router.post("/call-status")
+async def call_status(request: Request):
+    data = await request.json()
+    print("Call fields:", data.keys())
+    for key, value in data.items():
+        print(key, "-->", value)
     return Response(status=200)

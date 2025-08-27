@@ -469,8 +469,8 @@ def create_conference_response(conference_name, with_status=False):
             record="record-from-start",
             recording_status_callback=f"{COMMS_URL}/phone/recording",
             recording_status_callback_event="completed",
-            status_callback=f"{COMMS_URL}/phone/call-status",
-            status_callback_event=["completed"],
+            status_callback=f"{COMMS_URL}/phone/conference-status",
+            status_callback_event="end",
         )
         return resp_user
     dial_user.conference(
