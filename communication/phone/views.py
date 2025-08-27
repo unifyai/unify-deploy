@@ -460,7 +460,7 @@ async def hang_up(request: Request):
     conference = (
         twilio_client.conferences(conferences[0].sid).participants(call_sid).delete()
     )
-    return Response(status=200)
+    return Response(status_code=200)
 
 
 @auth_router.post("/end-conference")
@@ -492,7 +492,7 @@ async def conference_status(request: Request):
             twilio_client.conferences(conference_sid).participants(
                 participant.sid
             ).update(muted=False)
-    return Response(status=200)
+    return Response(status_code=200)
 
 
 @unauth_router.post("/call-status")
@@ -502,4 +502,4 @@ async def call_status(request: Request):
     print("Call fields:", data.keys())
     for key, value in data.items():
         print(key, "-->", value)
-    return Response(status=200)
+    return Response(status_code=200)
