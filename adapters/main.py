@@ -37,10 +37,12 @@ def livekit_webhook(request: Request):
     data = request.json
     event = data.get("event")
     staging = False
+    print(f"Event: {event} | Data: {data}")
     if event == "participant_joined":
+        print("Participant joined event")
         user_number = data.get("participant").get("identity").replace("user_", "")
         assistant_number = data.get("room").get("name").replace("user_", "")
-        if user_number != assistant_number:
+        if user_number != assistant_number and "agent" not in user_number:
             print(f"User {user_number} joined room with {assistant_number}")
             assistant_data = get_assistant(phone_number=assistant_number)
             if assistant_data["assistant_id"] is None:
