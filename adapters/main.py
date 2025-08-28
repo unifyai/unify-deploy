@@ -34,7 +34,7 @@ from .helpers import (
 @functions_framework.http
 def livekit_webhook(request: Request):
     print("livekit_webhook function started")
-    data = request.json()
+    data = request.json
     event = data.get("event")
     staging = False
     if event == "participant_joined":
