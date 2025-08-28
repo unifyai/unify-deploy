@@ -505,7 +505,7 @@ async def call_status(request: Request):
 
 @unauth_router.post("/livekit-status")
 async def livekit_status(request: Request):
-    data = await request.form()
+    data = await request.json()
     print("Livekit fields:", data.keys())
     for key, value in data.items():
         print(key, "-->", value)
