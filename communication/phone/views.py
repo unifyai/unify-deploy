@@ -501,3 +501,12 @@ async def call_status(request: Request):
     for key, value in data.items():
         print(key, "-->", value)
     return Response(status_code=200)
+
+
+@unauth_router.post("/livekit-status")
+async def livekit_status(request: Request):
+    data = await request.form()
+    print("Livekit fields:", data.keys())
+    for key, value in data.items():
+        print(key, "-->", value)
+    return Response(status_code=200)
