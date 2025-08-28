@@ -13,11 +13,9 @@ from livekit import api
 
 
 STAGING = os.getenv("STAGING")
-ORCHESTRA_URL = (
-    "https://api.unify.ai/v0"
-    if not STAGING
-    else "https://service.a.run.app/v0"
-)
+ORCHESTRA_PROD_URL = "https://api.unify.ai/v0"
+ORCHESTRA_STAGING_URL = "https://service.a.run.app/v0"
+ORCHESTRA_URL = ORCHESTRA_PROD_URL if not STAGING else ORCHESTRA_STAGING_URL
 COMMS_URL = (
     "https://unity-comms-app-000000000000.us-central1.run.app"
     if not STAGING
@@ -25,13 +23,18 @@ COMMS_URL = (
 )
 
 
-def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, str]:
+def get_assistant(
+    email_id: str = None,
+    phone_number: str = None,
+    staging: bool = bool(STAGING),
+) -> dict[str, str]:
     """
     Get the assistant id from the email id or phone number.
 
     Args:
         email_id: The email id of the assistant.
         phone_number: The phone number of the assistant.
+        staging: Whether to use the staging environment.
 
     Returns:
         The assistant id.
@@ -103,17 +106,18 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
     if "+15550100008" in phone_check:
         return {**default_assistant_data, "assistant_id": "default-assistant-5"}
 
+    orchestra_url = ORCHESTRA_PROD_URL if not staging else ORCHESTRA_STAGING_URL
     response = requests.get(
-        f"{ORCHESTRA_URL}/admin/assistant",
+        f"{orchestra_url}/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
 
     if "detail" in response:
-        return default_assistant_data
+        return {**default_assistant_data, "assistant_id": None}
     assistants = response["info"]
     if len(assistants) == 0:
-        return default_assistant_data
+        return {**default_assistant_data, "assistant_id": None}
 
     return {
         "assistant_id": assistants[0]["agent_id"],
@@ -173,6 +177,7 @@ def check_valid_contact(
     user_number: str = None,
     user_whatsapp_number: str = None,
     user_email: str = None,
+    staging: bool = bool(STAGING),
 ) -> bool:
     """
     Check if the contact is valid.
@@ -186,6 +191,7 @@ def check_valid_contact(
         user_number: The phone number of the user.
         user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
+        staging: Whether to use the staging environment.
     """
     print(
         f"Checking valid contact: {email_id}, {phone_number}, "
@@ -195,7 +201,7 @@ def check_valid_contact(
     # check for contact in assistant contacts
     context = f"{assistant_context}/Contacts"
     response = requests.get(
-        f"{ORCHESTRA_URL}/logs",
+        f"{ORCHESTRA_PROD_URL if not staging else ORCHESTRA_STAGING_URL}/logs",
         params={"project": "Assistants", "context": context},
         headers={"Authorization": f"Bearer {api_key}"},
     )
@@ -639,7 +645,8 @@ def get_thread_id(user_id, history_id, gmail_service):
             message_headers = message["payload"].get("headers", [])
             print(f"message_headers: {message_headers}")
             message_id_header = [
-                header for header in message_headers
+                header
+                for header in message_headers
                 if header.get("name") == "Message-ID"
             ][0]
             message_id = message_id_header.get("value")
