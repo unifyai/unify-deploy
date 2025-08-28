@@ -40,7 +40,7 @@ def create_conference_response(conference_name, with_status=False):
             recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
             recording_status_callback_event="completed",
             status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/conference-status",
-            status_callback_event="join",
+            status_callback_event=["completed"],
         )
         return resp_user
 
@@ -77,15 +77,12 @@ def add_user_to_conference(
                 break
         response = create_conference_response(conference_name, with_status=True)
     else:
-        response = create_conference_response(conference_name, with_status=True)
+        response = create_conference_response(conference_name)
 
     call = twilio_client.calls.create(
         to=to_number_uri,
         from_=from_number,
         twiml=str(response),
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        status_callback_event=["initiated", "answered"],
-        status_callback_method="POST",
     )
     return call.sid
 
@@ -249,7 +246,6 @@ async def send_call(request: Request):
 
     # create livekit agent participant
     lkapi = LiveKitAPI()
-    print("creating call")
     trunk = CreateSIPParticipantRequest(
         sip_trunk_id="ST_knkas2oxiawB",
         sip_number=twilio_number,
@@ -259,16 +255,12 @@ async def send_call(request: Request):
         participant_name="User",
         wait_until_answered=True,
     )
-    print("answered")
     call = await lkapi.sip.create_sip_participant(trunk)
-    print("call created")
 
     # add user to twilio conference
-    conference_name = f"Unity_{twilio_number[1:]}"
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
-    # call_sid = add_user_to_conference(conference_name, twilio_number, phone_number)
-    return {"success": True, "call_sid": call_sid}
+    # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    # call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
+    return {"success": True}
 
 
 @auth_router.post("/send-text")
@@ -320,8 +312,14 @@ async def create_phone_number(request: Request):
     data = await request.json()
 
     # Extract customizable parameters from request
-    voice_url = data.get("voice_url", "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-call-webhook")
-    sms_url = data.get("sms_url", "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-msg-webhook")
+    voice_url = data.get(
+        "voice_url",
+        "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-call-webhook",
+    )
+    sms_url = data.get(
+        "sms_url",
+        "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-msg-webhook",
+    )
     country = data.get("country", "US")
 
     # Additional args for country
@@ -482,23 +480,18 @@ async def end_conference(request: Request):
 @unauth_router.post("/conference-status")
 async def conference_status(request: Request):
     data = await request.form()
-    print("Call fields:", data.keys())
-    for key, value in data.items():
-        print(key, "-->", value)
-    return Response(status_code=200)
-    # data = await request.json()
-    # conference_status = data.get("StatusCallbackEvent")
-    # conference_sid = data.get("ConferenceSid")
+    conference_status = data.get("StatusCallbackEvent")
+    conference_sid = data.get("ConferenceSid")
 
-    # twilio_client = get_twilio_client()
-    # if conference_status == "end":
-    #     # Unmute LiveKit agent (Agent A) after User B hangs up
-    #     participants = twilio_client.conferences(conference_sid).participants.list()
-    #     for participant in participants:
-    #         twilio_client.conferences(conference_sid).participants(
-    #             participant.sid
-    #         ).update(muted=False)
-    # return Response(status_code=200)
+    twilio_client = get_twilio_client()
+    if conference_status == "end":
+        # Unmute LiveKit agent (Agent A) after User B hangs up
+        participants = twilio_client.conferences(conference_sid).participants.list()
+        for participant in participants:
+            twilio_client.conferences(conference_sid).participants(
+                participant.sid
+            ).update(muted=False)
+    return Response(status_code=200)
 
 
 @unauth_router.post("/call-status")
