@@ -280,7 +280,7 @@ async def send_call(request: Request):
         to=phone_number,
         from_=twilio_number,
         url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
-        status_callback_event=["answered", "completed"],
+        status_callback_event=["initiated", "ringing", "answered", "completed"],
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
     )
     return {"success": True, "call_sid": call.sid}
@@ -532,21 +532,27 @@ async def twiml(request: Request):
     print("TWIML request:", data)
     twilio_number = data.get("From")
     print("TWIML twilio number:", twilio_number)
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    # date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    # conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
-    dial_user.conference(
-        conference_name,
-        startConferenceOnEnter=True,
-        endConferenceOnExit=True,
-        muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-        record="record-from-start",
-        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-        recording_status_callback_event="completed",
-    )
+    # dial_user.conference(
+    #     conference_name,
+    #     startConferenceOnEnter=True,
+    #     endConferenceOnExit=True,
+    #     muted=False,
+    #     wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+    #     record="record-from-start",
+    #     recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
+    #     recording_status_callback_event="completed",
+    # )
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    print("SIP URI:", sip_uri)
+    dial_user.sip(
+        sip_uri,
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event="initiated ringing answered completed",
+    )
     twilio_client = get_twilio_client()
     response = twilio_client.calls.create(
         to=sip_uri,
