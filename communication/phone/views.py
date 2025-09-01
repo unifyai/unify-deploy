@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import httpx
 import base64
@@ -83,6 +84,8 @@ def add_user_to_conference(
         to=to_number_uri,
         from_=from_number,
         twiml=str(response),
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event=["initiated", "ringing", "answered", "completed"],
     )
     return call.sid
 
@@ -260,17 +263,17 @@ async def send_call(request: Request):
     # print("Call picked up")
 
     # add user to twilio conference
-    # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    # call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
-    twilio_client = get_twilio_client()
-    call = twilio_client.calls.create(
-        to=phone_number,
-        from_=twilio_number,
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        status_callback_event=["answered"],
-        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/empty-twiml",
-    )
-    return {"success": True, "call_sid": call.sid}
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
+    # call = twilio_client.calls.create(
+    #     to=phone_number,
+    #     from_=twilio_number,
+    #     status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+    #     status_callback_event=["initiated", "ringing", "answered", "completed"],
+    # )
+    return {"success": True, "call_sid": call_sid}
 
 
 @auth_router.post("/send-text")
@@ -507,11 +510,7 @@ async def conference_status(request: Request):
 @unauth_router.post("/call-status")
 async def call_status(request: Request):
     data = await request.form()
+    print("Call status request")
     for key, value in data.items():
         print(key, "-->", value)
     return Response(status_code=200)
-
-
-@unauth_router.post("/empty-twiml")
-async def empty_twiml(request: Request):
-    return str(VoiceResponse())
