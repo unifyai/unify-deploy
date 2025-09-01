@@ -283,8 +283,7 @@ async def send_call(request: Request):
         from_=twilio_number,
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
         status_callback_event=["initiated", "ringing", "answered", "completed"],
-        method="GET",
-        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml?twilio_number={twilio_number}",
+        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
     )
     return {"success": True, "call_sid": call.sid}
 
@@ -531,9 +530,9 @@ async def call_status(request: Request):
 
 @unauth_router.post("/twiml")
 async def twiml(request: Request):
-    data = await request.query_params()
+    data = await request.form()
     print("TWIML request:", data)
-    twilio_number = data.get("twilio_number")
+    twilio_number = data.get("From")
     print("TWIML twilio number:", twilio_number)
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
