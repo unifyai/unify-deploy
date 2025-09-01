@@ -268,7 +268,7 @@ async def send_call(request: Request):
         from_=twilio_number,
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
         status_callback_event=["answered"],
-        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/empty-twiml"
+        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/empty-twiml",
     )
     return {"success": True, "call_sid": call.sid}
 
