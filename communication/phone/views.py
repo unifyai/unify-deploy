@@ -239,30 +239,38 @@ async def send_call(request: Request):
     data = await request.json()
     phone_number = data.get("To")
     twilio_number = data.get("From")
-    new_call = data.get("NewCall")
+    # new_call = data.get("NewCall")
 
-    new_call = new_call.lower() == "true"
-    room_name = f"unity_{twilio_number}"
+    # new_call = new_call.lower() == "true"
+    # room_name = f"unity_{twilio_number}"
 
     # create livekit agent participant
-    lkapi = LiveKitAPI()
-    trunk = CreateSIPParticipantRequest(
-        sip_trunk_id="ST_knkas2oxiawB",
-        sip_number=twilio_number,
-        sip_call_to=phone_number,
-        room_name=room_name,
-        participant_identity=f"user_{phone_number}",
-        participant_name="User",
-        wait_until_answered=True,
-    )
-    print("Making call request")
-    call = await lkapi.sip.create_sip_participant(trunk)
-    print("Call picked up")
+    # lkapi = LiveKitAPI()
+    # trunk = CreateSIPParticipantRequest(
+    #     sip_trunk_id="ST_knkas2oxiawB",
+    #     sip_number=twilio_number,
+    #     sip_call_to=phone_number,
+    #     room_name=room_name,
+    #     participant_identity=f"user_{phone_number}",
+    #     participant_name="User",
+    #     wait_until_answered=True,
+    # )
+    # print("Making call request")
+    # call = await lkapi.sip.create_sip_participant(trunk)
+    # print("Call picked up")
 
     # add user to twilio conference
     # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     # call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
-    return {"success": True}
+    twilio_client = get_twilio_client()
+    call = twilio_client.calls.create(
+        to=phone_number,
+        from_=twilio_number,
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event=["answered"],
+        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/empty-twiml"
+    )
+    return {"success": True, "call_sid": call.sid}
 
 
 @auth_router.post("/send-text")
@@ -493,4 +501,12 @@ async def conference_status(request: Request):
             twilio_client.conferences(conference_sid).participants(
                 participant.sid
             ).update(muted=False)
+    return Response(status_code=200)
+
+
+@unauth_router.post("/call-status")
+async def call_status(request: Request):
+    data = await request.form()
+    for key, value in data.items():
+        print(key, "-->", value)
     return Response(status_code=200)
