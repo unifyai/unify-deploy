@@ -33,7 +33,7 @@ def create_conference_response(conference_name, sip_uri, with_status=False):
     dial_user.sip(
         sip_uri,
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        status_callback_event=["initiated", "ringing", "answered", "completed"],
+        status_callback_event="initiated ringing answered completed",
     )
     # if with_status:
     #     dial_user.conference(
@@ -92,8 +92,8 @@ def add_user_to_conference(
         to=to_number,
         from_=from_number,
         twiml=str(response),
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        status_callback_event=["initiated", "ringing", "answered", "completed"],
+        # status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        # status_callback_event=["initiated", "ringing", "answered", "completed"],
     )
     return call.sid
 
