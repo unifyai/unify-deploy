@@ -27,9 +27,10 @@ unauth_router = APIRouter()
 
 
 # Helpers
-def create_conference_response(conference_name, with_status=False):
+def create_conference_response(conference_name, sip_uri, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
+    dial_user.sip(sip_uri)
     if with_status:
         dial_user.conference(
             conference_name,
@@ -59,7 +60,7 @@ def create_conference_response(conference_name, with_status=False):
 
 
 def add_user_to_conference(
-    conference_name, from_number, to_number_uri, connect_third_party=False
+    conference_name, from_number, to_number, sip_uri, connect_third_party=False
 ):
     twilio_client = get_twilio_client()
 
@@ -76,12 +77,12 @@ def add_user_to_conference(
                     participant.sid
                 ).update(muted=True)
                 break
-        response = create_conference_response(conference_name, with_status=True)
+        response = create_conference_response(conference_name, sip_uri, with_status=True)
     else:
-        response = create_conference_response(conference_name)
+        response = create_conference_response(conference_name, sip_uri)
 
     call = twilio_client.calls.create(
-        to=to_number_uri,
+        to=to_number,
         from_=from_number,
         twiml=str(response),
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
@@ -266,7 +267,7 @@ async def send_call(request: Request):
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    call_sid = add_user_to_conference(conference_name, phone_number, sip_uri)
+    call_sid = add_user_to_conference(conference_name, twilio_number, phone_number, sip_uri)
     # call = twilio_client.calls.create(
     #     to=phone_number,
     #     from_=twilio_number,
