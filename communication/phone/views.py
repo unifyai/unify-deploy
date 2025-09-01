@@ -30,7 +30,7 @@ unauth_router = APIRouter()
 def create_conference_response(conference_name, sip_uri, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
-    dial_user.sip(sip_uri)
+    # dial_user.sip(sip_uri)
     if with_status:
         dial_user.conference(
             conference_name,
