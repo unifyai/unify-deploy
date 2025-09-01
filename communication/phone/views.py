@@ -30,32 +30,32 @@ unauth_router = APIRouter()
 def create_conference_response(conference_name, sip_uri, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
-    # dial_user.sip(sip_uri)
-    if with_status:
-        dial_user.conference(
-            conference_name,
-            startConferenceOnEnter=True,
-            endConferenceOnExit=True,
-            muted=False,
-            wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-            record="record-from-start",
-            recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-            recording_status_callback_event="completed",
-            status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/conference-status",
-            status_callback_event=["completed"],
-        )
-        return resp_user
+    dial_user.sip(sip_uri)
+    # if with_status:
+    #     dial_user.conference(
+    #         conference_name,
+    #         startConferenceOnEnter=True,
+    #         endConferenceOnExit=True,
+    #         muted=False,
+    #         wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+    #         record="record-from-start",
+    #         recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
+    #         recording_status_callback_event="completed",
+    #         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/conference-status",
+    #         status_callback_event=["completed"],
+    #     )
+    #     return resp_user
 
-    dial_user.conference(
-        conference_name,
-        startConferenceOnEnter=True,
-        endConferenceOnExit=True,
-        muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-        record="record-from-start",
-        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-        recording_status_callback_event="completed",
-    )
+    # dial_user.conference(
+    #     conference_name,
+    #     startConferenceOnEnter=True,
+    #     endConferenceOnExit=True,
+    #     muted=False,
+    #     wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+    #     record="record-from-start",
+    #     recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
+    #     recording_status_callback_event="completed",
+    # )
     return resp_user
 
 
@@ -83,6 +83,7 @@ def add_user_to_conference(
     else:
         response = create_conference_response(conference_name, sip_uri)
 
+    print("TWIML RESPONSE:", str(response))
     call = twilio_client.calls.create(
         to=to_number,
         from_=from_number,
