@@ -271,19 +271,22 @@ async def send_call(request: Request):
     # print("Call picked up")
 
     # add user to twilio conference
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    call_sid = add_user_to_conference(
-        conference_name, twilio_number, phone_number, sip_uri
-    )
-    # call = twilio_client.calls.create(
-    #     to=phone_number,
-    #     from_=twilio_number,
-    #     status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-    #     status_callback_event=["initiated", "ringing", "answered", "completed"],
+    # date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    # conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    # call_sid = add_user_to_conference(
+    #     conference_name, twilio_number, phone_number, sip_uri
     # )
-    return {"success": True, "call_sid": call_sid}
+    twilio_client = get_twilio_client()
+    call = twilio_client.calls.create(
+        to=phone_number,
+        from_=twilio_number,
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event=["initiated", "ringing", "answered", "completed"],
+        method="GET",
+        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml?twilio_number={twilio_number}",
+    )
+    return {"success": True, "call_sid": call.sid}
 
 
 @auth_router.post("/send-text")
@@ -524,3 +527,17 @@ async def call_status(request: Request):
     # for key, value in data.items():
     #     print(key, "-->", value)
     return Response(status_code=200)
+
+
+@unauth_router.post("/twiml")
+async def twiml(request: Request):
+    data = await request.query_params()
+    print("TWIML request:", data)
+    twilio_number = data.get("twilio_number")
+    print("TWIML twilio number:", twilio_number)
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    response = create_conference_response(conference_name, sip_uri)
+    print("TWIML response:", str(response))
+    return Response(status_code=200, content=str(response))
