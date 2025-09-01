@@ -92,8 +92,8 @@ def add_user_to_conference(
         to=to_number,
         from_=from_number,
         twiml=str(response),
-        # status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        # status_callback_event=["initiated", "ringing", "answered", "completed"],
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event=["initiated", "ringing", "answered", "completed"],
     )
     return call.sid
 
