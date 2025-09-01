@@ -30,7 +30,7 @@ unauth_router = APIRouter()
 def create_conference_response(conference_name, sip_uri, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
-    dial_user.sip(sip_uri)
+    # dial_user.sip(sip_uri)
     # if with_status:
     #     dial_user.conference(
     #         conference_name,
@@ -516,7 +516,7 @@ async def conference_status(request: Request):
 @unauth_router.post("/call-status")
 async def call_status(request: Request):
     data = await request.form()
-    print("Call status request")
-    for key, value in data.items():
-        print(key, "-->", value)
+    print("Call status request:", data.get("CallStatus"))
+    # for key, value in data.items():
+    #     print(key, "-->", value)
     return Response(status_code=200)
