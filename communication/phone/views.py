@@ -510,3 +510,8 @@ async def call_status(request: Request):
     for key, value in data.items():
         print(key, "-->", value)
     return Response(status_code=200)
+
+
+@unauth_router.post("/empty-twiml")
+async def empty_twiml(request: Request):
+    return str(VoiceResponse())
