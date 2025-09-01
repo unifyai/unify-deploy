@@ -77,7 +77,9 @@ def add_user_to_conference(
                     participant.sid
                 ).update(muted=True)
                 break
-        response = create_conference_response(conference_name, sip_uri, with_status=True)
+        response = create_conference_response(
+            conference_name, sip_uri, with_status=True
+        )
     else:
         response = create_conference_response(conference_name, sip_uri)
 
@@ -267,7 +269,9 @@ async def send_call(request: Request):
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    call_sid = add_user_to_conference(conference_name, twilio_number, phone_number, sip_uri)
+    call_sid = add_user_to_conference(
+        conference_name, twilio_number, phone_number, sip_uri
+    )
     # call = twilio_client.calls.create(
     #     to=phone_number,
     #     from_=twilio_number,
