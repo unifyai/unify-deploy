@@ -248,81 +248,14 @@ async def send_call(request: Request):
     data = await request.json()
     phone_number = data.get("To")
     twilio_number = data.get("From")
-    # new_call = data.get("NewCall")
-
-    # new_call = new_call.lower() == "true"
-    # room_name = f"unity_{twilio_number}"
-
-    # create livekit agent participant
-    # lkapi = LiveKitAPI()
-    # trunk = CreateSIPParticipantRequest(
-    #     sip_trunk_id="ST_knkas2oxiawB",
-    #     sip_number=twilio_number,
-    #     sip_call_to=phone_number,
-    #     room_name=room_name,
-    #     participant_identity=f"user_{phone_number}",
-    #     participant_name="User",
-    #     wait_until_answered=True,
-    # )
-    # print("Making call request")
-    # call = await lkapi.sip.create_sip_participant(trunk)
-    # print("Call picked up")
-
-    # add user to twilio conference
-    # date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    # conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
-    # sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    # call_sid = add_user_to_conference(
-    #     conference_name, twilio_number, phone_number, sip_uri
-    # )
-    # return {"success": True, "call_sid": call_sid}
-
-    # resp = VoiceResponse()
-    # resp.dial(
-    #     phone_number,
-    #     action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-    #     caller_id=twilio_number,
-    #     answer_on_bridge=True
-    # )
-    # resp.say("Hello. Call status test is active.")
-
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
-    resp_user = VoiceResponse()
-    dial = resp_user.dial()
-    # dial.number(
-    #     phone_number,
-    #     status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-    #     status_callback_event="initiated ringing answered completed",
-    # )
-    dial.conference(
-        conference_name,
-        startConferenceOnEnter=True,
-        endConferenceOnExit=True,
-        muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-        record="record-from-start",
-        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-        recording_status_callback_event="completed",
-    )
-    print("TWIML response:", str(resp_user))
-
     twilio_client = get_twilio_client()
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    call1 = twilio_client.calls.create(
-        to=sip_uri,
-        from_=twilio_number,
-        twiml=str(resp_user),
-        # url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
-    )
-    twilio_client.calls.create(
+    call = twilio_client.calls.create(
         to=phone_number,
         from_=twilio_number,
-        twiml=str(resp_user),
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        status_callback_event=["initiated", "ringing", "answered", "completed"],
+        # twiml=str(resp_user),
+        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
     )
-    return {"success": True, "call_sid": call1.sid}
+    return {"success": True, "call_sid": call.sid}
 
 
 @auth_router.post("/send-text")
@@ -570,40 +503,18 @@ async def twiml(request: Request):
     data = await request.form()
     print("TWIML request:", data)
     twilio_number = data.get("From")
-    phone_number = data.get("To")
     print("TWIML twilio number:", twilio_number)
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     print("SIP URI:", sip_uri)
 
-    # resp_user = VoiceResponse()
-    # dial_user = resp_user.dial()
-    # dial_user.conference(
-    #     conference_name,
-    #     startConferenceOnEnter=False,
-    #     endConferenceOnExit=True,
-    #     muted=False,
-    #     wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-    #     record="record-from-start",
-    #     recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-    #     recording_status_callback_event="completed",
-    # )
-    # twilio_client = get_twilio_client()
-    # response = twilio_client.calls.create(
-    #     to=sip_uri,
-    #     from_=twilio_number,
-    #     twiml=str(resp_user),
-    # )
-    # print("Call response:", response)
-    # print("TWIML response Leg 2:", str(resp_user))
-
     resp_user = VoiceResponse()
-    dial = resp_user.dial(
-        phone_number,
-        action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        caller_id=twilio_number,
-        answer_on_bridge=True
+    dial = resp_user.dial()
+    dial.sip(
+        sip_uri,
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event="initiated ringing answered completed",
     )
     dial.conference(
         conference_name,
@@ -615,5 +526,4 @@ async def twiml(request: Request):
         recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
         recording_status_callback_event="completed",
     )
-    print("TWIML response:", str(resp_user))
     return Response(status_code=200, content=str(resp_user), media_type="text/xml")
