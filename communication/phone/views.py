@@ -286,11 +286,12 @@ async def send_call(request: Request):
     # )
     # resp.say("Hello. Call status test is active.")
 
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    # date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    # conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     resp_user = VoiceResponse()
-    dial = resp_user.dial(
-        phone_number,
+    resp_user.dial(
+        sip_uri,
         action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
         caller_id=twilio_number,
         answer_on_bridge=True
@@ -308,9 +309,8 @@ async def send_call(request: Request):
     print("TWIML response:", str(resp_user))
 
     twilio_client = get_twilio_client()
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     call = twilio_client.calls.create(
-        to=sip_uri,
+        to=phone_number,
         from_=twilio_number,
         twiml=str(resp_user),
         # url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
