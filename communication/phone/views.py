@@ -290,11 +290,11 @@ async def send_call(request: Request):
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     resp_user = VoiceResponse()
     dial = resp_user.dial()
-    dial.number(
-        phone_number,
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        status_callback_event="initiated ringing answered completed",
-    )
+    # dial.number(
+    #     phone_number,
+    #     status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+    #     status_callback_event="initiated ringing answered completed",
+    # )
     dial.conference(
         conference_name,
         startConferenceOnEnter=True,
@@ -309,13 +309,20 @@ async def send_call(request: Request):
 
     twilio_client = get_twilio_client()
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    call = twilio_client.calls.create(
+    call1 = twilio_client.calls.create(
         to=sip_uri,
         from_=twilio_number,
         twiml=str(resp_user),
         # url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
     )
-    return {"success": True, "call_sid": call.sid}
+    twilio_client.calls.create(
+        to=phone_number,
+        from_=twilio_number,
+        twiml=str(resp_user),
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event=["initiated", "ringing", "answered", "completed"],
+    )
+    return {"success": True, "call_sid": call1.sid}
 
 
 @auth_router.post("/send-text")
