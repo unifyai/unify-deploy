@@ -280,7 +280,8 @@ async def send_call(request: Request):
     call = twilio_client.calls.create(
         to=phone_number,
         from_=twilio_number,
-        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
+        # url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
+        twiml="<Response><Say>Hello. Call status test is active.</Say></Response>",
         status_callback_event=["initiated", "ringing", "answered", "completed"],
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
     )
@@ -537,6 +538,7 @@ async def twiml(request: Request):
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     print("SIP URI:", sip_uri)
+
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
     dial_user.conference(
@@ -559,7 +561,7 @@ async def twiml(request: Request):
     print("TWIML response Leg 2:", str(resp_user))
 
     resp_user = VoiceResponse()
-    dial = Dial()
+    dial = resp_user.dial()
     dial.conference(
         conference_name,
         startConferenceOnEnter=True,
@@ -570,6 +572,5 @@ async def twiml(request: Request):
         recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
         recording_status_callback_event="completed",
     )
-    resp_user.append(dial)
     print("TWIML response Leg 1:", str(resp_user))
-    return Response(status_code=200, content=str(resp_user))
+    return Response(status_code=200, content=str(resp_user), media_type="text/xml")
