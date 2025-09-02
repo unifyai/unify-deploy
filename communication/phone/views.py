@@ -251,12 +251,12 @@ async def send_call(request: Request):
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     twilio_client = get_twilio_client()
     call = twilio_client.calls.create(
-        # to=sip_uri,
-        to=phone_number,
+        to=sip_uri,
         from_=twilio_number,
         # status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
         # status_callback_event=["initiated", "ringing", "answered", "completed"],
         url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml?phone_number={phone_number}",
+        # url=f"https://unity-comms-app-staging-000000000000.us-central1.run.app/phone/twiml?phone_number={phone_number}",
     )
     return {"success": True, "call_sid": call.sid}
 
@@ -506,10 +506,11 @@ async def twiml(request: Request):
     print("TWIML request:", data)
     twilio_number = data.get("From")
     print("TWIML twilio number:", twilio_number)
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    phone_number = "+" + request.query_params.get("phone_number")
+    print("TWIML phone number:", phone_number)
     resp_user = VoiceResponse()
     resp_user.dial(
-        sip_uri,
+        phone_number,
         action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
         caller_id=twilio_number,
         answer_on_bridge=True,
