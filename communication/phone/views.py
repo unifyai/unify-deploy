@@ -505,7 +505,7 @@ async def twiml(request: Request):
     twilio_number = data.get("From")
     print("TWIML twilio number:", twilio_number)
     print("query params:", request.query_params)
-    phone_number = request.query_params.get("phone_number")
+    phone_number = "+" + request.query_params.get("phone_number")
     print("phone number:", phone_number)
     resp_user = VoiceResponse()
     resp_user.dial(
