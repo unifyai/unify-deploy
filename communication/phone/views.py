@@ -516,7 +516,7 @@ async def twiml(request: Request):
     print("TWIML request:", data)
     twilio_number = data.get("From")
     print("TWIML twilio number:", twilio_number)
-    phone_number = "+" + request.query_params.get("phone_number")
+    phone_number = "+" + request.query_params.get("phone_number").replace(" ", "")
     print("TWIML phone number:", phone_number)
     resp_user = VoiceResponse()
     dial = resp_user.dial(caller_id=twilio_number)
