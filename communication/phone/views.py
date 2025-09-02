@@ -248,12 +248,12 @@ async def send_call(request: Request):
     data = await request.json()
     phone_number = data.get("To")
     twilio_number = data.get("From")
+    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     twilio_client = get_twilio_client()
     call = twilio_client.calls.create(
-        to=phone_number,
+        to=sip_uri,
         from_=twilio_number,
-        # twiml=str(resp_user),
-        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
+        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml?phone_number={phone_number}",
     )
     return {"success": True, "call_sid": call.sid}
 
@@ -504,26 +504,15 @@ async def twiml(request: Request):
     print("TWIML request:", data)
     twilio_number = data.get("From")
     print("TWIML twilio number:", twilio_number)
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    print("SIP URI:", sip_uri)
-
+    print("query params:", request.query_params)
+    phone_number = request.query_params.get("phone_number")
+    print("phone number:", phone_number)
     resp_user = VoiceResponse()
-    dial = resp_user.dial()
-    dial.sip(
-        sip_uri,
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        status_callback_event="initiated ringing answered completed",
+    resp_user.dial(
+        phone_number,
+        action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        caller_id=twilio_number,
+        answer_on_bridge=True,
     )
-    dial.conference(
-        conference_name,
-        startConferenceOnEnter=True,
-        endConferenceOnExit=True,
-        muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-        record="record-from-start",
-        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-        recording_status_callback_event="completed",
-    )
+    print("TWIML response:", str(resp_user))
     return Response(status_code=200, content=str(resp_user), media_type="text/xml")
