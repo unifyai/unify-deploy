@@ -495,6 +495,16 @@ async def conference_status(request: Request):
 @unauth_router.post("/call-status")
 async def call_status(request: Request):
     data = await request.form()
+    print("Call status")
+    for key, value in data.items():
+        print(key, "-->", value)
+    return Response(status_code=200)
+
+
+@unauth_router.post("/amd-status")
+async def amd_status(request: Request):
+    data = await request.form()
+    print("AMD status")
     for key, value in data.items():
         print(key, "-->", value)
     return Response(status_code=200)
@@ -514,6 +524,7 @@ async def twiml(request: Request):
         phone_number,
         status_callback_event="initiated ringing answered completed",
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        amd_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/amd-status",
     )
     print("TWIML response:", str(resp_user))
     return Response(status_code=200, content=str(resp_user), media_type="text/xml")
