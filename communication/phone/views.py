@@ -513,7 +513,7 @@ async def twiml(request: Request):
     dial.number(
         phone_number,
         status_callback_event="initiated ringing answered completed",
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/number-status",
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
     )
     print("TWIML response:", str(resp_user))
     return Response(status_code=200, content=str(resp_user), media_type="text/xml")
