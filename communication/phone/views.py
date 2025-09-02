@@ -283,6 +283,7 @@ async def send_call(request: Request):
         caller_id=twilio_number,
         answer_on_bridge=True
     )
+    resp.say("Hello. Call status test is active.")
     twilio_client = get_twilio_client()
     call = twilio_client.calls.create(
         to=phone_number,
