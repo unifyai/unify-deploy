@@ -286,12 +286,34 @@ async def send_call(request: Request):
     # )
     # resp.say("Hello. Call status test is active.")
 
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    resp_user = VoiceResponse()
+    dial = resp_user.dial(
+        phone_number,
+        action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        caller_id=twilio_number,
+        answer_on_bridge=True
+    )
+    dial.conference(
+        conference_name,
+        startConferenceOnEnter=True,
+        endConferenceOnExit=True,
+        muted=False,
+        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+        record="record-from-start",
+        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
+        recording_status_callback_event="completed",
+    )
+    print("TWIML response:", str(resp_user))
+
     twilio_client = get_twilio_client()
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     call = twilio_client.calls.create(
         to=sip_uri,
         from_=twilio_number,
-        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
+        twiml=str(resp_user),
+        # url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
     )
     return {"success": True, "call_sid": call.sid}
 
