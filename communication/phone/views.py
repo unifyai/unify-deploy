@@ -514,6 +514,7 @@ async def twiml(request: Request):
         action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
         caller_id=twilio_number,
         answer_on_bridge=True,
+        events=["initiated", "ringing", "answered", "completed"],
     )
     print("TWIML response:", str(resp_user))
     return Response(status_code=200, content=str(resp_user), media_type="text/xml")
