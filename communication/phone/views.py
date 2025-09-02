@@ -276,14 +276,22 @@ async def send_call(request: Request):
     #     conference_name, twilio_number, phone_number, sip_uri
     # )
     # return {"success": True, "call_sid": call_sid}
+    resp = VoiceResponse()
+    resp.dial(
+        phone_number,
+        action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        caller_id=twilio_number,
+        answer_on_bridge=True
+    )
     twilio_client = get_twilio_client()
     call = twilio_client.calls.create(
         to=phone_number,
         from_=twilio_number,
+        twiml=str(resp),
         # url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml",
-        twiml="<Response><Say>Hello. Call status test is active.</Say></Response>",
-        status_callback_event=["initiated", "ringing", "answered", "completed"],
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        # twiml="<Response><Say>Hello. Call status test is active.</Say></Response>",
+        # status_callback_event=["initiated", "ringing", "answered", "completed"],
+        # status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
     )
     return {"success": True, "call_sid": call.sid}
 
