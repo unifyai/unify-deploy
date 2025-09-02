@@ -286,25 +286,25 @@ async def send_call(request: Request):
     # )
     # resp.say("Hello. Call status test is active.")
 
-    # date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    # conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     resp_user = VoiceResponse()
-    resp_user.dial(
+    dial = resp_user.dial()
+    dial.number(
         phone_number,
-        action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        caller_id=twilio_number,
-        answer_on_bridge=True
+        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback_event="initiated ringing answered completed",
     )
-    # dial.conference(
-    #     conference_name,
-    #     startConferenceOnEnter=True,
-    #     endConferenceOnExit=True,
-    #     muted=False,
-    #     wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-    #     record="record-from-start",
-    #     recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-    #     recording_status_callback_event="completed",
-    # )
+    dial.conference(
+        conference_name,
+        startConferenceOnEnter=True,
+        endConferenceOnExit=True,
+        muted=False,
+        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+        record="record-from-start",
+        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
+        recording_status_callback_event="completed",
+    )
     print("TWIML response:", str(resp_user))
 
     twilio_client = get_twilio_client()
@@ -552,7 +552,7 @@ async def conference_status(request: Request):
 @unauth_router.post("/call-status")
 async def call_status(request: Request):
     data = await request.form()
-    print("Call status request:", data.get("CallStatus"), data.get("CallbackSource"))
+    print("Call status request:", data.get("CallStatus"), data.get("DialCallStatus"), data.get("DialBridged"), data.get("CallbackSource"))
     # for key, value in data.items():
     #     print(key, "-->", value)
     return Response(status_code=200)
