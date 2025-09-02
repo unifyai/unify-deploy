@@ -295,16 +295,16 @@ async def send_call(request: Request):
         caller_id=twilio_number,
         answer_on_bridge=True
     )
-    dial.conference(
-        conference_name,
-        startConferenceOnEnter=True,
-        endConferenceOnExit=True,
-        muted=False,
-        wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-        record="record-from-start",
-        recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-        recording_status_callback_event="completed",
-    )
+    # dial.conference(
+    #     conference_name,
+    #     startConferenceOnEnter=True,
+    #     endConferenceOnExit=True,
+    #     muted=False,
+    #     wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+    #     record="record-from-start",
+    #     recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
+    #     recording_status_callback_event="completed",
+    # )
     print("TWIML response:", str(resp_user))
 
     twilio_client = get_twilio_client()
