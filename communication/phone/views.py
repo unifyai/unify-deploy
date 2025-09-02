@@ -254,8 +254,8 @@ async def send_call(request: Request):
         # to=sip_uri,
         to=phone_number,
         from_=twilio_number,
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        status_callback_event=["initiated", "ringing", "answered", "completed"],
+        # status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        # status_callback_event=["initiated", "ringing", "answered", "completed"],
         url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml?phone_number={phone_number}",
     )
     return {"success": True, "call_sid": call.sid}
@@ -502,23 +502,17 @@ async def call_status(request: Request):
 
 @unauth_router.post("/twiml")
 async def twiml(request: Request):
+    data = await request.form()
+    print("TWIML request:", data)
+    twilio_number = data.get("From")
+    print("TWIML twilio number:", twilio_number)
+    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     resp_user = VoiceResponse()
-    resp_user.pause(length=30)
+    resp_user.dial(
+        sip_uri,
+        action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        caller_id=twilio_number,
+        answer_on_bridge=True,
+    )
     print("TWIML response:", str(resp_user))
     return Response(status_code=200, content=str(resp_user), media_type="text/xml")
-    # data = await request.form()
-    # print("TWIML request:", data)
-    # twilio_number = data.get("From")
-    # print("TWIML twilio number:", twilio_number)
-    # print("query params:", request.query_params)
-    # phone_number = "+" + request.query_params.get("phone_number")
-    # print("phone number:", phone_number)
-    # resp_user = VoiceResponse()
-    # resp_user.dial(
-    #     phone_number,
-    #     action=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-    #     caller_id=twilio_number,
-    #     # answer_on_bridge=True,
-    # )
-    # print("TWIML response:", str(resp_user))
-    # return Response(status_code=200, content=str(resp_user), media_type="text/xml")
