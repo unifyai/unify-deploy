@@ -509,7 +509,7 @@ async def twiml(request: Request):
     phone_number = "+" + request.query_params.get("phone_number")
     print("TWIML phone number:", phone_number)
     resp_user = VoiceResponse()
-    dial = resp_user.dial(caller_id=twilio_number, answer_on_bridge=True)
+    dial = resp_user.dial(caller_id=twilio_number)
     dial.number(
         phone_number,
         status_callback_event="initiated ringing answered completed",
