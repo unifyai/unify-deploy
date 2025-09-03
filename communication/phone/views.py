@@ -253,10 +253,7 @@ async def send_call(request: Request):
     call = twilio_client.calls.create(
         to=sip_uri,
         from_=twilio_number,
-        # status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        # status_callback_event=["initiated", "ringing", "answered", "completed"],
         url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml?phone_number={phone_number}",
-        # url=f"https://unity-comms-app-staging-000000000000.us-central1.run.app/phone/twiml?phone_number={phone_number}",
     )
     return {"success": True, "call_sid": call.sid}
 
@@ -524,7 +521,6 @@ async def twiml(request: Request):
         phone_number,
         status_callback_event="initiated ringing answered completed",
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
-        amd_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/amd-status",
     )
     print("TWIML response:", str(resp_user))
     return Response(status_code=200, content=str(resp_user), media_type="text/xml")
