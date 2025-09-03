@@ -498,23 +498,11 @@ async def call_status(request: Request):
     return Response(status_code=200)
 
 
-@unauth_router.post("/amd-status")
-async def amd_status(request: Request):
-    data = await request.form()
-    print("AMD status")
-    for key, value in data.items():
-        print(key, "-->", value)
-    return Response(status_code=200)
-
-
 @unauth_router.post("/twiml")
 async def twiml(request: Request):
     data = await request.form()
-    print("TWIML request:", data)
     twilio_number = data.get("From")
-    print("TWIML twilio number:", twilio_number)
     phone_number = "+" + request.query_params.get("phone_number").replace(" ", "")
-    print("TWIML phone number:", phone_number)
     resp_user = VoiceResponse()
     dial = resp_user.dial(caller_id=twilio_number)
     dial.number(
