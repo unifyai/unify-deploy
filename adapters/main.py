@@ -30,72 +30,60 @@ from .helpers import (
 )
 
 
-# livekit webhook (mainly useful for outbound calls)
 @functions_framework.http
-def livekit_webhook(request: Request):
-    print("livekit_webhook function started")
-    data = request.json
-    event = data.get("event")
-    staging = False
-    print(f"Event: {event} | Data: {data}")
-    if event == "participant_joined":
-        print("Participant joined event")
-        user_number = data.get("participant").get("identity").replace("user_", "")
-        assistant_number = data.get("room").get("name").replace("user_", "")
-        if user_number != assistant_number and "agent" not in user_number:
-            print(f"User {user_number} joined room with {assistant_number}")
-            assistant_data = get_assistant(phone_number=assistant_number)
-            if assistant_data["assistant_id"] is None:
-                staging = True
-                assistant_data = get_assistant(
-                    phone_number=assistant_number,
-                    staging=True,
-                )
-            api_key = assistant_data["api_key"]
-            assistant_id = assistant_data["assistant_id"]
-            assistant_first_name = assistant_data["assistant_first_name"]
-            assistant_surname = assistant_data["assistant_surname"]
-            user_number = assistant_data["user_number"]
-            assistant_number = assistant_data["assistant_number"]
+def twilio_call_status_webhook(request: Request):
+    call_status = request.form.get("CallStatus")
+    assistant_number = request.form.get("From")
+    user_number = request.form.get("To")
+    print(f"twilio_call_status_webhook function started: {call_status}")
+    print(f"User {user_number} on call with {assistant_number}")
+    if call_status == "in-progress":
+        # get assistant data
+        assistant_data = get_assistant(phone_number=assistant_number)
+        api_key = assistant_data["api_key"]
+        assistant_id = assistant_data["assistant_id"]
+        assistant_first_name = assistant_data["assistant_first_name"]
+        assistant_surname = assistant_data["assistant_surname"]
+        user_number = assistant_data["user_number"]
+        assistant_number = assistant_data["assistant_number"]
 
-            # check if contact is valid
-            contact_details = check_valid_contact(
-                email_id="",
-                phone_number=user_number,
-                medium="phone",
-                assistant_context=f"{assistant_first_name}{assistant_surname}",
-                api_key=api_key,
-                user_number=user_number,
-                staging=staging,
+        # check if contact is valid
+        contact_details = check_valid_contact(
+            email_id="",
+            phone_number=user_number,
+            medium="phone",
+            assistant_context=f"{assistant_first_name}{assistant_surname}",
+            api_key=api_key,
+            user_number=user_number,
+        )
+        if "default" not in assistant_id and not contact_details:
+            print(f"User {user_number} is not a valid contact")
+            return Response(status_code=200)
+
+        # publish to pubsub
+        pubsub_client = pubsub_v1.PublisherClient()
+        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        print(f"Publishing call to Pub/Sub at path: {topic_path}")
+        try:
+            pubsub_client.publish(
+                topic_path,
+                json.dumps(
+                    {
+                        "thread": "call_received",
+                        "event": {
+                            "contact_details": contact_details,
+                            "assistant_id": assistant_id,
+                            "user_number": user_number,
+                            "assistant_number": assistant_number,
+                            "timestamp": int(time.time() * 1000),
+                        },
+                    }
+                ).encode("utf-8"),
             )
-            if "default" not in assistant_id and not contact_details:
-                print(f"User {user_number} is not a valid contact")
-                return Response(status_code=200)
-
-            # publish to pubsub
-            pubsub_client = pubsub_v1.PublisherClient()
-            topic_name = f"unity-{assistant_id}" + ("" if not staging else "-staging")
-            topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-            print(f"Publishing call to Pub/Sub at path: {topic_path}")
-            try:
-                pubsub_client.publish(
-                    topic_path,
-                    json.dumps(
-                        {
-                            "thread": "call_received",
-                            "event": {
-                                "contact_details": contact_details,
-                                "assistant_id": assistant_id,
-                                "user_number": user_number,
-                                "assistant_number": assistant_number,
-                                "timestamp": int(time.time() * 1000),
-                            },
-                        }
-                    ).encode("utf-8"),
-                )
-                print("Call published to Pub/Sub successfully")
-            except Exception as e:
-                print(f"Error publishing to Pub/Sub: {str(e)}")
+            print("Call published to Pub/Sub successfully")
+        except Exception as e:
+            print(f"Error publishing to Pub/Sub: {str(e)}")
     return Response(status=200)
 
 
