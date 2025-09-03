@@ -347,7 +347,7 @@ async def list_kubernetes_jobs(namespace: str = "default", hours: int = 2):
                 "%Y-%m-%d-%H-%M-%S",
             )
         ) < timedelta(hours=hours), jobs.items))
-        print(f"Job items: {job_items}")
+        print(f"Job items: {map(lambda job: job.metadata.name, job_items)}")
 
         job_list = []
         for job in job_items:
