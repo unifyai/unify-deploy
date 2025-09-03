@@ -17,7 +17,7 @@ from livekit.protocol.sip import (
     DeleteSIPTrunkRequest,
     CreateSIPParticipantRequest,
 )
-from communication.helpers import get_twilio_client, ORCHESTRA_URL
+from communication.helpers import get_twilio_client, ORCHESTRA_URL, STAGING
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -489,24 +489,25 @@ async def conference_status(request: Request):
     return Response(status_code=200)
 
 
-@unauth_router.post("/call-status")
-async def call_status(request: Request):
-    data = await request.form()
-    print("Call status:", data.get("CallStatus"))
-    return Response(status_code=200)
-
-
 @unauth_router.post("/twiml")
 async def twiml(request: Request):
     data = await request.form()
     twilio_number = data.get("From")
     phone_number = "+" + request.query_params.get("phone_number").replace(" ", "")
+    call_status_url = (
+        "https://us-central1-gcp-project-runtime.cloudfunctions.net/"
+        + (
+            "twilio-call-status-webhook-staging"
+            if STAGING
+            else "twilio-call-status-webhook"
+        )
+    )
     resp_user = VoiceResponse()
     dial = resp_user.dial(caller_id=twilio_number)
     dial.number(
         phone_number,
         status_callback_event="initiated ringing answered completed",
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/call-status",
+        status_callback=call_status_url,
     )
     print("TWIML response:", str(resp_user))
     return Response(status_code=200, content=str(resp_user), media_type="text/xml")
