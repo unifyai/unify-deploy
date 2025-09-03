@@ -36,7 +36,7 @@ def twilio_call_status_webhook(request: Request):
     assistant_number = request.form.get("From")
     user_number = request.form.get("To")
     print(f"twilio_call_status_webhook function started: {call_status}")
-    print(f"User {user_number} on call with {assistant_number}")
+    print(f"User {user_number} called by {assistant_number}")
     if call_status == "in-progress":
         # get assistant data
         assistant_data = get_assistant(phone_number=assistant_number)
