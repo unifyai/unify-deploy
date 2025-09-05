@@ -358,3 +358,20 @@ def get_job_logs(
             "namespace": namespace,
             "logs": [],
         }
+
+
+def suspend_job(batch_api, job_name: str, namespace: str = "default"):
+    """Suspend a GKE Job by preventing new pods and deleting existing ones without
+    deleting the Job resource."""
+    try:
+        patch_body = {"spec": {"suspend": True}}
+        batch_api.patch_namespaced_job(
+            name=job_name,
+            namespace=namespace,
+            body=patch_body,
+        )
+        print(f"🛑 Patched job to stop new pods and retries: {job_name}")
+        return True
+    except Exception as e:
+        print(f"❌ Error stopping job: {e}")
+        return False
