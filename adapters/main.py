@@ -658,6 +658,8 @@ def clean_idle_jobs(request):
     if len(new_idle_jobs) == 0:
         if len(idle_jobs) != 0:
             idle_jobs = sorted(idle_jobs)[:-1]
+    else:
+        new_idle_jobs = [sorted(new_idle_jobs)[-1]]
     idle_jobs = filter(lambda job: job not in new_idle_jobs, idle_jobs)
 
     # delete all old idle jobs
