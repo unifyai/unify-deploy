@@ -158,6 +158,10 @@ def check_contact_details(
         user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
     """
+    print(
+        f"Checking contact details: {email_id}, {phone_number}, {medium}, "
+        f"{user_number}, {user_whatsapp_number}, {user_email}"
+    )
     if medium == "email" and user_email == email_id:
         return True
     if medium in ["msg", "phone"] and user_number == phone_number:
@@ -244,6 +248,7 @@ def check_valid_contact(
     boss_contact = [
         contact for contact in contacts if contact["entries"]["contact_id"] == 1
     ]
+    print(f"Boss contact: {boss_contact}")
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
         user_number = boss_contact["entries"]["phone_number"]
