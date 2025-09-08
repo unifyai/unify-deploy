@@ -398,7 +398,7 @@ def create_job(assistant_id: str):
             else "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator-staging"
         )
         # Make request with 1 second timeout - just enough to send it
-        requests.post(idle_job_url, data={"assistant_id": assistant_id}, timeout=1)
+        requests.post(idle_job_url, timeout=1)
         print(f"Idle job creation request sent for assistant {assistant_id}")
         return True
     except requests.exceptions.Timeout as e:

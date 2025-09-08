@@ -31,6 +31,56 @@ from .helpers import (
 
 
 @functions_framework.http
+def assistant_wakeup_webhook(request: Request):
+    print("assistant_wakeup_webhook function started")
+    assistant_number = request.form.get("assistant_number")
+    print(f"Assistant {assistant_number} woke up")
+
+    # get assistant data
+    assistant_data = get_assistant(phone_number=assistant_number)
+    api_key = assistant_data["api_key"]
+    assistant_id = assistant_data["assistant_id"]
+    user_id = assistant_data["user_id"]
+    user_name = assistant_data["user_name"]
+    assistant_first_name = assistant_data["assistant_first_name"]
+    assistant_surname = assistant_data["assistant_surname"]
+    assistant_age = assistant_data["assistant_age"]
+    assistant_region = assistant_data["assistant_region"]
+    assistant_about = assistant_data["assistant_about"]
+    user_number = assistant_data["user_number"]
+    assistant_number = assistant_data["assistant_number"]
+    assistant_email = assistant_data["assistant_email"]
+    user_whatsapp_number = assistant_data["user_whatsapp_number"]
+    user_email = assistant_data["user_email"]
+    tts_provider = assistant_data["tts_provider"]
+    voice_id = assistant_data["voice_id"]
+
+    # start unity job
+    start_unity_job(
+        api_key,
+        "wakeup",
+        assistant_id,
+        user_id,
+        user_name,
+        f"{assistant_first_name} {assistant_surname}",
+        assistant_age,
+        assistant_region,
+        assistant_about,
+        user_number,
+        assistant_number,
+        assistant_email,
+        user_whatsapp_number,
+        user_email,
+        tts_provider,
+        voice_id,
+    )
+
+    # create job
+    create_job(assistant_id)
+    return Response(status_code=200)
+
+
+@functions_framework.http
 def twilio_call_status_webhook(request: Request):
     call_status = request.form.get("CallStatus")
     assistant_number = request.form.get("From")
