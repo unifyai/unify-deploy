@@ -271,8 +271,8 @@ def twilio_call_webhook(request: Request):
 
         print(f"Assistant ID: {assistant_id}")
         if assistant_id == "default-assistant":
-            print(f"Dispatching agent unity_{assistant_number}")
-            dispatch_agent(f"unity_{assistant_number}")
+            print(f"Dispatching agent {room_name}")
+            dispatch_agent(room_name)
 
         print("Conference setup completed")
     except Exception as e:
