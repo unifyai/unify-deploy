@@ -269,7 +269,9 @@ def twilio_call_webhook(request: Request):
             print("Error: Failed to add user to conference")
             return Response(response="Error adding user to conference", status=500)
 
+        print(f"Assistant ID: {assistant_id}")
         if assistant_id == "default-assistant":
+            print("Dispatching agent for default assistant")
             dispatch_agent(assistant_id)
 
         print("Conference setup completed")
