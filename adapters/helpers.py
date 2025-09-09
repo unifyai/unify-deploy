@@ -722,3 +722,15 @@ def publish_thread_id(
         print(f"Published thread_id {thread_id} for user {user_id} to {topic_path}")
     except Exception as e:
         print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
+
+
+def dispatch_agent(agent_name: str):
+    response = requests.post(
+        f"{COMMS_URL}/phone/dispatch-agent",
+        headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+        json={"agent_name": agent_name},
+    )
+    if response.status_code != 200:
+        print(f"Failed to dispatch agent. Status: {response.status_code}")
+        return False
+    return True

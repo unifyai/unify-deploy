@@ -16,6 +16,7 @@ from twilio.twiml.voice_response import VoiceResponse
 
 from .helpers import (
     check_valid_contact,
+    dispatch_agent,
     get_assistant,
     is_job_running,
     start_unity_job,
@@ -267,6 +268,9 @@ def twilio_call_webhook(request: Request):
         else:
             print("Error: Failed to add user to conference")
             return Response(response="Error adding user to conference", status=500)
+
+        if assistant_id == "default-assistant":
+            dispatch_agent(assistant_id)
 
         print("Conference setup completed")
     except Exception as e:
