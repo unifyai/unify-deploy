@@ -77,7 +77,7 @@ def assistant_wakeup_webhook(request: Request):
 
     # create job
     create_job(assistant_id)
-    return Response(status_code=200)
+    return Response(status=200)
 
 
 @functions_framework.http
