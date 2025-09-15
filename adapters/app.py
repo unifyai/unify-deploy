@@ -13,6 +13,7 @@ sys.path.insert(0, str(adapters_dir))
 from flask import request, Flask, Request, Response
 from main import (
     twilio_call_webhook as _twilio_call_webhook,
+    twilio_call_status_webhook as _twilio_call_status_webhook,
     twilio_msg_webhook as _twilio_msg_webhook,
     twilio_whatsapp_webhook as _twilio_whatsapp_webhook,
     email_watch_renewer as _email_watch_renewer,
@@ -27,6 +28,18 @@ app = Flask(__name__)
 def health_check():
     """Health check endpoint."""
     return Response("OK", status=200)
+
+
+@app.route("/call-status", methods=["POST"])
+def twilio_call_status():
+    """Phone call status webhook endpoint."""
+    try:
+        response = _twilio_call_status_webhook(request)
+        if isinstance(response, str):
+            return Response(response)
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
 
 
 @app.route("/call", methods=["POST"])

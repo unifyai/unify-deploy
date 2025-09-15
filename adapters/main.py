@@ -117,7 +117,7 @@ def twilio_call_status_webhook(request: Request):
         topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
         print(f"Publishing call to Pub/Sub at path: {topic_path}")
         try:
-            pubsub_client.publish(
+            publish_future = pubsub_client.publish(
                 topic_path,
                 json.dumps(
                     {
@@ -132,6 +132,9 @@ def twilio_call_status_webhook(request: Request):
                     }
                 ).encode("utf-8"),
             )
+            if "test" in assistant_id:
+                status_id = publish_future.result(timeout=10)
+                print(f"Message ID: {status_id}")
             print("Call published to Pub/Sub successfully")
         except Exception as e:
             print(f"Error publishing to Pub/Sub: {str(e)}")
@@ -244,10 +247,13 @@ def twilio_call_webhook(request: Request):
                 },
             },
         }
-        pubsub_client.publish(
+        publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(pubsub_message).encode("utf-8"),
         )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
         print("Call published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing to Pub/Sub: {str(e)}")
@@ -365,7 +371,7 @@ def twilio_msg_webhook(request: Request):
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
-        pubsub_client.publish(
+        publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(
                 {
@@ -379,6 +385,9 @@ def twilio_msg_webhook(request: Request):
                 }
             ).encode("utf-8"),
         )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
         print("Message published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing to Pub/Sub: {str(e)}")
@@ -468,7 +477,7 @@ def twilio_whatsapp_webhook(request: Request):
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
-        pubsub_client.publish(
+        publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(
                 {
@@ -482,6 +491,9 @@ def twilio_whatsapp_webhook(request: Request):
                 }
             ).encode("utf-8"),
         )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
         print("Message published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing to Pub/Sub: {str(e)}")

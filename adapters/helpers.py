@@ -730,8 +730,10 @@ def publish_thread_id(
         data = json.dumps(message_dict).encode("utf-8")
 
         # Publish asynchronously
-        future = publisher.publish(topic_path, data=data)
-        future.result()  # Wait for publish to complete
+        publish_future = publisher.publish(topic_path, data=data)
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
         print(f"Published thread_id {thread_id} for user {user_id} to {topic_path}")
     except Exception as e:
         print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
