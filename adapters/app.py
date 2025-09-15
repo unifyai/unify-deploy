@@ -10,7 +10,7 @@ from pathlib import Path
 adapters_dir = Path(__file__).parent
 sys.path.insert(0, str(adapters_dir))
 
-from flask import Flask, Request, Response
+from flask import request, Flask, Request, Response
 from main import (
     twilio_call_webhook as _twilio_call_webhook,
     twilio_msg_webhook as _twilio_msg_webhook,
@@ -30,7 +30,7 @@ def health_check():
 
 
 @app.route("/call", methods=["POST"])
-def twilio_call_webhook(request: Request):
+def twilio_call_webhook():
     """Phone call webhook endpoint."""
     try:
         response = _twilio_call_webhook(request)
@@ -42,7 +42,7 @@ def twilio_call_webhook(request: Request):
 
 
 @app.route("/msg", methods=["POST"])
-def twilio_msg_webhook(request: Request):
+def twilio_msg_webhook():
     """Phone SMS webhook endpoint."""
     try:
         response = _twilio_msg_webhook(request)
@@ -54,7 +54,7 @@ def twilio_msg_webhook(request: Request):
 
 
 @app.route("/whatsapp", methods=["POST"])
-def twilio_whatsapp_webhook(request: Request):
+def twilio_whatsapp_webhook():
     """WhatsApp webhook endpoint."""
     try:
         response = _twilio_whatsapp_webhook(request)
@@ -66,7 +66,7 @@ def twilio_whatsapp_webhook(request: Request):
 
 
 @app.route("/email/watch", methods=["POST"])
-def email_watch_renewer(request: Request):
+def email_watch_renewer():
     """Email watch renewer endpoint."""
     try:
         response = _email_watch_renewer(request)
@@ -76,7 +76,7 @@ def email_watch_renewer(request: Request):
 
 
 @app.route("/email", methods=["POST"])
-def email_notification_processor(request: Request):
+def email_notification_processor():
     """Email webhook endpoint."""
     try:
         cloud_event = request.json()
@@ -87,7 +87,7 @@ def email_notification_processor(request: Request):
 
 
 @app.route("/idle-job", methods=["POST"])
-def idle_job_creator(request: Request):
+def idle_job_creator():
     """Create idle job endpoint."""
     try:
         response = _idle_job_creator(request)

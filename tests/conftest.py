@@ -50,8 +50,8 @@ def adapters_server() -> Generator[str, None, None]:
         [sys.executable, "adapters/app.py"],
         cwd=project_root,
         env=os.environ,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
         preexec_fn=os.setsid if os.name != "nt" else None,
     )
 
@@ -105,6 +105,7 @@ def test_client(adapters_server: str):
     def request(method: str, endpoint: str, **kwargs):
         """Helper method to make requests to the server."""
         url = f"{session.base_url}{endpoint}"
+        print(f"Making request to {url} {method} {kwargs}")
         return session.request(method, url, **kwargs)
 
     session.make_request = request
