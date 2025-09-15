@@ -106,10 +106,14 @@ async def send_email(request: Request):
     bcc = data.get("bcc")
     subject = data.get("subject", "")
     body = data.get("body")
+    in_reply_to = data.get("in_reply_to")  # message_id to reply to
+
     if not sender or not to or body is None:
         raise HTTPException(
             status_code=400, detail="Missing required fields: 'from', 'to', 'body'"
         )
+
+    # initialize message
     msg = MIMEMultipart()
     msg["from"] = sender
     msg["to"] = to if isinstance(to, str) else ",".join(to)
@@ -119,9 +123,23 @@ async def send_email(request: Request):
         msg["bcc"] = bcc if isinstance(bcc, str) else ",".join(bcc)
     msg["subject"] = subject
     msg.attach(MIMEText(body, "plain"))
+
+    # add threading headers if provided
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        # For simple replies, References should be the same as In-Reply-To
+        # This is the standard way to handle email threading
+        msg["References"] = in_reply_to
+    print(f"msg: {msg}")
+
+    # get raw message and initialize service
     raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     service = get_gmail_service(sender)
+
+    # send the email
     sent = service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
+
+    print(f"sent: {sent}")
     return {"success": True, "id": sent.get("id")}
 
 

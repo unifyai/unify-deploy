@@ -1,4 +1,50 @@
 steps:
+  # Twilio Call Webhook
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Twilio Call Webhook"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "twilio-call-webhook" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters" \
+          --entry-point=twilio_call_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
+  # Assistant Wakeup Webhook
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Assistant Wakeup Webhook"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "assistant-wakeup-webhook" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters" \
+          --entry-point=assistant_wakeup_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
   # Twilio WhatsApp Webhook
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: "Deploy Twilio WhatsApp Webhook"
@@ -45,19 +91,19 @@ steps:
           --max-instances=100 \
           --concurrency=80
 
-  # Twilio Call Webhook
+  # Twilio Call Status Webhook
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Twilio Call Webhook"
+    id: "Deploy Twilio Call Status Webhook"
     entrypoint: bash
     args:
       - "-c"
       - |
-        gcloud functions deploy "twilio-call-webhook" \
+        gcloud functions deploy "twilio-call-status-webhook" \
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
           --source="adapters" \
-          --entry-point=twilio_call_webhook \
+          --entry-point=twilio_call_status_webhook \
           --trigger-http \
           --allow-unauthenticated \
           --set-env-vars=PROJECT_ID=$PROJECT_ID \

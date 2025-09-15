@@ -16,9 +16,11 @@ from twilio.twiml.voice_response import VoiceResponse
 
 from helpers import (
     check_valid_contact,
+    dispatch_agent,
     get_assistant,
     is_job_running,
     start_unity_job,
+    create_job,
     create_conference_response,
     add_user_to_conference,
     get_thread_id,
@@ -29,10 +31,117 @@ from helpers import (
 )
 
 
+@functions_framework.http
+def assistant_wakeup_webhook(request: Request):
+    print("assistant_wakeup_webhook function started")
+    assistant_number = request.form.get("assistant_number")
+    print(f"Assistant {assistant_number} woke up")
+
+    # get assistant data
+    assistant_data = get_assistant(phone_number=assistant_number)
+    api_key = assistant_data["api_key"]
+    assistant_id = assistant_data["assistant_id"]
+    user_id = assistant_data["user_id"]
+    user_name = assistant_data["user_name"]
+    assistant_first_name = assistant_data["assistant_first_name"]
+    assistant_surname = assistant_data["assistant_surname"]
+    assistant_age = assistant_data["assistant_age"]
+    assistant_region = assistant_data["assistant_region"]
+    assistant_about = assistant_data["assistant_about"]
+    user_number = assistant_data["user_number"]
+    assistant_number = assistant_data["assistant_number"]
+    assistant_email = assistant_data["assistant_email"]
+    user_whatsapp_number = assistant_data["user_whatsapp_number"]
+    user_email = assistant_data["user_email"]
+    tts_provider = assistant_data["tts_provider"]
+    voice_id = assistant_data["voice_id"]
+
+    # start unity job
+    start_unity_job(
+        api_key,
+        "wakeup",
+        assistant_id,
+        user_id,
+        user_name,
+        f"{assistant_first_name} {assistant_surname}",
+        assistant_age,
+        assistant_region,
+        assistant_about,
+        user_number,
+        assistant_number,
+        assistant_email,
+        user_whatsapp_number,
+        user_email,
+        tts_provider,
+        voice_id,
+    )
+
+    # create job
+    create_job(assistant_id)
+    return Response(status=200)
+
+
+@functions_framework.http
+def twilio_call_status_webhook(request: Request):
+    call_status = request.form.get("CallStatus")
+    assistant_number = request.form.get("From")
+    user_number = request.form.get("To")
+    print(f"twilio_call_status_webhook function started: {call_status}")
+    print(f"User {user_number} called by {assistant_number}")
+    if call_status == "in-progress":
+        # get assistant data
+        assistant_data = get_assistant(phone_number=assistant_number)
+        api_key = assistant_data["api_key"]
+        assistant_id = assistant_data["assistant_id"]
+        assistant_first_name = assistant_data["assistant_first_name"]
+        assistant_surname = assistant_data["assistant_surname"]
+        user_number = assistant_data["user_number"]
+        assistant_number = assistant_data["assistant_number"]
+
+        # check if contact is valid
+        contact_details = check_valid_contact(
+            email_id="",
+            phone_number=user_number,
+            medium="phone",
+            assistant_context=f"{assistant_first_name}{assistant_surname}",
+            api_key=api_key,
+            user_number=user_number,
+        )
+        if "default" not in assistant_id and not contact_details:
+            print(f"User {user_number} is not a valid contact")
+            return Response(status_code=200)
+
+        # publish to pubsub
+        pubsub_client = pubsub_v1.PublisherClient()
+        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        print(f"Publishing call to Pub/Sub at path: {topic_path}")
+        try:
+            pubsub_client.publish(
+                topic_path,
+                json.dumps(
+                    {
+                        "thread": "call_received",
+                        "event": {
+                            "contact_details": contact_details,
+                            "assistant_id": assistant_id,
+                            "user_number": user_number,
+                            "assistant_number": assistant_number,
+                            "timestamp": int(time.time() * 1000),
+                        },
+                    }
+                ).encode("utf-8"),
+            )
+            print("Call published to Pub/Sub successfully")
+        except Exception as e:
+            print(f"Error publishing to Pub/Sub: {str(e)}")
+    return Response(status=200)
+
+
 # phone webhook
 @functions_framework.http
 def twilio_call_webhook(request: Request):
-    print("🚀 Minimal change webhook started")
+    print("twilio_call_webhook function started")
     # get twilio number and caller number
     to_number = request.form.get("To", "")
     from_number = request.form.get("From", "")
@@ -60,7 +169,7 @@ def twilio_call_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if "default" not in assistant_id and not check_valid_contact(
+    contact_details = check_valid_contact(
         email_id="",
         phone_number=caller_number,
         medium="phone",
@@ -69,7 +178,8 @@ def twilio_call_webhook(request: Request):
         user_number=user_number,
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
-    ):
+    )
+    if "default" not in assistant_id and not contact_details:
         resp_user = VoiceResponse()
         resp_user.say(
             "This number is no longer active. Please visit "
@@ -80,7 +190,7 @@ def twilio_call_webhook(request: Request):
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
     print(f"Job running: {running}")
-    if "test" not in assistant_id and not is_job_running(user_id, assistant_id):
+    if "test" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "phone",
@@ -99,9 +209,11 @@ def twilio_call_webhook(request: Request):
             tts_provider,
             voice_id,
         )
+        create_job(assistant_id)
 
     # FIXED: Create conference name and sip uri with unique timestamp
-    conference_name = f"Unity_{twilio_number[1:]}"
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     room_name = f"unity_{twilio_number}"  # Consistent room per assistant
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
@@ -116,6 +228,7 @@ def twilio_call_webhook(request: Request):
         pubsub_message = {
             "thread": "call",
             "event": {
+                "contact_details": contact_details,
                 "conference_name": conference_name,
                 "caller_number": caller_number,
                 "sip_uri": sip_uri,
@@ -157,6 +270,11 @@ def twilio_call_webhook(request: Request):
             print("Error: Failed to add user to conference")
             return Response(response="Error adding user to conference", status=500)
 
+        print(f"Assistant ID: {assistant_id}")
+        if assistant_id == "default-assistant":
+            print(f"Dispatching agent {room_name}")
+            dispatch_agent(room_name)
+
         print("Conference setup completed")
     except Exception as e:
         print(f"Error during conference setup: {str(e)}")
@@ -196,7 +314,7 @@ def twilio_msg_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if "default" not in assistant_id and not check_valid_contact(
+    contact_details = check_valid_contact(
         email_id="",
         phone_number=from_number,
         medium="msg",
@@ -205,7 +323,8 @@ def twilio_msg_webhook(request: Request):
         user_number=user_number,
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
-    ):
+    )
+    if "default" not in assistant_id and not contact_details:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -214,7 +333,9 @@ def twilio_msg_webhook(request: Request):
         return Response(response=str(resp_user), mimetype="text/xml")
 
     # start unity job if it is not running
-    if "test" not in assistant_id and not is_job_running(user_id, assistant_id):
+    running = is_job_running(user_id, assistant_id)
+    print(f"Job running: {running}")
+    if "test" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "msg",
@@ -233,6 +354,7 @@ def twilio_msg_webhook(request: Request):
             tts_provider,
             voice_id,
         )
+        create_job(assistant_id)
 
     # set up conference
     resp_user = MessagingResponse()
@@ -249,6 +371,7 @@ def twilio_msg_webhook(request: Request):
                 {
                     "thread": "msg",
                     "event": {
+                        "contact_details": contact_details,
                         "to_number": to_number,
                         "from_number": from_number,
                         "body": body,
@@ -294,7 +417,7 @@ def twilio_whatsapp_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    if "default" not in assistant_id and not check_valid_contact(
+    contact_details = check_valid_contact(
         email_id="",
         phone_number=from_number.replace("whatsapp:", ""),
         medium="whatsapp",
@@ -303,7 +426,8 @@ def twilio_whatsapp_webhook(request: Request):
         user_number=user_number,
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
-    ):
+    )
+    if "default" not in assistant_id and not contact_details:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -312,7 +436,9 @@ def twilio_whatsapp_webhook(request: Request):
         return Response(response=str(resp_user), mimetype="text/xml")
 
     # start unity job if it is not running
-    if "test" not in assistant_id and not is_job_running(user_id, assistant_id):
+    running = is_job_running(user_id, assistant_id)
+    print(f"Job running: {running}")
+    if "test" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "whatsapp",
@@ -331,6 +457,7 @@ def twilio_whatsapp_webhook(request: Request):
             tts_provider,
             voice_id,
         )
+        create_job(assistant_id)
 
     # set up conference
     resp_user = MessagingResponse()
@@ -347,6 +474,7 @@ def twilio_whatsapp_webhook(request: Request):
                 {
                     "thread": "whatsapp",
                     "event": {
+                        "contact_details": contact_details,
                         "to_number": to_number,
                         "from_number": from_number,
                         "body": body,
@@ -431,7 +559,7 @@ def email_notification_processor(cloud_event):
         voice_id = assistant_data["voice_id"]
 
         # check if contact is valid
-        if "default" not in assistant_id and not check_valid_contact(
+        contact_details = check_valid_contact(
             email_id=email_id,
             phone_number="",
             medium="email",
@@ -440,7 +568,8 @@ def email_notification_processor(cloud_event):
             user_number=user_number,
             user_whatsapp_number=user_whatsapp_number,
             user_email=user_email,
-        ):
+        )
+        if "default" not in assistant_id and not contact_details:
             error_message = (
                 "This email address is no longer active. Please visit "
                 "console.unify.ai to view your assistant details."
@@ -448,7 +577,9 @@ def email_notification_processor(cloud_event):
             return error_message, 500
 
         # start unity job if it is not running
-        if "test" not in assistant_id and not is_job_running(user_id, assistant_id):
+        running = is_job_running(user_id, assistant_id)
+        print(f"Job running: {running}")
+        if "test" not in assistant_id and not running:
             start_unity_job(
                 api_key,
                 "email",
@@ -467,6 +598,7 @@ def email_notification_processor(cloud_event):
                 tts_provider,
                 voice_id,
             )
+            create_job(assistant_id)
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
@@ -483,11 +615,24 @@ def email_notification_processor(cloud_event):
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # Process the history and thread
-        thread_id, last_message = get_thread_id(email_id, history_id, gmail_service)
+        print(f"email_id: {email_id}, history_id: {history_id}")
+        thread_id, message_id, last_message = get_thread_id(
+            email_id, history_id, gmail_service
+        )
+        print(
+            f"thread_id: {thread_id}, message_id: {message_id}, last_message: {last_message}"
+        )
 
         if thread_id:
             print(f"Successfully processed conversation for user {email_id}")
-            publish_thread_id(assistant_id, thread_id, user_id, last_message)
+            publish_thread_id(
+                assistant_id,
+                user_id,
+                thread_id,
+                message_id,
+                last_message,
+                contact_details,
+            )
             return "OK"
         else:
             print(f"No new conversations found for user {email_id}")
@@ -527,6 +672,12 @@ def idle_job_cleaner(request):
     # get all jobs
     jobs = requests.get(f"{COMMS_URL}/infra/jobs", headers=headers).json()
     job_names = [job["job_name"] for job in jobs["jobs"]]
+    job_names = [
+        job_name
+        for job_name in job_names
+        if (STAGING and "staging" in job_name)
+        or (not STAGING and "staging" not in job_name)
+    ]
     print(f"Job names: {job_names}")
 
     for job_name in job_names:
@@ -543,7 +694,10 @@ def idle_job_cleaner(request):
         print(f"Logs: {logs}")
 
         # check if job is idle
-        if "ping received - keeping event manager alive" in logs:
+        if (
+            "ping received - keeping event manager alive" in logs
+            and "Graceful shutdown completed" not in logs
+        ):
             idle_jobs.append(job_name)
 
     new_idle_jobs = []
@@ -561,6 +715,8 @@ def idle_job_cleaner(request):
     if len(new_idle_jobs) == 0:
         if len(idle_jobs) != 0:
             idle_jobs = sorted(idle_jobs)[:-1]
+    else:
+        new_idle_jobs = [sorted(new_idle_jobs)[-1]]
     idle_jobs = filter(lambda job: job not in new_idle_jobs, idle_jobs)
 
     # delete all old idle jobs

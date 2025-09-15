@@ -178,6 +178,10 @@ def create_unity_job(
             },
             {"name": "OMP_NUM_THREADS", "value": "2"},
             {"name": "MKL_NUM_THREADS", "value": "2"},
+            {
+                "name": "UNITY_COMMS_URL",
+                "value": "https://unity-comms-app-000000000000.us-central1.run.app",
+            },
         ]
         if is_staging:
             env_vars = [
@@ -186,7 +190,11 @@ def create_unity_job(
                     "name": "UNIFY_BASE_URL",
                     "value": "https://service.a.run.app/v0",
                 },
-            ] + env_vars
+                {
+                    "name": "UNITY_COMMS_URL",
+                    "value": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
+                },
+            ] + env_vars[:-1]
 
         # Define the job manifest
         job_manifest = {
@@ -350,3 +358,20 @@ def get_job_logs(
             "namespace": namespace,
             "logs": [],
         }
+
+
+def suspend_job(batch_api, job_name: str, namespace: str = "default"):
+    """Suspend a GKE Job by preventing new pods and deleting existing ones without
+    deleting the Job resource."""
+    try:
+        patch_body = {"spec": {"suspend": True}}
+        batch_api.patch_namespaced_job(
+            name=job_name,
+            namespace=namespace,
+            body=patch_body,
+        )
+        print(f"🛑 Patched job to stop new pods and retries: {job_name}")
+        return True
+    except Exception as e:
+        print(f"❌ Error stopping job: {e}")
+        return False

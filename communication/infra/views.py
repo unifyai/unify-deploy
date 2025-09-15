@@ -9,6 +9,7 @@ from .helpers import (
     create_unity_job,
     delete_job,
     get_job_logs,
+    suspend_job,
 )
 from communication.helpers import STAGING
 
@@ -319,6 +320,36 @@ async def start_job(
         )
 
 
+# stop kubernetes job
+@router.post("/job/stop")
+async def stop_job(
+    job_name: str = Form(...), namespace: str = Form("default")
+):
+    """
+    Stop a Kubernetes Job for a Unity assistant.
+    """
+    try:
+        # Initialize Kubernetes client
+        batch_api, core_api = setup_kubernetes_client()
+        if not batch_api or not core_api:
+            raise HTTPException(
+                status_code=500, detail="Failed to connect to Kubernetes cluster"
+            )
+        # Suspend the job
+        success = suspend_job(batch_api, job_name, namespace)
+        if success:
+            return {
+                "success": True,
+                "message": f"Job suspended successfully: {job_name}",
+            }
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to suspend job: {job_name}")
+    except HTTPException:
+            raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to suspend job: {str(e)}")
+
+
 # list kubernetes jobs
 @router.get("/jobs")
 async def list_kubernetes_jobs(namespace: str = "default", hours: int = 2):
@@ -347,7 +378,7 @@ async def list_kubernetes_jobs(namespace: str = "default", hours: int = 2):
                 "%Y-%m-%d-%H-%M-%S",
             )
         ) < timedelta(hours=hours), jobs.items))
-        print(f"Job items: {job_items}")
+        print(f"Job items: {map(lambda job: job.metadata.name, job_items)}")
 
         job_list = []
         for job in job_items:

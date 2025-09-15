@@ -1,8 +1,8 @@
-import asyncio
 import base64
 import json
 import os
 import re
+import traceback
 import requests
 
 from google.cloud import pubsub_v1
@@ -25,7 +25,10 @@ COMMS_URL = (
 )
 
 
-def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, str]:
+def get_assistant(
+    email_id: str = None,
+    phone_number: str = None,
+) -> dict[str, str]:
     """
     Get the assistant id from the email id or phone number.
 
@@ -123,10 +126,10 @@ def get_assistant(email_id: str = None, phone_number: str = None) -> dict[str, s
     ).json()
 
     if "detail" in response:
-        return default_assistant_data
+        return {**default_assistant_data, "assistant_id": None}
     assistants = response["info"]
     if len(assistants) == 0:
-        return default_assistant_data
+        return {**default_assistant_data, "assistant_id": None}
 
     return {
         "assistant_id": assistants[0]["agent_id"],
@@ -168,6 +171,10 @@ def check_contact_details(
         user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
     """
+    print(
+        f"Checking contact details: {email_id}, {phone_number}, {medium}, "
+        f"{user_number}, {user_whatsapp_number}, {user_email}"
+    )
     if medium == "email" and user_email == email_id:
         return True
     if medium in ["msg", "phone"] and user_number == phone_number:
@@ -204,38 +211,78 @@ def check_valid_contact(
         f"Checking valid contact: {email_id}, {phone_number}, "
         f"{medium}, {user_number}, {user_whatsapp_number}, {user_email}"
     )
-    # check for boss user
-    if check_contact_details(
-        email_id=email_id,
-        phone_number=phone_number,
-        medium=medium,
-        user_number=user_number,
-        user_whatsapp_number=user_whatsapp_number,
-        user_email=user_email,
-    ):
-        print(
-            f"Boss user found: {email_id}, {phone_number}, {medium}, "
-            f"{user_number}, {user_whatsapp_number}, {user_email}"
-        )
-        return True
 
     # check for contact in assistant contacts
+    context = f"{assistant_context}/Contacts"
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
-        params={
-            "project": "Assistants",
-            "context": f"{assistant_context}/Contacts",
-        },
+        params={"project": "Assistants", "context": context},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     if response.status_code != 200:
+        # if the context isn't created yet (first time user)
+        if response.json()["detail"] == f"Context '{context}' not found":
+            # check for boss user
+            if check_contact_details(
+                email_id=email_id,
+                phone_number=phone_number,
+                medium=medium,
+                user_number=user_number,
+                user_whatsapp_number=user_whatsapp_number,
+                user_email=user_email,
+            ):
+                print(
+                    f"Boss user found: {email_id}, {phone_number}, {medium}, "
+                    f"{user_number}, {user_whatsapp_number}, {user_email}"
+                )
+                return {
+                    "contact_id": 1,
+                    "first_name": "",
+                    "surname": "",
+                    "email_adress": user_email,
+                    "phone_number": phone_number,
+                    "whatsapp_number": user_whatsapp_number,
+                    "bio": "",
+                    "rolling_summary": "",
+                    "respond_to": "",
+                    "response_policy": "",
+                }
+
+        # otherwise
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response.text)
-        return False
+        return None
     contacts = response.json()["logs"]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
-        return False
+        return None
+
+    # check for boss user
+    boss_contact = [
+        contact for contact in contacts if contact["entries"]["contact_id"] == 1
+    ]
+    print(f"Boss contact: {boss_contact}")
+    if len(boss_contact) > 0:
+        boss_contact = boss_contact[0]
+        user_number = boss_contact["entries"]["phone_number"]
+        user_whatsapp_number = boss_contact["entries"]["whatsapp_number"]
+        user_email = boss_contact["entries"]["email_address"]
+        if check_contact_details(
+            email_id=email_id,
+            phone_number=phone_number,
+            medium=medium,
+            user_number=user_number,
+            user_whatsapp_number=user_whatsapp_number,
+            user_email=user_email,
+        ):
+            print(
+                f"Boss user found: {email_id}, {phone_number}, {medium}, "
+                f"{user_number}, {user_whatsapp_number}, {user_email}"
+            )
+            return boss_contact["entries"]
+    else:
+        print("No boss user found")
+        return None
 
     # check all contacts
     for contact in contacts:
@@ -248,8 +295,8 @@ def check_valid_contact(
             user_email=contact["entries"]["email_address"],
         ):
             print(f"Contact found: {contact}")
-            return True
-    return False
+            return contact["entries"]
+    return None
 
 
 def is_job_running(user_id: str, assistant_id: str):
@@ -262,7 +309,7 @@ def is_job_running(user_id: str, assistant_id: str):
                 f"user_id == '{user_id}' and "
                 f"assistant_id == '{assistant_id}' and "
                 f"running == 'true'"
-            )
+            ),
         },
         headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
     )
@@ -316,65 +363,66 @@ def start_unity_job(
         print(f"No user name for assistant {assistant_id}")
         return
 
-    # get commit hash
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.get(
-        f"{COMMS_URL}/infra/image",
-        headers=headers,
-    )
-    if response.status_code != 200:
-        print(f"Failed to get commit hash for assistant {assistant_id}")
-        return
-    commit_hash = response.json()["commit_hash"]
-    image = (
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if not STAGING else "/unity-staging:")
-        + commit_hash
-    )
-
     # start job
-    response = requests.post(
-        f"{COMMS_URL}/infra/job/start",
-        headers=headers,
-        data={
-            "api_key": api_key,
-            "medium": medium,
-            "assistant_id": assistant_id,
-            "user_id": user_id,
-            "user_name": user_name,
-            "user_email": user_email,
-            "assistant_name": assistant_name,
-            "assistant_age": assistant_age,
-            "assistant_region": assistant_region,
-            "assistant_about": assistant_about,
-            "user_number": user_number,
-            "assistant_number": assistant_number,
-            "assistant_email": assistant_email,
-            "user_whatsapp_number": user_whatsapp_number,
-            "tts_provider": tts_provider,
-            "voice_id": voice_id,
-        },
-    )
-    if response.status_code != 200:
-        print(f"Failed to start job for assistant {assistant_id}")
-    else:
-        print(f"Job started for assistant {assistant_id}")
-
-    # create job
-    def create_job():
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    try:
         response = requests.post(
-            f"{COMMS_URL}/infra/job/create",
+            f"{COMMS_URL}/infra/job/start",
             headers=headers,
-            data={"image": image},
+            data={
+                "api_key": api_key,
+                "medium": medium,
+                "assistant_id": assistant_id,
+                "user_id": user_id,
+                "user_name": user_name,
+                "user_email": user_email,
+                "assistant_name": assistant_name,
+                "assistant_age": assistant_age,
+                "assistant_region": assistant_region,
+                "assistant_about": assistant_about,
+                "user_number": user_number,
+                "assistant_number": assistant_number,
+                "assistant_email": assistant_email,
+                "user_whatsapp_number": user_whatsapp_number,
+                "tts_provider": tts_provider,
+                "voice_id": voice_id,
+            },
+            timeout=1,
         )
         if response.status_code != 200:
-            print(f"Failed to create job for assistant {assistant_id}")
-            print(f"Error: {response.text}")
+            print(f"Failed to start job for assistant {assistant_id}")
         else:
-            print(f"Job creation initiated for assistant {assistant_id}")
+            print(f"Job started for assistant {assistant_id}")
+    except requests.exceptions.Timeout:
+        print(f"Job started for assistant {assistant_id} (timeout)")
 
-    # Start job creation asynchronously without waiting
-    asyncio.run(asyncio.to_thread(create_job))
+
+def create_job(assistant_id: str):
+    """
+    Create idle job by calling the dedicated Cloud Function.
+    Uses httpx.Client with minimal timeout for fire-and-forget behavior.
+    """
+
+    try:
+        # Determine the correct URL based on staging/prod
+        idle_job_url = (
+            "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator"
+            if not STAGING
+            else "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator-staging"
+        )
+        # Make request with 1 second timeout - just enough to send it
+        requests.post(idle_job_url, timeout=1)
+        print(f"Idle job creation request sent for assistant {assistant_id}")
+        return True
+    except requests.exceptions.Timeout as e:
+        # timeout exception is expected, just return True
+        print(f"Idle job creation request sent for assistant {assistant_id} (timeout)")
+        return True
+    except Exception as e:
+        print(
+            f"Error sending idle job creation request for assistant {assistant_id}: {e}"
+        )
+        return False
 
 
 # phone helpers
@@ -442,8 +490,8 @@ def create_conference_response(conference_name, with_status=False):
             record="record-from-start",
             recording_status_callback=f"{COMMS_URL}/phone/recording",
             recording_status_callback_event="completed",
-            status_callback=f"{COMMS_URL}/phone/call-status",
-            status_callback_event=["completed"],
+            status_callback=f"{COMMS_URL}/phone/conference-status",
+            status_callback_event="end",
         )
         return resp_user
     dial_user.conference(
@@ -575,9 +623,10 @@ def get_thread_id(user_id, history_id, gmail_service):
             )
             .execute()
         )
+        print(f"pre-histories: {histories}")
 
         # Safeguard for thread replies
-        if not histories or "history" not in histories or not histories["history"]:
+        if "history" not in histories or not histories["history"]:
             histories["history"] = [
                 (
                     gmail_service.users()
@@ -590,14 +639,12 @@ def get_thread_id(user_id, history_id, gmail_service):
                 )
             ]
 
-        if not histories or "history" not in histories or not histories["history"]:
-            print(f"No history found for user {user_id} with history id {history_id}")
-            return None, None
-
         # Process each history entry
-        print(f"History: {histories}")
+        print(f"histories: {histories}")
         for history in histories["history"]:
+            print(f"history: {history}")
             messages = history.get("messages", [])
+            print(f"messages: {messages}")
             if len(messages) == 0:
                 continue
 
@@ -609,8 +656,19 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .get(userId=user_id, id=msg_id)
                 .execute()
             )
+            print(f"message: {message} {msg_id}")
+            message_headers = message["payload"].get("headers", [])
+            print(f"message_headers: {message_headers}")
+            message_id_header = [
+                header
+                for header in message_headers
+                if header.get("name") == "Message-ID"
+            ][0]
+            message_id = message_id_header.get("value")
+            print(f"message_id: {message_id}")
 
             labels = message.get("labelIds", [])
+            print(f"labels: {labels}")
             if labels and "UNREAD" not in labels:
                 print(f"Message {msg_id} is read, skipping")
                 continue
@@ -627,22 +685,28 @@ def get_thread_id(user_id, history_id, gmail_service):
                 .get(userId=user_id, id=thread_id, format="full")
                 .execute()
             )
+            print(f"thread: {thread} {thread_id}")
 
             # Convert to conversation format
             conversation = _gmail_thread_to_conversation(thread)
+            print(f"conversation: {conversation}")
             last_message = conversation[-1]
+            print(f"last_message: {last_message}")
 
             # Return the conversation (or process it further as needed)
-            return thread_id, last_message
+            return thread_id, message_id, last_message
 
-        return None, None
+        return None, None, None
 
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
-        return None, None
+        traceback.print_exc()
+        return None, None, None
 
 
-def publish_thread_id(assistant_id, thread_id, user_id, last_message):
+def publish_thread_id(
+    assistant_id, user_id, thread_id, message_id, last_message, contact_details
+):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = pubsub_v1.PublisherClient()
@@ -652,7 +716,9 @@ def publish_thread_id(assistant_id, thread_id, user_id, last_message):
         message_dict = {
             "thread": "email",
             "event": {
+                "contact_details": contact_details,
                 "thread_id": thread_id,
+                "message_id": message_id,
                 "from": last_message["sender"],
                 "to": last_message["to"],
                 "cc": last_message["cc"],
@@ -669,3 +735,15 @@ def publish_thread_id(assistant_id, thread_id, user_id, last_message):
         print(f"Published thread_id {thread_id} for user {user_id} to {topic_path}")
     except Exception as e:
         print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
+
+
+def dispatch_agent(agent_name: str):
+    response = requests.post(
+        f"{COMMS_URL}/phone/dispatch-agent",
+        headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+        json={"agent_name": agent_name},
+    )
+    if response.status_code != 200:
+        print(f"Failed to dispatch agent. Status: {response.status_code}")
+        return False
+    return True
