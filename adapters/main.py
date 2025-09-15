@@ -193,7 +193,7 @@ def twilio_call_webhook(request: Request):
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
     print(f"Job running: {running}")
-    if "test" not in assistant_id and not running:
+    if "test" not in assistant_id and "default" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "phone",
@@ -341,7 +341,7 @@ def twilio_msg_webhook(request: Request):
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
     print(f"Job running: {running}")
-    if "test" not in assistant_id and not running:
+    if "test" not in assistant_id and "default" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "msg",
@@ -447,7 +447,7 @@ def twilio_whatsapp_webhook(request: Request):
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
     print(f"Job running: {running}")
-    if "test" not in assistant_id and not running:
+    if "test" not in assistant_id and "default" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "whatsapp",
@@ -591,7 +591,7 @@ def email_notification_processor(cloud_event):
         # start unity job if it is not running
         running = is_job_running(user_id, assistant_id)
         print(f"Job running: {running}")
-        if "test" not in assistant_id and not running:
+        if "test" not in assistant_id and "default" not in assistant_id and not running:
             start_unity_job(
                 api_key,
                 "email",
