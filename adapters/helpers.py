@@ -105,6 +105,19 @@ def get_assistant(
         return {**default_assistant_data, "assistant_id": "default-assistant-4"}
     if "+15550100008" in phone_check:
         return {**default_assistant_data, "assistant_id": "default-assistant-5"}
+    if "+0123456789" in phone_check or "default-test-assistant@unify.ai" in email_check:
+        return {
+            **default_assistant_data,
+            "assistant_id": "default-test-assistant",
+            "user_name": "Test User",
+            "user_number": "+9876543210",
+            "user_email": "test@unify.ai",
+            "assistant_first_name": "Test",
+            "assistant_surname": "Assistant",
+            "assistant_number": "+0123456789",
+            "assistant_email": "default-test-assistant@unify.ai",
+            "user_whatsapp_number": "+9876543210",
+        }
 
     response = requests.get(
         f"{ORCHESTRA_URL}/admin/assistant",
@@ -717,8 +730,10 @@ def publish_thread_id(
         data = json.dumps(message_dict).encode("utf-8")
 
         # Publish asynchronously
-        future = publisher.publish(topic_path, data=data)
-        future.result()  # Wait for publish to complete
+        publish_future = publisher.publish(topic_path, data=data)
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
         print(f"Published thread_id {thread_id} for user {user_id} to {topic_path}")
     except Exception as e:
         print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")

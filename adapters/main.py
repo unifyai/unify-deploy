@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
 
-from .helpers import (
+from helpers import (
     check_valid_contact,
     dispatch_agent,
     get_assistant,
@@ -117,7 +117,7 @@ def twilio_call_status_webhook(request: Request):
         topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
         print(f"Publishing call to Pub/Sub at path: {topic_path}")
         try:
-            pubsub_client.publish(
+            publish_future = pubsub_client.publish(
                 topic_path,
                 json.dumps(
                     {
@@ -132,6 +132,9 @@ def twilio_call_status_webhook(request: Request):
                     }
                 ).encode("utf-8"),
             )
+            if "test" in assistant_id:
+                status_id = publish_future.result(timeout=10)
+                print(f"Message ID: {status_id}")
             print("Call published to Pub/Sub successfully")
         except Exception as e:
             print(f"Error publishing to Pub/Sub: {str(e)}")
@@ -190,7 +193,7 @@ def twilio_call_webhook(request: Request):
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
     print(f"Job running: {running}")
-    if not running:
+    if "test" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "phone",
@@ -244,13 +247,17 @@ def twilio_call_webhook(request: Request):
                 },
             },
         }
-        pubsub_client.publish(
+        publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(pubsub_message).encode("utf-8"),
         )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
         print("Call published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing to Pub/Sub: {str(e)}")
+        return Response(response="Error publishing to Pub/Sub", status=500)
 
     # UNCHANGED: Keep the original conference setup (this works)
     try:
@@ -334,7 +341,7 @@ def twilio_msg_webhook(request: Request):
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
     print(f"Job running: {running}")
-    if not running:
+    if "test" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "msg",
@@ -364,7 +371,7 @@ def twilio_msg_webhook(request: Request):
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
-        pubsub_client.publish(
+        publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(
                 {
@@ -378,9 +385,13 @@ def twilio_msg_webhook(request: Request):
                 }
             ).encode("utf-8"),
         )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
         print("Message published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing to Pub/Sub: {str(e)}")
+        return Response(response="Error publishing to Pub/Sub", status=500)
     print("Returning TwiML response")
     return Response(response=str(resp_user), mimetype="text/xml")
 
@@ -436,7 +447,7 @@ def twilio_whatsapp_webhook(request: Request):
     # start unity job if it is not running
     running = is_job_running(user_id, assistant_id)
     print(f"Job running: {running}")
-    if not running:
+    if "test" not in assistant_id and not running:
         start_unity_job(
             api_key,
             "whatsapp",
@@ -466,7 +477,7 @@ def twilio_whatsapp_webhook(request: Request):
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
-        pubsub_client.publish(
+        publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(
                 {
@@ -480,19 +491,21 @@ def twilio_whatsapp_webhook(request: Request):
                 }
             ).encode("utf-8"),
         )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
         print("Message published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing to Pub/Sub: {str(e)}")
-        # Optionally, you might want to return an error response here
-        # or modify resp_user to indicate failure.
-        # For now, we'll just log the error and continue.
+        return Response(response="Error publishing to Pub/Sub", status=500)
+
     print("Returning TwiML response")
     return Response(response=str(resp_user), mimetype="text/xml")
 
 
 # email webhook
 @functions_framework.http
-def renew_watch(request):
+def email_watch_renewer(request):
     """Cloud Function that renews Gmail watches for multiple users."""
     # ToDo: make orchestra admin call to get all assistant emails
     emails = requests.get(
@@ -525,7 +538,7 @@ def renew_watch(request):
 
 
 @functions_framework.cloud_event
-def process_notification(cloud_event):
+def email_notification_processor(cloud_event):
     """Cloud Function triggered by Pub/Sub that processes Gmail notifications."""
     try:
         # Extract the Pub/Sub message from the cloud event
@@ -578,7 +591,7 @@ def process_notification(cloud_event):
         # start unity job if it is not running
         running = is_job_running(user_id, assistant_id)
         print(f"Job running: {running}")
-        if not running:
+        if "test" not in assistant_id and not running:
             start_unity_job(
                 api_key,
                 "email",
@@ -646,7 +659,7 @@ def process_notification(cloud_event):
 
 # infra webhook
 @functions_framework.http
-def create_idle_job(request):
+def idle_job_creator(request):
     """Cloud Function that creates a new idle job."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
@@ -663,7 +676,7 @@ def create_idle_job(request):
 
 
 @functions_framework.http
-def clean_idle_jobs(request):
+def idle_job_cleaner(request):
     """Cloud Function that renews idle jobs that have been around for >24 hours.."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     idle_jobs = []

@@ -1,0 +1,134 @@
+"""
+Local development server for adapters.
+
+This file allows the adapters to run locally as a Flask web app
+for testing and development purposes.
+"""
+
+import sys
+from pathlib import Path
+adapters_dir = Path(__file__).parent
+sys.path.insert(0, str(adapters_dir))
+
+from flask import request, Flask, Request, Response
+from main import (
+    twilio_call_webhook as _twilio_call_webhook,
+    twilio_call_status_webhook as _twilio_call_status_webhook,
+    twilio_msg_webhook as _twilio_msg_webhook,
+    twilio_whatsapp_webhook as _twilio_whatsapp_webhook,
+    email_watch_renewer as _email_watch_renewer,
+    email_notification_processor as _email_notification_processor,
+    idle_job_creator as _idle_job_creator,
+    idle_job_cleaner as _idle_job_cleaner,
+)
+
+app = Flask(__name__)
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint."""
+    return Response("OK", status=200)
+
+
+@app.route("/call-status", methods=["POST"])
+def twilio_call_status():
+    """Phone call status webhook endpoint."""
+    try:
+        response = _twilio_call_status_webhook(request)
+        if isinstance(response, str):
+            return Response(response)
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/call", methods=["POST"])
+def twilio_call_webhook():
+    """Phone call webhook endpoint."""
+    try:
+        response = _twilio_call_webhook(request)
+        if isinstance(response, str):
+            return Response(response, mimetype="text/xml")
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/msg", methods=["POST"])
+def twilio_msg_webhook():
+    """Phone SMS webhook endpoint."""
+    try:
+        response = _twilio_msg_webhook(request)
+        if isinstance(response, str):
+            return Response(response, mimetype="text/xml")
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/whatsapp", methods=["POST"])
+def twilio_whatsapp_webhook():
+    """WhatsApp webhook endpoint."""
+    try:
+        response = _twilio_whatsapp_webhook(request)
+        if isinstance(response, str):
+            return Response(response, mimetype="text/xml")
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/email/watch", methods=["POST"])
+def email_watch_renewer():
+    """Email watch renewer endpoint."""
+    try:
+        response = _email_watch_renewer(request)
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/email", methods=["POST"])
+def email_notification_processor():
+    """Email webhook endpoint."""
+    try:
+        cloud_event = request.json()
+        result = _email_notification_processor(cloud_event)
+        return result
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/idle-job", methods=["POST"])
+def idle_job_creator():
+    """Create idle job endpoint."""
+    try:
+        response = _idle_job_creator(request)
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/idle-job/clean", methods=["POST"])
+def idle_job_cleaner(request: Request):
+    """Clean idle jobs endpoint."""
+    try:
+        response = _idle_job_cleaner(request)
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+if __name__ == "__main__":
+    print("🚀 Starting local adapters server...")
+    print("📱 Available endpoints:")
+    print("   - POST /call - Phone call webhook")
+    print("   - POST /msg - Phone SMS webhook")
+    print("   - POST /whatsapp - WhatsApp webhook")
+    print("   - POST /email/watch - Email watch renewer")
+    print("   - POST /email - Email notification processor")
+    print("   - POST /idle-job - Create idle job")
+    print("   - POST /idle-job/clean - Clean idle jobs")
+    print(f"🌐 Server running at: http://localhost:3000")
+
+    app.run(debug=True, host="0.0.0.0", port=3000)
