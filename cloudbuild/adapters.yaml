@@ -192,7 +192,7 @@ steps:
           --region="us-central1" \
           --runtime=python311 \
           --source="adapters" \
-          --entry-point=create_idle_job \
+          --entry-point=idle_job_creator \
           --trigger-http \
           --allow-unauthenticated \
           --timeout=300 \
@@ -235,7 +235,7 @@ steps:
           --region="us-central1" \
           --runtime=python311 \
           --source="adapters" \
-          --entry-point=clean_idle_jobs \
+          --entry-point=idle_job_cleaner \
           --trigger-http \
           --allow-unauthenticated \
           --timeout=300 \
