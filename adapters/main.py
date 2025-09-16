@@ -733,7 +733,7 @@ def idle_job_cleaner(request):
             idle_jobs = sorted(idle_jobs)[:-1]
     else:
         new_idle_jobs = [sorted(new_idle_jobs)[-1]]
-    idle_jobs = filter(lambda job: job not in new_idle_jobs, idle_jobs)
+    idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
 
     # delete all old idle jobs
     for job_name in idle_jobs:
@@ -743,4 +743,4 @@ def idle_job_cleaner(request):
             headers=headers,
         )
 
-    return idle_jobs
+    return Response(response=json.dumps({"idle_jobs": idle_jobs}), status=200)

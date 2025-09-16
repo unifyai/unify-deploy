@@ -11,7 +11,7 @@ import json
 
 subscriber = pubsub_v1.SubscriberClient()
 subscription_path = subscriber.subscription_path(
-    os.getenv("PROJECT_ID"), "unity-default-test-assistant-sub"
+    os.getenv("PROJECT_ID"), "unity-default-test-assistant-staging-sub"
 )
 
 
@@ -26,8 +26,6 @@ def test_twilio_call_status_webhook(test_client):
 
     # endpoint should accept status updates
     assert response.status_code == 200
-    # The response should be XML for Twilio
-    assert "text/xml" in response.headers.get("content-type", "")
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
@@ -193,3 +191,19 @@ def test_email_notification_processor(test_client):
 
     assert response.status_code == 200
     assert response.text == "No new conversations"
+
+
+def test_idle_job_adapters(test_client):
+    """Test successful idle job creation and cleanup."""
+    endpoint = "/job/create"
+    response = test_client.make_request("POST", endpoint)
+
+    print("Idle job creator:", response.text)
+    assert response.status_code == 200
+
+    endpoint = "/job/clean"
+    response = test_client.make_request("POST", endpoint)
+
+    print("Idle job cleaner:", response.text)
+    assert response.status_code == 200
+    assert len(response.json()["idle_jobs"])

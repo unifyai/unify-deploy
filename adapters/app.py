@@ -105,7 +105,7 @@ def email_notification_processor():
         return Response(f"Error: {str(e)}", status=500)
 
 
-@app.route("/idle-job", methods=["POST"])
+@app.route("/job/create", methods=["POST"])
 def idle_job_creator():
     """Create idle job endpoint."""
     try:
@@ -115,8 +115,8 @@ def idle_job_creator():
         return Response(f"Error: {str(e)}", status=500)
 
 
-@app.route("/idle-job/clean", methods=["POST"])
-def idle_job_cleaner(request: Request):
+@app.route("/job/clean", methods=["POST"])
+def idle_job_cleaner():
     """Clean idle jobs endpoint."""
     try:
         response = _idle_job_cleaner(request)
