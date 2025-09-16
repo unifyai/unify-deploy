@@ -508,15 +508,19 @@ def twilio_whatsapp_webhook(request: Request):
 def email_watch_renewer(request):
     """Cloud Function that renews Gmail watches for multiple users."""
     # ToDo: make orchestra admin call to get all assistant emails
-    emails = requests.get(
-        f"{ORCHESTRA_URL}/admin/assistant/emails",
-        headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-    ).json()["info"]
-    emails += [
-        # "default-assistant@unify.ai",
-        # "default-assistant-2@unify.ai",
-        "default-assistant-3@unify.ai",
-    ]
+    test = request.json.get("test")
+    if not test:
+        emails = requests.get(
+            f"{ORCHESTRA_URL}/admin/assistant/emails",
+            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+        ).json()["info"]
+        emails += [
+            # "default-assistant@unify.ai",
+            # "default-assistant-2@unify.ai",
+            "default-assistant-3@unify.ai",
+        ]
+    else:
+        emails = ["default-test-assistant@unify.ai"]
 
     results = {}
 

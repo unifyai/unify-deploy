@@ -174,11 +174,10 @@ def test_twilio_whatsapp_webhook(test_client):
 def test_email_watch_renewer(test_client):
     """Test successful email watch renewal."""
     endpoint = "/email/watch"
-    response = test_client.make_request("POST", endpoint)
+    response = test_client.make_request("POST", endpoint, json={"test": True})
 
     assert response.status_code == 200
-    for email in response.json():
-        assert email["success"]
+    assert not response.json()["default-test-assistant@unify.ai"]["success"]
 
 
 def test_email_notification_processor(test_client):

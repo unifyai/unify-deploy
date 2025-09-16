@@ -5,6 +5,8 @@ This file allows the adapters to run locally as a Flask web app
 for testing and development purposes.
 """
 
+import base64
+import json
 import sys
 from pathlib import Path
 adapters_dir = Path(__file__).parent
@@ -92,10 +94,14 @@ def email_watch_renewer():
 def email_notification_processor():
     """Email webhook endpoint."""
     try:
-        cloud_event = request.json()
-        result = _email_notification_processor(cloud_event)
-        return result
+        json_payload = request.get_json(silent=True)
+        msg = json_payload['message']
+        fake_event = type('CE', (), {})()
+        fake_event.data = {'message': {'data': base64.b64encode(json.dumps(msg).encode()).decode()}}
+        handler = getattr(_email_notification_processor, "__wrapped__", _email_notification_processor)
+        return handler(fake_event)
     except Exception as e:
+        print(f"Error: {str(e)}")
         return Response(f"Error: {str(e)}", status=500)
 
 
