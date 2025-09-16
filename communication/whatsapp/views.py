@@ -88,7 +88,8 @@ async def create_whatsapp_sender(request: Request):
         "webhook": {
             "callback_method": "POST",
             "callback_url": data.get(
-                "callback_url", "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-whatsapp-webhook"
+                "callback_url",
+                "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-whatsapp-webhook",
             ),
         },
     }

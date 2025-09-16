@@ -322,9 +322,7 @@ async def start_job(
 
 # stop kubernetes job
 @router.post("/job/stop")
-async def stop_job(
-    job_name: str = Form(...), namespace: str = Form("default")
-):
+async def stop_job(job_name: str = Form(...), namespace: str = Form("default")):
     """
     Stop a Kubernetes Job for a Unity assistant.
     """
@@ -343,9 +341,11 @@ async def stop_job(
                 "message": f"Job suspended successfully: {job_name}",
             }
         else:
-            raise HTTPException(status_code=500, detail=f"Failed to suspend job: {job_name}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to suspend job: {job_name}"
+            )
     except HTTPException:
-            raise
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to suspend job: {str(e)}")
 
@@ -372,12 +372,19 @@ async def list_kubernetes_jobs(namespace: str = "default", hours: int = 2):
         jobs = batch_api.list_namespaced_job(
             namespace=namespace, label_selector="app=unity"
         )
-        job_items = list(filter(lambda job: (
-            datetime.now() - datetime.strptime(
-                job.metadata.name.replace("unity-", "").replace("-staging", ""),
-                "%Y-%m-%d-%H-%M-%S",
+        job_items = list(
+            filter(
+                lambda job: (
+                    datetime.now()
+                    - datetime.strptime(
+                        job.metadata.name.replace("unity-", "").replace("-staging", ""),
+                        "%Y-%m-%d-%H-%M-%S",
+                    )
+                )
+                < timedelta(hours=hours),
+                jobs.items,
             )
-        ) < timedelta(hours=hours), jobs.items))
+        )
         print(f"Job items: {map(lambda job: job.metadata.name, job_items)}")
 
         job_list = []

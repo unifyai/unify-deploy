@@ -9,6 +9,7 @@ import base64
 import json
 import sys
 from pathlib import Path
+
 adapters_dir = Path(__file__).parent
 sys.path.insert(0, str(adapters_dir))
 
@@ -25,6 +26,7 @@ from main import (
 )
 
 app = Flask(__name__)
+
 
 @app.route("/health", methods=["GET"])
 def health_check():
@@ -95,10 +97,14 @@ def email_notification_processor():
     """Email webhook endpoint."""
     try:
         json_payload = request.get_json(silent=True)
-        msg = json_payload['message']
-        fake_event = type('CE', (), {})()
-        fake_event.data = {'message': {'data': base64.b64encode(json.dumps(msg).encode()).decode()}}
-        handler = getattr(_email_notification_processor, "__wrapped__", _email_notification_processor)
+        msg = json_payload["message"]
+        fake_event = type("CE", (), {})()
+        fake_event.data = {
+            "message": {"data": base64.b64encode(json.dumps(msg).encode()).decode()}
+        }
+        handler = getattr(
+            _email_notification_processor, "__wrapped__", _email_notification_processor
+        )
         return handler(fake_event)
     except Exception as e:
         print(f"Error: {str(e)}")
