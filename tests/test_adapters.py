@@ -3,6 +3,7 @@ Tests for the Flask wrapper endpoints for the adapters.
 """
 
 from dotenv import load_dotenv
+
 load_dotenv()
 import os
 from google.cloud import pubsub_v1
