@@ -521,10 +521,12 @@ def email_watch_renewer(request):
         ]
     else:
         emails = ["default-test-assistant@unify.ai"]
+    print(f"Emails to renew: {emails}")
 
     results = {}
 
     # Process each email
+    print("Renewing emails...")
     for email in emails:
         try:
             admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
@@ -537,6 +539,19 @@ def email_watch_renewer(request):
             error_message = f"Error renewing Gmail watch for {email}: {str(e)}"
             print(error_message)
             results[email] = {"success": False, "error": error_message}
+    print("Results of renewing emails:")
+    print(results)
+
+    # renew policy assistant
+    if os.getenv("STAGING") and not test:
+        admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+        response = requests.post(
+            f"{COMMS_URL}/email/watch",
+            json={"primary_email": "mh-policies@unify.ai", "topic_name": "intranet"},
+            headers={"Authorization": f"Bearer {admin_key}"},
+        ).json()
+        print("Renewed policy assistant")
+        print(response)
 
     return results
 
