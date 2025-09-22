@@ -236,7 +236,7 @@ async def start_job(
     assistant_number: str = Form(""),
     assistant_email: str = Form(""),
     user_whatsapp_number: str = Form(""),
-    tts_provider: str = Form(""),
+    voice_provider: str = Form(""),
     voice_id: str = Form(""),
 ):
     """
@@ -257,7 +257,7 @@ async def start_job(
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         assistant_email: Assistant's email (optional, defaults to empty string)
         user_whatsapp_number: User's whatsapp number (optional, defaults to empty string)
-        tts_provider: TTS provider (optional, defaults to empty string)
+        voice_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
     """
     try:
@@ -292,7 +292,7 @@ async def start_job(
                 "assistant_number": assistant_number,
                 "assistant_email": assistant_email,
                 "user_whatsapp_number": user_whatsapp_number,
-                "tts_provider": tts_provider,
+                "voice_provider": voice_provider,
                 "voice_id": voice_id,
             },
         }

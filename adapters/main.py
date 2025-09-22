@@ -53,7 +53,7 @@ def assistant_wakeup_webhook(request: Request):
     assistant_email = assistant_data["assistant_email"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
-    tts_provider = assistant_data["tts_provider"]
+    voice_provider = assistant_data["voice_provider"]
     voice_id = assistant_data["voice_id"]
 
     # start unity job
@@ -72,7 +72,7 @@ def assistant_wakeup_webhook(request: Request):
         assistant_email,
         user_whatsapp_number,
         user_email,
-        tts_provider,
+        voice_provider,
         voice_id,
     )
 
@@ -168,7 +168,7 @@ def twilio_call_webhook(request: Request):
     assistant_email = assistant_data["assistant_email"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
-    tts_provider = assistant_data["tts_provider"]
+    voice_provider = assistant_data["voice_provider"]
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
@@ -209,7 +209,7 @@ def twilio_call_webhook(request: Request):
             assistant_email,
             user_whatsapp_number,
             user_email,
-            tts_provider,
+            voice_provider,
             voice_id,
         )
         create_job(assistant_id)
@@ -316,7 +316,7 @@ def twilio_msg_webhook(request: Request):
     assistant_email = assistant_data["assistant_email"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
-    tts_provider = assistant_data["tts_provider"]
+    voice_provider = assistant_data["voice_provider"]
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
@@ -357,7 +357,7 @@ def twilio_msg_webhook(request: Request):
             assistant_email,
             user_whatsapp_number,
             user_email,
-            tts_provider,
+            voice_provider,
             voice_id,
         )
         create_job(assistant_id)
@@ -422,7 +422,7 @@ def twilio_whatsapp_webhook(request: Request):
     assistant_email = assistant_data["assistant_email"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
-    tts_provider = assistant_data["tts_provider"]
+    voice_provider = assistant_data["voice_provider"]
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
@@ -463,7 +463,7 @@ def twilio_whatsapp_webhook(request: Request):
             assistant_email,
             user_whatsapp_number,
             user_email,
-            tts_provider,
+            voice_provider,
             voice_id,
         )
         create_job(assistant_id)
@@ -586,7 +586,7 @@ def email_notification_processor(cloud_event):
         assistant_email = assistant_data["assistant_email"]
         user_whatsapp_number = assistant_data["user_whatsapp_number"]
         user_email = assistant_data["user_email"]
-        tts_provider = assistant_data["tts_provider"]
+        voice_provider = assistant_data["voice_provider"]
         voice_id = assistant_data["voice_id"]
 
         # check if contact is valid
@@ -626,7 +626,7 @@ def email_notification_processor(cloud_event):
                 assistant_email,
                 user_whatsapp_number,
                 user_email,
-                tts_provider,
+                voice_provider,
                 voice_id,
             )
             create_job(assistant_id)

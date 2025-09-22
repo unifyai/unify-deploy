@@ -50,7 +50,7 @@ def get_assistant(
     default_assistant_data = {
         "assistant_id": "default-assistant",
         "user_id": "default-user",
-        "tts_provider": "cartesia",
+        "voice_provider": "cartesia",
         "voice_id": None,
         "api_key": "",
         "user_name": "",
@@ -80,7 +80,7 @@ def get_assistant(
             "assistant_number": "+15550100001",
             "assistant_email": "unity.agent@unify.ai",
             "user_whatsapp_number": "+15550100004",
-            "tts_provider": "cartesia",
+            "voice_provider": "cartesia",
             "voice_id": None,
         }
     if "+15550100005" in phone_check or "default-assistant-3@unify.ai" in email_check:
@@ -98,7 +98,7 @@ def get_assistant(
             "assistant_number": "+15550100005",
             "assistant_email": "default-assistant-3@unify.ai",
             "user_whatsapp_number": "+15550100004",
-            "tts_provider": "elevenlabs",
+            "voice_provider": "elevenlabs",
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
     if "+15550100007" in phone_check:
@@ -147,7 +147,7 @@ def get_assistant(
         "user_number": assistants[0]["user_phone"],
         "user_whatsapp_number": assistants[0]["user_whatsapp_number"],
         "user_email": assistants[0]["user_email"],
-        "tts_provider": assistants[0]["tts_provider"],
+        "voice_provider": assistants[0]["voice_provider"],
         "voice_id": assistants[0]["voice_id"],
     }
 
@@ -334,7 +334,7 @@ def start_unity_job(
     assistant_email: str,
     user_whatsapp_number: str,
     user_email: str,
-    tts_provider: str,
+    voice_provider: str,
     voice_id: str,
 ):
     """
@@ -355,7 +355,7 @@ def start_unity_job(
         assistant_email: The email of the assistant.
         user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
-        tts_provider: The tts provider of the assistant.
+        voice_provider: The tts provider of the assistant.
         voice_id: The voice id of the assistant.
     """
     # default option when api key isn't set
@@ -384,7 +384,7 @@ def start_unity_job(
                 "assistant_number": assistant_number,
                 "assistant_email": assistant_email,
                 "user_whatsapp_number": user_whatsapp_number,
-                "tts_provider": tts_provider,
+                "voice_provider": voice_provider,
                 "voice_id": voice_id,
             },
             timeout=1,
