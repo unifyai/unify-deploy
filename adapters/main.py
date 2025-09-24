@@ -518,6 +518,7 @@ def email_watch_renewer(request):
             # "default-assistant@unify.ai",
             # "default-assistant-2@unify.ai",
             "default-assistant-3@unify.ai",
+            "default-assistant-5@unify.ai",
         ]
     else:
         emails = ["default-test-assistant@unify.ai"]
