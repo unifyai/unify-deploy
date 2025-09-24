@@ -104,7 +104,23 @@ def get_assistant(
     if "+15550100007" in phone_check:
         return {**default_assistant_data, "assistant_id": "default-assistant-4"}
     if "+15550100008" in phone_check:
-        return {**default_assistant_data, "assistant_id": "default-assistant-5"}
+        return {
+            **default_assistant_data,
+            "api_key": "",
+            "assistant_id": "default-assistant-5",
+            "user_name": "Ved",
+            "user_number": "+15550100004",
+            "user_email": "user@example.com",
+            "assistant_first_name": "Liz",
+            "assistant_age": "25",
+            "assistant_region": "United States",
+            "assistant_about": "Default Assistant",
+            "assistant_number": "+15550100005",
+            "assistant_email": "default-assistant-5@unify.ai",
+            "user_whatsapp_number": "+15550100004",
+            "voice_provider": "elevenlabs",
+            "voice_id": "ThT5KcBeYPX3keUQqHPh",
+        }
     if "+0123456789" in phone_check or "default-test-assistant@unify.ai" in email_check:
         return {
             **default_assistant_data,
