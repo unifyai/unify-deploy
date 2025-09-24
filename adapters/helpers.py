@@ -89,7 +89,7 @@ def get_assistant(
             "api_key": "",
             "assistant_id": "default-assistant-3",
             "user_name": "Yasser",
-            "user_number": "+15550100004",
+            "user_number": "+12697784020",
             "user_email": "yasser@unify.ai",
             "assistant_first_name": "Liz",
             "assistant_age": "25",
@@ -97,7 +97,7 @@ def get_assistant(
             "assistant_about": "Default Assistant",
             "assistant_number": "+15550100005",
             "assistant_email": "default-assistant-3@unify.ai",
-            "user_whatsapp_number": "+15550100004",
+            "user_whatsapp_number": "+12697784020",
             "voice_provider": "elevenlabs",
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
