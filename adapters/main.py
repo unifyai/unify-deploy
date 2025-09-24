@@ -727,6 +727,7 @@ def idle_job_cleaner(request):
         # check if job is idle
         if (
             "ping received - keeping conversation manager alive" in logs
+            and "Inactivity timeout reached (360s), requesting shutdown..." not in logs
             and "Graceful shutdown completed" not in logs
             and "Shutting down convo manager..." not in logs
         ):
