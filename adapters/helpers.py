@@ -102,7 +102,22 @@ def get_assistant(
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
     if "+15550100007" in phone_check:
-        return {**default_assistant_data, "assistant_id": "default-assistant-4"}
+        return {
+            **default_assistant_data,
+            "assistant_id": "default-assistant-4",
+            "user_name": "Ved",
+            "user_number": "+15550100004",
+            "user_email": "user@example.com",
+            "assistant_first_name": "Liz",
+            "assistant_age": "25",
+            "assistant_region": "United States",
+            "assistant_about": "Default Assistant",
+            "assistant_number": "+15550100005",
+            "assistant_email": "default-assistant-4@unify.ai",
+            "user_whatsapp_number": "+15550100004",
+            "voice_provider": "elevenlabs",
+            "voice_id": "ThT5KcBeYPX3keUQqHPh",
+        }
     if "+18148592377" in phone_check:
         return {
             **default_assistant_data,
