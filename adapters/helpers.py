@@ -112,7 +112,7 @@ def get_assistant(
             "assistant_age": "25",
             "assistant_region": "United States",
             "assistant_about": "Default Assistant",
-            "assistant_number": "+15550100005",
+            "assistant_number": "+15550100007",
             "assistant_email": "default-assistant-4@unify.ai",
             "user_whatsapp_number": "+15550100004",
             "voice_provider": "elevenlabs",
