@@ -103,7 +103,7 @@ def get_assistant(
         }
     if "+15550100007" in phone_check:
         return {**default_assistant_data, "assistant_id": "default-assistant-4"}
-    if "+15550100008" in phone_check:
+    if "+18148592377" in phone_check:
         return {
             **default_assistant_data,
             "api_key": "",
