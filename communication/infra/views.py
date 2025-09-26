@@ -352,13 +352,13 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form("default")):
 
 # list kubernetes jobs
 @router.get("/jobs")
-async def list_kubernetes_jobs(namespace: str = "default", hours: int = 2):
+async def list_kubernetes_jobs(namespace: str = "default", hours: int = 3):
     """
     List all Unity Kubernetes jobs in the namespace.
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to "default")
-        hours: Number of hours to filter jobs (optional, defaults to 2)
+        hours: Number of hours to filter jobs (optional, defaults to 3)
     """
     try:
         # Initialize Kubernetes client
