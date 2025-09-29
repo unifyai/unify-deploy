@@ -564,11 +564,6 @@ def add_user_to_conference(
         to=to_number_uri,
         from_=from_number,
         twiml=str(response),
-        status_callback=(
-            "https://us-central1-gcp-project-runtime.cloudfunctions.net/"
-            + "twilio-call-status-webhook"
-            + ("" if not STAGING else "-staging")
-        ),
     )
     return call.sid
 

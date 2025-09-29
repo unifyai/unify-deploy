@@ -315,6 +315,10 @@ async def create_phone_number(request: Request):
         "sms_url",
         "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-msg-webhook",
     )
+    status_callback = data.get(
+        "status_callback",
+        "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-call-status-webhook",
+    )
     country = data.get("country", "US")
 
     # Additional args for country
@@ -363,6 +367,8 @@ async def create_phone_number(request: Request):
         voice_method="POST",
         sms_url=sms_url,
         sms_method="POST",
+        status_callback=status_callback,
+        status_callback_method="POST",
         **additional_args,
     )
 
