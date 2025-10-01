@@ -609,6 +609,29 @@ def _payload_text(payload) -> str:
     return ""
 
 
+def _collect_attachments(payload):
+    attachments = []
+    if not payload:
+        return attachments
+    body = payload.get("body", {})
+    filename = payload.get("filename")
+    attachment_id = body.get("attachmentId")
+    mime_type = payload.get("mimeType")
+    size = body.get("size")
+    if attachment_id:
+        attachments.append(
+            {
+                "id": attachment_id,
+                "filename": filename or "",
+                "mimeType": mime_type,
+                "size": size,
+            }
+        )
+    for part in payload.get("parts", []):
+        attachments.extend(_collect_attachments(part))
+    return attachments
+
+
 def _gmail_thread_to_conversation(thread):
     """Convert a Gmail thread to a structured conversation."""
     convo = []
@@ -679,7 +702,7 @@ def get_thread_id(user_id, history_id, gmail_service):
             if len(messages) == 0:
                 continue
 
-            # Get the message details
+            # Get the message details (Gmail message resource id)
             msg_id = messages[-1]["id"]
             message = (
                 gmail_service.users()
@@ -697,6 +720,10 @@ def get_thread_id(user_id, history_id, gmail_service):
             ][0]
             message_id = message_id_header.get("value")
             print(f"message_id: {message_id}")
+
+            # Extract attachments from the Gmail message payload
+            attachments = _collect_attachments(message.get("payload", {}))
+            print(f"attachments: {attachments}")
 
             labels = message.get("labelIds", [])
             print(f"labels: {labels}")
@@ -724,10 +751,13 @@ def get_thread_id(user_id, history_id, gmail_service):
             last_message = conversation[-1]
             print(f"last_message: {last_message}")
 
-            # Return the conversation (or process it further as needed)
-            return thread_id, message_id, last_message
+            # Attach only attachment IDs to the last_message for publishing
+            last_message["attachment_ids"] = [att["id"] for att in attachments]
 
-        return None, None, None
+            # Return the conversation plus Gmail message id
+            return thread_id, message_id, last_message, msg_id
+
+        return None, None, None, None
 
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
@@ -736,7 +766,13 @@ def get_thread_id(user_id, history_id, gmail_service):
 
 
 def publish_thread_id(
-    assistant_id, user_id, thread_id, message_id, last_message, contact_details
+    assistant_id,
+    user_id,
+    thread_id,
+    message_id,
+    last_message,
+    contact_details,
+    gmail_message_id=None,
 ):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
@@ -750,6 +786,8 @@ def publish_thread_id(
                 "contact_details": contact_details,
                 "thread_id": thread_id,
                 "message_id": message_id,
+                "gmail_message_id": gmail_message_id,
+                "attachment_ids": last_message.get("attachment_ids", []),
                 "from": last_message["sender"],
                 "to": last_message["to"],
                 "cc": last_message["cc"],

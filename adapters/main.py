@@ -648,7 +648,7 @@ def email_notification_processor(cloud_event):
 
         # Process the history and thread
         print(f"email_id: {email_id}, history_id: {history_id}")
-        thread_id, message_id, last_message = get_thread_id(
+        thread_id, message_id, last_message, gmail_message_id = get_thread_id(
             email_id, history_id, gmail_service
         )
         print(
@@ -664,6 +664,7 @@ def email_notification_processor(cloud_event):
                 message_id,
                 last_message,
                 contact_details,
+                gmail_message_id,
             )
             return "OK"
         else:

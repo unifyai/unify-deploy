@@ -3,7 +3,7 @@ import json
 import logging
 import random
 import string
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from dotenv import load_dotenv
 import httpx
 from google.oauth2.service_account import Credentials
@@ -168,3 +168,31 @@ async def watch_email(request: Request):
         .execute()
     )
     return {"success": True, "historyId": watch_resp.get("historyId")}
+
+
+@router.get("/attachment")
+async def get_attachment(sender_email: str, gmail_message_id: str, attachment_id: str, filename: str | None = None):
+    try:
+        service = get_gmail_service(sender_email)
+        attachment = (
+            service.users()
+            .messages()
+            .attachments()
+            .get(userId="me", messageId=gmail_message_id, id=attachment_id)
+            .execute()
+        )
+        data = attachment.get("data")
+        if not data:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        file_bytes = base64.urlsafe_b64decode(data.encode("utf-8"))
+        return Response(
+            content=file_bytes,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename or 'attachment'}"
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
