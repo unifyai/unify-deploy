@@ -751,8 +751,11 @@ def get_thread_id(user_id, history_id, gmail_service):
             last_message = conversation[-1]
             print(f"last_message: {last_message}")
 
-            # Attach only attachment IDs to the last_message for publishing
-            last_message["attachment_ids"] = [att["id"] for att in attachments]
+            # Attach filenames with IDs to the last_message for publishing
+            last_message["attachments"] = [
+                {"id": att["id"], "filename": att.get("filename", "")}
+                for att in attachments
+            ]
 
             # Return the conversation plus Gmail message id
             return thread_id, message_id, last_message, msg_id
@@ -787,7 +790,7 @@ def publish_thread_id(
                 "thread_id": thread_id,
                 "message_id": message_id,
                 "gmail_message_id": gmail_message_id,
-                "attachment_ids": last_message.get("attachment_ids", []),
+                "attachments": last_message.get("attachments", []),
                 "from": last_message["sender"],
                 "to": last_message["to"],
                 "cc": last_message["cc"],
