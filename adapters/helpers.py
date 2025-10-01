@@ -762,7 +762,7 @@ def get_thread_id(user_id, history_id, gmail_service):
     except Exception as e:
         print(f"Error processing history for user {user_id}: {str(e)}")
         traceback.print_exc()
-        return None, None, None
+        return None, None, None, None
 
 
 def publish_thread_id(
