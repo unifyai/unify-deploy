@@ -171,7 +171,12 @@ async def watch_email(request: Request):
 
 
 @router.get("/attachment")
-async def get_attachment(sender_email: str, gmail_message_id: str, attachment_id: str, filename: str | None = None):
+async def get_attachment(
+    sender_email: str,
+    gmail_message_id: str,
+    attachment_id: str,
+    filename: str | None = None,
+):
     try:
         service = get_gmail_service(sender_email)
         attachment = (
