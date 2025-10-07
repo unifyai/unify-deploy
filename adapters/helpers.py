@@ -224,7 +224,7 @@ def check_valid_contact(
     user_number: str = None,
     user_whatsapp_number: str = None,
     user_email: str = None,
-) -> bool:
+) -> list[dict[str, str]]:
     """
     Check if the contact is valid.
 
@@ -266,7 +266,7 @@ def check_valid_contact(
                     f"Boss user found: {email_id}, {phone_number}, {medium}, "
                     f"{user_number}, {user_whatsapp_number}, {user_email}"
                 )
-                return {
+                return [{
                     "contact_id": 1,
                     "first_name": "",
                     "surname": "",
@@ -277,27 +277,28 @@ def check_valid_contact(
                     "rolling_summary": "",
                     "respond_to": "",
                     "response_policy": "",
-                }
+                }]
 
         # otherwise
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response.text)
-        return None
-    contacts = response.json()["logs"]
+        return []
+    contact_logs = response.json()["logs"]
+    contacts = [c["entries"] for c in contacts]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
-        return None
+        return []
 
     # check for boss user
     boss_contact = [
-        contact for contact in contacts if contact["entries"]["contact_id"] == 1
+        contact for contact in contacts if contact["contact_id"] == 1
     ]
     print(f"Boss contact: {boss_contact}")
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
-        user_number = boss_contact["entries"]["phone_number"]
-        user_whatsapp_number = boss_contact["entries"]["whatsapp_number"]
-        user_email = boss_contact["entries"]["email_address"]
+        user_number = boss_contact["phone_number"]
+        user_whatsapp_number = boss_contact["whatsapp_number"]
+        user_email = boss_contact["email_address"]
         if check_contact_details(
             email_id=email_id,
             phone_number=phone_number,
@@ -310,10 +311,10 @@ def check_valid_contact(
                 f"Boss user found: {email_id}, {phone_number}, {medium}, "
                 f"{user_number}, {user_whatsapp_number}, {user_email}"
             )
-            return boss_contact["entries"]
+            return contacts
     else:
         print("No boss user found")
-        return None
+        return []
 
     # check all contacts
     for contact in contacts:
@@ -321,13 +322,13 @@ def check_valid_contact(
             email_id=email_id,
             phone_number=phone_number,
             medium=medium,
-            user_number=contact["entries"]["phone_number"],
-            user_whatsapp_number=contact["entries"]["whatsapp_number"],
-            user_email=contact["entries"]["email_address"],
+            user_number=contact["phone_number"],
+            user_whatsapp_number=contact["whatsapp_number"],
+            user_email=contact["email_address"],
         ):
             print(f"Contact found: {contact}")
-            return contact["entries"]
-    return None
+            return contacts
+    return []
 
 
 def is_job_running(user_id: str, assistant_id: str):
@@ -774,7 +775,7 @@ def publish_thread_id(
     thread_id,
     message_id,
     last_message,
-    contact_details,
+    contacts,
     gmail_message_id=None,
 ):
     """Publish the thread_id and user_id to a different pub/sub topic."""
@@ -786,7 +787,7 @@ def publish_thread_id(
         message_dict = {
             "thread": "email",
             "event": {
-                "contact_details": contact_details,
+                "contacts": contacts,
                 "thread_id": thread_id,
                 "message_id": message_id,
                 "gmail_message_id": gmail_message_id,

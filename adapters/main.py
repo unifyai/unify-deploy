@@ -99,7 +99,7 @@ def twilio_call_status_webhook(request: Request):
         assistant_number = assistant_data["assistant_number"]
 
         # check if contact is valid
-        contact_details = check_valid_contact(
+        contacts = check_valid_contact(
             email_id="",
             phone_number=user_number,
             medium="phone",
@@ -107,7 +107,7 @@ def twilio_call_status_webhook(request: Request):
             api_key=api_key,
             user_number=user_number,
         )
-        if "default" not in assistant_id and not contact_details:
+        if "default" not in assistant_id and not contacts:
             print(f"User {user_number} is not a valid contact")
             return Response(status_code=200)
 
@@ -123,7 +123,7 @@ def twilio_call_status_webhook(request: Request):
                     {
                         "thread": "call_received",
                         "event": {
-                            "contact_details": contact_details,
+                            "contacts": contacts,
                             "assistant_id": assistant_id,
                             "user_number": user_number,
                             "assistant_number": assistant_number,
@@ -172,7 +172,7 @@ def twilio_call_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    contact_details = check_valid_contact(
+    contacts = check_valid_contact(
         email_id="",
         phone_number=caller_number,
         medium="phone",
@@ -182,7 +182,7 @@ def twilio_call_webhook(request: Request):
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
     )
-    if "default" not in assistant_id and not contact_details:
+    if "default" not in assistant_id and not contacts:
         resp_user = VoiceResponse()
         resp_user.say(
             "This number is no longer active. Please visit "
@@ -231,7 +231,7 @@ def twilio_call_webhook(request: Request):
         pubsub_message = {
             "thread": "call",
             "event": {
-                "contact_details": contact_details,
+                "contacts": contacts,
                 "conference_name": conference_name,
                 "caller_number": caller_number,
                 "sip_uri": sip_uri,
@@ -320,7 +320,7 @@ def twilio_msg_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    contact_details = check_valid_contact(
+    contacts = check_valid_contact(
         email_id="",
         phone_number=from_number,
         medium="msg",
@@ -330,7 +330,7 @@ def twilio_msg_webhook(request: Request):
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
     )
-    if "default" not in assistant_id and not contact_details:
+    if "default" not in assistant_id and not contacts:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -377,7 +377,7 @@ def twilio_msg_webhook(request: Request):
                 {
                     "thread": "msg",
                     "event": {
-                        "contact_details": contact_details,
+                        "contacts": contacts,
                         "to_number": to_number,
                         "from_number": from_number,
                         "body": body,
@@ -426,7 +426,7 @@ def twilio_whatsapp_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # check if contact is valid
-    contact_details = check_valid_contact(
+    contacts = check_valid_contact(
         email_id="",
         phone_number=from_number.replace("whatsapp:", ""),
         medium="whatsapp",
@@ -436,7 +436,7 @@ def twilio_whatsapp_webhook(request: Request):
         user_whatsapp_number=user_whatsapp_number,
         user_email=user_email,
     )
-    if "default" not in assistant_id and not contact_details:
+    if "default" not in assistant_id and not contacts:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -483,7 +483,7 @@ def twilio_whatsapp_webhook(request: Request):
                 {
                     "thread": "whatsapp",
                     "event": {
-                        "contact_details": contact_details,
+                        "contacts": contacts,
                         "to_number": to_number,
                         "from_number": from_number,
                         "body": body,
@@ -591,7 +591,7 @@ def email_notification_processor(cloud_event):
         voice_id = assistant_data["voice_id"]
 
         # check if contact is valid
-        contact_details = check_valid_contact(
+        contacts = check_valid_contact(
             email_id=email_id,
             phone_number="",
             medium="email",
@@ -601,7 +601,7 @@ def email_notification_processor(cloud_event):
             user_whatsapp_number=user_whatsapp_number,
             user_email=user_email,
         )
-        if "default" not in assistant_id and not contact_details:
+        if "default" not in assistant_id and not contacts:
             error_message = (
                 "This email address is no longer active. Please visit "
                 "console.unify.ai to view your assistant details."
@@ -663,7 +663,7 @@ def email_notification_processor(cloud_event):
                 thread_id,
                 message_id,
                 last_message,
-                contact_details,
+                contacts,
                 gmail_message_id,
             )
             return "OK"
