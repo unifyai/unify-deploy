@@ -100,11 +100,14 @@ def add_user_to_conference(
 @unauth_router.post("/recording")
 async def check_recording_status(request: Request):
     data = await request.form()
+    conference_name = request.query_params.get("conference_name")
+    print("Conference name: ", conference_name)
 
     print("Recorded data")
     for key, value in data.items():
         print(key, value)
     recording_url = data.get("RecordingUrl")
+    conference_sid = data.get("ConferenceSid")
 
     if not recording_url:
         return {"success": False, "error": "RecordingUrl is required"}
@@ -175,6 +178,8 @@ async def check_recording_status(request: Request):
         "content_type": "audio/mp3",
         "assistant_id": assistant_id,
         "user_id": user_id,
+        "conference_name": conference_name,
+        "conference_sid": conference_sid,
     }
     async with httpx.AsyncClient() as httpx_client:
         resp = await httpx_client.post(

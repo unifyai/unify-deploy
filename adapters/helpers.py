@@ -4,6 +4,7 @@ import os
 import re
 import traceback
 import requests
+from urllib.parse import quote_plus
 
 from google.cloud import pubsub_v1
 
@@ -266,18 +267,20 @@ def check_valid_contact(
                     f"Boss user found: {email_id}, {phone_number}, {medium}, "
                     f"{user_number}, {user_whatsapp_number}, {user_email}"
                 )
-                return [{
-                    "contact_id": 1,
-                    "first_name": "",
-                    "surname": "",
-                    "email_adress": user_email,
-                    "phone_number": phone_number,
-                    "whatsapp_number": user_whatsapp_number,
-                    "bio": "",
-                    "rolling_summary": "",
-                    "respond_to": "",
-                    "response_policy": "",
-                }]
+                return [
+                    {
+                        "contact_id": 1,
+                        "first_name": "",
+                        "surname": "",
+                        "email_adress": user_email,
+                        "phone_number": phone_number,
+                        "whatsapp_number": user_whatsapp_number,
+                        "bio": "",
+                        "rolling_summary": "",
+                        "respond_to": "",
+                        "response_policy": "",
+                    }
+                ]
 
         # otherwise
         print(f"Failed to get contacts for assistant {assistant_context}")
@@ -290,9 +293,7 @@ def check_valid_contact(
         return []
 
     # check for boss user
-    boss_contact = [
-        contact for contact in contacts if contact["contact_id"] == 1
-    ]
+    boss_contact = [contact for contact in contacts if contact["contact_id"] == 1]
     print(f"Boss contact: {boss_contact}")
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
@@ -512,6 +513,11 @@ async def create_room_and_dispatch_agent(
 def create_conference_response(conference_name, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
+    recording_status_callback = (
+        f"{COMMS_URL}/phone/recording?"
+        f"conference_name={quote_plus(conference_name)}"
+    )
+    print("Recording status callback: ", recording_status_callback)
     if with_status:
         dial_user.conference(
             conference_name,
@@ -520,7 +526,7 @@ def create_conference_response(conference_name, with_status=False):
             muted=False,
             wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
             record="record-from-start",
-            recording_status_callback=f"{COMMS_URL}/phone/recording",
+            recording_status_callback=recording_status_callback,
             recording_status_callback_event="completed",
             status_callback=f"{COMMS_URL}/phone/conference-status",
             status_callback_event="end",
@@ -533,7 +539,7 @@ def create_conference_response(conference_name, with_status=False):
         muted=False,
         wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
         record="record-from-start",
-        recording_status_callback=f"{COMMS_URL}/phone/recording",
+        recording_status_callback=recording_status_callback,
         recording_status_callback_event="completed",
     )
     return resp_user
