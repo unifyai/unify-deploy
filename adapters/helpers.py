@@ -514,8 +514,7 @@ def create_conference_response(conference_name, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
     recording_status_callback = (
-        f"{COMMS_URL}/phone/recording?"
-        f"conference_name={quote_plus(conference_name)}"
+        f"{COMMS_URL}/phone/recording?" f"conference_name={quote_plus(conference_name)}"
     )
     print("Recording status callback: ", recording_status_callback)
     if with_status:
