@@ -284,7 +284,7 @@ def check_valid_contact(
         print(response.text)
         return []
     contact_logs = response.json()["logs"]
-    contacts = [c["entries"] for c in contacts]
+    contacts = [c["entries"] for c in contact_logs]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
         return []
