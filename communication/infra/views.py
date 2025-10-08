@@ -43,34 +43,48 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             PROJECT_ID, f"{topic_name}-sub"
         )
 
-        # Try to create the topic
+        # Create the topic if it doesn't already exist
         try:
             publisher.create_topic(request={"name": topic_path})
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                raise
+
+        # Create or update the subscription with no expiration
+        expiration_policy = pubsub_v1.types.ExpirationPolicy(ttl=None)
+
+        try:
             subscriber.create_subscription(
                 request={
                     "name": subscription_path,
                     "topic": topic_path,
+                    "expiration_policy": expiration_policy,
                 }
             )
-            return {
-                "success": True,
-                "message": "Topic and subscription created successfully",
-                "topic_name": topic_path,
-                "subscription_name": subscription_path,
-                "project_id": PROJECT_ID,
-            }
         except Exception as e:
-            # Handle case where topic already exists
             if "already exists" in str(e).lower():
-                return {
-                    "success": True,
-                    "message": "Topic and subscription already exist",
-                    "topic_name": topic_path,
-                    "subscription_name": subscription_path,
-                    "project_id": PROJECT_ID,
-                }
+                # Ensure the subscription never expires
+                subscription = pubsub_v1.types.Subscription(
+                    name=subscription_path,
+                    expiration_policy=expiration_policy,
+                )
+                update_mask = {"paths": ["expiration_policy.ttl"]}
+                subscriber.update_subscription(
+                    request={
+                        "subscription": subscription,
+                        "update_mask": update_mask,
+                    }
+                )
             else:
-                raise e
+                raise
+
+        return {
+            "success": True,
+            "message": "Topic and subscription ensured with no expiration",
+            "topic_name": topic_path,
+            "subscription_name": subscription_path,
+            "project_id": PROJECT_ID,
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to create topic and subscription: {str(e)}"
@@ -82,18 +96,37 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
 async def delete_pubsub_topic(topic_name: str = Form(...)):
     """
     Delete a Google Cloud Pub/Sub topic with the assistant_id as the topic name.
-    Note: Deleting a topic automatically deletes all subscriptions attached to it.
+    Subscriptions are explicitly deleted first to avoid orphaned resources.
     """
     try:
         # Get credentials from environment variable
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
         creds = Credentials.from_service_account_info(creds_json)
 
-        # Initialize the publisher client
+        # Initialize the publisher and subscriber clients
         publisher = pubsub_v1.PublisherClient(credentials=creds)
+        subscriber = pubsub_v1.SubscriberClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
         topic_path = publisher.topic_path(PROJECT_ID, topic_name)
+
+        # Delete all subscriptions attached to the topic (if any)
+        try:
+            for subscription_name in publisher.list_topic_subscriptions(
+                request={"topic": topic_path}
+            ):
+                try:
+                    subscriber.delete_subscription(
+                        request={"subscription": subscription_name}
+                    )
+                except Exception as sub_err:
+                    # If the subscription was already deleted, continue
+                    if "not found" not in str(sub_err).lower():
+                        raise
+        except Exception as list_err:
+            # If the topic is not found, there are no subscriptions to delete
+            if "not found" not in str(list_err).lower():
+                raise
 
         # Delete the topic
         publisher.delete_topic(request={"topic": topic_path})
