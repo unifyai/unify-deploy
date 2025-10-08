@@ -276,7 +276,7 @@ def check_valid_contact(
                         "contact_id": 1,
                         "first_name": "",
                         "surname": "",
-                        "email_adress": user_email,
+                        "email_address": user_email,
                         "phone_number": phone_number,
                         "whatsapp_number": user_whatsapp_number,
                         "bio": "",
