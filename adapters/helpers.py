@@ -165,15 +165,11 @@ def get_assistant(
             "assistant_surname": "Assistant",
         }
 
-    print(f"GET Assistant params: {params}")
-
     response = requests.get(
         f"{ORCHESTRA_URL}/admin/assistant",
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
-
-    print(f"GET Assistant response: {response}")
 
     if "detail" in response:
         return {**default_assistant_data, "assistant_id": None}
