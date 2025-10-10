@@ -29,6 +29,7 @@ COMMS_URL = (
 def get_assistant(
     email_id: str = None,
     phone_number: str = None,
+    assistant_id: str = None,
 ) -> dict[str, str]:
     """
     Get the assistant id from the email id or phone number.
@@ -45,6 +46,8 @@ def get_assistant(
         params["email"] = email_id
     if phone_number:
         params["phone"] = phone_number
+    if assistant_id:
+        params["agent_id"] = assistant_id
     email_check = email_id or ""
     phone_check = phone_number or ""
 
@@ -153,6 +156,13 @@ def get_assistant(
             "assistant_number": "+0123456789",
             "assistant_email": "default-test-assistant@unify.ai",
             "user_whatsapp_number": "+9876543210",
+        }
+    if assistant_id == "default-test-assistant":
+        return {
+            **default_assistant_data,
+            "assistant_id": "default-test-assistant",
+            "assistant_first_name": "Test",
+            "assistant_surname": "Assistant",
         }
 
     response = requests.get(
