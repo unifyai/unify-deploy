@@ -91,19 +91,19 @@ steps:
           --max-instances=100 \
           --concurrency=80
 
-  # Unify Chat Webhook Staging
+  # Unify Message Webhook Staging
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Unify Chat Webhook Staging"
+    id: "Deploy Unify Message Webhook Staging"
     entrypoint: bash
     args:
       - "-c"
       - |
-        gcloud functions deploy "unify-chat-webhook-staging" \
+        gcloud functions deploy "unify-message-webhook-staging" \
           --gen2 \
           --region="us-central1" \
           --runtime=python311 \
           --source="adapters" \
-          --entry-point=unify_chat_webhook \
+          --entry-point=unify_message_webhook \
           --trigger-http \
           --allow-unauthenticated \
           --set-env-vars=PROJECT_ID=$PROJECT_ID,STAGING=true \

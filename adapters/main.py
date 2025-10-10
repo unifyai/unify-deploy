@@ -32,13 +32,13 @@ from helpers import (
 
 
 @functions_framework.http
-def unify_chat_webhook(request: Request):
-    print("unify_chat_webhook function started")
+def unify_message_webhook(request: Request):
+    print("unify_message_webhook function started")
     # optional auth via admin key
     shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     auth_header = request.headers.get("Authorization", "")
     if shared_key and auth_header != f"Bearer {shared_key}":
-        print("Unauthorized unify_chat request")
+        print("Unauthorized unify_message request")
         return Response(status=401)
 
     # accept JSON or form payloads
@@ -51,10 +51,10 @@ def unify_chat_webhook(request: Request):
         return Response(status_code=400)
     body = payload.get("body") or request.form.get("Body", "") or ""
     print(
-        f"Received unify_chat message for assistant_id={assistant_id_input} with body: {body}"
+        f"Received unify_message message for assistant_id={assistant_id_input} with body: {body}"
     )
 
-    # resolve assistant strictly by assistant_id for unify_chat
+    # resolve assistant strictly by assistant_id for unify_message
     assistant_data = get_assistant(assistant_id=assistant_id_input)
     api_key = assistant_data["api_key"]
     assistant_id = assistant_data["assistant_id"]
@@ -73,7 +73,7 @@ def unify_chat_webhook(request: Request):
     voice_provider = assistant_data["voice_provider"]
     voice_id = assistant_data["voice_id"]
 
-    # frontend unify_chat: no validation of contact
+    # frontend unify_message: no validation of contact
 
     # ensure job running
     running = is_job_running(user_id, assistant_id)
@@ -81,7 +81,7 @@ def unify_chat_webhook(request: Request):
     if "test" not in assistant_id and "default" not in assistant_id and not running:
         start_unity_job(
             api_key,
-            "unify_chat",
+            "unify_message",
             assistant_id,
             user_id,
             user_name,
@@ -103,13 +103,13 @@ def unify_chat_webhook(request: Request):
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing unify_chat to Pub/Sub at path: {topic_path}")
+    print(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(
                 {
-                    "thread": "unify_chat",
+                    "thread": "unify_message",
                     "event": {
                         "assistant_id": assistant_id,
                         "body": body,
@@ -120,9 +120,9 @@ def unify_chat_webhook(request: Request):
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
             print(f"Message ID: {message_id}")
-        print("unify_chat message published to Pub/Sub successfully")
+        print("unify_message message published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing unify_chat to Pub/Sub: {str(e)}")
+        print(f"Error publishing unify_message to Pub/Sub: {str(e)}")
         return Response(response="Error publishing to Pub/Sub", status=500)
 
     return Response(status=200)

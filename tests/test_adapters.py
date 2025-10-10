@@ -171,10 +171,10 @@ def test_twilio_whatsapp_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
-def test_unify_chat_webhook(test_client):
-    """Test successful Unify Chat webhook processing."""
-    endpoint = "/unify_chat"
-    body = "Hello, this is a unify_chat test message"
+def test_unify_message_webhook(test_client):
+    """Test successful Unify Message webhook processing."""
+    endpoint = "/unify_message"
+    body = "Hello, this is a unify_message test message"
     json_payload = {
         "assistant_id": "default-test-assistant",
         "body": body,
@@ -199,7 +199,7 @@ def test_unify_chat_webhook(test_client):
         assert False, "Failed to decode message data"
     try:
         assert data is not None
-        assert "thread" in data and data["thread"] == "unify_chat"
+        assert "thread" in data and data["thread"] == "unify_message"
         assert "event" in data and data["event"] is not None
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert data["event"]["body"] == body
