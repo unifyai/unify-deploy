@@ -74,6 +74,7 @@ def unify_chat_webhook(request: Request):
     voice_id = assistant_data["voice_id"]
 
     # frontend unify_chat: no validation of contact
+    print(f"Assistant data: {assistant_data}")
 
     # ensure job running
     running = is_job_running(user_id, assistant_id)
