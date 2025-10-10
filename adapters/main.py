@@ -43,7 +43,9 @@ def unify_chat_webhook(request: Request):
 
     # accept JSON or form payloads
     payload = request.get_json(silent=True) or {}
-    assistant_id_input = payload.get("assistant_id") or request.form.get("assistant_id", "")
+    assistant_id_input = payload.get("assistant_id") or request.form.get(
+        "assistant_id", ""
+    )
     if not assistant_id_input:
         print(f"Assistant ID is required")
         return Response(status_code=400)
@@ -124,6 +126,7 @@ def unify_chat_webhook(request: Request):
         return Response(response="Error publishing to Pub/Sub", status=500)
 
     return Response(status=200)
+
 
 @functions_framework.http
 def assistant_wakeup_webhook(request: Request):

@@ -181,7 +181,9 @@ def test_unify_chat_webhook(test_client):
     }
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = test_client.make_request("POST", endpoint, json=json_payload, headers=headers)
+    response = test_client.make_request(
+        "POST", endpoint, json=json_payload, headers=headers
+    )
 
     assert response.status_code == 200
 
@@ -204,6 +206,7 @@ def test_unify_chat_webhook(test_client):
     except AssertionError as e:
         print(e)
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+
 
 def test_email_watch_renewer(test_client):
     """Test successful email watch renewal."""
