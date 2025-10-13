@@ -171,6 +171,43 @@ def test_twilio_whatsapp_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
+def test_unify_message_webhook(test_client):
+    """Test successful Unify Message webhook processing."""
+    endpoint = "/unify_message"
+    body = "Hello, this is a unify_message test message"
+    json_payload = {
+        "assistant_id": "default-test-assistant",
+        "body": body,
+    }
+
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    response = test_client.make_request(
+        "POST", endpoint, json=json_payload, headers=headers
+    )
+
+    assert response.status_code == 200
+
+    # Check that the message was published to Pub/Sub
+    message = subscriber.pull(
+        subscription=subscription_path, max_messages=1
+    ).received_messages[0]
+    ack_id = message.ack_id
+    message = message.message
+    try:
+        data = json.loads(message.data.decode("utf-8"))
+    except json.JSONDecodeError:
+        assert False, "Failed to decode message data"
+    try:
+        assert data is not None
+        assert "thread" in data and data["thread"] == "unify_message"
+        assert "event" in data and data["event"] is not None
+        assert data["event"]["assistant_id"] == "default-test-assistant"
+        assert data["event"]["body"] == body
+    except AssertionError as e:
+        print(e)
+    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+
+
 def test_email_watch_renewer(test_client):
     """Test successful email watch renewal."""
     endpoint = "/email/watch"

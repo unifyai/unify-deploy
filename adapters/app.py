@@ -19,6 +19,7 @@ from main import (
     twilio_call_status_webhook as _twilio_call_status_webhook,
     twilio_msg_webhook as _twilio_msg_webhook,
     twilio_whatsapp_webhook as _twilio_whatsapp_webhook,
+    unify_message_webhook as _unify_message_webhook,
     email_watch_renewer as _email_watch_renewer,
     email_notification_processor as _email_notification_processor,
     idle_job_creator as _idle_job_creator,
@@ -66,6 +67,18 @@ def twilio_msg_webhook():
         response = _twilio_msg_webhook(request)
         if isinstance(response, str):
             return Response(response, mimetype="text/xml")
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/unify_message", methods=["POST"])
+def unify_message_webhook():
+    """Unify Message webhook endpoint."""
+    try:
+        response = _unify_message_webhook(request)
+        if isinstance(response, str):
+            return Response(response)
         return response
     except Exception as e:
         return Response(f"Error: {str(e)}", status=500)

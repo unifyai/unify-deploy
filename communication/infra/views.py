@@ -265,7 +265,7 @@ async def start_job(
     assistant_age: str = Form(...),
     assistant_region: str = Form(...),
     assistant_about: str = Form(...),
-    user_number: str = Form(...),
+    user_number: str = Form(""),
     assistant_number: str = Form(""),
     assistant_email: str = Form(""),
     user_whatsapp_number: str = Form(""),
@@ -286,7 +286,7 @@ async def start_job(
         assistant_age: Assistant's age (required)
         assistant_region: Assistant's region (required)
         assistant_about: Assistant's about (required)
-        user_number: User's phone number (required)
+        user_number: User's phone number (optional, defaults to empty string)
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         assistant_email: Assistant's email (optional, defaults to empty string)
         user_whatsapp_number: User's whatsapp number (optional, defaults to empty string)
