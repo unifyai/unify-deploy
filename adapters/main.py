@@ -910,10 +910,7 @@ def assistant_update_webhook(request: Request):
         topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
 
         # Prepare message in the same format as startup event
-        message_data = {
-            "thread": "assistant_update",
-            "event": assistant_data,
-        }
+        message_data = {"thread": "assistant_update", "event": assistant_data}
 
         print(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
         publish_future = pubsub_client.publish(
