@@ -23,6 +23,7 @@ from main import (
     email_notification_processor as _email_notification_processor,
     idle_job_creator as _idle_job_creator,
     idle_job_cleaner as _idle_job_cleaner,
+    assistant_update_webhook as _assistant_update_webhook,
 )
 
 app = Flask(__name__)
@@ -131,6 +132,16 @@ def idle_job_cleaner():
         return Response(f"Error: {str(e)}", status=500)
 
 
+@app.route("/assistant/update", methods=["POST"])
+def assistant_update_webhook():
+    """Assistant update webhook endpoint."""
+    try:
+        response = _assistant_update_webhook(request)
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
 if __name__ == "__main__":
     print("🚀 Starting local adapters server...")
     print("📱 Available endpoints:")
@@ -139,8 +150,9 @@ if __name__ == "__main__":
     print("   - POST /whatsapp - WhatsApp webhook")
     print("   - POST /email/watch - Email watch renewer")
     print("   - POST /email - Email notification processor")
-    print("   - POST /idle-job - Create idle job")
-    print("   - POST /idle-job/clean - Clean idle jobs")
+    print("   - POST /job/create - Create idle job")
+    print("   - POST /job/clean - Clean idle jobs")
+    print("   - POST /assistant/update - Assistant update webhook")
     print(f"🌐 Server running at: http://localhost:3000")
 
     app.run(debug=True, host="0.0.0.0", port=3000)

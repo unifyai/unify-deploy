@@ -212,3 +212,44 @@ def test_idle_job_adapters(test_client):
     print("Idle job cleaner:", response.text)
     assert response.status_code == 200
     assert len(response.json()["idle_jobs"])
+
+
+def test_assistant_update_webhook(test_client):
+    """Test successful assistant update webhook processing."""
+    endpoint = "/assistant/update"
+    assistant_id = "default-test-assistant"
+
+    # Test with JSON payload
+    data = {"assistant_id": assistant_id}
+    response = test_client.make_request("POST", endpoint, json=data)
+
+    print("Assistant update response:", response.text)
+    assert response.status_code == 200
+    assert "application/json" in response.headers.get("content-type", "")
+
+    response_data = response.json()
+    assert response_data["success"] is True
+    assert response_data["assistant_id"] == assistant_id
+    assert "topic_path" in response_data
+
+    # Check that the message was published to Pub/Sub
+    message = subscriber.pull(
+        subscription=subscription_path, max_messages=1
+    ).received_messages[0]
+    ack_id = message.ack_id
+    message = message.message
+    try:
+        data = json.loads(message.data.decode("utf-8"))
+    except json.JSONDecodeError:
+        assert False, "Failed to decode message data"
+    try:
+        assert data is not None
+        assert "thread" in data and data["thread"] == "assistant_update"
+        assert "event" in data and data["event"] is not None
+        event = data["event"]
+        assert event["assistant_id"] == assistant_id
+        assert event["user_id"] == "default-user"
+        assert event["assistant_name"] == "Test Assistant"
+    except AssertionError as e:
+        print(e)
+    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
