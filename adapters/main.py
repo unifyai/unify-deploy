@@ -875,7 +875,6 @@ def assistant_update_webhook(request: Request):
         assistant_id = request.form.get("assistant_id")
         print(f"Received assistant_id: {assistant_id}")
         assistant_data = get_assistant(assistant_id=assistant_id)
-        assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
         assistant_first_name = assistant_data["assistant_first_name"]
         assistant_surname = assistant_data["assistant_surname"]
