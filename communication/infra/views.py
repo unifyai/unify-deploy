@@ -150,7 +150,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 async def expose_job_service(
     job_name: str = Form(...),
     namespace: str = Form("default"),
-    port: int = Form(3000),
+    port: int = Form(6080),
     service_name: str = Form(""),
 ):
     """
@@ -253,6 +253,9 @@ async def create_kubernetes_job(
     image: str = Form(
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
     ),
+    expose_service: bool = Form(True),
+    expose_port: int = Form(6080),
+    service_name: str = Form(""),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
@@ -288,7 +291,7 @@ async def create_kubernetes_job(
         )
 
         if job:
-            return {
+            response = {
                 "success": True,
                 "message": "Kubernetes job created successfully",
                 "job_name": job.metadata.name,
@@ -301,6 +304,26 @@ async def create_kubernetes_job(
                     else None
                 ),
             }
+
+            # Optionally expose the job via a LoadBalancer Service
+            if expose_service:
+                name = service_name or f"unity-svc-{job.metadata.name}"
+                svc = create_external_service_for_job(
+                    core_api=core_api,
+                    job_name=job.metadata.name,
+                    namespace=namespace,
+                    port=expose_port,
+                    service_name=name,
+                )
+                if svc:
+                    ip_info = get_service_external_ip(core_api, name, namespace)
+                    response["service"] = {
+                        "service_name": name,
+                        "port": expose_port,
+                        "external": ip_info,
+                    }
+
+            return response
         else:
             raise HTTPException(
                 status_code=500,
@@ -318,7 +341,9 @@ async def create_kubernetes_job(
 # delete kubernetes job
 @router.delete("/job/delete")
 async def delete_kubernetes_job(
-    job_name: str = Form(...), namespace: str = Form("default")
+    job_name: str = Form(...),
+    namespace: str = Form("default"),
+    delete_services: bool = Form(True),
 ):
     """
     Delete a Kubernetes Job for a Unity assistant.
@@ -335,6 +360,26 @@ async def delete_kubernetes_job(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
 
+        deleted_services = []
+        failed_services = []
+
+        # Optionally delete any services associated with this job
+        if delete_services:
+            try:
+                svcs = core_api.list_namespaced_service(
+                    namespace=namespace, label_selector=f"job-name={job_name}"
+                )
+                for svc in svcs.items:
+                    svc_name = svc.metadata.name
+                    ok = delete_service(core_api, svc_name, namespace)
+                    if ok:
+                        deleted_services.append(svc_name)
+                    else:
+                        failed_services.append(svc_name)
+            except Exception:
+                # Continue even if listing services fails
+                pass
+
         # Delete the job
         success = delete_job(batch_api, job_name, namespace)
 
@@ -344,6 +389,8 @@ async def delete_kubernetes_job(
                 "message": f"Job deleted successfully: {job_name}",
                 "job_name": job_name,
                 "namespace": namespace,
+                "deleted_services": deleted_services,
+                "failed_services": failed_services,
             }
         else:
             raise HTTPException(

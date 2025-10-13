@@ -225,7 +225,7 @@ def create_unity_job(
                                 "ports": [
                                     {"containerPort": 8000},
                                     {"containerPort": 6379},
-                                    {"containerPort": 3000},
+                                    {"containerPort": 6080},
                                 ],
                                 "envFrom": [
                                     {"configMapRef": {"name": "unity-config"}},
@@ -382,7 +382,7 @@ def create_external_service_for_job(
     core_api,
     job_name: str,
     namespace: str = "default",
-    port: int = 3000,
+    port: int = 6080,
     service_name: str = None,
 ):
     """Create a Service of type LoadBalancer to expose a Job's Pod on an external IP.
