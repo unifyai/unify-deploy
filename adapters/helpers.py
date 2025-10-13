@@ -71,7 +71,11 @@ def get_assistant(
     }
     if "+15550100002" in phone_check:
         return default_assistant_data
-    if "+15550100001" in phone_check or "julia@unify.ai" in email_check:
+    if (
+        "+15550100001" in phone_check
+        or "julia@unify.ai" in email_check
+        or assistant_id == "default-assistant-2"
+    ):
         return {
             **default_assistant_data,
             "api_key": "",
