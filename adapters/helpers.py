@@ -68,6 +68,7 @@ def get_assistant(
         "user_number": "",
         "assistant_number": "",
         "user_whatsapp_number": "",
+        "assistant_whatsapp_number": "",
     }
     if "+15550100002" in phone_check:
         return default_assistant_data
