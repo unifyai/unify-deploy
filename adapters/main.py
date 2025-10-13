@@ -886,7 +886,7 @@ def assistant_update_webhook(request: Request):
         # check if job is running
         running = is_job_running(user_id, assistant_id)
         print(f"Job running: {running}")
-        if "test" not in assistant_id and not running:
+        if "default" not in assistant_id and not running:
             return Response(
                 response=json.dumps(
                     {
@@ -901,7 +901,7 @@ def assistant_update_webhook(request: Request):
         elif running:
             print(f"Job running for assistant {assistant_id}: {running}")
         else:
-            print(f"Test assistant {assistant_id} - skipping job running check")
+            print(f"Default assistant {assistant_id} - skipping job running check")
 
         # Job is running, publish to assistant topic
         pubsub_client = pubsub_v1.PublisherClient()
