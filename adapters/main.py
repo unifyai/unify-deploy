@@ -870,118 +870,37 @@ def assistant_update_webhook(request: Request):
     """
     print("assistant_update_webhook function started")
 
-    # Get parameters from request (supports both form and JSON)
-    if request.is_json:
-        data = request.get_json()
-        assistant_id = data.get("assistant_id")
-    else:
-        assistant_id = request.form.get("assistant_id")
-
-    print(f"Received assistant_id: {assistant_id}")
-
-    if not assistant_id:
-        return Response(
-            response=json.dumps({"error": "assistant_id is required"}),
-            status=400,
-            mimetype="application/json",
-        )
-
     try:
-        # Check if it's a default assistant
-        default_assistants = {
-            "default-assistant": {"phone": "+15550100002"},
-            "default-assistant-2": {"phone": "+15550100001"},
-            "default-assistant-3": {"phone": "+15550100005"},
-            "default-assistant-4": {"phone": "+15550100007"},
-            "default-assistant-5": {"phone": "+18148592377"},
-            "default-test-assistant": {"phone": "+0123456789"},
-        }
-
-        if assistant_id in default_assistants:
-            # Use the helper function for default assistants
-            assistant_data = get_assistant(
-                phone_number=default_assistants[assistant_id]["phone"]
-            )
-        else:
-            # Fetch assistant data from Orchestra API using agent_id
-            response = requests.get(
-                f"{ORCHESTRA_URL}/admin/assistant",
-                params={"agent_id": assistant_id},
-                headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-            )
-
-            if response.status_code != 200:
-                return Response(
-                    response=json.dumps(
-                        {
-                            "error": f"Failed to fetch assistant from Orchestra API: {response.text}"
-                        }
-                    ),
-                    status=response.status_code,
-                    mimetype="application/json",
-                )
-
-            response_data = response.json()
-            if "detail" in response_data:
-                return Response(
-                    response=json.dumps(
-                        {"error": f"Assistant not found: {response_data['detail']}"}
-                    ),
-                    status=404,
-                    mimetype="application/json",
-                )
-
-            assistants = response_data.get("info", [])
-            if len(assistants) == 0:
-                return Response(
-                    response=json.dumps({"error": "Assistant not found"}),
-                    status=404,
-                    mimetype="application/json",
-                )
-
-            # Parse assistant data from Orchestra response
-            assistant = assistants[0]
-            assistant_data = {
-                "assistant_id": assistant["agent_id"],
-                "user_id": assistant["user_id"],
-                "api_key": assistant["api_key"],
-                "user_name": f"{assistant['user_first_name']} {assistant['user_last_name']}",
-                "assistant_first_name": assistant["first_name"],
-                "assistant_surname": assistant["surname"],
-                "assistant_age": assistant["age"],
-                "assistant_region": assistant["region"],
-                "assistant_about": assistant["about"],
-                "assistant_number": assistant["phone"],
-                "assistant_whatsapp_number": assistant.get(
-                    "assistant_whatsapp_number", ""
-                ),
-                "assistant_email": assistant["email"],
-                "user_number": assistant["user_phone"],
-                "user_whatsapp_number": assistant.get("user_whatsapp_number", ""),
-                "user_email": assistant["user_email"],
-                "voice_provider": assistant.get("voice_provider", ""),
-                "voice_id": assistant.get("voice_id", ""),
-            }
-
+        # get assistant from request
+        assistant_id = request.form.get("assistant_id")
+        print(f"Received assistant_id: {assistant_id}")
+        assistant_data = get_assistant(assistant_id=assistant_id)
+        assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
+        assistant_first_name = assistant_data["assistant_first_name"]
+        assistant_surname = assistant_data["assistant_surname"]
+        assistant_data["assistant_name"] = f"{assistant_first_name} {assistant_surname}"
+        assistant_data.pop("assistant_first_name")
+        assistant_data.pop("assistant_surname")
+        assistant_data.pop("assistant_whatsapp_number")
 
-        # Check if job is running (skip check for test assistants)
-        if "test" not in assistant_id:
-            running = is_job_running(user_id, assistant_id)
+        # check if job is running
+        running = is_job_running(user_id, assistant_id)
+        print(f"Job running: {running}")
+        if "test" not in assistant_id and not running:
+            return Response(
+                response=json.dumps(
+                    {
+                        "success": False,
+                        "message": "No job currently running for this assistant",
+                        "assistant_id": assistant_id,
+                    }
+                ),
+                status=200,
+                mimetype="application/json",
+            )
+        elif running:
             print(f"Job running for assistant {assistant_id}: {running}")
-
-            if not running:
-                return Response(
-                    response=json.dumps(
-                        {
-                            "success": False,
-                            "message": "No job currently running for this assistant",
-                            "assistant_id": assistant_id,
-                        }
-                    ),
-                    status=200,
-                    mimetype="application/json",
-                )
         else:
             print(f"Test assistant {assistant_id} - skipping job running check")
 
@@ -993,23 +912,7 @@ def assistant_update_webhook(request: Request):
         # Prepare message in the same format as startup event
         message_data = {
             "thread": "assistant_update",
-            "event": {
-                "api_key": assistant_data["api_key"],
-                "assistant_id": assistant_id,
-                "user_id": user_id,
-                "user_name": assistant_data["user_name"],
-                "user_email": assistant_data["user_email"],
-                "assistant_name": f"{assistant_data['assistant_first_name']} {assistant_data['assistant_surname']}",
-                "assistant_age": assistant_data["assistant_age"],
-                "assistant_region": assistant_data["assistant_region"],
-                "assistant_about": assistant_data["assistant_about"],
-                "user_number": assistant_data["user_number"],
-                "assistant_number": assistant_data["assistant_number"],
-                "assistant_email": assistant_data["assistant_email"],
-                "user_whatsapp_number": assistant_data["user_whatsapp_number"],
-                "voice_provider": assistant_data["voice_provider"],
-                "voice_id": assistant_data["voice_id"],
-            },
+            "event": assistant_data,
         }
 
         print(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
