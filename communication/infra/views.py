@@ -10,6 +10,9 @@ from .helpers import (
     delete_job,
     get_job_logs,
     suspend_job,
+    create_external_service_for_job,
+    get_service_external_ip,
+    delete_service,
 )
 from communication.helpers import STAGING
 
@@ -140,6 +143,107 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete topic: {str(e)}")
+
+
+# create external service for a job
+@router.post("/job/expose")
+async def expose_job_service(
+    job_name: str = Form(...),
+    namespace: str = Form("default"),
+    port: int = Form(3000),
+    service_name: str = Form(""),
+):
+    """
+    Create a LoadBalancer Service that exposes the Job's Pod externally on the given port.
+    Returns the service name and current external IP status.
+    """
+    try:
+        batch_api, core_api = setup_kubernetes_client()
+        if not batch_api or not core_api:
+            raise HTTPException(
+                status_code=500, detail="Failed to connect to Kubernetes cluster"
+            )
+
+        name = service_name or f"unity-svc-{job_name}"
+        svc = create_external_service_for_job(
+            core_api=core_api,
+            job_name=job_name,
+            namespace=namespace,
+            port=port,
+            service_name=name,
+        )
+        if not svc:
+            raise HTTPException(status_code=500, detail="Failed to create Service")
+
+        ip_info = get_service_external_ip(core_api, name, namespace)
+        return {
+            "success": True,
+            "service_name": name,
+            "namespace": namespace,
+            "port": port,
+            "external": ip_info,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to expose service: {str(e)}"
+        )
+
+
+# get external ip for a service
+@router.get("/job/service/ip")
+async def get_job_service_ip(service_name: str, namespace: str = "default"):
+    try:
+        batch_api, core_api = setup_kubernetes_client()
+        if not batch_api or not core_api:
+            raise HTTPException(
+                status_code=500, detail="Failed to connect to Kubernetes cluster"
+            )
+
+        ip_info = get_service_external_ip(core_api, service_name, namespace)
+        return {
+            "success": True,
+            "service_name": service_name,
+            "namespace": namespace,
+            "external": ip_info,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get service IP: {str(e)}"
+        )
+
+
+# delete external service
+@router.delete("/job/service")
+async def delete_job_service(
+    service_name: str = Form(...), namespace: str = Form("default")
+):
+    try:
+        batch_api, core_api = setup_kubernetes_client()
+        if not batch_api or not core_api:
+            raise HTTPException(
+                status_code=500, detail="Failed to connect to Kubernetes cluster"
+            )
+
+        ok = delete_service(core_api, service_name, namespace)
+        if ok:
+            return {
+                "success": True,
+                "message": f"Service deleted: {service_name}",
+                "service_name": service_name,
+            }
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete service: {service_name}"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete service: {str(e)}"
+        )
 
 
 # create kubernetes job
