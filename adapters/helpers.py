@@ -70,7 +70,7 @@ def get_assistant(
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
     }
-    if "+15550100002" in phone_check:
+    if "+15550100002" in phone_check or assistant_id == "default-assistant":
         return default_assistant_data
     if (
         "+15550100001" in phone_check
@@ -93,7 +93,11 @@ def get_assistant(
             "voice_provider": "cartesia",
             "voice_id": None,
         }
-    if "+15550100005" in phone_check or "default-assistant-3@unify.ai" in email_check:
+    if (
+        "+15550100005" in phone_check
+        or "default-assistant-3@unify.ai" in email_check
+        or assistant_id == "default-assistant-3"
+    ):
         return {
             **default_assistant_data,
             "api_key": "",
@@ -112,7 +116,7 @@ def get_assistant(
             "voice_provider": "elevenlabs",
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
-    if "+15550100007" in phone_check:
+    if "+15550100007" in phone_check or assistant_id == "default-assistant-4":
         return {
             **default_assistant_data,
             "assistant_id": "default-assistant-4",
@@ -130,7 +134,11 @@ def get_assistant(
             "voice_provider": "elevenlabs",
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
-    if "+18148592377" in phone_check:
+    if (
+        "+18148592377" in phone_check
+        or "default-assistant-5@unify.ai" in email_check
+        or assistant_id == "default-assistant-5"
+    ):
         return {
             **default_assistant_data,
             "api_key": "",
@@ -149,7 +157,11 @@ def get_assistant(
             "voice_provider": "elevenlabs",
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
-    if "+0123456789" in phone_check or "default-test-assistant@unify.ai" in email_check:
+    if (
+        "+0123456789" in phone_check
+        or "default-test-assistant@unify.ai" in email_check
+        or assistant_id == "default-test-assistant"
+    ):
         return {
             **default_assistant_data,
             "assistant_id": "default-test-assistant",
