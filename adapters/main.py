@@ -129,6 +129,127 @@ def unify_message_webhook(request: Request):
 
 
 @functions_framework.http
+def log_pre_hire_chats_webhook(request: Request):
+    print("log_pre_hire_chats_webhook function started")
+    # optional auth via admin key
+    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    auth_header = request.headers.get("Authorization", "")
+    if shared_key and auth_header != f"Bearer {shared_key}":
+        print("Unauthorized log_pre_hire_chats request")
+        return Response(status=401)
+
+    # accept JSON or form payloads
+    payload = request.get_json(silent=True) or {}
+    assistant_id_input = payload.get("assistant_id") or request.form.get(
+        "assistant_id", ""
+    )
+    if not assistant_id_input:
+        print(f"Assistant ID is required")
+        return Response(status_code=400)
+
+    # accept list of role/msg pairs under `body`
+    raw_body = payload.get("body")
+    if raw_body is None:
+        raw_body = request.form.get("Body", "") or ""
+    # If body is a JSON string, parse it; otherwise, use as-is
+    try:
+        body = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+    except Exception:
+        body = None
+
+    # validate body: must be list of dicts with role and msg (both strings)
+    if not isinstance(body, list) or not all(
+        isinstance(item, dict)
+        and isinstance(item.get("role"), str)
+        and isinstance(item.get("msg"), str)
+        for item in body
+    ):
+        print("Invalid body format; expected list of {role, msg} objects")
+        return Response(
+            response=json.dumps({"error": "body must be a list of {role, msg}"}),
+            status=400,
+            mimetype="application/json",
+        )
+
+    print(
+        f"Received log_pre_hire_chats for assistant_id={assistant_id_input} with {len(body)} messages"
+    )
+
+    # resolve assistant strictly by assistant_id for unify_message
+    assistant_data = get_assistant(assistant_id=assistant_id_input)
+    api_key = assistant_data["api_key"]
+    assistant_id = assistant_data["assistant_id"]
+    user_id = assistant_data["user_id"]
+    user_name = assistant_data["user_name"]
+    assistant_first_name = assistant_data["assistant_first_name"]
+    assistant_surname = assistant_data["assistant_surname"]
+    assistant_age = assistant_data["assistant_age"]
+    assistant_region = assistant_data["assistant_region"]
+    assistant_about = assistant_data["assistant_about"]
+    user_number = assistant_data["user_number"]
+    assistant_number = assistant_data["assistant_number"]
+    assistant_email = assistant_data["assistant_email"]
+    user_whatsapp_number = assistant_data["user_whatsapp_number"]
+    user_email = assistant_data["user_email"]
+    voice_provider = assistant_data["voice_provider"]
+    voice_id = assistant_data["voice_id"]
+
+    # frontend log_pre_hire_chats: no validation of contact
+
+    # ensure job running
+    running = is_job_running(user_id, assistant_id)
+    print(f"Job running: {running}")
+    if "test" not in assistant_id and "default" not in assistant_id and not running:
+        start_unity_job(
+            api_key,
+            "unify_message",
+            assistant_id,
+            user_id,
+            user_name,
+            f"{assistant_first_name} {assistant_surname}",
+            assistant_age,
+            assistant_region,
+            assistant_about,
+            user_number,
+            assistant_number,
+            assistant_email,
+            user_whatsapp_number,
+            user_email,
+            voice_provider,
+            voice_id,
+        )
+        create_job(assistant_id)
+
+    # publish to pubsub
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    print(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
+    try:
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "log_pre_hire_chats",
+                    "event": {
+                        "assistant_id": assistant_id,
+                        "body": body,
+                    },
+                }
+            ).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
+        print("log_pre_hire_chats message published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing log_pre_hire_chats to Pub/Sub: {str(e)}")
+        return Response(response="Error publishing to Pub/Sub", status=500)
+
+    return Response(status=200)
+
+
+@functions_framework.http
 def assistant_wakeup_webhook(request: Request):
     print("assistant_wakeup_webhook function started")
     assistant_number = request.form.get("assistant_number")
