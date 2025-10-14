@@ -208,6 +208,44 @@ def test_unify_message_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
+def test_unify_call_webhook(test_client):
+    """Test successful unify_call webhook processing."""
+    endpoint = "/unify_call"
+    agent_name = "unify_call_default-test-assistant"
+    json_payload = {
+        "agent_name": agent_name,
+        "assistant_id": "default-test-assistant",
+    }
+
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    response = test_client.make_request(
+        "POST", endpoint, json=json_payload, headers=headers
+    )
+
+    assert response.status_code == 200
+
+    # Check that the message was published to Pub/Sub
+    message = subscriber.pull(
+        subscription=subscription_path, max_messages=1
+    ).received_messages[0]
+    ack_id = message.ack_id
+    message = message.message
+    try:
+        data = json.loads(message.data.decode("utf-8"))
+    except json.JSONDecodeError:
+        assert False, "Failed to decode message data"
+    try:
+        assert data is not None
+        assert "thread" in data and data["thread"] == "unify_call"
+        assert "event" in data and data["event"] is not None
+        assert data["event"]["assistant_id"] == "default-test-assistant"
+        assert data["event"]["livekit_room"] == agent_name
+        assert data["event"]["agent_name"] == agent_name
+    except AssertionError as e:
+        print(e)
+    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+
+
 def test_log_pre_hire_chats_webhook(test_client):
     """Test successful log_pre_hire_chats webhook processing with body list."""
     endpoint = "/log_pre_hire_chats"

@@ -225,6 +225,7 @@ def create_unity_job(
                                 "ports": [
                                     {"containerPort": 8000},
                                     {"containerPort": 6379},
+                                    {"containerPort": 6080},
                                 ],
                                 "envFrom": [
                                     {"configMapRef": {"name": "unity-config"}},
@@ -375,3 +376,118 @@ def suspend_job(batch_api, job_name: str, namespace: str = "default"):
     except Exception as e:
         print(f"❌ Error stopping job: {e}")
         return False
+
+
+def create_external_service_for_job(
+    core_api,
+    job_name: str,
+    namespace: str = "default",
+    port: int = 6080,
+    service_name: str = None,
+    job_uid: str = None,
+):
+    """Create a Service of type LoadBalancer to expose a Job's Pod on an external IP.
+
+    The Service selects Pods with label `job-name=<job_name>` and exposes `port`.
+    """
+    try:
+        name = service_name or f"unity-svc-{job_name}"
+        service_manifest = {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": name,
+                "namespace": namespace,
+                "labels": {
+                    "app": "unity",
+                    "job-name": job_name,
+                },
+            },
+            "spec": {
+                "type": "LoadBalancer",
+                "selector": {
+                    "job-name": job_name,
+                },
+                "ports": [
+                    {
+                        "name": f"http-{port}",
+                        "port": port,
+                        "targetPort": port,
+                        "protocol": "TCP",
+                    }
+                ],
+                "externalTrafficPolicy": "Cluster",
+            },
+        }
+
+        # Attach ownerReferences so GC deletes Service when Job is deleted
+        if job_uid:
+            service_manifest["metadata"]["ownerReferences"] = [
+                {
+                    "apiVersion": "batch/v1",
+                    "kind": "Job",
+                    "name": job_name,
+                    "uid": job_uid,
+                    # Not a controller of the Service; just ownership for GC
+                    "controller": False,
+                }
+            ]
+
+        # Try create; if exists, return existing
+        try:
+            svc = core_api.create_namespaced_service(
+                namespace=namespace, body=service_manifest
+            )
+            print(f"✅ Service created: {name}")
+            return svc
+        except ApiException as e:
+            if e.status == 409:
+                print(f"⚠️  Service already exists: {name}")
+                return core_api.read_namespaced_service(name=name, namespace=namespace)
+            raise
+    except Exception as e:
+        print(f"❌ Error creating service: {e}")
+        return None
+
+
+def delete_service(core_api, service_name: str, namespace: str = "default"):
+    """Delete a Kubernetes Service by name."""
+    try:
+        core_api.delete_namespaced_service(name=service_name, namespace=namespace)
+        print(f"✅ Service deleted: {service_name}")
+        return True
+    except ApiException as e:
+        if e.status == 404:
+            print(f"⚠️  Service not found (already deleted): {service_name}")
+            return True
+        print(f"❌ Error deleting service: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ Error deleting service: {e}")
+        return False
+
+
+def get_service_external_ip(core_api, service_name: str, namespace: str = "default"):
+    """Return the Service's external IP or hostname if available."""
+    try:
+        svc = core_api.read_namespaced_service(name=service_name, namespace=namespace)
+        ingress = None
+        if (
+            svc.status
+            and svc.status.load_balancer
+            and svc.status.load_balancer.ingress
+            and len(svc.status.load_balancer.ingress) > 0
+        ):
+            ingress = svc.status.load_balancer.ingress[0]
+            if getattr(ingress, "ip", None):
+                return {"ready": True, "address": ingress.ip, "type": "ip"}
+            if getattr(ingress, "hostname", None):
+                return {"ready": True, "address": ingress.hostname, "type": "hostname"}
+        return {"ready": False, "address": None, "type": None}
+    except ApiException as e:
+        if e.status == 404:
+            return {"ready": False, "address": None, "type": None}
+        raise
+    except Exception as e:
+        print(f"❌ Error fetching service external IP: {e}")
+        return {"ready": False, "address": None, "type": None}
