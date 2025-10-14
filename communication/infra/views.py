@@ -264,10 +264,10 @@ async def create_kubernetes_job(
     image: str = Form(
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
     ),
-    expose_service: bool = Form(True),
+    expose_service: bool = Form(False),
     expose_port: int = Form(6080),
     service_name: str = Form(""),
-    ttl_seconds_after_finished: int = Form(5),
+    ttl_seconds_after_finished: int = Form(0),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
