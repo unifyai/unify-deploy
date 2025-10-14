@@ -384,6 +384,7 @@ def create_external_service_for_job(
     namespace: str = "default",
     port: int = 6080,
     service_name: str = None,
+    job_uid: str = None,
 ):
     """Create a Service of type LoadBalancer to expose a Job's Pod on an external IP.
 
@@ -418,6 +419,19 @@ def create_external_service_for_job(
                 "externalTrafficPolicy": "Cluster",
             },
         }
+
+        # Attach ownerReferences so GC deletes Service when Job is deleted
+        if job_uid:
+            service_manifest["metadata"]["ownerReferences"] = [
+                {
+                    "apiVersion": "batch/v1",
+                    "kind": "Job",
+                    "name": job_name,
+                    "uid": job_uid,
+                    # Not a controller of the Service; just ownership for GC
+                    "controller": False,
+                }
+            ]
 
         # Try create; if exists, return existing
         try:

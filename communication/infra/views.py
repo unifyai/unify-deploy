@@ -152,6 +152,7 @@ async def expose_job_service(
     namespace: str = Form("default"),
     port: int = Form(6080),
     service_name: str = Form(""),
+    attach_owner: bool = Form(True),
 ):
     """
     Create a LoadBalancer Service that exposes the Job's Pod externally on the given port.
@@ -165,12 +166,22 @@ async def expose_job_service(
             )
 
         name = service_name or f"unity-svc-{job_name}"
+        # If attaching owner, look up job UID to set ownerReferences
+        job_uid = None
+        if attach_owner:
+            try:
+                job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
+                job_uid = job.metadata.uid
+            except Exception:
+                job_uid = None
+
         svc = create_external_service_for_job(
             core_api=core_api,
             job_name=job_name,
             namespace=namespace,
             port=port,
             service_name=name,
+            job_uid=job_uid,
         )
         if not svc:
             raise HTTPException(status_code=500, detail="Failed to create Service")
@@ -256,6 +267,7 @@ async def create_kubernetes_job(
     expose_service: bool = Form(True),
     expose_port: int = Form(6080),
     service_name: str = Form(""),
+    ttl_seconds_after_finished: int = Form(5),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
@@ -288,6 +300,9 @@ async def create_kubernetes_job(
             namespace=namespace,
             image=image,
             is_staging=bool(STAGING),
+            ttl_seconds_after_finished=(
+                ttl_seconds_after_finished if ttl_seconds_after_finished > 0 else None
+            ),
         )
 
         if job:
@@ -314,6 +329,7 @@ async def create_kubernetes_job(
                     namespace=namespace,
                     port=expose_port,
                     service_name=name,
+                    job_uid=job.metadata.uid,
                 )
                 if svc:
                     ip_info = get_service_external_ip(core_api, name, namespace)
