@@ -114,6 +114,29 @@ steps:
           --max-instances=100 \
           --concurrency=80
 
+  # Unify Call Webhook Staging
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: "Deploy Unify Call Webhook Staging"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud functions deploy "unify-call-webhook-staging" \
+          --gen2 \
+          --region="us-central1" \
+          --runtime=python311 \
+          --source="adapters" \
+          --entry-point=unify_call_webhook \
+          --trigger-http \
+          --allow-unauthenticated \
+          --set-env-vars=PROJECT_ID=$PROJECT_ID,STAGING=true \
+          --timeout=300 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=100 \
+          --concurrency=80
+
   # Log Pre Hire Chats Webhook Staging
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: "Deploy Log Pre Hire Chats Webhook Staging"
