@@ -337,7 +337,7 @@ def test_assistant_update_webhook(test_client):
 
     # Test with JSON payload
     data = {"assistant_id": assistant_id}
-    response = test_client.make_request("POST", endpoint, json=data)
+    response = test_client.make_request("POST", endpoint, data=data)
 
     print("Assistant update response:", response.text)
     assert response.status_code == 200

@@ -308,7 +308,7 @@ def check_valid_contact(
                         "whatsapp_number": user_whatsapp_number,
                         "bio": "",
                         "rolling_summary": "",
-                        "respond_to": "",
+                        "respond_to": False,
                         "response_policy": "",
                     }
                 ]
