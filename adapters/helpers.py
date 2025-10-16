@@ -367,7 +367,7 @@ def is_job_running(user_id: str, assistant_id: str):
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
         params={
-            "project": "Debug",
+            "project": "AssistantJobs",
             "context": "startup_events",
             "filter_expr": (
                 f"user_id == '{user_id}' and "
