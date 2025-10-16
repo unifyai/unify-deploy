@@ -358,11 +358,11 @@ def log_pre_hire_chats_webhook(request: Request):
 @functions_framework.http
 def assistant_wakeup_webhook(request: Request):
     print("assistant_wakeup_webhook function started")
-    assistant_number = request.form.get("assistant_number")
-    print(f"Assistant {assistant_number} woke up")
+    assistant_id = request.form.get("assistant_id")
+    print(f"Assistant {assistant_id} woke up")
 
     # get assistant data
-    assistant_data = get_assistant(phone_number=assistant_number)
+    assistant_data = get_assistant(phone_number=assistant_id)
     api_key = assistant_data["api_key"]
     assistant_id = assistant_data["assistant_id"]
     user_id = assistant_data["user_id"]
