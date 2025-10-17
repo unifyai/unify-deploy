@@ -267,7 +267,6 @@ async def create_kubernetes_job(
     expose_service: bool = Form(True),
     expose_port: int = Form(6080),
     service_name: str = Form(""),
-    ttl_seconds_after_finished: int = Form(5),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
@@ -300,9 +299,6 @@ async def create_kubernetes_job(
             namespace=namespace,
             image=image,
             is_staging=bool(STAGING),
-            ttl_seconds_after_finished=(
-                ttl_seconds_after_finished if ttl_seconds_after_finished > 0 else None
-            ),
         )
 
         if job:
