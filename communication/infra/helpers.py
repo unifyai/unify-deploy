@@ -233,8 +233,8 @@ def create_unity_job(
                                 ],
                                 "env": env_vars,
                                 "resources": {
-                                    "requests": {"cpu": "4", "memory": "16Gi"},
-                                    "limits": {"cpu": "4", "memory": "16Gi"},
+                                    "requests": {"cpu": "2", "memory": "8Gi"},
+                                    "limits": {"cpu": "2", "memory": "8Gi"},
                                 },
                                 "volumeMounts": [
                                     {
