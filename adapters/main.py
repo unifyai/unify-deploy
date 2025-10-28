@@ -640,6 +640,7 @@ def email_notification_processor(cloud_event):
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
         contacts = context["contacts"]
+
         if not context["is_valid_contact"]:
             error_message = (
                 "This email address is no longer active. Please visit "
