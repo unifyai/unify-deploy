@@ -383,46 +383,11 @@ def is_job_running(user_id: str, assistant_id: str):
     return bool(logs)
 
 
-def start_unity_job(
-    api_key: str,
-    medium: str,
-    assistant_id: str,
-    user_id: str,
-    user_name: str,
-    assistant_name: str,
-    assistant_age: str,
-    assistant_region: str,
-    assistant_about: str,
-    user_number: str,
-    assistant_number: str,
-    assistant_email: str,
-    user_whatsapp_number: str,
-    user_email: str,
-    voice_provider: str,
-    voice_id: str,
-):
-    """
-    Start the service if it is not running.
+def start_unity_job(assistant: dict, medium: str):
+    """Start the service using values from assistant dict."""
+    api_key = assistant["api_key"]
+    assistant_id = assistant["assistant_id"]
 
-    Args:
-        api_key: The API key for the assistant.
-        medium: The type of medium.
-        assistant_id: The ID of the assistant.
-        user_id: The ID of the user.
-        user_name: The name of the user.
-        assistant_name: The name of the assistant.
-        assistant_age: The age of the assistant.
-        assistant_region: The region of the assistant.
-        assistant_about: The about of the assistant.
-        user_number: The phone number of the user.
-        assistant_number: The phone number of the assistant.
-        assistant_email: The email of the assistant.
-        user_whatsapp_number: The whatsapp number of the user.
-        user_email: The email of the user.
-        voice_provider: The tts provider of the assistant.
-        voice_id: The voice id of the assistant.
-    """
-    # default option when api key isn't set
     if api_key == "":
         print(f"No user name for assistant {assistant_id}")
         return
@@ -437,19 +402,19 @@ def start_unity_job(
                 "api_key": api_key,
                 "medium": medium,
                 "assistant_id": assistant_id,
-                "user_id": user_id,
-                "user_name": user_name,
-                "user_email": user_email,
-                "assistant_name": assistant_name,
-                "assistant_age": assistant_age,
-                "assistant_region": assistant_region,
-                "assistant_about": assistant_about,
-                "user_number": user_number,
-                "assistant_number": assistant_number,
-                "assistant_email": assistant_email,
-                "user_whatsapp_number": user_whatsapp_number,
-                "voice_provider": voice_provider,
-                "voice_id": voice_id,
+                "user_id": assistant["user_id"],
+                "user_name": assistant["user_name"],
+                "user_email": assistant["user_email"],
+                "assistant_name": f"{assistant['assistant_first_name']} {assistant['assistant_surname']}",
+                "assistant_age": assistant["assistant_age"],
+                "assistant_region": assistant["assistant_region"],
+                "assistant_about": assistant["assistant_about"],
+                "user_number": assistant["user_number"],
+                "assistant_number": assistant["assistant_number"],
+                "assistant_email": assistant["assistant_email"],
+                "user_whatsapp_number": assistant["user_whatsapp_number"],
+                "voice_provider": assistant["voice_provider"],
+                "voice_id": assistant["voice_id"],
             },
             timeout=1,
         )
@@ -487,6 +452,79 @@ def create_job(assistant_id: str):
             f"Error sending idle job creation request for assistant {assistant_id}: {e}"
         )
         return False
+
+
+def build_webhook_context(
+    channel: str,
+    destination: str,
+    sender: str,
+    assistant_id: str = None,
+    validate_contact: bool = True,
+    ensure_job: bool = True,
+    force_start: bool = False,
+):
+    """Build a shared context for webhooks."""
+    # normalize identifiers and resolve assistant by channel
+    is_email = channel == "email"
+    normalized_sender = (
+        sender.replace("whatsapp:", "") if channel == "whatsapp" else sender
+    )
+
+    # get assistant data
+    if assistant_id:
+        assistant_data = get_assistant(assistant_id=assistant_id)
+    else:
+        assistant_data = (
+            get_assistant(email_id=destination)
+            if is_email
+            else get_assistant(phone_number=destination)
+        )
+    api_key = assistant_data["api_key"]
+    assistant_id = assistant_data["assistant_id"]
+    user_id = assistant_data["user_id"]
+    assistant_first_name = assistant_data["assistant_first_name"]
+    assistant_surname = assistant_data["assistant_surname"]
+    user_number = assistant_data["user_number"]
+    user_whatsapp_number = assistant_data["user_whatsapp_number"]
+    user_email = assistant_data["user_email"]
+
+    # validate contact
+    contacts = []
+    if validate_contact:
+        contacts = check_valid_contact(
+            email_id=(destination if is_email else ""),
+            phone_number=("" if is_email else normalized_sender),
+            medium=channel,
+            assistant_context=f"{assistant_first_name}{assistant_surname}",
+            api_key=api_key,
+            user_number=user_number,
+            user_whatsapp_number=user_whatsapp_number,
+            user_email=user_email,
+        )
+
+    # check contact validity
+    is_default_assistant = "default" in assistant_id
+    is_test_assistant = "test" in assistant_id
+    is_valid_contact = is_default_assistant or bool(contacts)
+
+    # ensure job is running (skip for tests/default)
+    job_started = False
+    is_running = is_job_running(user_id, assistant_id)
+    skip_auto_start = is_test_assistant or is_default_assistant or is_running
+    should_start_job = ensure_job and (force_start or not skip_auto_start)
+    if should_start_job:
+        start_unity_job(assistant_data, channel)
+        create_job(assistant_id)
+        job_started = True
+        is_running = True
+
+    return {
+        "assistant": assistant_data,
+        "contacts": contacts,
+        "is_valid_contact": is_valid_contact,
+        "is_job_running": is_running,
+        "job_started": job_started,
+    }
 
 
 # phone helpers

@@ -15,15 +15,14 @@ from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
 
 from helpers import (
+    add_user_to_conference,
+    build_webhook_context,
     check_valid_contact,
+    create_conference_response,
     dispatch_agent,
     get_assistant,
-    is_job_running,
-    start_unity_job,
-    create_job,
-    create_conference_response,
-    add_user_to_conference,
     get_thread_id,
+    is_job_running,
     publish_thread_id,
     STAGING,
     ORCHESTRA_URL,
@@ -54,50 +53,18 @@ def unify_message_webhook(request: Request):
         f"Received unify_message message for assistant_id={assistant_id_input} with body: {body}"
     )
 
-    # resolve assistant strictly by assistant_id for unify_message
-    assistant_data = get_assistant(assistant_id=assistant_id_input)
-    api_key = assistant_data["api_key"]
-    assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_first_name = assistant_data["assistant_first_name"]
-    assistant_surname = assistant_data["assistant_surname"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    user_whatsapp_number = assistant_data["user_whatsapp_number"]
-    user_email = assistant_data["user_email"]
-    voice_provider = assistant_data["voice_provider"]
-    voice_id = assistant_data["voice_id"]
-
-    # frontend unify_message: no validation of contact
-
-    # ensure job running
-    running = is_job_running(user_id, assistant_id)
+    # shared context
+    context = build_webhook_context(
+        channel="unify_message",
+        destination="",
+        sender="",
+        assistant_id=assistant_id_input,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+    running = context["is_job_running"]
     print(f"Job running: {running}")
-    if "test" not in assistant_id and "default" not in assistant_id and not running:
-        start_unity_job(
-            api_key,
-            "unify_message",
-            assistant_id,
-            user_id,
-            user_name,
-            f"{assistant_first_name} {assistant_surname}",
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_whatsapp_number,
-            user_email,
-            voice_provider,
-            voice_id,
-        )
-        create_job(assistant_id)
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
@@ -160,48 +127,18 @@ def unify_call_webhook(request: Request):
         f"Received unify_call for assistant_id={assistant_id_input} room={room} agent_name={agent_name}"
     )
 
-    # resolve assistant strictly by assistant_id
-    assistant_data = get_assistant(assistant_id=assistant_id_input)
-    api_key = assistant_data["api_key"]
-    assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_first_name = assistant_data["assistant_first_name"]
-    assistant_surname = assistant_data["assistant_surname"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    user_whatsapp_number = assistant_data["user_whatsapp_number"]
-    user_email = assistant_data["user_email"]
-    voice_provider = assistant_data["voice_provider"]
-    voice_id = assistant_data["voice_id"]
-
-    # ensure job running
-    running = is_job_running(user_id, assistant_id)
+    # shared context
+    context = build_webhook_context(
+        channel="unify_call",
+        destination="",
+        sender="",
+        assistant_id=assistant_id_input,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+    running = context["is_job_running"]
     print(f"Job running: {running}")
-    if "test" not in assistant_id and "default" not in assistant_id and not running:
-        start_unity_job(
-            api_key,
-            "unify_call",
-            assistant_id,
-            user_id,
-            user_name,
-            f"{assistant_first_name} {assistant_surname}",
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_whatsapp_number,
-            user_email,
-            voice_provider,
-            voice_id,
-        )
-        create_job(assistant_id)
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
@@ -281,50 +218,18 @@ def log_pre_hire_chats_webhook(request: Request):
         f"Received log_pre_hire_chats for assistant_id={assistant_id_input} with {len(body)} messages"
     )
 
-    # resolve assistant strictly by assistant_id for unify_message
-    assistant_data = get_assistant(assistant_id=assistant_id_input)
-    api_key = assistant_data["api_key"]
-    assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_first_name = assistant_data["assistant_first_name"]
-    assistant_surname = assistant_data["assistant_surname"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    user_whatsapp_number = assistant_data["user_whatsapp_number"]
-    user_email = assistant_data["user_email"]
-    voice_provider = assistant_data["voice_provider"]
-    voice_id = assistant_data["voice_id"]
-
-    # frontend log_pre_hire_chats: no validation of contact
-
-    # ensure job running
-    running = is_job_running(user_id, assistant_id)
+    # shared context
+    context = build_webhook_context(
+        channel="unify_message",
+        destination="",
+        sender="",
+        assistant_id=assistant_id_input,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+    running = context["is_job_running"]
     print(f"Job running: {running}")
-    if "test" not in assistant_id and "default" not in assistant_id and not running:
-        start_unity_job(
-            api_key,
-            "unify_message",
-            assistant_id,
-            user_id,
-            user_name,
-            f"{assistant_first_name} {assistant_surname}",
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_whatsapp_number,
-            user_email,
-            voice_provider,
-            voice_id,
-        )
-        create_job(assistant_id)
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
@@ -361,47 +266,17 @@ def assistant_wakeup_webhook(request: Request):
     assistant_id = request.form.get("assistant_id")
     print(f"Assistant {assistant_id} woke up")
 
-    # get assistant data
-    assistant_data = get_assistant(assistant_id=assistant_id)
-    api_key = assistant_data["api_key"]
-    assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_first_name = assistant_data["assistant_first_name"]
-    assistant_surname = assistant_data["assistant_surname"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    user_whatsapp_number = assistant_data["user_whatsapp_number"]
-    user_email = assistant_data["user_email"]
-    voice_provider = assistant_data["voice_provider"]
-    voice_id = assistant_data["voice_id"]
-
-    # start unity job
-    start_unity_job(
-        api_key,
-        "wakeup",
-        assistant_id,
-        user_id,
-        user_name,
-        f"{assistant_first_name} {assistant_surname}",
-        assistant_age,
-        assistant_region,
-        assistant_about,
-        user_number,
-        assistant_number,
-        assistant_email,
-        user_whatsapp_number,
-        user_email,
-        voice_provider,
-        voice_id,
+    # shared context
+    build_webhook_context(
+        channel="wakeup",
+        destination="",
+        sender="",
+        assistant_id=assistant_id,
+        validate_contact=False,
+        ensure_job=True,
+        force_start=True,
     )
 
-    # create job
-    create_job(assistant_id)
     return Response(status=200)
 
 
@@ -476,37 +351,12 @@ def twilio_call_webhook(request: Request):
     caller_number = from_number or ""
     print(f"Received call from {caller_number} to {twilio_number}")
 
-    # get assistant id from email id
-    assistant_data = get_assistant(phone_number=to_number)
-    api_key = assistant_data["api_key"]
-    assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_first_name = assistant_data["assistant_first_name"]
-    assistant_surname = assistant_data["assistant_surname"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    user_whatsapp_number = assistant_data["user_whatsapp_number"]
-    user_email = assistant_data["user_email"]
-    voice_provider = assistant_data["voice_provider"]
-    voice_id = assistant_data["voice_id"]
+    # shared context
+    context = build_webhook_context("phone", to_number, from_number)
+    assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
 
-    # check if contact is valid
-    contacts = check_valid_contact(
-        email_id="",
-        phone_number=caller_number,
-        medium="phone",
-        assistant_context=f"{assistant_first_name}{assistant_surname}",
-        api_key=api_key,
-        user_number=user_number,
-        user_whatsapp_number=user_whatsapp_number,
-        user_email=user_email,
-    )
-    if "default" not in assistant_id and not contacts:
+    if not context["is_valid_contact"]:
         resp_user = VoiceResponse()
         resp_user.say(
             "This number is no longer active. Please visit "
@@ -514,31 +364,10 @@ def twilio_call_webhook(request: Request):
         )
         return Response(response=str(resp_user), mimetype="text/xml")
 
-    # start unity job if it is not running
-    running = is_job_running(user_id, assistant_id)
+    running = context["is_job_running"]
     print(f"Job running: {running}")
-    if "test" not in assistant_id and "default" not in assistant_id and not running:
-        start_unity_job(
-            api_key,
-            "phone",
-            assistant_id,
-            user_id,
-            user_name,
-            f"{assistant_first_name} {assistant_surname}",
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_whatsapp_number,
-            user_email,
-            voice_provider,
-            voice_id,
-        )
-        create_job(assistant_id)
 
-    # FIXED: Create conference name and sip uri with unique timestamp
+    # conference name and SIP URI
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     room_name = f"unity_{twilio_number}"  # Consistent room per assistant
@@ -546,7 +375,7 @@ def twilio_call_webhook(request: Request):
     print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
     print(f"LiveKit room will be: {room_name}")
 
-    # publish to pubsub - let the pubsub handler dispatch the agent when worker is ready
+    # publish to Pub/Sub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
@@ -624,37 +453,13 @@ def twilio_msg_webhook(request: Request):
     body = request.form.get("Body", "") or ""
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
-    # get assistant id from email id
-    assistant_data = get_assistant(phone_number=to_number)
-    api_key = assistant_data["api_key"]
+    # shared context
+    context = build_webhook_context("msg", to_number, from_number)
+    assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_first_name = assistant_data["assistant_first_name"]
-    assistant_surname = assistant_data["assistant_surname"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    user_whatsapp_number = assistant_data["user_whatsapp_number"]
-    user_email = assistant_data["user_email"]
-    voice_provider = assistant_data["voice_provider"]
-    voice_id = assistant_data["voice_id"]
+    contacts = context["contacts"]
 
-    # check if contact is valid
-    contacts = check_valid_contact(
-        email_id="",
-        phone_number=from_number,
-        medium="msg",
-        assistant_context=f"{assistant_first_name}{assistant_surname}",
-        api_key=api_key,
-        user_number=user_number,
-        user_whatsapp_number=user_whatsapp_number,
-        user_email=user_email,
-    )
-    if "default" not in assistant_id and not contacts:
+    if not context["is_valid_contact"]:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -662,29 +467,8 @@ def twilio_msg_webhook(request: Request):
         )
         return Response(response=str(resp_user), mimetype="text/xml")
 
-    # start unity job if it is not running
-    running = is_job_running(user_id, assistant_id)
+    running = context["is_job_running"]
     print(f"Job running: {running}")
-    if "test" not in assistant_id and "default" not in assistant_id and not running:
-        start_unity_job(
-            api_key,
-            "msg",
-            assistant_id,
-            user_id,
-            user_name,
-            f"{assistant_first_name} {assistant_surname}",
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_whatsapp_number,
-            user_email,
-            voice_provider,
-            voice_id,
-        )
-        create_job(assistant_id)
 
     # set up conference
     resp_user = MessagingResponse()
@@ -730,37 +514,13 @@ def twilio_whatsapp_webhook(request: Request):
     body = request.form.get("Body", "") or ""
     print(f"Received message from {from_number} to {to_number} with body: {body}")
 
-    # get assistant id from email id
-    assistant_data = get_assistant(phone_number=to_number)
-    api_key = assistant_data["api_key"]
+    # shared context
+    context = build_webhook_context("whatsapp", to_number, from_number)
+    assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
-    user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_first_name = assistant_data["assistant_first_name"]
-    assistant_surname = assistant_data["assistant_surname"]
-    assistant_age = assistant_data["assistant_age"]
-    assistant_region = assistant_data["assistant_region"]
-    assistant_about = assistant_data["assistant_about"]
-    user_number = assistant_data["user_number"]
-    assistant_number = assistant_data["assistant_number"]
-    assistant_email = assistant_data["assistant_email"]
-    user_whatsapp_number = assistant_data["user_whatsapp_number"]
-    user_email = assistant_data["user_email"]
-    voice_provider = assistant_data["voice_provider"]
-    voice_id = assistant_data["voice_id"]
+    contacts = context["contacts"]
 
-    # check if contact is valid
-    contacts = check_valid_contact(
-        email_id="",
-        phone_number=from_number.replace("whatsapp:", ""),
-        medium="whatsapp",
-        assistant_context=f"{assistant_first_name}{assistant_surname}",
-        api_key=api_key,
-        user_number=user_number,
-        user_whatsapp_number=user_whatsapp_number,
-        user_email=user_email,
-    )
-    if "default" not in assistant_id and not contacts:
+    if not context["is_valid_contact"]:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -768,29 +528,8 @@ def twilio_whatsapp_webhook(request: Request):
         )
         return Response(response=str(resp_user), mimetype="text/xml")
 
-    # start unity job if it is not running
-    running = is_job_running(user_id, assistant_id)
+    running = context["is_job_running"]
     print(f"Job running: {running}")
-    if "test" not in assistant_id and "default" not in assistant_id and not running:
-        start_unity_job(
-            api_key,
-            "whatsapp",
-            assistant_id,
-            user_id,
-            user_name,
-            f"{assistant_first_name} {assistant_surname}",
-            assistant_age,
-            assistant_region,
-            assistant_about,
-            user_number,
-            assistant_number,
-            assistant_email,
-            user_whatsapp_number,
-            user_email,
-            voice_provider,
-            voice_id,
-        )
-        create_job(assistant_id)
 
     # set up conference
     resp_user = MessagingResponse()
@@ -895,66 +634,20 @@ def email_notification_processor(cloud_event):
         email_id = envelope["emailAddress"]
         history_id = envelope["historyId"]
 
-        # get assistant id from email id
-        assistant_data = get_assistant(email_id=email_id)
-        api_key = assistant_data["api_key"]
+        # shared context
+        context = build_webhook_context("email", email_id, "")
+        assistant_data = context["assistant"]
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
-        user_name = assistant_data["user_name"]
-        assistant_first_name = assistant_data["assistant_first_name"]
-        assistant_surname = assistant_data["assistant_surname"]
-        assistant_age = assistant_data["assistant_age"]
-        assistant_region = assistant_data["assistant_region"]
-        assistant_about = assistant_data["assistant_about"]
-        user_number = assistant_data["user_number"]
-        assistant_number = assistant_data["assistant_number"]
-        assistant_email = assistant_data["assistant_email"]
-        user_whatsapp_number = assistant_data["user_whatsapp_number"]
-        user_email = assistant_data["user_email"]
-        voice_provider = assistant_data["voice_provider"]
-        voice_id = assistant_data["voice_id"]
-
-        # check if contact is valid
-        contacts = check_valid_contact(
-            email_id=email_id,
-            phone_number="",
-            medium="email",
-            assistant_context=f"{assistant_first_name}{assistant_surname}",
-            api_key=api_key,
-            user_number=user_number,
-            user_whatsapp_number=user_whatsapp_number,
-            user_email=user_email,
-        )
-        if "default" not in assistant_id and not contacts:
+        contacts = context["contacts"]
+        if not context["is_valid_contact"]:
             error_message = (
                 "This email address is no longer active. Please visit "
                 "console.unify.ai to view your assistant details."
             )
             return error_message, 500
-
-        # start unity job if it is not running
-        running = is_job_running(user_id, assistant_id)
+        running = context["is_job_running"]
         print(f"Job running: {running}")
-        if "test" not in assistant_id and "default" not in assistant_id and not running:
-            start_unity_job(
-                api_key,
-                "email",
-                assistant_id,
-                user_id,
-                user_name,
-                f"{assistant_first_name} {assistant_surname}",
-                assistant_age,
-                assistant_region,
-                assistant_about,
-                user_number,
-                assistant_number,
-                assistant_email,
-                user_whatsapp_number,
-                user_email,
-                voice_provider,
-                voice_id,
-            )
-            create_job(assistant_id)
 
         # Get credentials
         creds_json = json.loads(os.getenv("GCP_SA_KEY"))
