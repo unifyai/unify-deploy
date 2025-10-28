@@ -581,7 +581,6 @@ def email_watch_renewer(request):
             # "default-assistant@unify.ai",
             # "default-assistant-2@unify.ai",
             "default-assistant-3@unify.ai",
-            "default-assistant-5@unify.ai",
         ]
     else:
         emails = ["default-test-assistant@unify.ai"]
@@ -805,9 +804,13 @@ def assistant_update_webhook(request: Request):
         assistant_data.pop("assistant_whatsapp_number")
 
         # check if job is running
+        is_default_assistant = (
+            "default" in assistant_id
+            or "Default Assistant" in assistant_data["assistant_about"]
+        )
         running = is_job_running(user_id, assistant_id)
         print(f"Job running: {running}")
-        if "default" not in assistant_id and not running:
+        if not is_default_assistant and not running:
             return Response(
                 response=json.dumps(
                     {

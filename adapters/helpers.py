@@ -135,29 +135,6 @@ def get_assistant(
             "voice_id": "ThT5KcBeYPX3keUQqHPh",
         }
     if (
-        "+18148592377" in phone_check
-        or "default-assistant-5@unify.ai" in email_check
-        or assistant_id == "default-assistant-5"
-    ):
-        return {
-            **default_assistant_data,
-            "api_key": "",
-            "assistant_id": "default-assistant-5",
-            "user_name": "Ved",
-            "user_number": "+15550100004",
-            "user_email": "user@example.com",
-            "assistant_first_name": "Liz",
-            "assistant_surname": "",
-            "assistant_age": "25",
-            "assistant_region": "United States",
-            "assistant_about": "Default Assistant",
-            "assistant_number": "+18148592377",
-            "assistant_email": "default-assistant-5@unify.ai",
-            "user_whatsapp_number": "+15550100004",
-            "voice_provider": "elevenlabs",
-            "voice_id": "ThT5KcBeYPX3keUQqHPh",
-        }
-    if (
         "+0123456789" in phone_check
         or "default-test-assistant@unify.ai" in email_check
         or assistant_id == "default-test-assistant"
@@ -503,7 +480,10 @@ def build_webhook_context(
         )
 
     # check contact validity
-    is_default_assistant = "default" in assistant_id
+    is_default_assistant = (
+        "default" in assistant_id
+        or "Default Assistant" in assistant_data["assistant_about"]
+    )
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_default_assistant or bool(contacts)
 
