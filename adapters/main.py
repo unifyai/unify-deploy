@@ -63,6 +63,7 @@ def unify_message_webhook(request: Request):
         ensure_job=True,
     )
     assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
     running = context["is_job_running"]
     print(f"Job running: {running}")
 
@@ -78,6 +79,7 @@ def unify_message_webhook(request: Request):
                 {
                     "thread": "unify_message",
                     "event": {
+                        "contacts": contacts,
                         "assistant_id": assistant_id,
                         "body": body,
                     },
@@ -137,6 +139,7 @@ def unify_call_webhook(request: Request):
         ensure_job=True,
     )
     assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
     running = context["is_job_running"]
     print(f"Job running: {running}")
 
@@ -152,6 +155,7 @@ def unify_call_webhook(request: Request):
                 {
                     "thread": "unify_call",
                     "event": {
+                        "contacts": contacts,
                         "assistant_id": assistant_id,
                         "livekit_room": room,
                         "agent_name": agent_name,
@@ -228,6 +232,7 @@ def log_pre_hire_chats_webhook(request: Request):
         ensure_job=True,
     )
     assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
     running = context["is_job_running"]
     print(f"Job running: {running}")
 
@@ -243,6 +248,7 @@ def log_pre_hire_chats_webhook(request: Request):
                 {
                     "thread": "log_pre_hire_chats",
                     "event": {
+                        "contacts": contacts,
                         "assistant_id": assistant_id,
                         "body": body,
                     },
