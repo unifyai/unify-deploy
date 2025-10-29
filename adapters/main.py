@@ -577,11 +577,6 @@ def email_watch_renewer(request):
             f"{ORCHESTRA_URL}/admin/assistant/emails",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
         ).json()["info"]
-        emails += [
-            # "default-assistant@unify.ai",
-            # "default-assistant-2@unify.ai",
-            "default-assistant-3@unify.ai",
-        ]
     else:
         emails = ["default-test-assistant@unify.ai"]
     print(f"Emails to renew: {emails}")

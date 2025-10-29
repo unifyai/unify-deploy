@@ -73,68 +73,6 @@ def get_assistant(
     if "+15550100002" in phone_check or assistant_id == "default-assistant":
         return default_assistant_data
     if (
-        "+15550100001" in phone_check
-        or "julia@unify.ai" in email_check
-        or assistant_id == "default-assistant-2"
-    ):
-        return {
-            **default_assistant_data,
-            "api_key": "",
-            "assistant_id": "default-assistant-2",
-            "user_name": "Julia",
-            "user_number": "+18125625087",
-            "user_email": "julia@unify.ai",
-            "assistant_first_name": "Lily",
-            "assistant_surname": "",
-            "assistant_age": "25",
-            "assistant_number": "+15550100001",
-            "assistant_email": "unity.agent@unify.ai",
-            "user_whatsapp_number": "+15550100004",
-            "voice_provider": "cartesia",
-            "voice_id": None,
-        }
-    if (
-        "+15550100005" in phone_check
-        or "default-assistant-3@unify.ai" in email_check
-        or assistant_id == "default-assistant-3"
-    ):
-        return {
-            **default_assistant_data,
-            "api_key": "",
-            "assistant_id": "default-assistant-3",
-            "user_name": "Yasser",
-            "user_number": "+12697784020",
-            "user_email": "yasser@unify.ai",
-            "assistant_first_name": "Liz",
-            "assistant_surname": "",
-            "assistant_age": "25",
-            "assistant_region": "United States",
-            "assistant_about": "Default Assistant",
-            "assistant_number": "+15550100005",
-            "assistant_email": "default-assistant-3@unify.ai",
-            "user_whatsapp_number": "+12697784020",
-            "voice_provider": "elevenlabs",
-            "voice_id": "ThT5KcBeYPX3keUQqHPh",
-        }
-    if "+15550100007" in phone_check or assistant_id == "default-assistant-4":
-        return {
-            **default_assistant_data,
-            "assistant_id": "default-assistant-4",
-            "user_name": "Ved",
-            "user_number": "+15550100004",
-            "user_email": "user@example.com",
-            "assistant_first_name": "Liz",
-            "assistant_surname": "",
-            "assistant_age": "25",
-            "assistant_region": "United States",
-            "assistant_about": "Default Assistant",
-            "assistant_number": "+15550100007",
-            "assistant_email": "default-assistant-4@unify.ai",
-            "user_whatsapp_number": "+15550100004",
-            "voice_provider": "elevenlabs",
-            "voice_id": "ThT5KcBeYPX3keUQqHPh",
-        }
-    if (
         "+0123456789" in phone_check
         or "default-test-assistant@unify.ai" in email_check
         or assistant_id == "default-test-assistant"
@@ -150,13 +88,6 @@ def get_assistant(
             "assistant_number": "+0123456789",
             "assistant_email": "default-test-assistant@unify.ai",
             "user_whatsapp_number": "+9876543210",
-        }
-    if assistant_id == "default-test-assistant":
-        return {
-            **default_assistant_data,
-            "assistant_id": "default-test-assistant",
-            "assistant_first_name": "Test",
-            "assistant_surname": "Assistant",
         }
 
     response = requests.get(
