@@ -125,6 +125,17 @@ def get_assistant(
     }
 
 
+def get_contacts(
+    assistant_context: str, api_key: str
+) -> tuple[list[dict[str, str]], int]:
+    response = requests.get(
+        f"{ORCHESTRA_URL}/logs",
+        params={"project": "Assistants", "context": f"{assistant_context}/Contacts"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    return response.json(), response.status_code
+
+
 def check_contact_details(
     email_id: str = None,
     phone_number: str = None,
@@ -187,14 +198,10 @@ def check_valid_contact(
 
     # check for contact in assistant contacts
     context = f"{assistant_context}/Contacts"
-    response = requests.get(
-        f"{ORCHESTRA_URL}/logs",
-        params={"project": "Assistants", "context": context},
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    if response.status_code != 200:
+    response_json, status_code = get_contacts(context, api_key)
+    if status_code != 200:
         # if the context isn't created yet (first time user)
-        if response.json()["detail"] == f"Context '{context}' not found":
+        if response_json["detail"] == f"Context '{context}' not found":
             # check for boss user
             if check_contact_details(
                 email_id=email_id,
@@ -225,9 +232,9 @@ def check_valid_contact(
 
         # otherwise
         print(f"Failed to get contacts for assistant {assistant_context}")
-        print(response.text)
+        print(response_json)
         return []
-    contact_logs = response.json()["logs"]
+    contact_logs = response_json["logs"]
     contacts = [c["entries"] for c in contact_logs]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
@@ -412,6 +419,12 @@ def build_webhook_context(
             user_whatsapp_number=user_whatsapp_number,
             user_email=user_email,
         )
+    else:
+        contacts, status_code = get_contacts(
+            f"{assistant_first_name}{assistant_surname}/Contacts", api_key
+        )
+        if status_code != 200:
+            contacts = []
 
     # check contact validity
     is_default_assistant = (
