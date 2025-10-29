@@ -123,12 +123,10 @@ def get_assistant(
     }
 
 
-def get_contacts(
-    assistant_context: str, api_key: str
-) -> tuple[list[dict[str, str]], int]:
+def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]:
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
-        params={"project": "Assistants", "context": f"{assistant_context}/Contacts"},
+        params={"project": "Assistants", "context": context},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     return response.json(), response.status_code
