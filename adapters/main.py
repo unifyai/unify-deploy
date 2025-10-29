@@ -110,12 +110,10 @@ def unify_call_webhook(request: Request):
     # accept JSON or form payloads
     payload = request.get_json(silent=True) or {}
     agent_name = payload.get("agent_name") or request.form.get("agent_name", "")
-    if not agent_name:
-        print("agent_name is required")
+    room_name = payload.get("room_name") or request.form.get("room_name", "")
+    if not agent_name or not room_name:
+        print("agent_name and room_name are required")
         return Response(status=400)
-
-    # Enforce rule: room_name = agent_name
-    room = agent_name
 
     # Require assistant_id explicitly
     assistant_id_input = payload.get("assistant_id") or request.form.get(
@@ -126,7 +124,7 @@ def unify_call_webhook(request: Request):
         return Response(status=400)
 
     print(
-        f"Received unify_call for assistant_id={assistant_id_input} room={room} agent_name={agent_name}"
+        f"Received unify_call for assistant_id={assistant_id_input} room={room_name} agent_name={agent_name}"
     )
 
     # shared context
@@ -157,7 +155,7 @@ def unify_call_webhook(request: Request):
                     "event": {
                         "contacts": contacts,
                         "assistant_id": assistant_id,
-                        "livekit_room": room,
+                        "livekit_room": room_name,
                         "agent_name": agent_name,
                         "timestamp": int(time.time() * 1000),
                     },
