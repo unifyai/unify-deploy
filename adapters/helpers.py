@@ -248,8 +248,8 @@ def check_valid_contact(
         user_email: The email of the user.
     """
     print(
-        f"Checking valid contact: {email_id}, {phone_number}, "
-        f"{medium}, {user_number}, {user_whatsapp_number}, {user_email}"
+        f"Checking valid contact: {email_id}, {phone_number}, {medium}, "
+        f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}"
     )
 
     # check for contact in assistant contacts
@@ -464,6 +464,7 @@ def build_webhook_context(
     user_number = assistant_data["user_number"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
+    print("assistant_data: ", assistant_data)
 
     # validate contact
     contacts = []
