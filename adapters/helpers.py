@@ -164,6 +164,8 @@ def get_assistant(
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
+    print("assistant params: ", params)
+    print("assistant response: ", response)
 
     if "detail" in response:
         return {**default_assistant_data, "assistant_id": None}
