@@ -319,8 +319,8 @@ def test_idle_job_adapters(test_client):
     print("Idle job creator:", response.text)
     assert response.status_code == 200
 
-    print("Waiting for 60 seconds...")
-    time.sleep(60)
+    print("Waiting for 120 seconds...")
+    time.sleep(120)
 
     endpoint = "/job/clean"
     response = test_client.make_request("POST", endpoint)
