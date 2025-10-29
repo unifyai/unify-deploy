@@ -425,6 +425,8 @@ def build_webhook_context(
         print("status_code:", status_code)
         if status_code != 200:
             contacts = []
+        else:
+            contacts = [c["entries"] for c in contacts["logs"]]
 
     # check contact validity
     is_default_assistant = (
