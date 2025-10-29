@@ -244,7 +244,10 @@ async def create_room_and_dispatch_agent(
 async def dispatch_agent(request: Request):
     data = await request.json()
     agent_name = data.get("agent_name")
-    await create_room_and_dispatch_agent(agent_name, agent_name)
+    room_name = data.get("room_name")
+    if not room_name:
+        room_name = agent_name
+    await create_room_and_dispatch_agent(room_name, agent_name)
     return {"success": True}
 
 
