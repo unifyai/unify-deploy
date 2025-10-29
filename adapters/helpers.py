@@ -95,8 +95,6 @@ def get_assistant(
         params=params,
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
-    print("assistant params: ", params)
-    print("assistant response: ", response)
 
     if "detail" in response:
         return {**default_assistant_data, "assistant_id": None}
@@ -404,10 +402,10 @@ def build_webhook_context(
     user_number = assistant_data["user_number"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
-    print("assistant_data: ", assistant_data)
 
     # validate contact
     contacts = []
+    print("validate_contact:", validate_contact)
     if validate_contact:
         contacts = check_valid_contact(
             email_id=(destination if is_email else ""),
@@ -423,6 +421,10 @@ def build_webhook_context(
         contacts, status_code = get_contacts(
             f"{assistant_first_name}{assistant_surname}/Contacts", api_key
         )
+        print("context:", f"{assistant_first_name}{assistant_surname}/Contacts")
+        print("api_key:", api_key)
+        print("contacts:", contacts)
+        print("status_code:", status_code)
         if status_code != 200:
             contacts = []
 
