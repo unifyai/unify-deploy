@@ -201,6 +201,7 @@ def test_unify_message_webhook(test_client):
         assert data is not None
         assert "thread" in data and data["thread"] == "unify_message"
         assert "event" in data and data["event"] is not None
+        assert data["event"]["contact_id"] == 1
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert data["event"]["body"] == body
     except AssertionError as e:

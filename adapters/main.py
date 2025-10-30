@@ -45,6 +45,7 @@ def unify_message_webhook(request: Request):
     assistant_id_input = payload.get("assistant_id") or request.form.get(
         "assistant_id", ""
     )
+    contact_id = payload.get("contact_id") or request.form.get("contact_id", 1)
     if not assistant_id_input:
         print(f"Assistant ID is required")
         return Response(status_code=400)
@@ -79,7 +80,7 @@ def unify_message_webhook(request: Request):
                 {
                     "thread": "unify_message",
                     "event": {
-                        "contact_id": 1,
+                        "contact_id": contact_id,
                         "contacts": contacts,
                         "assistant_id": assistant_id,
                         "body": body,
