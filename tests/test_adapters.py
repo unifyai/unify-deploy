@@ -214,6 +214,7 @@ def test_unify_call_webhook(test_client):
     agent_name = "unify_call_default-test-assistant"
     json_payload = {
         "agent_name": agent_name,
+        "room_name": agent_name,
         "assistant_id": "default-test-assistant",
     }
 
