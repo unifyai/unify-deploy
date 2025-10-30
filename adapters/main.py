@@ -79,6 +79,7 @@ def unify_message_webhook(request: Request):
                 {
                     "thread": "unify_message",
                     "event": {
+                        "contact_id": 1,
                         "contacts": contacts,
                         "assistant_id": assistant_id,
                         "body": body,
