@@ -300,7 +300,9 @@ def test_unity_system_event_webhook(test_client):
         "message": message,
     }
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = test_client.make_request("POST", endpoint, json=form_payload, headers=headers)
+    response = test_client.make_request(
+        "POST", endpoint, json=form_payload, headers=headers
+    )
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub

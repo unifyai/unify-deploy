@@ -275,7 +275,7 @@ def unity_system_event_webhook(request: Request):
     if shared_key and auth_header != f"Bearer {shared_key}":
         print("Unauthorized unity_system_event request")
         return Response(status=401)
-    
+
     # accept JSON or form payloads
     payload = request.get_json(silent=True) or {}
     assistant_id = payload.get("assistant_id") or request.form.get("assistant_id") or ""
@@ -287,14 +287,16 @@ def unity_system_event_webhook(request: Request):
     if not event_type:
         print("event_type is required")
         return Response(status=400)
-    
+
     message = payload.get("message") or request.form.get("message", "")
     if not message:
         print("message is required")
         return Response(status=400)
-    
-    print(f"Received unity_system_event for event_type={event_type} with message={message}")
-    
+
+    print(
+        f"Received unity_system_event for event_type={event_type} with message={message}"
+    )
+
     # shared context
     context = build_webhook_context(
         channel="unity_system_event",
