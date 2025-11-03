@@ -289,6 +289,42 @@ def test_log_pre_hire_chats_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
+def test_unity_system_event_webhook(test_client):
+    """Test successful unity system event webhook processing."""
+    endpoint = "/unity_system_event"
+    event_type = "test_event"
+    message = "This is a test message"
+    form_payload = {
+        "assistant_id": "default-test-assistant",
+        "event_type": event_type,
+        "message": message,
+    }
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    response = test_client.make_request("POST", endpoint, json=form_payload, headers=headers)
+    assert response.status_code == 200
+
+    # Check that the message was published to Pub/Sub
+    pubsub_msg = subscriber.pull(
+        subscription=subscription_path, max_messages=1
+    ).received_messages[0]
+    ack_id = pubsub_msg.ack_id
+    pubsub_msg = pubsub_msg.message
+    try:
+        data = json.loads(pubsub_msg.data.decode("utf-8"))
+    except json.JSONDecodeError:
+        assert False, "Failed to decode message data"
+    try:
+        assert data is not None
+        assert "thread" in data and data["thread"] == "unity_system_event"
+        assert "event" in data and data["event"] is not None
+        assert data["event"]["assistant_id"] == "default-test-assistant"
+        assert data["event"]["event_type"] == event_type
+        assert data["event"]["message"] == message
+    except AssertionError as e:
+        print(e)
+    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
+
+
 def test_email_watch_renewer(test_client):
     """Test successful email watch renewal."""
     endpoint = "/email/watch"

@@ -267,6 +267,80 @@ def log_pre_hire_chats_webhook(request: Request):
 
 
 @functions_framework.http
+def unity_system_event_webhook(request: Request):
+    print("unity_system_event_webhook function started")
+    # optional auth via admin key
+    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    auth_header = request.headers.get("Authorization", "")
+    if shared_key and auth_header != f"Bearer {shared_key}":
+        print("Unauthorized unity_system_event request")
+        return Response(status=401)
+    
+    # accept JSON or form payloads
+    payload = request.get_json(silent=True) or {}
+    assistant_id = payload.get("assistant_id") or request.form.get("assistant_id") or ""
+    if not assistant_id:
+        print("assistant_id is required")
+        return Response(status=400)
+
+    event_type = payload.get("event_type") or request.form.get("event_type", "")
+    if not event_type:
+        print("event_type is required")
+        return Response(status=400)
+    
+    message = payload.get("message") or request.form.get("message", "")
+    if not message:
+        print("message is required")
+        return Response(status=400)
+    
+    print(f"Received unity_system_event for event_type={event_type} with message={message}")
+    
+    # shared context
+    context = build_webhook_context(
+        channel="unity_system_event",
+        destination="",
+        sender="",
+        assistant_id=assistant_id,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
+    running = context["is_job_running"]
+    print(f"Job running: {running}")
+
+    # publish to pubsub
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    print(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
+    try:
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "unity_system_event",
+                    "event": {
+                        "contacts": contacts,
+                        "assistant_id": assistant_id,
+                        "event_type": event_type,
+                        "message": message,
+                    },
+                }
+            ).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
+        print("unity_system_event message published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing unity_system_event to Pub/Sub: {str(e)}")
+        return Response(response="Error publishing to Pub/Sub", status=500)
+
+    return Response(status=200)
+
+
+@functions_framework.http
 def assistant_wakeup_webhook(request: Request):
     print("assistant_wakeup_webhook function started")
     assistant_id = request.form.get("assistant_id")

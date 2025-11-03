@@ -22,6 +22,7 @@ from main import (
     unify_message_webhook as _unify_message_webhook,
     unify_call_webhook as _unify_call_webhook,
     log_pre_hire_chats_webhook as _log_pre_hire_chats_webhook,
+    unity_system_event_webhook as _unity_system_event_webhook,
     email_watch_renewer as _email_watch_renewer,
     email_notification_processor as _email_notification_processor,
     idle_job_creator as _idle_job_creator,
@@ -103,6 +104,18 @@ def log_pre_hire_chats_webhook():
     """Log pre-hire chats webhook endpoint."""
     try:
         response = _log_pre_hire_chats_webhook(request)
+        if isinstance(response, str):
+            return Response(response)
+        return response
+    except Exception as e:
+        return Response(f"Error: {str(e)}", status=500)
+
+
+@app.route("/unity_system_event", methods=["POST"])
+def unity_system_event_webhook():
+    """Unity system event webhook endpoint."""
+    try:
+        response = _unity_system_event_webhook(request)
         if isinstance(response, str):
             return Response(response)
         return response
