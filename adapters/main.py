@@ -374,6 +374,7 @@ def twilio_call_status_webhook(request: Request):
         assistant_data = get_assistant(phone_number=assistant_number)
         api_key = assistant_data["api_key"]
         assistant_id = assistant_data["assistant_id"]
+        user_name = assistant_data["user_name"]
         assistant_first_name = assistant_data["assistant_first_name"]
         assistant_surname = assistant_data["assistant_surname"]
         user_number = assistant_data["user_number"]
@@ -387,6 +388,7 @@ def twilio_call_status_webhook(request: Request):
             assistant_context=f"{assistant_first_name}{assistant_surname}",
             api_key=api_key,
             user_number=user_number,
+            user_name=user_name,
         )
         if "default" not in assistant_id and not contacts:
             print(f"User {user_number} is not a valid contact")
