@@ -388,7 +388,7 @@ def twilio_call_status_webhook(request: Request):
             assistant_context=f"{assistant_first_name}{assistant_surname}",
             api_key=api_key,
             user_number=user_number,
-            user_name=user_name,
+            assistant_data=assistant_data,
         )
         if "default" not in assistant_id and not contacts:
             print(f"User {user_number} is not a valid contact")
