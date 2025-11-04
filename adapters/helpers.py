@@ -157,7 +157,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "rolling_summary": "",
             "respond_to": False,
             "response_policy": "",
-        }
+        },
     ]
 
 
