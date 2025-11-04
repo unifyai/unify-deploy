@@ -413,7 +413,6 @@ def build_webhook_context(
     api_key = assistant_data["api_key"]
     assistant_id = assistant_data["assistant_id"]
     user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
     assistant_first_name = assistant_data["assistant_first_name"]
     assistant_surname = assistant_data["assistant_surname"]
     user_number = assistant_data["user_number"]
@@ -433,7 +432,7 @@ def build_webhook_context(
             user_number=user_number,
             user_whatsapp_number=user_whatsapp_number,
             user_email=user_email,
-            user_name=user_name,
+            assistant_data=assistant_data,
         )
     else:
         contacts, status_code = get_contacts(
