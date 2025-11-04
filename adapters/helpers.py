@@ -132,6 +132,35 @@ def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]
     return response.json(), response.status_code
 
 
+def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
+    return [
+        {
+            "contact_id": 0,
+            "first_name": assistant_data["assistant_first_name"],
+            "surname": assistant_data["assistant_surname"],
+            "email_address": assistant_data["assistant_email"],
+            "phone_number": assistant_data["assistant_number"],
+            "whatsapp_number": assistant_data["assistant_whatsapp_number"],
+            "bio": "",
+            "rolling_summary": "",
+            "respond_to": False,
+            "response_policy": "",
+        },
+        {
+            "contact_id": 1,
+            "first_name": assistant_data["user_name"],
+            "surname": "",
+            "email_address": assistant_data["user_email"],
+            "phone_number": assistant_data["user_number"],
+            "whatsapp_number": assistant_data["user_whatsapp_number"],
+            "bio": "",
+            "rolling_summary": "",
+            "respond_to": False,
+            "response_policy": "",
+        }
+    ]
+
+
 def check_contact_details(
     email_id: str = None,
     phone_number: str = None,
@@ -173,7 +202,7 @@ def check_valid_contact(
     user_number: str = None,
     user_whatsapp_number: str = None,
     user_email: str = None,
-    user_name: str = None,
+    assistant_data: dict = None,
 ) -> list[dict[str, str]]:
     """
     Check if the contact is valid.
@@ -187,7 +216,7 @@ def check_valid_contact(
         user_number: The phone number of the user.
         user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
-        user_name: The name of the user.
+        assistant_data: The data of the assistant.
     """
     print(
         f"Checking valid contact: {email_id}, {phone_number}, {medium}, "
@@ -213,30 +242,17 @@ def check_valid_contact(
                     f"Boss user found: {email_id}, {phone_number}, {medium}, "
                     f"{user_number}, {user_whatsapp_number}, {user_email}"
                 )
-                return [
-                    {
-                        "contact_id": 1,
-                        "first_name": user_name,
-                        "surname": "",
-                        "email_address": user_email,
-                        "phone_number": phone_number,
-                        "whatsapp_number": user_whatsapp_number,
-                        "bio": "",
-                        "rolling_summary": "",
-                        "respond_to": False,
-                        "response_policy": "",
-                    }
-                ]
+                return get_default_contacts(assistant_data)
 
         # otherwise
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response_json)
-        return []
+        return get_default_contacts(assistant_data)
     contact_logs = response_json["logs"]
     contacts = [c["entries"] for c in contact_logs]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
-        return []
+        return get_default_contacts(assistant_data)
 
     # check for boss user
     boss_contact = [contact for contact in contacts if contact["contact_id"] == 1]
@@ -261,7 +277,7 @@ def check_valid_contact(
             return contacts
     else:
         print("No boss user found")
-        return []
+        return get_default_contacts(assistant_data)
 
     # check all contacts
     for contact in contacts:
@@ -275,7 +291,7 @@ def check_valid_contact(
         ):
             print(f"Contact found: {contact}")
             return contacts
-    return []
+    return get_default_contacts(assistant_data)
 
 
 def is_job_running(user_id: str, assistant_id: str):
@@ -424,41 +440,10 @@ def build_webhook_context(
             f"{assistant_first_name}{assistant_surname}/Contacts", api_key
         )
         if status_code != 200:
-            contacts = [
-                {
-                    "contact_id": 1,
-                    "first_name": user_name,
-                    "surname": "",
-                    "email_address": user_email,
-                    "phone_number": user_number,
-                    "whatsapp_number": user_whatsapp_number,
-                    "bio": "",
-                    "rolling_summary": "",
-                    "respond_to": False,
-                    "response_policy": "",
-                }
-            ]
+            contacts = get_default_contacts(assistant_data)
         else:
             contacts = [c["entries"] for c in contacts["logs"]]
     print("contacts:", contacts)
-
-    # add the assistant contact if there is only one contact and it is the boss user
-    if len(contacts) == 1 and contacts[0]["contact_id"] == 1:
-        contacts = [
-            {
-                "contact_id": 0,
-                "first_name": assistant_first_name,
-                "surname": assistant_surname,
-                "email_address": assistant_data["assistant_email"],
-                "phone_number": assistant_data["assistant_number"],
-                "whatsapp_number": assistant_data["assistant_whatsapp_number"],
-                "bio": "",
-                "rolling_summary": "",
-                "respond_to": False,
-                "response_policy": "",
-            },
-            *contacts,
-        ]
 
     # check contact validity
     is_default_assistant = (
