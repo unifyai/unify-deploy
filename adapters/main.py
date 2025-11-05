@@ -674,7 +674,14 @@ def email_watch_renewer(request):
             admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
             results[email] = requests.post(
                 f"{COMMS_URL}/email/watch",
-                json={"primary_email": email},
+                json={
+                    "primary_email": email,
+                    "topic_name": (
+                        "email-notifications"
+                        if not STAGING
+                        else "email-notifications-staging"
+                    ),
+                },
                 headers={"Authorization": f"Bearer {admin_key}"},
             ).json()
         except Exception as e:
