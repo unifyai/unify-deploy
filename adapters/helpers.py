@@ -676,7 +676,7 @@ def _gmail_thread_to_conversation(thread):
                     if _header(headers, "Bcc")
                     else []
                 ),
-                "subject": _header(headers, "Subject"),
+                "subject": _header(headers, "Subject").replace("Re: "),
                 "content": _payload_text(payload),
             }
         )
