@@ -67,6 +67,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
                 "filter": 'NOT attributes.thread = "unify_message_outbound"',
             }
             subscriber.create_subscription(request=request)
+            request["name"] = outbound_subscription_path
             request["filter"] = 'attributes.thread = "unify_message_outbound"'
             subscriber.create_subscription(request=request)
         except Exception as e:
