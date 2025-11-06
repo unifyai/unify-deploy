@@ -45,6 +45,9 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
         subscription_path = subscriber.subscription_path(
             PROJECT_ID, f"{topic_name}-sub"
         )
+        outbound_subscription_path = subscriber.subscription_path(
+            PROJECT_ID, f"{topic_name}-outbound-sub"
+        )
 
         # Create the topic if it doesn't already exist
         try:
@@ -57,13 +60,14 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
         expiration_policy = pubsub_v1.types.ExpirationPolicy(ttl=None)
 
         try:
-            subscriber.create_subscription(
-                request={
-                    "name": subscription_path,
-                    "topic": topic_path,
-                    "expiration_policy": expiration_policy,
-                }
-            )
+            request = {
+                "name": subscription_path,
+                "topic": topic_path,
+                "expiration_policy": expiration_policy,
+            }
+            subscriber.create_subscription(request=request)
+            request["filter"] = "attributes.thread = 'unify_message_outbound'"
+            subscriber.create_subscription(request=request)
         except Exception as e:
             if "already exists" in str(e).lower():
                 # Ensure the subscription never expires
@@ -71,13 +75,17 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
                     name=subscription_path,
                     expiration_policy=expiration_policy,
                 )
-                update_mask = {"paths": ["expiration_policy.ttl"]}
-                subscriber.update_subscription(
-                    request={
-                        "subscription": subscription,
-                        "update_mask": update_mask,
-                    }
+                request = {
+                    "update_mask": {"paths": ["expiration_policy.ttl"]},
+                    "subscription": subscription,
+                }
+                subscriber.update_subscription(request=request)
+                outbound_subscription = pubsub_v1.types.Subscription(
+                    name=outbound_subscription_path,
+                    expiration_policy=expiration_policy,
                 )
+                request["subscription"] = outbound_subscription
+                subscriber.update_subscription(request=request)
             else:
                 raise
 
