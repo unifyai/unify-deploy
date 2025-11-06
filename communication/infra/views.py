@@ -64,9 +64,10 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
                 "name": subscription_path,
                 "topic": topic_path,
                 "expiration_policy": expiration_policy,
+                "filter": 'NOT attributes.thread = "unify_message_outbound"',
             }
             subscriber.create_subscription(request=request)
-            request["filter"] = "attributes.thread = 'unify_message_outbound'"
+            request["filter"] = 'attributes.thread = "unify_message_outbound"'
             subscriber.create_subscription(request=request)
         except Exception as e:
             if "already exists" in str(e).lower():
