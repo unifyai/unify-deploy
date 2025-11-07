@@ -424,7 +424,7 @@ def build_webhook_context(
     print("validate_contact:", validate_contact)
     if validate_contact and assistant_id != 4:
         contacts = check_valid_contact(
-            email_id=(destination if is_email else ""),
+            email_id=(sender if is_email else ""),
             phone_number=("" if is_email else normalized_sender),
             medium=channel,
             assistant_context=f"{assistant_first_name}{assistant_surname}",
