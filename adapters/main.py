@@ -745,6 +745,7 @@ def email_notification_processor(cloud_event):
             print(f"No new conversations found for user {email_id}")
             return "No new conversations"
         from_email = last_message["sender"].split("<")[1].split(">")[0]
+        print(f"from_email: {from_email}")
 
         # shared context
         context = build_webhook_context("email", email_id, from_email)
