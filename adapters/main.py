@@ -709,18 +709,45 @@ def email_watch_renewer(request):
 def email_notification_processor(cloud_event):
     """Cloud Function triggered by Pub/Sub that processes Gmail notifications."""
     try:
-        # Extract the Pub/Sub message from the cloud event
+        # extract the Pub/Sub message from the cloud event
         envelope = json.loads(
             base64.b64decode(cloud_event.data["message"]["data"]).decode("utf-8")
         )
         print(f"Received notification: {envelope}")
 
-        # Extract Gmail notification details
+        # extract Gmail notification details
         email_id = envelope["emailAddress"]
         history_id = envelope["historyId"]
 
+        # get credentials
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        scopes = [
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.modify",
+        ]
+        gmail_creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=scopes,
+            subject=email_id,
+        )
+        gmail_service = build("gmail", "v1", credentials=gmail_creds)
+
+        # process the history and thread
+        print(f"email_id: {email_id}, history_id: {history_id}")
+        thread_id, message_id, last_message, gmail_message_id = get_thread_id(
+            email_id, history_id, gmail_service
+        )
+        print(
+            f"thread_id: {thread_id}, message_id: {message_id}, last_message: {last_message}"
+        )
+        if not thread_id:
+            print(f"No new conversations found for user {email_id}")
+            return "No new conversations"
+        from_email = last_message["sender"].split("<")[1].split(">")[0]
+
         # shared context
-        context = build_webhook_context("email", email_id, "")
+        context = build_webhook_context("email", email_id, from_email)
         assistant_data = context["assistant"]
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
@@ -735,44 +762,17 @@ def email_notification_processor(cloud_event):
         running = context["is_job_running"]
         print(f"Job running: {running}")
 
-        # Get credentials
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        scopes = [
-            "https://www.googleapis.com/auth/gmail.send",
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/gmail.modify",
-        ]
-        gmail_creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=scopes,
-            subject=email_id,
+        print(f"Successfully processed conversation for user {email_id}")
+        publish_thread_id(
+            assistant_id,
+            user_id,
+            thread_id,
+            message_id,
+            last_message,
+            contacts,
+            gmail_message_id,
         )
-        gmail_service = build("gmail", "v1", credentials=gmail_creds)
-
-        # Process the history and thread
-        print(f"email_id: {email_id}, history_id: {history_id}")
-        thread_id, message_id, last_message, gmail_message_id = get_thread_id(
-            email_id, history_id, gmail_service
-        )
-        print(
-            f"thread_id: {thread_id}, message_id: {message_id}, last_message: {last_message}"
-        )
-
-        if thread_id:
-            print(f"Successfully processed conversation for user {email_id}")
-            publish_thread_id(
-                assistant_id,
-                user_id,
-                thread_id,
-                message_id,
-                last_message,
-                contacts,
-                gmail_message_id,
-            )
-            return "OK"
-        else:
-            print(f"No new conversations found for user {email_id}")
-            return "No new conversations"
+        return "OK"
 
     except Exception as e:
         error_message = f"Error processing notification: {str(e)}"
