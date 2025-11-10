@@ -209,7 +209,7 @@ def create_unity_job(
                 },
             },
             "spec": {
-                "backoffLimit": 1,  # Allow 1 retry for resource issues
+                "backoffLimit": 2,  # Allow 1 retry for resource issues
                 "template": {
                     "metadata": {"labels": {"app": "unity"}},
                     "spec": {
