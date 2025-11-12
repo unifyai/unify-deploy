@@ -226,6 +226,7 @@ def check_valid_contact(
     # check for contact in assistant contacts
     context = f"{assistant_context}/Contacts"
     response_json, status_code = get_contacts(context, api_key)
+    default_contacts = get_default_contacts(assistant_data)
     if status_code != 200:
         # if the context isn't created yet (first time user)
         if response_json["detail"] == f"Context '{context}' not found":
@@ -242,17 +243,17 @@ def check_valid_contact(
                     f"Boss user found: {email_id}, {phone_number}, {medium}, "
                     f"{user_number}, {user_whatsapp_number}, {user_email}"
                 )
-                return get_default_contacts(assistant_data)
+                return default_contacts, True
 
         # otherwise
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response_json)
-        return get_default_contacts(assistant_data)
+        return default_contacts, False
     contact_logs = response_json["logs"]
     contacts = [c["entries"] for c in contact_logs]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
-        return get_default_contacts(assistant_data)
+        return default_contacts, False
 
     # check for boss user
     boss_contact = [contact for contact in contacts if contact["contact_id"] == 1]
@@ -274,10 +275,10 @@ def check_valid_contact(
                 f"Boss user found: {email_id}, {phone_number}, {medium}, "
                 f"{user_number}, {user_whatsapp_number}, {user_email}"
             )
-            return contacts
+            return contacts, True
     else:
         print("No boss user found")
-        return get_default_contacts(assistant_data)
+        return default_contacts, False
 
     # check all contacts
     for contact in contacts:
@@ -290,8 +291,8 @@ def check_valid_contact(
             user_email=contact["email_address"],
         ):
             print(f"Contact found: {contact}")
-            return contacts
-    return get_default_contacts(assistant_data)
+            return contacts, True
+    return default_contacts, False
 
 
 def is_job_running(user_id: str, assistant_id: str):
@@ -421,9 +422,10 @@ def build_webhook_context(
 
     # validate contact
     contacts = []
+    is_valid_contact = True
     print("validate_contact:", validate_contact)
     if validate_contact and assistant_id not in [4, 5]:
-        contacts = check_valid_contact(
+        contacts, is_valid_contact = check_valid_contact(
             email_id=(sender if is_email else ""),
             phone_number=("" if is_email else normalized_sender),
             medium=channel,
@@ -450,19 +452,22 @@ def build_webhook_context(
         or "Default Assistant" in assistant_data["assistant_about"]
     )
     is_test_assistant = "test" in assistant_id
-    is_valid_contact = is_default_assistant or bool(contacts)
+    is_valid_contact = is_valid_contact or is_default_assistant
 
     # ensure job is running (skip for tests/default)
     job_started = False
     is_running = is_job_running(user_id, assistant_id)
     skip_auto_start = is_test_assistant or is_default_assistant or is_running
-    should_start_job = ensure_job and (force_start or not skip_auto_start)
+    should_start_job = (
+        ensure_job and is_valid_contact and (force_start or not skip_auto_start)
+    )
     if should_start_job:
         start_unity_job(assistant_data, channel)
         create_job(assistant_id)
         job_started = True
         is_running = True
 
+    print("is_valid_contact:", is_valid_contact)
     return {
         "assistant": assistant_data,
         "contacts": contacts,
