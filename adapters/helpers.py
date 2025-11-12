@@ -458,7 +458,9 @@ def build_webhook_context(
     job_started = False
     is_running = is_job_running(user_id, assistant_id)
     skip_auto_start = is_test_assistant or is_default_assistant or is_running
-    should_start_job = ensure_job and (force_start or not skip_auto_start)
+    should_start_job = (
+        ensure_job and is_valid_contact and (force_start or not skip_auto_start)
+    )
     if should_start_job:
         start_unity_job(assistant_data, channel)
         create_job(assistant_id)
