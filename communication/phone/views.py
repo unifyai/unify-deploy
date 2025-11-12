@@ -327,21 +327,21 @@ async def create_phone_number(request: Request):
         "status_callback",
         "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-call-status-webhook",
     )
-    country = data.get("country", "US")
+    phone_country = data.get("phone_country", "US")
 
-    # Additional args for country
+    # Additional args for phone_country
     additional_args = {}
-    if country == "GB":
+    if phone_country == "GB":
         additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
-    elif country in ["NL", "FI"]:
+    elif phone_country in ["NL", "FI"]:
         additional_args["address_sid"] = "AD742b83eb0aab7a249e7a3f2f5fb615c0"
-    elif country == "AU":
+    elif phone_country == "AU":
         additional_args["bundle_sid"] = "BUd8f2d4e2fe905d85653f738d7323c88b"
         additional_args["address_sid"] = "AD828c09f385dea4f977464da90006bfd7"
-    elif country == "TH":
+    elif phone_country == "TH":
         additional_args["bundle_sid"] = "BUadbcfca4db22f76c6840ced254c10a11"
         additional_args["address_sid"] = "ADdf839edff37d001d2634edc9b0c4a304"
-    elif country == "PL":
+    elif phone_country == "PL":
         additional_args["bundle_sid"] = "BU0864466d980ebd9df91768d9123110b2"
         additional_args["address_sid"] = "ADdf839edff37d001d2634edc9b0c4a304"
 
@@ -351,14 +351,14 @@ async def create_phone_number(request: Request):
     # Search for available mobile number
     numbers = []
     try:
-        numbers += twilio_client.available_phone_numbers(country).local.list(
+        numbers += twilio_client.available_phone_numbers(phone_country).local.list(
             limit=1, sms_enabled=True, voice_enabled=True, beta=False
         )
     except Exception as e:
         pass
 
     try:
-        numbers += twilio_client.available_phone_numbers(country).mobile.list(
+        numbers += twilio_client.available_phone_numbers(phone_country).mobile.list(
             limit=1, sms_enabled=True, voice_enabled=True, beta=False
         )
     except Exception as e:
