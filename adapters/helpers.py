@@ -56,6 +56,7 @@ def get_assistant(
         "user_id": "default-user",
         "voice_provider": "cartesia",
         "voice_id": None,
+        "voice_mode": "tts",
         "api_key": "",
         "user_name": "",
         "assistant_first_name": "Default",
@@ -120,6 +121,7 @@ def get_assistant(
         "user_email": assistants[0]["user_email"] or "",
         "voice_provider": assistants[0]["voice_provider"],
         "voice_id": assistants[0]["voice_id"],
+        "voice_mode": assistants[0]["voice_mode"],
     }
 
 
@@ -347,6 +349,7 @@ def start_unity_job(assistant: dict, medium: str):
                 "user_whatsapp_number": assistant["user_whatsapp_number"],
                 "voice_provider": assistant["voice_provider"],
                 "voice_id": assistant["voice_id"],
+                "voice_mode": assistant["voice_mode"],
             },
             timeout=1,
         )
