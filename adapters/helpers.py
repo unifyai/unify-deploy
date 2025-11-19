@@ -422,6 +422,7 @@ def build_webhook_context(
     user_number = assistant_data["user_number"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
+    print("assistant_data:", assistant_data)
 
     # validate contact
     contacts = []
