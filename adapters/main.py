@@ -17,7 +17,6 @@ from twilio.twiml.voice_response import VoiceResponse
 from helpers import (
     add_user_to_conference,
     build_webhook_context,
-    check_valid_contact,
     create_conference_response,
     dispatch_agent,
     get_assistant,
