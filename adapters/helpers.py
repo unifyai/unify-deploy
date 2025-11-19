@@ -97,6 +97,9 @@ def get_assistant(
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
     ).json()
 
+    print(f"get_assistant params: {params}")
+    print(f"get_assistant response: {response}")
+
     if "detail" in response:
         return {**default_assistant_data, "assistant_id": None}
     assistants = response["info"]
@@ -409,6 +412,7 @@ def build_webhook_context(
     if assistant_id:
         assistant_data = get_assistant(assistant_id=assistant_id)
     else:
+        print(f"Getting assistant data for {destination} with is_email: {is_email}")
         assistant_data = (
             get_assistant(email_id=destination)
             if is_email
