@@ -386,7 +386,7 @@ def twilio_call_status_webhook(request: Request):
                 topic_path,
                 json.dumps(
                     {
-                        "thread": "call_received",
+                        "thread": "call_answered",
                         "event": {
                             "contacts": contacts,
                             "assistant_id": assistant_id,
