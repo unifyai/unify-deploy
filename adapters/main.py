@@ -371,28 +371,11 @@ def twilio_call_status_webhook(request: Request):
     print(f"User {user_number} called by {assistant_number}")
     if call_status == "in-progress":
         # get assistant data
-        assistant_data = get_assistant(phone_number=assistant_number)
-        api_key = assistant_data["api_key"]
-        assistant_id = assistant_data["assistant_id"]
-        user_name = assistant_data["user_name"]
-        assistant_first_name = assistant_data["assistant_first_name"]
-        assistant_surname = assistant_data["assistant_surname"]
-        user_number = assistant_data["user_number"]
-        assistant_number = assistant_data["assistant_number"]
-
-        # check if contact is valid
-        contacts = check_valid_contact(
-            email_id="",
-            phone_number=user_number,
-            medium="phone",
-            assistant_context=f"{assistant_first_name}{assistant_surname}",
-            api_key=api_key,
-            user_number=user_number,
-            assistant_data=assistant_data,
+        context = build_webhook_context(
+            "phone", assistant_number, user_number, validate_contact=False
         )
-        if "default" not in assistant_id and not contacts:
-            print(f"User {user_number} is not a valid contact")
-            return Response(status_code=200)
+        assistant_id = context["assistant"]["assistant_id"]
+        contacts = context["contacts"]
 
         # publish to pubsub
         pubsub_client = pubsub_v1.PublisherClient()
