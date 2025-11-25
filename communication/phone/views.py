@@ -517,7 +517,7 @@ async def twiml(request: Request):
         )
     )
     resp_user = VoiceResponse()
-    dial = resp_user.dial(caller_id=twilio_number)
+    dial = resp_user.dial(caller_id=twilio_number, timeout=15)
     dial.number(
         phone_number,
         status_callback_event="initiated ringing answered completed",
