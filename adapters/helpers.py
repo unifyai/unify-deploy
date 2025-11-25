@@ -301,6 +301,7 @@ def check_valid_contact(
 
 
 def is_job_running(user_id: str, assistant_id: str):
+    print(f"Checking if job is running for {user_id} --> {assistant_id}")
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
         params={
