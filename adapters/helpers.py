@@ -315,6 +315,7 @@ def is_job_running(user_id: str, assistant_id: str):
         },
         headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
     )
+    print(f"Response: {response.status_code}")
     if response.status_code != 200:
         return False
     logs = response.json()["logs"]
