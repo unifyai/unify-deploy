@@ -444,6 +444,7 @@ async def start_job(
     user_whatsapp_number: str = Form(""),
     voice_provider: str = Form(""),
     voice_id: str = Form(""),
+    voice_mode: str = Form(""),
 ):
     """
     Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
@@ -465,6 +466,7 @@ async def start_job(
         user_whatsapp_number: User's whatsapp number (optional, defaults to empty string)
         voice_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
+        voice_mode: Voice mode (optional, defaults to empty string)
     """
     try:
         # Get credentials from environment variable
@@ -500,6 +502,7 @@ async def start_job(
                 "user_whatsapp_number": user_whatsapp_number,
                 "voice_provider": voice_provider,
                 "voice_id": voice_id,
+                "voice_mode": voice_mode,
             },
         }
 
