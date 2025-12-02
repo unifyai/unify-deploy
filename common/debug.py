@@ -22,4 +22,3 @@ def CURSOR_DEBUG_LOG(*message_parts: Any) -> None:
         file=sys.stderr,
         flush=True,
     )
-
