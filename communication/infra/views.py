@@ -365,7 +365,7 @@ async def create_kubernetes_job(
 async def delete_kubernetes_job(
     job_name: str = Form(...),
     namespace: str = Form("default"),
-    delete_services: bool = Form(True),
+    delete_services: bool = Form(False),
 ):
     """
     Delete a Kubernetes Job for a Unity assistant.
