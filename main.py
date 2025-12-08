@@ -5,7 +5,10 @@ from communication.phone.views import (
 )
 from communication.whatsapp.views import router as whatsapp_router
 from communication.gmail.views import router as gmail_router
-from communication.outlook.views import router as outlook_router, unauth_router as outlook_unauth_router
+from communication.outlook.views import (
+    router as outlook_router,
+    unauth_router as outlook_unauth_router,
+)
 from communication.infra.views import router as infra_router
 from communication.social.views import router as social_router
 from dependencies import auth_admin_key
