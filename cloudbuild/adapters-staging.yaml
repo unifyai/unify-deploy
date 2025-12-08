@@ -219,7 +219,7 @@ steps:
           --runtime=python311 \
           --source="adapters" \
           --entry-point=email_notification_processor \
-          --trigger-topic=email-notifications \
+          --trigger-topic=email-notifications-staging \
           --allow-unauthenticated \
           --set-env-vars=PROJECT_ID=$PROJECT_ID,STAGING=true \
           --timeout=300 \
