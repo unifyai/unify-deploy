@@ -655,7 +655,7 @@ def email_watch_renewer(request):
         try:
             admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
             results[email] = requests.post(
-                f"{COMMS_URL}/email/watch",
+                f"{COMMS_URL}/gmail/watch",
                 json={
                     "primary_email": email,
                     "topic_name": (
@@ -677,7 +677,7 @@ def email_watch_renewer(request):
     if os.getenv("STAGING") and not test:
         admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
         response = requests.post(
-            f"{COMMS_URL}/email/watch",
+            f"{COMMS_URL}/gmail/watch",
             json={"primary_email": "mh-policies@unify.ai", "topic_name": "intranet"},
             headers={"Authorization": f"Bearer {admin_key}"},
         ).json()

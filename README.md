@@ -26,7 +26,7 @@ This repository provides a unified communication service with two primary compon
     - `social/`    – Verification code generation over WhatsApp or SMS (auth)
     - `infra/`     – Infrastructure-related endpoints (e.g. health checks, metrics) (auth)
 
-- `main.py`       – FastAPI entrypoint, mounts routers under `/phone`, `/whatsapp`, `/email`, `/infra`, `/social` with appropriate auth dependencies
+- `main.py`       – FastAPI entrypoint, mounts routers under `/phone`, `/whatsapp`, `/gmail`, `/outlook`, `/infra`, `/social` with appropriate auth dependencies
 - `requirements.txt` – Dependencies for the Communication API
 - `adapters/requirements.txt` – Dependencies for the Adapters
 
@@ -108,14 +108,23 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
   - `POST /whatsapp/assign`
   - `GET /whatsapp/conflict`
 
-### Email (`/email`)
+### Gmail (`/gmail`)
 
 **Authenticated JSON Endpoints**:
 
-- `POST /email/create`
-- `DELETE /email/delete`
-- `POST /email/send`
-- `POST /email/watch`
+- `POST /gmail/create`
+- `DELETE /gmail/delete`
+- `POST /gmail/send`
+- `POST /gmail/watch`
+
+### Outlook (`/outlook`)
+
+**Authenticated JSON Endpoints**:
+
+- `POST /outlook/send`
+- `POST /outlook/watch`
+- `POST /outlook/watch/renew`
+- `DELETE /outlook/watch`
 
 ### Social Verification (`/social`)
 

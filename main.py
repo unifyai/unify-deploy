@@ -4,7 +4,8 @@ from communication.phone.views import (
     unauth_router as phone_unauth_router,
 )
 from communication.whatsapp.views import router as whatsapp_router
-from communication.email.views import router as email_router
+from communication.gmail.views import router as gmail_router
+from communication.outlook.views import router as outlook_router
 from communication.infra.views import router as infra_router
 from communication.social.views import router as social_router
 from dependencies import auth_admin_key
@@ -18,7 +19,8 @@ app = FastAPI()
 app.include_router(phone_auth_router, prefix="/phone", dependencies=admin_auth)
 app.include_router(phone_unauth_router, prefix="/phone")
 app.include_router(whatsapp_router, prefix="/whatsapp", dependencies=admin_auth)
-app.include_router(email_router, prefix="/email", dependencies=admin_auth)
+app.include_router(gmail_router, prefix="/gmail", dependencies=admin_auth)
+app.include_router(outlook_router, prefix="/outlook", dependencies=admin_auth)
 app.include_router(infra_router, prefix="/infra", dependencies=admin_auth)
 app.include_router(social_router, prefix="/social", dependencies=admin_auth)
 
