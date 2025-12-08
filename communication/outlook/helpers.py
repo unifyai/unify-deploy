@@ -48,9 +48,11 @@ async def process_outlook_notification(user_email: str, message_id: str):
         graph_client = get_graph_client()
 
         # Fetch the message
-        message = await graph_client.users.by_user_id(
-            user_email
-        ).messages.by_message_id(message_id).get()
+        message = (
+            await graph_client.users.by_user_id(user_email)
+            .messages.by_message_id(message_id)
+            .get()
+        )
 
         if not message:
             print(f"Message {message_id} not found")
@@ -66,9 +68,11 @@ async def process_outlook_notification(user_email: str, message_id: str):
             "to": [r.email_address.address for r in (message.to_recipients or [])],
             "cc": [r.email_address.address for r in (message.cc_recipients or [])],
             "bcc": [r.email_address.address for r in (message.bcc_recipients or [])],
-            "received_at": message.received_date_time.isoformat()
-            if message.received_date_time
-            else None,
+            "received_at": (
+                message.received_date_time.isoformat()
+                if message.received_date_time
+                else None
+            ),
             "has_attachments": message.has_attachments,
         }
 
@@ -101,9 +105,11 @@ async def get_outlook_message(
     try:
         graph_client = get_graph_client()
 
-        message = await graph_client.users.by_user_id(
-            user_email
-        ).messages.by_message_id(message_id).get()
+        message = (
+            await graph_client.users.by_user_id(user_email)
+            .messages.by_message_id(message_id)
+            .get()
+        )
 
         if not message:
             raise HTTPException(status_code=404, detail="Message not found")
@@ -117,9 +123,11 @@ async def get_outlook_message(
             "sender": message.from_.email_address.address if message.from_ else "",
             "to": [r.email_address.address for r in (message.to_recipients or [])],
             "cc": [r.email_address.address for r in (message.cc_recipients or [])],
-            "received_at": message.received_date_time.isoformat()
-            if message.received_date_time
-            else None,
+            "received_at": (
+                message.received_date_time.isoformat()
+                if message.received_date_time
+                else None
+            ),
             "has_attachments": message.has_attachments,
         }
 
@@ -162,9 +170,11 @@ async def get_outlook_thread(
                     "sender": msg.from_.email_address.address if msg.from_ else "",
                     "to": [r.email_address.address for r in (msg.to_recipients or [])],
                     "cc": [r.email_address.address for r in (msg.cc_recipients or [])],
-                    "received_at": msg.received_date_time.isoformat()
-                    if msg.received_date_time
-                    else None,
+                    "received_at": (
+                        msg.received_date_time.isoformat()
+                        if msg.received_date_time
+                        else None
+                    ),
                 }
             )
 

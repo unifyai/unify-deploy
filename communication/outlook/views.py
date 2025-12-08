@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
 from dotenv import load_dotenv
 
@@ -19,6 +19,7 @@ from msgraph.generated.models.message import Message
 load_dotenv()
 
 router = APIRouter()
+unauth_router = APIRouter()
 
 # Azure AD credentials from environment
 AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID")
@@ -91,21 +92,18 @@ async def send_outlook_email(request: Request):
             subject=subject,
             body=ItemBody(content=body, content_type=BodyType.Text),
             to_recipients=[
-                Recipient(email_address=EmailAddress(address=addr))
-                for addr in to_list
+                Recipient(email_address=EmailAddress(address=addr)) for addr in to_list
             ],
         )
 
         if cc_list:
             message.cc_recipients = [
-                Recipient(email_address=EmailAddress(address=addr))
-                for addr in cc_list
+                Recipient(email_address=EmailAddress(address=addr)) for addr in cc_list
             ]
 
         if bcc_list:
             message.bcc_recipients = [
-                Recipient(email_address=EmailAddress(address=addr))
-                for addr in bcc_list
+                Recipient(email_address=EmailAddress(address=addr)) for addr in bcc_list
             ]
 
         # For threading/replies - set conversation_id
@@ -152,7 +150,7 @@ async def watch_outlook_email(request: Request):
 
     try:
         graph_client = get_graph_client()
-        expiration = datetime.now() + timedelta(days=3)
+        expiration = datetime.now(timezone.utc) + timedelta(days=3)
         target_resource = f"users/{user_email}/mailFolders/inbox/messages"
 
         # Check if subscription already exists
@@ -185,11 +183,15 @@ async def watch_outlook_email(request: Request):
                 notification_url=webhook_url,
                 resource=target_resource,
                 expiration_date_time=expiration,
-                client_state=os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"),
+                client_state=os.getenv(
+                    "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
+                ),
             )
 
             result = await graph_client.subscriptions.post(subscription)
-            print(f"Outlook watch created for {user_email}, subscription_id: {result.id}")
+            print(
+                f"Outlook watch created for {user_email}, subscription_id: {result.id}"
+            )
 
             return {
                 "success": True,
@@ -258,7 +260,7 @@ async def delete_outlook_watch(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/webhook")
+@unauth_router.post("/webhook")
 async def outlook_webhook(request: Request):
     """
     Webhook endpoint to receive Microsoft Graph change notifications.
@@ -305,6 +307,7 @@ async def outlook_webhook(request: Request):
     try:
         # Need to reconstruct request since body was already consumed
         import json
+
         json_body = json.loads(raw_body) if raw_body else None
         print(f"  [JSON] {json.dumps(json_body, indent=2)}")
     except Exception as e:
@@ -351,7 +354,7 @@ async def outlook_webhook(request: Request):
     print("\n[RESPONSE] Returning 202 Accepted")
     print("=" * 60 + "\n")
 
-    return Response(status_code=202)
+    return Response(status_code=200)
 
 
 @router.get("/attachment")
@@ -367,11 +370,12 @@ async def get_outlook_attachment(
     try:
         graph_client = get_graph_client()
 
-        attachment = await graph_client.users.by_user_id(
-            user_email
-        ).messages.by_message_id(message_id).attachments.by_attachment_id(
-            attachment_id
-        ).get()
+        attachment = (
+            await graph_client.users.by_user_id(user_email)
+            .messages.by_message_id(message_id)
+            .attachments.by_attachment_id(attachment_id)
+            .get()
+        )
 
         if not attachment:
             raise HTTPException(status_code=404, detail="Attachment not found")
