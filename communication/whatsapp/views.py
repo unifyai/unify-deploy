@@ -3,7 +3,7 @@ import json
 import base64
 import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
-from communication.helpers import get_twilio_client, ORCHESTRA_URL
+from communication.helpers import ADAPTERS_URL, get_twilio_client, ORCHESTRA_URL
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -89,7 +89,7 @@ async def create_whatsapp_sender(request: Request):
             "callback_method": "POST",
             "callback_url": data.get(
                 "callback_url",
-                "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-whatsapp-webhook",
+                ADAPTERS_URL + "/twilio/whatsapp",
             ),
         },
     }

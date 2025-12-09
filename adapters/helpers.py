@@ -12,6 +12,8 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from livekit import api
 
+from communication.helpers import ADAPTERS_URL
+
 
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
@@ -374,11 +376,7 @@ def create_job(assistant_id: str):
 
     try:
         # Determine the correct URL based on staging/prod
-        idle_job_url = (
-            "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator"
-            if not STAGING
-            else "https://us-central1-gcp-project-runtime.cloudfunctions.net/idle-job-creator-staging"
-        )
+        idle_job_url = ADAPTERS_URL + "/scheduled/idle-job-creator"
         # Make request with 1 second timeout - just enough to send it
         requests.post(idle_job_url, timeout=1)
         print(f"Idle job creation request sent for assistant {assistant_id}")

@@ -7,6 +7,11 @@ ORCHESTRA_URL = (
     if not STAGING
     else "https://service.a.run.app/v0"
 )
+ADAPTERS_URL = (
+    "https://service.a.run.app"
+    if not STAGING
+    else "https://service.a.run.app"
+)
 
 
 def get_twilio_client():

@@ -1,11 +1,10 @@
-from datetime import datetime
 import os
 import httpx
 import base64
 import json
 import time
 from fastapi import APIRouter, Response, Request, HTTPException
-from twilio.twiml.voice_response import VoiceResponse, Dial
+from twilio.twiml.voice_response import VoiceResponse
 from livekit.api import (
     LiveKitAPI,
     SIPInboundTrunkInfo,
@@ -15,9 +14,8 @@ from livekit.api import (
 from livekit.protocol.sip import (
     ListSIPInboundTrunkRequest,
     DeleteSIPTrunkRequest,
-    CreateSIPParticipantRequest,
 )
-from communication.helpers import get_twilio_client, ORCHESTRA_URL, STAGING
+from communication.helpers import ADAPTERS_URL, get_twilio_client, ORCHESTRA_URL
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -315,18 +313,9 @@ async def create_phone_number(request: Request):
     data = await request.json()
 
     # Extract customizable parameters from request
-    voice_url = data.get(
-        "voice_url",
-        "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-call-webhook",
-    )
-    sms_url = data.get(
-        "sms_url",
-        "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-msg-webhook",
-    )
-    status_callback = data.get(
-        "status_callback",
-        "https://us-central1-gcp-project-runtime.cloudfunctions.net/twilio-call-status-webhook",
-    )
+    voice_url = data.get("voice_url", ADAPTERS_URL + "/twilio/call")
+    sms_url = data.get("sms_url", ADAPTERS_URL + "/twilio/msg")
+    status_callback = data.get("status_callback", ADAPTERS_URL + "/twilio/call-status")
     phone_country = data.get("phone_country", "US")
 
     # Additional args for phone_country
@@ -508,14 +497,7 @@ async def twiml(request: Request):
     data = await request.form()
     twilio_number = data.get("From")
     phone_number = "+" + request.query_params.get("phone_number").replace(" ", "")
-    call_status_url = (
-        "https://us-central1-gcp-project-runtime.cloudfunctions.net/"
-        + (
-            "twilio-call-status-webhook-staging"
-            if STAGING
-            else "twilio-call-status-webhook"
-        )
-    )
+    call_status_url = ADAPTERS_URL + "/twilio/call-status"
     resp_user = VoiceResponse()
     dial = resp_user.dial(caller_id=twilio_number, timeout=15)
     dial.number(
