@@ -2,6 +2,7 @@ import json
 import base64
 import traceback
 import time
+from dotenv import load_dotenv
 import os
 import requests
 from datetime import datetime, timedelta
@@ -29,6 +30,7 @@ from .helpers import (
     COMMS_URL,
 )
 
+load_dotenv()
 app = FastAPI(
     title="Unity Adapters",
     description="Webhook adapters for Twilio, Gmail, and internal services",
