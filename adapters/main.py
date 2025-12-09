@@ -947,7 +947,7 @@ async def email_watch_renewer(request: Request):
     print(results)
 
     # renew policy assistant
-    if os.getenv("STAGING") and not test:
+    if STAGING and not test:
         admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
         response = requests.post(
             f"{COMMS_URL}/gmail/watch",
@@ -963,6 +963,8 @@ async def email_watch_renewer(request: Request):
 @app.post("/scheduled/idle-job-creator")
 async def idle_job_creator(request: Request):
     """Cloud Run endpoint that creates a new idle job."""
+    if not STAGING:
+        return Response(content="Production job creation is not enabled", status_code=200)
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
