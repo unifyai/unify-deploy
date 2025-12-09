@@ -12,9 +12,6 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from livekit import api
 
-from communication.helpers import ADAPTERS_URL
-
-
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
     "https://api.unify.ai/v0"
@@ -25,6 +22,11 @@ COMMS_URL = (
     "https://unity-comms-app-000000000000.us-central1.run.app"
     if not STAGING
     else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+)
+ADAPTERS_URL = (
+    "https://service.a.run.app"
+    if not STAGING
+    else "https://service.a.run.app"
 )
 
 
