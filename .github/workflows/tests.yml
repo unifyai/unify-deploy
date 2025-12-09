@@ -44,8 +44,8 @@ jobs:
 
     - name: Set up Environment
       run: |
-        pip install -r requirements.txt
-        pip install -r adapters/requirements.txt
+        pip install -r requirements-comms.txt
+        pip install -r requirements-adapters.txt
 
     - name: Run adapter tests
       run: pytest tests/test_adapters.py

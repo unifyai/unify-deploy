@@ -343,10 +343,14 @@ def test_email_notification_processor(test_client):
     # Pub/Sub push format
     data = {
         "message": {
-            "data": base64.b64encode(json.dumps({
-                "emailAddress": "default-test-assistant@unify.ai",
-                "historyId": "12345",
-            }).encode()).decode()
+            "data": base64.b64encode(
+                json.dumps(
+                    {
+                        "emailAddress": "default-test-assistant@unify.ai",
+                        "historyId": "12345",
+                    }
+                ).encode()
+            ).decode()
         }
     }
     response = test_client.make_request("POST", endpoint, json=data)

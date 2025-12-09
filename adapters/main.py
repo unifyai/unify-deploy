@@ -544,7 +544,9 @@ async def unity_system_event_webhook(request: Request):
         print("message is required")
         return Response(status_code=400)
 
-    print(f"Received unity_system_event for event_type={event_type} with message={message}")
+    print(
+        f"Received unity_system_event for event_type={event_type} with message={message}"
+    )
 
     # shared context
     context = build_webhook_context(

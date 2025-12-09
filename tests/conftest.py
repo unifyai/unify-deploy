@@ -47,7 +47,16 @@ def adapters_server() -> Generator[str, None, None]:
 
     # Start the FastAPI server with uvicorn
     process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "adapters.main:app", "--host", "0.0.0.0", "--port", "8080"],
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "adapters.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+        ],
         cwd=project_root,
         env=os.environ,
         stdout=sys.stdout,
