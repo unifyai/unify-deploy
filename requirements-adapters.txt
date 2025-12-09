@@ -1,19 +1,13 @@
-# FastAPI and server
 fastapi
 uvicorn[standard]
 pydantic
+python-dotenv
 python-multipart
 requests
 httpx
-
-# Google Cloud
 google-auth
 google-api-python-client
 google-cloud-pubsub
 google-cloud-secret-manager
-
-# Twilio
 twilio
-
-# LiveKit
 livekit-api
