@@ -30,7 +30,7 @@ def adapters_server() -> Generator[str, None, None]:
 
     Yields the base URL of the running server.
     """
-    server_url = "http://localhost:3000"
+    server_url = "http://localhost:8080"
 
     # Check if server is already running
     try:
@@ -45,9 +45,9 @@ def adapters_server() -> Generator[str, None, None]:
     # Start the server
     print("🚀 Starting adapters server for testing...")
 
-    # Start the server process
+    # Start the FastAPI server with uvicorn
     process = subprocess.Popen(
-        [sys.executable, "adapters/app.py"],
+        [sys.executable, "-m", "uvicorn", "adapters.main:app", "--host", "0.0.0.0", "--port", "8080"],
         cwd=project_root,
         env=os.environ,
         stdout=sys.stdout,

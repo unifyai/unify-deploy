@@ -6,7 +6,7 @@ steps:
   args:
   - '-c'
   - |
-    docker build --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
+    docker build -f Dockerfile-comms --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
   secretEnv: ['ORCHESTRA_API_KEY']

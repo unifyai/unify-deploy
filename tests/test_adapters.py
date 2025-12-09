@@ -1,5 +1,5 @@
 """
-Tests for the Flask wrapper endpoints for the adapters.
+Tests for the FastAPI adapters endpoints.
 """
 
 import time
@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import os
+import base64
 from google.cloud import pubsub_v1
 import json
 
@@ -19,7 +20,7 @@ subscription_path = subscriber.subscription_path(
 
 def test_twilio_call_status_webhook(test_client):
     """Test successful phone call status webhook processing."""
-    endpoint = "/call-status"
+    endpoint = "/twilio/call-status"
     user_number = "+9876543210"
     assistant_number = "+0123456789"
     # simulate call status update
@@ -41,7 +42,7 @@ def test_twilio_call_status_webhook(test_client):
         assert False, "Failed to decode message data"
     try:
         assert data is not None
-        assert "thread" in data and data["thread"] == "call_received"
+        assert "thread" in data and data["thread"] == "call_answered"
         assert "event" in data and data["event"] is not None
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert data["event"]["user_number"] == user_number
@@ -53,7 +54,7 @@ def test_twilio_call_status_webhook(test_client):
 
 def test_twilio_call_webhook(test_client):
     """Test successful phone call webhook processing."""
-    endpoint = "/call"
+    endpoint = "/twilio/call"
     user_number = "+9876543210"
     assistant_number = "+0123456789"
     data = {"To": assistant_number, "From": user_number}
@@ -95,7 +96,7 @@ def test_twilio_call_webhook(test_client):
 
 def test_twilio_msg_webhook(test_client):
     """Test successful SMS webhook processing."""
-    endpoint = "/msg"
+    endpoint = "/twilio/msg"
     user_number = "+9876543210"
     assistant_number = "+0123456789"
     body = "Hello, this is a test message"
@@ -134,7 +135,7 @@ def test_twilio_msg_webhook(test_client):
 
 def test_twilio_whatsapp_webhook(test_client):
     """Test successful WhatsApp webhook processing."""
-    endpoint = "/whatsapp"
+    endpoint = "/twilio/whatsapp"
     user_number = "+9876543210"
     assistant_number = "+0123456789"
     body = "Hello, this is a test message"
@@ -161,7 +162,7 @@ def test_twilio_whatsapp_webhook(test_client):
         assert False, "Failed to decode message data"
     try:
         assert data is not None
-        assert "thread" in data and data["thread"] == "msg"
+        assert "thread" in data and data["thread"] == "whatsapp"
         assert "event" in data and data["event"] is not None
         assert data["event"]["to_number"] == assistant_number
         assert data["event"]["from_number"] == user_number
@@ -173,7 +174,7 @@ def test_twilio_whatsapp_webhook(test_client):
 
 def test_unify_message_webhook(test_client):
     """Test successful Unify Message webhook processing."""
-    endpoint = "/unify_message"
+    endpoint = "/unify/message"
     body = "Hello, this is a unify_message test message"
     json_payload = {
         "assistant_id": "default-test-assistant",
@@ -211,7 +212,7 @@ def test_unify_message_webhook(test_client):
 
 def test_unify_call_webhook(test_client):
     """Test successful unify_call webhook processing."""
-    endpoint = "/unify_call"
+    endpoint = "/unify/call"
     agent_name = "unify_call_default-test-assistant"
     json_payload = {
         "agent_name": agent_name,
@@ -250,7 +251,7 @@ def test_unify_call_webhook(test_client):
 
 def test_log_pre_hire_chats_webhook(test_client):
     """Test successful log_pre_hire_chats webhook processing with body list."""
-    endpoint = "/log_pre_hire_chats"
+    endpoint = "/log-pre-hire-chats"
     body = [
         {"role": "user", "msg": "Hey, I'm interested in the role."},
         {"role": "assistant", "msg": "Great! Can you share your resume?"},
@@ -291,7 +292,7 @@ def test_log_pre_hire_chats_webhook(test_client):
 
 def test_unity_system_event_webhook(test_client):
     """Test successful unity system event webhook processing."""
-    endpoint = "/unity_system_event"
+    endpoint = "/unity/system-event"
     event_type = "test_event"
     message = "This is a test message"
     form_payload = {
@@ -329,7 +330,7 @@ def test_unity_system_event_webhook(test_client):
 
 def test_email_watch_renewer(test_client):
     """Test successful email watch renewal."""
-    endpoint = "/email/watch"
+    endpoint = "/scheduled/email-watch-renewer"
     response = test_client.make_request("POST", endpoint, json={"test": True})
 
     assert response.status_code == 200
@@ -338,11 +339,14 @@ def test_email_watch_renewer(test_client):
 
 def test_email_notification_processor(test_client):
     """Test successful email notification processing."""
-    endpoint = "/email"
+    endpoint = "/pubsub/email-notifications"
+    # Pub/Sub push format
     data = {
         "message": {
-            "emailAddress": "default-test-assistant@unify.ai",
-            "historyId": "12345",
+            "data": base64.b64encode(json.dumps({
+                "emailAddress": "default-test-assistant@unify.ai",
+                "historyId": "12345",
+            }).encode()).decode()
         }
     }
     response = test_client.make_request("POST", endpoint, json=data)
@@ -353,8 +357,8 @@ def test_email_notification_processor(test_client):
 
 def test_idle_job_adapters(test_client):
     """Test successful idle job creation and cleanup."""
-    endpoint = "/job/create"
-    response = test_client.make_request("POST", endpoint)
+    endpoint = "/scheduled/idle-job-creator"
+    response = test_client.make_request("POST", endpoint, json={})
 
     print("Idle job creator:", response.text)
     assert response.status_code == 200
@@ -362,8 +366,8 @@ def test_idle_job_adapters(test_client):
     print("Waiting for 120 seconds...")
     time.sleep(120)
 
-    endpoint = "/job/clean"
-    response = test_client.make_request("POST", endpoint)
+    endpoint = "/scheduled/idle-job-cleaner"
+    response = test_client.make_request("POST", endpoint, json={})
 
     print("Idle job cleaner:", response.text)
     assert response.status_code == 200
@@ -375,7 +379,7 @@ def test_assistant_update_webhook(test_client):
     endpoint = "/assistant/update"
     assistant_id = "default-test-assistant"
 
-    # Test with JSON payload
+    # Test with form data payload
     data = {"assistant_id": assistant_id}
     response = test_client.make_request("POST", endpoint, data=data)
 

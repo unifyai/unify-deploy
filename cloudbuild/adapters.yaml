@@ -1,387 +1,129 @@
 steps:
-  # Twilio Call Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Twilio Call Webhook"
-    entrypoint: bash
+  # Build Docker Image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-image'
     args:
-      - "-c"
-      - |
-        gcloud functions deploy "twilio-call-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=twilio_call_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
+      - 'build'
+      - '-f'
+      - 'Dockerfile-adapters'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'
+      - '.'
 
-  # Assistant Wakeup Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Assistant Wakeup Webhook"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "assistant-wakeup-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=assistant_wakeup_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
+  # Push Docker Image (SHA Tag)
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-sha-tag'
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}']
+    waitFor: ['build-image']
 
-  # Twilio WhatsApp Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Twilio WhatsApp Webhook"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "twilio-whatsapp-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=twilio_whatsapp_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
+  # Push Docker Image (Latest Tag)
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-latest-tag'
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest']
+    waitFor: ['build-image']
 
-  # Twilio Message Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Twilio Message Webhook"
-    entrypoint: bash
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    id: 'deploy'
+    entrypoint: gcloud
     args:
-      - "-c"
-      - |
-        gcloud functions deploy "twilio-msg-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=twilio_msg_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--min-instances=1'
+      - '--max-instances=100'
+      - '--concurrency=80'
+      - '--memory=512Mi'
+      - '--cpu=1'
+      - '--timeout=300'
+      - '--cpu-boost'
+      - '--set-env-vars=PROJECT_ID=${PROJECT_ID}'
+    waitFor: ['push-sha-tag']
 
-  # Unify Message Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Unify Message Webhook"
+  # Update Cloud Scheduler: Email Watch Renewer
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    id: 'update-scheduler-email-watch'
     entrypoint: bash
     args:
-      - "-c"
+      - '-c'
       - |
-        gcloud functions deploy "unify-message-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=unify_message_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Unify Call Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Unify Call Webhook"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "unify-call-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=unify_call_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Log Pre Hire Chats Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Log Pre Hire Chats Webhook"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "log-pre-hire-chats-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=log_pre_hire_chats_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Unity System Event Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Unity System Event Webhook"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "unity-system-event-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=unity_system_event_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Twilio Call Status Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Twilio Call Status Webhook"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "twilio-call-status-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=twilio_call_status_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Email Notification Processor
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Email Notification Processor"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "email-notification-processor" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=email_notification_processor \
-          --trigger-topic=email-notifications \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Email Watch Renewer
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Email Watch Renewer"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "email-watch-renewer" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=email_watch_renewer \
-          --trigger-http \
-          --allow-unauthenticated \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Create/Update Email Watch Renewer Scheduler
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Create/Update Email Watch Renewer Scheduler"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
+        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+        gcloud scheduler jobs update http "email-watch-renewer" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/email-watch-renewer" \
+          --http-method POST \
+          --location="${_REGION}" \
+        || \
         gcloud scheduler jobs create http "email-watch-renewer" \
           --schedule "0 0 * * *" \
-          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/email-watch-renewer" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/email-watch-renewer" \
           --http-method POST \
           --time-zone "UTC" \
-          --location="us-central1" \
+          --location="${_REGION}"
+    waitFor: ['deploy']
+
+  # Update Cloud Scheduler: Idle Job Creator
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    id: 'update-scheduler-idle-creator'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+        gcloud scheduler jobs update http "idle-job-creator" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/idle-job-creator" \
+          --http-method POST \
+          --location="${_REGION}" \
         || \
-        gcloud scheduler jobs update http "email-watch-renewer" \
-          --schedule "0 0 * * *" \
-          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/email-watch-renewer" \
-          --http-method POST \
-          --time-zone "UTC" \
-          --location="us-central1"
-
-  # Idle Job Creator
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Idle Job Creator"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "idle-job-creator" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=idle_job_creator \
-          --trigger-http \
-          --allow-unauthenticated \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Create/Update Idle Job Creator Scheduler
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Create/Update Idle Job Creator Scheduler"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
         gcloud scheduler jobs create http "idle-job-creator" \
           --schedule "0 * * * *" \
-          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-creator" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/idle-job-creator" \
           --http-method POST \
           --time-zone "UTC" \
-          --location="us-central1" \
+          --location="${_REGION}"
+    waitFor: ['deploy']
+
+  # Update Cloud Scheduler: Idle Job Cleaner
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    id: 'update-scheduler-idle-cleaner'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+        gcloud scheduler jobs update http "idle-job-cleaner" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/idle-job-cleaner" \
+          --http-method POST \
+          --location="${_REGION}" \
         || \
-        gcloud scheduler jobs update http "idle-job-creator" \
-          --schedule "0 * * * *" \
-          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-creator" \
-          --http-method POST \
-          --time-zone "UTC" \
-          --location="us-central1"
-
-  # Idle Job Cleaner
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Idle Job Cleaner"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "idle-job-cleaner" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=idle_job_cleaner \
-          --trigger-http \
-          --allow-unauthenticated \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-  # Create/Update Idle Job Cleaner Scheduler
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Create/Update Idle Job Cleaner Scheduler"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
         gcloud scheduler jobs create http "idle-job-cleaner" \
           --schedule "10 * * * *" \
-          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-cleaner" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/idle-job-cleaner" \
           --http-method POST \
           --time-zone "UTC" \
-          --location="us-central1" \
-        || \
-        gcloud scheduler jobs update http "idle-job-cleaner" \
-          --schedule "10 * * * *" \
-          --uri "https://us-central1-$PROJECT_ID.cloudfunctions.net/idle-job-cleaner" \
-          --http-method POST \
-          --time-zone "UTC" \
-          --location="us-central1"
+          --location="${_REGION}"
+    waitFor: ['deploy']
 
-  # Assistant Update Webhook
-  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
-    id: "Deploy Assistant Update Webhook"
-    entrypoint: bash
-    args:
-      - "-c"
-      - |
-        gcloud functions deploy "assistant-update-webhook" \
-          --gen2 \
-          --region="us-central1" \
-          --runtime=python311 \
-          --source="adapters" \
-          --entry-point=assistant_update_webhook \
-          --trigger-http \
-          --allow-unauthenticated \
-          --set-env-vars=PROJECT_ID=$PROJECT_ID \
-          --timeout=300 \
-          --memory=512Mi \
-          --cpu=1 \
-          --min-instances=0 \
-          --max-instances=100 \
-          --concurrency=80
-
-timeout: "3600s"
+# Options
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
+# Substitution variables
+substitutions:
+  _REGION: 'us-central1'
+  _REPOSITORY: 'unity-adapters-repo'
+  _SERVICE_NAME: 'unity-adapters'
+
+# Timeout
+timeout: '1200s'
+
+# Images to be pushed
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'

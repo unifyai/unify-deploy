@@ -11,7 +11,7 @@ from communication.outlook.views import (
 )
 from communication.infra.views import router as infra_router
 from communication.social.views import router as social_router
-from dependencies import auth_admin_key
+from .dependencies import auth_admin_key
 import uvicorn
 from dotenv import load_dotenv
 
@@ -35,4 +35,4 @@ async def read_root():
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("communication.main:app", host="0.0.0.0", port=8080, reload=True)

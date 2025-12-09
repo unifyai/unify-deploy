@@ -2,11 +2,12 @@ import json
 import base64
 import traceback
 import time
-import functions_framework
 import os
 import requests
 from datetime import datetime, timedelta
-from flask import Request, Response
+from typing import Optional
+from fastapi import FastAPI, Request, Response
+from pydantic import BaseModel
 
 from google.cloud import pubsub_v1
 from googleapiclient.discovery import build
@@ -14,7 +15,7 @@ from google.oauth2.service_account import Credentials
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
 
-from helpers import (
+from .helpers import (
     add_user_to_conference,
     build_webhook_context,
     create_conference_response,
@@ -28,27 +29,351 @@ from helpers import (
     COMMS_URL,
 )
 
+app = FastAPI(
+    title="Unity Adapters",
+    description="Webhook adapters for Twilio, Gmail, and internal services",
+    version="1.0.0",
+)
 
-@functions_framework.http
-def unify_message_webhook(request: Request):
+
+# =============================================================================
+# Health Check
+# =============================================================================
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy"}
+
+
+# =============================================================================
+# Twilio Webhooks
+# =============================================================================
+
+
+@app.post("/twilio/call")
+async def twilio_call_webhook(request: Request):
+    """Phone call webhook endpoint - handles incoming Twilio voice calls."""
+    print("twilio_call_webhook function started")
+    form_data = await request.form()
+
+    # get twilio number and caller number
+    to_number = form_data.get("To", "")
+    from_number = form_data.get("From", "")
+    twilio_number = to_number or ""
+    caller_number = from_number or ""
+    print(f"Received call from {caller_number} to {twilio_number}")
+
+    # shared context
+    context = build_webhook_context("phone", to_number, from_number)
+    assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
+
+    if not context["is_valid_contact"]:
+        resp_user = VoiceResponse()
+        resp_user.say(
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details."
+        )
+        return Response(content=str(resp_user), media_type="text/xml")
+
+    running = context["is_job_running"]
+    print(f"Job running: {running}")
+
+    # conference name and SIP URI
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+    room_name = f"unity_{twilio_number}"
+    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
+    print(f"LiveKit room will be: {room_name}")
+
+    # publish to Pub/Sub
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    print(f"Publishing call to Pub/Sub at path: {topic_path}")
+    try:
+        pubsub_message = {
+            "thread": "call",
+            "event": {
+                "contacts": contacts,
+                "conference_name": conference_name,
+                "caller_number": caller_number,
+                "sip_uri": sip_uri,
+                "livekit_room": room_name,  # Include LiveKit room name
+                "assistant_id": assistant_id,  # Include for agent dispatch
+                "action": "start_worker",  # Signal that worker should start (agent already dispatched)
+                "timestamp": int(time.time() * 1000),  # For timing analysis
+                "call_metadata": {
+                    "twilio_number": twilio_number,
+                    "call_type": "inbound",
+                    "room_created": True,  # Confirms room was created
+                    "bridge_established": True,  # Confirms SIP bridge is ready
+                },
+            },
+        }
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(pubsub_message).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
+        print("Call published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing to Pub/Sub: {str(e)}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    # Conference setup
+    try:
+        resp_user = create_conference_response(conference_name)
+        print(f"Conference response: {resp_user.to_xml()}")
+        if resp_user:
+            print("Conference response created successfully")
+        else:
+            print("Error: Failed to create conference response")
+            return Response(content="Error creating conference", status_code=500)
+
+        call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
+        if call_sid:
+            print(f"User added to conference successfully. Call SID: {call_sid}")
+        else:
+            print("Error: Failed to add user to conference")
+            return Response(content="Error adding user to conference", status_code=500)
+
+        print(f"Assistant ID: {assistant_id}")
+        if assistant_id == "default-assistant":
+            print(f"Dispatching agent {room_name}")
+            dispatch_agent(room_name)
+
+        print("Conference setup completed")
+    except Exception as e:
+        print(f"Error during conference setup: {str(e)}")
+        return Response(content="Error setting up conference", status_code=500)
+
+    print("Returning TwiML response")
+    return Response(content=str(resp_user), media_type="text/xml")
+
+
+@app.post("/twilio/call-status")
+async def twilio_call_status_webhook(request: Request):
+    """Phone call status webhook - handles Twilio call status updates."""
+    form_data = await request.form()
+    call_status = form_data.get("CallStatus")
+    assistant_number = form_data.get("From")
+    user_number = form_data.get("To")
+    print(f"twilio_call_status_webhook function started: {call_status}")
+    print(f"User {user_number} called by {assistant_number}")
+
+    if call_status == "in-progress":
+        # get assistant data
+        context = build_webhook_context(
+            "phone", assistant_number, user_number, validate_contact=False
+        )
+        assistant_id = context["assistant"]["assistant_id"]
+        contacts = context["contacts"]
+
+        # publish to pubsub
+        pubsub_client = pubsub_v1.PublisherClient()
+        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        print(f"Publishing call to Pub/Sub at path: {topic_path}")
+        try:
+            publish_future = pubsub_client.publish(
+                topic_path,
+                json.dumps(
+                    {
+                        "thread": "call_answered",
+                        "event": {
+                            "contacts": contacts,
+                            "assistant_id": assistant_id,
+                            "user_number": user_number,
+                            "assistant_number": assistant_number,
+                            "timestamp": int(time.time() * 1000),
+                        },
+                    }
+                ).encode("utf-8"),
+            )
+            if "test" in assistant_id:
+                status_id = publish_future.result(timeout=10)
+                print(f"Message ID: {status_id}")
+            print("Call published to Pub/Sub successfully")
+        except Exception as e:
+            print(f"Error publishing to Pub/Sub: {str(e)}")
+
+    return Response(status_code=200)
+
+
+@app.post("/twilio/msg")
+async def twilio_msg_webhook(request: Request):
+    """SMS webhook endpoint - handles incoming Twilio SMS messages."""
+    print("twilio_msg_webhook function started")
+    form_data = await request.form()
+
+    # get twilio number and caller number
+    to_number = form_data.get("To", "") or ""
+    from_number = form_data.get("From", "") or ""
+    body = form_data.get("Body", "") or ""
+    print(f"Received message from {from_number} to {to_number} with body: {body}")
+
+    # shared context
+    context = build_webhook_context("msg", to_number, from_number)
+    assistant_data = context["assistant"]
+    assistant_id = assistant_data["assistant_id"]
+    contacts = context["contacts"]
+
+    if not context["is_valid_contact"]:
+        resp_user = MessagingResponse()
+        resp_user.message(
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details."
+        )
+        return Response(content=str(resp_user), media_type="text/xml")
+
+    running = context["is_job_running"]
+    print(f"Job running: {running}")
+
+    # set up response
+    resp_user = MessagingResponse()
+
+    # publish to pubsub
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    print(f"Publishing message to Pub/Sub at path: {topic_path}")
+    try:
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "msg",
+                    "event": {
+                        "contacts": contacts,
+                        "to_number": to_number,
+                        "from_number": from_number,
+                        "body": body,
+                    },
+                }
+            ).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
+        print("Message published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing to Pub/Sub: {str(e)}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    print("Returning TwiML response")
+    return Response(content=str(resp_user), media_type="text/xml")
+
+
+@app.post("/twilio/whatsapp")
+async def twilio_whatsapp_webhook(request: Request):
+    """WhatsApp webhook endpoint - handles incoming Twilio WhatsApp messages."""
+    print("twilio_whatsapp_webhook function started")
+    form_data = await request.form()
+
+    # get twilio number and caller number
+    to_number = form_data.get("To", "") or ""
+    from_number = form_data.get("From", "") or ""
+    body = form_data.get("Body", "") or ""
+    print(f"Received message from {from_number} to {to_number} with body: {body}")
+
+    # shared context
+    context = build_webhook_context("whatsapp", to_number, from_number)
+    assistant_data = context["assistant"]
+    assistant_id = assistant_data["assistant_id"]
+    contacts = context["contacts"]
+
+    if not context["is_valid_contact"]:
+        resp_user = MessagingResponse()
+        resp_user.message(
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details."
+        )
+        return Response(content=str(resp_user), media_type="text/xml")
+
+    running = context["is_job_running"]
+    print(f"Job running: {running}")
+
+    # set up response
+    resp_user = MessagingResponse()
+
+    # publish to pubsub
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    print(f"Publishing message to Pub/Sub at path: {topic_path}")
+    try:
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "whatsapp",
+                    "event": {
+                        "contacts": contacts,
+                        "to_number": to_number,
+                        "from_number": from_number,
+                        "body": body,
+                    },
+                }
+            ).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
+        print("Message published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing to Pub/Sub: {str(e)}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    print("Returning TwiML response")
+    return Response(content=str(resp_user), media_type="text/xml")
+
+
+# =============================================================================
+# Unify Webhooks
+# =============================================================================
+
+
+class UnifyMessagePayload(BaseModel):
+    assistant_id: str
+    contact_id: Optional[int] = 1
+    body: Optional[str] = ""
+
+
+@app.post("/unify/message")
+async def unify_message_webhook(request: Request):
+    """Unify message webhook - handles internal message events."""
     print("unify_message_webhook function started")
+
     # optional auth via admin key
     shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     auth_header = request.headers.get("Authorization", "")
     if shared_key and auth_header != f"Bearer {shared_key}":
         print("Unauthorized unify_message request")
-        return Response(status=401)
+        return Response(status_code=401)
 
     # accept JSON or form payloads
-    payload = request.get_json(silent=True) or {}
-    assistant_id_input = payload.get("assistant_id") or request.form.get(
-        "assistant_id", ""
-    )
-    contact_id = payload.get("contact_id") or request.form.get("contact_id", 1)
+    content_type = request.headers.get("Content-Type", "")
+    if "application/json" in content_type:
+        payload = await request.json()
+        assistant_id_input = payload.get("assistant_id", "")
+        contact_id = payload.get("contact_id", 1)
+        body = payload.get("body", "") or ""
+    else:
+        form_data = await request.form()
+        assistant_id_input = form_data.get("assistant_id", "")
+        contact_id = form_data.get("contact_id", 1)
+        body = form_data.get("Body", "") or ""
+
     if not assistant_id_input:
-        print(f"Assistant ID is required")
+        print("Assistant ID is required")
         return Response(status_code=400)
-    body = payload.get("body") or request.form.get("Body", "") or ""
+
     print(
         f"Received unify_message message for assistant_id={assistant_id_input} with body: {body}"
     )
@@ -93,36 +418,41 @@ def unify_message_webhook(request: Request):
         print("unify_message message published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing unify_message to Pub/Sub: {str(e)}")
-        return Response(response="Error publishing to Pub/Sub", status=500)
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
 
-    return Response(status=200)
+    return Response(status_code=200)
 
 
-@functions_framework.http
-def unify_call_webhook(request: Request):
+@app.post("/unify/call")
+async def unify_call_webhook(request: Request):
+    """Unify call webhook - handles internal call events."""
     print("unify_call_webhook function started")
+
     # optional auth via admin key
     shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     auth_header = request.headers.get("Authorization", "")
     if shared_key and auth_header != f"Bearer {shared_key}":
         print("Unauthorized unify_call request")
-        return Response(status=401)
+        return Response(status_code=401)
 
     # accept JSON or form payloads
-    payload = request.get_json(silent=True) or {}
-    agent_name = payload.get("agent_name") or request.form.get("agent_name", "")
-    room_name = payload.get("room_name") or request.form.get("room_name", "")
+    content_type = request.headers.get("Content-Type", "")
+    if "application/json" in content_type:
+        payload = await request.json()
+    else:
+        form_data = await request.form()
+        payload = dict(form_data)
+
+    agent_name = payload.get("agent_name", "")
+    room_name = payload.get("room_name", "")
     if not agent_name or not room_name:
         print("agent_name and room_name are required")
-        return Response(status=400)
+        return Response(status_code=400)
 
-    # Require assistant_id explicitly
-    assistant_id_input = payload.get("assistant_id") or request.form.get(
-        "assistant_id", ""
-    )
+    assistant_id_input = payload.get("assistant_id", "")
     if not assistant_id_input:
         print("assistant_id is required")
-        return Response(status=400)
+        return Response(status_code=400)
 
     print(
         f"Received unify_call for assistant_id={assistant_id_input} room={room_name} agent_name={agent_name}"
@@ -169,34 +499,128 @@ def unify_call_webhook(request: Request):
         print("unify_call message published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing unify_call to Pub/Sub: {str(e)}")
-        return Response(response="Error publishing to Pub/Sub", status=500)
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
 
-    return Response(status=200)
+    return Response(status_code=200)
 
 
-@functions_framework.http
-def log_pre_hire_chats_webhook(request: Request):
+# =============================================================================
+# Unity System Webhooks
+# =============================================================================
+
+
+@app.post("/unity/system-event")
+async def unity_system_event_webhook(request: Request):
+    """Unity system event webhook - handles system-level events."""
+    print("unity_system_event_webhook function started")
+
+    # optional auth via admin key
+    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    auth_header = request.headers.get("Authorization", "")
+    if shared_key and auth_header != f"Bearer {shared_key}":
+        print("Unauthorized unity_system_event request")
+        return Response(status_code=401)
+
+    # accept JSON or form payloads
+    content_type = request.headers.get("Content-Type", "")
+    if "application/json" in content_type:
+        payload = await request.json()
+    else:
+        form_data = await request.form()
+        payload = dict(form_data)
+
+    assistant_id = payload.get("assistant_id", "")
+    if not assistant_id:
+        print("assistant_id is required")
+        return Response(status_code=400)
+
+    event_type = payload.get("event_type", "")
+    if not event_type:
+        print("event_type is required")
+        return Response(status_code=400)
+
+    message = payload.get("message", "")
+    if not message:
+        print("message is required")
+        return Response(status_code=400)
+
+    print(f"Received unity_system_event for event_type={event_type} with message={message}")
+
+    # shared context
+    context = build_webhook_context(
+        channel="unity_system_event",
+        destination="",
+        sender="",
+        assistant_id=assistant_id,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
+    running = context["is_job_running"]
+    print(f"Job running: {running}")
+
+    # publish to pubsub
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    print(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
+    try:
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "unity_system_event",
+                    "event": {
+                        "contacts": contacts,
+                        "assistant_id": assistant_id,
+                        "event_type": event_type,
+                        "message": message,
+                    },
+                }
+            ).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
+        print("unity_system_event message published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing unity_system_event to Pub/Sub: {str(e)}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    return Response(status_code=200)
+
+
+@app.post("/log-pre-hire-chats")
+async def log_pre_hire_chats_webhook(request: Request):
+    """Log pre-hire chats webhook - logs chat history before hiring."""
     print("log_pre_hire_chats_webhook function started")
+
     # optional auth via admin key
     shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     auth_header = request.headers.get("Authorization", "")
     if shared_key and auth_header != f"Bearer {shared_key}":
         print("Unauthorized log_pre_hire_chats request")
-        return Response(status=401)
+        return Response(status_code=401)
 
     # accept JSON or form payloads
-    payload = request.get_json(silent=True) or {}
-    assistant_id_input = payload.get("assistant_id") or request.form.get(
-        "assistant_id", ""
-    )
+    content_type = request.headers.get("Content-Type", "")
+    if "application/json" in content_type:
+        payload = await request.json()
+    else:
+        form_data = await request.form()
+        payload = dict(form_data)
+
+    assistant_id_input = payload.get("assistant_id", "")
     if not assistant_id_input:
-        print(f"Assistant ID is required")
+        print("Assistant ID is required")
         return Response(status_code=400)
 
     # accept list of role/msg pairs under `body`
     raw_body = payload.get("body")
     if raw_body is None:
-        raw_body = request.form.get("Body", "") or ""
+        raw_body = payload.get("Body", "") or ""
+
     # If body is a JSON string, parse it; otherwise, use as-is
     try:
         body = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
@@ -212,9 +636,9 @@ def log_pre_hire_chats_webhook(request: Request):
     ):
         print("Invalid body format; expected list of {role, msg} objects")
         return Response(
-            response=json.dumps({"error": "body must be a list of {role, msg}"}),
-            status=400,
-            mimetype="application/json",
+            content=json.dumps({"error": "body must be a list of {role, msg}"}),
+            status_code=400,
+            media_type="application/json",
         )
 
     print(
@@ -260,91 +684,22 @@ def log_pre_hire_chats_webhook(request: Request):
         print("log_pre_hire_chats message published to Pub/Sub successfully")
     except Exception as e:
         print(f"Error publishing log_pre_hire_chats to Pub/Sub: {str(e)}")
-        return Response(response="Error publishing to Pub/Sub", status=500)
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
 
-    return Response(status=200)
-
-
-@functions_framework.http
-def unity_system_event_webhook(request: Request):
-    print("unity_system_event_webhook function started")
-    # optional auth via admin key
-    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-    auth_header = request.headers.get("Authorization", "")
-    if shared_key and auth_header != f"Bearer {shared_key}":
-        print("Unauthorized unity_system_event request")
-        return Response(status=401)
-
-    # accept JSON or form payloads
-    payload = request.get_json(silent=True) or {}
-    assistant_id = payload.get("assistant_id") or request.form.get("assistant_id") or ""
-    if not assistant_id:
-        print("assistant_id is required")
-        return Response(status=400)
-
-    event_type = payload.get("event_type") or request.form.get("event_type", "")
-    if not event_type:
-        print("event_type is required")
-        return Response(status=400)
-
-    message = payload.get("message") or request.form.get("message", "")
-    if not message:
-        print("message is required")
-        return Response(status=400)
-
-    print(
-        f"Received unity_system_event for event_type={event_type} with message={message}"
-    )
-
-    # shared context
-    context = build_webhook_context(
-        channel="unity_system_event",
-        destination="",
-        sender="",
-        assistant_id=assistant_id,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    assistant_id = context["assistant"]["assistant_id"]
-    contacts = context["contacts"]
-    running = context["is_job_running"]
-    print(f"Job running: {running}")
-
-    # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
-    try:
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "unity_system_event",
-                    "event": {
-                        "contacts": contacts,
-                        "assistant_id": assistant_id,
-                        "event_type": event_type,
-                        "message": message,
-                    },
-                }
-            ).encode("utf-8"),
-        )
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("unity_system_event message published to Pub/Sub successfully")
-    except Exception as e:
-        print(f"Error publishing unity_system_event to Pub/Sub: {str(e)}")
-        return Response(response="Error publishing to Pub/Sub", status=500)
-
-    return Response(status=200)
+    return Response(status_code=200)
 
 
-@functions_framework.http
-def assistant_wakeup_webhook(request: Request):
+# =============================================================================
+# Assistant Webhooks
+# =============================================================================
+
+
+@app.post("/assistant/wakeup")
+async def assistant_wakeup_webhook(request: Request):
+    """Assistant wakeup webhook - wakes up an assistant."""
     print("assistant_wakeup_webhook function started")
-    assistant_id = request.form.get("assistant_id")
+    form_data = await request.form()
+    assistant_id = form_data.get("assistant_id")
     print(f"Assistant {assistant_id} woke up")
 
     # shared context
@@ -358,286 +713,202 @@ def assistant_wakeup_webhook(request: Request):
         force_start=True,
     )
 
-    return Response(status=200)
+    return Response(status_code=200)
 
 
-@functions_framework.http
-def twilio_call_status_webhook(request: Request):
-    call_status = request.form.get("CallStatus")
-    assistant_number = request.form.get("From")
-    user_number = request.form.get("To")
-    print(f"twilio_call_status_webhook function started: {call_status}")
-    print(f"User {user_number} called by {assistant_number}")
-    if call_status == "in-progress":
-        # get assistant data
-        context = build_webhook_context(
-            "phone", assistant_number, user_number, validate_contact=False
+@app.post("/assistant/update")
+async def assistant_update_webhook(request: Request):
+    """
+    Webhook that receives an assistant id and publishes assistant details
+    to the assistant_update topic if there is a job running.
+    """
+    print("assistant_update_webhook function started")
+
+    try:
+        form_data = await request.form()
+        assistant_id = form_data.get("assistant_id")
+        print(f"Received assistant_id: {assistant_id}")
+
+        assistant_data = get_assistant(assistant_id=assistant_id)
+        user_id = assistant_data["user_id"]
+        assistant_first_name = assistant_data["assistant_first_name"]
+        assistant_surname = assistant_data["assistant_surname"]
+        assistant_data["assistant_name"] = f"{assistant_first_name} {assistant_surname}"
+        assistant_data.pop("assistant_first_name")
+        assistant_data.pop("assistant_surname")
+        assistant_data.pop("assistant_whatsapp_number")
+
+        # check if job is running
+        is_default_assistant = (
+            "default" in assistant_id
+            or "Default Assistant" in assistant_data["assistant_about"]
         )
-        assistant_id = context["assistant"]["assistant_id"]
-        contacts = context["contacts"]
+        running = is_job_running(user_id, assistant_id)
+        print(f"Job running: {running}")
 
-        # publish to pubsub
+        if not is_default_assistant and not running:
+            return Response(
+                content=json.dumps(
+                    {
+                        "success": False,
+                        "message": "No job currently running for this assistant",
+                        "assistant_id": assistant_id,
+                    }
+                ),
+                status_code=200,
+                media_type="application/json",
+            )
+        elif running:
+            print(f"Job running for assistant {assistant_id}: {running}")
+        else:
+            print(f"Default assistant {assistant_id} - skipping job running check")
+
+        # Job is running, publish to assistant topic
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-        print(f"Publishing call to Pub/Sub at path: {topic_path}")
-        try:
-            publish_future = pubsub_client.publish(
-                topic_path,
-                json.dumps(
-                    {
-                        "thread": "call_answered",
-                        "event": {
-                            "contacts": contacts,
-                            "assistant_id": assistant_id,
-                            "user_number": user_number,
-                            "assistant_number": assistant_number,
-                            "timestamp": int(time.time() * 1000),
-                        },
-                    }
-                ).encode("utf-8"),
+
+        # Prepare message in the same format as startup event
+        message_data = {"thread": "assistant_update", "event": assistant_data}
+
+        print(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(message_data).encode("utf-8"),
+        )
+
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {message_id}")
+
+        print("Assistant update published to Pub/Sub successfully")
+
+        return Response(
+            content=json.dumps(
+                {
+                    "success": True,
+                    "message": "Assistant update published successfully",
+                    "assistant_id": assistant_id,
+                    "topic_path": topic_path,
+                }
+            ),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    except Exception as e:
+        print(f"Error in assistant_update_webhook: {str(e)}")
+        traceback.print_exc()
+        return Response(
+            content=json.dumps({"error": str(e)}),
+            status_code=500,
+            media_type="application/json",
+        )
+
+
+# =============================================================================
+# Email Webhooks (Pub/Sub Push)
+# =============================================================================
+
+
+@app.post("/pubsub/email-notifications")
+async def email_notification_processor(request: Request):
+    """
+    Cloud Run endpoint that processes Gmail notifications via Pub/Sub push.
+    Receives push messages from Pub/Sub subscription.
+    """
+    try:
+        # Parse the Pub/Sub push message envelope
+        envelope = await request.json()
+        if not envelope or "message" not in envelope:
+            print("Bad Request: no Pub/Sub message")
+            return Response(content="Bad Request: no Pub/Sub message", status_code=400)
+
+        pubsub_message = envelope.get("message", {})
+        data = base64.b64decode(pubsub_message.get("data", "")).decode("utf-8")
+        notification = json.loads(data)
+        print(f"Received notification: {notification}")
+
+        # extract Gmail notification details
+        email_id = notification["emailAddress"]
+        history_id = notification["historyId"]
+
+        # get credentials
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        scopes = [
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.modify",
+        ]
+        gmail_creds = Credentials.from_service_account_info(
+            creds_json,
+            scopes=scopes,
+            subject=email_id,
+        )
+        gmail_service = build("gmail", "v1", credentials=gmail_creds)
+
+        # process the history and thread
+        print(f"email_id: {email_id}, history_id: {history_id}")
+        thread_id, message_id, last_message, gmail_message_id = get_thread_id(
+            email_id, history_id, gmail_service
+        )
+        print(
+            f"thread_id: {thread_id}, message_id: {message_id}, last_message: {last_message}"
+        )
+        if not thread_id:
+            print(f"No new conversations found for user {email_id}")
+            return Response(content="No new conversations", status_code=200)
+
+        from_email = last_message["sender"].split("<")[1].split(">")[0]
+        print(f"from_email: {from_email}")
+
+        # shared context
+        context = build_webhook_context("email", email_id, from_email)
+        assistant_data = context["assistant"]
+        assistant_id = assistant_data["assistant_id"]
+        user_id = assistant_data["user_id"]
+        contacts = context["contacts"]
+
+        if not context["is_valid_contact"]:
+            error_message = (
+                "This email address is no longer active. Please visit "
+                "console.unify.ai to view your assistant details."
             )
-            if "test" in assistant_id:
-                status_id = publish_future.result(timeout=10)
-                print(f"Message ID: {status_id}")
-            print("Call published to Pub/Sub successfully")
-        except Exception as e:
-            print(f"Error publishing to Pub/Sub: {str(e)}")
-    return Response(status=200)
+            return Response(content=error_message, status_code=500)
 
+        running = context["is_job_running"]
+        print(f"Job running: {running}")
 
-# phone webhook
-@functions_framework.http
-def twilio_call_webhook(request: Request):
-    print("twilio_call_webhook function started")
-    # get twilio number and caller number
-    to_number = request.form.get("To", "")
-    from_number = request.form.get("From", "")
-    twilio_number = to_number or ""
-    caller_number = from_number or ""
-    print(f"Received call from {caller_number} to {twilio_number}")
-
-    # shared context
-    context = build_webhook_context("phone", to_number, from_number)
-    assistant_id = context["assistant"]["assistant_id"]
-    contacts = context["contacts"]
-
-    if not context["is_valid_contact"]:
-        resp_user = VoiceResponse()
-        resp_user.say(
-            "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
+        print(f"Successfully processed conversation for user {email_id}")
+        publish_thread_id(
+            assistant_id,
+            user_id,
+            thread_id,
+            message_id,
+            last_message,
+            contacts,
+            gmail_message_id,
         )
-        return Response(response=str(resp_user), mimetype="text/xml")
+        return Response(content="OK", status_code=200)
 
-    running = context["is_job_running"]
-    print(f"Job running: {running}")
-
-    # conference name and SIP URI
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
-    room_name = f"unity_{twilio_number}"  # Consistent room per assistant
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
-    print(f"LiveKit room will be: {room_name}")
-
-    # publish to Pub/Sub
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing call to Pub/Sub at path: {topic_path}")
-    try:
-        pubsub_message = {
-            "thread": "call",
-            "event": {
-                "contacts": contacts,
-                "conference_name": conference_name,
-                "caller_number": caller_number,
-                "sip_uri": sip_uri,
-                "livekit_room": room_name,  # Include LiveKit room name
-                "assistant_id": assistant_id,  # Include for agent dispatch
-                "action": "start_worker",  # Signal that worker should start (agent already dispatched)
-                "timestamp": int(time.time() * 1000),  # For timing analysis
-                "call_metadata": {
-                    "twilio_number": twilio_number,
-                    "call_type": "inbound",
-                    "room_created": True,  # Confirms room was created
-                    "bridge_established": True,  # Confirms SIP bridge is ready
-                },
-            },
-        }
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(pubsub_message).encode("utf-8"),
-        )
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("Call published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
-        return Response(response="Error publishing to Pub/Sub", status=500)
-
-    # UNCHANGED: Keep the original conference setup (this works)
-    try:
-        resp_user = create_conference_response(conference_name)
-        print(f"Conference response: {resp_user.to_xml()}")
-        if resp_user:
-            print("Conference response created successfully")
-        else:
-            print("Error: Failed to create conference response")
-            return Response(response="Error creating conference", status=500)
-
-        call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
-        if call_sid:
-            print(f"User added to conference successfully. Call SID: {call_sid}")
-        else:
-            print("Error: Failed to add user to conference")
-            return Response(response="Error adding user to conference", status=500)
-
-        print(f"Assistant ID: {assistant_id}")
-        if assistant_id == "default-assistant":
-            print(f"Dispatching agent {room_name}")
-            dispatch_agent(room_name)
-
-        print("Conference setup completed")
-    except Exception as e:
-        print(f"Error during conference setup: {str(e)}")
-        return Response(response="Error setting up conference", status=500)
-
-    print("Returning TwiML response")
-    return Response(response=str(resp_user), mimetype="text/xml")
+        error_message = f"Error processing notification: {str(e)}"
+        traceback.print_exc()
+        print(error_message)
+        return Response(content=error_message, status_code=500)
 
 
-# sms webhook
-@functions_framework.http
-def twilio_msg_webhook(request: Request):
-    print("twilio_msg_webhook function started")
-    # get twilio number and caller number
-    to_number = request.form.get("To", "") or ""
-    from_number = request.form.get("From", "") or ""
-    body = request.form.get("Body", "") or ""
-    print(f"Received message from {from_number} to {to_number} with body: {body}")
-
-    # shared context
-    context = build_webhook_context("msg", to_number, from_number)
-    assistant_data = context["assistant"]
-    assistant_id = assistant_data["assistant_id"]
-    contacts = context["contacts"]
-
-    if not context["is_valid_contact"]:
-        resp_user = MessagingResponse()
-        resp_user.message(
-            "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
-        )
-        return Response(response=str(resp_user), mimetype="text/xml")
-
-    running = context["is_job_running"]
-    print(f"Job running: {running}")
-
-    # set up conference
-    resp_user = MessagingResponse()
-
-    # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing message to Pub/Sub at path: {topic_path}")
-    try:
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "msg",
-                    "event": {
-                        "contacts": contacts,
-                        "to_number": to_number,
-                        "from_number": from_number,
-                        "body": body,
-                    },
-                }
-            ).encode("utf-8"),
-        )
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("Message published to Pub/Sub successfully")
-    except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
-        return Response(response="Error publishing to Pub/Sub", status=500)
-    print("Returning TwiML response")
-    return Response(response=str(resp_user), mimetype="text/xml")
+# =============================================================================
+# Scheduled Endpoints
+# =============================================================================
 
 
-# whatsapp webhook
-@functions_framework.http
-def twilio_whatsapp_webhook(request: Request):
-    print("twilio_whatsapp_webhook function started")
-    # get twilio number and caller number
-    to_number = request.form.get("To", "") or ""
-    from_number = request.form.get("From", "") or ""
-    body = request.form.get("Body", "") or ""
-    print(f"Received message from {from_number} to {to_number} with body: {body}")
+@app.post("/scheduled/email-watch-renewer")
+async def email_watch_renewer(request: Request):
+    """Cloud Run endpoint that renews Gmail watches for multiple users."""
+    payload = await request.json()
+    test = payload.get("test", False)
 
-    # shared context
-    context = build_webhook_context("whatsapp", to_number, from_number)
-    assistant_data = context["assistant"]
-    assistant_id = assistant_data["assistant_id"]
-    contacts = context["contacts"]
-
-    if not context["is_valid_contact"]:
-        resp_user = MessagingResponse()
-        resp_user.message(
-            "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
-        )
-        return Response(response=str(resp_user), mimetype="text/xml")
-
-    running = context["is_job_running"]
-    print(f"Job running: {running}")
-
-    # set up conference
-    resp_user = MessagingResponse()
-
-    # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing message to Pub/Sub at path: {topic_path}")
-    try:
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "whatsapp",
-                    "event": {
-                        "contacts": contacts,
-                        "to_number": to_number,
-                        "from_number": from_number,
-                        "body": body,
-                    },
-                }
-            ).encode("utf-8"),
-        )
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("Message published to Pub/Sub successfully")
-    except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
-        return Response(response="Error publishing to Pub/Sub", status=500)
-
-    print("Returning TwiML response")
-    return Response(response=str(resp_user), mimetype="text/xml")
-
-
-# email webhook
-@functions_framework.http
-def email_watch_renewer(request):
-    """Cloud Function that renews Gmail watches for multiple users."""
-    # ToDo: make orchestra admin call to get all assistant emails
-    test = request.json.get("test")
     if not test:
         emails = requests.get(
             f"{ORCHESTRA_URL}/admin/assistant/emails",
@@ -687,87 +958,9 @@ def email_watch_renewer(request):
     return results
 
 
-@functions_framework.cloud_event
-def email_notification_processor(cloud_event):
-    """Cloud Function triggered by Pub/Sub that processes Gmail notifications."""
-    try:
-        # extract the Pub/Sub message from the cloud event
-        envelope = json.loads(
-            base64.b64decode(cloud_event.data["message"]["data"]).decode("utf-8")
-        )
-        print(f"Received notification: {envelope}")
-
-        # extract Gmail notification details
-        email_id = envelope["emailAddress"]
-        history_id = envelope["historyId"]
-
-        # get credentials
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        scopes = [
-            "https://www.googleapis.com/auth/gmail.send",
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/gmail.modify",
-        ]
-        gmail_creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=scopes,
-            subject=email_id,
-        )
-        gmail_service = build("gmail", "v1", credentials=gmail_creds)
-
-        # process the history and thread
-        print(f"email_id: {email_id}, history_id: {history_id}")
-        thread_id, message_id, last_message, gmail_message_id = get_thread_id(
-            email_id, history_id, gmail_service
-        )
-        print(
-            f"thread_id: {thread_id}, message_id: {message_id}, last_message: {last_message}"
-        )
-        if not thread_id:
-            print(f"No new conversations found for user {email_id}")
-            return "No new conversations"
-        from_email = last_message["sender"].split("<")[1].split(">")[0]
-        print(f"from_email: {from_email}")
-
-        # shared context
-        context = build_webhook_context("email", email_id, from_email)
-        assistant_data = context["assistant"]
-        assistant_id = assistant_data["assistant_id"]
-        user_id = assistant_data["user_id"]
-        contacts = context["contacts"]
-
-        if not context["is_valid_contact"]:
-            error_message = (
-                "This email address is no longer active. Please visit "
-                "console.unify.ai to view your assistant details."
-            )
-            return error_message, 500
-        running = context["is_job_running"]
-        print(f"Job running: {running}")
-
-        print(f"Successfully processed conversation for user {email_id}")
-        publish_thread_id(
-            assistant_id,
-            user_id,
-            thread_id,
-            message_id,
-            last_message,
-            contacts,
-            gmail_message_id,
-        )
-        return "OK"
-
-    except Exception as e:
-        error_message = f"Error processing notification: {str(e)}"
-        traceback.print_exc()
-        print(error_message)
-        return error_message, 500
-
-
-# infra webhook
-@functions_framework.http
-def idle_job_creator(request):
-    """Cloud Function that creates a new idle job."""
+@app.post("/scheduled/idle-job-creator")
+async def idle_job_creator(request: Request):
+    """Cloud Run endpoint that creates a new idle job."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
@@ -782,9 +975,9 @@ def idle_job_creator(request):
     return response.json()
 
 
-@functions_framework.http
-def idle_job_cleaner(request):
-    """Cloud Function that renews idle jobs that have been around for >24 hours.."""
+@app.post("/scheduled/idle-job-cleaner")
+async def idle_job_cleaner(request: Request):
+    """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     idle_jobs = []
 
@@ -848,92 +1041,38 @@ def idle_job_cleaner(request):
             headers=headers,
         )
 
-    return Response(response=json.dumps({"idle_jobs": idle_jobs}), status=200)
+    return Response(content=json.dumps({"idle_jobs": idle_jobs}), status_code=200)
 
 
-@functions_framework.http
-def assistant_update_webhook(request: Request):
-    """
-    Webhook that receives an assistant id and publishes assistant details
-    to the assistant_update topic if there is a job running.
-    """
-    print("assistant_update_webhook function started")
+# =============================================================================
+# Main Entry Point
+# =============================================================================
 
-    try:
-        # get assistant from request
-        assistant_id = request.form.get("assistant_id")
-        print(f"Received assistant_id: {assistant_id}")
-        assistant_data = get_assistant(assistant_id=assistant_id)
-        user_id = assistant_data["user_id"]
-        assistant_first_name = assistant_data["assistant_first_name"]
-        assistant_surname = assistant_data["assistant_surname"]
-        assistant_data["assistant_name"] = f"{assistant_first_name} {assistant_surname}"
-        assistant_data.pop("assistant_first_name")
-        assistant_data.pop("assistant_surname")
-        assistant_data.pop("assistant_whatsapp_number")
+if __name__ == "__main__":
+    import uvicorn
 
-        # check if job is running
-        is_default_assistant = (
-            "default" in assistant_id
-            or "Default Assistant" in assistant_data["assistant_about"]
-        )
-        running = is_job_running(user_id, assistant_id)
-        print(f"Job running: {running}")
-        if not is_default_assistant and not running:
-            return Response(
-                response=json.dumps(
-                    {
-                        "success": False,
-                        "message": "No job currently running for this assistant",
-                        "assistant_id": assistant_id,
-                    }
-                ),
-                status=200,
-                mimetype="application/json",
-            )
-        elif running:
-            print(f"Job running for assistant {assistant_id}: {running}")
-        else:
-            print(f"Default assistant {assistant_id} - skipping job running check")
+    print("Starting Unity Adapters server...")
+    print("Available endpoints:")
+    print("  Twilio:")
+    print("    - POST /twilio/call")
+    print("    - POST /twilio/call-status")
+    print("    - POST /twilio/msg")
+    print("    - POST /twilio/whatsapp")
+    print("  Unify:")
+    print("    - POST /unify/message")
+    print("    - POST /unify/call")
+    print("  Unity:")
+    print("    - POST /unity/system-event")
+    print("    - POST /log-pre-hire-chats")
+    print("  Assistant:")
+    print("    - POST /assistant/wakeup")
+    print("    - POST /assistant/update")
+    print("  Pub/Sub:")
+    print("    - POST /pubsub/email-notifications")
+    print("  Scheduled:")
+    print("    - POST /scheduled/email-watch-renewer")
+    print("    - POST /scheduled/idle-job-creator")
+    print("    - POST /scheduled/idle-job-cleaner")
+    print("Server running at: http://localhost:8080")
 
-        # Job is running, publish to assistant topic
-        pubsub_client = pubsub_v1.PublisherClient()
-        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-
-        # Prepare message in the same format as startup event
-        message_data = {"thread": "assistant_update", "event": assistant_data}
-
-        print(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(message_data).encode("utf-8"),
-        )
-
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-
-        print("Assistant update published to Pub/Sub successfully")
-
-        return Response(
-            response=json.dumps(
-                {
-                    "success": True,
-                    "message": "Assistant update published successfully",
-                    "assistant_id": assistant_id,
-                    "topic_path": topic_path,
-                }
-            ),
-            status=200,
-            mimetype="application/json",
-        )
-
-    except Exception as e:
-        print(f"Error in assistant_update_webhook: {str(e)}")
-        traceback.print_exc()
-        return Response(
-            response=json.dumps({"error": str(e)}),
-            status=500,
-            mimetype="application/json",
-        )
+    uvicorn.run("adapters.main:app", host="0.0.0.0", port=8080, reload=True)
