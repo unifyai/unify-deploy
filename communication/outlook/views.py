@@ -16,7 +16,7 @@ from msgraph.generated.models.email_address import EmailAddress
 from msgraph.generated.models.subscription import Subscription
 from msgraph.generated.models.message import Message
 
-from adapters.helpers import ADAPTERS_URL
+from communication.helpers import ADAPTERS_URL
 
 load_dotenv()
 
