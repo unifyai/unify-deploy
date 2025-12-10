@@ -1,3 +1,4 @@
+import json
 import os
 import logging
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,8 @@ from msgraph.generated.models.recipient import Recipient
 from msgraph.generated.models.email_address import EmailAddress
 from msgraph.generated.models.subscription import Subscription
 from msgraph.generated.models.message import Message
+
+from .utils import process_outlook_notification
 
 load_dotenv()
 
@@ -264,7 +267,7 @@ async def delete_outlook_watch(request: Request):
 async def outlook_webhook(request: Request):
     """
     Webhook endpoint to receive Microsoft Graph change notifications.
-    This is a debug-friendly version that logs all request details.
+    Fetches email details similar to how Gmail notifications are processed.
     """
     # Log everything for debugging
     print("\n" + "=" * 60)
@@ -288,14 +291,14 @@ async def outlook_webhook(request: Request):
     # Handle validation request from Microsoft
     validation_token = request.query_params.get("validationToken")
     if validation_token:
-        print(f"\n[VALIDATION REQUEST] Returning token: {validation_token[:50]}...")
-        print("=" * 60 + "\n")
+        print(f"[VALIDATION REQUEST] Returning token: {validation_token[:50]}...")
         return Response(content=validation_token, media_type="text/plain")
 
     # Body - try different formats
     print("\n[BODY]")
 
     # Raw body
+    raw_body = b""
     try:
         raw_body = await request.body()
         print(f"  [RAW] ({len(raw_body)} bytes): {raw_body[:500]}...")
@@ -305,13 +308,13 @@ async def outlook_webhook(request: Request):
     # JSON body
     json_body = None
     try:
-        # Need to reconstruct request since body was already consumed
-        import json
-
         json_body = json.loads(raw_body) if raw_body else None
         print(f"  [JSON] {json.dumps(json_body, indent=2)}")
     except Exception as e:
         print(f"  [JSON] Not valid JSON or error: {e}")
+
+    if not json_body:
+        return Response(status_code=400)
 
     # Form data (if applicable)
     try:
@@ -325,35 +328,64 @@ async def outlook_webhook(request: Request):
 
     print("\n" + "=" * 60)
 
-    # Process notification if we have JSON
-    if json_body:
-        notifications = json_body.get("value", [])
-        print(f"\n[PROCESSING] Found {len(notifications)} notification(s)")
+    # Expected client state for validation (set during subscription creation)
+    expected_client_state = os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook")
 
-        for i, notification in enumerate(notifications):
-            print(f"\n[NOTIFICATION {i + 1}]")
-            print(f"  subscriptionId: {notification.get('subscriptionId')}")
-            print(f"  changeType: {notification.get('changeType')}")
-            print(f"  resource: {notification.get('resource')}")
-            print(f"  clientState: {notification.get('clientState')}")
-            print(f"  tenantId: {notification.get('tenantId')}")
+    # Process notifications
+    notifications = json_body.get("value", [])
+    print(f"[PROCESSING] Found {len(notifications)} notification(s)")
 
-            # Check for resource data (if includeResourceData was set)
-            if "resourceData" in notification:
-                print(f"  resourceData: {notification.get('resourceData')}")
+    for i, notification in enumerate(notifications):
+        print(f"\n[NOTIFICATION {i + 1}]")
+        print(f"  subscriptionId: {notification.get('subscriptionId')}")
+        print(f"  changeType: {notification.get('changeType')}")
+        print(f"  resource: {notification.get('resource')}")
+        print(f"  clientState: {notification.get('clientState')}")
+        print(f"  tenantId: {notification.get('tenantId')}")
 
-            # Optionally process the notification
-            # Uncomment below to actually fetch message details
-            # resource = notification.get("resource", "")
-            # if "/messages/" in resource:
-            #     parts = resource.split("/")
-            #     user_id_or_email = parts[1]
-            #     message_id = parts[3]
-            #     await process_outlook_notification(user_id_or_email, message_id)
+        # Validate clientState for security
+        client_state = notification.get("clientState")
+        if client_state != expected_client_state:
+            logging.warning(f"Invalid clientState received: {client_state}")
+            continue
 
-    print("\n[RESPONSE] Returning 202 Accepted")
+        # Fetch message details from the resource path
+        resource = notification.get("resource", "")
+        if "/messages/" in resource:
+            # Parse resource path: users/{user_id}/mailFolders/inbox/messages/{message_id}
+            # or: users/{user_id}/messages/{message_id}
+            parts = resource.split("/")
+            try:
+                user_index = parts.index("users") + 1
+                user_id_or_email = parts[user_index]
+
+                messages_index = parts.index("messages") + 1
+                message_id = parts[messages_index]
+
+                print(f"  user: {user_id_or_email}")
+                print(f"  message_id: {message_id}")
+
+                # Fetch the full message details using utils function
+                message_details = await process_outlook_notification(user_id_or_email, message_id)
+
+                if message_details:
+                    print(f"[MESSAGE DETAILS]")
+                    print(f"  From: {message_details['sender']}")
+                    print(f"  To: {message_details['to']}")
+                    print(f"  CC: {message_details['cc']}")
+                    print(f"  Subject: {message_details['subject']}")
+                    body = message_details.get('body', '')
+                    print(f"  Body preview: {body[:200]}..." if len(body) > 200 else f"  Body: {body}")
+                    print(f"  Has attachments: {message_details.get('has_attachments', False)}")
+                    print(f"  Conversation ID: {message_details['conversation_id']}")
+                    print(f"  Received: {message_details['received_at']}")
+                else:
+                    logging.error(f"Could not fetch message details for {message_id}")
+
+            except (ValueError, IndexError) as e:
+                logging.error(f"Could not parse resource path '{resource}': {e}")
+
     print("=" * 60 + "\n")
-
     return Response(status_code=200)
 
 
