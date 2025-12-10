@@ -339,7 +339,7 @@ def test_email_watch_renewer(test_client):
 
 def test_email_notification_processor(test_client):
     """Test successful email notification processing."""
-    endpoint = "/pubsub/email-notifications"
+    endpoint = "/email/gmail"
     # Pub/Sub push format
     data = {
         "message": {
