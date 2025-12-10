@@ -11,11 +11,9 @@ from .helpers import (
     get_job_logs,
     suspend_job,
     create_external_service_for_job,
-    get_service_external_ip,
     delete_service,
     add_ingress_rule_for_job,
     remove_ingress_rule_for_job,
-    get_job_https_url,
     get_job_readiness_status,
 )
 from communication.helpers import STAGING

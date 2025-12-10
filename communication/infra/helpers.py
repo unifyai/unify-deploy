@@ -106,28 +106,6 @@ def setup_kubernetes_client():
         return None, None, None
 
 
-def check_job_exists(batch_api, job_name: str, namespace: str = "default"):
-    """Check if a job for this assistant already exists and is running"""
-    try:
-        job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
-
-        # Check if job is active (has running pods)
-        if job.status.active and job.status.active > 0:
-            return True, "running"
-        elif job.status.succeeded and job.status.succeeded > 0:
-            return True, "completed"
-        elif job.status.failed and job.status.failed > 0:
-            return True, "failed"
-        else:
-            return True, "unknown"
-
-    except ApiException as e:
-        if e.status == 404:
-            return False, None
-        else:
-            raise e
-
-
 def delete_job(batch_api, job_name: str, namespace: str = "default"):
     """Delete a Unity job"""
     try:
@@ -472,32 +450,6 @@ def delete_service(core_api, service_name: str, namespace: str = "default"):
         return False
 
 
-def get_service_external_ip(core_api, service_name: str, namespace: str = "default"):
-    """Return the Service's external IP or hostname if available."""
-    try:
-        svc = core_api.read_namespaced_service(name=service_name, namespace=namespace)
-        ingress = None
-        if (
-            svc.status
-            and svc.status.load_balancer
-            and svc.status.load_balancer.ingress
-            and len(svc.status.load_balancer.ingress) > 0
-        ):
-            ingress = svc.status.load_balancer.ingress[0]
-            if getattr(ingress, "ip", None):
-                return {"ready": True, "address": ingress.ip, "type": "ip"}
-            if getattr(ingress, "hostname", None):
-                return {"ready": True, "address": ingress.hostname, "type": "hostname"}
-        return {"ready": False, "address": None, "type": None}
-    except ApiException as e:
-        if e.status == 404:
-            return {"ready": False, "address": None, "type": None}
-        raise
-    except Exception as e:
-        print(f"❌ Error fetching service external IP: {e}")
-        return {"ready": False, "address": None, "type": None}
-
-
 def add_ingress_rule_for_job(
     networking_api,
     job_name: str,
@@ -628,16 +580,6 @@ def remove_ingress_rule_for_job(
         return False
 
 
-def get_job_https_url(job_name: str):
-    """Get the HTTPS URL for a job (without readiness check)."""
-    hostname = f"{job_name}.{DESKTOP_DOMAIN}"
-    return {
-        "url": f"https://{hostname}",
-        "hostname": hostname,
-        "type": "ingress",
-    }
-
-
 def check_service_has_endpoints(
     core_api,
     service_name: str,
@@ -747,56 +689,6 @@ def check_ingress_rule_exists(
         }
 
 
-async def check_url_reachable(
-    url: str,
-    timeout: float = 10.0,
-) -> dict:
-    """Check if a URL is reachable via HTTP.
-
-    Returns:
-        dict: {"reachable": bool, "status_code": int | None, "error": str | None}
-    """
-    import httpx
-
-    try:
-        async with httpx.AsyncClient(
-            timeout=timeout,
-            verify=True,  # Verify TLS certificate
-        ) as client:
-            response = await client.get(url)
-            # Any HTTP response means the service is reachable
-            return {
-                "reachable": True,
-                "status_code": response.status_code,
-                "error": None,
-            }
-    except httpx.TimeoutException:
-        return {
-            "reachable": False,
-            "status_code": None,
-            "error": "Connection timed out",
-        }
-    except httpx.ConnectError as e:
-        return {
-            "reachable": False,
-            "status_code": None,
-            "error": f"Connection failed: {str(e)}",
-        }
-    except httpx.HTTPStatusError as e:
-        # This shouldn't happen with our usage, but handle it
-        return {
-            "reachable": True,
-            "status_code": e.response.status_code,
-            "error": None,
-        }
-    except Exception as e:
-        return {
-            "reachable": False,
-            "status_code": None,
-            "error": str(e),
-        }
-
-
 def get_job_readiness_status(
     core_api,
     networking_api,
@@ -882,12 +774,14 @@ def get_job_readiness_status(
         checks["seconds_until_ready"] = 0
 
     # Overall ready = K8s checks pass AND GCE LB wait time has passed
-    ready = all([
-        checks["service_exists"],
-        checks["endpoints_ready"],
-        checks["ingress_rule_exists"],
-        checks["gce_lb_wait_passed"],
-    ])
+    ready = all(
+        [
+            checks["service_exists"],
+            checks["endpoints_ready"],
+            checks["ingress_rule_exists"],
+            checks["gce_lb_wait_passed"],
+        ]
+    )
 
     return {
         "ready": ready,
