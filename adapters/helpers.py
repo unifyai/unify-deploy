@@ -676,13 +676,14 @@ async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
         # so we don't need to track read status for duplicate prevention
 
         # Extract message details (similar to Gmail's last_message format)
+        # Use unique_body to get only the new content, not the quoted thread history
         last_message = {
             "sender": message.from_.email_address.address if message.from_ else "",
             "to": [r.email_address.address for r in (message.to_recipients or [])],
             "cc": [r.email_address.address for r in (message.cc_recipients or [])],
             "bcc": [r.email_address.address for r in (message.bcc_recipients or [])],
             "subject": message.subject or "",
-            "content": message.body.content if message.body else "",
+            "content": message.unique_body.content if message.unique_body else "",
             "received_at": (
                 message.received_date_time.isoformat()
                 if message.received_date_time
