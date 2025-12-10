@@ -999,7 +999,7 @@ async def outlook_notification_processor(request: Request):
                 continue
 
             # Parse resource path to get user email and message ID
-            resource = notification.get("resource", "")
+            resource = notification.get("resource", "").lower()
             print(f"  resource: {resource}")
             print(f"  /messages/ in resource: {'/messages/' in resource}")
             if "/messages/" not in resource:
