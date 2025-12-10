@@ -13,6 +13,10 @@ from .helpers import (
     create_external_service_for_job,
     get_service_external_ip,
     delete_service,
+    add_ingress_rule_for_job,
+    remove_ingress_rule_for_job,
+    get_job_https_url,
+    get_job_readiness_status,
 )
 from communication.helpers import STAGING
 
@@ -165,12 +169,12 @@ async def expose_job_service(
     attach_owner: bool = Form(True),
 ):
     """
-    Create a LoadBalancer Service that exposes the Job's Pod externally on the given port.
-    Returns the service name and current external IP status.
+    Create a ClusterIP Service and add an Ingress rule to expose the Job via HTTPS.
+    Returns the service name and HTTPS URL.
     """
     try:
-        batch_api, core_api = setup_kubernetes_client()
-        if not batch_api or not core_api:
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
             raise HTTPException(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
@@ -185,6 +189,7 @@ async def expose_job_service(
             except Exception:
                 job_uid = None
 
+        # Create ClusterIP service
         svc = create_external_service_for_job(
             core_api=core_api,
             job_name=job_name,
@@ -196,13 +201,26 @@ async def expose_job_service(
         if not svc:
             raise HTTPException(status_code=500, detail="Failed to create Service")
 
-        ip_info = get_service_external_ip(core_api, name, namespace)
+        # Add Ingress rule
+        ingress_result = add_ingress_rule_for_job(
+            networking_api=networking_api,
+            job_name=job_name,
+            service_name=name,
+            namespace=namespace,
+            port=port,
+        )
+
         return {
             "success": True,
             "service_name": name,
             "namespace": namespace,
             "port": port,
-            "external": ip_info,
+            "external": {
+                "ready": ingress_result["success"],
+                "url": ingress_result.get("url"),
+                "hostname": ingress_result.get("hostname"),
+                "type": "ingress",
+            },
         }
     except HTTPException:
         raise
@@ -212,28 +230,51 @@ async def expose_job_service(
         )
 
 
-# get external ip for a service
+# get external url for a service with readiness check
 @router.get("/job/service/ip")
-async def get_job_service_ip(service_name: str, namespace: str = "default"):
+async def get_job_service_ip(
+    service_name: str,
+    namespace: str = "default",
+):
+    """Get the HTTPS URL for a job service with readiness status.
+
+    Ready = K8s checks pass AND 5 minutes have elapsed since job creation
+    (to allow for GCE LB propagation).
+
+    Args:
+        service_name: Name of the service (e.g., unity-svc-unity-2024-12-08-10-00-00)
+        namespace: Kubernetes namespace (default: "default")
+    """
     try:
-        batch_api, core_api = setup_kubernetes_client()
-        if not batch_api or not core_api:
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
             raise HTTPException(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
 
-        ip_info = get_service_external_ip(core_api, service_name, namespace)
+        # Extract job_name from service_name (unity-svc-{job_name})
+        job_name = service_name.replace("unity-svc-", "")
+
+        # Get comprehensive readiness status
+        readiness_info = get_job_readiness_status(
+            core_api=core_api,
+            networking_api=networking_api,
+            job_name=job_name,
+            service_name=service_name,
+            namespace=namespace,
+        )
+
         return {
             "success": True,
             "service_name": service_name,
             "namespace": namespace,
-            "external": ip_info,
+            "external": readiness_info,
         }
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to get service IP: {str(e)}"
+            status_code=500, detail=f"Failed to get service URL: {str(e)}"
         )
 
 
@@ -242,18 +283,29 @@ async def get_job_service_ip(service_name: str, namespace: str = "default"):
 async def delete_job_service(
     service_name: str = Form(...), namespace: str = Form("default")
 ):
+    """Delete a Service and its associated Ingress rule."""
     try:
-        batch_api, core_api = setup_kubernetes_client()
-        if not batch_api or not core_api:
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
             raise HTTPException(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
 
+        # Extract job_name from service_name
+        job_name = service_name.replace("unity-svc-", "")
+
+        # Remove Ingress rule first
+        remove_ingress_rule_for_job(
+            networking_api=networking_api,
+            job_name=job_name,
+        )
+
+        # Delete the service
         ok = delete_service(core_api, service_name, namespace)
         if ok:
             return {
                 "success": True,
-                "message": f"Service deleted: {service_name}",
+                "message": f"Service and Ingress rule deleted: {service_name}",
                 "service_name": service_name,
             }
         raise HTTPException(
@@ -287,8 +339,8 @@ async def create_kubernetes_job(
     """
     try:
         # Initialize Kubernetes client
-        batch_api, core_api = setup_kubernetes_client()
-        if not batch_api or not core_api:
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
             raise HTTPException(
                 status_code=500,
                 detail="Failed to connect to Kubernetes cluster. Make sure gcloud CLI is installed and configured.",
@@ -326,7 +378,7 @@ async def create_kubernetes_job(
                 ),
             }
 
-            # Optionally expose the job via a LoadBalancer Service
+            # Optionally expose the job via Ingress
             if expose_service:
                 name = service_name or f"unity-svc-{job.metadata.name}"
                 svc = create_external_service_for_job(
@@ -338,11 +390,23 @@ async def create_kubernetes_job(
                     job_uid=job.metadata.uid,
                 )
                 if svc:
-                    ip_info = get_service_external_ip(core_api, name, namespace)
+                    # Add Ingress rule for HTTPS access
+                    ingress_result = add_ingress_rule_for_job(
+                        networking_api=networking_api,
+                        job_name=job.metadata.name,
+                        service_name=name,
+                        namespace=namespace,
+                        port=expose_port,
+                    )
                     response["service"] = {
                         "service_name": name,
                         "port": expose_port,
-                        "external": ip_info,
+                        "external": {
+                            "ready": ingress_result["success"],
+                            "url": ingress_result.get("url"),
+                            "hostname": ingress_result.get("hostname"),
+                            "type": "ingress",
+                        },
                     }
 
             return response
@@ -366,6 +430,7 @@ async def delete_kubernetes_job(
     job_name: str = Form(...),
     namespace: str = Form("default"),
     delete_services: bool = Form(False),
+    delete_ingress: bool = Form(True),
 ):
     """
     Delete a Kubernetes Job for a Unity assistant.
@@ -376,8 +441,8 @@ async def delete_kubernetes_job(
     """
     try:
         # Initialize Kubernetes client
-        batch_api, core_api = setup_kubernetes_client()
-        if not batch_api or not core_api:
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
             raise HTTPException(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
@@ -393,6 +458,11 @@ async def delete_kubernetes_job(
                 )
                 for svc in svcs.items:
                     svc_name = svc.metadata.name
+                    # Remove Ingress rule first
+                    remove_ingress_rule_for_job(
+                        networking_api=networking_api,
+                        job_name=job_name,
+                    )
                     ok = delete_service(core_api, svc_name, namespace)
                     if ok:
                         deleted_services.append(svc_name)
@@ -406,6 +476,14 @@ async def delete_kubernetes_job(
         success = delete_job(batch_api, job_name, namespace)
 
         if success:
+
+            # Optionally delete the ingress rule only when job delete is successful
+            if delete_ingress:
+                remove_ingress_rule_for_job(
+                    networking_api=networking_api,
+                    job_name=job_name,
+                )
+
             return {
                 "success": True,
                 "message": f"Job deleted successfully: {job_name}",
@@ -537,8 +615,8 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form("default")):
     """
     try:
         # Initialize Kubernetes client
-        batch_api, core_api = setup_kubernetes_client()
-        if not batch_api or not core_api:
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
             raise HTTPException(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
@@ -571,8 +649,8 @@ async def list_kubernetes_jobs(namespace: str = "default", hours: int = 3):
     """
     try:
         # Initialize Kubernetes client
-        batch_api, core_api = setup_kubernetes_client()
-        if not batch_api or not core_api:
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
             raise HTTPException(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
@@ -651,8 +729,8 @@ async def get_job_logs_endpoint(
     """
     try:
         # Initialize Kubernetes client
-        batch_api, core_api = setup_kubernetes_client()
-        if not batch_api or not core_api:
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
             raise HTTPException(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
