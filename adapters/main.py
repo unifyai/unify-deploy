@@ -999,19 +999,20 @@ async def outlook_notification_processor(request: Request):
                 continue
 
             # Parse resource path to get user email and message ID
-            resource = notification.get("resource", "").lower()
+            # Microsoft Graph uses PascalCase: Users/{id}/Messages/{id}
+            resource = notification.get("resource", "")
             print(f"  resource: {resource}")
-            print(f"  /messages/ in resource: {'/messages/' in resource}")
-            if "/messages/" not in resource:
+            print(f"  /Messages/ in resource: {'/Messages/' in resource}")
+            if "/Messages/" not in resource:
                 continue
 
-            # Parse: users/{user_id}/mailFolders/inbox/messages/{message_id}
+            # Parse: Users/{user_id}/MailFolders/Inbox/Messages/{message_id}
             parts = resource.split("/")
             try:
-                user_index = parts.index("users") + 1
+                user_index = parts.index("Users") + 1
                 email_id = parts[user_index]
 
-                messages_index = parts.index("messages") + 1
+                messages_index = parts.index("Messages") + 1
                 outlook_message_id = parts[messages_index]
 
                 print(f"  user: {email_id}")
