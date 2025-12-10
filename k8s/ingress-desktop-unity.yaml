@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: desktop-unity-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "unity-ingress-ip"
+spec:
+  tls:
+    - hosts:
+        - "*.desktop.unify.ai"
+      secretName: desktop-unify-wildcard-tls
+  defaultBackend:
+    service:
+      name: default-http-backend
+      port:
+        number: 80
+  rules: []
