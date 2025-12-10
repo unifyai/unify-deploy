@@ -15,6 +15,9 @@ from livekit import api
 from azure.identity import ClientSecretCredential
 from msgraph import GraphServiceClient
 from msgraph.generated.models.message import Message
+from msgraph.generated.users.item.messages.item.message_item_request_builder import (
+    MessageItemRequestBuilder,
+)
 
 # Azure AD credentials from environment
 AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID")
@@ -653,11 +656,16 @@ async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
         tuple: (conversation_id, message_id, last_message) or (None, None, None) if not found
     """
     try:
-        # Fetch the message
+        # Fetch the message with body in text format (not HTML)
+        request_config = (
+            MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration()
+        )
+        request_config.headers.add("Prefer", 'outlook.body-content-type="text"')
+
         message = (
             await graph_client.users.by_user_id(user_email)
             .messages.by_message_id(message_id)
-            .get()
+            .get(request_configuration=request_config)
         )
 
         if not message:

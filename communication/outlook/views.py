@@ -172,16 +172,12 @@ async def watch_outlook_email(request: Request):
             notification_url=webhook_url,
             resource=target_resource,
             expiration_date_time=expiration,
-            client_state=os.getenv(
-                "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
-            ),
+            client_state=os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"),
         )
 
         print(f"Creating new subscription for {user_email} with webhook {webhook_url}")
         result = await graph_client.subscriptions.post(subscription)
-        print(
-            f"Outlook watch created for {user_email}, subscription_id: {result.id}"
-        )
+        print(f"Outlook watch created for {user_email}, subscription_id: {result.id}")
 
         return {
             "success": True,
