@@ -11,3 +11,5 @@ google-cloud-pubsub
 google-cloud-secret-manager
 twilio
 livekit-api
+azure-identity
+msgraph-sdk

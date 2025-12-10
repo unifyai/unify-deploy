@@ -12,6 +12,15 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from livekit import api
 
+from azure.identity import ClientSecretCredential
+from msgraph import GraphServiceClient
+from msgraph.generated.models.message import Message
+
+# Azure AD credentials from environment
+AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID")
+AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
+AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
+
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
     "https://api.unify.ai/v0"
@@ -620,6 +629,92 @@ def _strip_quoted_text(text: str) -> str:
     return "\n".join(cleaned).strip()
 
 
+# =============================================================================
+# Outlook Helpers
+# =============================================================================
+
+
+def get_graph_client():
+    """
+    Create a Microsoft Graph client using client credentials flow.
+    """
+    if not all([AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET]):
+        raise Exception("Azure AD credentials not configured.")
+
+    credential = ClientSecretCredential(
+        tenant_id=AZURE_TENANT_ID,
+        client_id=AZURE_CLIENT_ID,
+        client_secret=AZURE_CLIENT_SECRET,
+    )
+    return GraphServiceClient(
+        credentials=credential,
+        scopes=["https://graph.microsoft.com/.default"],
+    )
+
+
+async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
+    """
+    Fetch Outlook message details and mark as read.
+    Similar to get_thread_id for Gmail - extracts conversation data from a notification.
+
+    Returns:
+        tuple: (conversation_id, message_id, last_message) or (None, None, None) if not found
+    """
+    try:
+        # Fetch the message
+        message = (
+            await graph_client.users.by_user_id(user_email)
+            .messages.by_message_id(message_id)
+            .get()
+        )
+
+        if not message:
+            print(f"Message {message_id} not found")
+            return None, None, None
+
+        # Check if already read (skip if already processed)
+        if message.is_read:
+            print(f"Message {message_id} already read, skipping")
+            return None, None, None
+
+        # Mark as read
+        await graph_client.users.by_user_id(user_email).messages.by_message_id(
+            message_id
+        ).patch(Message(is_read=True))
+
+        # Extract message details (similar to Gmail's last_message format)
+        last_message = {
+            "sender": message.from_.email_address.address if message.from_ else "",
+            "to": [r.email_address.address for r in (message.to_recipients or [])],
+            "cc": [r.email_address.address for r in (message.cc_recipients or [])],
+            "bcc": [r.email_address.address for r in (message.bcc_recipients or [])],
+            "subject": message.subject or "",
+            "content": message.body.content if message.body else "",
+            "received_at": (
+                message.received_date_time.isoformat()
+                if message.received_date_time
+                else None
+            ),
+            "has_attachments": message.has_attachments,
+            "attachments": [],  # TODO: fetch attachment details if needed
+        }
+
+        conversation_id = message.conversation_id
+        print(f"conversation_id: {conversation_id}, message_id: {message_id}, last_message: {last_message}")
+
+        return conversation_id, message_id, last_message
+
+    except Exception as e:
+        print(f"Error fetching Outlook message: {e}")
+        traceback.print_exc()
+        return None, None, None
+
+
+# =============================================================================
+# Gmail Helpers
+# =============================================================================
+
+
 def _header(headers, name: str) -> str:
     """Extract a specific header from email headers."""
     for h in headers:
@@ -802,7 +897,7 @@ def get_thread_id(user_id, history_id, gmail_service):
         return None, None, None, None
 
 
-def publish_thread_id(
+def publish_gmail_thread_id(
     assistant_id,
     user_id,
     thread_id,

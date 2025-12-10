@@ -22,9 +22,11 @@ from .helpers import (
     create_conference_response,
     dispatch_agent,
     get_assistant,
+    get_graph_client,
+    get_outlook_thread_id,
     get_thread_id,
     is_job_running,
-    publish_thread_id,
+    publish_gmail_thread_id,
     STAGING,
     ORCHESTRA_URL,
     COMMS_URL,
@@ -811,12 +813,12 @@ async def assistant_update_webhook(request: Request):
 
 
 # =============================================================================
-# Email Webhooks (Pub/Sub Push)
+# Email Webhooks
 # =============================================================================
 
 
-@app.post("/pubsub/email-notifications")
-async def email_notification_processor(request: Request):
+@app.post("/email/gmail")
+async def gmail_notification_processor(request: Request):
     """
     Cloud Run endpoint that processes Gmail notifications via Pub/Sub push.
     Receives push messages from Pub/Sub subscription.
@@ -884,7 +886,7 @@ async def email_notification_processor(request: Request):
         print(f"Job running: {running}")
 
         print(f"Successfully processed conversation for user {email_id}")
-        publish_thread_id(
+        publish_gmail_thread_id(
             assistant_id,
             user_id,
             thread_id,
@@ -897,6 +899,173 @@ async def email_notification_processor(request: Request):
 
     except Exception as e:
         error_message = f"Error processing notification: {str(e)}"
+        traceback.print_exc()
+        print(error_message)
+        return Response(content=error_message, status_code=500)
+
+
+@app.post("/email/outlook")
+async def outlook_notification_processor(request: Request):
+    """
+    Webhook endpoint to receive Microsoft Graph change notifications.
+    Processes Outlook email notifications similar to Gmail notification processor.
+    """
+    try:
+        # Log everything for debugging
+        print("\n" + "=" * 60)
+        print("OUTLOOK WEBHOOK RECEIVED")
+        print("=" * 60)
+
+        # Method and URL
+        print(f"\n[METHOD] {request.method}")
+        print(f"[URL] {request.url}")
+
+        # Headers
+        print("\n[HEADERS]")
+        for key, value in request.headers.items():
+            print(f"  {key}: {value}")
+
+        # Query params
+        print("\n[QUERY PARAMS]")
+        for key, value in request.query_params.items():
+            print(f"  {key}: {value}")
+
+        # Handle validation request from Microsoft (required for subscription setup)
+        validation_token = request.query_params.get("validationToken")
+        if validation_token:
+            print(f"\n[VALIDATION REQUEST] Returning token: {validation_token[:50]}...")
+            print("=" * 60 + "\n")
+            return Response(content=validation_token, media_type="text/plain")
+
+        # Body - try different formats
+        print("\n[BODY]")
+
+        # Raw body
+        raw_body = b""
+        try:
+            raw_body = await request.body()
+            print(f"  [RAW] ({len(raw_body)} bytes): {raw_body[:500]}...")
+        except Exception as e:
+            print(f"  [RAW] Error reading: {e}")
+
+        # JSON body
+        json_body = None
+        try:
+            json_body = json.loads(raw_body) if raw_body else None
+            print(f"  [JSON] {json.dumps(json_body, indent=2)}")
+        except Exception as e:
+            print(f"  [JSON] Not valid JSON or error: {e}")
+
+        if not json_body:
+            print("  [JSON] No JSON body found")
+            return Response(status_code=400)
+
+        # Form data (if applicable)
+        try:
+            form = await request.form()
+            if form:
+                print("  [FORM DATA]")
+                for key, value in form.items():
+                    print(f"    {key}: {value}")
+        except Exception as e:
+            print(f"  [FORM] Not form data or error: {e}")
+
+        print("\n" + "=" * 60)
+
+        # Expected client state for validation (set during subscription creation)
+        expected_client_state = os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook")
+
+        # Get Graph client (similar to how Gmail gets credentials)
+        graph_client = get_graph_client()
+
+        # Process notifications
+        notifications = json_body.get("value", [])
+        print(f"[PROCESSING] Found {len(notifications)} notification(s)")
+
+        for i, notification in enumerate(notifications):
+            print(f"\n[NOTIFICATION {i + 1}]")
+            print(f"  subscriptionId: {notification.get('subscriptionId')}")
+            print(f"  changeType: {notification.get('changeType')}")
+            print(f"  resource: {notification.get('resource')}")
+            print(f"  clientState: {notification.get('clientState')}")
+            print(f"  tenantId: {notification.get('tenantId')}")
+
+            # Validate clientState for security
+            client_state = notification.get("clientState")
+            if client_state != expected_client_state:
+                print(f"  [WARNING] Invalid clientState received: {client_state}")
+                continue
+
+            # Parse resource path to get user email and message ID
+            resource = notification.get("resource", "")
+            print(f"  resource: {resource}")
+            print(f"  /messages/ in resource: {'/messages/' in resource}")
+            if "/messages/" not in resource:
+                continue
+
+            # Parse: users/{user_id}/mailFolders/inbox/messages/{message_id}
+            parts = resource.split("/")
+            try:
+                user_index = parts.index("users") + 1
+                email_id = parts[user_index]
+
+                messages_index = parts.index("messages") + 1
+                outlook_message_id = parts[messages_index]
+
+                print(f"  user: {email_id}")
+                print(f"  message_id: {outlook_message_id}")
+            except (ValueError, IndexError) as e:
+                print(f"  [ERROR] Could not parse resource path '{resource}': {e}")
+                continue
+
+            # Process the message (similar to get_thread_id for Gmail)
+            print(f"\nemail_id: {email_id}, message_id: {outlook_message_id}")
+            conversation_id, message_id, last_message = await get_outlook_thread_id(
+                email_id, outlook_message_id, graph_client
+            )
+            print(
+                f"conversation_id: {conversation_id}, message_id: {message_id}, last_message: {last_message}"
+            )
+
+            if not conversation_id:
+                print(f"No new conversations found for user {email_id}")
+                continue
+
+            from_email = last_message["sender"]
+            print(f"from_email: {from_email}")
+
+            # Print message details
+            print(f"\n[MESSAGE DETAILS]")
+            print(f"  From: {last_message['sender']}")
+            print(f"  To: {last_message['to']}")
+            print(f"  CC: {last_message['cc']}")
+            print(f"  Subject: {last_message['subject']}")
+            content = last_message.get('content', '')
+            print(f"  Body preview: {content[:200]}..." if len(content) > 200 else f"  Body: {content}")
+            print(f"  Has attachments: {last_message.get('has_attachments', False)}")
+            print(f"  Conversation ID: {conversation_id}")
+            print(f"  Received: {last_message.get('received_at')}")
+
+            # TODO: Add shared context and pub/sub integration similar to Gmail
+            # context = build_webhook_context("outlook_email", email_id, from_email)
+            # assistant_data = context["assistant"]
+            # assistant_id = assistant_data["assistant_id"]
+            # user_id = assistant_data["user_id"]
+            # contacts = context["contacts"]
+            #
+            # if not context["is_valid_contact"]:
+            #     continue
+            #
+            # publish_outlook_thread(assistant_id, user_id, conversation_id, message_id, last_message, contacts)
+
+            print(f"\nSuccessfully processed conversation for user {email_id}")
+
+        print("\n[RESPONSE] Returning 200 OK")
+        print("=" * 60 + "\n")
+        return Response(content="OK", status_code=200)
+
+    except Exception as e:
+        error_message = f"Error processing Outlook notification: {str(e)}"
         traceback.print_exc()
         print(error_message)
         return Response(content=error_message, status_code=500)
@@ -1075,8 +1244,9 @@ if __name__ == "__main__":
     print("  Assistant:")
     print("    - POST /assistant/wakeup")
     print("    - POST /assistant/update")
-    print("  Pub/Sub:")
-    print("    - POST /pubsub/email-notifications")
+    print("  Email Webhooks:")
+    print("    - POST /email/gmail")
+    print("    - POST /email/outlook")
     print("  Scheduled:")
     print("    - POST /scheduled/email-watch-renewer")
     print("    - POST /scheduled/idle-job-creator")
