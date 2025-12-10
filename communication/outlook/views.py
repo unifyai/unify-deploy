@@ -148,6 +148,7 @@ async def watch_outlook_email(request: Request):
     if not webhook_url:
         # Default to the adapters URL webhook endpoint
         webhook_url = f"{ADAPTERS_URL}/email/outlook"
+    print(f"Webhook URL: {webhook_url}")
 
     try:
         graph_client = get_graph_client()
