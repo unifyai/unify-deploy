@@ -1103,9 +1103,9 @@ async def email_watch_renewer(request: Request):
                 json={
                     "primary_email": email,
                     "topic_name": (
-                        "email-notifications"
+                        "gmail-notifications"
                         if not STAGING
-                        else "email-notifications-staging"
+                        else "gmail-notifications-staging"
                     ),
                 },
                 headers={"Authorization": f"Bearer {admin_key}"},
