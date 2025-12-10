@@ -27,16 +27,8 @@ ORCHESTRA_URL = (
     if not STAGING
     else "https://service.a.run.app/v0"
 )
-COMMS_URL = (
-    "https://unity-comms-app-000000000000.us-central1.run.app"
-    if not STAGING
-    else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
-)
-ADAPTERS_URL = (
-    "https://service.a.run.app"
-    if not STAGING
-    else "https://service.a.run.app"
-)
+COMMS_URL = os.getenv("UNITY_COMMS_URL")
+ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
 
 
 def get_assistant(
