@@ -973,7 +973,9 @@ async def outlook_notification_processor(request: Request):
         print("\n" + "=" * 60)
 
         # Expected client state for validation (set during subscription creation)
-        expected_client_state = os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook")
+        expected_client_state = os.getenv(
+            "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
+        )
 
         # Get Graph client (similar to how Gmail gets credentials)
         graph_client = get_graph_client()
@@ -1040,8 +1042,12 @@ async def outlook_notification_processor(request: Request):
             print(f"  To: {last_message['to']}")
             print(f"  CC: {last_message['cc']}")
             print(f"  Subject: {last_message['subject']}")
-            content = last_message.get('content', '')
-            print(f"  Body preview: {content[:200]}..." if len(content) > 200 else f"  Body: {content}")
+            content = last_message.get("content", "")
+            print(
+                f"  Body preview: {content[:200]}..."
+                if len(content) > 200
+                else f"  Body: {content}"
+            )
             print(f"  Has attachments: {last_message.get('has_attachments', False)}")
             print(f"  Conversation ID: {conversation_id}")
             print(f"  Received: {last_message.get('received_at')}")

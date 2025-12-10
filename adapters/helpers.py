@@ -692,7 +692,9 @@ async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
         }
 
         conversation_id = message.conversation_id
-        print(f"conversation_id: {conversation_id}, message_id: {message_id}, last_message: {last_message}")
+        print(
+            f"conversation_id: {conversation_id}, message_id: {message_id}, last_message: {last_message}"
+        )
 
         return conversation_id, message_id, last_message
 
