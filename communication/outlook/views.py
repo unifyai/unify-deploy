@@ -314,6 +314,7 @@ async def outlook_webhook(request: Request):
         print(f"  [JSON] Not valid JSON or error: {e}")
 
     if not json_body:
+        print("  [JSON] No JSON body found")
         return Response(status_code=400)
 
     # Form data (if applicable)
