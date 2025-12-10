@@ -664,15 +664,8 @@ async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
             print(f"Message {message_id} not found")
             return None, None, None
 
-        # Check if already read (skip if already processed)
-        if message.is_read:
-            print(f"Message {message_id} already read, skipping")
-            return None, None, None
-
-        # Mark as read
-        await graph_client.users.by_user_id(user_email).messages.by_message_id(
-            message_id
-        ).patch(Message(is_read=True))
+        # Note: Not marking as read - subscription only triggers on "created" events,
+        # so we don't need to track read status for duplicate prevention
 
         # Extract message details (similar to Gmail's last_message format)
         last_message = {
