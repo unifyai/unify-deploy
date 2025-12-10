@@ -155,52 +155,40 @@ async def watch_outlook_email(request: Request):
         expiration = datetime.now(timezone.utc) + timedelta(days=3)
         target_resource = f"users/{user_email}/mailFolders/inbox/messages"
 
-        # Check if subscription already exists
+        # Delete any existing subscriptions for this resource
         subscriptions = await graph_client.subscriptions.get()
-        existing_subscription = None
-
-        for sub in subscriptions.value:
+        for sub in subscriptions.value or []:
             if sub.resource and sub.resource.lower() == target_resource.lower():
-                existing_subscription = sub
-                break
+                print(f"Deleting existing subscription {sub.id} for {user_email}")
+                try:
+                    await graph_client.subscriptions.by_subscription_id(sub.id).delete()
+                    print(f"Deleted subscription {sub.id}")
+                except Exception as del_err:
+                    print(f"Warning: Failed to delete subscription {sub.id}: {del_err}")
 
-        if existing_subscription:
-            # Renew existing subscription
-            subscription_update = Subscription(expiration_date_time=expiration)
-            result = await graph_client.subscriptions.by_subscription_id(
-                existing_subscription.id
-            ).patch(subscription_update)
+        # Create new subscription
+        subscription = Subscription(
+            change_type="created",
+            notification_url=webhook_url,
+            resource=target_resource,
+            expiration_date_time=expiration,
+            client_state=os.getenv(
+                "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
+            ),
+        )
 
-            print(f"Outlook watch renewed for {user_email}")
-            return {
-                "success": True,
-                "action": "renewed",
-                "subscription_id": existing_subscription.id,
-                "expiration": result.expiration_date_time.isoformat(),
-            }
-        else:
-            # Create new subscription
-            subscription = Subscription(
-                change_type="created",
-                notification_url=webhook_url,
-                resource=target_resource,
-                expiration_date_time=expiration,
-                client_state=os.getenv(
-                    "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
-                ),
-            )
+        print(f"Creating new subscription for {user_email} with webhook {webhook_url}")
+        result = await graph_client.subscriptions.post(subscription)
+        print(
+            f"Outlook watch created for {user_email}, subscription_id: {result.id}"
+        )
 
-            result = await graph_client.subscriptions.post(subscription)
-            print(
-                f"Outlook watch created for {user_email}, subscription_id: {result.id}"
-            )
-
-            return {
-                "success": True,
-                "action": "created",
-                "subscription_id": result.id,
-                "expiration": result.expiration_date_time.isoformat(),
-            }
+        return {
+            "success": True,
+            "action": "created",
+            "subscription_id": result.id,
+            "expiration": result.expiration_date_time.isoformat(),
+        }
 
     except Exception as e:
         logging.error("Failed to create/renew Outlook watch: %s", e)
