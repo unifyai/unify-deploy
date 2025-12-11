@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import os
@@ -7,7 +8,7 @@ import requests
 from functools import wraps
 from urllib.parse import quote_plus
 
-from fastapi import BackgroundTasks, Request, Response
+from fastapi import Request, Response
 
 from google.cloud import pubsub_v1
 
@@ -17,7 +18,6 @@ from livekit import api
 
 from azure.identity import ClientSecretCredential
 from msgraph import GraphServiceClient
-from msgraph.generated.models.message import Message
 from msgraph.generated.users.item.messages.item.message_item_request_builder import (
     MessageItemRequestBuilder,
 )
@@ -978,7 +978,7 @@ def defer_to_background(func):
     """
 
     @wraps(func)
-    async def wrapper(request: Request, background_tasks: BackgroundTasks):
+    async def wrapper(request: Request):
         print(f"\n[DEFER] Wrapper entered for {func.__name__}")
 
         # specific for microsoft outlook watch renewal
@@ -991,10 +991,10 @@ def defer_to_background(func):
         body = await request.body()
         print(f"[DEFER] Body buffered: {len(body)} bytes")
 
-        # add the task to the background tasks queue
-        print(f"[DEFER] Scheduling background task...")
-        background_tasks.add_task(func, request, background_tasks)
-        print(f"[DEFER] Background task scheduled, returning 200")
+        # run task immediately in the event loop
+        print(f"[DEFER] Creating async task...")
+        asyncio.create_task(func(request))
+        print(f"[DEFER] Task created, returning 200")
 
         return Response(content="OK", status_code=200)
 
