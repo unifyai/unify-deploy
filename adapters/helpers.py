@@ -4,7 +4,10 @@ import os
 import re
 import traceback
 import requests
+from functools import wraps
 from urllib.parse import quote_plus
+
+from fastapi import BackgroundTasks, Request, Response
 
 from google.cloud import pubsub_v1
 
@@ -964,3 +967,29 @@ def dispatch_agent(agent_name: str):
         print(f"Failed to dispatch agent. Status: {response.status_code}")
         return False
     return True
+
+
+def defer_to_background(func):
+    """
+    Decorator that defers webhook processing to a background task.
+    Returns 200 OK immediately after scheduling the task.
+
+    The decorated function receives the Request object.
+    """
+
+    @wraps(func)
+    async def wrapper(request: Request, background_tasks: BackgroundTasks):
+        # specific for microsoft outlook watch renewal
+        validation_token = request.query_params.get("validationToken")
+        if validation_token:
+            return Response(content=validation_token, media_type="text/plain")
+
+        # buffer the body before connection closes
+        await request.body()
+
+        # add the task to the background tasks queue
+        background_tasks.add_task(func, request)
+
+        return Response(content="OK", status_code=200)
+
+    return wrapper

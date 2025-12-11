@@ -20,6 +20,7 @@ from .helpers import (
     add_user_to_conference,
     build_webhook_context,
     create_conference_response,
+    defer_to_background,
     dispatch_agent,
     get_assistant,
     get_graph_client,
@@ -905,87 +906,30 @@ async def gmail_notification_processor(request: Request):
 
 
 @app.post("/email/outlook")
+@defer_to_background
 async def outlook_notification_processor(request: Request):
     """
     Webhook endpoint to receive Microsoft Graph change notifications.
     Processes Outlook email notifications similar to Gmail notification processor.
+
+    Microsoft has a timeout of 3s for the webhook to return, which isn't realistic
+    for processing a message with the calls to orchestra and everything.
+    The @defer_to_background decorator handles returning 200 immediately and
+    scheduling this function as a background task.
     """
     try:
-        # Log everything for debugging
-        print("\n" + "=" * 60)
-        print("OUTLOOK WEBHOOK RECEIVED")
-        print("=" * 60)
-
-        # Method and URL
-        print(f"\n[METHOD] {request.method}")
-        print(f"[URL] {request.url}")
-
-        # Headers
-        print("\n[HEADERS]")
-        for key, value in request.headers.items():
-            print(f"  {key}: {value}")
-
-        # Query params
-        print("\n[QUERY PARAMS]")
-        for key, value in request.query_params.items():
-            print(f"  {key}: {value}")
-
-        # Handle validation request from Microsoft (required for subscription setup)
-        validation_token = request.query_params.get("validationToken")
-        if validation_token:
-            print(f"\n[VALIDATION REQUEST] Returning token: {validation_token[:50]}...")
-            print("=" * 60 + "\n")
-            return Response(content=validation_token, media_type="text/plain")
-
-        # Body - try different formats
-        print("\n[BODY]")
-
-        # Raw body
-        raw_body = b""
-        try:
-            raw_body = await request.body()
-            print(f"  [RAW] ({len(raw_body)} bytes): {raw_body[:500]}...")
-        except Exception as e:
-            print(f"  [RAW] Error reading: {e}")
-
-        # JSON body
-        json_body = None
-        try:
-            json_body = json.loads(raw_body) if raw_body else None
-            print(f"  [JSON] {json.dumps(json_body, indent=2)}")
-        except Exception as e:
-            print(f"  [JSON] Not valid JSON or error: {e}")
-
-        if not json_body:
-            print("  [JSON] No JSON body found")
-            return Response(status_code=400)
-
-        # Form data (if applicable)
-        try:
-            form = await request.form()
-            if form:
-                print("  [FORM DATA]")
-                for key, value in form.items():
-                    print(f"    {key}: {value}")
-        except Exception as e:
-            print(f"  [FORM] Not form data or error: {e}")
-
-        print("\n" + "=" * 60)
+        body = await request.body()
+        json_body = json.loads(body)
+        notifications = json_body.get("value", [])
+        print(f"\n[BACKGROUND] Processing {len(notifications)} notification(s)...")
 
         # Expected client state for validation (set during subscription creation)
         expected_client_state = os.getenv(
             "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
         )
 
-        # Get Graph client (similar to how Gmail gets credentials)
-        graph_client = get_graph_client()
-
-        # Process notifications
-        notifications = json_body.get("value", [])
-        print(f"[PROCESSING] Found {len(notifications)} notification(s)")
-
-        for i, notification in enumerate(notifications):
-            print(f"\n[NOTIFICATION {i + 1}]")
+        for notification in notifications:
+            print(f"\n[NOTIFICATION]")
             print(f"  subscriptionId: {notification.get('subscriptionId')}")
             print(f"  changeType: {notification.get('changeType')}")
             print(f"  resource: {notification.get('resource')}")
@@ -1020,6 +964,9 @@ async def outlook_notification_processor(request: Request):
             except (ValueError, IndexError) as e:
                 print(f"  [ERROR] Could not parse resource path '{resource}': {e}")
                 continue
+
+            # Get Graph client
+            graph_client = get_graph_client()
 
             # Process the message (similar to get_thread_id for Gmail)
             print(f"\nemail_id: {email_id}, message_id: {outlook_message_id}")
@@ -1065,17 +1012,11 @@ async def outlook_notification_processor(request: Request):
             #
             # publish_outlook_thread(assistant_id, user_id, conversation_id, message_id, last_message, contacts)
 
-            print(f"\nSuccessfully processed conversation for user {email_id}")
-
-        print("\n[RESPONSE] Returning 200 OK")
-        print("=" * 60 + "\n")
-        return Response(content="OK", status_code=200)
+            print(f"\n[BACKGROUND] Successfully processed conversation for user {email_id}")
 
     except Exception as e:
-        error_message = f"Error processing Outlook notification: {str(e)}"
+        print(f"[BACKGROUND] Error processing Outlook notifications: {str(e)}")
         traceback.print_exc()
-        print(error_message)
-        return Response(content=error_message, status_code=500)
 
 
 # =============================================================================
