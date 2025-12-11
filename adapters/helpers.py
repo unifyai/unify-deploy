@@ -994,7 +994,10 @@ def defer_to_background(func):
         # run task immediately in the event loop
         print(f"[DEFER] Creating async task...")
         asyncio.create_task(func(request))
-        print(f"[DEFER] Task created, returning 200")
+
+        # yield to event loop so task can start before we return
+        await asyncio.sleep(0)
+        print(f"[DEFER] Task started, returning 200")
 
         return Response(content="OK", status_code=200)
 
