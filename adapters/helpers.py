@@ -657,10 +657,28 @@ async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
     """
     try:
         # Fetch the message with body in text format (not HTML)
+        # Must explicitly select uniqueBody as it's not returned by default
         request_config = (
             MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration()
         )
         request_config.headers.add("Prefer", 'outlook.body-content-type="text"')
+        request_config.query_parameters = (
+            MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters(
+                select=[
+                    "id",
+                    "conversationId",
+                    "subject",
+                    "body",
+                    "uniqueBody",
+                    "from",
+                    "toRecipients",
+                    "ccRecipients",
+                    "bccRecipients",
+                    "receivedDateTime",
+                    "hasAttachments",
+                ]
+            )
+        )
 
         message = (
             await graph_client.users.by_user_id(user_email)
