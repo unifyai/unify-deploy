@@ -7,7 +7,7 @@ import os
 import requests
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import FastAPI, Request, Response
+from fastapi import BackgroundTasks, FastAPI, Request, Response
 from pydantic import BaseModel
 
 from google.cloud import pubsub_v1
@@ -907,7 +907,9 @@ async def gmail_notification_processor(request: Request):
 
 @app.post("/email/outlook")
 @defer_to_background
-async def outlook_notification_processor(request: Request):
+async def outlook_notification_processor(
+    request: Request, background_tasks: BackgroundTasks
+):
     """
     Webhook endpoint to receive Microsoft Graph change notifications.
     Processes Outlook email notifications similar to Gmail notification processor.
@@ -1012,7 +1014,9 @@ async def outlook_notification_processor(request: Request):
             #
             # publish_outlook_thread(assistant_id, user_id, conversation_id, message_id, last_message, contacts)
 
-            print(f"\n[BACKGROUND] Successfully processed conversation for user {email_id}")
+            print(
+                f"\n[BACKGROUND] Successfully processed conversation for user {email_id}"
+            )
 
     except Exception as e:
         print(f"[BACKGROUND] Error processing Outlook notifications: {str(e)}")

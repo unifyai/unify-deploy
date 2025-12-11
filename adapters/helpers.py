@@ -988,7 +988,7 @@ def defer_to_background(func):
         await request.body()
 
         # add the task to the background tasks queue
-        background_tasks.add_task(func, request)
+        background_tasks.add_task(func, request, background_tasks)
 
         return Response(content="OK", status_code=200)
 
