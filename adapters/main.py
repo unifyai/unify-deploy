@@ -919,11 +919,13 @@ async def outlook_notification_processor(
     The @defer_to_background decorator handles returning 200 immediately and
     scheduling this function as a background task.
     """
+    print(f"\n[BACKGROUND] outlook_notification_processor STARTED")
     try:
         body = await request.body()
+        print(f"[BACKGROUND] Got body: {len(body)} bytes")
         json_body = json.loads(body)
         notifications = json_body.get("value", [])
-        print(f"\n[BACKGROUND] Processing {len(notifications)} notification(s)...")
+        print(f"[BACKGROUND] Processing {len(notifications)} notification(s)...")
 
         # Expected client state for validation (set during subscription creation)
         expected_client_state = os.getenv(

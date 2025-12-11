@@ -979,16 +979,22 @@ def defer_to_background(func):
 
     @wraps(func)
     async def wrapper(request: Request, background_tasks: BackgroundTasks):
+        print(f"\n[DEFER] Wrapper entered for {func.__name__}")
+
         # specific for microsoft outlook watch renewal
         validation_token = request.query_params.get("validationToken")
         if validation_token:
+            print(f"[DEFER] Returning validation token")
             return Response(content=validation_token, media_type="text/plain")
 
         # buffer the body before connection closes
-        await request.body()
+        body = await request.body()
+        print(f"[DEFER] Body buffered: {len(body)} bytes")
 
         # add the task to the background tasks queue
+        print(f"[DEFER] Scheduling background task...")
         background_tasks.add_task(func, request, background_tasks)
+        print(f"[DEFER] Background task scheduled, returning 200")
 
         return Response(content="OK", status_code=200)
 
