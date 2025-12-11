@@ -438,7 +438,7 @@ def build_webhook_context(
     contacts = []
     is_valid_contact = True
     print("validate_contact:", validate_contact)
-    if validate_contact and assistant_id not in [4, 5, 6]:
+    if validate_contact and assistant_id not in [4, 5, 6, 7]:
         contacts, is_valid_contact = check_valid_contact(
             email_id=(sender if is_email else ""),
             phone_number=("" if is_email else normalized_sender),
