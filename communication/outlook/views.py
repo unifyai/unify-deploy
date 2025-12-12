@@ -9,6 +9,9 @@ from msgraph import GraphServiceClient
 from msgraph.generated.users.item.send_mail.send_mail_post_request_body import (
     SendMailPostRequestBody,
 )
+from msgraph.generated.users.item.messages.item.reply.reply_post_request_body import (
+    ReplyPostRequestBody,
+)
 from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.body_type import BodyType
 from msgraph.generated.models.recipient import Recipient
@@ -63,7 +66,7 @@ async def send_outlook_email(request: Request):
         "bcc": "bcc@example.com" (optional),
         "subject": "Email subject",
         "body": "Email body content",
-        "in_reply_to": "conversation_id" (optional, for threading)
+        "in_reply_to": "message_id" (optional, for replying to a thread)
     }
     """
     data = await request.json()
@@ -73,7 +76,7 @@ async def send_outlook_email(request: Request):
     bcc = data.get("bcc")
     subject = data.get("subject", "")
     body = data.get("body")
-    in_reply_to = data.get("in_reply_to")  # conversation_id for threading
+    in_reply_to = data.get("in_reply_to")
 
     if not sender or not to or body is None:
         raise HTTPException(
@@ -96,28 +99,30 @@ async def send_outlook_email(request: Request):
                 Recipient(email_address=EmailAddress(address=addr)) for addr in to_list
             ],
         )
-
         if cc_list:
             message.cc_recipients = [
                 Recipient(email_address=EmailAddress(address=addr)) for addr in cc_list
             ]
-
         if bcc_list:
             message.bcc_recipients = [
                 Recipient(email_address=EmailAddress(address=addr)) for addr in bcc_list
             ]
 
-        # For threading/replies - set conversation_id
         if in_reply_to:
-            message.conversation_id = in_reply_to
+            request_body = ReplyPostRequestBody(message=message)
+            await (
+                graph_client.users.by_user_id(sender)
+                .messages.by_message_id(in_reply_to)
+                .reply.post(request_body)
+            )
+        else:
+            request_body = SendMailPostRequestBody(
+                message=message, save_to_sent_items=True
+            )
+            await graph_client.users.by_user_id(sender).send_mail.post(request_body)
 
-        request_body = SendMailPostRequestBody(
-            message=message,
-            save_to_sent_items=True,
-        )
-
-        await graph_client.users.by_user_id(sender).send_mail.post(request_body)
         print(f"Outlook email sent from {sender} to {to}")
+
         return {"success": True}
 
     except Exception as e:
