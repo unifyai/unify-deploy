@@ -135,7 +135,7 @@ async def watch_outlook_email(request: Request):
     Request body:
     {
         "primary_email": "user@yourdomain.com",
-        "webhook_url": "https://your-domain.com/email/outlook" (optional)
+        "webhook_url": "https://your-domain.com/microsoft/webhook" (optional)
     }
     """
     data = await request.json()
@@ -147,7 +147,7 @@ async def watch_outlook_email(request: Request):
 
     if not webhook_url:
         # Default to the adapters URL webhook endpoint
-        webhook_url = f"{ADAPTERS_URL}/email/outlook"
+        webhook_url = f"{ADAPTERS_URL}/microsoft/webhook"
     print(f"Webhook URL: {webhook_url}")
 
     try:

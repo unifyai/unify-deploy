@@ -5,6 +5,7 @@ import time
 from dotenv import load_dotenv
 import os
 import requests
+import httpx
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import FastAPI, Request, Response
@@ -20,7 +21,6 @@ from .helpers import (
     add_user_to_conference,
     build_webhook_context,
     create_conference_response,
-    defer_to_background,
     dispatch_agent,
     get_assistant,
     get_graph_client,
@@ -905,122 +905,157 @@ async def gmail_notification_processor(request: Request):
         return Response(content=error_message, status_code=500)
 
 
+@app.post("/microsoft/webhook")
+async def microsoft_webhook_router(request: Request):
+    """
+    Router for Microsoft Graph webhook notifications.
+    Returns 200 immediately to satisfy Microsoft's 3-second timeout,
+    then routes notifications to appropriate processors via HTTP.
+    """
+    print("\n[MICROSOFT] Webhook received")
+
+    # Handle validation token (required for subscription setup)
+    validation_token = request.query_params.get("validationToken")
+    if validation_token:
+        print(f"[MICROSOFT] Returning validation token")
+        return Response(content=validation_token, media_type="text/plain")
+
+    # Parse notifications
+    body = await request.body()
+    json_body = json.loads(body)
+    notifications = json_body.get("value", [])
+    print(f"[MICROSOFT] Routing {len(notifications)} notification(s)")
+
+    # Route each notification to appropriate processor
+    adapters_url = os.getenv("UNITY_ADAPTERS_URL", "http://localhost:8001")
+
+    async with httpx.AsyncClient() as client:
+        for notification in notifications:
+            resource = notification.get("resource", "")
+
+            # Route based on resource type
+            if "/Messages/" in resource:
+                target = f"{adapters_url}/email/outlook"
+            # Future: add more Microsoft services here
+            # elif "/calls/" in resource:
+            #     target = f"{adapters_url}/calls/teams"
+            else:
+                print(f"[MICROSOFT] Unknown resource type: {resource}")
+                continue
+
+            print(f"[MICROSOFT] Routing to {target}")
+            try:
+                await client.post(target, json=notification, timeout=1.0)
+            except Exception as e:
+                # Log but don't fail - the request was sent
+                print(f"[MICROSOFT] Request sent (may have timed out on response): {e}")
+
+    print("[MICROSOFT] Returning 200 OK")
+    return Response(content="OK", status_code=200)
+
+
 @app.post("/email/outlook")
-@defer_to_background
 async def outlook_notification_processor(request: Request):
     """
     Webhook endpoint to receive Microsoft Graph change notifications.
     Processes Outlook email notifications similar to Gmail notification processor.
-
-    Microsoft has a timeout of 3s for the webhook to return, which isn't realistic
-    for processing a message with the calls to orchestra and everything.
-    The @defer_to_background decorator handles returning 200 immediately and
-    scheduling this function as a background task.
     """
-    print(f"\n[BACKGROUND] outlook_notification_processor STARTED")
+    print(f"\n[OUTLOOK] Processing notification")
     try:
-        body = await request.body()
-        print(f"[BACKGROUND] Got body: {len(body)} bytes")
-        json_body = json.loads(body)
-        notifications = json_body.get("value", [])
-        print(f"[BACKGROUND] Processing {len(notifications)} notification(s)...")
+        notification = await request.json()
+        print(f"  subscriptionId: {notification.get('subscriptionId')}")
+        print(f"  changeType: {notification.get('changeType')}")
+        print(f"  resource: {notification.get('resource')}")
+        print(f"  clientState: {notification.get('clientState')}")
+        print(f"  tenantId: {notification.get('tenantId')}")
 
         # Expected client state for validation (set during subscription creation)
         expected_client_state = os.getenv(
             "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
         )
 
-        for notification in notifications:
-            print(f"\n[NOTIFICATION]")
-            print(f"  subscriptionId: {notification.get('subscriptionId')}")
-            print(f"  changeType: {notification.get('changeType')}")
-            print(f"  resource: {notification.get('resource')}")
-            print(f"  clientState: {notification.get('clientState')}")
-            print(f"  tenantId: {notification.get('tenantId')}")
+        # Validate clientState for security
+        client_state = notification.get("clientState")
+        if client_state != expected_client_state:
+            print(f"  [WARNING] Invalid clientState received: {client_state}")
+            return Response(status_code=200)
 
-            # Validate clientState for security
-            client_state = notification.get("clientState")
-            if client_state != expected_client_state:
-                print(f"  [WARNING] Invalid clientState received: {client_state}")
-                continue
+        # Parse resource path to get user email and message ID
+        # Microsoft Graph uses PascalCase: Users/{id}/Messages/{id}
+        resource = notification.get("resource", "")
+        print(f"  resource: {resource}")
+        if "/Messages/" not in resource:
+            return Response(status_code=200)
 
-            # Parse resource path to get user email and message ID
-            # Microsoft Graph uses PascalCase: Users/{id}/Messages/{id}
-            resource = notification.get("resource", "")
-            print(f"  resource: {resource}")
-            print(f"  /Messages/ in resource: {'/Messages/' in resource}")
-            if "/Messages/" not in resource:
-                continue
+        # Parse: Users/{user_id}/MailFolders/Inbox/Messages/{message_id}
+        parts = resource.split("/")
+        try:
+            user_index = parts.index("Users") + 1
+            email_id = parts[user_index]
 
-            # Parse: Users/{user_id}/MailFolders/Inbox/Messages/{message_id}
-            parts = resource.split("/")
-            try:
-                user_index = parts.index("Users") + 1
-                email_id = parts[user_index]
+            messages_index = parts.index("Messages") + 1
+            outlook_message_id = parts[messages_index]
 
-                messages_index = parts.index("Messages") + 1
-                outlook_message_id = parts[messages_index]
+            print(f"  user: {email_id}")
+            print(f"  message_id: {outlook_message_id}")
+        except (ValueError, IndexError) as e:
+            print(f"  [ERROR] Could not parse resource path '{resource}': {e}")
+            return Response(status_code=200)
 
-                print(f"  user: {email_id}")
-                print(f"  message_id: {outlook_message_id}")
-            except (ValueError, IndexError) as e:
-                print(f"  [ERROR] Could not parse resource path '{resource}': {e}")
-                continue
+        # Get Graph client
+        graph_client = get_graph_client()
 
-            # Get Graph client
-            graph_client = get_graph_client()
+        # Process the message (similar to get_thread_id for Gmail)
+        print(f"\nemail_id: {email_id}, message_id: {outlook_message_id}")
+        conversation_id, message_id, last_message = await get_outlook_thread_id(
+            email_id, outlook_message_id, graph_client
+        )
+        print(
+            f"conversation_id: {conversation_id}, message_id: {message_id}, last_message: {last_message}"
+        )
 
-            # Process the message (similar to get_thread_id for Gmail)
-            print(f"\nemail_id: {email_id}, message_id: {outlook_message_id}")
-            conversation_id, message_id, last_message = await get_outlook_thread_id(
-                email_id, outlook_message_id, graph_client
-            )
-            print(
-                f"conversation_id: {conversation_id}, message_id: {message_id}, last_message: {last_message}"
-            )
+        if not conversation_id:
+            print(f"No new conversations found for user {email_id}")
+            return Response(status_code=200)
 
-            if not conversation_id:
-                print(f"No new conversations found for user {email_id}")
-                continue
+        from_email = last_message["sender"]
+        print(f"from_email: {from_email}")
 
-            from_email = last_message["sender"]
-            print(f"from_email: {from_email}")
+        # Print message details
+        print(f"\n[MESSAGE DETAILS]")
+        print(f"  From: {last_message['sender']}")
+        print(f"  To: {last_message['to']}")
+        print(f"  CC: {last_message['cc']}")
+        print(f"  Subject: {last_message['subject']}")
+        content = last_message.get("content", "")
+        print(
+            f"  Body preview: {content[:200]}..."
+            if len(content) > 200
+            else f"  Body: {content}"
+        )
+        print(f"  Has attachments: {last_message.get('has_attachments', False)}")
+        print(f"  Conversation ID: {conversation_id}")
+        print(f"  Received: {last_message.get('received_at')}")
 
-            # Print message details
-            print(f"\n[MESSAGE DETAILS]")
-            print(f"  From: {last_message['sender']}")
-            print(f"  To: {last_message['to']}")
-            print(f"  CC: {last_message['cc']}")
-            print(f"  Subject: {last_message['subject']}")
-            content = last_message.get("content", "")
-            print(
-                f"  Body preview: {content[:200]}..."
-                if len(content) > 200
-                else f"  Body: {content}"
-            )
-            print(f"  Has attachments: {last_message.get('has_attachments', False)}")
-            print(f"  Conversation ID: {conversation_id}")
-            print(f"  Received: {last_message.get('received_at')}")
+        # TODO: Add shared context and pub/sub integration similar to Gmail
+        # context = build_webhook_context("outlook_email", email_id, from_email)
+        # assistant_data = context["assistant"]
+        # assistant_id = assistant_data["assistant_id"]
+        # user_id = assistant_data["user_id"]
+        # contacts = context["contacts"]
+        #
+        # if not context["is_valid_contact"]:
+        #     return Response(status_code=200)
+        #
+        # publish_outlook_thread(assistant_id, user_id, conversation_id, message_id, last_message, contacts)
 
-            # TODO: Add shared context and pub/sub integration similar to Gmail
-            # context = build_webhook_context("outlook_email", email_id, from_email)
-            # assistant_data = context["assistant"]
-            # assistant_id = assistant_data["assistant_id"]
-            # user_id = assistant_data["user_id"]
-            # contacts = context["contacts"]
-            #
-            # if not context["is_valid_contact"]:
-            #     continue
-            #
-            # publish_outlook_thread(assistant_id, user_id, conversation_id, message_id, last_message, contacts)
-
-            print(
-                f"\n[BACKGROUND] Successfully processed conversation for user {email_id}"
-            )
+        print(f"\n[OUTLOOK] Successfully processed conversation for user {email_id}")
+        return Response(status_code=200)
 
     except Exception as e:
-        print(f"[BACKGROUND] Error processing Outlook notifications: {str(e)}")
+        print(f"[OUTLOOK] Error processing notification: {str(e)}")
         traceback.print_exc()
+        return Response(status_code=500)
 
 
 # =============================================================================
