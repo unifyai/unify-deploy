@@ -957,6 +957,50 @@ def publish_gmail_thread_id(
         print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
 
 
+def publish_outlook_thread_id(
+    assistant_id,
+    user_id,
+    conversation_id,
+    message_id,
+    last_message,
+    contacts,
+):
+    """Publish the Outlook conversation to pub/sub topic."""
+    try:
+        publisher = pubsub_v1.PublisherClient()
+        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), topic_name)
+
+        message_dict = {
+            "thread": "email",
+            "event": {
+                "contacts": contacts,
+                "thread_id": conversation_id,
+                "message_id": message_id,
+                "attachments": last_message.get("attachments", []),
+                "from": last_message["sender"],
+                "to": last_message["to"],
+                "cc": last_message["cc"],
+                "bcc": last_message.get("bcc", ""),
+                "subject": last_message["subject"],
+                "body": last_message["content"],
+            },
+        }
+        data = json.dumps(message_dict).encode("utf-8")
+
+        publish_future = publisher.publish(topic_path, data=data)
+        if "test" in assistant_id:
+            msg_id = publish_future.result(timeout=10)
+            print(f"Message ID: {msg_id}")
+        print(
+            f"Published conversation_id {conversation_id} for user {user_id} to {topic_path}"
+        )
+    except Exception as e:
+        print(
+            f"Failed to publish conversation_id {conversation_id} for user {user_id}: {e}"
+        )
+
+
 def dispatch_agent(agent_name: str):
     response = requests.post(
         f"{COMMS_URL}/phone/dispatch-agent",
