@@ -969,12 +969,18 @@ def dispatch_agent(agent_name: str):
     return True
 
 
+from concurrent.futures import ThreadPoolExecutor
+
+_background_executor = ThreadPoolExecutor(max_workers=10)
+
+
 def defer_to_background(func):
     """
     Decorator that defers webhook processing to a background task.
     Returns 200 OK immediately after scheduling the task.
 
     The decorated function receives the Request object.
+    Runs the task in a thread pool to avoid event loop blocking.
     """
 
     @wraps(func)
@@ -991,13 +997,10 @@ def defer_to_background(func):
         body = await request.body()
         print(f"[DEFER] Body buffered: {len(body)} bytes")
 
-        # run task immediately in the event loop
-        print(f"[DEFER] Creating async task...")
-        asyncio.create_task(func(request))
-
-        # yield to event loop so task can start before we return
-        await asyncio.sleep(0)
-        print(f"[DEFER] Task started, returning 200")
+        # run task in thread pool with its own event loop
+        print(f"[DEFER] Submitting to thread pool...")
+        _background_executor.submit(asyncio.run, func(request))
+        print(f"[DEFER] Task submitted, returning 200")
 
         return Response(content="OK", status_code=200)
 
