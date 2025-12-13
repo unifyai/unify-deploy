@@ -87,7 +87,6 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
 - `POST /phone/dispatch-agent`
 - `POST /phone/send-call`
 - `POST /phone/send-text`
-- `POST /phone/meet-call`
 - `GET  /phone/available-countries`
 - `POST /phone/create`
 - `DELETE /phone/delete`
