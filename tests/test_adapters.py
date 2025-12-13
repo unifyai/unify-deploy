@@ -133,45 +133,6 @@ def test_twilio_msg_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
-def test_twilio_whatsapp_webhook(test_client):
-    """Test successful WhatsApp webhook processing."""
-    endpoint = "/twilio/whatsapp"
-    user_number = "+9876543210"
-    assistant_number = "+0123456789"
-    body = "Hello, this is a test message"
-    data = {
-        "To": assistant_number,
-        "From": user_number,
-        "Body": body,
-    }
-
-    response = test_client.make_request("POST", endpoint, data=data)
-
-    assert response.status_code == 200
-    assert "text/xml" in response.headers.get("content-type", "")
-
-    # Check that the message was published to Pub/Sub
-    message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
-    ).received_messages[0]
-    ack_id = message.ack_id
-    message = message.message
-    try:
-        data = json.loads(message.data.decode("utf-8"))
-    except json.JSONDecodeError:
-        assert False, "Failed to decode message data"
-    try:
-        assert data is not None
-        assert "thread" in data and data["thread"] == "whatsapp"
-        assert "event" in data and data["event"] is not None
-        assert data["event"]["to_number"] == assistant_number
-        assert data["event"]["from_number"] == user_number
-        assert data["event"]["body"] == body
-    except AssertionError as e:
-        print(e)
-    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
-
-
 def test_unify_message_webhook(test_client):
     """Test successful Unify Message webhook processing."""
     endpoint = "/unify/message"

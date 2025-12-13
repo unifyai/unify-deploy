@@ -79,8 +79,6 @@ def get_assistant(
         "user_email": "unity.agent@unify.ai",
         "user_number": "",
         "assistant_number": "",
-        "user_whatsapp_number": "",
-        "assistant_whatsapp_number": "",
     }
     if "+15550100002" in phone_check or assistant_id == "default-assistant":
         return default_assistant_data
@@ -99,7 +97,6 @@ def get_assistant(
             "assistant_surname": "Assistant",
             "assistant_number": "+0123456789",
             "assistant_email": "default-test-assistant@unify.ai",
-            "user_whatsapp_number": "+9876543210",
         }
 
     response = requests.get(
@@ -128,10 +125,8 @@ def get_assistant(
         "assistant_nationality": assistants[0]["nationality"],
         "assistant_about": assistants[0]["about"],
         "assistant_number": assistants[0]["phone"] or "",
-        "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"] or "",
         "assistant_email": assistants[0]["email"] or "",
         "user_number": assistants[0]["user_phone"] or "",
-        "user_whatsapp_number": assistants[0]["user_whatsapp_number"] or "",
         "user_email": assistants[0]["user_email"] or "",
         "voice_provider": assistants[0]["voice_provider"],
         "voice_id": assistants[0]["voice_id"],
@@ -156,7 +151,6 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "surname": assistant_data["assistant_surname"],
             "email_address": assistant_data["assistant_email"],
             "phone_number": assistant_data["assistant_number"],
-            "whatsapp_number": assistant_data["assistant_whatsapp_number"],
             "bio": "",
             "rolling_summary": "",
             "respond_to": False,
@@ -168,7 +162,6 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "surname": "",
             "email_address": assistant_data["user_email"],
             "phone_number": assistant_data["user_number"],
-            "whatsapp_number": assistant_data["user_whatsapp_number"],
             "bio": "",
             "rolling_summary": "",
             "respond_to": False,
@@ -182,7 +175,6 @@ def check_contact_details(
     phone_number: str = None,
     medium: str = None,
     user_number: str = None,
-    user_whatsapp_number: str = None,
     user_email: str = None,
 ) -> bool:
     """
@@ -193,18 +185,15 @@ def check_contact_details(
         phone_number: The phone number of the contact.
         medium: The medium of the contact.
         user_number: The phone number of the user.
-        user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
     """
     print(
         f"Checking contact details: {email_address}, {phone_number}, {medium}, "
-        f"{user_number}, {user_whatsapp_number}, {user_email}"
+        f"{user_number}, {user_email}"
     )
     if medium == "email" and user_email == email_address:
         return True
     if medium in ["msg", "phone"] and user_number == phone_number:
-        return True
-    if medium == "whatsapp" and user_whatsapp_number == phone_number:
         return True
     return False
 
@@ -216,7 +205,6 @@ def check_valid_contact(
     assistant_context: str = None,
     api_key: str = None,
     user_number: str = None,
-    user_whatsapp_number: str = None,
     user_email: str = None,
     assistant_data: dict = None,
 ) -> list[dict[str, str]]:
@@ -230,13 +218,12 @@ def check_valid_contact(
         assistant_context: The context of the assistant.
         api_key: The API key of the assistant.
         user_number: The phone number of the user.
-        user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
         assistant_data: The data of the assistant.
     """
     print(
         f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
-        f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}"
+        f"{user_number}, {user_email}, {assistant_context}"
     )
 
     # check for contact in assistant contacts
@@ -252,12 +239,11 @@ def check_valid_contact(
                 phone_number=phone_number,
                 medium=medium,
                 user_number=user_number,
-                user_whatsapp_number=user_whatsapp_number,
                 user_email=user_email,
             ):
                 print(
                     f"Boss user found: {email_address}, {phone_number}, {medium}, "
-                    f"{user_number}, {user_whatsapp_number}, {user_email}"
+                    f"{user_number}, {user_email}"
                 )
                 return default_contacts, True
 
@@ -277,19 +263,17 @@ def check_valid_contact(
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
         user_number = boss_contact["phone_number"]
-        user_whatsapp_number = boss_contact["whatsapp_number"]
         user_email = boss_contact["email_address"]
         if check_contact_details(
             email_address=email_address,
             phone_number=phone_number,
             medium=medium,
             user_number=user_number,
-            user_whatsapp_number=user_whatsapp_number,
             user_email=user_email,
         ):
             print(
                 f"Boss user found: {email_address}, {phone_number}, {medium}, "
-                f"{user_number}, {user_whatsapp_number}, {user_email}"
+                f"{user_number}, {user_email}"
             )
             return contacts, True
     else:
@@ -303,7 +287,6 @@ def check_valid_contact(
             phone_number=phone_number,
             medium=medium,
             user_number=contact["phone_number"],
-            user_whatsapp_number=contact["whatsapp_number"],
             user_email=contact["email_address"],
         ):
             print(f"Contact found: {contact}")
@@ -362,7 +345,6 @@ def start_unity_job(assistant: dict, medium: str):
                 "user_number": assistant["user_number"],
                 "assistant_number": assistant["assistant_number"],
                 "assistant_email": assistant["assistant_email"],
-                "user_whatsapp_number": assistant["user_whatsapp_number"],
                 "voice_provider": assistant["voice_provider"],
                 "voice_id": assistant["voice_id"],
                 "voice_mode": assistant["voice_mode"],
@@ -413,9 +395,7 @@ def build_webhook_context(
     """Build a shared context for webhooks."""
     # normalize identifiers and resolve assistant by channel
     is_email = channel == "email"
-    normalized_sender = (
-        sender.replace("whatsapp:", "") if channel == "whatsapp" else sender
-    )
+    normalized_sender = sender.strip()
 
     # get assistant data
     if assistant_id:
@@ -433,7 +413,6 @@ def build_webhook_context(
     assistant_first_name = assistant_data["assistant_first_name"]
     assistant_surname = assistant_data["assistant_surname"]
     user_number = assistant_data["user_number"]
-    user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
     print("assistant_data:", assistant_data)
 
@@ -449,7 +428,6 @@ def build_webhook_context(
             assistant_context=f"{assistant_first_name}{assistant_surname}",
             api_key=api_key,
             user_number=user_number,
-            user_whatsapp_number=user_whatsapp_number,
             user_email=user_email,
             assistant_data=assistant_data,
         )

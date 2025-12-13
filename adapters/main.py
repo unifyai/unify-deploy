@@ -276,70 +276,6 @@ async def twilio_msg_webhook(request: Request):
     return Response(content=str(resp_user), media_type="text/xml")
 
 
-@app.post("/twilio/whatsapp")
-async def twilio_whatsapp_webhook(request: Request):
-    """WhatsApp webhook endpoint - handles incoming Twilio WhatsApp messages."""
-    print("twilio_whatsapp_webhook function started")
-    form_data = await request.form()
-
-    # get twilio number and caller number
-    to_number = form_data.get("To", "") or ""
-    from_number = form_data.get("From", "") or ""
-    body = form_data.get("Body", "") or ""
-    print(f"Received message from {from_number} to {to_number} with body: {body}")
-
-    # shared context
-    context = build_webhook_context("whatsapp", to_number, from_number)
-    assistant_data = context["assistant"]
-    assistant_id = assistant_data["assistant_id"]
-    contacts = context["contacts"]
-
-    if not context["is_valid_contact"]:
-        resp_user = MessagingResponse()
-        resp_user.message(
-            "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
-        )
-        return Response(content=str(resp_user), media_type="text/xml")
-
-    running = context["is_job_running"]
-    print(f"Job running: {running}")
-
-    # set up response
-    resp_user = MessagingResponse()
-
-    # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
-    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing message to Pub/Sub at path: {topic_path}")
-    try:
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "whatsapp",
-                    "event": {
-                        "contacts": contacts,
-                        "to_number": to_number,
-                        "from_number": from_number,
-                        "body": body,
-                    },
-                }
-            ).encode("utf-8"),
-        )
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("Message published to Pub/Sub successfully")
-    except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
-        return Response(content="Error publishing to Pub/Sub", status_code=500)
-
-    print("Returning TwiML response")
-    return Response(content=str(resp_user), media_type="text/xml")
-
-
 # =============================================================================
 # Unify Webhooks
 # =============================================================================
@@ -744,7 +680,6 @@ async def assistant_update_webhook(request: Request):
         assistant_data["assistant_name"] = f"{assistant_first_name} {assistant_surname}"
         assistant_data.pop("assistant_first_name")
         assistant_data.pop("assistant_surname")
-        assistant_data.pop("assistant_whatsapp_number")
 
         # check if job is running
         is_default_assistant = (
@@ -1204,7 +1139,6 @@ if __name__ == "__main__":
     print("    - POST /twilio/call")
     print("    - POST /twilio/call-status")
     print("    - POST /twilio/msg")
-    print("    - POST /twilio/whatsapp")
     print("  Unify:")
     print("    - POST /unify/message")
     print("    - POST /unify/call")
