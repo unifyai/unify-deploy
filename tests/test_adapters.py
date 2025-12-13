@@ -171,10 +171,10 @@ def test_unify_message_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
-def test_unify_call_webhook(test_client):
-    """Test successful unify_call webhook processing."""
+def test_unify_meet_webhook(test_client):
+    """Test successful unify_meet webhook processing."""
     endpoint = "/unify/call"
-    agent_name = "unify_call_default-test-assistant"
+    agent_name = "unify_meet_default-test-assistant"
     json_payload = {
         "agent_name": agent_name,
         "room_name": agent_name,
@@ -200,7 +200,7 @@ def test_unify_call_webhook(test_client):
         assert False, "Failed to decode message data"
     try:
         assert data is not None
-        assert "thread" in data and data["thread"] == "unify_call"
+        assert "thread" in data and data["thread"] == "unify_meet"
         assert "event" in data and data["event"] is not None
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert data["event"]["livekit_room"] == agent_name

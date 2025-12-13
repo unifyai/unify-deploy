@@ -366,15 +366,15 @@ async def unify_message_webhook(request: Request):
 
 
 @app.post("/unify/call")
-async def unify_call_webhook(request: Request):
-    """Unify call webhook - handles internal call events."""
-    print("unify_call_webhook function started")
+async def unify_meet_webhook(request: Request):
+    """Unify meet webhook - handles internal meet events."""
+    print("unify_meet_webhook function started")
 
     # optional auth via admin key
     shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     auth_header = request.headers.get("Authorization", "")
     if shared_key and auth_header != f"Bearer {shared_key}":
-        print("Unauthorized unify_call request")
+        print("Unauthorized unify_meet request")
         return Response(status_code=401)
 
     # accept JSON or form payloads
@@ -397,12 +397,12 @@ async def unify_call_webhook(request: Request):
         return Response(status_code=400)
 
     print(
-        f"Received unify_call for assistant_id={assistant_id_input} room={room_name} agent_name={agent_name}"
+        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} agent_name={agent_name}"
     )
 
     # shared context
     context = build_webhook_context(
-        channel="unify_call",
+        channel="unify_meet",
         destination="",
         sender="",
         assistant_id=assistant_id_input,
@@ -418,13 +418,13 @@ async def unify_call_webhook(request: Request):
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    print(f"Publishing unify_call to Pub/Sub at path: {topic_path}")
+    print(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(
                 {
-                    "thread": "unify_call",
+                    "thread": "unify_meet",
                     "event": {
                         "contacts": contacts,
                         "assistant_id": assistant_id,
@@ -438,9 +438,9 @@ async def unify_call_webhook(request: Request):
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
             print(f"Message ID: {message_id}")
-        print("unify_call message published to Pub/Sub successfully")
+        print("unify_meet message published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing unify_call to Pub/Sub: {str(e)}")
+        print(f"Error publishing unify_meet to Pub/Sub: {str(e)}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
