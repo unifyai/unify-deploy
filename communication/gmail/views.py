@@ -106,7 +106,7 @@ async def send_email(request: Request):
     bcc = data.get("bcc")
     subject = data.get("subject", "")
     body = data.get("body")
-    in_reply_to = data.get("in_reply_to")  # message_id to reply to
+    in_reply_to = data.get("in_reply_to")  # email_id to reply to (threading id)
 
     if not sender or not to or body is None:
         raise HTTPException(

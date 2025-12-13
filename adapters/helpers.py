@@ -38,28 +38,28 @@ ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
 
 
 def get_assistant(
-    email_id: str = None,
+    email_address: str = None,
     phone_number: str = None,
     assistant_id: str = None,
 ) -> dict[str, str]:
     """
-    Get the assistant id from the email id or phone number.
+    Get the assistant id from the email address or phone number.
 
     Args:
-        email_id: The email id of the assistant.
+        email_address: The email address of the assistant.
         phone_number: The phone number of the assistant.
 
     Returns:
         The assistant id.
     """
     params = dict()
-    if email_id:
-        params["email"] = email_id
+    if email_address:
+        params["email"] = email_address
     if phone_number:
         params["phone"] = phone_number
     if assistant_id:
         params["agent_id"] = assistant_id
-    email_check = email_id or ""
+    email_check = email_address or ""
     phone_check = phone_number or ""
 
     default_assistant_data = {
@@ -178,7 +178,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
 
 
 def check_contact_details(
-    email_id: str = None,
+    email_address: str = None,
     phone_number: str = None,
     medium: str = None,
     user_number: str = None,
@@ -189,7 +189,7 @@ def check_contact_details(
     Check if the contact details are valid.
 
     Args:
-        email_id: The email id of the contact.
+        email_address: The email address of the contact.
         phone_number: The phone number of the contact.
         medium: The medium of the contact.
         user_number: The phone number of the user.
@@ -197,10 +197,10 @@ def check_contact_details(
         user_email: The email of the user.
     """
     print(
-        f"Checking contact details: {email_id}, {phone_number}, {medium}, "
+        f"Checking contact details: {email_address}, {phone_number}, {medium}, "
         f"{user_number}, {user_whatsapp_number}, {user_email}"
     )
-    if medium == "email" and user_email == email_id:
+    if medium == "email" and user_email == email_address:
         return True
     if medium in ["msg", "phone"] and user_number == phone_number:
         return True
@@ -210,7 +210,7 @@ def check_contact_details(
 
 
 def check_valid_contact(
-    email_id: str = None,
+    email_address: str = None,
     phone_number: str = None,
     medium: str = None,
     assistant_context: str = None,
@@ -224,7 +224,7 @@ def check_valid_contact(
     Check if the contact is valid.
 
     Args:
-        email_id: The email id of the contact.
+        email_address: The email address of the contact.
         phone_number: The phone number of the contact.
         medium: The medium of the contact.
         assistant_context: The context of the assistant.
@@ -235,7 +235,7 @@ def check_valid_contact(
         assistant_data: The data of the assistant.
     """
     print(
-        f"Checking valid contact: {email_id}, {phone_number}, {medium}, "
+        f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
         f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}"
     )
 
@@ -248,7 +248,7 @@ def check_valid_contact(
         if response_json["detail"] == f"Context '{context}' not found":
             # check for boss user
             if check_contact_details(
-                email_id=email_id,
+                email_address=email_address,
                 phone_number=phone_number,
                 medium=medium,
                 user_number=user_number,
@@ -256,7 +256,7 @@ def check_valid_contact(
                 user_email=user_email,
             ):
                 print(
-                    f"Boss user found: {email_id}, {phone_number}, {medium}, "
+                    f"Boss user found: {email_address}, {phone_number}, {medium}, "
                     f"{user_number}, {user_whatsapp_number}, {user_email}"
                 )
                 return default_contacts, True
@@ -280,7 +280,7 @@ def check_valid_contact(
         user_whatsapp_number = boss_contact["whatsapp_number"]
         user_email = boss_contact["email_address"]
         if check_contact_details(
-            email_id=email_id,
+            email_address=email_address,
             phone_number=phone_number,
             medium=medium,
             user_number=user_number,
@@ -288,7 +288,7 @@ def check_valid_contact(
             user_email=user_email,
         ):
             print(
-                f"Boss user found: {email_id}, {phone_number}, {medium}, "
+                f"Boss user found: {email_address}, {phone_number}, {medium}, "
                 f"{user_number}, {user_whatsapp_number}, {user_email}"
             )
             return contacts, True
@@ -299,7 +299,7 @@ def check_valid_contact(
     # check all contacts
     for contact in contacts:
         if check_contact_details(
-            email_id=email_id,
+            email_address=email_address,
             phone_number=phone_number,
             medium=medium,
             user_number=contact["phone_number"],
@@ -423,7 +423,7 @@ def build_webhook_context(
     else:
         print(f"Getting assistant data for {destination} with is_email: {is_email}")
         assistant_data = (
-            get_assistant(email_id=destination)
+            get_assistant(email_address=destination)
             if is_email
             else get_assistant(phone_number=destination)
         )
@@ -443,7 +443,7 @@ def build_webhook_context(
     print("validate_contact:", validate_contact)
     if validate_contact and assistant_id not in [4, 5, 6, 7]:
         contacts, is_valid_contact = check_valid_contact(
-            email_id=(sender if is_email else ""),
+            email_address=(sender if is_email else ""),
             phone_number=("" if is_email else normalized_sender),
             medium=channel,
             assistant_context=f"{assistant_first_name}{assistant_surname}",
@@ -650,13 +650,13 @@ def get_graph_client():
     )
 
 
-async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
+async def get_outlook_thread_id(user_email: str, email_id: str, graph_client):
     """
     Fetch Outlook message details and mark as read.
     Similar to get_thread_id for Gmail - extracts conversation data from a notification.
 
     Returns:
-        tuple: (conversation_id, message_id, last_message) or (None, None, None) if not found
+        tuple: (conversation_id, email_id, last_message) or (None, None, None) if not found
     """
     try:
         # Fetch the message with body in text format (not HTML)
@@ -685,12 +685,12 @@ async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
 
         message = (
             await graph_client.users.by_user_id(user_email)
-            .messages.by_message_id(message_id)
+            .messages.by_message_id(email_id)
             .get(request_configuration=request_config)
         )
 
         if not message:
-            print(f"Message {message_id} not found")
+            print(f"Message {email_id} not found")
             return None, None, None
 
         # Note: Not marking as read - subscription only triggers on "created" events,
@@ -716,10 +716,10 @@ async def get_outlook_thread_id(user_email: str, message_id: str, graph_client):
 
         conversation_id = message.conversation_id
         print(
-            f"conversation_id: {conversation_id}, message_id: {message_id}, last_message: {last_message}"
+            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}"
         )
 
-        return conversation_id, message_id, last_message
+        return conversation_id, email_id, last_message
 
     except Exception as e:
         print(f"Error fetching Outlook message: {e}")
@@ -864,8 +864,8 @@ def get_thread_id(user_id, history_id, gmail_service):
                 for header in message_headers
                 if header.get("name") == "Message-ID"
             ][0]
-            message_id = message_id_header.get("value")
-            print(f"message_id: {message_id}")
+            email_id = message_id_header.get("value")
+            print(f"email_id: {email_id}")
 
             # Extract attachments from the Gmail message payload
             attachments = _collect_attachments(message.get("payload", {}))
@@ -904,7 +904,7 @@ def get_thread_id(user_id, history_id, gmail_service):
             ]
 
             # Return the conversation plus Gmail message id
-            return thread_id, message_id, last_message, msg_id
+            return thread_id, email_id, last_message, msg_id
 
         return None, None, None, None
 
@@ -918,7 +918,7 @@ def publish_gmail_thread_id(
     assistant_id,
     user_id,
     thread_id,
-    message_id,
+    email_id,
     last_message,
     contacts,
     gmail_message_id=None,
@@ -934,7 +934,7 @@ def publish_gmail_thread_id(
             "event": {
                 "contacts": contacts,
                 "thread_id": thread_id,
-                "message_id": message_id,
+                "email_id": email_id,
                 "gmail_message_id": gmail_message_id,
                 "attachments": last_message.get("attachments", []),
                 "from": last_message["sender"],
@@ -950,8 +950,8 @@ def publish_gmail_thread_id(
         # Publish asynchronously
         publish_future = publisher.publish(topic_path, data=data)
         if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
+            pubsub_message_id = publish_future.result(timeout=10)
+            print(f"Message ID: {pubsub_message_id}")
         print(f"Published thread_id {thread_id} for user {user_id} to {topic_path}")
     except Exception as e:
         print(f"Failed to publish thread_id {thread_id} for user {user_id}: {e}")
@@ -961,7 +961,7 @@ def publish_outlook_thread_id(
     assistant_id,
     user_id,
     conversation_id,
-    message_id,
+    email_id,
     last_message,
     contacts,
 ):
@@ -976,7 +976,7 @@ def publish_outlook_thread_id(
             "event": {
                 "contacts": contacts,
                 "thread_id": conversation_id,
-                "message_id": message_id,
+                "email_id": email_id,
                 "attachments": last_message.get("attachments", []),
                 "from": last_message["sender"],
                 "to": last_message["to"],

@@ -837,8 +837,8 @@ async def gmail_notification_processor(request: Request):
         notification = json.loads(data)
         print(f"Received notification: {notification}")
 
-        # extract Gmail notification details
-        email_id = notification["emailAddress"]
+        # extract Gmail notification details (mailbox address being watched)
+        assistant_email_address = notification["emailAddress"]
         history_id = notification["historyId"]
 
         # get credentials
@@ -851,27 +851,27 @@ async def gmail_notification_processor(request: Request):
         gmail_creds = Credentials.from_service_account_info(
             creds_json,
             scopes=scopes,
-            subject=email_id,
+            subject=assistant_email_address,
         )
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # process the history and thread
-        print(f"email_id: {email_id}, history_id: {history_id}")
-        thread_id, message_id, last_message, gmail_message_id = get_thread_id(
-            email_id, history_id, gmail_service
+        print(f"assistant_email_address: {assistant_email_address}, history_id: {history_id}")
+        thread_id, email_id, last_message, gmail_message_id = get_thread_id(
+            assistant_email_address, history_id, gmail_service
         )
         print(
-            f"thread_id: {thread_id}, message_id: {message_id}, last_message: {last_message}"
+            f"thread_id: {thread_id}, email_id: {email_id}, last_message: {last_message}"
         )
         if not thread_id:
-            print(f"No new conversations found for user {email_id}")
+            print(f"No new conversations found for user {assistant_email_address}")
             return Response(content="No new conversations", status_code=200)
 
         from_email = last_message["sender"].split("<")[1].split(">")[0]
         print(f"from_email: {from_email}")
 
         # shared context
-        context = build_webhook_context("email", email_id, from_email)
+        context = build_webhook_context("email", assistant_email_address, from_email)
         assistant_data = context["assistant"]
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
@@ -887,12 +887,12 @@ async def gmail_notification_processor(request: Request):
         running = context["is_job_running"]
         print(f"Job running: {running}")
 
-        print(f"Successfully processed conversation for user {email_id}")
+        print(f"Successfully processed conversation for user {assistant_email_address}")
         publish_gmail_thread_id(
             assistant_id,
             user_id,
             thread_id,
-            message_id,
+            email_id,
             last_message,
             contacts,
             gmail_message_id,
@@ -981,33 +981,33 @@ async def outlook_notification_processor(request: Request):
         parts = resource.split("/")
         try:
             user_index = parts.index("Users") + 1
-            email_id = parts[user_index]
+            assistant_email_address = parts[user_index]
 
             messages_index = parts.index("Messages") + 1
-            outlook_message_id = parts[messages_index]
+            email_id = parts[messages_index]
         except (ValueError, IndexError) as e:
             print(f"Could not parse resource path '{resource}': {e}")
             return Response(status_code=200)
 
         # Get Graph client and process message
         graph_client = get_graph_client()
-        print(f"email_id: {email_id}, message_id: {outlook_message_id}")
-        conversation_id, message_id, last_message = await get_outlook_thread_id(
-            email_id, outlook_message_id, graph_client
+        print(f"assistant_email_address: {assistant_email_address}, email_id: {email_id}")
+        conversation_id, email_id, last_message = await get_outlook_thread_id(
+            assistant_email_address, email_id, graph_client
         )
         print(
-            f"conversation_id: {conversation_id}, message_id: {message_id}, last_message: {last_message}"
+            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}"
         )
 
         if not conversation_id:
-            print(f"No new conversations found for user {email_id}")
+            print(f"No new conversations found for user {assistant_email_address}")
             return Response(status_code=200)
 
         from_email = last_message["sender"]
         print(f"from_email: {from_email}")
 
         # Shared context
-        context = build_webhook_context("email", email_id, from_email)
+        context = build_webhook_context("email", assistant_email_address, from_email)
         assistant_data = context["assistant"]
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
@@ -1023,12 +1023,12 @@ async def outlook_notification_processor(request: Request):
         running = context["is_job_running"]
         print(f"Job running: {running}")
 
-        print(f"Successfully processed conversation for user {email_id}")
+        print(f"Successfully processed conversation for user {assistant_email_address}")
         publish_outlook_thread_id(
             assistant_id,
             user_id,
             conversation_id,
-            message_id,
+            email_id,
             last_message,
             contacts,
         )

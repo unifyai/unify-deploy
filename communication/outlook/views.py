@@ -66,7 +66,7 @@ async def send_outlook_email(request: Request):
         "bcc": "bcc@example.com" (optional),
         "subject": "Email subject",
         "body": "Email body content",
-        "in_reply_to": "message_id" (optional, for replying to a thread)
+        "in_reply_to": "email_id" (optional, for replying to a thread)
     }
     """
     data = await request.json()
