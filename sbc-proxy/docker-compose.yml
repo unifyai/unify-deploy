@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  kamailio:
+    build: .
+    container_name: kamailio-sbc
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+      - "5061:5061/tcp"
+    volumes:
+      # Mount config for live editing
+      - ./kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+      # Mount TLS certificates (create these first)
+      - ./tls:/etc/kamailio/tls:ro
+    restart: unless-stopped
+    # Enable for debugging
+    # command: ["kamailio", "-DD", "-E", "-m", "64", "-M", "8", "-d", "4"]
