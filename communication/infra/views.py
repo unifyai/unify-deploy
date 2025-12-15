@@ -24,6 +24,8 @@ router = APIRouter()
 PROJECT_ID = "gcp-project-runtime"
 # Default region for Cloud Run jobs
 DEFAULT_REGION = "us-central1"
+# Namespace based on environment
+DEFAULT_NAMESPACE = "staging" if STAGING else "production"
 
 
 # create pubsub topic
@@ -161,7 +163,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 @router.post("/job/expose")
 async def expose_job_service(
     job_name: str = Form(...),
-    namespace: str = Form("default"),
+    namespace: str = Form(DEFAULT_NAMESPACE),
     port: int = Form(6080),
     service_name: str = Form(""),
     attach_owner: bool = Form(True),
@@ -232,7 +234,7 @@ async def expose_job_service(
 @router.get("/job/service/ip")
 async def get_job_service_ip(
     service_name: str,
-    namespace: str = "default",
+    namespace: str = DEFAULT_NAMESPACE,
 ):
     """Get the HTTPS URL for a job service with readiness status.
 
@@ -279,7 +281,7 @@ async def get_job_service_ip(
 # delete external service
 @router.delete("/job/service")
 async def delete_job_service(
-    service_name: str = Form(...), namespace: str = Form("default")
+    service_name: str = Form(...), namespace: str = Form(DEFAULT_NAMESPACE)
 ):
     """Delete a Service and its associated Ingress rule."""
     try:
@@ -320,7 +322,7 @@ async def delete_job_service(
 # create kubernetes job
 @router.post("/job/create")
 async def create_kubernetes_job(
-    namespace: str = Form("default"),
+    namespace: str = Form(DEFAULT_NAMESPACE),
     image: str = Form(
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
     ),
@@ -332,7 +334,6 @@ async def create_kubernetes_job(
     Create a Kubernetes Job for a Unity assistant.
 
     Args:
-        namespace: Kubernetes namespace (optional, defaults to "default")
         image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
@@ -426,7 +427,7 @@ async def create_kubernetes_job(
 @router.delete("/job/delete")
 async def delete_kubernetes_job(
     job_name: str = Form(...),
-    namespace: str = Form("default"),
+    namespace: str = Form(DEFAULT_NAMESPACE),
     delete_services: bool = Form(False),
     delete_ingress: bool = Form(True),
 ):
@@ -604,7 +605,7 @@ async def start_job(
 
 # stop kubernetes job
 @router.post("/job/stop")
-async def stop_job(job_name: str = Form(...), namespace: str = Form("default")):
+async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAMESPACE)):
     """
     Stop a Kubernetes Job for a Unity assistant.
     """
@@ -634,7 +635,7 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form("default")):
 
 # list kubernetes jobs
 @router.get("/jobs")
-async def list_kubernetes_jobs(namespace: str = "default", hours: int = 3):
+async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 3):
     """
     List all Unity Kubernetes jobs in the namespace.
 
@@ -712,7 +713,7 @@ async def list_kubernetes_jobs(namespace: str = "default", hours: int = 3):
 # get job logs
 @router.get("/job/logs")
 async def get_job_logs_endpoint(
-    job_name: str, namespace: str = "default", tail_lines: int = 10
+    job_name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: int = 10
 ):
     """
     Get logs from a Kubernetes Job.

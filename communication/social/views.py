@@ -14,9 +14,7 @@ router = APIRouter()
 
 # --- Schema ---
 class VerificationRequest(BaseModel):
-    platform: str = Field(
-        ..., description="The platform to verify (e.g., 'phone')."
-    )
+    platform: str = Field(..., description="The platform to verify (e.g., 'phone').")
     account_identifier: str = Field(
         ..., description="The user's account identifier (e.g., phone number)."
     )
