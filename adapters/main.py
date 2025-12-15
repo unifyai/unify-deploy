@@ -985,6 +985,8 @@ async def outlook_notification_processor(request: Request):
 # =============================================================================
 
 
+# ToDo: we need to get this working with outlook as well after it's added to the
+# assistant table in orchestra (maybe with an additional column for gmail/outlook)
 @app.post("/scheduled/email-watch-renewer")
 async def email_watch_renewer(request: Request):
     """Cloud Run endpoint that renews Gmail watches for multiple users."""
