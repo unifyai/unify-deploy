@@ -791,7 +791,9 @@ async def gmail_notification_processor(request: Request):
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # process the history and thread
-        print(f"assistant_email_address: {assistant_email_address}, history_id: {history_id}")
+        print(
+            f"assistant_email_address: {assistant_email_address}, history_id: {history_id}"
+        )
         thread_id, email_id, last_message, gmail_message_id = get_thread_id(
             assistant_email_address, history_id, gmail_service
         )
@@ -926,7 +928,9 @@ async def outlook_notification_processor(request: Request):
 
         # Get Graph client and process message
         graph_client = get_graph_client()
-        print(f"assistant_email_address: {assistant_email_address}, email_id: {email_id}")
+        print(
+            f"assistant_email_address: {assistant_email_address}, email_id: {email_id}"
+        )
         conversation_id, email_id, last_message = await get_outlook_thread_id(
             assistant_email_address, email_id, graph_client
         )
