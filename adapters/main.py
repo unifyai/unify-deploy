@@ -212,10 +212,10 @@ async def twilio_call_status_webhook(request: Request):
     return Response(status_code=200)
 
 
-@app.post("/twilio/msg")
-async def twilio_msg_webhook(request: Request):
+@app.post("/twilio/sms")
+async def twilio_sms_webhook(request: Request):
     """SMS webhook endpoint - handles incoming Twilio SMS messages."""
-    print("twilio_msg_webhook function started")
+    print("twilio_sms_webhook function started")
     form_data = await request.form()
 
     # get twilio number and caller number
@@ -365,7 +365,7 @@ async def unify_message_webhook(request: Request):
     return Response(status_code=200)
 
 
-@app.post("/unify/call")
+@app.post("/unify/meet")
 async def unify_meet_webhook(request: Request):
     """Unify meet webhook - handles internal meet events."""
     print("unify_meet_webhook function started")
@@ -535,10 +535,10 @@ async def unity_system_event_webhook(request: Request):
     return Response(status_code=200)
 
 
-@app.post("/log-pre-hire-chats")
-async def log_pre_hire_chats_webhook(request: Request):
-    """Log pre-hire chats webhook - logs chat history before hiring."""
-    print("log_pre_hire_chats_webhook function started")
+@app.post("/unity/pre-hire")
+async def unity_pre_hire_webhook(request: Request):
+    """Unity pre-hire webhook - logs chat history before hiring."""
+    print("unity_pre_hire_webhook function started")
 
     # optional auth via admin key
     shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
@@ -843,55 +843,6 @@ async def gmail_notification_processor(request: Request):
         return Response(content=error_message, status_code=500)
 
 
-@app.post("/microsoft/webhook")
-async def microsoft_webhook_router(request: Request):
-    """
-    Router for Microsoft Graph webhook notifications.
-    Returns 200 immediately to satisfy Microsoft's 3-second timeout,
-    then routes notifications to appropriate processors via HTTP.
-    """
-    print("microsoft_webhook_router function started")
-
-    # Handle validation token (required for subscription setup)
-    validation_token = request.query_params.get("validationToken")
-    if validation_token:
-        print("returning validation token")
-        return Response(content=validation_token, media_type="text/plain")
-
-    # Parse notifications
-    body = await request.body()
-    json_body = json.loads(body)
-    notifications = json_body.get("value", [])
-    print(f"routing {len(notifications)} notification(s)")
-
-    # Route each notification to appropriate processor
-    adapters_url = os.getenv("UNITY_ADAPTERS_URL", "http://localhost:8001")
-
-    async with httpx.AsyncClient() as client:
-        for notification in notifications:
-            resource = notification.get("resource", "")
-
-            # Route based on resource type
-            if "/Messages/" in resource:
-                target = f"{adapters_url}/email/outlook"
-            # Future: add more Microsoft services here
-            # elif "/calls/" in resource:
-            #     target = f"{adapters_url}/calls/teams"
-            else:
-                print(f"unknown resource type: {resource}")
-                continue
-
-            print(f"routing to {target}")
-            try:
-                await client.post(target, json=notification, timeout=1.0)
-            except Exception as e:
-                # Log but don't fail - the request was sent
-                print(f"request sent (may have timed out on response): {e}")
-
-    print("returning 200 OK")
-    return Response(content="OK", status_code=200)
-
-
 @app.post("/email/outlook")
 async def outlook_notification_processor(request: Request):
     """
@@ -981,14 +932,68 @@ async def outlook_notification_processor(request: Request):
 
 
 # =============================================================================
+# Microsoft Router
+# =============================================================================
+
+
+@app.post("/microsoft/router")
+async def microsoft_router(request: Request):
+    """
+    Router for Microsoft Graph webhook notifications.
+    Returns 200 immediately to satisfy Microsoft's 3-second timeout,
+    then routes notifications to appropriate processors via HTTP.
+    """
+    print("microsoft_router function started")
+
+    # Handle validation token (required for subscription setup)
+    validation_token = request.query_params.get("validationToken")
+    if validation_token:
+        print("returning validation token")
+        return Response(content=validation_token, media_type="text/plain")
+
+    # Parse notifications
+    body = await request.body()
+    json_body = json.loads(body)
+    notifications = json_body.get("value", [])
+    print(f"routing {len(notifications)} notification(s)")
+
+    # Route each notification to appropriate processor
+    adapters_url = os.getenv("UNITY_ADAPTERS_URL", "http://localhost:8001")
+
+    async with httpx.AsyncClient() as client:
+        for notification in notifications:
+            resource = notification.get("resource", "")
+
+            # Route based on resource type
+            if "/Messages/" in resource:
+                target = f"{adapters_url}/email/outlook"
+            # Future: add more Microsoft services here
+            # elif "/calls/" in resource:
+            #     target = f"{adapters_url}/calls/teams"
+            else:
+                print(f"unknown resource type: {resource}")
+                continue
+
+            print(f"routing to {target}")
+            try:
+                await client.post(target, json=notification, timeout=1.0)
+            except Exception as e:
+                # Log but don't fail - the request was sent
+                print(f"request sent (may have timed out on response): {e}")
+
+    print("returning 200 OK")
+    return Response(content="OK", status_code=200)
+
+
+# =============================================================================
 # Scheduled Endpoints
 # =============================================================================
 
 
 # ToDo: we need to get this working with outlook as well after it's added to the
 # assistant table in orchestra (maybe with an additional column for gmail/outlook)
-@app.post("/scheduled/email-watch-renewer")
-async def email_watch_renewer(request: Request):
+@app.post("/scheduled/gmail-watches")
+async def scheduled_gmail_watches(request: Request):
     """Cloud Run endpoint that renews Gmail watches for multiple users."""
     payload = await request.json()
     test = payload.get("test", False)
@@ -1042,8 +1047,8 @@ async def email_watch_renewer(request: Request):
     return results
 
 
-@app.post("/scheduled/idle-job-creator")
-async def idle_job_creator(request: Request):
+@app.post("/scheduled/jobs/create")
+async def scheduled_jobs_create(request: Request):
     """Cloud Run endpoint that creates a new idle job."""
     if not STAGING:
         return Response(
@@ -1063,8 +1068,8 @@ async def idle_job_creator(request: Request):
     return response.json()
 
 
-@app.post("/scheduled/idle-job-cleaner")
-async def idle_job_cleaner(request: Request):
+@app.post("/scheduled/jobs/cleanup")
+async def scheduled_jobs_cleanup(request: Request):
     """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     idle_jobs = []
@@ -1144,23 +1149,25 @@ if __name__ == "__main__":
     print("  Twilio:")
     print("    - POST /twilio/call")
     print("    - POST /twilio/call-status")
-    print("    - POST /twilio/msg")
+    print("    - POST /twilio/sms")
     print("  Unify:")
     print("    - POST /unify/message")
-    print("    - POST /unify/call")
+    print("    - POST /unify/meet")
     print("  Unity:")
     print("    - POST /unity/system-event")
-    print("    - POST /log-pre-hire-chats")
+    print("    - POST /unity/pre-hire")
     print("  Assistant:")
     print("    - POST /assistant/wakeup")
     print("    - POST /assistant/update")
-    print("  Email Webhooks:")
+    print("  Email:")
     print("    - POST /email/gmail")
     print("    - POST /email/outlook")
+    print("  Microsoft:")
+    print("    - POST /microsoft/router")
     print("  Scheduled:")
-    print("    - POST /scheduled/email-watch-renewer")
-    print("    - POST /scheduled/idle-job-creator")
-    print("    - POST /scheduled/idle-job-cleaner")
+    print("    - POST /scheduled/gmail-watches")
+    print("    - POST /scheduled/jobs/create")
+    print("    - POST /scheduled/jobs/cleanup")
     print("Server running at: http://localhost:8080")
 
     uvicorn.run("adapters.main:app", host="0.0.0.0", port=8080, reload=True)

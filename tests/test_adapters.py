@@ -94,9 +94,9 @@ def test_twilio_call_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
-def test_twilio_msg_webhook(test_client):
+def test_twilio_sms_webhook(test_client):
     """Test successful SMS webhook processing."""
-    endpoint = "/twilio/msg"
+    endpoint = "/twilio/sms"
     user_number = "+9876543210"
     assistant_number = "+0123456789"
     body = "Hello, this is a test message"
@@ -291,7 +291,7 @@ def test_unity_system_event_webhook(test_client):
 
 def test_email_watch_renewer(test_client):
     """Test successful email watch renewal."""
-    endpoint = "/scheduled/email-watch-renewer"
+    endpoint = "/scheduled/gmail-watches"
     response = test_client.make_request("POST", endpoint, json={"test": True})
 
     assert response.status_code == 200
@@ -322,7 +322,7 @@ def test_email_notification_processor(test_client):
 
 def test_idle_job_adapters(test_client):
     """Test successful idle job creation and cleanup."""
-    endpoint = "/scheduled/idle-job-creator"
+    endpoint = "/scheduled/jobs/create"
     response = test_client.make_request("POST", endpoint, json={})
 
     print("Idle job creator:", response.text)
@@ -331,7 +331,7 @@ def test_idle_job_adapters(test_client):
     print("Waiting for 120 seconds...")
     time.sleep(120)
 
-    endpoint = "/scheduled/idle-job-cleaner"
+    endpoint = "/scheduled/jobs/cleanup"
     response = test_client.make_request("POST", endpoint, json={})
 
     print("Idle job cleaner:", response.text)

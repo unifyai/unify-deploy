@@ -287,7 +287,7 @@ async def create_phone_number(request: Request):
 
     # Extract customizable parameters from request
     voice_url = data.get("voice_url", ADAPTERS_URL + "/twilio/call")
-    sms_url = data.get("sms_url", ADAPTERS_URL + "/twilio/msg")
+    sms_url = data.get("sms_url", ADAPTERS_URL + "/twilio/sms")
     status_callback = data.get("status_callback", ADAPTERS_URL + "/twilio/call-status")
     phone_country = data.get("phone_country", "US")
 

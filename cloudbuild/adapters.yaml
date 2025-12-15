@@ -46,64 +46,64 @@ steps:
       - '--set-env-vars=PROJECT_ID=${PROJECT_ID}'
     waitFor: ['push-sha-tag']
 
-  # Update Cloud Scheduler: Email Watch Renewer
+  # Update Cloud Scheduler: Gmail Watches
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-email-watch'
+    id: 'update-scheduler-gmail-watches'
     entrypoint: bash
     args:
       - '-c'
       - |
         CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "email-watch-renewer" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/email-watch-renewer" \
+        gcloud scheduler jobs update http "gmail-watches" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/gmail-watches" \
           --http-method POST \
           --location="${_REGION}" \
         || \
-        gcloud scheduler jobs create http "email-watch-renewer" \
+        gcloud scheduler jobs create http "gmail-watches" \
           --schedule "0 0 * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/email-watch-renewer" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/gmail-watches" \
           --http-method POST \
           --time-zone "UTC" \
           --location="${_REGION}"
     waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Idle Job Creator
+  # Update Cloud Scheduler: Jobs Create
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-idle-creator'
+    id: 'update-scheduler-jobs-create'
     entrypoint: bash
     args:
       - '-c'
       - |
         CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "idle-job-creator" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/idle-job-creator" \
+        gcloud scheduler jobs update http "jobs-create" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
           --http-method POST \
           --location="${_REGION}" \
         || \
-        gcloud scheduler jobs create http "idle-job-creator" \
+        gcloud scheduler jobs create http "jobs-create" \
           --schedule "0 * * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/idle-job-creator" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
           --http-method POST \
           --time-zone "UTC" \
           --location="${_REGION}"
     waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Idle Job Cleaner
+  # Update Cloud Scheduler: Jobs Cleanup
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-idle-cleaner'
+    id: 'update-scheduler-jobs-cleanup'
     entrypoint: bash
     args:
       - '-c'
       - |
         CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "idle-job-cleaner" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/idle-job-cleaner" \
+        gcloud scheduler jobs update http "jobs-cleanup" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
           --http-method POST \
           --location="${_REGION}" \
         || \
-        gcloud scheduler jobs create http "idle-job-cleaner" \
+        gcloud scheduler jobs create http "jobs-cleanup" \
           --schedule "10 * * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/idle-job-cleaner" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
           --http-method POST \
           --time-zone "UTC" \
           --location="${_REGION}"

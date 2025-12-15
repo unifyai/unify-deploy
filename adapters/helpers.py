@@ -367,7 +367,7 @@ def create_job(assistant_id: str):
 
     try:
         # Determine the correct URL based on staging/prod
-        idle_job_url = ADAPTERS_URL + "/scheduled/idle-job-creator"
+        idle_job_url = ADAPTERS_URL + "/scheduled/jobs/create"
         # Make request with 1 second timeout - just enough to send it
         requests.post(idle_job_url, timeout=1)
         print(f"Idle job creation request sent for assistant {assistant_id}")
