@@ -2,7 +2,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: desktop-unify-wildcard
-  namespace: default
+  namespace: production
 spec:
   secretName: desktop-unify-wildcard-tls
   issuerRef:
