@@ -3,11 +3,12 @@ import os
 import subprocess
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
+from communication.helpers import STAGING
 
 # Ingress configuration for HTTPS
 INGRESS_NAME = "desktop-unity-ingress"
-INGRESS_NAMESPACE = "default"
-DESKTOP_DOMAIN = "desktop.unify.ai"
+INGRESS_NAMESPACE = "staging" if STAGING else "production"
+DESKTOP_DOMAIN = "staging.desktop.unify.ai" if STAGING else "desktop.unify.ai"
 
 
 def setup_kubernetes_client():
