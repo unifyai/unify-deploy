@@ -174,4 +174,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Custom SA Key files
 comm-sa.json
+cert-manager-dns-key.json
