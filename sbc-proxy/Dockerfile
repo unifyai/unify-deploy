@@ -13,11 +13,12 @@ RUN apt-get update && apt-get install -y \
 RUN wget -O- https://deb.kamailio.org/kamailiodebkey.gpg | gpg --dearmor > /usr/share/keyrings/kamailio.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/kamailio.gpg] https://deb.kamailio.org/kamailio58 bookworm main" > /etc/apt/sources.list.d/kamailio.list
 
-# Install Kamailio with TLS support
+# Install Kamailio with TLS support and extra modules (uac, rtimer)
 RUN apt-get update && apt-get install -y \
     kamailio \
     kamailio-tls-modules \
     kamailio-utils-modules \
+    kamailio-extra-modules \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories
