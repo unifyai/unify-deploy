@@ -13,6 +13,8 @@ services:
       - ./tls.cfg:/etc/kamailio/tls.cfg:ro
       # Mount TLS certificates (create these first)
       - ./tls:/etc/kamailio/tls:ro
+      # Mount system CA certificates for verifying Microsoft's cert
+      - /etc/ssl/certs:/etc/ssl/certs:ro
     restart: unless-stopped
     # Enable for debugging
     # command: ["kamailio", "-DD", "-E", "-m", "64", "-M", "8", "-d", "4"]
