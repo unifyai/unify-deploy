@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     kamailio-tls-modules \
     kamailio-utils-modules \
     kamailio-extra-modules \
+    netbase \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories
