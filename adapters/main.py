@@ -277,6 +277,129 @@ async def twilio_sms_webhook(request: Request):
 
 
 # =============================================================================
+# Teams SIP Webhooks
+# =============================================================================
+
+
+@app.post("/teams/call")
+async def teams_call_webhook(request: Request):
+    """
+    Webhook called by Kamailio SBC when a Teams call arrives.
+    Publishes to Pub/Sub to trigger agent dispatch, then returns
+    so Kamailio can forward the call to LiveKit.
+    """
+    print("teams_call_webhook function started")
+
+    # Accept JSON from Kamailio
+    try:
+        data = await request.json()
+    except Exception:
+        # Fallback to form data if JSON parsing fails
+        form_data = await request.form()
+        data = dict(form_data)
+
+    # Extract call details from Kamailio
+    # Kamailio sends: from_uri, to_uri, call_id
+    from_uri = data.get("from_uri", "")
+    to_uri = data.get("to_uri", "")
+    call_id = data.get("call_id", "")
+    source_ip = data.get("source_ip", "")
+
+    print(f"Teams call: from={from_uri} to={to_uri} call_id={call_id}")
+
+    # Extract phone number from to_uri
+    # Format: sip:+19999999999@sbc.unify.ai:5061;user=phone;transport=tls
+    # We need: +19999999999
+    teams_number = ""
+    if "sip:" in to_uri:
+        # Extract the user part (before @)
+        user_part = to_uri.split("sip:")[1].split("@")[0]
+        # Clean up any parameters
+        teams_number = user_part.split(";")[0]
+        if not teams_number.startswith("+"):
+            teams_number = "+" + teams_number
+
+    print(f"Extracted Teams number: {teams_number}")
+
+    if not teams_number:
+        print("ERROR: Could not extract phone number from to_uri")
+        return Response(
+            content=json.dumps({"error": "Invalid to_uri"}),
+            status_code=400,
+            media_type="application/json",
+        )
+
+    # Look up assistant by the Teams virtual number
+    # This uses the same flow as Twilio - the number maps to an assistant
+    try:
+        context = build_webhook_context("teams", teams_number, from_uri)
+        assistant_id = context["assistant"]["assistant_id"]
+        contacts = context["contacts"]
+    except Exception as e:
+        print(f"ERROR: Could not find assistant for {teams_number}: {e}")
+        # Return success anyway - let the call proceed, it just won't have an agent
+        return Response(
+            content=json.dumps({"success": True, "warning": "No assistant found"}),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    # Generate room name (consistent with Twilio pattern)
+    room_name = f"unity_{teams_number}"
+    sip_uri = f"sip:{teams_number}@{os.getenv('LIVEKIT_SIP_URI')}"
+
+    print(f"Teams call for assistant {assistant_id}, room: {room_name}")
+
+    # Publish to Pub/Sub (same format as Twilio webhook)
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    print(f"Publishing Teams call to Pub/Sub at path: {topic_path}")
+
+    try:
+        pubsub_message = {
+            "thread": "call",
+            "event": {
+                "contacts": contacts,
+                "conference_name": f"Teams_{teams_number[1:]}_{call_id[:8]}",
+                "caller_number": from_uri,  # Will be anonymous for Teams AA
+                "sip_uri": sip_uri,
+                "livekit_room": room_name,
+                "assistant_id": assistant_id,
+                "action": "start_worker",
+                "timestamp": int(time.time() * 1000),
+                "call_metadata": {
+                    "teams_number": teams_number,
+                    "call_type": "inbound_teams",
+                    "source": "teams_direct_routing",
+                    "call_id": call_id,
+                    "source_ip": source_ip,
+                },
+            },
+        }
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(pubsub_message).encode("utf-8"),
+        )
+        # Don't wait for result - fire and forget for speed
+        print("Teams call published to Pub/Sub successfully")
+    except Exception as e:
+        print(f"Error publishing Teams call to Pub/Sub: {str(e)}")
+        # Still return success - don't block the call
+
+    # Return success so Kamailio can proceed to forward to LiveKit
+    return Response(
+        content=json.dumps({
+            "success": True,
+            "room_name": room_name,
+            "assistant_id": assistant_id,
+        }),
+        status_code=200,
+        media_type="application/json",
+    )
+
+
+# =============================================================================
 # Unify Webhooks
 # =============================================================================
 
