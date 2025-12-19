@@ -27,7 +27,13 @@ from livekit.api import (
     CreateSIPInboundTrunkRequest,
     ListSIPInboundTrunkRequest,
     ListSIPDispatchRuleRequest,
+    CreateSIPDispatchRuleRequest,
+    SIPDispatchRule,
+    SIPDispatchRuleDirect,
+    RoomConfiguration,
+    RoomAgentDispatch,
 )
+from livekit.protocol.sip import DeleteSIPDispatchRuleRequest
 
 # Your Kamailio SBC public IP
 SBC_IP = "34.121.162.2"
@@ -76,6 +82,57 @@ async def create_teams_trunk():
     return result.sip_trunk_id
 
 
+async def create_teams_dispatch_rule(trunk_id: str, agent_name: str):
+    """Create a dispatch rule that auto-dispatches an agent to answer calls.
+
+    This is needed because LiveKit SIP calls are only answered (200 OK)
+    when an agent is dispatched and joins the room.
+    """
+    lkapi = await get_livekit_api()
+
+    # Delete existing Teams dispatch rules for this trunk
+    existing = await lkapi.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
+    for rule in existing.items:
+        if trunk_id in rule.trunk_ids:
+            print(f"🗑️  Deleting existing dispatch rule: {rule.sip_dispatch_rule_id}")
+            await lkapi.sip.delete_sip_dispatch_rule(
+                DeleteSIPDispatchRuleRequest(
+                    sip_dispatch_rule_id=rule.sip_dispatch_rule_id
+                )
+            )
+
+    # Create dispatch rule with agent auto-dispatch
+    # This tells LiveKit to dispatch the specified agent when a call arrives,
+    # which triggers the call to be answered (200 OK)
+    request = CreateSIPDispatchRuleRequest(
+        trunk_ids=[trunk_id],
+        rule=SIPDispatchRule(
+            # Use dispatchRuleDirect to route to a specific room pattern
+            dispatch_rule_direct=SIPDispatchRuleDirect(
+                room_name="unity_${call.to.user}",  # Room name based on dialed number
+                pin="",
+            ),
+        ),
+        # Configure agent auto-dispatch - THIS IS KEY for auto-answering
+        room_config=RoomConfiguration(
+            agents=[
+                RoomAgentDispatch(
+                    agent_name=agent_name,
+                )
+            ]
+        ),
+    )
+
+    result = await lkapi.sip.create_sip_dispatch_rule(request)
+    print(f"✅ Created dispatch rule: {result.sip_dispatch_rule_id}")
+    print(f"   Trunk ID: {trunk_id}")
+    print(f"   Agent: {agent_name}")
+    print(f"   Room pattern: unity_${{call.to.user}}")
+
+    await lkapi.aclose()
+    return result.sip_dispatch_rule_id
+
+
 async def list_trunks():
     """List all existing trunks for debugging."""
     lkapi = await get_livekit_api()
@@ -109,19 +166,26 @@ async def list_dispatch_rules():
 
 async def main():
     print("🔧 Setting up Teams Direct Routing SIP Trunk...\n")
-    
-    # Create trunk (dispatch rule not needed - existing global rule applies)
-    await create_teams_trunk()
-    
+
+    # Agent name must match what's registered in your agent worker
+    AGENT_NAME = "unity_+19999999999"
+
+    # Create trunk
+    trunk_id = await create_teams_trunk()
+
+    # Create dispatch rule with agent auto-dispatch
+    # This is KEY - without this, calls won't be auto-answered
+    await create_teams_dispatch_rule(trunk_id, AGENT_NAME)
+
     # List everything for verification
     await list_trunks()
     await list_dispatch_rules()
-    
+
     print("\n✅ Setup complete!")
     print("\nNext steps:")
-    print("1. Deploy the updated kamailio.cfg to your SBC")
-    print("2. Ensure your adapters endpoint /teams/call is deployed")
-    print("3. Test by calling the Auto Attendant in Teams")
+    print("1. Start your agent worker: uv run call.py dev")
+    print("2. Call the Auto Attendant in Teams")
+    print("3. The call should auto-connect to your agent")
 
 
 if __name__ == "__main__":
