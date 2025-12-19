@@ -53,7 +53,7 @@ async def create_teams_trunk():
     lkapi = await get_livekit_api()
 
     # First, check if trunk already exists
-    existing = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
+    existing = await lkapi.sip.list_inbound_trunk(ListSIPInboundTrunkRequest())
     for trunk in existing.items:
         if trunk.name == TRUNK_NAME:
             print(f"✅ Trunk '{TRUNK_NAME}' already exists: {trunk.sip_trunk_id}")
@@ -72,7 +72,7 @@ async def create_teams_trunk():
     )
 
     request = CreateSIPInboundTrunkRequest(trunk=sip_trunk)
-    result = await lkapi.sip.create_sip_inbound_trunk(request)
+    result = await lkapi.sip.create_inbound_trunk(request)
 
     print(f"✅ Created SIP trunk: {result.sip_trunk_id}")
     print(f"   Name: {TRUNK_NAME}")
@@ -82,7 +82,7 @@ async def create_teams_trunk():
     return result.sip_trunk_id
 
 
-async def create_teams_dispatch_rule(trunk_id: str, agent_name: str):
+async def create_teams_dispatch_rule(trunk_id: str, agent_name: str, room_name: str):
     """Create a dispatch rule that auto-dispatches an agent to answer calls.
 
     This is needed because LiveKit SIP calls are only answered (200 OK)
@@ -91,25 +91,24 @@ async def create_teams_dispatch_rule(trunk_id: str, agent_name: str):
     lkapi = await get_livekit_api()
 
     # Delete existing Teams dispatch rules for this trunk
-    existing = await lkapi.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
+    existing = await lkapi.sip.list_dispatch_rule(ListSIPDispatchRuleRequest())
     for rule in existing.items:
         if trunk_id in rule.trunk_ids:
             print(f"🗑️  Deleting existing dispatch rule: {rule.sip_dispatch_rule_id}")
-            await lkapi.sip.delete_sip_dispatch_rule(
+            await lkapi.sip.delete_dispatch_rule(
                 DeleteSIPDispatchRuleRequest(
                     sip_dispatch_rule_id=rule.sip_dispatch_rule_id
                 )
             )
 
     # Create dispatch rule with agent auto-dispatch
-    # This tells LiveKit to dispatch the specified agent when a call arrives,
-    # which triggers the call to be answered (200 OK)
+    # Using a hardcoded room name (same as agent name) for reliable matching
     request = CreateSIPDispatchRuleRequest(
         trunk_ids=[trunk_id],
         rule=SIPDispatchRule(
-            # Use dispatchRuleDirect to route to a specific room pattern
+            # Use dispatchRuleDirect with a fixed room name
             dispatch_rule_direct=SIPDispatchRuleDirect(
-                room_name="unity_${call.to.user}",  # Room name based on dialed number
+                room_name=room_name,  # Hardcoded room name matching agent
                 pin="",
             ),
         ),
@@ -123,11 +122,11 @@ async def create_teams_dispatch_rule(trunk_id: str, agent_name: str):
         ),
     )
 
-    result = await lkapi.sip.create_sip_dispatch_rule(request)
+    result = await lkapi.sip.create_dispatch_rule(request)
     print(f"✅ Created dispatch rule: {result.sip_dispatch_rule_id}")
     print(f"   Trunk ID: {trunk_id}")
     print(f"   Agent: {agent_name}")
-    print(f"   Room pattern: unity_${{call.to.user}}")
+    print(f"   Room: {room_name}")
 
     await lkapi.aclose()
     return result.sip_dispatch_rule_id
@@ -137,7 +136,7 @@ async def list_trunks():
     """List all existing trunks for debugging."""
     lkapi = await get_livekit_api()
 
-    trunks = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
+    trunks = await lkapi.sip.list_inbound_trunk(ListSIPInboundTrunkRequest())
     print("\n📋 Existing SIP Inbound Trunks:")
     for trunk in trunks.items:
         print(f"   - {trunk.name}: {trunk.sip_trunk_id}")
@@ -152,7 +151,7 @@ async def list_dispatch_rules():
     """List all existing dispatch rules for debugging."""
     lkapi = await get_livekit_api()
 
-    rules = await lkapi.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
+    rules = await lkapi.sip.list_dispatch_rule(ListSIPDispatchRuleRequest())
     print("\n📋 Existing SIP Dispatch Rules:")
     for rule in rules.items:
         print(f"   - {rule.sip_dispatch_rule_id}")
@@ -167,15 +166,17 @@ async def list_dispatch_rules():
 async def main():
     print("🔧 Setting up Teams Direct Routing SIP Trunk...\n")
 
-    # Agent name must match what's registered in your agent worker
+    # Agent and room name must match what's registered in your agent worker
+    # Using the same value for both ensures reliable matching
     AGENT_NAME = "unity_+19999999999"
+    ROOM_NAME = "unity_+19999999999"  # Same as agent name for testing
 
     # Create trunk
     trunk_id = await create_teams_trunk()
 
     # Create dispatch rule with agent auto-dispatch
     # This is KEY - without this, calls won't be auto-answered
-    await create_teams_dispatch_rule(trunk_id, AGENT_NAME)
+    await create_teams_dispatch_rule(trunk_id, AGENT_NAME, ROOM_NAME)
 
     # List everything for verification
     await list_trunks()
