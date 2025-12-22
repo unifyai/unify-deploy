@@ -150,7 +150,7 @@ def create_unity_job(
     try:
         # Define the assistant-specific environment variables
         env_vars = [
-            {"name": "JOB_NAME", "value": job_name},
+            {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
             {
                 "name": "GOOGLE_APPLICATION_CREDENTIALS",
                 "value": "/secrets/key.json",
