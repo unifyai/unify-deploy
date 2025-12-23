@@ -6,12 +6,13 @@ This guide walks you through setting up Microsoft Graph API for Outlook email in
 1. [Prerequisites](#prerequisites)
 2. [Step 1: Access Azure Portal](#step-1-access-azure-portal)
 3. [Step 2: Register an Application](#step-2-register-an-application)
-4. [Step 3: Configure API Permissions](#step-3-configure-api-permissions)
+4. [Step 3: Configure API Permissions (Delegated)](#step-3-configure-api-permissions)
 5. [Step 4: Create Client Secret](#step-4-create-client-secret)
 6. [Step 5: Configure Environment Variables](#step-5-configure-environment-variables)
-7. [Step 6: Set Up Webhook Endpoint](#step-6-set-up-webhook-endpoint)
-8. [Step 7: Test the Integration](#step-7-test-the-integration)
-9. [Troubleshooting](#troubleshooting)
+7. [Step 6: Authorize the User (OAuth Flow)](#step-6-authorize-the-user-oauth-flow)
+8. [Step 7: Set Up Webhook Endpoint](#step-7-set-up-webhook-endpoint)
+9. [Step 8: Test the Integration](#step-8-test-the-integration)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -56,53 +57,83 @@ This guide walks you through setting up Microsoft Graph API for Outlook email in
 
 ![App Registration Overview](https://learn.microsoft.com/en-us/azure/active-directory/develop/media/quickstart-register-app/portal-app-registration.png)
 
-> ### 📧 One App, Multiple Mailboxes
+> ### 📧 One App, Multiple Users
 >
-> A single app registration can access **all mailboxes** in your tenant - you don't need a separate app for each email account.
+> A single app registration can be used by **multiple users** - each user authorizes the app separately.
 >
-> | Component | Scope |
-> |-----------|-------|
-> | **Tenant ID** | Your organization (e.g., `tenant.onmicrosoft.com`) |
-> | **Client ID** | Your app - can access any user in the tenant |
-> | **Permissions** | Control what the app can do across all mailboxes |
+> | Approach | How It Works |
+> |----------|--------------|
+> | **Delegated (recommended)** | Each user authorizes → app accesses only their mailbox |
+> | **Application** | Admin consents → app can access all mailboxes (use access policies to restrict) |
 >
-> With application permissions (configured in Step 3), the app authenticates as itself and can read/send mail for any mailbox by specifying the user's email address. For example:
-> - `assistant1@company.com` - Assistant A
-> - `assistant2@company.com` - Assistant B
-> - `support@company.com` - Assistant C
+> With delegated permissions:
+> - User A authorizes → app monitors User A's inbox
+> - User B authorizes → app monitors User B's inbox
+> - Each user's refresh token stored separately
 >
-> All handled by the same app registration.
->
-> **To restrict access** to specific mailboxes only, see [Application Access Policies](https://learn.microsoft.com/en-us/graph/auth-limit-mailbox-access).
+> With application permissions (requires admin):
+> - App can access any mailbox by specifying email address
+> - Use [Application Access Policies](https://learn.microsoft.com/en-us/graph/auth-limit-mailbox-access) to restrict
 
 ---
 
 ## Step 3: Configure API Permissions
 
+We recommend **Delegated permissions** for a consistent pattern with Teams Chat integration.
+
 1. In your app registration, click **"API permissions"** in the left sidebar
 2. Click **"+ Add a permission"**
 3. Select **"Microsoft Graph"**
-4. Select **"Application permissions"** (NOT Delegated permissions)
+4. Select **"Delegated permissions"**
 
 5. Search for and add these permissions:
 
    | Permission | Description |
    |------------|-------------|
-   | `Mail.Read` | Read mail in all mailboxes |
-   | `Mail.Send` | Send mail as any user |
-   | `Mail.ReadWrite` | Read and write mail in all mailboxes |
-   | `User.Read.All` | Read all users' profiles (optional, for user lookup) |
+   | `Mail.Read` | Read user's mail |
+   | `Mail.Send` | Send mail as the user |
+   | `Mail.ReadWrite` | Read and write user's mail |
+   | `offline_access` | Maintain access (refresh tokens) |
+   | `User.Read` | Read user's basic profile |
 
 6. Click **"Add permissions"**
 
-7. **Important:** Click **"Grant admin consent for [Your Organization]"**
-   - You'll see a prompt asking for confirmation
-   - Click "Yes"
-   - All permissions should now show a green checkmark ✅
+> **Note:** Delegated permissions do NOT require admin consent - the user can consent for themselves during the OAuth flow.
+
+### Alternative: Application Permissions (Tenant-Wide Access)
+
+If you need to access multiple mailboxes without individual user consent, use Application permissions instead:
+
+<details>
+<summary>Click to expand Application permissions setup</summary>
+
+1. Select **"Application permissions"** (instead of Delegated)
+2. Add these permissions:
+   - `Mail.Read` - Read mail in all mailboxes
+   - `Mail.Send` - Send mail as any user
+   - `Mail.ReadWrite` - Read and write mail in all mailboxes
+
+3. Click **"Grant admin consent for [Your Organization]"**
+   - Requires admin privileges
+   - All permissions should show a green checkmark ✅
+
+4. To restrict to specific mailboxes, configure [Application Access Policies](https://learn.microsoft.com/en-us/graph/auth-limit-mailbox-access)
+
+</details>
 
 ![API Permissions](https://learn.microsoft.com/en-us/azure/active-directory/develop/media/quickstart-configure-app-access-web-apis/portal-permissions.png)
 
-> ⚠️ **Without admin consent, the integration will not work.** The permissions will show a warning icon until consent is granted.
+---
+
+## Step 3.5: Configure Redirect URI
+
+Since we're using delegated permissions, we need an OAuth flow:
+
+1. In your app registration, go to **Authentication**
+2. Click **+ Add a platform**
+3. Select **Web**
+4. Add your redirect URI: `https://your-domain.com/outlook/auth/callback`
+5. Click **Configure**
 
 ---
 
@@ -156,7 +187,98 @@ UNITY_COMMS_URL=https://your-domain.com
 
 ---
 
-## Step 6: Set Up Webhook Endpoint
+## Step 6: Authorize the User (OAuth Flow)
+
+For delegated permissions, the target user must authorize your app once.
+
+### 6.1 Build the Authorization URL
+
+```python
+import urllib.parse
+
+def get_outlook_auth_url(client_id: str, redirect_uri: str, tenant_id: str) -> str:
+    """Generate the OAuth authorization URL for Outlook."""
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "scope": "offline_access Mail.Read Mail.Send Mail.ReadWrite User.Read",
+        "response_mode": "query",
+    }
+    base_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize"
+    return f"{base_url}?{urllib.parse.urlencode(params)}"
+
+# Example usage:
+# auth_url = get_outlook_auth_url(CLIENT_ID, "https://your-app.com/outlook/auth/callback", TENANT_ID)
+# Redirect user to auth_url
+```
+
+### 6.2 Handle the Callback
+
+```python
+from fastapi import FastAPI, Request
+import httpx
+
+app = FastAPI()
+
+@app.get("/outlook/auth/callback")
+async def outlook_auth_callback(request: Request, code: str):
+    """Exchange authorization code for tokens."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token",
+            data={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": REDIRECT_URI,
+                "grant_type": "authorization_code",
+            },
+        )
+        
+        if response.status_code == 200:
+            tokens = response.json()
+            access_token = tokens["access_token"]
+            refresh_token = tokens["refresh_token"]
+            
+            # Store refresh_token securely for later use
+            await save_refresh_token(user_email, refresh_token)
+            
+            return {"status": "authorized", "message": "Outlook access granted"}
+        else:
+            return {"error": response.text}
+```
+
+### 6.3 Refresh the Access Token
+
+```python
+async def refresh_outlook_token(refresh_token: str) -> dict:
+    """Get a new access token using the refresh token."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token",
+            data={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+                "scope": "offline_access Mail.Read Mail.Send Mail.ReadWrite User.Read",
+            },
+        )
+        
+        if response.status_code == 200:
+            tokens = response.json()
+            return {
+                "access_token": tokens["access_token"],
+                "refresh_token": tokens.get("refresh_token", refresh_token),
+            }
+        else:
+            raise Exception(f"Token refresh failed: {response.text}")
+```
+
+---
+
+## Step 7: Set Up Webhook Endpoint
 
 Microsoft Graph uses webhooks to notify your application about new emails. Unlike Gmail's Pub/Sub, you need a publicly accessible HTTPS endpoint.
 
@@ -167,64 +289,115 @@ Your `/outlook/webhook` endpoint must be:
 - Able to respond within 3 seconds
 - Return a 200-202 status code
 
-### 6.2 Register a Subscription
+### 7.2 Register a Subscription
 
-Once your app is deployed, create a subscription for each mailbox you want to monitor:
+With delegated permissions, you create a subscription using the user's access token. The resource path uses `/me` which automatically scopes to that user:
 
-```bash
-curl -X POST "https://your-domain.com/outlook/watch" \
-  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "primary_email": "user@yourdomain.com",
-    "webhook_url": "https://your-domain.com/outlook/webhook"
-  }'
+```python
+async def create_mail_subscription(user_access_token: str, webhook_url: str):
+    """Create a subscription for the user's inbox notifications."""
+    from datetime import datetime, timedelta
+    
+    expiration = datetime.utcnow() + timedelta(days=3)  # Max 3 days for mail
+    
+    subscription_data = {
+        "changeType": "created",
+        "notificationUrl": webhook_url,
+        "resource": "/me/mailFolders/inbox/messages",  # User's inbox only
+        "expirationDateTime": expiration.isoformat() + "Z",
+        "clientState": "your-secret-state",
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://graph.microsoft.com/v1.0/subscriptions",
+            headers={
+                "Authorization": f"Bearer {user_access_token}",
+                "Content-Type": "application/json",
+            },
+            json=subscription_data,
+        )
+        
+        if response.status_code == 201:
+            return response.json()
+        else:
+            raise Exception(f"Subscription failed: {response.text}")
 ```
 
-### 6.3 Subscription Renewal
+> **Note:** With delegated permissions and `/me`, the subscription automatically scopes to the authorized user's mailbox only.
+
+### 7.3 Subscription Renewal
 
 **Important:** Microsoft Graph subscriptions expire after **3 days** for mail resources.
 
-Set up a scheduled job (cron, Cloud Scheduler, etc.) to renew subscriptions:
+Set up a background task to renew subscriptions every 2 days:
 
-```bash
-# Run every 2 days to renew before expiry
-curl -X POST "https://your-domain.com/outlook/watch/renew" \
-  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "subscription_id": "the-subscription-id-from-watch-response"
-  }'
+```python
+async def renew_mail_subscription(user_access_token: str, subscription_id: str):
+    """Renew a mail subscription before it expires."""
+    from datetime import datetime, timedelta
+    
+    new_expiration = datetime.utcnow() + timedelta(days=3)
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.patch(
+            f"https://graph.microsoft.com/v1.0/subscriptions/{subscription_id}",
+            headers={
+                "Authorization": f"Bearer {user_access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "expirationDateTime": new_expiration.isoformat() + "Z"
+            },
+        )
+        
+        if response.status_code == 200:
+            print(f"Subscription renewed until {new_expiration}")
+            return response.json()
+        else:
+            raise Exception(f"Renewal failed: {response.text}")
 ```
 
 ---
 
-## Step 7: Test the Integration
+## Step 8: Test the Integration
 
-### 7.1 Test Sending an Email
+### 8.1 Authorize a Test User
 
-```bash
-curl -X POST "https://your-domain.com/outlook/send" \
-  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": "sender@yourdomain.com",
-    "to": "recipient@example.com",
-    "subject": "Test from Unify",
-    "body": "This is a test email sent via Microsoft Graph API."
-  }'
+1. Generate the authorization URL using your app's credentials
+2. Open the URL in a browser and sign in as the test user
+3. Grant consent to the requested permissions
+4. Verify you receive the tokens in your callback handler
+
+### 8.2 Test Sending an Email
+
+Once authorized, test sending an email as the user:
+
+```python
+async def test_send_email(user_access_token: str):
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://graph.microsoft.com/v1.0/me/sendMail",
+            headers={
+                "Authorization": f"Bearer {user_access_token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "message": {
+                    "subject": "Test from Integration",
+                    "body": {"contentType": "Text", "content": "Hello!"},
+                    "toRecipients": [{"emailAddress": {"address": "recipient@example.com"}}]
+                }
+            },
+        )
+        print(f"Status: {response.status_code}")
 ```
 
-### 7.2 Test Getting a Message
+### 8.3 Test Webhook
 
-```bash
-curl "https://your-domain.com/outlook/message?user_email=user@yourdomain.com&message_id=MESSAGE_ID" \
-  -H "Authorization: Bearer YOUR_ADMIN_KEY"
-```
-
-### 7.3 Test Webhook (Manual)
-
-Send a test email to a monitored mailbox and check your application logs for the webhook notification.
+1. Create a subscription for the authorized user
+2. Send a test email TO the monitored mailbox
+3. Check your application logs for the webhook notification
 
 ---
 

@@ -1,5 +1,7 @@
 import asyncio
 import base64
+from datetime import datetime, timedelta, timezone
+import httpx
 import json
 import os
 import re
@@ -989,3 +991,112 @@ def dispatch_agent(agent_name: str):
         print(f"Failed to dispatch agent. Status: {response.status_code}")
         return False
     return True
+
+
+# =============================================================================
+# Microsoft OAuth Helpers
+# =============================================================================
+
+async def exchange_microsoft_code_for_tokens(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    code: str,
+    redirect_uri: str,
+) -> dict:
+    """Exchange an authorization code for tokens."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Token exchange failed: {response.text}")
+
+        data = response.json()
+        data["expires_at"] = (
+            datetime.now(tz=timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))
+        ).isoformat()
+        return data
+
+
+async def get_microsoft_user_info(access_token: str) -> dict:
+    """Get user info (email, name, etc.) from an access token."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Failed to get user info: {response.text}")
+
+        return response.json()
+
+
+async def get_microsoft_credentials(tenant_id: str, client_id: str) -> dict | None:
+    """Get app credentials from external storage."""
+    if not ORCHESTRA_URL:
+        print("ORCHESTRA_URL not configured")
+        return None
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{ORCHESTRA_URL}/microsoft/credentials",
+                params={"tenant_id": tenant_id, "client_id": client_id},
+                timeout=30.0,
+            )
+            if response.status_code == 200:
+                return response.json()
+            return None
+    except Exception as e:
+        print(f"Error getting credentials: {e}")
+        return None
+
+
+async def store_microsoft_token(
+    user_email: str,
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    tokens: dict,
+) -> bool:
+    """Store tokens via external API."""
+    if not ORCHESTRA_URL:
+        print("ORCHESTRA_URL not configured")
+        return False
+
+    payload = {
+        "user_email": user_email,
+        "tenant_id": tenant_id,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token", ""),
+        "expires_at": tokens.get("expires_at"),
+        "expires_in": tokens.get("expires_in"),
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{ORCHESTRA_URL}/microsoft/token",
+                json=payload,
+                timeout=30.0,
+            )
+            if response.status_code in (200, 201):
+                print(f"Stored token for {user_email}")
+                return True
+            print(f"Failed to store token: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        print(f"Error storing token: {e}")
+        return False

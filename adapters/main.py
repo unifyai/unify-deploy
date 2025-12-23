@@ -9,6 +9,7 @@ import httpx
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from google.cloud import pubsub_v1
@@ -29,6 +30,10 @@ from .helpers import (
     is_job_running,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
+    exchange_microsoft_code_for_tokens,
+    get_microsoft_user_info,
+    get_microsoft_credentials,
+    store_microsoft_token,
     STAGING,
     ORCHESTRA_URL,
     COMMS_URL,
@@ -1058,7 +1063,7 @@ async def outlook_notification_processor(request: Request):
 
 
 # =============================================================================
-# Microsoft Router
+# Microsoft Adapters
 # =============================================================================
 
 
@@ -1109,6 +1114,99 @@ async def microsoft_router(request: Request):
 
     print("returning 200 OK")
     return Response(content="OK", status_code=200)
+
+
+@app.get("/microsoft/auth/callback")
+async def microsoft_oauth_callback(request: Request):
+    """
+    OAuth callback - Microsoft redirects here after user authorizes.
+    See docs/MICROSOFT_OAUTH_SETUP_GUIDE.md for full setup instructions.
+    """
+    # Get query params
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    error = request.query_params.get("error")
+    error_description = request.query_params.get("error_description")
+
+    if error:
+        print(f"OAuth error: {error} - {error_description}")
+        return Response(content=f"OAuth error: {error}: {error_description}", status_code=400)
+
+    if not code:
+        return Response(content="Missing authorization code", status_code=400)
+
+    # Decode state
+    tenant_id = None
+    client_id = None
+    redirect_after = None
+
+    if state:
+        try:
+            state_data = json.loads(base64.b64decode(state).decode())
+            tenant_id = state_data.get("tenant_id")
+            client_id = state_data.get("client_id")
+            redirect_after = state_data.get("redirect_after")
+        except Exception:
+            return Response(content="Invalid state parameter", status_code=400)
+
+    if not tenant_id or not client_id:
+        return Response(content="Missing tenant_id or client_id in state", status_code=400)
+
+    # Get client_secret from external storage
+    credentials = await get_microsoft_credentials(tenant_id, client_id)
+    if not credentials or not credentials.get("client_secret"):
+        return Response(
+            content="App credentials not found. Register the app credentials first.",
+            status_code=400,
+        )
+
+    client_secret = credentials["client_secret"]
+    redirect_uri = os.getenv("UNITY_ADAPTERS_URL", "") + "/microsoft/auth/callback"
+
+    # Exchange code for tokens
+    try:
+        tokens = await exchange_microsoft_code_for_tokens(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            code=code,
+            redirect_uri=redirect_uri,
+        )
+    except Exception as e:
+        print(f"Token exchange failed: {e}")
+        return Response(content=f"Token exchange failed: {e}", status_code=400)
+
+    # Get user email from token
+    try:
+        user_info = await get_microsoft_user_info(tokens["access_token"])
+        user_email = user_info.get("mail") or user_info.get("userPrincipalName")
+    except Exception as e:
+        print(f"Failed to get user info: {e}")
+        return Response(content=f"Failed to get user info: {e}", status_code=400)
+
+    if not user_email:
+        return Response(content="Could not determine user email from token", status_code=400)
+
+    # Store tokens externally
+    stored = await store_microsoft_token(
+        user_email=user_email,
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+        tokens=tokens,
+    )
+
+    print(f"OAuth complete for {user_email}, stored={stored}")
+
+    # Redirect to success page or return JSON
+    if redirect_after:
+        sep = "&" if "?" in redirect_after else "?"
+        return RedirectResponse(f"{redirect_after}{sep}success=true&user_email={user_email}")
+
+    return Response(
+        content=json.dumps({"success": True, "user_email": user_email, "stored": stored}),
+        media_type="application/json",
+    )
 
 
 # =============================================================================
@@ -1290,6 +1388,7 @@ if __name__ == "__main__":
     print("    - POST /email/outlook")
     print("  Microsoft:")
     print("    - POST /microsoft/router")
+    print("    - GET  /microsoft/auth/callback")
     print("  Scheduled:")
     print("    - POST /scheduled/gmail-watches")
     print("    - POST /scheduled/jobs/create")
