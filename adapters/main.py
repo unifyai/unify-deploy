@@ -1200,6 +1200,7 @@ async def microsoft_oauth_callback(request: Request):
 
     # Get user email from token (should match assistant_email)
     try:
+        print(f"tokens: {tokens}")
         user_info = await get_microsoft_user_info(tokens["access_token"])
         user_email = user_info.get("mail") or user_info.get("userPrincipalName")
     except Exception as e:
