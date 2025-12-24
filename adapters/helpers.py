@@ -1044,7 +1044,7 @@ async def get_microsoft_user_info(access_token: str) -> dict:
         return response.json()
 
 
-async def store_microsoft_token(assistant_id: str, tokens: dict) -> bool:
+async def store_microsoft_token(assistant_id: str, tokens: dict, api_key: str) -> bool:
     """
     Store Microsoft OAuth tokens as assistant secrets.
 
@@ -1063,9 +1063,8 @@ async def store_microsoft_token(assistant_id: str, tokens: dict) -> bool:
         "MICROSOFT_TOKEN_EXPIRES_AT": tokens.get("expires_at", ""),
     }
 
-    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-    if not admin_key:
-        print("ORCHESTRA_ADMIN_KEY not configured")
+    if not api_key:
+        print("api_key not configured")
         return False
 
     success = True
@@ -1075,7 +1074,7 @@ async def store_microsoft_token(assistant_id: str, tokens: dict) -> bool:
                 response = await client.post(
                     f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret",
                     json={"secret_name": secret_name, "secret_value": secret_value},
-                    headers={"Authorization": f"Bearer {admin_key}"},
+                    headers={"Authorization": f"Bearer {api_key}"},
                     timeout=30.0,
                 )
                 if response.status_code in (200, 201):

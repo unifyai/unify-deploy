@@ -1214,7 +1214,10 @@ async def microsoft_oauth_callback(request: Request):
 
     # Store tokens as assistant secrets
     assistant_id = assistant["assistant_id"]
-    stored = await store_microsoft_token(assistant_id=assistant_id, tokens=tokens)
+    api_key = assistant["api_key"]
+    stored = await store_microsoft_token(
+        assistant_id=assistant_id, tokens=tokens, api_key=api_key
+    )
 
     print(
         f"OAuth complete for {user_email} (assistant: {assistant_email}, id: {assistant_id}), stored={stored}"
