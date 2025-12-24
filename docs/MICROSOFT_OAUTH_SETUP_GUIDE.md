@@ -161,12 +161,15 @@ https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize?
   client_id={client_id}
   &response_type=code
   &redirect_uri=https://adapters.unify.ai/microsoft/auth/callback
-  &scope={client_id}/.default
+  &scope=https://graph.microsoft.com/.default offline_access
   &response_mode=query
   &state={base64_encoded_state}
 ```
 
-**Important:** The `state` parameter is REQUIRED. It contains the tenant_id and client_id that the callback needs to look up credentials.
+**Important:**
+- The `scope` must be `https://graph.microsoft.com/.default` to get a token that works with Microsoft Graph API
+- `offline_access` is needed to get a refresh token
+- The `state` parameter is REQUIRED - it contains the assistant_email to look up credentials
 
 **Generating the state parameter (Python):**
 ```python
@@ -189,7 +192,7 @@ state = base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
 | `tenant_id` | Customer's Azure AD tenant ID |
 | `client_id` | Customer's app client ID |
 | `redirect_uri` | Must match URI configured in app registration (adapters URL) |
-| `scope` | `{client_id}/.default` requests all configured permissions |
+| `scope` | `https://graph.microsoft.com/.default offline_access` for Graph API access + refresh tokens |
 | `state` | **Required.** Base64-encoded JSON with assistant_email, tenant_id, client_id, redirect_after |
 
 **Example:**
@@ -198,8 +201,9 @@ https://login.microsoftonline.com/abc123-tenant-id/oauth2/v2.0/authorize?
   client_id=def456-client-id
   &response_type=code
   &redirect_uri=https://adapters.unify.ai/microsoft/auth/callback
-  &scope=def456-client-id/.default
+  &scope=https://graph.microsoft.com/.default offline_access
   &response_mode=query
+  &state={base64_encoded_state}
 ```
 
 You can send this URL to the customer via email, embed it in a dashboard, etc.

@@ -1044,42 +1044,49 @@ async def get_microsoft_user_info(access_token: str) -> dict:
         return response.json()
 
 
-async def store_microsoft_token(
-    user_email: str,
-    tenant_id: str,
-    client_id: str,
-    client_secret: str,
-    tokens: dict,
-) -> bool:
-    """Store tokens via external API."""
+async def store_microsoft_token(assistant_id: str, tokens: dict) -> bool:
+    """
+    Store Microsoft OAuth tokens as assistant secrets.
+
+    Stores:
+    - MICROSOFT_ACCESS_TOKEN
+    - MICROSOFT_REFRESH_TOKEN
+    - MICROSOFT_TOKEN_EXPIRES_AT
+    """
     if not ORCHESTRA_URL:
         print("ORCHESTRA_URL not configured")
         return False
 
-    payload = {
-        "user_email": user_email,
-        "tenant_id": tenant_id,
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "access_token": tokens["access_token"],
-        "refresh_token": tokens.get("refresh_token", ""),
-        "expires_at": tokens.get("expires_at"),
-        "expires_in": tokens.get("expires_in"),
+    secrets_to_store = {
+        "MICROSOFT_ACCESS_TOKEN": tokens["access_token"],
+        "MICROSOFT_REFRESH_TOKEN": tokens.get("refresh_token", ""),
+        "MICROSOFT_TOKEN_EXPIRES_AT": tokens.get("expires_at", ""),
     }
-    print(f"payload: {payload}")
 
-    # try:
-    #     async with httpx.AsyncClient() as client:
-    #         response = await client.post(
-    #             f"{ORCHESTRA_URL}/microsoft/token",
-    #             json=payload,
-    #             timeout=30.0,
-    #         )
-    #         if response.status_code in (200, 201):
-    #             print(f"Stored token for {user_email}")
-    #             return True
-    #         print(f"Failed to store token: {response.status_code} - {response.text}")
-    #         return False
-    # except Exception as e:
-    #     print(f"Error storing token: {e}")
-    #     return False
+    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    if not admin_key:
+        print("ORCHESTRA_ADMIN_KEY not configured")
+        return False
+
+    success = True
+    async with httpx.AsyncClient() as client:
+        for secret_name, secret_value in secrets_to_store.items():
+            try:
+                response = await client.post(
+                    f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret",
+                    json={"secret_name": secret_name, "secret_value": secret_value},
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    timeout=30.0,
+                )
+                if response.status_code in (200, 201):
+                    print(f"Stored {secret_name} for assistant {assistant_id}")
+                else:
+                    print(
+                        f"Failed to store {secret_name}: {response.status_code} - {response.text}"
+                    )
+                    success = False
+            except Exception as e:
+                print(f"Error storing {secret_name}: {e}")
+                success = False
+
+    return success

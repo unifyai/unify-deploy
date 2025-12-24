@@ -1212,17 +1212,12 @@ async def microsoft_oauth_callback(request: Request):
             content="Could not determine user email from token", status_code=400
         )
 
-    # Store tokens externally
-    stored = await store_microsoft_token(
-        user_email=user_email,
-        tenant_id=tenant_id,
-        client_id=client_id,
-        client_secret=client_secret,
-        tokens=tokens,
-    )
+    # Store tokens as assistant secrets
+    assistant_id = assistant["assistant_id"]
+    stored = await store_microsoft_token(assistant_id=assistant_id, tokens=tokens)
 
     print(
-        f"OAuth complete for {user_email} (assistant: {assistant_email}), stored={stored}"
+        f"OAuth complete for {user_email} (assistant: {assistant_email}, id: {assistant_id}), stored={stored}"
     )
 
     # Redirect to success page or return JSON
