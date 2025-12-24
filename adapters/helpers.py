@@ -1066,19 +1066,20 @@ async def store_microsoft_token(
         "expires_at": tokens.get("expires_at"),
         "expires_in": tokens.get("expires_in"),
     }
+    print(f"payload: {payload}")
 
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{ORCHESTRA_URL}/microsoft/token",
-                json=payload,
-                timeout=30.0,
-            )
-            if response.status_code in (200, 201):
-                print(f"Stored token for {user_email}")
-                return True
-            print(f"Failed to store token: {response.status_code} - {response.text}")
-            return False
-    except Exception as e:
-        print(f"Error storing token: {e}")
-        return False
+    # try:
+    #     async with httpx.AsyncClient() as client:
+    #         response = await client.post(
+    #             f"{ORCHESTRA_URL}/microsoft/token",
+    #             json=payload,
+    #             timeout=30.0,
+    #         )
+    #         if response.status_code in (200, 201):
+    #             print(f"Stored token for {user_email}")
+    #             return True
+    #         print(f"Failed to store token: {response.status_code} - {response.text}")
+    #         return False
+    # except Exception as e:
+    #     print(f"Error storing token: {e}")
+    #     return False
