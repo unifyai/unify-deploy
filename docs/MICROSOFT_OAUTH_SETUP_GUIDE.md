@@ -17,14 +17,14 @@ Each customer creates their own Azure AD app in their Microsoft 365 tenant:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Customer's Microsoft 365 Tenant                                      │
-│                                                                      │
+│ Customer's Microsoft 365 Tenant                                     │
+│                                                                     │
 │   Azure AD App (created by customer)                                │
 │   ├── tenant_id: "abc123-..."                                       │
 │   ├── client_id: "def456-..."                                       │
 │   ├── client_secret: "xyz789..."                                    │
 │   └── Permissions: Mail.Send, Chat.ReadWrite, etc.                  │
-│                                                                      │
+│                                                                     │
 │   Service Account (user who authorizes)                             │
 │   └── unify-bot@company.com                                         │
 └─────────────────────────────────────────────────────────────────────┘
@@ -32,11 +32,11 @@ Each customer creates their own Azure AD app in their Microsoft 365 tenant:
                               │ OAuth (delegated permissions)
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Unify Platform                                                       │
-│                                                                      │
+│ Unify Platform                                                      │
+│                                                                     │
 │   Stores: { user_email, tenant_id, client_id, client_secret,        │
 │             access_token, refresh_token }                           │
-│                                                                      │
+│                                                                     │
 │   Can now act as unify-bot@company.com:                             │
 │   ├── Send emails                                                   │
 │   ├── Read/send Teams messages                                      │
@@ -129,28 +129,28 @@ After the customer registers their app and provides credentials, a user from the
          │
          ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ 2. User visits URL                                                │
-│                                                                   │
+│ 2. User visits URL                                               │
+│                                                                  │
 │    https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/    │
 │    authorize?client_id={client_id}&response_type=code&...        │
-│                                                                   │
+│                                                                  │
 │    - User logs in (e.g., unify-bot@company.com)                  │
-│    - User sees consent screen                                     │
-│    - User clicks "Accept"                                         │
+│    - User sees consent screen                                    │
+│    - User clicks "Accept"                                        │
 └────────┬─────────────────────────────────────────────────────────┘
          │
          ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │ 3. Microsoft redirects to callback                               │
-│                                                                   │
+│                                                                  │
 │    GET /microsoft/auth/callback?code=ABC123&state=...            │
-│                                                                   │
-│    Callback endpoint:                                             │
+│                                                                  │
+│    Callback endpoint:                                            │
 │    - Looks up client_secret from database                        │
-│    - Exchanges code for tokens                                    │
-│    - Gets user email from token                                   │
-│    - Stores tokens in database                                    │
-│    - Redirects to success page                                    │
+│    - Exchanges code for tokens                                   │
+│    - Gets user email from token                                  │
+│    - Stores tokens in database                                   │
+│    - Redirects to success page                                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -163,6 +163,22 @@ https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize?
   &redirect_uri=https://adapters.unify.ai/microsoft/auth/callback
   &scope={client_id}/.default
   &response_mode=query
+  &state={base64_encoded_state}
+```
+
+**Important:** The `state` parameter is REQUIRED. It contains the tenant_id and client_id that the callback needs to look up credentials.
+
+**Generating the state parameter (Python):**
+```python
+import base64
+import json
+
+state_data = {
+    "tenant_id": "your-tenant-id",
+    "client_id": "your-client-id",
+    "redirect_after": "https://your-app.com/success"  # optional
+}
+state = base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
 ```
 
 | Parameter | Description |
@@ -171,6 +187,7 @@ https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize?
 | `client_id` | Customer's app client ID |
 | `redirect_uri` | Must match URI configured in app registration (adapters URL) |
 | `scope` | `{client_id}/.default` requests all configured permissions |
+| `state` | **Required.** Base64-encoded JSON with tenant_id, client_id, redirect_after |
 
 **Example:**
 ```
