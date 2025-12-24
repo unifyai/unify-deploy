@@ -32,7 +32,6 @@ from .helpers import (
     publish_outlook_thread_id,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
-    get_microsoft_credentials,
     store_microsoft_token,
     STAGING,
     ORCHESTRA_URL,
@@ -1121,6 +1120,12 @@ async def microsoft_oauth_callback(request: Request):
     """
     OAuth callback - Microsoft redirects here after user authorizes.
     See docs/MICROSOFT_OAUTH_SETUP_GUIDE.md for full setup instructions.
+
+    State must contain:
+    - assistant_email: The assistant's email (to look up credentials)
+    - tenant_id: Azure AD tenant ID
+    - client_id: Azure AD app client ID
+    - redirect_after: (optional) URL to redirect to after success
     """
     # Get query params
     code = request.query_params.get("code")
@@ -1130,7 +1135,9 @@ async def microsoft_oauth_callback(request: Request):
 
     if error:
         print(f"OAuth error: {error} - {error_description}")
-        return Response(content=f"OAuth error: {error}: {error_description}", status_code=400)
+        return Response(
+            content=f"OAuth error: {error}: {error_description}", status_code=400
+        )
 
     if not code:
         return Response(content="Missing authorization code", status_code=400)
@@ -1139,6 +1146,7 @@ async def microsoft_oauth_callback(request: Request):
     tenant_id = None
     client_id = None
     redirect_after = None
+    assistant_email = None
 
     if state:
         try:
@@ -1146,21 +1154,35 @@ async def microsoft_oauth_callback(request: Request):
             tenant_id = state_data.get("tenant_id")
             client_id = state_data.get("client_id")
             redirect_after = state_data.get("redirect_after")
+            assistant_email = state_data.get("assistant_email")
         except Exception:
             return Response(content="Invalid state parameter", status_code=400)
 
     if not tenant_id or not client_id:
-        return Response(content="Missing tenant_id or client_id in state", status_code=400)
-
-    # Get client_secret from external storage
-    credentials = await get_microsoft_credentials(tenant_id, client_id)
-    if not credentials or not credentials.get("client_secret"):
         return Response(
-            content="App credentials not found. Register the app credentials first.",
+            content="Missing tenant_id or client_id in state", status_code=400
+        )
+
+    if not assistant_email:
+        return Response(content="Missing assistant_email in state", status_code=400)
+
+    # Get assistant data (including secrets) from orchestra
+    assistant = get_assistant(email_address=assistant_email)
+    if not assistant or not assistant.get("assistant_id"):
+        return Response(
+            content=f"Assistant not found for email: {assistant_email}",
             status_code=400,
         )
 
-    client_secret = credentials["client_secret"]
+    secrets = assistant.get("secrets", {})
+    client_secret = secrets.get("AZURE_CLIENT_SECRET")
+
+    if not client_secret:
+        return Response(
+            content="AZURE_CLIENT_SECRET not found in assistant secrets. Add it to the assistant configuration.",
+            status_code=400,
+        )
+
     redirect_uri = os.getenv("UNITY_ADAPTERS_URL", "") + "/microsoft/auth/callback"
 
     # Exchange code for tokens
@@ -1176,7 +1198,7 @@ async def microsoft_oauth_callback(request: Request):
         print(f"Token exchange failed: {e}")
         return Response(content=f"Token exchange failed: {e}", status_code=400)
 
-    # Get user email from token
+    # Get user email from token (should match assistant_email)
     try:
         user_info = await get_microsoft_user_info(tokens["access_token"])
         user_email = user_info.get("mail") or user_info.get("userPrincipalName")
@@ -1185,7 +1207,9 @@ async def microsoft_oauth_callback(request: Request):
         return Response(content=f"Failed to get user info: {e}", status_code=400)
 
     if not user_email:
-        return Response(content="Could not determine user email from token", status_code=400)
+        return Response(
+            content="Could not determine user email from token", status_code=400
+        )
 
     # Store tokens externally
     stored = await store_microsoft_token(
@@ -1196,15 +1220,21 @@ async def microsoft_oauth_callback(request: Request):
         tokens=tokens,
     )
 
-    print(f"OAuth complete for {user_email}, stored={stored}")
+    print(
+        f"OAuth complete for {user_email} (assistant: {assistant_email}), stored={stored}"
+    )
 
     # Redirect to success page or return JSON
     if redirect_after:
         sep = "&" if "?" in redirect_after else "?"
-        return RedirectResponse(f"{redirect_after}{sep}success=true&user_email={user_email}")
+        return RedirectResponse(
+            f"{redirect_after}{sep}success=true&user_email={user_email}"
+        )
 
     return Response(
-        content=json.dumps({"success": True, "user_email": user_email, "stored": stored}),
+        content=json.dumps(
+            {"success": True, "user_email": user_email, "stored": stored}
+        ),
         media_type="application/json",
     )
 

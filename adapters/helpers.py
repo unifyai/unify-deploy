@@ -133,6 +133,7 @@ def get_assistant(
         "voice_provider": assistants[0]["voice_provider"],
         "voice_id": assistants[0]["voice_id"],
         "voice_mode": assistants[0]["voice_mode"],
+        "secrets": assistants[0].get("secrets", {}),
     }
 
 
@@ -997,6 +998,7 @@ def dispatch_agent(agent_name: str):
 # Microsoft OAuth Helpers
 # =============================================================================
 
+
 async def exchange_microsoft_code_for_tokens(
     tenant_id: str,
     client_id: str,
@@ -1022,7 +1024,8 @@ async def exchange_microsoft_code_for_tokens(
 
         data = response.json()
         data["expires_at"] = (
-            datetime.now(tz=timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))
+            datetime.now(tz=timezone.utc)
+            + timedelta(seconds=data.get("expires_in", 3600))
         ).isoformat()
         return data
 
@@ -1039,27 +1042,6 @@ async def get_microsoft_user_info(access_token: str) -> dict:
             raise Exception(f"Failed to get user info: {response.text}")
 
         return response.json()
-
-
-async def get_microsoft_credentials(tenant_id: str, client_id: str) -> dict | None:
-    """Get app credentials from external storage."""
-    if not ORCHESTRA_URL:
-        print("ORCHESTRA_URL not configured")
-        return None
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{ORCHESTRA_URL}/microsoft/credentials",
-                params={"tenant_id": tenant_id, "client_id": client_id},
-                timeout=30.0,
-            )
-            if response.status_code == 200:
-                return response.json()
-            return None
-    except Exception as e:
-        print(f"Error getting credentials: {e}")
-        return None
 
 
 async def store_microsoft_token(

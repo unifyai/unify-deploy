@@ -174,6 +174,7 @@ import base64
 import json
 
 state_data = {
+    "assistant_email": "assistant@company.com",  # Required - to look up AZURE_CLIENT_SECRET
     "tenant_id": "your-tenant-id",
     "client_id": "your-client-id",
     "redirect_after": "https://your-app.com/success"  # optional
@@ -181,13 +182,15 @@ state_data = {
 state = base64.urlsafe_b64encode(json.dumps(state_data).encode()).decode()
 ```
 
+> **Note:** The `assistant_email` must be registered in Orchestra with `AZURE_CLIENT_SECRET` in its secrets.
+
 | Parameter | Description |
 |-----------|-------------|
 | `tenant_id` | Customer's Azure AD tenant ID |
 | `client_id` | Customer's app client ID |
 | `redirect_uri` | Must match URI configured in app registration (adapters URL) |
 | `scope` | `{client_id}/.default` requests all configured permissions |
-| `state` | **Required.** Base64-encoded JSON with tenant_id, client_id, redirect_after |
+| `state` | **Required.** Base64-encoded JSON with assistant_email, tenant_id, client_id, redirect_after |
 
 **Example:**
 ```
