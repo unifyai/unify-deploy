@@ -18,16 +18,11 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
 from livekit import api
 
-from azure.identity import ClientSecretCredential
+from azure.core.credentials import AccessToken, TokenCredential
 from msgraph import GraphServiceClient
 from msgraph.generated.users.item.messages.item.message_item_request_builder import (
     MessageItemRequestBuilder,
 )
-
-# Azure AD credentials from environment
-AZURE_TENANT_ID = os.getenv("AZURE_TENANT_ID")
-AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
-AZURE_CLIENT_SECRET = os.getenv("AZURE_CLIENT_SECRET")
 
 STAGING = os.getenv("STAGING")
 ORCHESTRA_URL = (
@@ -228,6 +223,8 @@ def check_valid_contact(
         f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
         f"{user_number}, {user_email}, {assistant_context}"
     )
+    if assistant_data["assistant_id"] in [4, 5, 6, 7, 8]:
+        return [], True
 
     # check for contact in assistant contacts
     context = f"{assistant_context}/Contacts"
@@ -394,22 +391,28 @@ def build_webhook_context(
     validate_contact: bool = True,
     ensure_job: bool = True,
     force_start: bool = False,
+    assistant_data: dict = None,
 ):
-    """Build a shared context for webhooks."""
+    """Build a shared context for webhooks.
+
+    Args:
+        assistant_data: Optional pre-fetched assistant data to avoid duplicate Orchestra calls.
+    """
     # normalize identifiers and resolve assistant by channel
     is_email = channel == "email"
     normalized_sender = sender.strip()
 
-    # get assistant data
-    if assistant_id:
-        assistant_data = get_assistant(assistant_id=assistant_id)
-    else:
-        print(f"Getting assistant data for {destination} with is_email: {is_email}")
-        assistant_data = (
-            get_assistant(email_address=destination)
-            if is_email
-            else get_assistant(phone_number=destination)
-        )
+    # get assistant data (skip if pre-fetched)
+    if assistant_data is None:
+        if assistant_id:
+            assistant_data = get_assistant(assistant_id=assistant_id)
+        else:
+            print(f"Getting assistant data for {destination} with is_email: {is_email}")
+            assistant_data = (
+                get_assistant(email_address=destination)
+                if is_email
+                else get_assistant(phone_number=destination)
+            )
     api_key = assistant_data["api_key"]
     assistant_id = assistant_data["assistant_id"]
     user_id = assistant_data["user_id"]
@@ -423,7 +426,7 @@ def build_webhook_context(
     contacts = []
     is_valid_contact = True
     print("validate_contact:", validate_contact)
-    if validate_contact and assistant_id not in [4, 5, 6, 7]:
+    if validate_contact and assistant_id not in [4, 5, 6, 7, 8]:
         contacts, is_valid_contact = check_valid_contact(
             email_address=(sender if is_email else ""),
             phone_number=("" if is_email else normalized_sender),
@@ -613,28 +616,43 @@ def _strip_quoted_text(text: str) -> str:
 # =============================================================================
 
 
-def get_graph_client():
-    """
-    Create a Microsoft Graph client using client credentials flow.
-    """
-    if not all([AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET]):
-        raise Exception("Azure AD credentials not configured.")
+class TokenCredentialFromSecret(TokenCredential):
+    """Wraps a stored access token for use with Microsoft Graph SDK."""
 
-    credential = ClientSecretCredential(
-        tenant_id=AZURE_TENANT_ID,
-        client_id=AZURE_CLIENT_ID,
-        client_secret=AZURE_CLIENT_SECRET,
-    )
+    def __init__(self, access_token: str):
+        self._token = access_token
+
+    def get_token(self, *scopes, **kwargs) -> AccessToken:
+        # Expiry doesn't matter - scheduled job keeps token fresh
+        return AccessToken(
+            self._token, int(datetime.now(tz=timezone.utc).timestamp()) + 3600
+        )
+
+
+def get_graph_client_from_token(access_token: str) -> GraphServiceClient:
+    """
+    Create a Microsoft Graph client from an access token (delegated permissions).
+
+    Args:
+        access_token: The Microsoft access token
+
+    Returns:
+        GraphServiceClient configured with the access token
+    """
     return GraphServiceClient(
-        credentials=credential,
+        credentials=TokenCredentialFromSecret(access_token),
         scopes=["https://graph.microsoft.com/.default"],
     )
 
 
-async def get_outlook_thread_id(user_email: str, email_id: str, graph_client):
+async def get_outlook_thread_id(email_id: str, graph_client):
     """
-    Fetch Outlook message details and mark as read.
+    Fetch Outlook message details using delegated permissions.
     Similar to get_thread_id for Gmail - extracts conversation data from a notification.
+
+    Args:
+        email_id: The message ID from the notification
+        graph_client: GraphServiceClient configured with user's access token
 
     Returns:
         tuple: (conversation_id, email_id, last_message) or (None, None, None) if not found
@@ -664,10 +682,9 @@ async def get_outlook_thread_id(user_email: str, email_id: str, graph_client):
             )
         )
 
-        message = (
-            await graph_client.users.by_user_id(user_email)
-            .messages.by_message_id(email_id)
-            .get(request_configuration=request_config)
+        # Use /me endpoint for delegated permissions
+        message = await graph_client.me.messages.by_message_id(email_id).get(
+            request_configuration=request_config
         )
 
         if not message:

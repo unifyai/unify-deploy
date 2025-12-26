@@ -21,10 +21,12 @@ from twilio.twiml.voice_response import VoiceResponse
 from .helpers import (
     add_user_to_conference,
     build_webhook_context,
+    check_valid_contact,
     create_conference_response,
+    create_job,
     dispatch_agent,
     get_assistant,
-    get_graph_client,
+    get_graph_client_from_token,
     get_outlook_thread_id,
     get_thread_id,
     is_job_running,
@@ -32,6 +34,7 @@ from .helpers import (
     publish_outlook_thread_id,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
+    start_unity_job,
     store_microsoft_token,
     STAGING,
     ORCHESTRA_URL,
@@ -1007,13 +1010,40 @@ async def outlook_notification_processor(request: Request):
             print(f"Could not parse resource path '{resource}': {e}")
             return Response(status_code=200)
 
-        # Get Graph client and process message
-        graph_client = get_graph_client()
         print(
             f"assistant_email_address: {assistant_email_address}, email_id: {email_id}"
         )
+
+        # Get assistant data, secrets, and contacts in one call
+        context = build_webhook_context(
+            channel="email",
+            destination=assistant_email_address,
+            sender="",  # Unknown until we fetch the message
+            validate_contact=False,  # We'll validate after fetching message
+            ensure_job=False,  # We'll start job after validation
+        )
+        assistant_data = context["assistant"]
+        if not assistant_data or not assistant_data.get("assistant_id"):
+            print(f"Assistant not found for {assistant_email_address}")
+            return Response(status_code=200)
+
+        assistant_id = assistant_data["assistant_id"]
+        user_id = assistant_data["user_id"]
+        api_key = assistant_data["api_key"]
+
+        # Get access token from secrets
+        secrets = assistant_data.get("secrets", {})
+        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
+        if not access_token:
+            print(f"No Microsoft access token for {assistant_email_address}")
+            return Response(status_code=200)
+
+        # Create Graph client from token
+        graph_client = get_graph_client_from_token(access_token)
+
+        # Fetch message details to get the actual sender
         conversation_id, email_id, last_message = await get_outlook_thread_id(
-            assistant_email_address, email_id, graph_client
+            email_id, graph_client
         )
         print(
             f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}"
@@ -1026,22 +1056,33 @@ async def outlook_notification_processor(request: Request):
         from_email = last_message["sender"]
         print(f"from_email: {from_email}")
 
-        # Shared context
-        context = build_webhook_context("email", assistant_email_address, from_email)
-        assistant_data = context["assistant"]
-        assistant_id = assistant_data["assistant_id"]
-        user_id = assistant_data["user_id"]
-        contacts = context["contacts"]
+        # Validate contact now that we have the sender
+        contacts, is_valid_contact = check_valid_contact(
+            email_address=from_email,
+            medium="email",
+            assistant_context=f"{assistant_data['assistant_first_name']}{assistant_data['assistant_surname']}",
+            api_key=api_key,
+            user_number=assistant_data.get("user_number", ""),
+            user_email=assistant_data.get("user_email", ""),
+            assistant_data=assistant_data,
+        )
 
-        if not context["is_valid_contact"]:
+        if not is_valid_contact:
             error_message = (
                 "This email address is no longer active. Please visit "
                 "console.unify.ai to view your assistant details."
             )
             return Response(content=error_message, status_code=500)
 
-        running = context["is_job_running"]
-        print(f"Job running: {running}")
+        # Start job if not already running
+        is_running = is_job_running(user_id, assistant_id)
+        is_default = "default" in assistant_id
+        if not is_running and not is_default:
+            start_unity_job(assistant_data, "email")
+            create_job(assistant_id)
+            is_running = True
+
+        print(f"Job running: {is_running}")
 
         print(f"Successfully processed conversation for user {assistant_email_address}")
         publish_outlook_thread_id(

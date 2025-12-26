@@ -9,10 +9,11 @@ This guide walks you through setting up Microsoft Graph API for Outlook email in
 4. [Step 3: Configure API Permissions (Delegated)](#step-3-configure-api-permissions)
 5. [Step 4: Create Client Secret](#step-4-create-client-secret)
 6. [Step 5: Configure Environment Variables](#step-5-configure-environment-variables)
-7. [Step 6: Authorize the User (OAuth Flow)](#step-6-authorize-the-user-oauth-flow)
-8. [Step 7: Set Up Webhook Endpoint](#step-7-set-up-webhook-endpoint)
-9. [Step 8: Test the Integration](#step-8-test-the-integration)
-10. [Troubleshooting](#troubleshooting)
+7. [Step 5.5: Configure Mail Routing for Verified Domains](#step-55-configure-mail-routing-for-verified-domains-important)
+8. [Step 6: Authorize the User (OAuth Flow)](#step-6-authorize-the-user-oauth-flow)
+9. [Step 7: Set Up Webhook Endpoint](#step-7-set-up-webhook-endpoint)
+10. [Step 8: Test the Integration](#step-8-test-the-integration)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -184,6 +185,48 @@ UNITY_COMMS_URL=https://your-domain.com
 | `AZURE_CLIENT_ID` | App registration → Overview → "Application (client) ID" |
 | `AZURE_CLIENT_SECRET` | The value you copied in Step 4 |
 | `OUTLOOK_WEBHOOK_SECRET` | Generate a random string (e.g., `openssl rand -hex 32`) |
+
+---
+
+## Step 5.5: Configure Mail Routing for Verified Domains (Important)
+
+If you have verified a domain (e.g., `unify.ai`) in your Microsoft 365 tenant for **Teams SBC/calling** functionality, but the actual mailboxes for that domain are hosted elsewhere (another Microsoft 365 tenant, Google Workspace, etc.), you need to configure mail routing to prevent delivery failures.
+
+### The Problem
+
+When a domain is verified in Microsoft 365, Exchange Online treats it as an **authoritative domain** by default. This means:
+- Emails sent to `user@verified-domain.com` are routed internally
+- If no mailbox exists in this tenant → `RecipientNotFound` error (550 5.1.10)
+
+### The Solution: Internal Relay Domain
+
+Change the domain type to **Internal Relay**, which tells Exchange:
+- "Try internal delivery first, but if no mailbox is found, route externally via MX lookup"
+
+### Configuration Steps
+
+1. Go to **Microsoft 365 Admin Center** → **Admin centers** → **Exchange**
+2. Navigate to **Mail flow** → **Accepted domains**
+3. Click on your verified domain (e.g., `unify.ai`)
+4. Change **Domain type** from **Authoritative** to **Internal Relay**
+5. Click **Save**
+
+### Domain Type Comparison
+
+| Domain Type | Behavior |
+|-------------|----------|
+| **Authoritative** | All mailboxes must exist in this tenant. Reject if not found. |
+| **Internal Relay** | Try internal first, forward externally if no mailbox found. |
+
+### Prerequisites
+
+- Ensure MX records for the domain point to the actual mail server (not this tenant)
+- This configuration does NOT affect Teams SBC functionality - the domain remains verified
+
+> **When is this needed?**
+> - You have a domain verified for Teams calling/SBC
+> - Email for that domain is hosted elsewhere
+> - You want to send emails TO addresses on that domain from this tenant
 
 ---
 
@@ -428,6 +471,21 @@ async def test_send_email(user_access_token: str):
 **Fix:**
 1. Verify `AZURE_TENANT_ID` matches the "Directory (tenant) ID" in Azure Portal
 2. Ensure you registered the app in the correct tenant
+
+### "RecipientNotFound" Error (550 5.1.10)
+
+**Cause:** You're sending to an email address on a domain that's verified in your tenant, but the mailbox doesn't exist in this tenant.
+
+**Symptoms:**
+- `send_email` returns success
+- Email shows as sent in Outlook
+- Delivery failure notification: `550 5.1.10 RESOLVER.ADR.RecipientNotFound`
+
+**Fix:**
+1. This commonly happens when a domain is verified for Teams SBC but mail is hosted elsewhere
+2. Go to **Exchange Admin Center** → **Mail flow** → **Accepted domains**
+3. Change the domain type from **Authoritative** to **Internal Relay**
+4. See [Step 5.5](#step-55-configure-mail-routing-for-verified-domains-important) for detailed instructions
 
 ### Webhook Not Receiving Notifications
 
