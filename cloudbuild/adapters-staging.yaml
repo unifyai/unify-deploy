@@ -109,6 +109,29 @@ steps:
           --location="${_REGION}"
     waitFor: ['deploy']
 
+  # Update Cloud Scheduler: Microsoft Token Refresh Staging
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    id: 'update-scheduler-microsoft-tokens'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+        gcloud scheduler jobs update http "microsoft-tokens-staging" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
+          --http-method POST \
+          --message-body '{}' \
+          --location="${_REGION}" \
+        || \
+        gcloud scheduler jobs create http "microsoft-tokens-staging" \
+          --schedule "*/30 * * * *" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
+          --http-method POST \
+          --message-body '{}' \
+          --time-zone "UTC" \
+          --location="${_REGION}"
+    waitFor: ['deploy']
+
 # Options
 options:
   substitutionOption: ALLOW_LOOSE

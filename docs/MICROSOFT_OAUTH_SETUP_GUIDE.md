@@ -212,26 +212,36 @@ You can send this URL to the customer via email, embed it in a dashboard, etc.
 
 ## Token Storage
 
-After successful authorization, Unify stores:
+### Pre-configured during onboarding (before OAuth)
 
-```json
-{
-  "user_email": "unify-bot@company.com",
-  "tenant_id": "abc123-...",
-  "client_id": "def456-...",
-  "client_secret": "xyz789...",
-  "access_token": "eyJ...",
-  "refresh_token": "0.AR...",
-  "expires_at": "2024-01-15T12:00:00Z"
-}
-```
+These secrets must be added to the assistant **before** the OAuth flow:
+
+| Secret Name | Description |
+|-------------|-------------|
+| `AZURE_TENANT_ID` | Azure AD tenant ID (customer provides) |
+| `AZURE_CLIENT_ID` | Azure AD app client ID (customer provides) |
+| `AZURE_CLIENT_SECRET` | Azure AD app client secret (customer provides) |
+
+> ⚠️ The OAuth callback uses these to exchange the authorization code for tokens.
+> The scheduled token refresh job also uses these to refresh tokens every 30 minutes.
+
+### Stored during OAuth callback
+
+These secrets are stored automatically after the user completes authorization:
+
+| Secret Name | Description |
+|-------------|-------------|
+| `MICROSOFT_ACCESS_TOKEN` | Access token for Graph API calls (~1 hour lifetime) |
+| `MICROSOFT_REFRESH_TOKEN` | Refresh token for getting new access tokens |
+| `MICROSOFT_TOKEN_EXPIRES_AT` | ISO timestamp when access token expires |
 
 ### Token Lifecycle
 
-- **Access tokens** expire in ~1 hour
+- **Access tokens** expire in 60-90 minutes (Microsoft adds jitter to prevent thundering herd)
 - **Refresh tokens** expire in 90 days if unused
-- A daily background job "touches" all tokens to keep them alive indefinitely
-- When making API calls, tokens are refreshed automatically if expired
+- A **scheduled job runs every 30 minutes** to refresh all Microsoft tokens
+- This keeps both access tokens and refresh tokens alive indefinitely
+- Endpoints (Outlook, Teams) simply use the stored access token - no refresh logic needed
 
 ### Revoking Access
 
@@ -284,51 +294,86 @@ Or if no redirect_after:
 # Adapters URL (callback URL must match Azure AD app registration)
 UNITY_ADAPTERS_URL=https://adapters.unify.ai
 
-# External storage API
-UNIFY_BASE_URL=https://api.unify.ai/v0
+# Orchestra API URL
+ORCHESTRA_URL=https://api.unify.ai/v0
+
+# Admin key for Orchestra (needed to fetch all assistants)
+ORCHESTRA_ADMIN_KEY=...
 ```
 
 ---
 
-## External Storage API
+## Scheduled Token Refresh
 
-Unify's backend needs these endpoints:
+A Cloud Scheduler job refreshes all Microsoft tokens every 30 minutes:
 
-### Store Credentials (during onboarding)
+```bash
+# Create the scheduler job
+gcloud scheduler jobs create http microsoft-token-refresh \
+  --schedule="*/30 * * * *" \
+  --uri="https://your-adapters-url/scheduled/microsoft-tokens" \
+  --http-method=POST \
+  --message-body='{}' \
+  --time-zone="UTC" \
+  --location="us-central1"
 ```
-POST /microsoft/credentials
+
+### How it works
+
+```
+POST /scheduled/microsoft-tokens
+
+1. Fetches ALL assistants in a single call (GET /admin/assistant)
+2. Skips those without Microsoft tokens in secrets
+3. For each with tokens:
+   - Uses refresh_token to get new access_token
+   - Stores updated tokens back to secrets
+4. Returns: { refreshed: ["email1", ...], failed: [{email, error}, ...] }
+```
+
+### Why every 30 minutes?
+
+- Access tokens expire in 60-90 minutes
+- 30-min refresh ensures tokens are always valid with buffer
+- Using the refresh token also resets its 90-day inactivity clock
+- Single scheduled job - no refresh logic needed in endpoints
+
+---
+
+## Orchestra API Integration
+
+### Get Assistant by Email (OAuth callback)
+```
+GET /admin/assistant?email={assistant_email}
+→ { info: [{ agent_id, api_key, secrets: { AZURE_CLIENT_SECRET, ... } }] }
+```
+
+### Get All Assistants (scheduled token refresh)
+```
+GET /admin/assistant
+→ { info: [{ agent_id, api_key, email, secrets: {...} }, ...] }
+```
+
+### Store Secret
+```
+POST /assistant/{assistant_id}/secret
+Headers: Authorization: Bearer {api_key}
 {
-  "tenant_id": "...",
-  "client_id": "...",
-  "client_secret": "..."
+  "secret_name": "MICROSOFT_ACCESS_TOKEN",
+  "secret_value": "..."
 }
 ```
 
-### Get Credentials (for OAuth callback)
-```
-GET /microsoft/credentials?tenant_id=...&client_id=...
-→ { "client_secret": "..." }
-```
+### Pre-configured secrets (during onboarding)
+Must be added before OAuth flow:
+- `AZURE_TENANT_ID`
+- `AZURE_CLIENT_ID`
+- `AZURE_CLIENT_SECRET`
 
-### Store Token (after OAuth)
-```
-POST /microsoft/token
-{
-  "user_email": "...",
-  "tenant_id": "...",
-  "client_id": "...",
-  "client_secret": "...",
-  "access_token": "...",
-  "refresh_token": "...",
-  "expires_at": "..."
-}
-```
-
-### Get Token (for API calls)
-```
-GET /microsoft/token?user_email=...
-→ { access_token, refresh_token, tenant_id, client_id, client_secret, expires_at }
-```
+### Secrets stored by OAuth callback
+- `MICROSOFT_ACCESS_TOKEN`
+- `MICROSOFT_REFRESH_TOKEN`
+- `MICROSOFT_TOKEN_EXPIRES_AT`
 
 ---
 
@@ -359,5 +404,10 @@ The client_secret is wrong or expired.
 ### Tokens expiring / refresh failing
 Refresh tokens expire after 90 days of inactivity.
 
-**Fix:** Ensure the daily token refresh job is running to keep tokens alive.
+**Fix:** Ensure the scheduled token refresh job (`/scheduled/microsoft-tokens`) is running every 30 minutes. Check Cloud Scheduler logs.
+
+### "No Microsoft access token found"
+The user hasn't completed the OAuth flow yet.
+
+**Fix:** Have the user visit the OAuth URL to authorize the integration.
 

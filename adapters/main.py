@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import os
 import requests
 import httpx
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import RedirectResponse
@@ -1296,6 +1296,139 @@ async def scheduled_gmail_watches(request: Request):
         ).json()
         print("Renewed policy assistant")
         print(response)
+
+    return results
+
+
+@app.post("/scheduled/microsoft-tokens")
+async def scheduled_microsoft_tokens(request: Request):
+    """
+    Cloud Run endpoint that refreshes Microsoft OAuth tokens for all assistants.
+    Should be scheduled to run every 30-45 minutes to keep access tokens fresh.
+
+    Fetches all assistants in a single call and only processes those with
+    Microsoft tokens configured in their secrets.
+    """
+    payload = await request.json()
+    test = payload.get("test", False)
+
+    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    if not admin_key:
+        return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
+
+    # Get all assistants in a single call (no params = all assistants)
+    try:
+        response = requests.get(
+            f"{ORCHESTRA_URL}/admin/assistant",
+            headers={"Authorization": f"Bearer {admin_key}"},
+        )
+        if response.status_code != 200:
+            return Response(
+                content=f"Failed to get assistants: {response.text}",
+                status_code=500,
+            )
+        all_assistants = response.json().get("info", [])
+    except Exception as e:
+        print(f"Failed to get assistants: {e}")
+        return Response(content=f"Failed to get assistants: {e}", status_code=500)
+
+    print(f"Fetched {len(all_assistants)} assistants")
+    results = {"refreshed": [], "failed": []}
+
+    for assistant in all_assistants:
+        email = assistant.get("email", "unknown")
+        assistant_id = assistant.get("agent_id")
+
+        # Skip test in non-test mode
+        if test and email != "default-test-assistant@unify.ai":
+            continue
+
+        # Skip if no Microsoft tokens configured
+        secrets = assistant.get("secrets", {})
+        if not secrets:
+            continue
+        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
+        refresh_token = secrets.get("MICROSOFT_REFRESH_TOKEN")
+        if not access_token or not refresh_token:
+            continue
+
+        # Get required credentials for refresh
+        tenant_id = secrets.get("AZURE_TENANT_ID")
+        client_id = secrets.get("AZURE_CLIENT_ID")
+        client_secret = secrets.get("AZURE_CLIENT_SECRET")
+        if not all([tenant_id, client_id, client_secret]):
+            results["failed"].append(
+                {"email": email, "error": "Missing Azure credentials"}
+            )
+            continue
+
+        try:
+            # Refresh the token
+            token_resp = requests.post(
+                f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                    "scope": "https://graph.microsoft.com/.default offline_access",
+                },
+            )
+
+            if token_resp.status_code != 200:
+                results["failed"].append(
+                    {
+                        "email": email,
+                        "error": f"Token refresh failed: {token_resp.text}",
+                    }
+                )
+                continue
+
+            new_tokens = token_resp.json()
+            expires_at = (
+                datetime.now(tz=timezone.utc)
+                + timedelta(seconds=new_tokens.get("expires_in", 3600))
+            ).isoformat()
+
+            # Store updated tokens
+            api_key = assistant.get("api_key")
+
+            secrets_to_store = {
+                "MICROSOFT_ACCESS_TOKEN": new_tokens["access_token"],
+                "MICROSOFT_TOKEN_EXPIRES_AT": expires_at,
+            }
+            # Only update refresh token if a new one was issued
+            if new_tokens.get("refresh_token"):
+                secrets_to_store["MICROSOFT_REFRESH_TOKEN"] = new_tokens[
+                    "refresh_token"
+                ]
+
+            for secret_name, secret_value in secrets_to_store.items():
+                response = requests.put(
+                    f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret/{secret_name}",
+                    json={"secret_value": secret_value},
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                if response.status_code != 200:
+                    results["failed"].append(
+                        {
+                            "email": email,
+                            "error": f"Failed to store secret: {response.text}",
+                        }
+                    )
+                    continue
+
+            results["refreshed"].append(email)
+            print(f"Refreshed Microsoft token for {email}")
+
+        except Exception as e:
+            results["failed"].append({"email": email, "error": str(e)})
+            print(f"Error refreshing token for {email}: {e}")
+
+    print(
+        f"Microsoft token refresh complete: "
+        f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed"
+    )
 
     return results
 
