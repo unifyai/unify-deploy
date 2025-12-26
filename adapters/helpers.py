@@ -233,7 +233,7 @@ def check_valid_contact(
     if status_code != 200:
         # if the context or project isn't created yet (first time user)
         if response_json["detail"] in [
-            "Project Assistants not found",
+            "Project Assistants not found.",
             f"Context '{context}' not found",
         ]:
             # check for boss user
