@@ -46,23 +46,25 @@ steps:
       - '--set-env-vars=PROJECT_ID=${PROJECT_ID},STAGING=true'
     waitFor: ['push-sha-tag']
 
-  # Update Cloud Scheduler: Gmail Watches Staging
+  # Update Cloud Scheduler: Email Watches Staging
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-gmail-watches'
+    id: 'update-scheduler-email-watches'
     entrypoint: bash
     args:
       - '-c'
       - |
         CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "gmail-watches-staging" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/gmail-watches" \
+        gcloud scheduler jobs update http "email-watches-staging" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
           --http-method POST \
+          --message-body '{}' \
           --location="${_REGION}" \
         || \
-        gcloud scheduler jobs create http "gmail-watches-staging" \
+        gcloud scheduler jobs create http "email-watches-staging" \
           --schedule "0 0 * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/gmail-watches" \
+          --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
           --http-method POST \
+          --message-body '{}' \
           --time-zone "UTC" \
           --location="${_REGION}"
     waitFor: ['deploy']

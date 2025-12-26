@@ -1284,60 +1284,125 @@ async def microsoft_oauth_callback(request: Request):
 # =============================================================================
 
 
-# ToDo: we need to get this working with outlook as well after it's added to the
-# assistant table in orchestra (maybe with an additional column for gmail/outlook)
-@app.post("/scheduled/gmail-watches")
-async def scheduled_gmail_watches(request: Request):
-    """Cloud Run endpoint that renews Gmail watches for multiple users."""
+@app.post("/scheduled/email-watches")
+async def scheduled_email_watches(request: Request):
+    """
+    Cloud Run endpoint that renews email watches for all assistants.
+    Automatically detects provider based on secrets:
+    - If MICROSOFT_ACCESS_TOKEN exists → Outlook watch
+    - Otherwise → Gmail watch
+    """
     payload = await request.json()
     test = payload.get("test", False)
 
+    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    if not admin_key:
+        return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
+
+    # Fetch all assistants with their secrets
     if not test:
-        emails = requests.get(
-            f"{ORCHESTRA_URL}/admin/assistant/emails",
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-        ).json()["info"]
-    else:
-        emails = ["default-test-assistant@unify.ai"]
-    print(f"Emails to renew: {emails}")
-
-    results = {}
-
-    # Process each email
-    print("Renewing emails...")
-    for email in emails:
         try:
-            admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-            results[email] = requests.post(
+            response = requests.get(
+                f"{ORCHESTRA_URL}/admin/assistant",
+                headers={"Authorization": f"Bearer {admin_key}"},
+            )
+            if response.status_code != 200:
+                return Response(
+                    content=f"Failed to get assistants: {response.text}",
+                    status_code=500,
+                )
+            all_assistants = response.json().get("info", [])
+        except Exception as e:
+            print(f"Failed to get assistants: {e}")
+            return Response(content=f"Failed to get assistants: {e}", status_code=500)
+    else:
+        all_assistants = [{"email": "default-test-assistant@unify.ai", "secrets": {}}]
+
+    print(f"Processing {len(all_assistants)} assistants for email watch renewal")
+
+    results = {"gmail": [], "outlook": []}
+
+    for assistant in all_assistants:
+        email = assistant.get("email")
+        if not email:
+            continue
+
+        secrets = assistant.get("secrets", {})
+        has_ms_token = bool(secrets.get("MICROSOFT_ACCESS_TOKEN"))
+
+        try:
+            if has_ms_token:
+                # Use Outlook watch
+                watch_response = requests.post(
+                    f"{COMMS_URL}/outlook/watch",
+                    json={"primary_email": email},
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    timeout=30,
+                )
+                result = (
+                    watch_response.json()
+                    if watch_response.status_code == 200
+                    else {
+                        "success": False,
+                        "error": watch_response.text,
+                    }
+                )
+                results["outlook"].append({"email": email, **result})
+                print(f"Outlook watch for {email}: {result.get('success', False)}")
+            else:
+                # Use Gmail watch
+                watch_response = requests.post(
+                    f"{COMMS_URL}/gmail/watch",
+                    json={
+                        "primary_email": email,
+                        "topic_name": (
+                            "gmail-notifications"
+                            if not STAGING
+                            else "gmail-notifications-staging"
+                        ),
+                    },
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    timeout=30,
+                )
+                result = (
+                    watch_response.json()
+                    if watch_response.status_code == 200
+                    else {
+                        "success": False,
+                        "error": watch_response.text,
+                    }
+                )
+                results["gmail"].append({"email": email, **result})
+                print(f"Gmail watch for {email}: {result.get('success', False)}")
+
+        except Exception as e:
+            error_msg = f"Error renewing watch for {email}: {str(e)}"
+            print(error_msg)
+            provider = "outlook" if has_ms_token else "gmail"
+            results[provider].append(
+                {"email": email, "success": False, "error": error_msg}
+            )
+
+    # Renew policy assistant (Gmail-based, staging only)
+    if STAGING and not test:
+        try:
+            response = requests.post(
                 f"{COMMS_URL}/gmail/watch",
                 json={
-                    "primary_email": email,
-                    "topic_name": (
-                        "gmail-notifications"
-                        if not STAGING
-                        else "gmail-notifications-staging"
-                    ),
+                    "primary_email": "mh-policies@unify.ai",
+                    "topic_name": "intranet",
                 },
                 headers={"Authorization": f"Bearer {admin_key}"},
+                timeout=30,
             ).json()
+            results["gmail"].append({"email": "mh-policies@unify.ai", **response})
+            print(f"Renewed policy assistant: {response}")
         except Exception as e:
-            error_message = f"Error renewing Gmail watch for {email}: {str(e)}"
-            print(error_message)
-            results[email] = {"success": False, "error": error_message}
-    print("Results of renewing emails:")
-    print(results)
+            print(f"Error renewing policy assistant: {e}")
 
-    # renew policy assistant
-    if STAGING and not test:
-        admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-        response = requests.post(
-            f"{COMMS_URL}/gmail/watch",
-            json={"primary_email": "mh-policies@unify.ai", "topic_name": "intranet"},
-            headers={"Authorization": f"Bearer {admin_key}"},
-        ).json()
-        print("Renewed policy assistant")
-        print(response)
-
+    print(
+        f"Email watch renewal complete: {len(results['gmail'])} Gmail, {len(results['outlook'])} Outlook"
+    )
     return results
 
 
@@ -1593,7 +1658,7 @@ if __name__ == "__main__":
     print("    - POST /microsoft/router")
     print("    - GET  /microsoft/auth/callback")
     print("  Scheduled:")
-    print("    - POST /scheduled/gmail-watches")
+    print("    - POST /scheduled/email-watches")
     print("    - POST /scheduled/jobs/create")
     print("    - POST /scheduled/jobs/cleanup")
     print("Server running at: http://localhost:8080")
