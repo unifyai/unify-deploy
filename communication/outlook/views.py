@@ -185,15 +185,18 @@ async def watch_outlook_email(request: Request):
                     pass
 
         # Create new subscription
+        # Encode assistant email in clientState so we can identify them in notifications
+        # Format: {secret}::{email}
+        webhook_secret = os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook")
+        client_state = f"{webhook_secret}::{user_email}"
+
         result = await graph.subscriptions.post(
             Subscription(
                 change_type="created",
                 notification_url=webhook_url,
                 resource=target_resource,
                 expiration_date_time=datetime.now(timezone.utc) + timedelta(days=3),
-                client_state=os.getenv(
-                    "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
-                ),
+                client_state=client_state,
             )
         )
 

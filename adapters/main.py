@@ -986,7 +986,6 @@ async def outlook_notification_processor(request: Request):
         notification = await request.json()
         for key, value in notification.items():
             print(f"{key}: {value}")
-        return Response(status_code=200)
 
         # Parse clientState - format is "{secret}::{email}"
         # This contains the assistant email encoded when the subscription was created
