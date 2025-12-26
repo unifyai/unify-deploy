@@ -985,29 +985,33 @@ async def outlook_notification_processor(request: Request):
     try:
         notification = await request.json()
 
-        # Validate clientState for security
-        expected_client_state = os.getenv(
-            "OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook"
-        )
-        client_state = notification.get("clientState")
-        if client_state != expected_client_state:
-            print(f"Invalid clientState received: {client_state}")
+        # Parse clientState - format is "{secret}::{email}"
+        # This contains the assistant email encoded when the subscription was created
+        client_state = notification.get("clientState", "")
+        expected_secret = os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook")
+
+        # Validate and extract email from clientState
+        if "::" in client_state:
+            secret_part, assistant_email_address = client_state.split("::", 1)
+            if secret_part != expected_secret:
+                print(f"Invalid clientState secret: {secret_part}")
+                return Response(status_code=200)
+        else:
+            # Legacy format - just the secret, no email encoded
+            print(f"Legacy clientState format (no email encoded): {client_state}")
             return Response(status_code=200)
 
-        # Parse resource path to get user email and message ID
+        # Parse resource path to get message ID
         resource = notification.get("resource", "")
         if "/Messages/" not in resource:
             return Response(status_code=200)
 
         parts = resource.split("/")
         try:
-            user_index = parts.index("Users") + 1
-            assistant_email_address = parts[user_index]
-
             messages_index = parts.index("Messages") + 1
             email_id = parts[messages_index]
         except (ValueError, IndexError) as e:
-            print(f"Could not parse resource path '{resource}': {e}")
+            print(f"Could not parse message ID from resource path '{resource}': {e}")
             return Response(status_code=200)
 
         print(
