@@ -231,8 +231,11 @@ def check_valid_contact(
     response_json, status_code = get_contacts(context, api_key)
     default_contacts = get_default_contacts(assistant_data)
     if status_code != 200:
-        # if the context isn't created yet (first time user)
-        if response_json["detail"] == f"Context '{context}' not found":
+        # if the context or project isn't created yet (first time user)
+        if response_json["detail"] in [
+            "Project 'Assistants' not found",
+            f"Context '{context}' not found",
+        ]:
             # check for boss user
             if check_contact_details(
                 email_address=email_address,
