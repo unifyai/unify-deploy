@@ -1144,7 +1144,10 @@ async def teams_notification_processor(request: Request):
         resource_data = notification.get("resourceData", {})
 
         # Determine if this is a channel message or a chat message
-        is_channel_message = "/teams/" in resource and "/channels/" in resource
+        # Channel notifications use OData format: teams('id')/channels('id')/messages('id')
+        is_channel_message = (
+            "teams(" in resource.lower() and "channels(" in resource.lower()
+        )
 
         # Extract IDs using helper - try resourceData first, then parse from resource path
         message_id = resource_data.get("id") or parse_teams_resource_id(
@@ -1366,9 +1369,10 @@ async def microsoft_router(request: Request):
             elif (
                 "/chats/" in resource.lower()
                 or "getAllMessages" in resource
-                or ("/teams/" in resource.lower() and "/channels/" in resource.lower())
+                or ("teams(" in resource.lower() and "channels(" in resource.lower())
             ):
                 # Teams messages - both chat and channel go to same handler
+                # Channel notifications come as: teams('id')/channels('id')/messages('id')
                 target = f"{adapters_url}/chat/teams"
             else:
                 print(f"unknown resource type: {resource}")
