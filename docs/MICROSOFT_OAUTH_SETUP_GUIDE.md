@@ -101,6 +101,13 @@ Each customer creates their own Azure AD app in their Microsoft 365 tenant:
 
 4. Click **"Grant admin consent for [Organization]"** (requires admin)
 
+> ⚠️ **Important:** If you add new permissions later (e.g., adding Teams Chat to an existing Outlook integration), you must:
+> 1. Add the new permissions in Azure Portal
+> 2. Grant admin consent for the new permissions
+> 3. **Have the user re-authorize** by visiting the OAuth URL again
+>
+> Existing tokens only contain the permissions that were consented at the time of authorization. New permissions require a fresh OAuth flow to be included in the token.
+
 ### Step 5: Provide Credentials to Unify
 
 Customer provides to Unify:
@@ -410,4 +417,19 @@ Refresh tokens expire after 90 days of inactivity.
 The user hasn't completed the OAuth flow yet.
 
 **Fix:** Have the user visit the OAuth URL to authorize the integration.
+
+### "Required permissions to access user-scoped chat message subscription ('Chat.Read, Chat.ReadWrite') are missing"
+The access token doesn't have the required Teams Chat permissions.
+
+**Cause:** Either:
+- `Chat.Read` / `Chat.ReadWrite` permissions were never added to the Azure AD app
+- Permissions were added after the user authorized, so they're not in the token
+
+**Fix:**
+1. Go to Azure Portal → App Registration → API Permissions
+2. Ensure `Chat.Read` and `Chat.ReadWrite` (Delegated) are added
+3. Click "Grant admin consent"
+4. **Have the user re-authorize** by visiting the OAuth URL again
+
+> Tokens only contain permissions that existed and were consented at authorization time. Adding permissions later requires a fresh OAuth flow.
 
