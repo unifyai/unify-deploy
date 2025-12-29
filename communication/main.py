@@ -5,6 +5,7 @@ from communication.phone.views import (
 )
 from communication.gmail.views import router as gmail_router
 from communication.outlook.views import router as outlook_router
+from communication.teams.views import router as teams_router
 from communication.infra.views import router as infra_router
 from communication.social.views import router as social_router
 from .dependencies import auth_admin_key
@@ -19,6 +20,7 @@ app.include_router(phone_auth_router, prefix="/phone", dependencies=admin_auth)
 app.include_router(phone_unauth_router, prefix="/phone")
 app.include_router(gmail_router, prefix="/gmail", dependencies=admin_auth)
 app.include_router(outlook_router, prefix="/outlook", dependencies=admin_auth)
+app.include_router(teams_router, prefix="/teams", dependencies=admin_auth)
 app.include_router(infra_router, prefix="/infra", dependencies=admin_auth)
 app.include_router(social_router, prefix="/social", dependencies=admin_auth)
 

@@ -2,9 +2,7 @@ import os
 import logging
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
-import httpx
 
-from msgraph import GraphServiceClient
 from msgraph.generated.users.item.send_mail.send_mail_post_request_body import (
     SendMailPostRequestBody,
 )
@@ -17,65 +15,10 @@ from msgraph.generated.models.recipient import Recipient
 from msgraph.generated.models.email_address import EmailAddress
 from msgraph.generated.models.subscription import Subscription
 from msgraph.generated.models.message import Message
-from azure.core.credentials import AccessToken, TokenCredential
 
-from communication.helpers import ADAPTERS_URL, ORCHESTRA_URL
+from communication.helpers import ADAPTERS_URL, get_graph_client
 
 router = APIRouter()
-
-
-class TokenCredentialFromSecret(TokenCredential):
-    """Wraps a stored access token for use with Microsoft Graph SDK."""
-
-    def __init__(self, access_token: str):
-        self._token = access_token
-
-    def get_token(self, *scopes, **kwargs) -> AccessToken:
-        # Expiry doesn't matter - scheduled job keeps token fresh
-        return AccessToken(
-            self._token, int(datetime.now(tz=timezone.utc).timestamp()) + 3600
-        )
-
-
-async def get_graph_client(user_email: str) -> GraphServiceClient:
-    """Get Graph client using stored access token for the given assistant email."""
-    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-    if not admin_key:
-        raise HTTPException(
-            status_code=500, detail="ORCHESTRA_ADMIN_KEY not configured"
-        )
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{ORCHESTRA_URL}/admin/assistant",
-            params={"email": user_email},
-            headers={"Authorization": f"Bearer {admin_key}"},
-            timeout=30.0,
-        )
-
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=404, detail=f"Assistant not found: {user_email}"
-        )
-
-    assistants = response.json().get("info", [])
-    if not assistants:
-        raise HTTPException(
-            status_code=404, detail=f"Assistant not found: {user_email}"
-        )
-
-    secrets = assistants[0].get("secrets", {})
-    access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
-    if not access_token:
-        raise HTTPException(
-            status_code=401,
-            detail=f"No Microsoft access token for {user_email}. Complete OAuth first.",
-        )
-
-    return GraphServiceClient(
-        credentials=TokenCredentialFromSecret(access_token),
-        scopes=["https://graph.microsoft.com/.default"],
-    )
 
 
 @router.post("/send")

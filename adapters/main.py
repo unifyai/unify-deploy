@@ -1111,6 +1111,200 @@ async def outlook_notification_processor(request: Request):
 # =============================================================================
 
 
+@app.post("/chat/teams")
+async def teams_notification_processor(request: Request):
+    """
+    Process Teams chat notifications routed from /microsoft/router.
+    Handles new chat messages and triggers the AI agent.
+    """
+    try:
+        notification = await request.json()
+        print(f"teams_notification_processor received: {notification}")
+
+        # Validate client state
+        client_state = notification.get("clientState", "")
+        expected_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
+
+        # Extract assistant email from clientState
+        # Format: {secret}::{email}
+        if "::" in client_state:
+            secret_part, assistant_email_address = client_state.split("::", 1)
+            if secret_part != expected_secret:
+                print(f"Invalid webhook secret in clientState")
+                return Response(status_code=200)
+        else:
+            # Legacy format - just the secret, no email encoded
+            print(f"Legacy clientState format (no email encoded): {client_state}")
+            return Response(status_code=200)
+
+        # Parse resource path to get chat and message IDs
+        # Format: chats/{chatId}/messages/{messageId} or /me/chats/getAllMessages/...
+        resource = notification.get("resource", "")
+        resource_data = notification.get("resourceData", {})
+
+        chat_id = resource_data.get("chatId")
+        message_id = resource_data.get("id")
+
+        if not chat_id or not message_id:
+            # Try to parse from resource path
+            # Format: chats('19:meeting...@thread.v2')/messages('1234567890')
+            if "/chats(" in resource or "chats/" in resource:
+                try:
+                    if "chats('" in resource:
+                        chat_id = resource.split("chats('")[1].split("')")[0]
+                    elif "chats/" in resource:
+                        parts = resource.split("/")
+                        chat_idx = parts.index("chats") if "chats" in parts else -1
+                        if chat_idx >= 0 and len(parts) > chat_idx + 1:
+                            chat_id = parts[chat_idx + 1]
+
+                    if "messages('" in resource:
+                        message_id = resource.split("messages('")[1].split("')")[0]
+                    elif "/messages/" in resource:
+                        parts = resource.split("/")
+                        msg_idx = parts.index("messages") if "messages" in parts else -1
+                        if msg_idx >= 0 and len(parts) > msg_idx + 1:
+                            message_id = parts[msg_idx + 1]
+                except Exception as e:
+                    print(
+                        f"Could not parse chat/message ID from resource '{resource}': {e}"
+                    )
+
+        if not chat_id or not message_id:
+            print(f"Missing chat_id or message_id in notification")
+            return Response(status_code=200)
+
+        print(
+            f"assistant_email: {assistant_email_address}, chat_id: {chat_id}, message_id: {message_id}"
+        )
+
+        # Get assistant data and secrets
+        context = build_webhook_context(
+            channel="teams",
+            destination=assistant_email_address,
+            sender="",  # Unknown until we fetch the message
+            validate_contact=False,
+            ensure_job=False,
+        )
+        assistant_data = context["assistant"]
+        if not assistant_data or not assistant_data.get("assistant_id"):
+            print(f"Assistant not found for {assistant_email_address}")
+            return Response(status_code=200)
+
+        assistant_id = assistant_data["assistant_id"]
+        user_id = assistant_data["user_id"]
+        api_key = assistant_data["api_key"]
+
+        # Get access token from secrets
+        secrets = assistant_data.get("secrets", {})
+        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
+        if not access_token:
+            print(f"No Microsoft access token for {assistant_email_address}")
+            return Response(status_code=200)
+
+        # Fetch full message content using Graph API
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=30.0,
+            )
+
+        if response.status_code != 200:
+            print(
+                f"Failed to fetch Teams message: {response.status_code} - {response.text}"
+            )
+            return Response(status_code=200)
+
+        message_data = response.json()
+
+        # Extract sender info
+        sender_info = message_data.get("from", {})
+        sender_user = sender_info.get("user", {})
+        sender_name = sender_user.get("displayName", "Unknown")
+        sender_id = sender_user.get("id")
+        sender_email = sender_user.get("email") or f"{sender_id}@teams"
+
+        message_content = message_data.get("body", {}).get("content", "")
+        message_type = message_data.get("body", {}).get("contentType", "text")
+
+        print(
+            f"Teams message from {sender_name} ({sender_email}): {message_content[:100]}..."
+        )
+
+        # Skip messages from the assistant itself (avoid loops)
+        # Check if sender_id matches any known assistant identifier
+        if sender_email and sender_email.lower() == assistant_email_address.lower():
+            print("Skipping message from assistant itself")
+            return Response(status_code=200)
+
+        # Validate contact
+        contacts, is_valid_contact = check_valid_contact(
+            email_address=sender_email,
+            medium="teams",
+            assistant_context=f"{assistant_data['assistant_first_name']}{assistant_data['assistant_surname']}",
+            api_key=api_key,
+            user_number=assistant_data.get("user_number", ""),
+            user_email=assistant_data.get("user_email", ""),
+            assistant_data=assistant_data,
+        )
+
+        if not is_valid_contact:
+            print(f"Invalid contact for Teams: {sender_email}")
+            return Response(status_code=200)
+
+        # Start job if not already running
+        is_running = is_job_running(user_id, assistant_id)
+        is_default = assistant_id and "default" in assistant_id
+        if not is_running and not is_default:
+            start_unity_job(assistant_data, "teams")
+            create_job(assistant_id)
+            is_running = True
+
+        print(f"Job running: {is_running}")
+
+        # Publish to Pub/Sub
+        pubsub_client = pubsub_v1.PublisherClient()
+        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+
+        pubsub_message = {
+            "thread": "teams_chat",
+            "event": {
+                "contacts": contacts,
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "sender": sender_email,
+                "sender_name": sender_name,
+                "sender_id": sender_id,
+                "message": message_content,
+                "content_type": message_type,
+                "created_at": message_data.get("createdDateTime"),
+                "assistant_email": assistant_email_address,
+                "action": "new_message",
+                "timestamp": int(time.time() * 1000),
+            },
+        }
+
+        try:
+            publish_future = pubsub_client.publish(
+                topic_path,
+                json.dumps(pubsub_message).encode("utf-8"),
+            )
+            publish_future.result(timeout=5)
+            print(f"Teams chat message published to Pub/Sub topic {topic_name}")
+        except Exception as e:
+            print(f"Error publishing Teams chat to Pub/Sub: {e}")
+
+        return Response(content="OK", status_code=200)
+
+    except Exception as e:
+        error_message = f"Error processing Teams notification: {str(e)}"
+        traceback.print_exc()
+        print(error_message)
+        return Response(content=error_message, status_code=500)
+
+
 @app.post("/microsoft/router")
 async def microsoft_router(request: Request):
     """
@@ -1140,11 +1334,12 @@ async def microsoft_router(request: Request):
             resource = notification.get("resource", "")
 
             # Route based on resource type
-            if "/Messages/" in resource:
+            if "/Messages/" in resource and "/chats/" not in resource.lower():
+                # Outlook email messages (users/{id}/mailFolders/inbox/messages)
                 target = f"{adapters_url}/email/outlook"
-            # Future: add more Microsoft services here
-            # elif "/calls/" in resource:
-            #     target = f"{adapters_url}/calls/teams"
+            elif "/chats/" in resource.lower() or "getAllMessages" in resource:
+                # Teams chat messages (chats/{id}/messages or /me/chats/getAllMessages)
+                target = f"{adapters_url}/chat/teams"
             else:
                 print(f"unknown resource type: {resource}")
                 continue
@@ -1540,6 +1735,95 @@ async def scheduled_microsoft_tokens(request: Request):
         f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed"
     )
 
+    return results
+
+
+@app.post("/scheduled/teams-watches")
+async def scheduled_teams_watches(request: Request):
+    """
+    Cloud Run endpoint that renews Teams chat subscriptions for all assistants.
+    Teams chat subscriptions expire after 60 minutes, so this should run every 45 mins.
+    Only processes assistants with MICROSOFT_ACCESS_TOKEN in their secrets.
+    """
+    payload = await request.json()
+    test = payload.get("test", False)
+
+    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    if not admin_key:
+        return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
+
+    # Fetch all assistants with their secrets
+    if not test:
+        try:
+            response = requests.get(
+                f"{ORCHESTRA_URL}/admin/assistant",
+                headers={"Authorization": f"Bearer {admin_key}"},
+            )
+            if response.status_code != 200:
+                return Response(
+                    content=f"Failed to get assistants: {response.text}",
+                    status_code=500,
+                )
+            all_assistants = response.json().get("info", [])
+        except Exception as e:
+            print(f"Failed to get assistants: {e}")
+            return Response(content=f"Failed to get assistants: {e}", status_code=500)
+    else:
+        all_assistants = [
+            {
+                "email": "default-test-assistant@unify.ai",
+                "secrets": {"MICROSOFT_ACCESS_TOKEN": "test"},
+            }
+        ]
+
+    print(f"Processing {len(all_assistants)} assistants for Teams chat watch renewal")
+
+    results = {"renewed": [], "skipped": [], "failed": []}
+
+    for assistant in all_assistants:
+        email = assistant.get("email")
+        if not email:
+            continue
+
+        secrets = assistant.get("secrets", {})
+        has_ms_token = bool(secrets.get("MICROSOFT_ACCESS_TOKEN"))
+
+        # Skip if no Microsoft token (not using Microsoft services)
+        if not has_ms_token:
+            continue
+
+        try:
+            # Renew Teams chat watch
+            watch_response = requests.post(
+                f"{COMMS_URL}/teams/watch",
+                json={"primary_email": email},
+                headers={"Authorization": f"Bearer {admin_key}"},
+                timeout=30,
+            )
+            result = (
+                watch_response.json()
+                if watch_response.status_code == 200
+                else {
+                    "success": False,
+                    "error": watch_response.text,
+                }
+            )
+            if result.get("success"):
+                results["renewed"].append({"email": email, **result})
+            else:
+                results["failed"].append({"email": email, **result})
+            print(f"Teams watch for {email}: {result.get('success', False)}")
+
+        except Exception as e:
+            error_msg = f"Error renewing Teams watch for {email}: {str(e)}"
+            print(error_msg)
+            results["failed"].append(
+                {"email": email, "success": False, "error": error_msg}
+            )
+
+    print(
+        f"Teams watch renewal complete: {len(results['renewed'])} renewed, {len(results['failed'])} failed"
+    )
     return results
 
 
