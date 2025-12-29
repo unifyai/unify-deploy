@@ -1223,32 +1223,38 @@ async def teams_notification_processor(request: Request):
             return Response(status_code=200)
         print(f"[11] Access token found (length: {len(access_token)})")
 
-        # Fetch full message content using Graph SDK
-        # SDK handles URL encoding for channel IDs with special characters
-        print(f"[12] Creating Graph client from token")
-        graph_client = get_graph_client_from_token(access_token)
+        # Fetch full message content using Graph API
+        # Use beta endpoint for channel messages (v1.0 often returns 404)
+        print(f"[12] Fetching message via Graph API")
 
         try:
             if is_channel_message:
-                print(
-                    f"[13] Fetching channel message: teams/{team_id}/channels/{channel_id}/messages/{message_id}"
-                )
-                message_obj = (
-                    await graph_client.teams.by_team_id(team_id)
-                    .channels.by_channel_id(channel_id)
-                    .messages.by_chat_message_id(message_id)
-                    .get()
-                )
+                # Use beta endpoint for channel messages - more reliable
+                from urllib.parse import quote
+
+                encoded_channel_id = quote(channel_id, safe="")
+                graph_url = f"https://graph.microsoft.com/beta/teams/{team_id}/channels/{encoded_channel_id}/messages/{message_id}"
+                print(f"[13] Fetching channel message (beta): {graph_url}")
             else:
+                graph_url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
+                print(f"[13] Fetching chat message: {graph_url}")
+
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    graph_url,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=30.0,
+                )
+
+            print(f"[14] Response status: {response.status_code}")
+            if response.status_code != 200:
                 print(
-                    f"[13] Fetching chat message: chats/{chat_id}/messages/{message_id}"
+                    f"[14] FAIL: Failed to fetch Teams message: {response.status_code} - {response.text}"
                 )
-                message_obj = (
-                    await graph_client.me.chats.by_chat_id(chat_id)
-                    .messages.by_chat_message_id(message_id)
-                    .get()
-                )
-            print(f"[14] Message fetched successfully: {message_obj is not None}")
+                return Response(status_code=200)
+
+            message_data = response.json()
+            print(f"[15] Message data received")
         except Exception as e:
             print(f"[14] FAIL: Failed to fetch Teams message: {e}")
             import traceback
@@ -1256,42 +1262,23 @@ async def teams_notification_processor(request: Request):
             traceback.print_exc()
             return Response(status_code=200)
 
-        if not message_obj:
-            print("[15] FAIL: Teams message not found (None returned)")
-            return Response(status_code=200)
-        print(f"[15] Message object received")
-
-        # Extract sender info from SDK object
+        # Extract sender info from JSON response
         print(f"[16] Extracting sender info")
-        sender_info = message_obj.from_
-        sender_name = "Unknown"
-        sender_id = None
-        sender_email = None
+        sender_info = message_data.get("from", {})
+        sender_user = sender_info.get("user", {})
+        sender_name = sender_user.get("displayName", "Unknown")
+        sender_id = sender_user.get("id")
+        sender_email = sender_user.get("email")
 
-        if sender_info and sender_info.user:
-            sender_name = sender_info.user.display_name or "Unknown"
-            sender_id = sender_info.user.id
-            sender_email = (
-                sender_info.user.additional_data.get("email")
-                if sender_info.user.additional_data
-                else None
-            )
-            print(
-                f"[17] Sender from user: name={sender_name}, id={sender_id}, email={sender_email}"
-            )
-        else:
-            print(f"[17] No sender_info.user found. sender_info={sender_info}")
+        print(f"[17] Sender: name={sender_name}, id={sender_id}, email={sender_email}")
 
         if not sender_email and sender_id:
             sender_email = f"{sender_id}@teams"
             print(f"[18] Using fallback sender email: {sender_email}")
 
-        message_content = message_obj.body.content if message_obj.body else ""
-        message_type = (
-            str(message_obj.body.content_type)
-            if message_obj.body and message_obj.body.content_type
-            else "text"
-        )
+        message_content = message_data.get("body", {}).get("content", "")
+        message_type = message_data.get("body", {}).get("contentType", "text")
+        created_at = message_data.get("createdDateTime")
         print(
             f"[19] Message content length: {len(message_content)}, type: {message_type}"
         )
@@ -1357,11 +1344,7 @@ async def teams_notification_processor(request: Request):
             "sender_id": sender_id,
             "message": message_content,
             "content_type": message_type,
-            "created_at": (
-                message_obj.created_date_time.isoformat()
-                if message_obj.created_date_time
-                else None
-            ),
+            "created_at": created_at,
             "assistant_email": assistant_email_address,
             "is_channel_message": is_channel_message,
             "timestamp": int(time.time() * 1000),
