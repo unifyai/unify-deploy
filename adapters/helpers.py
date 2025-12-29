@@ -34,6 +34,33 @@ COMMS_URL = os.getenv("UNITY_COMMS_URL")
 ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
 
 
+def parse_teams_resource_id(resource: str, key: str) -> str | None:
+    """
+    Extract an ID from a Teams Graph resource path.
+    Handles both formats: key('value') and key/value
+
+    Args:
+        resource: The Graph API resource path (e.g., "teams('uuid')/channels('19:xxx')")
+        key: The key to extract (e.g., "teams", "channels", "chats", "messages")
+
+    Returns:
+        The extracted ID or None if not found
+    """
+    # Format: key('value')
+    if f"{key}('" in resource:
+        return resource.split(f"{key}('")[1].split("')")[0]
+    # Format: /key/value/
+    if f"/{key}/" in resource or f"{key}/" in resource:
+        parts = resource.split("/")
+        try:
+            idx = parts.index(key)
+            if idx >= 0 and len(parts) > idx + 1:
+                return parts[idx + 1]
+        except ValueError:
+            pass
+    return None
+
+
 def get_assistant(
     email_address: str = None,
     phone_number: str = None,

@@ -30,6 +30,7 @@ from .helpers import (
     get_outlook_thread_id,
     get_thread_id,
     is_job_running,
+    parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
     exchange_microsoft_code_for_tokens,
@@ -1114,69 +1115,75 @@ async def outlook_notification_processor(request: Request):
 @app.post("/chat/teams")
 async def teams_notification_processor(request: Request):
     """
-    Process Teams chat notifications routed from /microsoft/router.
-    Handles new chat messages and triggers the AI agent.
+    Process Teams notifications routed from /microsoft/router.
+    Handles both chat messages (DMs, group chats) and channel messages.
+    Automatically detects the message type from the resource path.
     """
     try:
         notification = await request.json()
         print(f"teams_notification_processor received: {notification}")
 
-        # Validate client state
+        # Validate client state and extract assistant email
         client_state = notification.get("clientState", "")
         expected_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
 
-        # Extract assistant email from clientState
-        # Format: {secret}::{email}
-        if "::" in client_state:
-            secret_part, assistant_email_address = client_state.split("::", 1)
-            if secret_part != expected_secret:
-                print(f"Invalid webhook secret in clientState")
-                return Response(status_code=200)
-        else:
-            # Legacy format - just the secret, no email encoded
-            print(f"Legacy clientState format (no email encoded): {client_state}")
+        # Format: {secret}::{email} or {secret}::{email}::{team_id}::{channel_id}
+        parts = client_state.split("::")
+        if len(parts) < 2:
+            print(f"Invalid clientState format: {client_state}")
             return Response(status_code=200)
 
-        # Parse resource path to get chat and message IDs
-        # Format: chats/{chatId}/messages/{messageId} or /me/chats/getAllMessages/...
+        if parts[0] != expected_secret:
+            print(f"Invalid webhook secret in clientState")
+            return Response(status_code=200)
+
+        assistant_email_address = parts[1]
+
+        # Parse resource to determine message type and extract IDs
         resource = notification.get("resource", "")
         resource_data = notification.get("resourceData", {})
 
-        chat_id = resource_data.get("chatId")
-        message_id = resource_data.get("id")
+        # Determine if this is a channel message or a chat message
+        is_channel_message = "/teams/" in resource and "/channels/" in resource
 
-        if not chat_id or not message_id:
-            # Try to parse from resource path
-            # Format: chats('19:meeting...@thread.v2')/messages('1234567890')
-            if "/chats(" in resource or "chats/" in resource:
-                try:
-                    if "chats('" in resource:
-                        chat_id = resource.split("chats('")[1].split("')")[0]
-                    elif "chats/" in resource:
-                        parts = resource.split("/")
-                        chat_idx = parts.index("chats") if "chats" in parts else -1
-                        if chat_idx >= 0 and len(parts) > chat_idx + 1:
-                            chat_id = parts[chat_idx + 1]
-
-                    if "messages('" in resource:
-                        message_id = resource.split("messages('")[1].split("')")[0]
-                    elif "/messages/" in resource:
-                        parts = resource.split("/")
-                        msg_idx = parts.index("messages") if "messages" in parts else -1
-                        if msg_idx >= 0 and len(parts) > msg_idx + 1:
-                            message_id = parts[msg_idx + 1]
-                except Exception as e:
-                    print(
-                        f"Could not parse chat/message ID from resource '{resource}': {e}"
-                    )
-
-        if not chat_id or not message_id:
-            print(f"Missing chat_id or message_id in notification")
-            return Response(status_code=200)
-
-        print(
-            f"assistant_email: {assistant_email_address}, chat_id: {chat_id}, message_id: {message_id}"
+        # Extract IDs using helper - try resourceData first, then parse from resource path
+        message_id = resource_data.get("id") or parse_teams_resource_id(
+            resource, "messages"
         )
+
+        if is_channel_message:
+            team_id = parse_teams_resource_id(resource, "teams")
+            channel_id = parse_teams_resource_id(resource, "channels")
+            chat_id = None
+
+            if not team_id or not channel_id or not message_id:
+                print(
+                    f"Missing IDs for channel message: team={team_id}, "
+                    f"channel={channel_id}, message={message_id}"
+                )
+                return Response(status_code=200)
+
+            print(
+                f"Channel message - assistant: {assistant_email_address}, "
+                f"team: {team_id}, channel: {channel_id}, message: {message_id}"
+            )
+        else:
+            chat_id = resource_data.get("chatId") or parse_teams_resource_id(
+                resource, "chats"
+            )
+            team_id = None
+            channel_id = None
+
+            if not chat_id or not message_id:
+                print(
+                    f"Missing IDs for chat message: chat={chat_id}, message={message_id}"
+                )
+                return Response(status_code=200)
+
+            print(
+                f"Chat message - assistant: {assistant_email_address}, "
+                f"chat: {chat_id}, message: {message_id}"
+            )
 
         # Get assistant data and secrets
         context = build_webhook_context(
@@ -1203,9 +1210,15 @@ async def teams_notification_processor(request: Request):
             return Response(status_code=200)
 
         # Fetch full message content using Graph API
+        # Different endpoints for chat vs channel messages
+        if is_channel_message:
+            graph_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages/{message_id}"
+        else:
+            graph_url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
+
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}",
+                graph_url,
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=30.0,
             )
@@ -1228,12 +1241,13 @@ async def teams_notification_processor(request: Request):
         message_content = message_data.get("body", {}).get("content", "")
         message_type = message_data.get("body", {}).get("contentType", "text")
 
+        msg_type_str = "channel" if is_channel_message else "chat"
         print(
-            f"Teams message from {sender_name} ({sender_email}): {message_content[:100]}..."
+            f"Teams {msg_type_str} message from {sender_name} ({sender_email}): "
+            f"{message_content[:100]}..."
         )
 
         # Skip messages from the assistant itself (avoid loops)
-        # Check if sender_id matches any known assistant identifier
         if sender_email and sender_email.lower() == assistant_email_address.lower():
             print("Skipping message from assistant itself")
             return Response(status_code=200)
@@ -1250,7 +1264,7 @@ async def teams_notification_processor(request: Request):
         )
 
         if not is_valid_contact:
-            print(f"Invalid contact for Teams: {sender_email}")
+            print(f"Invalid contact for Teams {msg_type_str}: {sender_email}")
             return Response(status_code=200)
 
         # Start job if not already running
@@ -1268,22 +1282,32 @@ async def teams_notification_processor(request: Request):
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
 
+        # Build event payload - include all IDs, consumer can use what they need
+        event_data = {
+            "contacts": contacts,
+            "message_id": message_id,
+            "sender": sender_email,
+            "sender_name": sender_name,
+            "sender_id": sender_id,
+            "message": message_content,
+            "content_type": message_type,
+            "created_at": message_data.get("createdDateTime"),
+            "assistant_email": assistant_email_address,
+            "is_channel_message": is_channel_message,
+            "timestamp": int(time.time() * 1000),
+        }
+
+        if is_channel_message:
+            event_data["team_id"] = team_id
+            event_data["channel_id"] = channel_id
+            event_data["action"] = "new_channel_message"
+        else:
+            event_data["chat_id"] = chat_id
+            event_data["action"] = "new_message"
+
         pubsub_message = {
-            "thread": "teams_chat",
-            "event": {
-                "contacts": contacts,
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "sender": sender_email,
-                "sender_name": sender_name,
-                "sender_id": sender_id,
-                "message": message_content,
-                "content_type": message_type,
-                "created_at": message_data.get("createdDateTime"),
-                "assistant_email": assistant_email_address,
-                "action": "new_message",
-                "timestamp": int(time.time() * 1000),
-            },
+            "thread": "teams_channel" if is_channel_message else "teams_chat",
+            "event": event_data,
         }
 
         try:
@@ -1292,9 +1316,11 @@ async def teams_notification_processor(request: Request):
                 json.dumps(pubsub_message).encode("utf-8"),
             )
             publish_future.result(timeout=5)
-            print(f"Teams chat message published to Pub/Sub topic {topic_name}")
+            print(
+                f"Teams {msg_type_str} message published to Pub/Sub topic {topic_name}"
+            )
         except Exception as e:
-            print(f"Error publishing Teams chat to Pub/Sub: {e}")
+            print(f"Error publishing Teams {msg_type_str} to Pub/Sub: {e}")
 
         return Response(content="OK", status_code=200)
 
@@ -1337,8 +1363,12 @@ async def microsoft_router(request: Request):
             if "/Messages/" in resource and "/chats/" not in resource.lower():
                 # Outlook email messages (users/{id}/mailFolders/inbox/messages)
                 target = f"{adapters_url}/email/outlook"
-            elif "/chats/" in resource.lower() or "getAllMessages" in resource:
-                # Teams chat messages (chats/{id}/messages or /me/chats/getAllMessages)
+            elif (
+                "/chats/" in resource.lower()
+                or "getAllMessages" in resource
+                or ("/teams/" in resource.lower() and "/channels/" in resource.lower())
+            ):
+                # Teams messages - both chat and channel go to same handler
                 target = f"{adapters_url}/chat/teams"
             else:
                 print(f"unknown resource type: {resource}")
@@ -1744,9 +1774,12 @@ async def scheduled_microsoft_tokens(request: Request):
 @app.post("/scheduled/teams-watches")
 async def scheduled_teams_watches(request: Request):
     """
-    Cloud Run endpoint that renews Teams chat subscriptions for all assistants.
-    Teams chat subscriptions expire after 60 minutes, so this should run every 45 mins.
+    Cloud Run endpoint that renews Teams chat AND channel subscriptions for all assistants.
+    Teams subscriptions expire after 60 minutes, so this should run every 30-45 mins.
     Only processes assistants with MICROSOFT_ACCESS_TOKEN in their secrets.
+
+    For chats: Creates/renews /me/chats/getAllMessages subscription
+    For channels: Finds and renews any existing channel subscriptions
     """
     payload = await request.json()
     test = payload.get("test", False)
@@ -1779,9 +1812,14 @@ async def scheduled_teams_watches(request: Request):
             }
         ]
 
-    print(f"Processing {len(all_assistants)} assistants for Teams chat watch renewal")
+    print(f"Processing {len(all_assistants)} assistants for Teams watch renewal")
 
-    results = {"renewed": [], "skipped": [], "failed": []}
+    results = {
+        "chats_renewed": [],
+        "channels_renewed": [],
+        "skipped": [],
+        "failed": [],
+    }
 
     for assistant in all_assistants:
         email = assistant.get("email")
@@ -1789,14 +1827,14 @@ async def scheduled_teams_watches(request: Request):
             continue
 
         secrets = assistant.get("secrets", {})
-        has_ms_token = bool(secrets.get("MICROSOFT_ACCESS_TOKEN"))
+        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
 
         # Skip if no Microsoft token (not using Microsoft services)
-        if not has_ms_token:
+        if not access_token:
             continue
 
         try:
-            # Renew Teams chat watch
+            # 1. Renew Teams chat watch (DMs and group chats)
             watch_response = requests.post(
                 f"{COMMS_URL}/teams/watch",
                 json={"primary_email": email},
@@ -1806,16 +1844,67 @@ async def scheduled_teams_watches(request: Request):
             result = (
                 watch_response.json()
                 if watch_response.status_code == 200
-                else {
-                    "success": False,
-                    "error": watch_response.text,
-                }
+                else {"success": False, "error": watch_response.text}
             )
             if result.get("success"):
-                results["renewed"].append({"email": email, **result})
+                results["chats_renewed"].append({"email": email, **result})
             else:
-                results["failed"].append({"email": email, **result})
-            print(f"Teams watch for {email}: {result.get('success', False)}")
+                results["failed"].append({"email": email, "type": "chat", **result})
+            print(f"Teams chat watch for {email}: {result.get('success', False)}")
+
+            # 2. Renew any existing channel subscriptions
+            # List all subscriptions and renew those matching /teams/{id}/channels/{id}/messages
+            async with httpx.AsyncClient() as client:
+                subs_response = await client.get(
+                    "https://graph.microsoft.com/v1.0/subscriptions",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=30.0,
+                )
+
+            if subs_response.status_code == 200:
+                subs_data = subs_response.json()
+                for sub in subs_data.get("value", []):
+                    resource = sub.get("resource", "")
+                    # Check if this is a channel subscription
+                    if "/teams/" in resource and "/channels/" in resource:
+                        # Parse team_id and channel_id from resource
+                        try:
+                            parts = resource.split("/")
+                            team_idx = parts.index("teams")
+                            channel_idx = parts.index("channels")
+                            team_id = parts[team_idx + 1]
+                            channel_id = parts[channel_idx + 1]
+
+                            # Renew channel subscription
+                            channel_response = requests.post(
+                                f"{COMMS_URL}/teams/watch-channel",
+                                json={
+                                    "primary_email": email,
+                                    "team_id": team_id,
+                                    "channel_id": channel_id,
+                                },
+                                headers={"Authorization": f"Bearer {admin_key}"},
+                                timeout=30,
+                            )
+                            ch_result = (
+                                channel_response.json()
+                                if channel_response.status_code == 200
+                                else {"success": False, "error": channel_response.text}
+                            )
+                            if ch_result.get("success"):
+                                results["channels_renewed"].append(
+                                    {"email": email, **ch_result}
+                                )
+                            else:
+                                results["failed"].append(
+                                    {"email": email, "type": "channel", **ch_result}
+                                )
+                            print(
+                                f"Teams channel watch for {email} ({team_id}/{channel_id}): "
+                                f"{ch_result.get('success', False)}"
+                            )
+                        except (ValueError, IndexError) as e:
+                            print(f"Could not parse channel subscription: {resource}")
 
         except Exception as e:
             error_msg = f"Error renewing Teams watch for {email}: {str(e)}"
@@ -1825,7 +1914,10 @@ async def scheduled_teams_watches(request: Request):
             )
 
     print(
-        f"Teams watch renewal complete: {len(results['renewed'])} renewed, {len(results['failed'])} failed"
+        f"Teams watch renewal complete: "
+        f"{len(results['chats_renewed'])} chats, "
+        f"{len(results['channels_renewed'])} channels, "
+        f"{len(results['failed'])} failed"
     )
     return results
 
