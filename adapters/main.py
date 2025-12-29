@@ -35,7 +35,7 @@ from .helpers import (
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
     start_unity_job,
-    store_microsoft_token,
+    store_microsoft_tokens,
     STAGING,
     ORCHESTRA_URL,
     COMMS_URL,
@@ -1455,8 +1455,11 @@ async def microsoft_oauth_callback(request: Request):
     # Store tokens as assistant secrets
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
-    stored = await store_microsoft_token(
-        assistant_id=assistant_id, tokens=tokens, api_key=api_key
+    stored = await store_microsoft_tokens(
+        assistant_id=assistant_id,
+        old_secrets=secrets,
+        new_secrets=tokens,
+        api_key=api_key,
     )
 
     print(

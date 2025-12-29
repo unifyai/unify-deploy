@@ -1064,7 +1064,9 @@ async def get_microsoft_user_info(access_token: str) -> dict:
         return response.json()
 
 
-async def store_microsoft_token(assistant_id: str, tokens: dict, api_key: str) -> bool:
+async def store_microsoft_tokens(
+    assistant_id: str, old_secrets: dict, new_secrets: dict, api_key: str
+) -> bool:
     """
     Store Microsoft OAuth tokens as assistant secrets.
 
@@ -1078,9 +1080,9 @@ async def store_microsoft_token(assistant_id: str, tokens: dict, api_key: str) -
         return False
 
     secrets_to_store = {
-        "MICROSOFT_ACCESS_TOKEN": tokens["access_token"],
-        "MICROSOFT_REFRESH_TOKEN": tokens.get("refresh_token", ""),
-        "MICROSOFT_TOKEN_EXPIRES_AT": tokens.get("expires_at", ""),
+        "MICROSOFT_ACCESS_TOKEN": new_secrets["access_token"],
+        "MICROSOFT_REFRESH_TOKEN": new_secrets.get("refresh_token", ""),
+        "MICROSOFT_TOKEN_EXPIRES_AT": new_secrets.get("expires_at", ""),
     }
 
     if not api_key:
@@ -1091,12 +1093,20 @@ async def store_microsoft_token(assistant_id: str, tokens: dict, api_key: str) -
     async with httpx.AsyncClient() as client:
         for secret_name, secret_value in secrets_to_store.items():
             try:
-                response = await client.post(
-                    f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret",
-                    json={"secret_name": secret_name, "secret_value": secret_value},
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=30.0,
-                )
+                args = {
+                    "url": f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret",
+                    "json": {"secret_name": secret_name, "secret_value": secret_value},
+                    "headers": {"Authorization": f"Bearer {api_key}"},
+                    "timeout": 30.0,
+                }
+                if old_secrets and secret_name in old_secrets:
+                    print(f"Updating secret {secret_name} for assistant {assistant_id}")
+                    args["url"] += f"/{secret_name}"
+                    args["json"].pop("secret_name")
+                    response = await client.put(**args)
+                else:
+                    print(f"Creating secret {secret_name} for assistant {assistant_id}")
+                    response = await client.post(**args)
                 if response.status_code in (200, 201):
                     print(f"Stored {secret_name} for assistant {assistant_id}")
                 else:
