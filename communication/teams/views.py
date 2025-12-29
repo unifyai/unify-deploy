@@ -372,9 +372,10 @@ async def watch_teams_channel(request: Request):
                     pass
 
         # Create new subscription
-        # Encode info in clientState: {secret}::{email}::{team_id}::{channel_id}
+        # Format: {secret}::{email} - same as chat watch
+        # team_id and channel_id are extracted from the resource path in the adapter
         webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
-        client_state = f"{webhook_secret}::{user_email}::{team_id}::{channel_id}"
+        client_state = f"{webhook_secret}::{user_email}"
 
         result = await graph.subscriptions.post(
             Subscription(
