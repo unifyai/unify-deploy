@@ -1119,9 +1119,10 @@ async def teams_notification_processor(request: Request):
     Handles both chat messages (DMs, group chats) and channel messages.
     Automatically detects the message type from the resource path.
     """
+    print("=== teams_notification_processor START ===")
     try:
         notification = await request.json()
-        print(f"teams_notification_processor received: {notification}")
+        print(f"[1] Received notification: {notification}")
 
         # Validate client state and extract assistant email
         client_state = notification.get("clientState", "")
@@ -1129,45 +1130,51 @@ async def teams_notification_processor(request: Request):
 
         # Format: {secret}::{email} or {secret}::{email}::{team_id}::{channel_id}
         parts = client_state.split("::")
+        print(f"[2] clientState parts: {len(parts)} parts")
         if len(parts) < 2:
-            print(f"Invalid clientState format: {client_state}")
+            print(f"[2] FAIL: Invalid clientState format: {client_state}")
             return Response(status_code=200)
 
         if parts[0] != expected_secret:
-            print(f"Invalid webhook secret in clientState")
+            print(f"[2] FAIL: Invalid webhook secret in clientState")
             return Response(status_code=200)
 
         assistant_email_address = parts[1]
+        print(f"[3] Assistant email: {assistant_email_address}")
 
         # Parse resource to determine message type and extract IDs
         resource = notification.get("resource", "")
         resource_data = notification.get("resourceData", {})
+        print(f"[4] Resource: {resource}")
 
         # Determine if this is a channel message or a chat message
         # Channel notifications use OData format: teams('id')/channels('id')/messages('id')
         is_channel_message = (
             "teams(" in resource.lower() and "channels(" in resource.lower()
         )
+        print(f"[5] Is channel message: {is_channel_message}")
 
         # Extract IDs using helper - try resourceData first, then parse from resource path
         message_id = resource_data.get("id") or parse_teams_resource_id(
             resource, "messages"
         )
+        print(f"[6] Message ID: {message_id}")
 
         if is_channel_message:
             team_id = parse_teams_resource_id(resource, "teams")
             channel_id = parse_teams_resource_id(resource, "channels")
             chat_id = None
+            print(f"[7] Channel IDs - team: {team_id}, channel: {channel_id}")
 
             if not team_id or not channel_id or not message_id:
                 print(
-                    f"Missing IDs for channel message: team={team_id}, "
+                    f"[7] FAIL: Missing IDs for channel message: team={team_id}, "
                     f"channel={channel_id}, message={message_id}"
                 )
                 return Response(status_code=200)
 
             print(
-                f"Channel message - assistant: {assistant_email_address}, "
+                f"[8] Channel message - assistant: {assistant_email_address}, "
                 f"team: {team_id}, channel: {channel_id}, message: {message_id}"
             )
         else:
@@ -1176,19 +1183,21 @@ async def teams_notification_processor(request: Request):
             )
             team_id = None
             channel_id = None
+            print(f"[7] Chat ID: {chat_id}")
 
             if not chat_id or not message_id:
                 print(
-                    f"Missing IDs for chat message: chat={chat_id}, message={message_id}"
+                    f"[7] FAIL: Missing IDs for chat message: chat={chat_id}, message={message_id}"
                 )
                 return Response(status_code=200)
 
             print(
-                f"Chat message - assistant: {assistant_email_address}, "
+                f"[8] Chat message - assistant: {assistant_email_address}, "
                 f"chat: {chat_id}, message: {message_id}"
             )
 
         # Get assistant data and secrets
+        print(f"[9] Building webhook context for {assistant_email_address}")
         context = build_webhook_context(
             channel="teams",
             destination=assistant_email_address,
@@ -1198,26 +1207,32 @@ async def teams_notification_processor(request: Request):
         )
         assistant_data = context["assistant"]
         if not assistant_data or not assistant_data.get("assistant_id"):
-            print(f"Assistant not found for {assistant_email_address}")
+            print(f"[9] FAIL: Assistant not found for {assistant_email_address}")
             return Response(status_code=200)
 
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
         api_key = assistant_data["api_key"]
+        print(f"[10] Assistant found: {assistant_id}")
 
         # Get access token from secrets
         secrets = assistant_data.get("secrets", {})
         access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
         if not access_token:
-            print(f"No Microsoft access token for {assistant_email_address}")
+            print(f"[10] FAIL: No Microsoft access token for {assistant_email_address}")
             return Response(status_code=200)
+        print(f"[11] Access token found (length: {len(access_token)})")
 
         # Fetch full message content using Graph SDK
         # SDK handles URL encoding for channel IDs with special characters
+        print(f"[12] Creating Graph client from token")
         graph_client = get_graph_client_from_token(access_token)
 
         try:
             if is_channel_message:
+                print(
+                    f"[13] Fetching channel message: teams/{team_id}/channels/{channel_id}/messages/{message_id}"
+                )
                 message_obj = (
                     await graph_client.teams.by_team_id(team_id)
                     .channels.by_channel_id(channel_id)
@@ -1225,20 +1240,29 @@ async def teams_notification_processor(request: Request):
                     .get()
                 )
             else:
+                print(
+                    f"[13] Fetching chat message: chats/{chat_id}/messages/{message_id}"
+                )
                 message_obj = (
                     await graph_client.me.chats.by_chat_id(chat_id)
                     .messages.by_chat_message_id(message_id)
                     .get()
                 )
+            print(f"[14] Message fetched successfully: {message_obj is not None}")
         except Exception as e:
-            print(f"Failed to fetch Teams message: {e}")
+            print(f"[14] FAIL: Failed to fetch Teams message: {e}")
+            import traceback
+
+            traceback.print_exc()
             return Response(status_code=200)
 
         if not message_obj:
-            print("Teams message not found")
+            print("[15] FAIL: Teams message not found (None returned)")
             return Response(status_code=200)
+        print(f"[15] Message object received")
 
         # Extract sender info from SDK object
+        print(f"[16] Extracting sender info")
         sender_info = message_obj.from_
         sender_name = "Unknown"
         sender_id = None
@@ -1252,9 +1276,15 @@ async def teams_notification_processor(request: Request):
                 if sender_info.user.additional_data
                 else None
             )
+            print(
+                f"[17] Sender from user: name={sender_name}, id={sender_id}, email={sender_email}"
+            )
+        else:
+            print(f"[17] No sender_info.user found. sender_info={sender_info}")
 
         if not sender_email and sender_id:
             sender_email = f"{sender_id}@teams"
+            print(f"[18] Using fallback sender email: {sender_email}")
 
         message_content = message_obj.body.content if message_obj.body else ""
         message_type = (
@@ -1262,19 +1292,23 @@ async def teams_notification_processor(request: Request):
             if message_obj.body and message_obj.body.content_type
             else "text"
         )
+        print(
+            f"[19] Message content length: {len(message_content)}, type: {message_type}"
+        )
 
         msg_type_str = "channel" if is_channel_message else "chat"
         print(
-            f"Teams {msg_type_str} message from {sender_name} ({sender_email}): "
+            f"[20] Teams {msg_type_str} message from {sender_name} ({sender_email}): "
             f"{message_content[:100]}..."
         )
 
         # Skip messages from the assistant itself (avoid loops)
         if sender_email and sender_email.lower() == assistant_email_address.lower():
-            print("Skipping message from assistant itself")
+            print(f"[21] SKIP: Message from assistant itself ({sender_email})")
             return Response(status_code=200)
 
         # Validate contact
+        print(f"[21] Validating contact: {sender_email}")
         contacts, is_valid_contact = check_valid_contact(
             email_address=sender_email,
             medium="teams",
@@ -1284,25 +1318,35 @@ async def teams_notification_processor(request: Request):
             user_email=assistant_data.get("user_email", ""),
             assistant_data=assistant_data,
         )
+        print(
+            f"[22] Contact validation result: is_valid={is_valid_contact}, contacts={contacts}"
+        )
 
         if not is_valid_contact:
-            print(f"Invalid contact for Teams {msg_type_str}: {sender_email}")
+            print(
+                f"[22] SKIP: Invalid contact for Teams {msg_type_str}: {sender_email}"
+            )
             return Response(status_code=200)
 
         # Start job if not already running
+        print(f"[23] Checking if job is running for {user_id}/{assistant_id}")
         is_running = is_job_running(user_id, assistant_id)
         is_default = assistant_id and "default" in assistant_id
+        print(f"[24] Job status: is_running={is_running}, is_default={is_default}")
         if not is_running and not is_default:
+            print(f"[25] Starting Unity job")
             start_unity_job(assistant_data, "teams")
             create_job(assistant_id)
             is_running = True
 
-        print(f"Job running: {is_running}")
+        print(f"[26] Job running: {is_running}")
 
         # Publish to Pub/Sub
+        print(f"[27] Publishing to Pub/Sub")
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        print(f"[28] Topic path: {topic_path}")
 
         # Build event payload - include all IDs, consumer can use what they need
         event_data = {
@@ -1335,6 +1379,7 @@ async def teams_notification_processor(request: Request):
             "thread": "teams_channel" if is_channel_message else "teams_chat",
             "event": event_data,
         }
+        print(f"[29] Pubsub message thread: {pubsub_message['thread']}")
 
         try:
             publish_future = pubsub_client.publish(
@@ -1343,17 +1388,18 @@ async def teams_notification_processor(request: Request):
             )
             publish_future.result(timeout=5)
             print(
-                f"Teams {msg_type_str} message published to Pub/Sub topic {topic_name}"
+                f"[30] SUCCESS: Teams {msg_type_str} message published to Pub/Sub topic {topic_name}"
             )
         except Exception as e:
-            print(f"Error publishing Teams {msg_type_str} to Pub/Sub: {e}")
+            print(f"[30] ERROR: Error publishing Teams {msg_type_str} to Pub/Sub: {e}")
 
+        print("=== teams_notification_processor END (OK) ===")
         return Response(content="OK", status_code=200)
 
     except Exception as e:
         error_message = f"Error processing Teams notification: {str(e)}"
         traceback.print_exc()
-        print(error_message)
+        print(f"=== teams_notification_processor END (ERROR): {error_message} ===")
         return Response(content=error_message, status_code=500)
 
 
