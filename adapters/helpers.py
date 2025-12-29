@@ -429,7 +429,7 @@ def build_webhook_context(
         assistant_data: Optional pre-fetched assistant data to avoid duplicate Orchestra calls.
     """
     # normalize identifiers and resolve assistant by channel
-    is_email = channel == "email"
+    is_email = channel in ["email", "teams"]
     normalized_sender = sender.strip()
 
     # get assistant data (skip if pre-fetched)
