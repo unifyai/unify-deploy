@@ -1385,8 +1385,10 @@ async def teams_notification_processor(request: Request):
         message_content = message_data.get("body", {}).get("content", "")
         message_type = message_data.get("body", {}).get("contentType", "text")
         created_at = message_data.get("createdDateTime")
+        subject = message_data.get("subject", "")
         print(
-            f"[19] Message content length: {len(message_content)}, type: {message_type}"
+            f"[19] Message content length: "
+            f"{len(message_content)}, type: {message_type}, subject: {subject}"
         )
 
         msg_type_str = "channel" if is_channel_message else "chat"
@@ -1470,7 +1472,7 @@ async def teams_notification_processor(request: Request):
                 # For root messages: message_id is the thread_id, include subject
                 event_data["parent_message_id"] = None
                 event_data["thread_id"] = message_id  # Root message is its own thread
-                event_data["post_subject"] = message_data.get("subject", "")
+                event_data["post_subject"] = subject
             event_data["action"] = "new_channel_message"
         else:
             event_data["chat_id"] = chat_id
