@@ -1349,9 +1349,15 @@ async def teams_notification_processor(request: Request):
         print(f"[16] Extracting sender info")
         sender_info = message_data.get("from", {})
         sender_user = sender_info.get("user", {})
+        print(f"[16] sender_user keys: {sender_user.keys() if sender_user else 'None'}")
+        print(f"[16] sender_user data: {sender_user}")
         sender_name = sender_user.get("displayName", "Unknown")
         sender_id = sender_user.get("id")
-        sender_email = sender_user.get("email")
+        # Try email first, then userPrincipalName (UPN is usually the email)
+        sender_email = (
+            sender_user.get("email")
+            or sender_user.get("userPrincipalName")
+        )
 
         print(f"[17] Sender: name={sender_name}, id={sender_id}, email={sender_email}")
 
