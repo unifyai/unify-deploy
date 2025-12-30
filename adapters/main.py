@@ -1294,7 +1294,7 @@ async def teams_notification_processor(request: Request):
         subject = message_data.get("subject", "")
 
         event_data = {
-            "contacts": contacts,
+            # "contacts": contacts,
             "message_id": message_id,
             "sender": sender_email,
             "sender_name": sender_name,
