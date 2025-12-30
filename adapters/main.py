@@ -1458,6 +1458,7 @@ async def teams_notification_processor(request: Request):
             "event": event_data,
         }
         print(f"[29] Pubsub message thread: {pubsub_message['thread']}")
+        print(f"[29] Pubsub message event: {pubsub_message['event']}")
 
         try:
             publish_future = pubsub_client.publish(
