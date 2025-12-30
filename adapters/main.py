@@ -1229,31 +1229,68 @@ async def teams_notification_processor(request: Request):
 
         try:
             if is_channel_message:
-                # Use beta endpoint for channel messages - more reliable
+                # For channel messages, we need to list recent messages and find the matching one
+                # Direct fetch of individual messages requires application permissions
                 from urllib.parse import quote
 
                 encoded_channel_id = quote(channel_id, safe="")
-                graph_url = f"https://graph.microsoft.com/beta/teams/{team_id}/channels/{encoded_channel_id}/messages/{message_id}"
-                print(f"[13] Fetching channel message (beta): {graph_url}")
+                # Fetch recent messages (top 10) and find the one matching our message_id
+                graph_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages?$top=10"
+                print(f"[13] Fetching channel messages list: {graph_url}")
+
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        graph_url,
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        timeout=30.0,
+                    )
+
+                print(f"[14] Response status: {response.status_code}")
+                if response.status_code != 200:
+                    print(
+                        f"[14] FAIL: Failed to fetch Teams messages: {response.status_code} - {response.text}"
+                    )
+                    return Response(status_code=200)
+
+                messages_response = response.json()
+                messages = messages_response.get("value", [])
+                print(f"[14] Got {len(messages)} messages, looking for {message_id}")
+
+                # Find the matching message
+                message_data = None
+                for msg in messages:
+                    if msg.get("id") == message_id:
+                        message_data = msg
+                        break
+
+                if not message_data:
+                    print(
+                        f"[15] FAIL: Message {message_id} not found in recent messages"
+                    )
+                    # Log available message IDs for debugging
+                    available_ids = [m.get("id") for m in messages[:5]]
+                    print(f"[15] Available message IDs: {available_ids}")
+                    return Response(status_code=200)
             else:
                 graph_url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
                 print(f"[13] Fetching chat message: {graph_url}")
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    graph_url,
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=30.0,
-                )
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        graph_url,
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        timeout=30.0,
+                    )
 
-            print(f"[14] Response status: {response.status_code}")
-            if response.status_code != 200:
-                print(
-                    f"[14] FAIL: Failed to fetch Teams message: {response.status_code} - {response.text}"
-                )
-                return Response(status_code=200)
+                print(f"[14] Response status: {response.status_code}")
+                if response.status_code != 200:
+                    print(
+                        f"[14] FAIL: Failed to fetch Teams message: {response.status_code} - {response.text}"
+                    )
+                    return Response(status_code=200)
 
-            message_data = response.json()
+                message_data = response.json()
+
             print(f"[15] Message data received")
         except Exception as e:
             print(f"[14] FAIL: Failed to fetch Teams message: {e}")
