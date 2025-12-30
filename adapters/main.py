@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+import traceback
 
 from google.cloud import pubsub_v1
 from googleapiclient.discovery import build
@@ -2002,6 +2003,7 @@ async def scheduled_teams_watches(request: Request):
         except Exception as e:
             error_msg = f"Error renewing Teams watch for {email}: {str(e)}"
             print(error_msg)
+            traceback.print_exc()
             results["failed"].append(
                 {"email": email, "success": False, "error": error_msg}
             )
