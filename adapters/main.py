@@ -1265,19 +1265,19 @@ async def teams_notification_processor(request: Request):
         #     print(f"Skipping self-message from {sender_email}")
         #     return Response(status_code=200)
 
-        # Validate contact
-        contacts, is_valid = check_valid_contact(
-            email_address=sender_email,
-            medium="teams",
-            assistant_context=f"{assistant_data['assistant_first_name']}{assistant_data['assistant_surname']}",
-            api_key=api_key,
-            user_number=assistant_data.get("user_number", ""),
-            user_email=assistant_data.get("user_email", ""),
-            assistant_data=assistant_data,
-        )
-        if not is_valid:
-            print(f"Invalid contact: {sender_email}")
-            return Response(status_code=200)
+        # # Validate contact
+        # contacts, is_valid = check_valid_contact(
+        #     email_address=sender_email,
+        #     medium="teams",
+        #     assistant_context=f"{assistant_data['assistant_first_name']}{assistant_data['assistant_surname']}",
+        #     api_key=api_key,
+        #     user_number=assistant_data.get("user_number", ""),
+        #     user_email=assistant_data.get("user_email", ""),
+        #     assistant_data=assistant_data,
+        # )
+        # if not is_valid:
+        #     print(f"Invalid contact: {sender_email}")
+        #     return Response(status_code=200)
 
         # Start job if needed
         is_running = is_job_running(user_id, assistant_id)
