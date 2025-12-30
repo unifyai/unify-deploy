@@ -1260,10 +1260,10 @@ async def teams_notification_processor(request: Request):
 
         print(f"from_email: {sender_email}, sender_name: {sender_name}")
 
-        # Skip self-messages
-        if sender_email and sender_email.lower() == assistant_email.lower():
-            print(f"Skipping self-message from {sender_email}")
-            return Response(status_code=200)
+        # # Skip self-messages
+        # if sender_email and sender_email.lower() == assistant_email.lower():
+        #     print(f"Skipping self-message from {sender_email}")
+        #     return Response(status_code=200)
 
         # Validate contact
         contacts, is_valid = check_valid_contact(
