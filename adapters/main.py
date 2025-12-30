@@ -1119,292 +1119,154 @@ async def teams_notification_processor(request: Request):
     """
     Process Teams notifications routed from /microsoft/router.
     Handles both chat messages (DMs, group chats) and channel messages.
-    Automatically detects the message type from the resource path.
     """
-    print("=== teams_notification_processor START ===")
     try:
         notification = await request.json()
-        print(f"[1] Received notification: {notification}")
+        print(f"Received Teams notification: {notification.get('resource', '')}")
 
         # Validate client state and extract assistant email
         client_state = notification.get("clientState", "")
         expected_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
-
-        # Format: {secret}::{email} or {secret}::{email}::{team_id}::{channel_id}
         parts = client_state.split("::")
-        print(f"[2] clientState parts: {len(parts)} parts")
-        if len(parts) < 2:
-            print(f"[2] FAIL: Invalid clientState format: {client_state}")
+        if len(parts) < 2 or parts[0] != expected_secret:
+            print(f"Invalid clientState format")
             return Response(status_code=200)
 
-        if parts[0] != expected_secret:
-            print(f"[2] FAIL: Invalid webhook secret in clientState")
-            return Response(status_code=200)
-
-        assistant_email_address = parts[1]
-        print(f"[3] Assistant email: {assistant_email_address}")
-
-        # Parse resource to determine message type and extract IDs
+        assistant_email = parts[1]
         resource = notification.get("resource", "")
         resource_data = notification.get("resourceData", {})
-        print(f"[4] Resource: {resource}")
 
-        # Determine if this is a channel message or a chat message
-        # Channel notifications use OData format: teams('id')/channels('id')/messages('id')
+        # Determine message type from resource path
         is_channel_message = (
             "teams(" in resource.lower() and "channels(" in resource.lower()
         )
-        print(f"[5] Is channel message: {is_channel_message}")
-
-        # Check if this is a reply to a channel message
         is_reply = "replies(" in resource.lower() or "/replies/" in resource.lower()
-        print(f"[6] Is reply: {is_reply}")
+        msg_type = "channel" if is_channel_message else "chat"
 
-        # Extract IDs using helper - try resourceData first, then parse from resource path
+        # Extract IDs
         if is_reply:
-            # For replies: resource_data.id is the reply ID, messages('...') is the parent
-            reply_id = resource_data.get("id") or parse_teams_resource_id(
+            message_id = resource_data.get("id") or parse_teams_resource_id(
                 resource, "replies"
             )
             parent_message_id = parse_teams_resource_id(resource, "messages")
-            message_id = reply_id  # The actual message we want to fetch
-            print(f"[7] Reply ID: {reply_id}, Parent message ID: {parent_message_id}")
         else:
             message_id = resource_data.get("id") or parse_teams_resource_id(
                 resource, "messages"
             )
-            reply_id = None
             parent_message_id = None
-            print(f"[7] Message ID: {message_id}")
 
         if is_channel_message:
             team_id = parse_teams_resource_id(resource, "teams")
             channel_id = parse_teams_resource_id(resource, "channels")
             chat_id = None
-            print(f"[8] Channel IDs - team: {team_id}, channel: {channel_id}")
-
             if not team_id or not channel_id or not message_id:
                 print(
-                    f"[8] FAIL: Missing IDs for channel message: team={team_id}, "
-                    f"channel={channel_id}, message={message_id}"
+                    f"Missing IDs for channel message: team={team_id}, channel={channel_id}, message={message_id}"
                 )
                 return Response(status_code=200)
-
             print(
-                f"[9] Channel message - assistant: {assistant_email_address}, "
-                f"team: {team_id}, channel: {channel_id}, message: {message_id}"
-                + (f", parent: {parent_message_id}" if is_reply else "")
+                f"assistant_email: {assistant_email}, team_id: {team_id}, channel_id: {channel_id}, message_id: {message_id}"
             )
         else:
             chat_id = resource_data.get("chatId") or parse_teams_resource_id(
                 resource, "chats"
             )
-            team_id = None
-            channel_id = None
-            print(f"[8] Chat ID: {chat_id}")
-
+            team_id = channel_id = None
             if not chat_id or not message_id:
                 print(
-                    f"[8] FAIL: Missing IDs for chat message: chat={chat_id}, message={message_id}"
+                    f"Missing IDs for chat message: chat={chat_id}, message={message_id}"
                 )
                 return Response(status_code=200)
-
             print(
-                f"[9] Chat message - assistant: {assistant_email_address}, "
-                f"chat: {chat_id}, message: {message_id}"
+                f"assistant_email: {assistant_email}, chat_id: {chat_id}, message_id: {message_id}"
             )
 
-        # Get assistant data and secrets
-        print(f"[9] Building webhook context for {assistant_email_address}")
+        # Get assistant data
         context = build_webhook_context(
             channel="teams",
-            destination=assistant_email_address,
-            sender="",  # Unknown until we fetch the message
+            destination=assistant_email,
+            sender="",
             validate_contact=False,
             ensure_job=False,
         )
         assistant_data = context["assistant"]
         if not assistant_data or not assistant_data.get("assistant_id"):
-            print(f"[9] FAIL: Assistant not found for {assistant_email_address}")
+            print(f"Assistant not found for {assistant_email}")
             return Response(status_code=200)
 
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
         api_key = assistant_data["api_key"]
-        print(f"[10] Assistant found: {assistant_id}")
-
-        # Get access token from secrets
-        secrets = assistant_data.get("secrets", {})
-        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
+        access_token = assistant_data.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN")
         if not access_token:
-            print(f"[10] FAIL: No Microsoft access token for {assistant_email_address}")
+            print(f"No Microsoft access token for {assistant_email}")
             return Response(status_code=200)
-        print(f"[11] Access token found (length: {len(access_token)})")
 
-        # Fetch full message content using Graph API
-        # Use beta endpoint for channel messages (v1.0 often returns 404)
-        print(f"[12] Fetching message via Graph API")
+        # Fetch message from Graph API
+        async def graph_get(url: str) -> tuple[dict | None, int]:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=30.0,
+                )
+            return resp.json() if resp.status_code == 200 else None, resp.status_code
 
-        try:
-            if is_channel_message:
-                # For channel messages, we need to list messages and find the matching one
-                # Direct fetch of individual messages requires application permissions
-                encoded_channel_id = quote(channel_id, safe="")
-
-                if is_reply and parent_message_id:
-                    # For replies, just fetch the replies list (1 API call)
-                    # Parent message ID is already known from the notification
-                    replies_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages/{parent_message_id}/replies?$top=50"
-                    print(f"[14] Fetching replies: {replies_url}")
-
-                    async with httpx.AsyncClient() as client:
-                        response = await client.get(
-                            replies_url,
-                            headers={"Authorization": f"Bearer {access_token}"},
-                            timeout=30.0,
-                        )
-
-                    if response.status_code != 200:
-                        print(
-                            f"[14] FAIL: Failed to fetch replies: {response.status_code} - {response.text}"
-                        )
-                        return Response(status_code=200)
-
-                    replies = response.json().get("value", [])
-                    print(f"[15] Got {len(replies)} replies, looking for {message_id}")
-
-                    # Find the matching reply
-                    message_data = None
-                    for msg in replies:
-                        if msg.get("id") == message_id:
-                            message_data = msg
-                            break
-                    if not message_data:
-                        print(f"[15] FAIL: Reply {message_id} not found")
-                        available_ids = [m.get("id") for m in replies[:5]]
-                        print(f"[15] Available reply IDs: {available_ids}")
-                        return Response(status_code=200)
-                else:
-                    # For root messages (first message in a post), fetch root messages
-                    root_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages?$top=50"
-                    print(f"[14] Fetching channel root messages: {root_url}")
-
-                    async with httpx.AsyncClient() as client:
-                        response = await client.get(
-                            root_url,
-                            headers={"Authorization": f"Bearer {access_token}"},
-                            timeout=30.0,
-                        )
-
-                    if response.status_code != 200:
-                        print(
-                            f"[14] FAIL: Failed to fetch messages: {response.status_code} - {response.text}"
-                        )
-                        return Response(status_code=200)
-
-                    root_messages = response.json().get("value", [])
-                    print(
-                        f"[15] Got {len(root_messages)} root messages, looking for {message_id}"
-                    )
-
-                    # Find the matching message
-                    message_data = None
-                    for msg in root_messages:
-                        if msg.get("id") == message_id:
-                            message_data = msg
-                            break
-                    if not message_data:
-                        print(
-                            f"[15] FAIL: Message {message_id} not found in root messages"
-                        )
-                        available_ids = [m.get("id") for m in root_messages[:5]]
-                        print(f"[15] Available IDs: {available_ids}")
-                        return Response(status_code=200)
+        message_data = None
+        if is_channel_message:
+            encoded_channel_id = quote(channel_id, safe="")
+            if is_reply and parent_message_id:
+                url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages/{parent_message_id}/replies?$top=50"
             else:
-                graph_url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
-                print(f"[13] Fetching chat message: {graph_url}")
+                url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages?$top=50"
 
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(
-                        graph_url,
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        timeout=30.0,
-                    )
+            data, status = await graph_get(url)
+            if not data:
+                print(f"Failed to fetch {msg_type} messages (status={status})")
+                return Response(status_code=200)
 
-                print(f"[14] Response status: {response.status_code}")
-                if response.status_code != 200:
-                    print(
-                        f"[14] FAIL: Failed to fetch Teams message: {response.status_code} - {response.text}"
-                    )
-                    return Response(status_code=200)
+            # Find matching message in list
+            for msg in data.get("value", []):
+                if msg.get("id") == message_id:
+                    message_data = msg
+                    break
+            if not message_data:
+                print(f"Message {message_id} not found in list")
+                return Response(status_code=200)
+        else:
+            url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
+            message_data, status = await graph_get(url)
+            if not message_data:
+                print(f"Failed to fetch chat message (status={status})")
+                return Response(status_code=200)
 
-                message_data = response.json()
-
-            print(f"[15] Message data received")
-        except Exception as e:
-            print(f"[14] FAIL: Failed to fetch Teams message: {e}")
-            return Response(status_code=200)
-
-        # Extract sender info from JSON response
-        print(f"[16] Extracting sender info")
-        sender_info = message_data.get("from", {})
-        sender_user = sender_info.get("user", {})
+        # Extract sender info
+        sender_user = message_data.get("from", {}).get("user", {})
         sender_name = sender_user.get("displayName", "Unknown")
         sender_id = sender_user.get("id")
-        # Email usually not in message data, need to fetch from user profile
         sender_email = sender_user.get("email") or sender_user.get("userPrincipalName")
 
-        print(
-            f"[17] Sender from message: name={sender_name}, id={sender_id}, email={sender_email}"
-        )
-
-        # If no email in message data, fetch user profile to get email
+        # Fetch email from user profile if not in message
         if not sender_email and sender_id:
-            print(f"[17] Fetching user profile for email: /users/{sender_id}")
-            try:
-                async with httpx.AsyncClient() as client:
-                    user_response = await client.get(
-                        f"https://graph.microsoft.com/v1.0/users/{sender_id}?$select=mail,userPrincipalName",
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        timeout=10.0,
-                    )
-                if user_response.status_code == 200:
-                    user_data = user_response.json()
-                    sender_email = user_data.get("mail") or user_data.get(
-                        "userPrincipalName"
-                    )
-                    print(f"[18] Got email from user profile: {sender_email}")
-                else:
-                    sender_email = f"{sender_id}@teams"
-                    print(
-                        f"[18] Failed to fetch user profile: {user_response.status_code}"
-                    )
-            except Exception as e:
-                print(f"[18] Error fetching user profile: {e}")
+            user_data, _ = await graph_get(
+                f"https://graph.microsoft.com/v1.0/users/{sender_id}?$select=mail,userPrincipalName"
+            )
+            if user_data:
+                sender_email = user_data.get("mail") or user_data.get(
+                    "userPrincipalName"
+                )
+            if not sender_email:
+                sender_email = f"{sender_id}@teams"
 
-        message_content = message_data.get("body", {}).get("content", "")
-        message_type = message_data.get("body", {}).get("contentType", "text")
-        created_at = message_data.get("createdDateTime")
-        subject = message_data.get("subject", "")
-        print(
-            f"[19] Message content length: "
-            f"{len(message_content)}, type: {message_type}, subject: {subject}"
-        )
+        print(f"from_email: {sender_email}, sender_name: {sender_name}")
 
-        msg_type_str = "channel" if is_channel_message else "chat"
-        print(
-            f"[20] Teams {msg_type_str} message from {sender_name} ({sender_email}): "
-            f"{message_content[:100]}..."
-        )
-
-        # Skip messages from the assistant itself (avoid loops)
-        if sender_email and sender_email.lower() == assistant_email_address.lower():
-            print(f"[21] SKIP: Message from assistant itself ({sender_email})")
+        # Skip self-messages
+        if sender_email and sender_email.lower() == assistant_email.lower():
+            print(f"Skipping self-message from {sender_email}")
             return Response(status_code=200)
 
         # Validate contact
-        print(f"[21] Validating contact: {sender_email}")
-        contacts, is_valid_contact = check_valid_contact(
+        contacts, is_valid = check_valid_contact(
             email_address=sender_email,
             medium="teams",
             assistant_context=f"{assistant_data['assistant_first_name']}{assistant_data['assistant_surname']}",
@@ -1413,37 +1275,24 @@ async def teams_notification_processor(request: Request):
             user_email=assistant_data.get("user_email", ""),
             assistant_data=assistant_data,
         )
-        print(
-            f"[22] Contact validation result: is_valid={is_valid_contact}, contacts={contacts}"
-        )
-
-        if not is_valid_contact:
-            print(
-                f"[22] SKIP: Invalid contact for Teams {msg_type_str}: {sender_email}"
-            )
+        if not is_valid:
+            print(f"Invalid contact: {sender_email}")
             return Response(status_code=200)
 
-        # Start job if not already running
-        print(f"[23] Checking if job is running for {user_id}/{assistant_id}")
+        # Start job if needed
         is_running = is_job_running(user_id, assistant_id)
         is_default = assistant_id and "default" in assistant_id
-        print(f"[24] Job status: is_running={is_running}, is_default={is_default}")
         if not is_running and not is_default:
-            print(f"[25] Starting Unity job")
             start_unity_job(assistant_data, "teams")
             create_job(assistant_id)
             is_running = True
+        print(f"Job running: {is_running}")
 
-        print(f"[26] Job running: {is_running}")
+        # Build event payload
+        message_content = message_data.get("body", {}).get("content", "")
+        message_content_type = message_data.get("body", {}).get("contentType", "text")
+        subject = message_data.get("subject", "")
 
-        # Publish to Pub/Sub
-        print(f"[27] Publishing to Pub/Sub")
-        pubsub_client = pubsub_v1.PublisherClient()
-        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-        print(f"[28] Topic path: {topic_path}")
-
-        # Build event payload - include all IDs, consumer can use what they need
         event_data = {
             "contacts": contacts,
             "message_id": message_id,
@@ -1451,59 +1300,55 @@ async def teams_notification_processor(request: Request):
             "sender_name": sender_name,
             "sender_id": sender_id,
             "message": message_content,
-            "content_type": message_type,
-            "created_at": created_at,
-            "assistant_email": assistant_email_address,
+            "content_type": message_content_type,
+            "created_at": message_data.get("createdDateTime"),
+            "assistant_email": assistant_email,
             "is_channel_message": is_channel_message,
             "timestamp": int(time.time() * 1000),
         }
 
         if is_channel_message:
-            event_data["team_id"] = team_id
-            event_data["channel_id"] = channel_id
-            event_data["is_reply"] = is_reply
-            # Always include these fields
-            if is_reply:
-                # For replies: parent/thread ID from notification, no subject available
-                event_data["parent_message_id"] = parent_message_id
-                event_data["thread_id"] = parent_message_id
-                event_data["post_subject"] = None
-            else:
-                # For root messages: message_id is the thread_id, include subject
-                event_data["parent_message_id"] = None
-                event_data["thread_id"] = message_id  # Root message is its own thread
-                event_data["post_subject"] = subject
-            event_data["action"] = "new_channel_message"
+            event_data.update(
+                {
+                    "team_id": team_id,
+                    "channel_id": channel_id,
+                    "is_reply": is_reply,
+                    "parent_message_id": parent_message_id if is_reply else None,
+                    "thread_id": parent_message_id if is_reply else message_id,
+                    "post_subject": None if is_reply else subject,
+                    "action": "new_channel_message",
+                }
+            )
         else:
-            event_data["chat_id"] = chat_id
-            event_data["action"] = "new_message"
+            event_data.update({"chat_id": chat_id, "action": "new_message"})
+
+        # Publish to Pub/Sub
+        pubsub_client = pubsub_v1.PublisherClient()
+        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
 
         pubsub_message = {
             "thread": "teams_channel" if is_channel_message else "teams_chat",
             "event": event_data,
         }
-        print(f"[29] Pubsub message thread: {pubsub_message['thread']}")
-        print(f"[29] Pubsub message event: {pubsub_message['event']}")
+        print(f"event_data: {event_data}")
 
         try:
             publish_future = pubsub_client.publish(
-                topic_path,
-                json.dumps(pubsub_message).encode("utf-8"),
+                topic_path, json.dumps(pubsub_message).encode("utf-8")
             )
             publish_future.result(timeout=5)
-            print(
-                f"[30] SUCCESS: Teams {msg_type_str} message published to Pub/Sub topic {topic_name}"
-            )
         except Exception as e:
-            print(f"[30] ERROR: Error publishing Teams {msg_type_str} to Pub/Sub: {e}")
+            print(f"Pub/Sub publish error: {e}")
+            return Response(content=str(e), status_code=500)
 
-        print("=== teams_notification_processor END (OK) ===")
+        print(f"Successfully processed Teams {msg_type} message for {assistant_email}")
         return Response(content="OK", status_code=200)
 
     except Exception as e:
         error_message = f"Error processing Teams notification: {str(e)}"
         traceback.print_exc()
-        print(f"=== teams_notification_processor END (ERROR): {error_message} ===")
+        print(error_message)
         return Response(content=error_message, status_code=500)
 
 
