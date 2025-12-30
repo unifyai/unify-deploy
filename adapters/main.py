@@ -1349,21 +1349,38 @@ async def teams_notification_processor(request: Request):
         print(f"[16] Extracting sender info")
         sender_info = message_data.get("from", {})
         sender_user = sender_info.get("user", {})
-        print(f"[16] sender_user keys: {sender_user.keys() if sender_user else 'None'}")
-        print(f"[16] sender_user data: {sender_user}")
         sender_name = sender_user.get("displayName", "Unknown")
         sender_id = sender_user.get("id")
-        # Try email first, then userPrincipalName (UPN is usually the email)
-        sender_email = (
-            sender_user.get("email")
-            or sender_user.get("userPrincipalName")
+        # Email usually not in message data, need to fetch from user profile
+        sender_email = sender_user.get("email") or sender_user.get("userPrincipalName")
+
+        print(
+            f"[17] Sender from message: name={sender_name}, id={sender_id}, email={sender_email}"
         )
 
-        print(f"[17] Sender: name={sender_name}, id={sender_id}, email={sender_email}")
-
+        # If no email in message data, fetch user profile to get email
         if not sender_email and sender_id:
-            sender_email = f"{sender_id}@teams"
-            print(f"[18] Using fallback sender email: {sender_email}")
+            print(f"[17] Fetching user profile for email: /users/{sender_id}")
+            try:
+                async with httpx.AsyncClient() as client:
+                    user_response = await client.get(
+                        f"https://graph.microsoft.com/v1.0/users/{sender_id}?$select=mail,userPrincipalName",
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        timeout=10.0,
+                    )
+                if user_response.status_code == 200:
+                    user_data = user_response.json()
+                    sender_email = user_data.get("mail") or user_data.get(
+                        "userPrincipalName"
+                    )
+                    print(f"[18] Got email from user profile: {sender_email}")
+                else:
+                    sender_email = f"{sender_id}@teams"
+                    print(
+                        f"[18] Failed to fetch user profile: {user_response.status_code}"
+                    )
+            except Exception as e:
+                print(f"[18] Error fetching user profile: {e}")
 
         message_content = message_data.get("body", {}).get("content", "")
         message_type = message_data.get("body", {}).get("contentType", "text")
