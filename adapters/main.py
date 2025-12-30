@@ -1955,6 +1955,8 @@ async def scheduled_teams_watches(request: Request):
                     timeout=30.0,
                 )
 
+            print(f"Subscriptions response status code: {subs_response.status_code}")
+            print(f"Subscriptions response text: {subs_response.text}")
             if subs_response.status_code == 200:
                 subs_data = subs_response.json()
                 for sub in subs_data.get("value", []):
