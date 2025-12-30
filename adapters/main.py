@@ -2000,6 +2000,10 @@ async def scheduled_teams_watches(request: Request):
                         except (ValueError, IndexError) as e:
                             print(f"Could not parse channel subscription: {resource}")
 
+        except requests.exceptions.Timeout:
+            # Timeout is not a failure - the request was sent and may succeed
+            print(f"Teams watch for {email}: timed out (request may still succeed)")
+            results["channels_renewed"].append({"email": email, "status": "timeout"})
         except Exception as e:
             error_msg = f"Error renewing Teams watch for {email}: {str(e)}"
             print(error_msg)
