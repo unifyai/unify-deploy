@@ -289,8 +289,6 @@ def test_unity_system_event_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
-
-
 def test_email_notification_processor(test_client):
     """Test successful email notification processing."""
     endpoint = "/email/gmail"
