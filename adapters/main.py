@@ -1155,28 +1155,44 @@ async def teams_notification_processor(request: Request):
         )
         print(f"[5] Is channel message: {is_channel_message}")
 
+        # Check if this is a reply to a channel message
+        is_reply = "replies(" in resource.lower() or "/replies/" in resource.lower()
+        print(f"[6] Is reply: {is_reply}")
+
         # Extract IDs using helper - try resourceData first, then parse from resource path
-        message_id = resource_data.get("id") or parse_teams_resource_id(
-            resource, "messages"
-        )
-        print(f"[6] Message ID: {message_id}")
+        if is_reply:
+            # For replies: resource_data.id is the reply ID, messages('...') is the parent
+            reply_id = resource_data.get("id") or parse_teams_resource_id(
+                resource, "replies"
+            )
+            parent_message_id = parse_teams_resource_id(resource, "messages")
+            message_id = reply_id  # The actual message we want to fetch
+            print(f"[7] Reply ID: {reply_id}, Parent message ID: {parent_message_id}")
+        else:
+            message_id = resource_data.get("id") or parse_teams_resource_id(
+                resource, "messages"
+            )
+            reply_id = None
+            parent_message_id = None
+            print(f"[7] Message ID: {message_id}")
 
         if is_channel_message:
             team_id = parse_teams_resource_id(resource, "teams")
             channel_id = parse_teams_resource_id(resource, "channels")
             chat_id = None
-            print(f"[7] Channel IDs - team: {team_id}, channel: {channel_id}")
+            print(f"[8] Channel IDs - team: {team_id}, channel: {channel_id}")
 
             if not team_id or not channel_id or not message_id:
                 print(
-                    f"[7] FAIL: Missing IDs for channel message: team={team_id}, "
+                    f"[8] FAIL: Missing IDs for channel message: team={team_id}, "
                     f"channel={channel_id}, message={message_id}"
                 )
                 return Response(status_code=200)
 
             print(
-                f"[8] Channel message - assistant: {assistant_email_address}, "
+                f"[9] Channel message - assistant: {assistant_email_address}, "
                 f"team: {team_id}, channel: {channel_id}, message: {message_id}"
+                + (f", parent: {parent_message_id}" if is_reply else "")
             )
         else:
             chat_id = resource_data.get("chatId") or parse_teams_resource_id(
@@ -1184,16 +1200,16 @@ async def teams_notification_processor(request: Request):
             )
             team_id = None
             channel_id = None
-            print(f"[7] Chat ID: {chat_id}")
+            print(f"[8] Chat ID: {chat_id}")
 
             if not chat_id or not message_id:
                 print(
-                    f"[7] FAIL: Missing IDs for chat message: chat={chat_id}, message={message_id}"
+                    f"[8] FAIL: Missing IDs for chat message: chat={chat_id}, message={message_id}"
                 )
                 return Response(status_code=200)
 
             print(
-                f"[8] Chat message - assistant: {assistant_email_address}, "
+                f"[9] Chat message - assistant: {assistant_email_address}, "
                 f"chat: {chat_id}, message: {message_id}"
             )
 
@@ -1235,9 +1251,15 @@ async def teams_notification_processor(request: Request):
                 from urllib.parse import quote
 
                 encoded_channel_id = quote(channel_id, safe="")
-                # Fetch recent messages (top 10) and find the one matching our message_id
-                graph_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages?$top=10"
-                print(f"[13] Fetching channel messages list: {graph_url}")
+
+                if is_reply and parent_message_id:
+                    # Fetch replies to the parent message
+                    graph_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages/{parent_message_id}/replies?$top=20"
+                    print(f"[14] Fetching channel message replies: {graph_url}")
+                else:
+                    # Fetch root messages (top 10)
+                    graph_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages?$top=10"
+                    print(f"[14] Fetching channel messages list: {graph_url}")
 
                 async with httpx.AsyncClient() as client:
                     response = await client.get(
@@ -1246,16 +1268,16 @@ async def teams_notification_processor(request: Request):
                         timeout=30.0,
                     )
 
-                print(f"[14] Response status: {response.status_code}")
+                print(f"[15] Response status: {response.status_code}")
                 if response.status_code != 200:
                     print(
-                        f"[14] FAIL: Failed to fetch Teams messages: {response.status_code} - {response.text}"
+                        f"[15] FAIL: Failed to fetch Teams messages: {response.status_code} - {response.text}"
                     )
                     return Response(status_code=200)
 
                 messages_response = response.json()
                 messages = messages_response.get("value", [])
-                print(f"[14] Got {len(messages)} messages, looking for {message_id}")
+                print(f"[15] Got {len(messages)} messages, looking for {message_id}")
 
                 # Find the matching message
                 message_data = None
@@ -1265,12 +1287,13 @@ async def teams_notification_processor(request: Request):
                         break
 
                 if not message_data:
+                    msg_type = "replies" if is_reply else "messages"
                     print(
-                        f"[15] FAIL: Message {message_id} not found in recent messages"
+                        f"[16] FAIL: Message {message_id} not found in recent {msg_type}"
                     )
                     # Log available message IDs for debugging
                     available_ids = [m.get("id") for m in messages[:5]]
-                    print(f"[15] Available message IDs: {available_ids}")
+                    print(f"[16] Available IDs: {available_ids}")
                     return Response(status_code=200)
             else:
                 graph_url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
