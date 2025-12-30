@@ -1244,6 +1244,7 @@ async def teams_notification_processor(request: Request):
         # Use beta endpoint for channel messages (v1.0 often returns 404)
         print(f"[12] Fetching message via Graph API")
 
+        parent_message_data = None  # Initialize for all cases
         try:
             if is_channel_message:
                 # For channel messages, we need to list recent messages and find the matching one
@@ -1252,49 +1253,79 @@ async def teams_notification_processor(request: Request):
 
                 encoded_channel_id = quote(channel_id, safe="")
 
+                # Helper to fetch messages from a URL
+                async def fetch_messages(url: str) -> tuple[list, bool]:
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.get(
+                            url,
+                            headers={"Authorization": f"Bearer {access_token}"},
+                            timeout=30.0,
+                        )
+                    if resp.status_code != 200:
+                        print(
+                            f"[14] FAIL: Failed to fetch: {resp.status_code} - {resp.text}"
+                        )
+                        return [], False
+                    return resp.json().get("value", []), True
+
+                # Always fetch root messages first (needed for both root posts and replies)
+                root_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages?$top=20"
+                print(f"[14] Fetching channel root messages: {root_url}")
+                root_messages, success = await fetch_messages(root_url)
+                if not success:
+                    return Response(status_code=200)
+                print(f"[15] Got {len(root_messages)} root messages")
+
                 if is_reply and parent_message_id:
-                    # Fetch replies to the parent message
-                    graph_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages/{parent_message_id}/replies?$top=20"
-                    print(f"[14] Fetching channel message replies: {graph_url}")
+                    # Find parent message in root messages for thread context
+                    parent_message_data = None
+                    for msg in root_messages:
+                        if msg.get("id") == parent_message_id:
+                            parent_message_data = msg
+                            break
+                    if parent_message_data:
+                        print(
+                            f"[15] Found parent message with subject: {parent_message_data.get('subject', '')}"
+                        )
+                    else:
+                        print(
+                            f"[15] Parent message {parent_message_id} not found in root messages"
+                        )
+
+                    # Now fetch replies to find our message
+                    replies_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages/{parent_message_id}/replies?$top=20"
+                    print(f"[16] Fetching replies: {replies_url}")
+                    replies, success = await fetch_messages(replies_url)
+                    if not success:
+                        return Response(status_code=200)
+                    print(f"[16] Got {len(replies)} replies, looking for {message_id}")
+
+                    # Find the matching reply
+                    message_data = None
+                    for msg in replies:
+                        if msg.get("id") == message_id:
+                            message_data = msg
+                            break
+                    if not message_data:
+                        print(f"[17] FAIL: Reply {message_id} not found")
+                        available_ids = [m.get("id") for m in replies[:5]]
+                        print(f"[17] Available reply IDs: {available_ids}")
+                        return Response(status_code=200)
                 else:
-                    # Fetch root messages (top 10)
-                    graph_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{encoded_channel_id}/messages?$top=10"
-                    print(f"[14] Fetching channel messages list: {graph_url}")
-
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(
-                        graph_url,
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        timeout=30.0,
-                    )
-
-                print(f"[15] Response status: {response.status_code}")
-                if response.status_code != 200:
-                    print(
-                        f"[15] FAIL: Failed to fetch Teams messages: {response.status_code} - {response.text}"
-                    )
-                    return Response(status_code=200)
-
-                messages_response = response.json()
-                messages = messages_response.get("value", [])
-                print(f"[15] Got {len(messages)} messages, looking for {message_id}")
-
-                # Find the matching message
-                message_data = None
-                for msg in messages:
-                    if msg.get("id") == message_id:
-                        message_data = msg
-                        break
-
-                if not message_data:
-                    msg_type = "replies" if is_reply else "messages"
-                    print(
-                        f"[16] FAIL: Message {message_id} not found in recent {msg_type}"
-                    )
-                    # Log available message IDs for debugging
-                    available_ids = [m.get("id") for m in messages[:5]]
-                    print(f"[16] Available IDs: {available_ids}")
-                    return Response(status_code=200)
+                    # For root messages, find in already-fetched list
+                    parent_message_data = None
+                    message_data = None
+                    for msg in root_messages:
+                        if msg.get("id") == message_id:
+                            message_data = msg
+                            break
+                    if not message_data:
+                        print(
+                            f"[16] FAIL: Message {message_id} not found in root messages"
+                        )
+                        available_ids = [m.get("id") for m in root_messages[:5]]
+                        print(f"[16] Available IDs: {available_ids}")
+                        return Response(status_code=200)
             else:
                 graph_url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
                 print(f"[13] Fetching chat message: {graph_url}")
@@ -1414,6 +1445,17 @@ async def teams_notification_processor(request: Request):
         if is_channel_message:
             event_data["team_id"] = team_id
             event_data["channel_id"] = channel_id
+            event_data["is_reply"] = is_reply
+            if is_reply and parent_message_id:
+                event_data["parent_message_id"] = parent_message_id
+                event_data["thread_id"] = (
+                    parent_message_id  # Thread is identified by the root message
+                )
+                # Include thread subject/header for context
+                if parent_message_data:
+                    event_data["thread_subject"] = parent_message_data.get(
+                        "subject", ""
+                    )
             event_data["action"] = "new_channel_message"
         else:
             event_data["chat_id"] = chat_id
