@@ -473,7 +473,8 @@ def build_webhook_context(
         )
     else:
         contacts, status_code = get_contacts(
-            f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}/Contacts", api_key
+            f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}/Contacts",
+            api_key,
         )
         if status_code != 200:
             contacts = get_default_contacts(assistant_data)
