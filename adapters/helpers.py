@@ -449,6 +449,7 @@ def build_webhook_context(
     api_key = assistant_data["api_key"]
     assistant_id = assistant_data["assistant_id"]
     user_id = assistant_data["user_id"]
+    user_name = assistant_data["user_name"]
     assistant_first_name = assistant_data["assistant_first_name"]
     assistant_surname = assistant_data["assistant_surname"]
     user_number = assistant_data["user_number"]
@@ -464,7 +465,7 @@ def build_webhook_context(
             email_address=(sender if is_email else ""),
             phone_number=("" if is_email else normalized_sender),
             medium=channel,
-            assistant_context=f"{assistant_first_name}{assistant_surname}",
+            assistant_context=f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}",
             api_key=api_key,
             user_number=user_number,
             user_email=user_email,
@@ -472,7 +473,7 @@ def build_webhook_context(
         )
     else:
         contacts, status_code = get_contacts(
-            f"{assistant_first_name}{assistant_surname}/Contacts", api_key
+            f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}/Contacts", api_key
         )
         if status_code != 200:
             contacts = get_default_contacts(assistant_data)
