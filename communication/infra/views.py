@@ -515,6 +515,7 @@ async def start_job(
     assistant_age: str = Form(...),
     assistant_nationality: str = Form(...),
     assistant_about: str = Form(...),
+    assistant_timezone: str = Form("UTC"),
     user_number: str = Form(""),
     assistant_number: str = Form(""),
     assistant_email: str = Form(""),
@@ -536,6 +537,7 @@ async def start_job(
         assistant_age: Assistant's age (required)
         assistant_nationality: Assistant's nationality (required)
         assistant_about: Assistant's about (required)
+        assistant_timezone: Assistant's timezone (required)
         user_number: User's phone number (optional, defaults to empty string)
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         assistant_email: Assistant's email (optional, defaults to empty string)
@@ -571,6 +573,7 @@ async def start_job(
                 "assistant_age": assistant_age,
                 "assistant_nationality": assistant_nationality,
                 "assistant_about": assistant_about,
+                "assistant_timezone": assistant_timezone,
                 "user_number": user_number,
                 "assistant_number": assistant_number,
                 "assistant_email": assistant_email,
