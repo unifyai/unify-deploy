@@ -1064,10 +1064,13 @@ async def outlook_notification_processor(request: Request):
         print(f"from_email: {from_email}")
 
         # Validate contact now that we have the sender
+        user_name = assistant_data["user_name"]
+        assistant_first_name = assistant_data["assistant_first_name"]
+        assistant_surname = assistant_data["assistant_surname"]
         contacts, is_valid_contact = check_valid_contact(
             email_address=from_email,
             medium="email",
-            assistant_context=f"{assistant_data['assistant_first_name']}{assistant_data['assistant_surname']}",
+            assistant_context=f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}",
             api_key=api_key,
             user_number=assistant_data.get("user_number", ""),
             user_email=assistant_data.get("user_email", ""),
@@ -1260,24 +1263,27 @@ async def teams_notification_processor(request: Request):
 
         print(f"from_email: {sender_email}, sender_name: {sender_name}")
 
-        # # Skip self-messages
-        # if sender_email and sender_email.lower() == assistant_email.lower():
-        #     print(f"Skipping self-message from {sender_email}")
-        #     return Response(status_code=200)
+        # Skip self-messages
+        if sender_email and sender_email.lower() == assistant_email.lower():
+            print(f"Skipping self-message from {sender_email}")
+            return Response(status_code=200)
 
-        # # Validate contact
-        # contacts, is_valid = check_valid_contact(
-        #     email_address=sender_email,
-        #     medium="teams",
-        #     assistant_context=f"{assistant_data['assistant_first_name']}{assistant_data['assistant_surname']}",
-        #     api_key=api_key,
-        #     user_number=assistant_data.get("user_number", ""),
-        #     user_email=assistant_data.get("user_email", ""),
-        #     assistant_data=assistant_data,
-        # )
-        # if not is_valid:
-        #     print(f"Invalid contact: {sender_email}")
-        #     return Response(status_code=200)
+        # Validate contact
+        user_name = assistant_data["user_name"]
+        assistant_first_name = assistant_data["assistant_first_name"]
+        assistant_surname = assistant_data["assistant_surname"]
+        contacts, is_valid = check_valid_contact(
+            email_address=sender_email,
+            medium="teams",
+            assistant_context=f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}",
+            api_key=api_key,
+            user_number=assistant_data.get("user_number", ""),
+            user_email=assistant_data.get("user_email", ""),
+            assistant_data=assistant_data,
+        )
+        if not is_valid:
+            print(f"Invalid contact: {sender_email}")
+            return Response(status_code=200)
 
         # Start job if needed
         is_running = is_job_running(user_id, assistant_id)
@@ -1294,7 +1300,7 @@ async def teams_notification_processor(request: Request):
         subject = message_data.get("subject", "")
 
         event_data = {
-            # "contacts": contacts,
+            "contacts": contacts,
             "message_id": message_id,
             "sender": sender_email,
             "sender_name": sender_name,
