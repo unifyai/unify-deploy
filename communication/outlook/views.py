@@ -20,6 +20,9 @@ from communication.helpers import ADAPTERS_URL, get_graph_client
 
 router = APIRouter()
 
+# Retry configuration for subscription creation (1 retry = 2 total attempts)
+MAX_RETRIES = 1
+
 
 @router.post("/send")
 async def send_outlook_email(request: Request):
@@ -127,28 +130,41 @@ async def watch_outlook_email(request: Request):
                 except Exception:
                     pass
 
-        # Create new subscription
+        # Create new subscription with retry logic for validation timeouts
         # Encode assistant email in clientState so we can identify them in notifications
         # Format: {secret}::{email}
         webhook_secret = os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook")
         client_state = f"{webhook_secret}::{user_email}"
 
-        result = await graph.subscriptions.post(
-            Subscription(
-                change_type="created",
-                notification_url=webhook_url,
-                resource=target_resource,
-                expiration_date_time=datetime.now(timezone.utc) + timedelta(days=3),
-                client_state=client_state,
-            )
-        )
-
-        logging.info(f"Outlook watch created for {user_email}: {result.id}")
-        return {
-            "success": True,
-            "subscription_id": result.id,
-            "expiration": result.expiration_date_time.isoformat(),
-        }
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                result = await graph.subscriptions.post(
+                    Subscription(
+                        change_type="created",
+                        notification_url=webhook_url,
+                        resource=target_resource,
+                        expiration_date_time=datetime.now(timezone.utc)
+                        + timedelta(days=3),
+                        client_state=client_state,
+                    )
+                )
+                logging.info(f"Outlook watch created for {user_email}: {result.id}")
+                return {
+                    "success": True,
+                    "subscription_id": result.id,
+                    "expiration": result.expiration_date_time.isoformat(),
+                }
+            except Exception as e:
+                error_str = str(e).lower()
+                is_validation_timeout = (
+                    "validation" in error_str and "timeout" in error_str
+                )
+                if is_validation_timeout and attempt < MAX_RETRIES:
+                    logging.warning(
+                        f"Outlook watch validation timeout for {user_email}, retrying..."
+                    )
+                    continue
+                raise
 
     except HTTPException:
         raise

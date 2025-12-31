@@ -12,6 +12,9 @@ from communication.helpers import ADAPTERS_URL, get_graph_client
 
 router = APIRouter()
 
+# Retry configuration for subscription creation (1 retry = 2 total attempts)
+MAX_RETRIES = 1
+
 
 @router.post("/send")
 async def send_teams_chat(request: Request):
@@ -129,29 +132,42 @@ async def watch_teams_chat(request: Request):
                 except Exception:
                     pass
 
-        # Create new subscription
+        # Create new subscription with retry logic for validation timeouts
         # Encode assistant email in clientState so we can identify them in notifications
         # Format: {secret}::{email}
         webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
         client_state = f"{webhook_secret}::{user_email}"
 
-        result = await graph.subscriptions.post(
-            Subscription(
-                change_type="created",
-                notification_url=webhook_url,
-                resource=target_resource,
-                expiration_date_time=datetime.now(timezone.utc) + timedelta(minutes=60),
-                client_state=client_state,
-            )
-        )
-
-        logging.info(f"Teams chat watch created for {user_email}: {result.id}")
-        return {
-            "success": True,
-            "action": "created",
-            "subscription_id": result.id,
-            "expiration": result.expiration_date_time.isoformat(),
-        }
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                result = await graph.subscriptions.post(
+                    Subscription(
+                        change_type="created",
+                        notification_url=webhook_url,
+                        resource=target_resource,
+                        expiration_date_time=datetime.now(timezone.utc)
+                        + timedelta(minutes=60),
+                        client_state=client_state,
+                    )
+                )
+                logging.info(f"Teams chat watch created for {user_email}: {result.id}")
+                return {
+                    "success": True,
+                    "action": "created",
+                    "subscription_id": result.id,
+                    "expiration": result.expiration_date_time.isoformat(),
+                }
+            except Exception as e:
+                error_str = str(e).lower()
+                is_validation_timeout = (
+                    "validation" in error_str and "timeout" in error_str
+                )
+                if is_validation_timeout and attempt < MAX_RETRIES:
+                    logging.warning(
+                        f"Teams chat watch validation timeout for {user_email}, retrying..."
+                    )
+                    continue
+                raise
 
     except HTTPException:
         raise
@@ -371,33 +387,47 @@ async def watch_teams_channel(request: Request):
                 except Exception:
                     pass
 
-        # Create new subscription
+        # Create new subscription with retry logic for validation timeouts
         # Format: {secret}::{email} - same as chat watch
         # team_id and channel_id are extracted from the resource path in the adapter
         webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
         client_state = f"{webhook_secret}::{user_email}"
 
-        result = await graph.subscriptions.post(
-            Subscription(
-                change_type="created",
-                notification_url=webhook_url,
-                resource=target_resource,
-                expiration_date_time=datetime.now(timezone.utc) + timedelta(minutes=60),
-                client_state=client_state,
-            )
-        )
-
-        logging.info(
-            f"Teams channel watch created for {user_email} on {team_id}/{channel_id}: {result.id}"
-        )
-        return {
-            "success": True,
-            "action": "created",
-            "subscription_id": result.id,
-            "team_id": team_id,
-            "channel_id": channel_id,
-            "expiration": result.expiration_date_time.isoformat(),
-        }
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                result = await graph.subscriptions.post(
+                    Subscription(
+                        change_type="created",
+                        notification_url=webhook_url,
+                        resource=target_resource,
+                        expiration_date_time=datetime.now(timezone.utc)
+                        + timedelta(minutes=60),
+                        client_state=client_state,
+                    )
+                )
+                logging.info(
+                    f"Teams channel watch created for {user_email} on {team_id}/{channel_id}: {result.id}"
+                )
+                return {
+                    "success": True,
+                    "action": "created",
+                    "subscription_id": result.id,
+                    "team_id": team_id,
+                    "channel_id": channel_id,
+                    "expiration": result.expiration_date_time.isoformat(),
+                }
+            except Exception as e:
+                error_str = str(e).lower()
+                is_validation_timeout = (
+                    "validation" in error_str and "timeout" in error_str
+                )
+                if is_validation_timeout and attempt < MAX_RETRIES:
+                    logging.warning(
+                        f"Teams channel watch validation timeout for {user_email} "
+                        f"on {team_id}/{channel_id}, retrying..."
+                    )
+                    continue
+                raise
 
     except HTTPException:
         raise
