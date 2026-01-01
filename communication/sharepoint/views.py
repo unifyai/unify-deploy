@@ -506,4 +506,3 @@ async def search_files(user_email: str, drive_id: str, q: str):
     except Exception as e:
         logging.error(f"Failed to search files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
