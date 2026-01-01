@@ -285,11 +285,10 @@ async def main():
     ROOM_NAME = "unity_+19999999999"  # Same as agent name for testing
 
     # Create inbound trunk (for receiving calls FROM Teams)
-    # inbound_trunk_id = await create_inbound_trunk()
+    inbound_trunk_id = await create_inbound_trunk()
 
     # Create outbound trunk (for making calls TO Teams)
     outbound_trunk_id = await create_outbound_trunk()
-    return
 
     # Create dispatch rule with agent auto-dispatch (for inbound calls)
     # This is KEY - without this, inbound calls won't be auto-answered
