@@ -27,6 +27,7 @@ from livekit.api import (
     SIPInboundTrunkInfo,
     SIPOutboundTrunkInfo,
     CreateSIPInboundTrunkRequest,
+    CreateSIPParticipantRequest,
     CreateSIPOutboundTrunkRequest,
     ListSIPInboundTrunkRequest,
     ListSIPOutboundTrunkRequest,
@@ -222,13 +223,16 @@ async def list_dispatch_rules():
     await lkapi.aclose()
 
 
-async def call_teams_user(phone_number: str, room_name: str):
+async def call_teams_user(
+    phone_number: str, room_name: str, agent_name: str = "unity_+19999999999"
+):
     """
     Make an outbound call to a Teams user (or any phone number via Teams).
 
     Args:
         phone_number: The phone number to call (e.g., "+14155551234")
         room_name: The LiveKit room name where the call will be connected
+        agent_name: The agent to dispatch to the room (must match your agent worker)
 
     Returns:
         The SIP participant info
@@ -236,8 +240,6 @@ async def call_teams_user(phone_number: str, room_name: str):
     Example:
         await call_teams_user("+14155551234", "outbound-call-123")
     """
-    from livekit.api import CreateSIPParticipantRequest
-
     lkapi = await get_livekit_api()
 
     # Get the outbound trunk ID
@@ -255,25 +257,60 @@ async def call_teams_user(phone_number: str, room_name: str):
 
     # Create a SIP participant that dials out
     # The call goes: LiveKit → SBC → Microsoft → Teams User
+    # Use the same room name as the agent to trigger dispatch
+    print(f"📞 Dialing {phone_number}...")
+    print(f"   Room: {room_name}")
+    print(f"   Agent: {agent_name}")
+
     result = await lkapi.sip.create_sip_participant(
         CreateSIPParticipantRequest(
             sip_trunk_id=outbound_trunk_id,
-            # Format: sip:+phonenumber@sbc.domain
-            # The SBC will route this to Microsoft
-            sip_call_to=f"sip:{phone_number}@{SBC_DOMAIN}",
+            sip_call_to=phone_number,
             room_name=room_name,
-            participant_identity=f"call-{phone_number}",
+            participant_identity=f"sip-{phone_number}",
             participant_name=f"Call to {phone_number}",
         )
     )
 
-    print(f"📞 Initiated outbound call:")
-    print(f"   To: {phone_number}")
-    print(f"   Room: {room_name}")
-    print(f"   Participant: {result.participant_identity}")
+    print(f"✅ Outbound call initiated:")
+    print(f"   SIP Participant: {result.participant_identity}")
 
     await lkapi.aclose()
     return result
+
+
+async def create_outbound_dispatch_rule(agent_name: str):
+    """
+    Create a global dispatch rule for outbound calls.
+    This ensures the agent is dispatched to ANY room where a SIP participant joins.
+    """
+    lkapi = await get_livekit_api()
+
+    # Create dispatch rule with NO trunk filter - applies to all rooms
+    request = CreateSIPDispatchRuleRequest(
+        trunk_ids=[],  # Empty = applies to all trunks/rooms
+        rule=SIPDispatchRule(
+            dispatch_rule_direct=SIPDispatchRuleDirect(
+                room_name="",  # Empty = match any room
+                pin="",
+            ),
+        ),
+        room_config=RoomConfiguration(
+            agents=[
+                RoomAgentDispatch(
+                    agent_name=agent_name,
+                )
+            ]
+        ),
+    )
+
+    result = await lkapi.sip.create_dispatch_rule(request)
+    print(f"✅ Created global dispatch rule: {result.sip_dispatch_rule_id}")
+    print(f"   Agent: {agent_name}")
+    print(f"   Applies to: ALL rooms")
+
+    await lkapi.aclose()
+    return result.sip_dispatch_rule_id
 
 
 async def main():
