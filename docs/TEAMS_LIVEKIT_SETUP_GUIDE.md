@@ -1247,6 +1247,57 @@ Get-CsOnlinePSTNGateway -Identity "sbc.yourdomain.com" | Select-Object Fqdn, Med
 
 ## Known Issues
 
+### Call Disconnects When User Microphone is Muted
+
+**Status:** Confirmed behavior with Media Bypass enabled
+
+**Symptoms:**
+- Call disconnects after ~15-18 seconds when the user's microphone is muted
+- Call stays alive indefinitely when microphone is unmuted (even if user is silent)
+- Agent audio continues playing until disconnect
+- BYE message originates from Microsoft/Teams side
+
+**Root Cause:**
+
+When the user mutes their microphone in Teams, the Teams client stops sending RTP packets to LiveKit. Despite LiveKit continuing to send audio (the agent speaking), Teams appears to monitor its **outgoing** RTP stream and disconnects if no packets are sent for ~15 seconds.
+
+```
+Mic UNMUTED (even if silent):
+  Teams → sends RTP (silence) → LiveKit     ✅ Call stays alive
+
+Mic MUTED:
+  Teams → stops sending RTP → LiveKit       ❌ Call disconnects after ~15s
+```
+
+**Solution:**
+
+Users must keep their microphone **unmuted** during the call. They don't need to speak - just stay unmuted. Update your agent's greeting to inform users:
+
+```python
+await session.generate_reply(
+    instructions="Greet the user warmly and offer your assistance. "
+    "Also briefly mention that they should keep their microphone unmuted during the call "
+    "to prevent disconnection - they don't need to speak constantly, just stay unmuted."
+)
+```
+
+**Example greeting the agent might say:**
+> "Hi! I'm your AI assistant. Just a quick note - please keep your microphone unmuted during our conversation. You don't need to talk constantly, but muting may cause the call to disconnect. How can I help you today?"
+
+**Why this happens:**
+
+This appears to be undocumented client-side behavior in Teams when Media Bypass is enabled. With Media Bypass, RTP flows directly between the Teams client and LiveKit. The Teams client monitors its own outgoing RTP stream and terminates the call if nothing is sent for ~15 seconds - regardless of incoming audio from the agent.
+
+**Workarounds tried (unsuccessful):**
+- ❌ Agent sending continuous audio/noise - doesn't prevent disconnect
+- ❌ Agent sending DTMF tones - doesn't prevent disconnect
+- ❌ Comfort noise injection - doesn't prevent disconnect
+- ❌ Teams admin policies - no configurable timeout setting exists
+
+**The only working solution is keeping the user's microphone unmuted.**
+
+---
+
 ### SRTP Crypto Tag Mismatch (New Teams Desktop Client)
 
 **Status:** Intermittent issue affecting new Teams desktop client (as of late 2024)
