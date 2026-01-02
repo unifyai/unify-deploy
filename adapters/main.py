@@ -339,20 +339,22 @@ async def teams_call_webhook(request: Request):
             media_type="application/json",
         )
 
-    # # Look up assistant by the Teams virtual number
-    # # This uses the same flow as Twilio - the number maps to an assistant
-    # try:
-    #     context = build_webhook_context("teams", teams_number, from_uri)
-    #     assistant_id = context["assistant"]["assistant_id"]
-    #     contacts = context["contacts"]
-    # except Exception as e:
-    #     print(f"ERROR: Could not find assistant for {teams_number}: {e}")
-    #     # Return success anyway - let the call proceed, it just won't have an agent
-    #     return Response(
-    #         content=json.dumps({"success": True, "warning": "No assistant found"}),
-    #         status_code=200,
-    #         media_type="application/json",
-    #     )
+    # Look up assistant by the Teams virtual number
+    # This uses the same flow as Twilio - the number maps to an assistant
+    try:
+        context = build_webhook_context(
+            "meet", teams_number, from_uri, validate_contact=False
+        )
+        assistant_id = context["assistant"]["assistant_id"]
+        contacts = context["contacts"]
+    except Exception as e:
+        print(f"ERROR: Could not find assistant for {teams_number}: {e}")
+        # Return success anyway - let the call proceed, it just won't have an agent
+        return Response(
+            content=json.dumps({"success": True, "warning": "No assistant found"}),
+            status_code=200,
+            media_type="application/json",
+        )
 
     # Generate room name (consistent with Twilio pattern)
     room_name = f"unity_{teams_number}"
@@ -371,12 +373,12 @@ async def teams_call_webhook(request: Request):
         pubsub_message = {
             "thread": "call",
             "event": {
-                # "contacts": contacts,
+                "contacts": contacts,
                 "conference_name": f"Teams_{teams_number[1:]}_{call_id[:8]}",
                 "caller_number": from_uri,  # Will be anonymous for Teams AA
                 "sip_uri": sip_uri,
                 "livekit_room": room_name,
-                # "assistant_id": assistant_id,
+                "assistant_id": assistant_id,
                 "action": "start_worker",
                 "timestamp": int(time.time() * 1000),
                 "call_metadata": {
