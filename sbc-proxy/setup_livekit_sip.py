@@ -38,7 +38,7 @@ from livekit.api import (
     RoomConfiguration,
     RoomAgentDispatch,
 )
-from livekit.protocol.sip import DeleteSIPDispatchRuleRequest
+from livekit.protocol.sip import DeleteSIPDispatchRuleRequest, DeleteSIPTrunkRequest
 
 # Your Kamailio SBC configuration
 SBC_IP = "34.121.162.2"
@@ -116,9 +116,10 @@ async def create_outbound_trunk():
         address=f"{SBC_DOMAIN}:{SBC_PORT}",
         # Transport protocol
         transport=1,  # 1 = UDP, 2 = TCP (SBC listens on UDP 5060)
-        # Numbers - the caller ID(s) to use for outbound calls
-        # This should be your Teams Resource Account phone number
-        numbers=["+19999999999"],
+        # Numbers - caller IDs this trunk can use
+        # Use "*" wildcard to allow any caller ID
+        # Security: Outbound calls are only triggered by code with API credentials
+        numbers=["*"],
     )
 
     request = CreateSIPOutboundTrunkRequest(trunk=sip_trunk)
