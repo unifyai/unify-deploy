@@ -20,10 +20,11 @@ This guide walks you through setting up LiveKit voice assistants that can receiv
 8. [Step 6: Configure LiveKit SIP Trunk](#step-6-configure-livekit-sip-trunk)
 9. [Step 7: Update Your Application](#step-7-update-your-application)
 10. [Step 8: Test the Integration](#step-8-test-the-integration)
-11. [Troubleshooting](#troubleshooting)
-12. [Known Issues](#known-issues)
-13. [Appendix A: Self-Hosted Kamailio SBC Setup](#appendix-a-self-hosted-kamailio-sbc-setup)
-14. [Appendix B: Files Reference](#appendix-b-files-reference)
+11. [Step 9: Configure Outbound Calls (Optional)](#step-9-configure-outbound-calls-optional)
+12. [Troubleshooting](#troubleshooting)
+13. [Known Issues](#known-issues)
+14. [Appendix A: Self-Hosted Kamailio SBC Setup](#appendix-a-self-hosted-kamailio-sbc-setup)
+15. [Appendix B: Files Reference](#appendix-b-files-reference)
 
 ---
 
@@ -1129,6 +1130,259 @@ Once connected:
 1. Speak into Teams client
 2. Verify audio reaches your LiveKit agent
 3. Verify agent response plays back in Teams
+
+---
+
+## Step 9: Configure Outbound Calls (Optional)
+
+This section covers making **outbound calls FROM your agent TO Teams users** - the reverse of the inbound flow.
+
+### 9.1 Architecture Overview
+
+```
+Outbound Call Flow:
+Your Agent → LiveKit Room → LiveKit SIP Outbound → SBC → Microsoft → Teams User
+```
+
+The same SBC infrastructure used for inbound calls can handle outbound calls with additional configuration.
+
+### 9.2 Create LiveKit Outbound SIP Trunk
+
+In addition to your inbound trunk, create an outbound trunk:
+
+```python
+from livekit.api import LiveKitAPI, SIPOutboundTrunkInfo, CreateSIPOutboundTrunkRequest
+
+async def create_outbound_trunk():
+    lkapi = LiveKitAPI(
+        url=os.getenv("LIVEKIT_URL"),
+        api_key=os.getenv("LIVEKIT_API_KEY"),
+        api_secret=os.getenv("LIVEKIT_API_SECRET"),
+    )
+
+    # LiveKit sends outbound calls to your SBC
+    sip_trunk = SIPOutboundTrunkInfo(
+        name="Teams-Outbound",
+        # Your SBC address - LiveKit sends outbound calls here
+        address="sbc.yourdomain.com:5060",
+        # Transport protocol (1 = UDP, 2 = TCP)
+        transport=1,
+        # Caller ID - your Teams Resource Account number
+        numbers=["+19999999999"],
+    )
+
+    request = CreateSIPOutboundTrunkRequest(trunk=sip_trunk)
+    result = await lkapi.sip.create_outbound_trunk(request)
+    print(f"Created outbound trunk: {result.sip_trunk_id}")
+
+    await lkapi.aclose()
+    return result
+```
+
+### 9.3 Update Kamailio for Bidirectional Routing
+
+Your SBC needs to route calls in both directions:
+
+1. **Inbound:** Microsoft Teams → SBC → LiveKit (existing)
+2. **Outbound:** LiveKit → SBC → Microsoft Teams (new)
+
+Add IP pattern matching to identify LiveKit as the source:
+
+```kamailio
+# LiveKit Cloud IP ranges (check dashboard for actual IPs)
+# These may vary by region - use tcpdump to find actual source IPs
+#!substdef "!LIVEKIT_IP_PATTERN!^(161\.115\.|143\.223\.)!g"
+
+# Microsoft Teams SIP Proxy
+#!substdef "!MS_SIP_PROXY!sip.pstnhub.microsoft.com!g"
+#!substdef "!MS_SIP_PORT!5061!g"
+```
+
+Update the INVITE routing logic:
+
+```kamailio
+if (is_method("INVITE")) {
+    # Check if this is from LiveKit (outbound call to Teams)
+    if ($si =~ "LIVEKIT_IP_PATTERN") {
+        xlog("L_INFO", "OUTBOUND: INVITE from LiveKit ($si) - routing to Microsoft\n");
+        route(TO_MICROSOFT);
+        exit;
+    }
+
+    # Check if this is from Microsoft Teams (inbound call to agent)
+    if ($si =~ "^52\.11[2-5]\." || $si =~ "^52\.12[0-3]\.") {
+        xlog("L_INFO", "INBOUND: INVITE from Teams ($si) - routing to LiveKit\n");
+        route(TO_LIVEKIT);
+        exit;
+    }
+
+    # Unknown source - reject
+    xlog("L_WARN", "INVITE from unknown IP $si - rejecting\n");
+    sl_send_reply("403", "Forbidden");
+    exit;
+}
+```
+
+Add the outbound routing logic:
+
+```kamailio
+# Route to Microsoft Teams (outbound calls from LiveKit)
+route[TO_MICROSOFT] {
+    xlog("L_INFO", "Routing OUTBOUND to Microsoft: sip:$rU@MS_SIP_PROXY:MS_SIP_PORT\n");
+
+    # Rewrite destination to Microsoft's SIP proxy over TLS
+    $ru = "sip:" + $rU + "@MS_SIP_PROXY:MS_SIP_PORT;transport=tls";
+
+    # CRITICAL: Rewrite To header to use Microsoft's domain
+    # uac_replace_to(display, uri) - don't include angle brackets
+    $var(new_to) = "sip:" + $rU + "@MS_SIP_PROXY";
+    uac_replace_to("", "$var(new_to)");
+
+    # Rewrite From header to use your verified SBC domain
+    $var(new_from) = "sip:" + $fU + "@MY_DOMAIN";
+    uac_replace_from("", "$var(new_from)");
+
+    # Add Record-Route so responses come back through us
+    remove_hf("Record-Route");
+    append_hf("Record-Route: <sip:MY_DOMAIN:5061;transport=tls;lr>\r\n");
+
+    route(RELAY);
+}
+```
+
+### 9.4 Make Outbound Calls from Your Agent
+
+Use the LiveKit API to initiate outbound calls:
+
+```python
+from livekit.api import LiveKitAPI, CreateSIPParticipantRequest, CreateRoomRequest
+
+async def call_teams_user(phone_number: str, room_name: str, agent_name: str):
+    """
+    Make an outbound call to a Teams user.
+
+    Args:
+        phone_number: The phone number to call (e.g., "+14155551234")
+        room_name: The LiveKit room name where the call will be connected
+        agent_name: The name of the agent to dispatch to the room
+    """
+    lkapi = LiveKitAPI(
+        url=os.getenv("LIVEKIT_URL"),
+        api_key=os.getenv("LIVEKIT_API_KEY"),
+        api_secret=os.getenv("LIVEKIT_API_SECRET"),
+    )
+
+    # 1. Create the room and dispatch your agent
+    from livekit.api import RoomConfiguration, RoomAgentDispatch
+
+    room_config = RoomConfiguration(
+        agents=[RoomAgentDispatch(agent_name=agent_name)]
+    )
+    await lkapi.room.create_room(CreateRoomRequest(name=room_name, room=room_config))
+
+    # 2. Get the outbound trunk ID
+    from livekit.api import ListSIPOutboundTrunkRequest
+
+    outbound = await lkapi.sip.list_outbound_trunk(ListSIPOutboundTrunkRequest())
+    outbound_trunk_id = None
+    for trunk in outbound.items:
+        if trunk.name == "Teams-Outbound":
+            outbound_trunk_id = trunk.sip_trunk_id
+            break
+
+    if not outbound_trunk_id:
+        raise ValueError("Outbound trunk not found")
+
+    # 3. Create a SIP participant that dials out
+    # The call goes: LiveKit → SBC → Microsoft → Teams User
+    result = await lkapi.sip.create_sip_participant(
+        CreateSIPParticipantRequest(
+            sip_trunk_id=outbound_trunk_id,
+            # Just the phone number - LiveKit builds the SIP URI
+            sip_call_to=phone_number,
+            room_name=room_name,
+            participant_identity=f"call-{phone_number}",
+            participant_name=f"Call to {phone_number}",
+        )
+    )
+
+    print(f"Outbound call initiated to {phone_number}")
+    await lkapi.aclose()
+    return result
+```
+
+### 9.5 Finding LiveKit's IP Addresses
+
+LiveKit Cloud uses dynamic IPs across regions. To find the actual source IPs:
+
+1. **Check your agent's registration region** (shown in agent logs)
+2. **Use DNS lookup** on your LiveKit SIP endpoint:
+   ```bash
+   nslookup your-project.sip.livekit.cloud
+   ```
+3. **Check SBC logs** when making test calls - the source IP will be logged
+4. **Update the IP pattern** in `kamailio.cfg` to match
+
+Common LiveKit IP ranges:
+- `161.115.x.x`
+- `143.223.x.x`
+
+### 9.6 Test Outbound Calls
+
+```python
+import asyncio
+
+async def test_outbound():
+    await call_teams_user(
+        phone_number="+14155551234",  # Teams user's number
+        room_name="outbound-test-room",
+        agent_name="your-agent-name"
+    )
+
+asyncio.run(test_outbound())
+```
+
+Check the flow:
+1. **LiveKit Dashboard** → Room created, agent joined
+2. **SBC Logs** → INVITE from LiveKit, routing to Microsoft
+3. **Teams User** → Receives incoming call
+4. **Agent** → Can interact with the Teams user
+
+### 9.7 Outbound Call Troubleshooting
+
+#### 400 Bad Request from Microsoft
+
+**Symptom:** SBC logs show `400 Bad Request` from Microsoft
+
+**Common causes:**
+1. **Double angle brackets in headers** - Ensure `uac_replace_to()` doesn't include `<>`:
+   ```kamailio
+   # Wrong:
+   $var(new_to) = "<sip:+123@domain>";
+   
+   # Correct:
+   $var(new_to) = "sip:+123@domain";
+   uac_replace_to("", "$var(new_to)");
+   ```
+
+2. **Invalid From domain** - From header must use your verified SBC domain
+
+3. **Transport parameter issues** - Don't include `transport=udp` when sending to Microsoft over TLS
+
+#### INVITE Rejected (403 Forbidden)
+
+**Symptom:** SBC rejects INVITE from LiveKit
+
+**Solution:** Update `LIVEKIT_IP_PATTERN` in `kamailio.cfg` to include LiveKit's actual IP
+
+#### No Ringing on Teams Side
+
+**Symptom:** Call appears to connect but Teams user never sees incoming call
+
+**Solutions:**
+1. Verify the phone number format matches Teams expectations (E.164)
+2. Check Microsoft's response in SBC logs
+3. Ensure your Resource Account has outbound calling rights
 
 ---
 
