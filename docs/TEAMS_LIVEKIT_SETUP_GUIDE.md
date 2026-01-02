@@ -1137,6 +1137,26 @@ Once connected:
 
 This section covers making **outbound calls FROM your agent TO Teams users** - the reverse of the inbound flow.
 
+> ⚠️ **Important Limitation: Phone Numbers Required**
+>
+> Microsoft Teams Direct Routing only works with **phone numbers** (E.164 format like `+14155551234`), not email addresses or UPNs. The SBC/SIP protocol routes calls based on the **dialed phone number** to the **Teams user with that number assigned**.
+>
+> **This means:**
+> - You cannot call `user@tenant.onmicrosoft.com` directly via SIP
+> - The Teams user you want to call **must have a phone number assigned** to their account
+> - The phone number can be a Direct Routing number (doesn't need to exist on PSTN)
+>
+> **To assign a Direct Routing number to a Teams user:**
+> ```powershell
+> # In Teams Admin PowerShell
+> Set-CsPhoneNumberAssignment -Identity "user@tenant.onmicrosoft.com" -PhoneNumber "+19999999998" -PhoneNumberType DirectRouting
+> Set-CsPhoneNumberAssignment -Identity "user@tenant.onmicrosoft.com" -EnterpriseVoiceEnabled $true
+> ```
+>
+> **Alternative for calling Teams users without phone numbers:**
+> - Use the **Microsoft Graph API** to initiate Teams calls (HTTPS, not SIP)
+> - This requires Azure AD app registration and is a completely different approach
+
 ### 9.1 Architecture Overview
 
 ```
