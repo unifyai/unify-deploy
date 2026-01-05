@@ -47,7 +47,7 @@ jobs:
         pip install -r requirements-comms.txt
         pip install -r requirements-adapters.txt
       env:
-        GITHUB_TOKEN: ${{ secrets.DEVBOT_GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.UNIFY_CLONE_TOKEN }}
 
     - name: Run adapter tests
       run: pytest -vs tests/test_adapters.py
