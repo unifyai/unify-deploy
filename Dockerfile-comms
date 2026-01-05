@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+# Accept build argument for GITHUB_TOKEN
+ARG GITHUB_TOKEN
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
@@ -33,6 +36,9 @@ RUN apt-get update && apt-get install -y google-cloud-cli google-cloud-sdk-gke-g
 ENV USE_GKE_GCLOUD_AUTH_PLUGIN=True
 
 WORKDIR /app
+
+# Configure git to use GITHUB_TOKEN for private repo authentication
+RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
 # Copy requirements first for better caching
 COPY requirements-comms.txt requirements.txt

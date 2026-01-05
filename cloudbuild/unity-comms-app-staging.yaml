@@ -6,10 +6,10 @@ steps:
   args:
   - '-c'
   - |
-    docker build -f Dockerfile-comms --build-arg UNIFY_KEY=$$ORCHESTRA_API_KEY \
+    docker build -f Dockerfile-comms --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
-  secretEnv: ['ORCHESTRA_API_KEY']
+  secretEnv: ['GITHUB_TOKEN']
 
   # Push Docker Image (SHA Tag)
 - name: 'gcr.io/cloud-builders/docker'
@@ -53,8 +53,8 @@ substitutions:
 # Available secrets
 availableSecrets:
   secretManager:
-  - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_API_KEY/versions/latest
-    env: 'ORCHESTRA_API_KEY'
+  - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
+    env: 'GITHUB_TOKEN'
 
 # Timeout
 timeout: '1200s'  # 20 minutes
