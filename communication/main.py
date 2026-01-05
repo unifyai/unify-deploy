@@ -3,6 +3,7 @@ from communication.phone.views import (
     auth_router as phone_auth_router,
     unauth_router as phone_unauth_router,
 )
+from communication.whatsapp.views import router as whatsapp_router
 from communication.gmail.views import router as gmail_router
 from communication.outlook.views import router as outlook_router
 from communication.teams.views import router as teams_router
@@ -19,6 +20,7 @@ admin_auth = [Depends(auth_admin_key)]
 app = FastAPI()
 app.include_router(phone_auth_router, prefix="/phone", dependencies=admin_auth)
 app.include_router(phone_unauth_router, prefix="/phone")
+app.include_router(whatsapp_router, prefix="/whatsapp", dependencies=admin_auth)
 app.include_router(gmail_router, prefix="/gmail", dependencies=admin_auth)
 app.include_router(outlook_router, prefix="/outlook", dependencies=admin_auth)
 app.include_router(teams_router, prefix="/teams", dependencies=admin_auth)

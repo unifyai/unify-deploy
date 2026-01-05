@@ -14,7 +14,9 @@ router = APIRouter()
 
 # --- Schema ---
 class VerificationRequest(BaseModel):
-    platform: str = Field(..., description="The platform to verify (e.g., 'phone').")
+    platform: str = Field(
+        ..., description="The platform to verify (e.g., 'whatsapp', 'phone')."
+    )
     account_identifier: str = Field(
         ..., description="The user's account identifier (e.g., phone number)."
     )
@@ -33,7 +35,7 @@ async def get_social_platforms():
     Fetches the available social media platforms
     and their respective account creation cost.
     """
-    platforms = {"phone": 0.0}
+    platforms = {"whatsapp": 10.0}
     return {"success": True, "platforms": platforms}
 
 
@@ -49,7 +51,31 @@ async def send_verification_message(request: VerificationRequest):
     identifier = request.account_identifier
     code = generate_verification_code()
 
-    if platform == "phone":
+    if platform == "whatsapp":
+        message = f"Your Unify verification code is: {code}"
+        try:
+            twilio_client = get_twilio_client()
+
+            from_number = os.getenv("TWILIO_VERIFICATION_NUMBER")
+            if not from_number:
+                raise HTTPException(
+                    status_code=500,
+                    detail="TWILIO_VERIFICATION_NUMBER environment variable is not configured.",
+                )
+
+            twilio_client.messages.create(
+                to=f"whatsapp:{identifier}",
+                from_=f"whatsapp:{from_number}",
+                body=message,
+            )
+        except Exception as e:
+            # Log the full error for debugging but return a generic message to the user
+            print(f"ERROR sending WhatsApp verification: {e}")
+            raise HTTPException(
+                status_code=500, detail="Failed to send WhatsApp verification message."
+            )
+
+    elif platform == "phone":
         message = f"Your Unify verification code is: {code}"
         try:
             twilio_client = get_twilio_client()
@@ -75,7 +101,7 @@ async def send_verification_message(request: VerificationRequest):
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"Platform '{platform}' is not supported. Supported platforms are: 'phone'.",
+            detail=f"Platform '{platform}' is not supported. Supported platforms are: 'whatsapp', 'phone'.",
         )
 
     # If sending was successful, return the code and a UTC timestamp.
