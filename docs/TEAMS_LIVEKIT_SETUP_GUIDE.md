@@ -23,6 +23,9 @@ This guide walks you through setting up LiveKit voice assistants that can receiv
 11. [Step 9: Configure Outbound Calls (Optional)](#step-9-configure-outbound-calls-optional)
 12. [Troubleshooting](#troubleshooting)
 13. [Known Issues](#known-issues)
+    - [Anonymous Caller Identity for Inbound Calls](#anonymous-caller-identity-for-inbound-calls)
+    - [Call Disconnects When User Microphone is Muted](#call-disconnects-when-user-microphone-is-muted)
+    - [SRTP Crypto Tag Mismatch](#srtp-crypto-tag-mismatch-new-teams-desktop-client)
 14. [Appendix A: Self-Hosted Kamailio SBC Setup](#appendix-a-self-hosted-kamailio-sbc-setup)
 15. [Appendix B: Files Reference](#appendix-b-files-reference)
 
@@ -1008,6 +1011,20 @@ Configure your SBC to send calls to this URI.
 
 ### 7.1 Add Teams Webhook Handler
 
+> ⚠️ **Caller Identity Limitation**
+>
+> Unlike phone calls where you get a phone number, **inbound Teams calls via Direct Routing typically provide anonymous or limited caller information**. The SIP `From` header may contain:
+> - The Resource Account's identity (not the actual caller)
+> - A generic SIP URI without user-identifying information
+> - An anonymous placeholder
+>
+> This is because the call flow goes: `User → Auto Attendant → Forward → SBC`. The forwarding step loses the original caller's identity.
+>
+> **To identify callers, consider:**
+> - Having the agent ask "Who am I speaking with?" at the start
+> - Using Teams Graph API separately to correlate call metadata
+> - Implementing a callback/PIN system for authenticated interactions
+
 Create a webhook to handle incoming Teams calls (similar to your Twilio webhook):
 
 ```python
@@ -1022,7 +1039,8 @@ async def teams_call_webhook(request: Request):
     data = await request.json()
     
     # Extract call info from SIP headers
-    caller_id = data.get("from_number", "")  # Teams user's identity
+    # NOTE: caller_id is often anonymous/empty for forwarded calls (see Known Issues)
+    caller_id = data.get("from_number", "")  # May be empty or Resource Account ID
     sip_trunk_id = data.get("sip_trunk_id", "")
     room_name = data.get("room_name", "")
     
@@ -1520,6 +1538,44 @@ Get-CsOnlinePSTNGateway -Identity "sbc.yourdomain.com" | Select-Object Fqdn, Med
 ---
 
 ## Known Issues
+
+### Anonymous Caller Identity for Inbound Calls
+
+**Status:** Expected behavior (not a bug)
+
+**Symptoms:**
+- `caller_id` or `from_number` in webhook is empty, anonymous, or shows the Resource Account instead of the actual caller
+- Cannot identify who is calling before the conversation starts
+
+**Root Cause:**
+
+When using the recommended Auto Attendant approach, the call flow is:
+
+```
+Teams User → Auto Attendant → Forward to Phone Number → SBC → LiveKit
+```
+
+The Auto Attendant performs a **call transfer/forward**, which replaces the original caller's identity with the Resource Account's identity in the SIP headers. This is standard telephony behavior for forwarded calls.
+
+**Why this happens:**
+- SIP `From` header reflects who initiated the leg to the SBC (the Auto Attendant/Resource Account)
+- The original caller identity may be in `P-Asserted-Identity` or `Diversion` headers, but these are often stripped or not forwarded
+- Microsoft's Direct Routing doesn't guarantee preservation of original caller info through forwards
+
+**Workarounds:**
+
+1. **Ask the caller to identify themselves** - Have your agent greet and ask "Who am I speaking with?"
+
+2. **Use Approach 1 (Direct Dialing)** - If users dial a phone number directly (instead of calling the Resource Account by name), their identity is preserved. However, this requires every caller to have a Voice Routing Policy.
+
+3. **Implement a PIN/callback system** - For sensitive operations, have callers verify their identity through a PIN or callback mechanism.
+
+4. **Check all SIP headers** - Configure LiveKit to include all headers and check for:
+   - `P-Asserted-Identity` - May contain original caller
+   - `Diversion` - Shows the forwarding chain
+   - `History-Info` - Call history headers
+
+---
 
 ### Call Disconnects When User Microphone is Muted
 
