@@ -483,10 +483,7 @@ def build_webhook_context(
     print("contacts:", contacts)
 
     # check contact validity
-    is_default_assistant = (
-        "default" in assistant_id
-        or "Default Assistant" in assistant_data["assistant_about"]
-    )
+    is_default_assistant = "default" in assistant_id or int(assistant_id) < 10
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_default_assistant
 
