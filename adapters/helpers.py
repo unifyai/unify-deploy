@@ -169,7 +169,7 @@ def get_assistant(
 def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]:
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
-        params={"project": "Assistants", "context": context},
+        params={"project_name": "Assistants", "context": context},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     return response.json(), response.status_code
@@ -348,7 +348,7 @@ def is_job_running(user_id: str, assistant_id: str):
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
         params={
-            "project": "AssistantJobs",
+            "project_name": "AssistantJobs",
             "context": "startup_events",
             "filter_expr": (
                 f"user_id == '{user_id}' and "
