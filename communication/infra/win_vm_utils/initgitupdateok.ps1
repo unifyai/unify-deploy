@@ -11,6 +11,11 @@
 #   windows-password  - Password for Windows user
 #   vnc-password      - VNC password (default: unify123)
 #   office-mak-key    - Office MAK activation key
+#   hostname          - DNS hostname for Caddy HTTPS (e.g., assistant-123.vm.unify.ai)
+#   github-token      - GitHub PAT for cloning private repos
+#   anthropic-api-key - Anthropic API key for agent service
+#   unify-key         - Unify API key for agent service
+#   unify-base-url    - Unify API base URL for agent service
 
 Write-Host "=========================================="
 Write-Host "  Office LTSC 2024 Installation Script"
@@ -338,6 +343,282 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
     Remove-Item $pythonInstallerPath -Force -ErrorAction SilentlyContinue
 }
 
+function Install-Chocolatey {
+    Write-Host ""
+    Write-Host "=== Installing Chocolatey ===" -ForegroundColor Cyan
+    
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        $chocoVersion = choco --version
+        Write-Host "Chocolatey already installed - v$chocoVersion" -ForegroundColor Green
+        return
+    }
+    
+    Write-Host "Chocolatey not found. Installing..."
+    
+    # Set execution policy and install Chocolatey
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+    
+    # Refresh PATH
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    
+    # Verify Chocolatey installation
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        $chocoVersion = choco --version
+        Write-Host "SUCCESS: Chocolatey installed - v$chocoVersion" -ForegroundColor Green
+    } else {
+        Write-Host "ERROR: Chocolatey installation failed" -ForegroundColor Red
+    }
+}
+
+function Install-NodeJS {
+    Write-Host ""
+    Write-Host "=== Installing Node.js v22 ===" -ForegroundColor Cyan
+    
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $nodeVersion = node --version
+        Write-Host "Node.js already installed - $nodeVersion" -ForegroundColor Green
+        return
+    }
+    
+    # Ensure Chocolatey is installed
+    Install-Chocolatey
+    
+    Write-Host "Installing Node.js v22 via Chocolatey..."
+    choco install nodejs --version=22.13.0 -y --no-progress
+    
+    # Refresh PATH
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    
+    # Verify Node.js installation
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        $nodeVersion = node --version
+        $npmVersion = npm --version
+        Write-Host "SUCCESS: Node.js installed - $nodeVersion" -ForegroundColor Green
+        Write-Host "npm version: $npmVersion" -ForegroundColor Green
+    } else {
+        Write-Host "Node.js installed but not in PATH. You may need to restart your terminal." -ForegroundColor Yellow
+        Write-Host "Expected location: C:\Program Files\nodejs\node.exe"
+        if (Test-Path 'C:\Program Files\nodejs\node.exe') {
+            Write-Host "Node.js executable found at expected location." -ForegroundColor Green
+        }
+    }
+    
+    # Install Bun via npm
+    Write-Host ""
+    Write-Host "=== Installing Bun ===" -ForegroundColor Cyan
+    
+    if (Get-Command bun -ErrorAction SilentlyContinue) {
+        $bunVersion = bun --version
+        Write-Host "Bun already installed - v$bunVersion" -ForegroundColor Green
+    } else {
+        Write-Host "Installing Bun..."
+        # Run installer in current process (not subprocess) for proper PATH handling
+        Invoke-Expression (Invoke-RestMethod 'https://bun.sh/install.ps1')
+        
+        # Refresh PATH from registry
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        
+        # Explicitly add Bun path to current session (in case registry isn't updated yet)
+        
+        # Verify Bun installation
+        if (Get-Command bun -ErrorAction SilentlyContinue) {
+            $bunVersion = bun --version
+            Write-Host "SUCCESS: Bun installed - v$bunVersion" -ForegroundColor Green
+        } else {
+            Write-Host "Bun installed but not in PATH. You may need to restart your terminal." -ForegroundColor Yellow
+        }
+    }
+
+    if (Get-Command npx -ErrorAction SilentlyContinue) {
+        $npxVersion = npx --version
+        Write-Host "SUCCESS: npx installed - v$npxVersion" -ForegroundColor Green
+    } else {
+        Write-Host "Installing npx..."
+        npm i -g npx
+
+        Write-Host "npx installed but not in PATH. You may need to restart your terminal." -ForegroundColor Yellow
+    }
+}
+
+function Install-AgentService {
+    param([string]$GithubToken, [string]$Staging)
+    
+    Write-Host ""
+    Write-Host "=== Installing/Updating Agent Service ===" -ForegroundColor Cyan
+    
+    $magnitudeDir = 'C:\magnitude'
+    $agentServiceDir = 'C:\agent-service'
+    $tempRepoDir = 'C:\temp\unity'
+    $branch = if ($Staging) { 'staging' } else { 'main' }
+    
+    # Build clone URL (with or without token)
+    if ($GithubToken) {
+        $magnitudeUrl = "https://${GithubToken}@github.com/unifyai/magnitude.git"
+        $agentRepoUrl = "https://${GithubToken}@github.com/unifyai/unity.git"
+        Write-Host "Using authenticated GitHub clone" -ForegroundColor Green
+    } else {
+        $magnitudeUrl = "https://github.com/unifyai/magnitude.git"
+        $agentRepoUrl = "https://github.com/unifyai/unity.git"
+        Write-Host "Using public GitHub clone (may fail for private repos)" -ForegroundColor Yellow
+    }
+    
+    # === MAGNITUDE ===
+    if (Test-Path "$magnitudeDir\.git") {
+        # Update existing repo with git pull
+        Write-Host "Updating magnitude (git pull)..."
+        Push-Location $magnitudeDir
+        
+        # Configure remote URL (in case token changed)
+        git remote set-url origin $magnitudeUrl
+        git pull origin unity-modifications
+        
+        Write-Host "Installing magnitude dependencies..."
+        bun install
+        npm run build
+        Pop-Location
+        Write-Host "SUCCESS: Magnitude updated" -ForegroundColor Green
+    } else {
+        # Clone fresh
+        Write-Host "Cloning unifyai/magnitude (branch: unity-modifications)..."
+        if (Test-Path $magnitudeDir) { Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue }
+        
+        git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir
+        
+        if (Test-Path "$magnitudeDir\package.json") {
+            Write-Host "Installing magnitude dependencies..."
+            Push-Location $magnitudeDir
+            bun install
+            npm run build
+            Pop-Location
+            Write-Host "SUCCESS: Magnitude installed" -ForegroundColor Green
+        } else {
+            Write-Host "WARNING: Magnitude may not have installed correctly" -ForegroundColor Yellow
+        }
+    }
+    
+    # === AGENT SERVICE ===
+    # Stop any running Node processes to release file locks
+    Write-Host "Stopping any running Node processes..."
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    
+    # Backup .env if exists (contains API keys)
+    $envBackup = $null
+    $envFile = "$agentServiceDir\.env"
+    if (Test-Path $envFile) {
+        Write-Host "Backing up .env file..."
+        $envBackup = Get-Content $envFile -Raw
+    }
+    
+    # Clone unity.git to temp and extract agent-service
+    Write-Host "Cloning unifyai/unity (branch: $branch)..."
+    if (Test-Path $tempRepoDir) { Remove-Item -Recurse -Force $tempRepoDir -ErrorAction SilentlyContinue }
+    
+    git clone --depth 1 --branch $branch $agentRepoUrl $tempRepoDir
+    
+    # Extract agent-service subfolder
+    if (Test-Path "$tempRepoDir\agent-service") {
+        Write-Host "Extracting agent-service subfolder..."
+        
+        # Remove existing agent-service folder with retry logic
+        if (Test-Path $agentServiceDir) {
+            $retryCount = 0
+            $maxRetries = 3
+            while ((Test-Path $agentServiceDir) -and ($retryCount -lt $maxRetries)) {
+                Write-Host "  Removing existing agent-service folder (attempt $($retryCount + 1))..."
+                Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 1
+                $retryCount++
+            }
+            
+            if (Test-Path $agentServiceDir) {
+                Write-Host "  WARNING: Could not fully remove existing folder, will try to overwrite" -ForegroundColor Yellow
+            }
+        }
+        
+        # Move new agent-service folder
+        if (Test-Path $agentServiceDir) {
+            # Folder still exists, use Copy instead of Move
+            Write-Host "  Using copy (folder still exists)..."
+            Copy-Item -Path "$tempRepoDir\agent-service\*" -Destination $agentServiceDir -Recurse -Force
+        } else {
+            Move-Item "$tempRepoDir\agent-service" $agentServiceDir
+        }
+        Remove-Item -Recurse -Force $tempRepoDir -ErrorAction SilentlyContinue
+        
+        # Restore .env if backed up
+        if ($envBackup) {
+            Write-Host "Restoring .env file..."
+            $envBackup | Out-File -FilePath $envFile -Encoding UTF8 -NoNewline
+        }
+        
+        if (Test-Path "$agentServiceDir\package.json") {
+            Write-Host "Installing agent-service dependencies..."
+            Push-Location $agentServiceDir
+            npm install
+            Pop-Location
+            Write-Host "SUCCESS: Agent service installed/updated" -ForegroundColor Green
+        } else {
+            Write-Host "WARNING: Agent service may not have installed correctly" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "ERROR: agent-service subfolder not found in repo" -ForegroundColor Red
+        Remove-Item -Recurse -Force $tempRepoDir -ErrorAction SilentlyContinue
+    }
+}
+
+function Setup-AgentServiceEnv {
+    param(
+        [string]$AnthropicApiKey,
+        [string]$UnifyKey,
+        [string]$UnifyBaseUrl
+    )
+    
+    Write-Host ""
+    Write-Host "=== Setting up Agent Service Environment ===" -ForegroundColor Cyan
+    
+    $agentServiceDir = 'C:\agent-service'
+    $envFile = "$agentServiceDir\.env"
+    
+    if (-not (Test-Path $agentServiceDir)) {
+        Write-Host "Agent service directory not found, skipping .env creation" -ForegroundColor Yellow
+        return
+    }
+    
+    # Build .env content
+    $envContent = @()
+    
+    if ($AnthropicApiKey) {
+        $envContent += "ANTHROPIC_API_KEY=$AnthropicApiKey"
+        Write-Host "  Added ANTHROPIC_API_KEY" -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: No ANTHROPIC_API_KEY provided" -ForegroundColor Yellow
+    }
+    
+    if ($UnifyKey) {
+        $envContent += "UNIFY_KEY=$UnifyKey"
+        Write-Host "  Added UNIFY_KEY" -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: No UNIFY_KEY provided" -ForegroundColor Yellow
+    }
+    
+    if ($UnifyBaseUrl) {
+        $envContent += "UNIFY_BASE_URL=$UnifyBaseUrl"
+        Write-Host "  Added UNIFY_BASE_URL=$UnifyBaseUrl" -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: No UNIFY_BASE_URL provided" -ForegroundColor Yellow
+    }
+    
+    if ($envContent.Count -gt 0) {
+        $envContent -join "`n" | Out-File -FilePath $envFile -Encoding UTF8 -NoNewline
+        Write-Host "Created .env file at: $envFile" -ForegroundColor Green
+    } else {
+        Write-Host "No environment variables to write" -ForegroundColor Yellow
+    }
+}
+
 function Install-TightVNC {
     param([string]$Password = "unify123")
     
@@ -482,9 +763,54 @@ if (Test-Path "$novncDir\vnc.html") {
     if (Test-Path "$novncDir\vnc.html") {
         Write-Host "SUCCESS: noVNC installed" -ForegroundColor Green
         
-        # Create index.html as a copy of vnc_lite.html for easier access
-        Copy-Item "$novncDir\vnc_lite.html" "$novncDir\index.html" -Force
-        Write-Host "Created index.html from vnc_lite.html" -ForegroundColor Green
+        # Create custom.html with iframe wrapper for clean noVNC experience
+        # Hides control bar, logo, and remote cursor via CSS injection
+        $customHtml = @'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Desktop</title>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background: #000; }
+        iframe { width: 100vw; height: 100vh; border: none; }
+    </style>
+</head>
+<body>
+    <iframe id="vnc" src=""></iframe>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        params.set('resize', 'scale');
+        params.set('autoconnect', '1');
+        params.set('reconnect', '1');
+        params.set('show_dot', '1');
+        document.getElementById('vnc').src = `vnc.html?${params}`;
+
+        // Inject CSS to hide control bar, logo, and remote cursor
+        document.getElementById('vnc').onload = function() {
+            try {
+                const style = this.contentDocument.createElement('style');
+                style.textContent = `
+                    #noVNC_control_bar,
+                    #noVNC_control_bar_anchor,
+                    #noVNC_control_bar_handle,
+                    #noVNC_logo,
+                    #noVNC_status { display: none !important; }
+                    
+                    /* Hide remote cursor - use local browser cursor only */
+                    .noVNC_cursor { display: none !important; }
+                `;
+                this.contentDocument.head.appendChild(style);
+            } catch (e) {
+                console.warn('Could not inject CSS (cross-origin)', e);
+            }
+        };
+    </script>
+</body>
+</html>
+'@
+        $customHtml | Out-File -FilePath "$novncDir\custom.html" -Encoding UTF8
+        Copy-Item "$novncDir\custom.html" "$novncDir\index.html" -Force
+        Write-Host "Created custom.html and set as index.html (default)" -ForegroundColor Green
     } else {
         Write-Host "WARNING: noVNC may not have installed correctly" -ForegroundColor Yellow
     }
@@ -513,27 +839,23 @@ function Setup-Websockify {
 
     $novncDir = 'C:\novnc'
 
-    # Find Python executable
-    $pythonExe = 'C:\Program Files\Python312\python.exe'
-    if (-not (Test-Path $pythonExe)) {
+    # Find pythonw.exe (no-console Python) for hidden execution
+    $pythonwExe = 'C:\Program Files\Python312\pythonw.exe'
+    if (-not (Test-Path $pythonwExe)) {
+        # Fallback to python.exe directory
         $pythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source
+        if ($pythonExe) {
+            $pythonwExe = Join-Path (Split-Path $pythonExe) "pythonw.exe"
     }
-    if (-not $pythonExe -or -not (Test-Path $pythonExe)) {
-        Write-Host "ERROR: Python not found" -ForegroundColor Red
+    }
+    if (-not $pythonwExe -or -not (Test-Path $pythonwExe)) {
+        Write-Host "ERROR: pythonw.exe not found" -ForegroundColor Red
         return
     }
-    Write-Host "Using Python: $pythonExe" -ForegroundColor Green
-
-    # Create websockify startup script
-$websockifyScript = @"
-@echo off
-cd /d C:\novnc
-"$pythonExe" -m websockify --web C:\novnc 6080 localhost:5900
-"@
-$websockifyScript | Out-File -FilePath "$novncDir\start-websockify.bat" -Encoding ASCII
-    Write-Host "Created websockify startup script at $novncDir\start-websockify.bat" -ForegroundColor Green
+    Write-Host "Using pythonw.exe: $pythonwExe (no console window)" -ForegroundColor Green
 
     # Create a scheduled task to run websockify at login (for persistence)
+    # Using pythonw.exe directly - no .bat file needed, no console window
     $taskName = "StartWebsockify"
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($existingTask) {
@@ -541,8 +863,8 @@ $websockifyScript | Out-File -FilePath "$novncDir\start-websockify.bat" -Encodin
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     }
 
-    Write-Host "Creating scheduled task for websockify auto-start..."
-    $action = New-ScheduledTaskAction -Execute "$novncDir\start-websockify.bat" -WorkingDirectory $novncDir
+    Write-Host "Creating scheduled task for websockify auto-start (hidden)..."
+    $action = New-ScheduledTaskAction -Execute $pythonwExe -Argument "-m websockify --web $novncDir 6080 localhost:5900" -WorkingDirectory $novncDir
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     
     # If target user specified, trigger at that user's logon; otherwise any user
@@ -559,21 +881,417 @@ $websockifyScript | Out-File -FilePath "$novncDir\start-websockify.bat" -Encodin
     }
 }
 
+function Setup-AgentServiceTask {
+    param([string]$TargetUser)
+    
+    Write-Host ""
+    Write-Host "=== Setting up Agent Service scheduled task ===" -ForegroundColor Cyan
+    
+    $agentServiceDir = 'C:\agent-service'
+    
+    if (-not (Test-Path "$agentServiceDir\package.json")) {
+        Write-Host "Agent service not found, skipping task creation" -ForegroundColor Yellow
+        return
+    }
+    
+    # Create scheduled task using PowerShell with hidden window - no .bat file needed
+    $taskName = "StartAgentService"
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Write-Host "Removing existing scheduled task..."
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    }
+    
+    Write-Host "Creating scheduled task for Agent Service (hidden)..."
+    # Use PowerShell with -WindowStyle Hidden to run npx without showing a console window
+    $psCommand = "Set-Location '$agentServiceDir'; npx ts-node src/index.ts"
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $agentServiceDir
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    
+    if ($TargetUser) {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
+        $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+        Write-Host "Scheduled task '$taskName' created for user: $TargetUser" -ForegroundColor Green
+    } else {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest | Out-Null
+        Write-Host "Scheduled task '$taskName' created for any user at login" -ForegroundColor Green
+    }
+}
+
+function Setup-DisplayResolution {
+    param(
+        [string]$TargetUser,
+        [int]$Width = 1920,
+        [int]$Height = 1080
+    )
+    
+    Write-Host ""
+    Write-Host "=== Setting up Display Resolution ($Width x $Height) ===" -ForegroundColor Cyan
+    
+    $novncDir = 'C:\novnc'
+    New-Item -ItemType Directory -Force -Path $novncDir | Out-Null
+    
+    # Create PowerShell script that sets display resolution using Windows API
+    $resolutionScript = @"
+# Set display resolution to ${Width}x${Height}
+# This script uses the Windows ChangeDisplaySettings API
+
+`$code = @'
+using System;
+using System.Runtime.InteropServices;
+
+public class DisplaySettings {
+    [DllImport("user32.dll")]
+    public static extern int EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
+    
+    [DllImport("user32.dll")]
+    public static extern int ChangeDisplaySettings(ref DEVMODE devMode, int flags);
+    
+    public const int ENUM_CURRENT_SETTINGS = -1;
+    public const int CDS_UPDATEREGISTRY = 0x01;
+    public const int CDS_TEST = 0x02;
+    public const int DISP_CHANGE_SUCCESSFUL = 0;
+    public const int DM_PELSWIDTH = 0x80000;
+    public const int DM_PELSHEIGHT = 0x100000;
+    
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public struct DEVMODE {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmDeviceName;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
+    }
+    
+    public static int SetResolution(int width, int height) {
+        DEVMODE dm = new DEVMODE();
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        
+        // Get current settings first
+        if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm) == 0) {
+            return -1;
+        }
+        
+        dm.dmPelsWidth = width;
+        dm.dmPelsHeight = height;
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+        
+        // Test if the resolution is valid
+        int testResult = ChangeDisplaySettings(ref dm, CDS_TEST);
+        if (testResult != DISP_CHANGE_SUCCESSFUL) {
+            return testResult;
+        }
+        
+        // Apply the resolution
+        return ChangeDisplaySettings(ref dm, CDS_UPDATEREGISTRY);
+    }
+}
+'@
+
+try {
+    Add-Type -TypeDefinition `$code -Language CSharp -ErrorAction Stop
+} catch {
+    # Type may already be loaded
+}
+
+`$result = [DisplaySettings]::SetResolution($Width, $Height)
+if (`$result -eq 0) {
+    "Resolution set to ${Width}x${Height}" | Out-File -FilePath "C:\novnc\resolution.log" -Append -Encoding UTF8
+} else {
+    "Failed to set resolution, error code: `$result" | Out-File -FilePath "C:\novnc\resolution.log" -Append -Encoding UTF8
+}
+"@
+    
+    $scriptPath = "$novncDir\set-resolution.ps1"
+    $resolutionScript | Out-File -FilePath $scriptPath -Encoding UTF8
+    Write-Host "Created resolution script at $scriptPath" -ForegroundColor Green
+    
+    # Create batch wrapper for scheduled task
+    $batchScript = @"
+@echo off
+REM Wait for desktop to initialize
+timeout /t 3 /nobreak >nul
+powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "$scriptPath"
+"@
+    $batchPath = "$novncDir\set-resolution.bat"
+    $batchScript | Out-File -FilePath $batchPath -Encoding ASCII
+    Write-Host "Created resolution batch script at $batchPath" -ForegroundColor Green
+    
+    # Create scheduled task to run resolution script at login (before TightVNC starts)
+    $taskName = "SetDisplayResolution"
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Write-Host "Removing existing scheduled task..."
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    }
+    
+    Write-Host "Creating scheduled task for display resolution..."
+    $action = New-ScheduledTaskAction -Execute $batchPath -WorkingDirectory $novncDir
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    
+    if ($TargetUser) {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
+        $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+        Write-Host "Scheduled task '$taskName' created for user: $TargetUser" -ForegroundColor Green
+    } else {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest | Out-Null
+        Write-Host "Scheduled task '$taskName' created for any user at login" -ForegroundColor Green
+    }
+}
+
 function Configure-Firewall {
-Write-Host ""
+    Write-Host ""
     Write-Host "=== Configuring Firewall ===" -ForegroundColor Cyan
 
-# Remove old rules if they exist (to update them)
+    # Remove old rules if they exist (to update them)
     Remove-NetFirewallRule -DisplayName "Unity-noVNC" -ErrorAction SilentlyContinue
-Remove-NetFirewallRule -DisplayName "Unity-HTTPS" -ErrorAction SilentlyContinue
-Remove-NetFirewallRule -DisplayName "Unity-HTTP" -ErrorAction SilentlyContinue
-Remove-NetFirewallRule -DisplayName "Unity-VNC-Local" -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName "Unity-HTTPS" -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName "Unity-HTTP" -ErrorAction SilentlyContinue
+    Remove-NetFirewallRule -DisplayName "Unity-VNC-Local" -ErrorAction SilentlyContinue
 
-    # Allow noVNC/websockify (6080)
+    # Allow HTTPS (443) - Caddy reverse proxy
+    New-NetFirewallRule -DisplayName "Unity-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any
+    Write-Host "Firewall rule created: Allow HTTPS (443)" -ForegroundColor Green
+
+    # Allow HTTP (80) - Let's Encrypt ACME challenge
+    New-NetFirewallRule -DisplayName "Unity-HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow -Profile Any
+    Write-Host "Firewall rule created: Allow HTTP (80)" -ForegroundColor Green
+
+    # Allow noVNC/websockify (6080) - for direct access / fallback
     New-NetFirewallRule -DisplayName "Unity-noVNC" -Direction Inbound -LocalPort 6080 -Protocol TCP -Action Allow -Profile Any
     Write-Host "Firewall rule created: Allow noVNC (6080)" -ForegroundColor Green
 
-Write-Host "Firewall configured" -ForegroundColor Green
+    Write-Host "Firewall configured" -ForegroundColor Green
+}
+
+# =============================================================================
+# Caddy HTTPS Reverse Proxy
+# =============================================================================
+
+function Install-Caddy {
+    Write-Host ""
+    Write-Host "=== Installing Caddy Web Server ===" -ForegroundColor Cyan
+    
+    $caddyDir = 'C:\caddy'
+    $caddyExe = "$caddyDir\caddy.exe"
+    
+    if (Test-Path $caddyExe) {
+        Write-Host "Caddy already installed at: $caddyExe" -ForegroundColor Green
+        return
+    }
+    
+    New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
+    
+    # Download Caddy for Windows
+    Write-Host "Downloading Caddy..."
+    $caddyUrl = "https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip"
+    $caddyZip = "$caddyDir\caddy.zip"
+    
+    try {
+        Invoke-WebRequest -Uri $caddyUrl -OutFile $caddyZip -UseBasicParsing
+        
+        Write-Host "Extracting Caddy..."
+        Expand-Archive -Path $caddyZip -DestinationPath $caddyDir -Force
+        Remove-Item $caddyZip -Force -ErrorAction SilentlyContinue
+        
+        if (Test-Path $caddyExe) {
+            Write-Host "SUCCESS: Caddy installed at $caddyExe" -ForegroundColor Green
+        } else {
+            Write-Host "WARNING: Caddy extraction may have failed" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "ERROR: Failed to download Caddy - $_" -ForegroundColor Red
+    }
+}
+
+function Setup-Caddyfile {
+    param([string]$Hostname)
+    
+    Write-Host ""
+    Write-Host "=== Creating Caddyfile ===" -ForegroundColor Cyan
+    
+    if (-not $Hostname) {
+        Write-Host "No hostname provided, skipping Caddy configuration" -ForegroundColor Yellow
+        Write-Host "Caddy will not provide HTTPS - use HTTP on port 6080 instead" -ForegroundColor Yellow
+        return $false
+    }
+    
+    $caddyDir = 'C:\caddy'
+    $caddyfile = "$caddyDir\Caddyfile"
+    
+    New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
+    
+    # Path-based routing: /desktop -> noVNC (6080), /api -> Agent Service (3000)
+    $caddyConfig = @"
+# Unity Windows VM - Caddy Configuration
+# Hostname: $Hostname
+# Generated: $(Get-Date)
+
+$Hostname {
+    # Handle WebSocket upgrade for noVNC
+    @websocket {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @websocket localhost:6080
+
+    # API endpoint service (port 3000)
+    handle_path /api/* {
+        reverse_proxy localhost:3000
+    }
+
+    # Exact match for /desktop (no trailing slash)
+    @desktop_exact path /desktop
+    handle @desktop_exact {
+        rewrite * /
+        reverse_proxy localhost:6080
+    }
+
+    # noVNC desktop sub-resources at /desktop/*
+    handle_path /desktop/* {
+        reverse_proxy localhost:6080
+    }
+
+    # Logging
+    log {
+        output file C:\caddy\access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+        format console
+    }
+}
+"@
+    
+    $caddyConfig | Out-File -FilePath $caddyfile -Encoding UTF8
+    Write-Host "Caddyfile created at: $caddyfile" -ForegroundColor Green
+    Write-Host "  HTTPS routes:" -ForegroundColor Gray
+    Write-Host "    https://$Hostname/desktop/ -> noVNC (localhost:6080)" -ForegroundColor Gray
+    Write-Host "    https://$Hostname/api/*    -> Agent Service (localhost:3000)" -ForegroundColor Gray
+    
+    return $true
+}
+
+function Setup-CaddyTask {
+    param([string]$TargetUser)
+    
+    Write-Host ""
+    Write-Host "=== Setting up Caddy scheduled task ===" -ForegroundColor Cyan
+    
+    $caddyDir = 'C:\caddy'
+    $caddyExe = "$caddyDir\caddy.exe"
+    $caddyfile = "$caddyDir\Caddyfile"
+    
+    if (-not (Test-Path $caddyExe)) {
+        Write-Host "Caddy not found, skipping task creation" -ForegroundColor Yellow
+        return
+    }
+    
+    if (-not (Test-Path $caddyfile)) {
+        Write-Host "Caddyfile not found, skipping task creation" -ForegroundColor Yellow
+        return
+    }
+    
+    # Create startup script for Caddy (no .bat needed, use PowerShell for hidden window)
+    $taskName = "StartCaddy"
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Write-Host "Removing existing Caddy scheduled task..."
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    }
+    
+    Write-Host "Creating scheduled task for Caddy..."
+    # Use PowerShell with hidden window to run Caddy
+    $psCommand = "Set-Location '$caddyDir'; & '$caddyExe' run --config '$caddyfile'"
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $caddyDir
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+    
+    # Run at user logon (consistent with other services, ensures network is ready)
+    if ($TargetUser) {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
+        $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+        Write-Host "Scheduled task '$taskName' created for user: $TargetUser" -ForegroundColor Green
+    } else {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest | Out-Null
+        Write-Host "Scheduled task '$taskName' created for any user at login" -ForegroundColor Green
+    }
+}
+
+function Start-Caddy {
+    Write-Host ""
+    Write-Host "=== Starting Caddy ===" -ForegroundColor Cyan
+    
+    $caddyDir = 'C:\caddy'
+    $caddyExe = "$caddyDir\caddy.exe"
+    $caddyfile = "$caddyDir\Caddyfile"
+    
+    if (-not (Test-Path $caddyExe)) {
+        Write-Host "Caddy not found, skipping" -ForegroundColor Yellow
+        return
+    }
+    
+    if (-not (Test-Path $caddyfile)) {
+        Write-Host "Caddyfile not found, skipping" -ForegroundColor Yellow
+        return
+    }
+    
+    # Kill any existing Caddy process
+    Get-Process -Name "caddy" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    
+    Write-Host "Starting Caddy..."
+    # Use PowerShell with hidden window to run Caddy
+    $psCommand = "Set-Location '$caddyDir'; & '$caddyExe' run --config '$caddyfile'"
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $caddyDir
+    Start-Sleep -Seconds 5
+    
+    # Check if Caddy is running
+    $listening443 = netstat -an | Select-String ":443.*LISTENING"
+    $listening80 = netstat -an | Select-String ":80.*LISTENING"
+    
+    if ($listening443) {
+        Write-Host "  Caddy: Running (port 443 listening)" -ForegroundColor Green
+    } else {
+        Write-Host "  Caddy: Not listening on port 443 yet" -ForegroundColor Yellow
+        Write-Host "  Note: TLS certificate acquisition may take a moment" -ForegroundColor Gray
+    }
+    
+    if ($listening80) {
+        Write-Host "  Caddy: HTTP redirect active (port 80 listening)" -ForegroundColor Green
+    }
 }
 
 function Start-AllServices {
@@ -611,13 +1329,13 @@ Start-Sleep -Seconds 2
     Get-Process -Name "python*" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*websockify*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
     
-    # Start websockify as background process
+    # Start websockify directly using pythonw.exe (no console window)
 Write-Host "Starting websockify..."
     $novncDir = 'C:\novnc'
-    $websockifyBat = "$novncDir\start-websockify.bat"
+    $pythonwExe = 'C:\Program Files\Python312\pythonw.exe'
     
-    if (Test-Path $websockifyBat) {
-        Start-Process -FilePath $websockifyBat -WorkingDirectory $novncDir -WindowStyle Hidden
+    if (Test-Path $pythonwExe) {
+        Start-Process -FilePath $pythonwExe -ArgumentList "-m websockify --web $novncDir 6080 localhost:5900" -WorkingDirectory $novncDir
 Start-Sleep -Seconds 3
 
         # Check if websockify is running (check if port 6080 is listening)
@@ -626,10 +1344,28 @@ Start-Sleep -Seconds 3
             Write-Host "  websockify : Running (port 6080 listening)" -ForegroundColor Green
         } else {
             Write-Host "  websockify : Not listening on port 6080" -ForegroundColor Yellow
-            Write-Host "  Check logs or try running manually: $websockifyBat" -ForegroundColor Gray
         }
     } else {
-        Write-Host "  websockify : Startup script not found at $websockifyBat" -ForegroundColor Red
+        Write-Host "  websockify : pythonw.exe not found at $pythonwExe" -ForegroundColor Red
+    }
+    
+    # Start Agent Service using PowerShell with hidden window
+    Write-Host "Starting Agent Service..."
+    $agentServiceDir = 'C:\agent-service'
+    if (Test-Path "$agentServiceDir\package.json") {
+        $psCommand = "Set-Location '$agentServiceDir'; npx ts-node src/index.ts"
+        Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $agentServiceDir
+        Start-Sleep -Seconds 5
+        
+        # Check if Agent Service is running (check if port 3000 is listening)
+        $listening3000 = netstat -an | Select-String ":3000.*LISTENING"
+        if ($listening3000) {
+            Write-Host "  Agent Service : Running (port 3000 listening)" -ForegroundColor Green
+        } else {
+            Write-Host "  Agent Service : Not listening on port 3000 yet" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  Agent Service : package.json not found at $agentServiceDir" -ForegroundColor Yellow
     }
 }
 
@@ -774,52 +1510,79 @@ Write-Host ""
 function Show-Summary {
     param(
         [string]$MakKey,
-        [string]$VncPassword
+        [string]$VncPassword,
+        [string]$Hostname
     )
     
-Write-Host ""
-Write-Host "=========================================="
-Write-Host "  Installation Complete!"
-Write-Host "=========================================="
-Write-Host ""
-Write-Host "Installed components:"
-Write-Host "  - Microsoft Word"
-Write-Host "  - Microsoft Excel"
-Write-Host "  - Microsoft PowerPoint"
-Write-Host "  - Git CLI"
-Write-Host "  - Python 3"
-Write-Host "  - TightVNC Server (port 5900)"
+    Write-Host ""
+    Write-Host "=========================================="
+    Write-Host "  Installation Complete!"
+    Write-Host "=========================================="
+    Write-Host ""
+    Write-Host "Installed components:"
+    Write-Host "  - Microsoft Word"
+    Write-Host "  - Microsoft Excel"
+    Write-Host "  - Microsoft PowerPoint"
+    Write-Host "  - Git CLI"
+    Write-Host "  - Python 3"
+    Write-Host "  - Node.js + Bun"
+    Write-Host "  - TightVNC Server (port 5900)"
     Write-Host "  - noVNC + websockify (port 6080)"
-Write-Host ""
-Write-Host "Paths:"
-Write-Host "  Excel:      C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE"
-Write-Host "  Git:        C:\Program Files\Git\bin\git.exe"
-Write-Host "  Python:     C:\Program Files\Python312\python.exe"
-Write-Host "  noVNC:      C:\novnc"
-Write-Host ""
-Write-Host "Logs:"
-Write-Host "  websockify: C:\novnc\websockify.log"
-Write-Host ""
+    Write-Host "  - Agent Service (port 3000)"
+    if ($Hostname) {
+        Write-Host "  - Caddy HTTPS reverse proxy (ports 80, 443)"
+    }
+    Write-Host ""
+    Write-Host "Paths:"
+    Write-Host "  Excel:      C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE"
+    Write-Host "  Git:        C:\Program Files\Git\bin\git.exe"
+    Write-Host "  Python:     C:\Program Files\Python312\python.exe"
+    Write-Host "  Node.js:    C:\Program Files\nodejs\node.exe"
+    Write-Host "  noVNC:      C:\novnc"
+    Write-Host "  Magnitude:  C:\magnitude"
+    Write-Host "  Agent:      C:\agent-service"
+    if ($Hostname) {
+        Write-Host "  Caddy:      C:\caddy"
+    }
+    Write-Host ""
+    Write-Host "Logs:"
+    Write-Host "  websockify: C:\novnc\websockify.log"
+    if ($Hostname) {
+        Write-Host "  Caddy:      C:\caddy\access.log"
+    }
+    Write-Host ""
 
-# Access information
+    # Access information
     $ipAddress = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch "Loopback" } | Select-Object -First 1).IPAddress
-    Write-Host "Access noVNC Desktop:" -ForegroundColor Cyan
-    Write-Host "  http://$ipAddress`:6080/vnc.html" -ForegroundColor Green
-Write-Host ""
+    
+    if ($Hostname) {
+        Write-Host "HTTPS Access (via Caddy):" -ForegroundColor Cyan
+        Write-Host "  Desktop:   https://$Hostname/desktop/" -ForegroundColor Green
+        Write-Host "  API:       https://$Hostname/api/*" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Direct HTTP Access (fallback):" -ForegroundColor Cyan
+        Write-Host "  http://$ipAddress`:6080/vnc.html" -ForegroundColor Gray
+        Write-Host "  http://$ipAddress`:3000/ (Agent Service)" -ForegroundColor Gray
+    } else {
+        Write-Host "HTTP Access (no hostname configured):" -ForegroundColor Yellow
+        Write-Host "  http://$ipAddress`:6080/vnc.html" -ForegroundColor Green
+        Write-Host "  http://$ipAddress`:3000/ (Agent Service)" -ForegroundColor Green
+    }
+    Write-Host ""
     Write-Host "VNC Password: $VncPassword" -ForegroundColor Cyan
-Write-Host ""
+    Write-Host ""
 
     if (-not $MakKey) {
-    Write-Host "REMINDER: Office is not activated. Run with MAK key to activate:" -ForegroundColor Yellow
+        Write-Host "REMINDER: Office is not activated. Run with MAK key to activate:" -ForegroundColor Yellow
         Write-Host '  .\init2024.ps1 "MAK-KEY" "VNC-PASSWORD"' -ForegroundColor Gray
-}
+    }
 
-Write-Host ""
-Write-Host "Script usage:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Script usage:" -ForegroundColor Cyan
     Write-Host '  .\init2024.ps1                        # Defaults only'
     Write-Host '  .\init2024.ps1 "MAK-KEY"              # With Office activation'
     Write-Host '  .\init2024.ps1 "MAK-KEY" "mypassword" # Custom VNC password'
-Write-Host ""
+    Write-Host ""
 }
 
 # =============================================================================
@@ -832,9 +1595,27 @@ $gcpWindowsUser = Get-GCPMetadata -Key "windows-username"
 $gcpWindowsPassword = Get-GCPMetadata -Key "windows-password"
 $gcpVncPassword = Get-GCPMetadata -Key "vnc-password"
 $gcpMakKey = Get-GCPMetadata -Key "office-mak-key"
+$gcpHostname = Get-GCPMetadata -Key "hostname"
+$gcpGithubToken = Get-GCPMetadata -Key "github-token"
+$gcpAnthropicKey = Get-GCPMetadata -Key "anthropic-api-key"
+$gcpUnifyKey = Get-GCPMetadata -Key "unify-key"
+$gcpUnifyBaseUrl = Get-GCPMetadata -Key "unify-base-url"
+$gcpStaging = Get-GCPMetadata -Key "staging"
 
 if ($gcpWindowsUser) {
     Write-Host "Found GCP metadata - running in automated mode" -ForegroundColor Cyan
+}
+if ($gcpHostname) {
+    Write-Host "Found hostname metadata: $gcpHostname" -ForegroundColor Cyan
+}
+if ($gcpGithubToken) {
+    Write-Host "Found GitHub token in metadata" -ForegroundColor Cyan
+}
+if ($gcpAnthropicKey) {
+    Write-Host "Found Anthropic API key in metadata" -ForegroundColor Cyan
+}
+if ($gcpStaging) {
+    Write-Host "Found staging metadata: $gcpStaging" -ForegroundColor Cyan
 }
 
 # Parse arguments (GCP metadata takes precedence)
@@ -842,6 +1623,7 @@ $makKey = if ($gcpMakKey) { $gcpMakKey } elseif ($args[0]) { $args[0] } else { $
 $vncPassword = if ($gcpVncPassword) { $gcpVncPassword } elseif ($args[1]) { $args[1] } else { "unify123" }
 $windowsUser = if ($gcpWindowsUser) { $gcpWindowsUser } elseif ($args[2]) { $args[2] } else { $null }
 $windowsPassword = if ($gcpWindowsPassword) { $gcpWindowsPassword } elseif ($args[3]) { $args[3] } else { $null }
+$hostname = if ($gcpHostname) { $gcpHostname } else { $null }
 
 # Check if we're running in a user session or as startup script
 $hasUserSession = [Environment]::UserInteractive -and ([Security.Principal.WindowsIdentity]::GetCurrent().Name -notmatch 'SYSTEM')
@@ -851,6 +1633,7 @@ Write-Host "Configuration:" -ForegroundColor Cyan
 Write-Host "  VNC Password:    $vncPassword"
 Write-Host "  Windows User:    $(if ($windowsUser) { $windowsUser } else { '(not configured)' })"
 Write-Host "  Office MAK:      $(if ($makKey) { '(provided)' } else { '(not provided)' })"
+Write-Host "  Hostname:        $(if ($hostname) { $hostname } else { '(not configured - no HTTPS)' })"
 Write-Host "  User Session:    $hasUserSession"
 Write-Host ""
 
@@ -864,12 +1647,24 @@ if ($windowsUser -and $windowsPassword) {
 Install-Office -MakKey $makKey
 Install-Git
 Install-Python
+Install-NodeJS
+Install-AgentService -GithubToken $gcpGithubToken -Staging $gcpStaging
+Setup-AgentServiceEnv -AnthropicApiKey $gcpAnthropicKey -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl
 Install-TightVNC -Password $vncPassword
 Install-NoVNC
 
+# Install Caddy for HTTPS reverse proxy
+Install-Caddy
+$caddyConfigured = Setup-Caddyfile -Hostname $hostname
+if ($caddyConfigured) {
+    Setup-CaddyTask -TargetUser $windowsUser
+}
+
 # Setup scheduled tasks (user must exist before this point)
+Setup-DisplayResolution -TargetUser $windowsUser -Width 1920 -Height 1080
 Setup-Websockify -TargetUser $windowsUser
 Setup-TightVNCTask -TargetUser $windowsUser
+Setup-AgentServiceTask -TargetUser $windowsUser
 Setup-FirstLogonTask -TargetUser $windowsUser
 Configure-Firewall
 
@@ -878,13 +1673,21 @@ if ($hasUserSession) {
     Write-Host ""
     Write-Host "User session detected - starting services now..." -ForegroundColor Cyan
     Start-AllServices
+    if ($caddyConfigured) {
+        Start-Caddy
+    }
 } else {
     Write-Host ""
     Write-Host "No user session (startup script mode) - services will start after auto-logon" -ForegroundColor Yellow
-    Write-Host "Scheduled tasks created for: TightVNC, websockify" -ForegroundColor Yellow
+    Write-Host "Scheduled tasks created for: TightVNC, websockify, Agent Service" -ForegroundColor Yellow
+    if ($caddyConfigured) {
+        Write-Host "Caddy will start at next system boot (runs as SYSTEM)" -ForegroundColor Yellow
+        # Start Caddy now anyway since it runs as SYSTEM and doesn't need user session
+        Start-Caddy
+    }
 }
 
-Show-Summary -MakKey $makKey -VncPassword $vncPassword
+Show-Summary -MakKey $makKey -VncPassword $vncPassword -Hostname $hostname
 
 # If auto-logon was configured and no user session, reboot (but only once!)
 $setupCompleteFlag = 'C:\novnc\.setup-complete'
