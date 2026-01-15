@@ -209,8 +209,9 @@ timeout /t 2 /nobreak >nul
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     }
     
-    Write-Host "Creating scheduled task for TightVNC auto-start..."
-    $action = New-ScheduledTaskAction -Execute $scriptPath -WorkingDirectory 'C:\novnc'
+    Write-Host "Creating scheduled task for TightVNC auto-start (hidden)..."
+    # Wrap batch in hidden PowerShell to prevent console window flash
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$scriptPath'`"" -WorkingDirectory 'C:\novnc'
     
     # If target user specified, trigger at that user's logon; otherwise any user
     if ($TargetUser) {
@@ -498,6 +499,16 @@ function Install-AgentService {
         }
     }
     
+    # Grant Users full control to magnitude directory (allows non-admin users to run npm/bun)
+    if (Test-Path $magnitudeDir) {
+        Write-Host "Setting permissions on $magnitudeDir..."
+        $acl = Get-Acl $magnitudeDir
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+        $acl.SetAccessRule($rule)
+        Set-Acl $magnitudeDir $acl
+        Write-Host "  Granted Users full control" -ForegroundColor Green
+    }
+    
     # === AGENT SERVICE ===
     # Stop any running Node processes to release file locks
     Write-Host "Stopping any running Node processes..."
@@ -560,6 +571,14 @@ function Install-AgentService {
             npm install
             Pop-Location
             Write-Host "SUCCESS: Agent service installed/updated" -ForegroundColor Green
+            
+            # Grant Users full control to agent-service directory (allows non-admin users to run)
+            Write-Host "Setting permissions on $agentServiceDir..."
+            $acl = Get-Acl $agentServiceDir
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+            $acl.SetAccessRule($rule)
+            Set-Acl $agentServiceDir $acl
+            Write-Host "  Granted Users full control" -ForegroundColor Green
         } else {
             Write-Host "WARNING: Agent service may not have installed correctly" -ForegroundColor Yellow
         }
@@ -1045,17 +1064,6 @@ if (`$result -eq 0) {
     $resolutionScript | Out-File -FilePath $scriptPath -Encoding UTF8
     Write-Host "Created resolution script at $scriptPath" -ForegroundColor Green
     
-    # Create batch wrapper for scheduled task
-    $batchScript = @"
-@echo off
-REM Wait for desktop to initialize
-timeout /t 3 /nobreak >nul
-powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "$scriptPath"
-"@
-    $batchPath = "$novncDir\set-resolution.bat"
-    $batchScript | Out-File -FilePath $batchPath -Encoding ASCII
-    Write-Host "Created resolution batch script at $batchPath" -ForegroundColor Green
-    
     # Create scheduled task to run resolution script at login (before TightVNC starts)
     $taskName = "SetDisplayResolution"
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -1064,8 +1072,9 @@ powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "$scriptPath"
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     }
     
-    Write-Host "Creating scheduled task for display resolution..."
-    $action = New-ScheduledTaskAction -Execute $batchPath -WorkingDirectory $novncDir
+    Write-Host "Creating scheduled task for display resolution (hidden)..."
+    # Execute PowerShell directly with hidden window (delay is handled via task settings)
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 3; & '$scriptPath'`"" -WorkingDirectory $novncDir
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     
     if ($TargetUser) {
@@ -1343,8 +1352,8 @@ Write-Host "Starting websockify..."
     $pythonwExe = 'C:\Program Files\Python312\pythonw.exe'
     
     if (Test-Path $pythonwExe) {
-        Start-Process -FilePath $pythonwExe -ArgumentList "-m websockify --web $novncDir 6080 localhost:5900" -WorkingDirectory $novncDir
-Start-Sleep -Seconds 3
+        Start-Process -FilePath $pythonwExe -ArgumentList "-m websockify --web $novncDir 6080 localhost:5900" -WorkingDirectory $novncDir -WindowStyle Hidden
+        Start-Sleep -Seconds 3
 
         # Check if websockify is running (check if port 6080 is listening)
         $listening = netstat -an | Select-String ":6080.*LISTENING"
