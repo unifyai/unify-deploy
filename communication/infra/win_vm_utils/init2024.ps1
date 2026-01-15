@@ -933,7 +933,8 @@ function Setup-AgentServiceTask {
     
     Write-Host "Creating scheduled task for Agent Service (hidden)..."
     # Use PowerShell with -WindowStyle Hidden to run npx without showing a console window
-    $psCommand = "Set-Location '$agentServiceDir'; npx ts-node src/index.ts"
+    # Refresh PATH first to ensure Node.js/npm/npx are available in the spawned process
+    $psCommand = "`$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); Set-Location '$agentServiceDir'; npx ts-node src/index.ts"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $agentServiceDir
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     
@@ -1370,7 +1371,8 @@ Write-Host "Starting websockify..."
     Write-Host "Starting Agent Service..."
     $agentServiceDir = 'C:\agent-service'
     if (Test-Path "$agentServiceDir\package.json") {
-        $psCommand = "Set-Location '$agentServiceDir'; npx ts-node src/index.ts"
+        # Refresh PATH first to ensure Node.js/npm/npx are available in the spawned process
+        $psCommand = "`$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User'); Set-Location '$agentServiceDir'; npx ts-node src/index.ts"
         Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $agentServiceDir
         Start-Sleep -Seconds 5
         
