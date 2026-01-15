@@ -697,6 +697,16 @@ if (Test-Path $tvnServerPath) {
     }
     Write-Host "TightVNC settings configured" -ForegroundColor Green
     
+    # Configure UAC for VNC compatibility
+    # 1. Disable Secure Desktop - prevents desktop blackout during UAC prompts
+    # 2. Auto-elevate admins - prevents UAC prompt that VNC cannot interact with (UIPI)
+    Write-Host "Configuring UAC for VNC compatibility..."
+    $uacRegPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    Set-ItemProperty -Path $uacRegPath -Name 'PromptOnSecureDesktop' -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path $uacRegPath -Name 'ConsentPromptBehaviorAdmin' -Value 0 -Type DWord -Force
+    Write-Host "  Disabled Secure Desktop for UAC prompts" -ForegroundColor Green
+    Write-Host "  Configured auto-elevation for admin users" -ForegroundColor Green
+    
     # Start TightVNC service briefly to ensure password is written to HKLM registry
     # The MSI installer writes the encrypted password to HKLM when the service starts
     Write-Host "Starting TightVNC service (Session 0) to initialize password..."
@@ -1153,14 +1163,16 @@ function Setup-Caddyfile {
     New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
     
     # Path-based routing: /desktop -> noVNC (6080), /api -> Agent Service (3000)
+    # Root path (/) returns 404
     $caddyConfig = @"
 # Unity Windows VM - Caddy Configuration
 # Hostname: $Hostname
 # Generated: $(Get-Date)
 
 $Hostname {
-    # Handle WebSocket upgrade for noVNC
+    # Handle WebSocket upgrade for noVNC (only for /desktop paths)
     @websocket {
+        path /desktop/*
         header Connection *Upgrade*
         header Upgrade websocket
     }
@@ -1171,16 +1183,20 @@ $Hostname {
         reverse_proxy localhost:3000
     }
 
-    # Exact match for /desktop (no trailing slash)
+    # Exact match for /desktop (redirect to /desktop/)
     @desktop_exact path /desktop
     handle @desktop_exact {
-        rewrite * /
-        reverse_proxy localhost:6080
+        redir /desktop/ permanent
     }
 
     # noVNC desktop sub-resources at /desktop/*
     handle_path /desktop/* {
         reverse_proxy localhost:6080
+    }
+
+    # Block all other paths (including root /)
+    handle {
+        respond "Not Found" 404
     }
 
     # Logging
@@ -1199,13 +1215,12 @@ $Hostname {
     Write-Host "  HTTPS routes:" -ForegroundColor Gray
     Write-Host "    https://$Hostname/desktop/ -> noVNC (localhost:6080)" -ForegroundColor Gray
     Write-Host "    https://$Hostname/api/*    -> Agent Service (localhost:3000)" -ForegroundColor Gray
+    Write-Host "    https://$Hostname/         -> 404 (blocked)" -ForegroundColor Gray
     
     return $true
 }
 
 function Setup-CaddyTask {
-    param([string]$TargetUser)
-    
     Write-Host ""
     Write-Host "=== Setting up Caddy scheduled task ===" -ForegroundColor Cyan
     
@@ -1223,7 +1238,6 @@ function Setup-CaddyTask {
         return
     }
     
-    # Create startup script for Caddy (no .bat needed, use PowerShell for hidden window)
     $taskName = "StartCaddy"
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($existingTask) {
@@ -1231,23 +1245,17 @@ function Setup-CaddyTask {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     }
     
-    Write-Host "Creating scheduled task for Caddy..."
+    Write-Host "Creating scheduled task for Caddy (runs at system startup as SYSTEM)..."
     # Use PowerShell with hidden window to run Caddy
     $psCommand = "Set-Location '$caddyDir'; & '$caddyExe' run --config '$caddyfile'"
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $caddyDir
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     
-    # Run at user logon (consistent with other services, ensures network is ready)
-    if ($TargetUser) {
-        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
-        $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
-        Write-Host "Scheduled task '$taskName' created for user: $TargetUser" -ForegroundColor Green
-    } else {
-        $trigger = New-ScheduledTaskTrigger -AtLogOn
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest | Out-Null
-        Write-Host "Scheduled task '$taskName' created for any user at login" -ForegroundColor Green
-    }
+    # Run at system startup as SYSTEM - gives Caddy time to acquire TLS certificate before user logon
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+    Write-Host "Scheduled task '$taskName' created (runs at system startup as SYSTEM)" -ForegroundColor Green
 }
 
 function Start-Caddy {
@@ -1657,7 +1665,7 @@ Install-NoVNC
 Install-Caddy
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
 if ($caddyConfigured) {
-    Setup-CaddyTask -TargetUser $windowsUser
+    Setup-CaddyTask
 }
 
 # Setup scheduled tasks (user must exist before this point)
@@ -1678,12 +1686,12 @@ if ($hasUserSession) {
     }
 } else {
     Write-Host ""
-    Write-Host "No user session (startup script mode) - services will start after auto-logon" -ForegroundColor Yellow
-    Write-Host "Scheduled tasks created for: TightVNC, websockify, Agent Service" -ForegroundColor Yellow
+    Write-Host "No user session (startup script mode) - services will start after reboot" -ForegroundColor Yellow
+    Write-Host "Scheduled tasks created for: TightVNC, websockify, Agent Service (at logon)" -ForegroundColor Yellow
     if ($caddyConfigured) {
-        Write-Host "Caddy will start at next system boot (runs as SYSTEM)" -ForegroundColor Yellow
-        # Start Caddy now anyway since it runs as SYSTEM and doesn't need user session
-        Start-Caddy
+        Write-Host "Caddy will start at system startup (as SYSTEM, before user logon)" -ForegroundColor Yellow
+        # Don't start Caddy now - let it start via scheduled task after reboot
+        # This gives it time to acquire TLS certificate before user tests
     }
 }
 
