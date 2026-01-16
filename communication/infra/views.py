@@ -26,6 +26,14 @@ from .vm_helpers import (
     stop_windows_vm,
     get_windows_vm_status,
 )
+from .models import (
+    VMCreateRequest,
+    VMActionRequest,
+    VMCreateResponse,
+    VMStatusResponse,
+    VMActionResponse,
+    VMDeleteResponse,
+)
 from communication.helpers import STAGING
 
 logger = logging.getLogger(__name__)
@@ -839,55 +847,6 @@ async def get_latest_unity_image_commit():
         raise HTTPException(
             status_code=500, detail=f"Failed to get latest Unity image commit: {str(e)}"
         )
-
-
-# =============================================================================
-# Windows VM Management - Request/Response Models
-# =============================================================================
-
-
-class VMCreateRequest(BaseModel):
-    assistant_id: str  # Numeric ID (e.g., "12345")
-    unify_apikey: str  # Required - used for VNC and Windows password
-    assistant_name: str  # Required - used for Windows username
-
-
-class VMActionRequest(BaseModel):
-    assistant_id: str
-
-
-class VMCreateResponse(BaseModel):
-    vm_name: str
-    assistant_id: str
-    ip_address: str
-    hostname: str  # Format: unity-assistant-{id}.vm.unify.ai
-    desktop_url: str  # https://unity-assistant-{id}.vm.unify.ai/desktop/custom.html
-    status: str
-
-
-class VMStatusResponse(BaseModel):
-    vm_name: str
-    assistant_id: str
-    status: str
-    ip_address: Optional[str]
-    hostname: str
-    desktop_url: Optional[str]
-    machine_type: str
-    zone: str
-
-
-class VMActionResponse(BaseModel):
-    vm_name: str
-    assistant_id: str
-    status: str
-    message: str
-
-
-class VMDeleteResponse(BaseModel):
-    assistant_id: str
-    vm_deleted: bool
-    dns_deleted: bool
-    ip_released: bool
 
 
 # =============================================================================

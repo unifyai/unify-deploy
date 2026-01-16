@@ -12,6 +12,7 @@ import logging
 import os
 import secrets
 import string
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
 from google.cloud import compute_v1
@@ -557,6 +558,32 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
 
         hostname = get_dns_hostname(assistant_id)
 
+        # Extract timestamps from instance
+        creation_ts = instance.creation_timestamp  # RFC 3339 string
+        last_start_ts = instance.last_start_timestamp  # RFC 3339 string or empty
+
+        # Calculate vm_ready_at: max(creation+15min, last_start+2min)
+        vm_ready_at = None
+        vm_ready = False
+
+        if creation_ts:
+            # Parse creation timestamp
+            creation_dt = datetime.fromisoformat(creation_ts.replace("Z", "+00:00"))
+            creation_ready = creation_dt + timedelta(minutes=15)
+
+            # Check if there's a last_start_timestamp
+            if last_start_ts:
+                last_start_dt = datetime.fromisoformat(last_start_ts.replace("Z", "+00:00"))
+                start_ready = last_start_dt + timedelta(minutes=2)
+                # Take the max (whichever requires longer wait)
+                ready_at_dt = max(creation_ready, start_ready)
+            else:
+                ready_at_dt = creation_ready
+
+            vm_ready_at = ready_at_dt.isoformat()
+            now = datetime.now(timezone.utc)
+            vm_ready = now >= ready_at_dt
+
         return {
             "vm_name": vm_name,
             "assistant_id": assistant_id,
@@ -566,6 +593,10 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
             "desktop_url": f"https://{hostname}/desktop/custom.html" if external_ip else None,
             "machine_type": instance.machine_type.split("/")[-1],
             "zone": ZONE,
+            "creation_timestamp": creation_ts or None,
+            "last_start_timestamp": last_start_ts or None,
+            "vm_ready_at": vm_ready_at,
+            "vm_ready": vm_ready,
         }
     except NotFound:
         return None
