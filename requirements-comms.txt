@@ -6,6 +6,7 @@ httpx
 kubernetes
 livekit
 livekit-api
+pytest
 python-dotenv
 python-multipart
 twilio
