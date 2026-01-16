@@ -46,7 +46,7 @@ function Setup-WindowsUser {
     
     if (-not $Username -or -not $Password) {
         Write-Host "No Windows user credentials provided, skipping user setup" -ForegroundColor Yellow
-        return $false
+        return $null  # No user setup needed
     }
     
     Write-Host ""
@@ -60,14 +60,14 @@ function Setup-WindowsUser {
     if ($existingUser) {
         Write-Host "User '$Username' already exists, updating password..." -ForegroundColor Yellow
         Set-LocalUser -Name $Username -Password $securePassword
+        return $false  # EXISTING user - no reboot needed
     } else {
         Write-Host "Creating user '$Username'..."
         New-LocalUser -Name $Username -Password $securePassword -PasswordNeverExpires -UserMayNotChangePassword
         Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
         Write-Host "User '$Username' created and added to Administrators" -ForegroundColor Green
+        return $true  # NEW user created - reboot needed
     }
-    
-    return $true
 }
 
 function Configure-AutoLogon {
@@ -1460,11 +1460,22 @@ Write-Host "  GitHub Token:    $(if ($gcpGithubToken) { '(set)' } else { '(not p
 Write-Host "  Staging Branch:  $(if ($gcpStaging) { 'yes' } else { 'no' })"
 Write-Host ""
 
-# Setup Windows user and auto-logon 
+# =============================================================================
+# Phase 1: User Setup (may trigger reboot if NEW user created)
+# =============================================================================
+
+$newUserCreated = $null
 if ($windowsUser -and $windowsPassword) {
-    Setup-WindowsUser -Username $windowsUser -Password $windowsPassword
+    $newUserCreated = Setup-WindowsUser -Username $windowsUser -Password $windowsPassword
     Configure-AutoLogon -Username $windowsUser -Password $windowsPassword
 }
+
+# =============================================================================
+# Phase 2: Software Installations (runs after reboot or if no new user)
+# =============================================================================
+
+Write-Host ""
+Write-Host "=== Phase 2: Software Installations ===" -ForegroundColor Cyan
 
 # Run installations in order (each function handles its own "already installed" check)
 Install-Office -MakKey $makKey
@@ -1482,7 +1493,14 @@ Install-Caddy
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
 
 Setup-Websockify
-Setup-DisplayResolution -TargetUser $windowsUser
+
+# Setup display resolution if not already done in Phase 1
+if ($newUserCreated -ne $true -and $windowsUser) {
+    Setup-DisplayResolution -TargetUser $windowsUser
+} elseif (-not $windowsUser) {
+    Setup-DisplayResolution
+}
+
 Configure-Firewall
 Start-AllServices
 
@@ -1492,3 +1510,24 @@ if ($caddyConfigured) {
 }
 
 Show-Summary -MakKey $makKey -VncPassword $vncPassword -Hostname $hostname
+
+# If NEW user was created, setup display resolution and reboot
+# After reboot, GCP startup script runs again, user will exist, and we continue to Phase 2
+if ($newUserCreated -eq $true) {
+    Write-Host ""
+    Write-Host "=== New User Created - Preparing for Reboot ===" -ForegroundColor Cyan
+    
+    # Setup display resolution task for the new user (will run at their logon after reboot)
+    Setup-DisplayResolution -TargetUser $windowsUser
+    
+    Write-Host ""
+    Write-Host "Rebooting in 10 seconds to activate auto-logon..." -ForegroundColor Yellow
+    Write-Host "After reboot, the script will resume with software installations." -ForegroundColor Yellow
+    Write-Host ""
+    
+    Start-Sleep -Seconds 10
+    Restart-Computer -Force
+    # exit
+} else {
+    Write-Host "Existing user detected, continuing with installations..." -ForegroundColor Green
+}
