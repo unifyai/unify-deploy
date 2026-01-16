@@ -532,9 +532,9 @@ function Install-AgentService {
     
     # === AGENT SERVICE ===
     # Stop any running Node processes to release file locks
-    # Write-Host "Stopping any running Node processes..."
-    # Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    # Start-Sleep -Seconds 2
+    Write-Host "Stopping any running Node processes..."
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
     
     # Backup .env if exists (contains API keys)
     $envBackup = $null
@@ -938,17 +938,22 @@ function Setup-AgentServiceTask {
     Write-Host "=== Setting up Agent Service scheduled task ===" -ForegroundColor Cyan
     
     $agentServiceDir = 'C:\agent-service'
-    $npxCmd = 'C:\Program Files\nodejs\npx.cmd'
     
     if (-not (Test-Path "$agentServiceDir\package.json")) {
         Write-Host "Agent service not found, skipping task creation" -ForegroundColor Yellow
         return
     }
     
-    if (-not (Test-Path $npxCmd)) {
-        Write-Host "npx.cmd not found at $npxCmd, skipping task creation" -ForegroundColor Yellow
-        return
-    }
+    # Create startup batch script (simple approach that works reliably with Task Scheduler)
+    # Use full path to npx.cmd to avoid PATH issues in scheduled task environment
+    $startScript = @"
+@echo off
+cd /d $agentServiceDir
+"C:\Program Files\nodejs\npx.cmd" -y ts-node src\index.ts
+"@
+    $startScriptPath = "$agentServiceDir\start-agent-service.bat"
+    $startScript | Out-File -FilePath $startScriptPath -Encoding ASCII
+    Write-Host "Created startup script: $startScriptPath" -ForegroundColor Green
     
     # Create scheduled task
     $taskName = "StartAgentService"
@@ -959,8 +964,8 @@ function Setup-AgentServiceTask {
     }
     
     Write-Host "Creating scheduled task for Agent Service..."
-    # Use cmd.exe to run npx.cmd with full path (reliable with Task Scheduler)
-    $action = New-ScheduledTaskAction -Execute $npxCmd -Argument "-y ts-node src\index.ts" -WorkingDirectory $agentServiceDir
+    # Execute .bat file directly (simple and reliable)
+    $action = New-ScheduledTaskAction -Execute $startScriptPath -WorkingDirectory $agentServiceDir
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     
     if ($TargetUser) {
@@ -1392,14 +1397,14 @@ Write-Host "Starting websockify..."
         Write-Host "  websockify : pythonw.exe not found at $pythonwExe" -ForegroundColor Red
     }
     
-    # Start Agent Service using npx directly
+    # Start Agent Service using the startup script (created by Setup-AgentServiceTask)
     Write-Host "Starting Agent Service..."
     $agentServiceDir = 'C:\agent-service'
-    $npxCmd = 'C:\Program Files\nodejs\npx.cmd'
-    
-    if ((Test-Path "$agentServiceDir\package.json") -and (Test-Path $npxCmd)) {
-        # Use cmd.exe to run npx.cmd with full path (visible window for debugging)
-        Start-Process -FilePath $npxCmd -ArgumentList "-y ts-node src\index.ts" -WorkingDirectory $agentServiceDir
+    $startScriptPath = "$agentServiceDir\start-agent-service.bat"
+    if (Test-Path $startScriptPath) {
+        # Execute .bat file directly (same as scheduled task)
+        # Keep window visible for debugging
+        Start-Process -FilePath $startScriptPath -WorkingDirectory $agentServiceDir
         Start-Sleep -Seconds 5
         
         # Check if Agent Service is running (check if port 3000 is listening)
@@ -1409,8 +1414,8 @@ Write-Host "Starting websockify..."
         } else {
             Write-Host "  Agent Service : Not listening on port 3000 yet" -ForegroundColor Yellow
         }
-    } elseif (-not (Test-Path $npxCmd)) {
-        Write-Host "  Agent Service : npx.cmd not found at $npxCmd" -ForegroundColor Yellow
+    } elseif (Test-Path "$agentServiceDir\package.json") {
+        Write-Host "  Agent Service : start-agent-service.bat not found (run Setup-AgentServiceTask first)" -ForegroundColor Yellow
     } else {
         Write-Host "  Agent Service : package.json not found at $agentServiceDir" -ForegroundColor Yellow
     }
