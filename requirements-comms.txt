@@ -9,7 +9,6 @@ livekit-api
 python-dotenv
 python-multipart
 twilio
-git+https://github.com/unifyai/unify
 uvicorn[standard]
 azure-identity
 msgraph-sdk
