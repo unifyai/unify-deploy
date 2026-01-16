@@ -54,4 +54,3 @@ class VMDeleteResponse(BaseModel):
     vm_deleted: bool
     dns_deleted: bool
     ip_released: bool
-

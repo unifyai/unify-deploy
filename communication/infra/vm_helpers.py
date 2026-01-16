@@ -353,22 +353,16 @@ def create_windows_vm(
 
     # Add MAK key if configured
     if MAK_KEY:
-        metadata_items.append(
-            compute_v1.Items(key="office-mak-key", value=MAK_KEY)
-        )
+        metadata_items.append(compute_v1.Items(key="office-mak-key", value=MAK_KEY))
 
     # Add staging flag only when STAGING is true
     if STAGING:
-        metadata_items.append(
-            compute_v1.Items(key="staging", value="true")
-        )
+        metadata_items.append(compute_v1.Items(key="staging", value="true"))
         logger.info("Added staging=true to VM metadata")
 
     # Add secrets from Secret Manager (if available)
     if github_token:
-        metadata_items.append(
-            compute_v1.Items(key="github-token", value=github_token)
-        )
+        metadata_items.append(compute_v1.Items(key="github-token", value=github_token))
         logger.info("Added GitHub token to VM metadata")
 
     if anthropic_api_key:
@@ -378,9 +372,7 @@ def create_windows_vm(
         logger.info("Added Anthropic API key to VM metadata")
 
     if unify_key:
-        metadata_items.append(
-            compute_v1.Items(key="unify-key", value=unify_key)
-        )
+        metadata_items.append(compute_v1.Items(key="unify-key", value=unify_key))
         logger.info("Added Unify key to VM metadata")
 
     # Configure the VM
@@ -573,7 +565,9 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
 
             # Check if there's a last_start_timestamp
             if last_start_ts:
-                last_start_dt = datetime.fromisoformat(last_start_ts.replace("Z", "+00:00"))
+                last_start_dt = datetime.fromisoformat(
+                    last_start_ts.replace("Z", "+00:00")
+                )
                 start_ready = last_start_dt + timedelta(minutes=2)
                 # Take the max (whichever requires longer wait)
                 ready_at_dt = max(creation_ready, start_ready)
@@ -590,7 +584,9 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
             "status": instance.status,
             "ip_address": external_ip,
             "hostname": hostname,
-            "desktop_url": f"https://{hostname}/desktop/custom.html" if external_ip else None,
+            "desktop_url": f"https://{hostname}/desktop/custom.html"
+            if external_ip
+            else None,
             "machine_type": instance.machine_type.split("/")[-1],
             "zone": ZONE,
             "creation_timestamp": creation_ts or None,
