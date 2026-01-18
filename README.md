@@ -1,5 +1,39 @@
 # Unity Communication Platform
 
+## System Architecture
+
+This repository is the external communication gateway in a multi-repository system:
+
+```
+         User (Console/Phone/SMS/Email)
+                      │
+    ┌─────────────────┴──────────────────┐
+    │           Communication            │
+    │    (Webhooks, Voice, SMS, Email)   │
+    └────┬───────────────────────────────┘
+         │
+    ┌────┴────┐    ┌─────────┐    ┌─────────┐
+    │  Unity  │    │  Unify  │    │Orchestra│
+    │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
+    │         │    │         │    │  (DB)   │
+    └────┬────┘    └────┬────┘    └────┬────┘
+         │              ▲              ▲
+         │              │              │
+         │    ┌─────────┴─┐       ┌────┴───────┐
+         └───▶│  UniLLM   │       │  Console   │
+              │ (LLM API) │       │(Interfaces)│
+              └───────────┘       └────────────┘
+```
+
+**This repo (Communication)** receives external events (Twilio webhooks, Gmail notifications) and routes them to Unity for processing. Unity calls back to Communication when it needs to send messages, make calls, or dispatch voice agents.
+
+Related repositories:
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain
+- [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
+- [Console](https://github.com/unifyai/console) — Web UI and observability dashboard
+
+---
+
 This repository provides a unified communication service with two primary components:
 
 1. **Adapters** – HTTP Cloud Functions (Flask + Functions Framework) that handle unauthenticated, form-encoded webhooks from Twilio (voice, SMS, WhatsApp) and Gmail.  They reside in the `adapters/` directory and are deployed as Google Cloud Functions.
