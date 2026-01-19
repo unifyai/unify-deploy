@@ -33,8 +33,8 @@ DOMAIN_SUFFIX = "vm.unify.ai"  # Subdomain for Windows VMs
 VM_MACHINE_TYPE = "e2-standard-4"  # 4 vCPU, 16GB RAM
 VM_DISK_SIZE_GB = 100
 VM_DISK_TYPE = "pd-ssd"
-VM_IMAGE_FAMILY = "windows-2025"
-VM_IMAGE_PROJECT = "windows-cloud"
+VM_IMAGE_FAMILY = "unity-windows-vm"
+VM_IMAGE_PROJECT = "gcp-project-runtime"
 
 # =============================================================================
 # Networking
