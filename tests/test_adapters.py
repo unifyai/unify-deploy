@@ -11,7 +11,6 @@ import base64
 from google.cloud import pubsub_v1
 import json
 
-
 subscriber = pubsub_v1.SubscriberClient()
 subscription_path = subscriber.subscription_path(
     os.getenv("PROJECT_ID"), "unity-default-test-assistant-staging-sub"
