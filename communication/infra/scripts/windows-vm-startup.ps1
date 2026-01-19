@@ -1134,30 +1134,24 @@ if (`$result -eq 0) {
 }
 
 function Setup-InvisibleCursor {
+    param(
+        [string]$TargetUser
+    )
+    
     Write-Host ""
     Write-Host "=== Setting up Invisible Cursor ===" -ForegroundColor Cyan
     
     $cursorDir = 'C:\Windows\Cursors'
     $blankCursorPath = "$cursorDir\blank.cur"
+    $novncDir = 'C:\novnc'
+    
+    New-Item -ItemType Directory -Force -Path $novncDir | Out-Null
     
     # Check if blank cursor already exists
     if (Test-Path $blankCursorPath) {
         Write-Host "Blank cursor already exists at: $blankCursorPath" -ForegroundColor Green
     } else {
         # Create a minimal transparent 32x32 cursor file
-        # This is a valid .cur file with a fully transparent 32x32 image
-        # Format: ICO/CUR header + directory entry + DIB header + pixel data (all zeros = transparent)
-        $blankCursorBase64 = @"
-AAACAAEAICAAAAEABAAoAQAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAgAAAAIAgGAAAAc3p69AAA
-AAlwSFlzAAALEwAACxMBAJqcGAAAAARnQU1BAACxjwv8YQUAAADjSURBVHja7doxAQAgDASx7V9a
-BQgXHHrIIoLZZz8AAACA/2nHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPgYL/sGALEgzSUAAAAASUVO
-RK5CYII=
-"@
-        
-        # Alternative: Create a proper .cur file programmatically
         # Minimal 32x32 1-bit transparent cursor (326 bytes)
         $curHeader = [byte[]]@(
             0x00, 0x00,       # Reserved (must be 0)
@@ -1218,46 +1212,44 @@ RK5CYII=
         }
     }
     
-    # Set all cursor types to use the blank cursor
-    $cursorTypes = @(
-        'Arrow',
-        'Help', 
-        'AppStarting',
-        'Wait',
-        'NWPen',
-        'No',
-        'SizeNS',
-        'SizeWE',
-        'Crosshair',
-        'IBeam',
-        'SizeNWSE',
-        'SizeNESW',
-        'SizeAll',
-        'UpArrow',
-        'Hand'
-    )
-    
-    $regPath = 'HKCU:\Control Panel\Cursors'
-    if (-not (Test-Path $regPath)) {
-        New-Item -Path $regPath -Force | Out-Null
-    }
-    
-    Write-Host "Setting all cursor types to invisible..."
-    foreach ($type in $cursorTypes) {
-        Set-ItemProperty -Path $regPath -Name $type -Value $blankCursorPath -ErrorAction SilentlyContinue
-    }
-    
-    # Disable touch and gesture visualizations
-    Set-ItemProperty -Path $regPath -Name 'ContactVisualization' -Value 0 -Type DWord -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $regPath -Name 'GestureVisualization' -Value 0 -Type DWord -ErrorAction SilentlyContinue
-    
-    # Apply cursor changes immediately using SystemParametersInfo
-    Write-Host "Applying cursor changes..."
-    $cursorHelperCode = @"
+    # Create PowerShell script that applies invisible cursor (runs in user's session)
+    $cursorScript = @'
+# Apply invisible cursor settings
+# This script runs at user logon to set cursor to transparent
+
+$blankCursorPath = 'C:\Windows\Cursors\blank.cur'
+
+if (-not (Test-Path $blankCursorPath)) {
+    "Blank cursor not found: $blankCursorPath" | Out-File -FilePath "C:\novnc\cursor.log" -Append -Encoding UTF8
+    exit 1
+}
+
+# Set all cursor types to use the blank cursor
+$cursorTypes = @(
+    'Arrow', 'Help', 'AppStarting', 'Wait', 'NWPen', 'No',
+    'SizeNS', 'SizeWE', 'Crosshair', 'IBeam', 'SizeNWSE',
+    'SizeNESW', 'SizeAll', 'UpArrow', 'Hand'
+)
+
+$regPath = 'HKCU:\Control Panel\Cursors'
+if (-not (Test-Path $regPath)) {
+    New-Item -Path $regPath -Force | Out-Null
+}
+
+foreach ($type in $cursorTypes) {
+    Set-ItemProperty -Path $regPath -Name $type -Value $blankCursorPath -ErrorAction SilentlyContinue
+}
+
+# Disable touch and gesture visualizations
+Set-ItemProperty -Path $regPath -Name 'ContactVisualization' -Value 0 -Type DWord -ErrorAction SilentlyContinue
+Set-ItemProperty -Path $regPath -Name 'GestureVisualization' -Value 0 -Type DWord -ErrorAction SilentlyContinue
+
+# Apply cursor changes immediately using SystemParametersInfo
+$cursorHelperCode = @"
 using System;
 using System.Runtime.InteropServices;
 
-public class CursorHelper {
+public class CursorHelperLogon {
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SystemParametersInfo(int uAction, int uParam, int lpvParam, int fuWinIni);
     
@@ -1270,25 +1262,59 @@ public class CursorHelper {
     }
 }
 "@
+
+try {
+    Add-Type -TypeDefinition $cursorHelperCode -Language CSharp -ErrorAction SilentlyContinue
+} catch {
+    # Type may already be loaded
+}
+
+$result = [CursorHelperLogon]::ApplyCursors()
+"$(Get-Date): Cursor applied, result: $result" | Out-File -FilePath "C:\novnc\cursor.log" -Append -Encoding UTF8
+'@
     
-    try {
-        Add-Type -TypeDefinition $cursorHelperCode -Language CSharp -ErrorAction SilentlyContinue
-    } catch {
-        # Type may already be loaded from a previous run
+    $scriptPath = "$novncDir\set-invisible-cursor.ps1"
+    $cursorScript | Out-File -FilePath $scriptPath -Encoding UTF8
+    Write-Host "Created cursor script at $scriptPath" -ForegroundColor Green
+    
+    # Create scheduled task to run cursor script at login (runs in user's interactive session)
+    $taskName = "SetInvisibleCursor"
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Write-Host "Removing existing scheduled task..."
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     }
     
-    try {
-        $result = [CursorHelper]::ApplyCursors()
-        if ($result) {
-            Write-Host "Invisible cursor applied successfully" -ForegroundColor Green
-        } else {
-            Write-Host "Cursor settings saved (will apply after next logon)" -ForegroundColor Yellow
-        }
-    } catch {
-        Write-Host "Cursor settings saved (will apply after next logon)" -ForegroundColor Yellow
+    Write-Host "Creating scheduled task for invisible cursor (hidden)..."
+    # Execute PowerShell with hidden window, small delay to ensure desktop is ready
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 2; & '$scriptPath'`"" -WorkingDirectory $novncDir
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    
+    # If TargetUser specified, schedule for that user's logon (runs in their interactive session)
+    if ($TargetUser) {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
+        $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+        Write-Host "Scheduled task '$taskName' created for user: $TargetUser" -ForegroundColor Green
+    } else {
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest | Out-Null
+        Write-Host "Scheduled task '$taskName' created for any user at login" -ForegroundColor Green
     }
     
-    Write-Host "Note: Native Windows cursor is now invisible for VNC streaming" -ForegroundColor Gray
+    # Also try to apply immediately in current session (only effective for interactive runs)
+    # For existing logged-in users, we trigger the scheduled task to run now
+    Write-Host "Applying cursor changes now..."
+    
+    # Try to run the task immediately for existing sessions
+    try {
+        Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Write-Host "Triggered cursor task to run immediately" -ForegroundColor Green
+    } catch {
+        Write-Host "Cursor task scheduled (will apply at next logon)" -ForegroundColor Yellow
+    }
+    
+    Write-Host "Note: Native Windows cursor will be invisible for VNC streaming" -ForegroundColor Gray
 }
 
 function Configure-Firewall {
@@ -2073,8 +2099,12 @@ if ($newUserCreated -ne $true -and $windowsUser) {
     Setup-DisplayResolution
 }
 
-# Hide native Windows cursor
-Setup-InvisibleCursor
+# Hide native Windows cursor (scheduled task for user session)
+if ($windowsUser) {
+    Setup-InvisibleCursor -TargetUser $windowsUser
+} else {
+    Setup-InvisibleCursor
+}
 
 # Configure firewall
 Configure-Firewall
@@ -2103,8 +2133,8 @@ if ($newUserCreated -eq $true) {
     # Setup display resolution task for the new user (will run at their logon after reboot)
     Setup-DisplayResolution -TargetUser $windowsUser
     
-    # Setup invisible cursor (will be applied for the current user context)
-    Setup-InvisibleCursor
+    # Setup invisible cursor task for the new user (will run at their logon after reboot)
+    Setup-InvisibleCursor -TargetUser $windowsUser
     
     Write-Host ""
     Write-Host "Rebooting in 10 seconds to activate auto-logon..." -ForegroundColor Yellow

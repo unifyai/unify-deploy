@@ -560,14 +560,14 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
         if creation_ts:
             # Parse creation timestamp
             creation_dt = datetime.fromisoformat(creation_ts.replace("Z", "+00:00"))
-            creation_ready = creation_dt + timedelta(minutes=8)
+            creation_ready = creation_dt + timedelta(minutes=7)
 
             # Check if there's a last_start_timestamp
             if last_start_ts:
                 last_start_dt = datetime.fromisoformat(
                     last_start_ts.replace("Z", "+00:00")
                 )
-                start_ready = last_start_dt + timedelta(minutes=2)
+                start_ready = last_start_dt + timedelta(minutes=1.5)
                 # Take the max (whichever requires longer wait)
                 ready_at_dt = max(creation_ready, start_ready)
             else:
