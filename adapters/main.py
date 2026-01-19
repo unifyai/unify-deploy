@@ -2079,7 +2079,7 @@ async def scheduled_jobs_cleanup(request: Request):
 
         # check if job is idle
         if (
-            "ping received - keeping conversation manager alive" in logs
+            "Ping received - keeping conversation manager alive" in logs
             and "Inactivity timeout reached (360s), requesting shutdown..." not in logs
             and "Graceful shutdown completed" not in logs
             and "Shutting down convo manager..." not in logs
