@@ -1133,6 +1133,164 @@ if (`$result -eq 0) {
     Write-Host "Display resolution applied" -ForegroundColor Green
 }
 
+function Setup-InvisibleCursor {
+    Write-Host ""
+    Write-Host "=== Setting up Invisible Cursor ===" -ForegroundColor Cyan
+    
+    $cursorDir = 'C:\Windows\Cursors'
+    $blankCursorPath = "$cursorDir\blank.cur"
+    
+    # Check if blank cursor already exists
+    if (Test-Path $blankCursorPath) {
+        Write-Host "Blank cursor already exists at: $blankCursorPath" -ForegroundColor Green
+    } else {
+        # Create a minimal transparent 32x32 cursor file
+        # This is a valid .cur file with a fully transparent 32x32 image
+        # Format: ICO/CUR header + directory entry + DIB header + pixel data (all zeros = transparent)
+        $blankCursorBase64 = @"
+AAACAAEAICAAAAEABAAoAQAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAgAAAAIAgGAAAAc3p69AAA
+AAlwSFlzAAALEwAACxMBAJqcGAAAAARnQU1BAACxjwv8YQUAAADjSURBVHja7doxAQAgDASx7V9a
+BQgXHHrIIoLZZz8AAACA/2nHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPgYL/sGALEgzSUAAAAASUVO
+RK5CYII=
+"@
+        
+        # Alternative: Create a proper .cur file programmatically
+        # Minimal 32x32 1-bit transparent cursor (326 bytes)
+        $curHeader = [byte[]]@(
+            0x00, 0x00,       # Reserved (must be 0)
+            0x02, 0x00,       # Type (2 = cursor)
+            0x01, 0x00        # Number of images (1)
+        )
+        
+        $curDirEntry = [byte[]]@(
+            0x20,             # Width (32)
+            0x20,             # Height (32)
+            0x00,             # Color count (0 = more than 256)
+            0x00,             # Reserved
+            0x00, 0x00,       # Hotspot X (0)
+            0x00, 0x00,       # Hotspot Y (0)
+            0x30, 0x01, 0x00, 0x00,  # Size of image data (304 bytes)
+            0x16, 0x00, 0x00, 0x00   # Offset to image data (22 bytes)
+        )
+        
+        # BITMAPINFOHEADER for 32x32 1-bit cursor
+        $bmpHeader = [byte[]]@(
+            0x28, 0x00, 0x00, 0x00,  # Header size (40)
+            0x20, 0x00, 0x00, 0x00,  # Width (32)
+            0x40, 0x00, 0x00, 0x00,  # Height (64 = 32*2 for XOR+AND masks)
+            0x01, 0x00,              # Planes (1)
+            0x01, 0x00,              # Bits per pixel (1)
+            0x00, 0x00, 0x00, 0x00,  # Compression (none)
+            0x00, 0x01, 0x00, 0x00,  # Image size (256 bytes)
+            0x00, 0x00, 0x00, 0x00,  # X pixels per meter
+            0x00, 0x00, 0x00, 0x00,  # Y pixels per meter
+            0x00, 0x00, 0x00, 0x00,  # Colors used
+            0x00, 0x00, 0x00, 0x00   # Important colors
+        )
+        
+        # Color table (2 entries for 1-bit: black and white)
+        $colorTable = [byte[]]@(
+            0x00, 0x00, 0x00, 0x00,  # Black (BGRX)
+            0xFF, 0xFF, 0xFF, 0x00   # White (BGRX)
+        )
+        
+        # XOR mask: 32x32 bits = 128 bytes (all zeros = use AND mask colors)
+        $xorMask = New-Object byte[] 128
+        
+        # AND mask: 32x32 bits = 128 bytes (all 1s = fully transparent)
+        $andMask = New-Object byte[] 128
+        for ($i = 0; $i -lt 128; $i++) {
+            $andMask[$i] = 0xFF
+        }
+        
+        # Combine all parts
+        $cursorData = $curHeader + $curDirEntry + $bmpHeader + $colorTable + $xorMask + $andMask
+        
+        try {
+            [System.IO.File]::WriteAllBytes($blankCursorPath, $cursorData)
+            Write-Host "Created blank cursor at: $blankCursorPath" -ForegroundColor Green
+        } catch {
+            Write-Host "WARNING: Could not create blank cursor - $_" -ForegroundColor Yellow
+            return
+        }
+    }
+    
+    # Set all cursor types to use the blank cursor
+    $cursorTypes = @(
+        'Arrow',
+        'Help', 
+        'AppStarting',
+        'Wait',
+        'NWPen',
+        'No',
+        'SizeNS',
+        'SizeWE',
+        'Crosshair',
+        'IBeam',
+        'SizeNWSE',
+        'SizeNESW',
+        'SizeAll',
+        'UpArrow',
+        'Hand'
+    )
+    
+    $regPath = 'HKCU:\Control Panel\Cursors'
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+    }
+    
+    Write-Host "Setting all cursor types to invisible..."
+    foreach ($type in $cursorTypes) {
+        Set-ItemProperty -Path $regPath -Name $type -Value $blankCursorPath -ErrorAction SilentlyContinue
+    }
+    
+    # Disable touch and gesture visualizations
+    Set-ItemProperty -Path $regPath -Name 'ContactVisualization' -Value 0 -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $regPath -Name 'GestureVisualization' -Value 0 -Type DWord -ErrorAction SilentlyContinue
+    
+    # Apply cursor changes immediately using SystemParametersInfo
+    Write-Host "Applying cursor changes..."
+    $cursorHelperCode = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class CursorHelper {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SystemParametersInfo(int uAction, int uParam, int lpvParam, int fuWinIni);
+    
+    public const int SPI_SETCURSORS = 0x0057;
+    public const int SPIF_UPDATEINIFILE = 0x01;
+    public const int SPIF_SENDCHANGE = 0x02;
+    
+    public static bool ApplyCursors() {
+        return SystemParametersInfo(SPI_SETCURSORS, 0, 0, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+    }
+}
+"@
+    
+    try {
+        Add-Type -TypeDefinition $cursorHelperCode -Language CSharp -ErrorAction SilentlyContinue
+    } catch {
+        # Type may already be loaded from a previous run
+    }
+    
+    try {
+        $result = [CursorHelper]::ApplyCursors()
+        if ($result) {
+            Write-Host "Invisible cursor applied successfully" -ForegroundColor Green
+        } else {
+            Write-Host "Cursor settings saved (will apply after next logon)" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "Cursor settings saved (will apply after next logon)" -ForegroundColor Yellow
+    }
+    
+    Write-Host "Note: Native Windows cursor is now invisible for VNC streaming" -ForegroundColor Gray
+}
+
 function Configure-Firewall {
     Write-Host ""
     Write-Host "=== Configuring Firewall ===" -ForegroundColor Cyan
@@ -1432,6 +1590,7 @@ function Show-Summary {
     Write-Host "  - Bun"
     Write-Host "  - TightVNC Server (port 5900, service mode)"
     Write-Host "  - noVNC + websockify (port 6080)"
+    Write-Host "  - Invisible cursor (for clean VNC streaming)"
     if (Test-Path 'C:\magnitude\package.json') {
         Write-Host "  - Magnitude (unity-modifications)"
     }
@@ -1553,37 +1712,379 @@ if ($windowsUser -and $windowsPassword) {
 }
 
 # =============================================================================
-# Phase 2: Software Installations (runs after reboot or if no new user)
+# Phase 2: Software Installations (with parallelization)
 # =============================================================================
 
 Write-Host ""
 Write-Host "=== Phase 2: Software Installations ===" -ForegroundColor Cyan
 
-# Run installations in order (each function handles its own "already installed" check)
+# Office must be installed first (longest, 20-40 min, and critical)
 Install-Office -MakKey $makKey
-Install-Git
-Install-Python
-Install-Chocolatey
+
+# -----------------------------------------------------------------------------
+# PARALLEL GROUP 1: Foundation tools (no dependencies between them)
+# Git, Python, Chocolatey, TightVNC, Caddy can all download/install simultaneously
+# Using Start-Job with self-contained script blocks for reliability
+# -----------------------------------------------------------------------------
+Write-Host ""
+Write-Host "=== Installing foundation tools in parallel ===" -ForegroundColor Cyan
+$parallelStartTime = Get-Date
+
+$jobs = @()
+
+# Job 1: Install Git
+$jobs += Start-Job -Name "Install-Git" -ScriptBlock {
+    $gitInstallerUrl = 'https://github.com/git-for-windows/git/releases/download/v2.43.0.windows.1/Git-2.43.0-64-bit.exe'
+    $gitInstallerPath = 'C:\temp\git-installer.exe'
+    
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        return "Git already installed"
+    }
+    
+    New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
+    Invoke-WebRequest -Uri $gitInstallerUrl -OutFile $gitInstallerPath
+    $proc = Start-Process -FilePath $gitInstallerPath -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh"' -PassThru -Wait -NoNewWindow
+    Remove-Item $gitInstallerPath -Force -ErrorAction SilentlyContinue
+    
+    if (Test-Path 'C:\Program Files\Git\bin\git.exe') {
+        return "Git installed successfully (exit code: $($proc.ExitCode))"
+    } else {
+        throw "Git installation failed"
+    }
+}
+
+# Job 2: Install Python
+$jobs += Start-Job -Name "Install-Python" -ScriptBlock {
+    $pythonInstallerUrl = 'https://www.python.org/ftp/python/3.12.2/python-3.12.2-amd64.exe'
+    $pythonInstallerPath = 'C:\temp\python-installer.exe'
+    $realPythonPath = 'C:\Program Files\Python312\python.exe'
+    
+    if (Test-Path $realPythonPath) {
+        return "Python already installed"
+    }
+    
+    New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
+    Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pythonInstallerPath
+    $proc = Start-Process -FilePath $pythonInstallerPath -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0' -PassThru -Wait -NoNewWindow
+    Remove-Item $pythonInstallerPath -Force -ErrorAction SilentlyContinue
+    
+    if (Test-Path $realPythonPath) {
+        # Upgrade pip
+        & $realPythonPath -m pip install --upgrade pip 2>&1 | Out-Null
+        return "Python installed successfully (exit code: $($proc.ExitCode))"
+    } else {
+        throw "Python installation failed"
+    }
+}
+
+# Job 3: Install Chocolatey
+$jobs += Start-Job -Name "Install-Chocolatey" -ScriptBlock {
+    if (Test-Path 'C:\ProgramData\chocolatey\bin\choco.exe') {
+        return "Chocolatey already installed"
+    }
+    
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+    
+    if (Test-Path 'C:\ProgramData\chocolatey\bin\choco.exe') {
+        return "Chocolatey installed successfully"
+    } else {
+        throw "Chocolatey installation failed"
+    }
+}
+
+# Job 4: Install TightVNC
+$vncPwd = $vncPassword  # Capture for job scope
+$jobs += Start-Job -Name "Install-TightVNC" -ScriptBlock {
+    param($Password)
+    
+    $tvnServerPath = 'C:\Program Files\TightVNC\tvnserver.exe'
+    
+    if (Test-Path $tvnServerPath) {
+        return "TightVNC already installed"
+    }
+    
+    $vncInstallerUrl = 'https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi'
+    $vncInstallerPath = 'C:\temp\tightvnc.msi'
+    
+    New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
+    Invoke-WebRequest -Uri $vncInstallerUrl -OutFile $vncInstallerPath -UseBasicParsing
+    
+    $vncArgs = @(
+        "/i", $vncInstallerPath,
+        "/quiet", "/norestart",
+        "ADDLOCAL=Server",
+        "SET_USEVNCAUTHENTICATION=1", "VALUE_OF_USEVNCAUTHENTICATION=1",
+        "SET_PASSWORD=1", "VALUE_OF_PASSWORD=$Password",
+        "SET_USECONTROLAUTHENTICATION=1", "VALUE_OF_USECONTROLAUTHENTICATION=1",
+        "SET_CONTROLPASSWORD=1", "VALUE_OF_CONTROLPASSWORD=$Password"
+    )
+    $proc = Start-Process msiexec.exe -ArgumentList $vncArgs -Wait -NoNewWindow -PassThru
+    Remove-Item $vncInstallerPath -Force -ErrorAction SilentlyContinue
+    
+    if (Test-Path $tvnServerPath) {
+        return "TightVNC installed successfully (exit code: $($proc.ExitCode))"
+    } else {
+        throw "TightVNC installation failed"
+    }
+} -ArgumentList $vncPwd
+
+# Job 5: Install Caddy
+$jobs += Start-Job -Name "Install-Caddy" -ScriptBlock {
+    $caddyDir = 'C:\caddy'
+    $caddyExe = "$caddyDir\caddy.exe"
+    
+    if (Test-Path $caddyExe) {
+        return "Caddy already installed"
+    }
+    
+    New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
+    $caddyUrl = "https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip"
+    $caddyZip = "$caddyDir\caddy.zip"
+    
+    Invoke-WebRequest -Uri $caddyUrl -OutFile $caddyZip -UseBasicParsing
+    Expand-Archive -Path $caddyZip -DestinationPath $caddyDir -Force
+    Remove-Item $caddyZip -Force -ErrorAction SilentlyContinue
+    
+    if (Test-Path $caddyExe) {
+        return "Caddy installed successfully"
+    } else {
+        throw "Caddy installation failed"
+    }
+}
+
+# Wait for all parallel jobs
+Write-Host "  Started $($jobs.Count) parallel install jobs..." -ForegroundColor Gray
+$jobs | Wait-Job | Out-Null
+
+# Report results
+foreach ($job in $jobs) {
+    $result = Receive-Job -Job $job -ErrorAction SilentlyContinue
+    $error = $job.ChildJobs[0].JobStateInfo.Reason
+    
+    if ($job.State -eq 'Completed') {
+        Write-Host "  $($job.Name): $result" -ForegroundColor Green
+    } else {
+        Write-Host "  $($job.Name): FAILED - $error" -ForegroundColor Red
+    }
+    Remove-Job -Job $job -Force
+}
+
+$parallelElapsed = (Get-Date) - $parallelStartTime
+Write-Host "  Parallel group 1 completed in $([math]::Round($parallelElapsed.TotalSeconds, 1))s" -ForegroundColor Magenta
+
+# Refresh PATH after parallel installs (jobs run in separate processes)
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# Run TightVNC configuration (needs to be in main process for registry access)
+Write-Host ""
+Write-Host "Configuring TightVNC settings..." -ForegroundColor Cyan
+$regPaths = @(
+    'HKLM:\SOFTWARE\TightVNC\Server',
+    'HKLM:\SOFTWARE\WOW6432Node\TightVNC\Server',
+    'HKCU:\SOFTWARE\TightVNC\Server',
+    'HKCU:\SOFTWARE\WOW6432Node\TightVNC\Server'
+)
+foreach ($regPath in $regPaths) {
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+    }
+    Set-ItemProperty -Path $regPath -Name 'AllowLoopback' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $regPath -Name 'AcceptRfbConnections' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $regPath -Name 'UseVncAuthentication' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $regPath -Name 'QueryIfNoPassword' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $regPath -Name 'RfbPort' -Value 5900 -Type DWord -Force -ErrorAction SilentlyContinue
+}
+Set-Service -Name "tvnserver" -StartupType Automatic -ErrorAction SilentlyContinue
+Write-Host "TightVNC configured" -ForegroundColor Green
+
+# -----------------------------------------------------------------------------
+# SEQUENTIAL: Node.js (depends on Chocolatey)
+# -----------------------------------------------------------------------------
 Install-NodeJS
-Install-AgentService -GithubToken $gcpGithubToken -Staging $gcpStaging
+
+# Refresh PATH again after Node.js install
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+
+# Add Bun to PATH if installed
+$bunPath = "$env:USERPROFILE\.bun\bin"
+if (Test-Path $bunPath) {
+    $env:Path = "$bunPath;$env:Path"
+}
+
+# -----------------------------------------------------------------------------
+# PARALLEL GROUP 2: Services that need Git/Python/Node (install in parallel)
+# noVNC and AgentService can install simultaneously
+# -----------------------------------------------------------------------------
+Write-Host ""
+Write-Host "=== Installing services in parallel ===" -ForegroundColor Cyan
+$parallelStartTime2 = Get-Date
+
+$jobs2 = @()
+
+# Job: Install noVNC
+$jobs2 += Start-Job -Name "Install-NoVNC" -ScriptBlock {
+    $novncDir = 'C:\novnc'
+    $pythonExe = 'C:\Program Files\Python312\python.exe'
+    
+    # Refresh PATH in job
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    
+    if (-not (Test-Path "$novncDir\vnc.html")) {
+        if (Test-Path $novncDir) {
+            Remove-Item -Recurse -Force $novncDir -ErrorAction SilentlyContinue
+        }
+        git clone --depth 1 https://github.com/novnc/noVNC.git $novncDir 2>&1 | Out-Null
+    }
+    
+    # Install websockify
+    if (Test-Path $pythonExe) {
+        & $pythonExe -m pip install websockify --quiet 2>&1 | Out-Null
+    }
+    
+    if (Test-Path "$novncDir\vnc.html") {
+        return "noVNC installed successfully"
+    } else {
+        throw "noVNC installation failed"
+    }
+}
+
+# Job: Install AgentService
+$ghToken = $gcpGithubToken
+$staging = $gcpStaging
+$jobs2 += Start-Job -Name "Install-AgentService" -ScriptBlock {
+    param($GithubToken, $Staging)
+    
+    $magnitudeDir = 'C:\magnitude'
+    $agentServiceDir = 'C:\agent-service'
+    $unityRepoDir = 'C:\temp\unity-repo'
+    
+    # Refresh PATH in job
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $bunPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $bunPath) { $env:Path = "$bunPath;$env:Path" }
+    
+    $unityBranch = if ($Staging) { "staging" } else { "main" }
+    
+    # Build URLs
+    $magnitudeUrl = if ($GithubToken) { "https://$GithubToken@github.com/unifyai/magnitude.git" } else { "https://github.com/unifyai/magnitude.git" }
+    $unityUrl = if ($GithubToken) { "https://$GithubToken@github.com/unifyai/unity.git" } else { "https://github.com/unifyai/unity.git" }
+    
+    # Clone Magnitude
+    if (-not (Test-Path "$magnitudeDir\.git")) {
+        if (Test-Path $magnitudeDir) { Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue }
+        git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
+        
+        if (Test-Path "$magnitudeDir\package.json") {
+            Push-Location $magnitudeDir
+            if (Get-Command bun -ErrorAction SilentlyContinue) {
+                bun install 2>&1 | Out-Null
+            } else {
+                npm install 2>&1 | Out-Null
+            }
+            Pop-Location
+        }
+    }
+    
+    # Clone and extract agent-service
+    $envBackup = $null
+    if (Test-Path "$agentServiceDir\.env") {
+        $envBackup = Get-Content "$agentServiceDir\.env" -Raw
+    }
+    
+    if (Test-Path "$agentServiceDir\package.json") {
+        Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
+    }
+    
+    New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
+    if (Test-Path $unityRepoDir) { Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue }
+    
+    git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
+    
+    if (Test-Path $unityRepoDir) {
+        Push-Location $unityRepoDir
+        git sparse-checkout set agent-service 2>&1 | Out-Null
+        Pop-Location
+        
+        if (Test-Path "$unityRepoDir\agent-service") {
+            Move-Item "$unityRepoDir\agent-service" $agentServiceDir -Force
+            
+            if (Test-Path "$agentServiceDir\package.json") {
+                Push-Location $agentServiceDir
+                if (Get-Command bun -ErrorAction SilentlyContinue) {
+                    bun install 2>&1 | Out-Null
+                } else {
+                    npm install 2>&1 | Out-Null
+                }
+                Pop-Location
+            }
+        }
+        Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+    }
+    
+    # Restore .env
+    if ($envBackup -and (Test-Path $agentServiceDir)) {
+        $envBackup | Out-File -FilePath "$agentServiceDir\.env" -Encoding UTF8 -NoNewline
+    }
+    
+    if (Test-Path "$agentServiceDir\package.json") {
+        return "Agent Service installed successfully"
+    } else {
+        return "Agent Service install completed (may need manual verification)"
+    }
+} -ArgumentList $ghToken, $staging
+
+# Wait for parallel jobs
+Write-Host "  Started $($jobs2.Count) parallel service install jobs..." -ForegroundColor Gray
+$jobs2 | Wait-Job | Out-Null
+
+foreach ($job in $jobs2) {
+    $result = Receive-Job -Job $job -ErrorAction SilentlyContinue
+    if ($job.State -eq 'Completed') {
+        Write-Host "  $($job.Name): $result" -ForegroundColor Green
+    } else {
+        $error = $job.ChildJobs[0].JobStateInfo.Reason
+        Write-Host "  $($job.Name): FAILED - $error" -ForegroundColor Red
+    }
+    Remove-Job -Job $job -Force
+}
+
+$parallelElapsed2 = (Get-Date) - $parallelStartTime2
+Write-Host "  Parallel group 2 completed in $([math]::Round($parallelElapsed2.TotalSeconds, 1))s" -ForegroundColor Magenta
+
+# -----------------------------------------------------------------------------
+# SEQUENTIAL: Configuration steps (fast, some have dependencies)
+# -----------------------------------------------------------------------------
+Write-Host ""
+Write-Host "=== Running configuration ===" -ForegroundColor Cyan
+
+# Create noVNC custom.html (needs noVNC installed)
+Install-NoVNC  # This will skip install but create custom.html
+
 Setup-AgentServiceEnv -AnthropicApiKey $gcpAnthropicKey -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl
-Install-TightVNC -Password $vncPassword
-Install-NoVNC
-
-# Install Caddy for HTTPS reverse proxy
-Install-Caddy
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
-
 Setup-Websockify
 
-# Setup display resolution if not already done in Phase 1
+# Setup display resolution
 if ($newUserCreated -ne $true -and $windowsUser) {
     Setup-DisplayResolution -TargetUser $windowsUser
 } elseif (-not $windowsUser) {
     Setup-DisplayResolution
 }
 
+# Hide native Windows cursor
+Setup-InvisibleCursor
+
+# Configure firewall
 Configure-Firewall
+
+# -----------------------------------------------------------------------------
+# FINAL: Start all services (must be sequential, after all installs)
+# -----------------------------------------------------------------------------
+Write-Host ""
+Write-Host "=== Starting services ===" -ForegroundColor Cyan
+
 Start-AllServices
 
 # Start Caddy if configured
@@ -1602,6 +2103,9 @@ if ($newUserCreated -eq $true) {
     # Setup display resolution task for the new user (will run at their logon after reboot)
     Setup-DisplayResolution -TargetUser $windowsUser
     
+    # Setup invisible cursor (will be applied for the current user context)
+    Setup-InvisibleCursor
+    
     Write-Host ""
     Write-Host "Rebooting in 10 seconds to activate auto-logon..." -ForegroundColor Yellow
     Write-Host "After reboot, the script will resume with software installations." -ForegroundColor Yellow
@@ -1609,7 +2113,6 @@ if ($newUserCreated -eq $true) {
     
     Start-Sleep -Seconds 10
     Restart-Computer -Force
-    # exit
 } else {
     Write-Host "Existing user detected, continuing with installations..." -ForegroundColor Green
 }
