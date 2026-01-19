@@ -99,6 +99,48 @@ function Configure-AutoLogon {
 # Helper Functions
 # =============================================================================
 
+function Update-GitRepo {
+    param(
+        [string]$RepoPath,
+        [string]$Branch,
+        [string]$GithubToken,
+        [string]$RepoName
+    )
+    
+    Write-Host "Updating $RepoName at $RepoPath..." -ForegroundColor Yellow
+    Push-Location $RepoPath
+    
+    try {
+        # Update remote URL if token provided (in case it changed)
+        if ($GithubToken) {
+            $remoteUrl = git remote get-url origin 2>&1
+            if ($remoteUrl -notlike "*$GithubToken*") {
+                $newUrl = "https://$GithubToken@github.com/unifyai/$RepoName.git"
+                git remote set-url origin $newUrl 2>&1 | Out-Null
+            }
+        }
+        
+        # Fetch latest from remote (works with shallow clones)
+        Write-Host "  Fetching latest from origin/$Branch..."
+        git fetch --depth 1 origin $Branch 2>&1 | Out-Null
+        
+        # Reset to latest remote state (discards local changes but keeps untracked files)
+        Write-Host "  Resetting to origin/$Branch..."
+        git reset --hard origin/$Branch 2>&1 | Out-Null
+        
+        # Get current commit for logging
+        $commit = git rev-parse --short HEAD 2>&1
+        Write-Host "  Updated to commit: $commit" -ForegroundColor Green
+        
+        Pop-Location
+        return $true
+    } catch {
+        Write-Host "  WARNING: Failed to update - $_" -ForegroundColor Yellow
+        Pop-Location
+        return $false
+    }
+}
+
 function Install-Git {
     Write-Host ""
     Write-Host "=== Installing Git CLI ===" -ForegroundColor Cyan
@@ -326,7 +368,7 @@ function Install-AgentService {
     )
     
     Write-Host ""
-    Write-Host "=== Installing Magnitude & Agent Service ===" -ForegroundColor Cyan
+    Write-Host "=== Installing/Updating Magnitude & Agent Service ===" -ForegroundColor Cyan
     
     $magnitudeDir = 'C:\magnitude'
     $agentServiceDir = 'C:\agent-service'
@@ -337,24 +379,46 @@ function Install-AgentService {
     Write-Host "Magnitude branch: unity-modifications (fixed)" -ForegroundColor Cyan
     Write-Host "Unity branch: $unityBranch" -ForegroundColor Cyan
     
-    # Clone Magnitude repository (always from unity-modifications branch)
-    if (Test-Path "$magnitudeDir\package.json") {
-        Write-Host "Magnitude already installed at: $magnitudeDir" -ForegroundColor Green
+    # Build repo URLs
+    $magnitudeUrl = if ($GithubToken) { 
+        "https://$GithubToken@github.com/unifyai/magnitude.git" 
+    } else { 
+        "https://github.com/unifyai/magnitude.git" 
+    }
+    $unityUrl = if ($GithubToken) { 
+        "https://$GithubToken@github.com/unifyai/unity.git" 
+    } else { 
+        "https://github.com/unifyai/unity.git" 
+    }
+    
+    # =========================================================================
+    # MAGNITUDE: Update if exists (has .git), otherwise clone fresh
+    # =========================================================================
+    if (Test-Path "$magnitudeDir\.git") {
+        # Existing git repo - update it
+        $updated = Update-GitRepo -RepoPath $magnitudeDir -Branch "unity-modifications" -GithubToken $GithubToken -RepoName "magnitude"
+        
+        if ($updated) {
+            # Reinstall dependencies (in case package.json changed)
+            Write-Host "Reinstalling Magnitude dependencies..."
+            Push-Location $magnitudeDir
+            if (Get-Command bun -ErrorAction SilentlyContinue) {
+                bun install 2>&1 | Out-Null
+                Write-Host "Magnitude dependencies installed" -ForegroundColor Green
+            } else {
+                npm install 2>&1 | Out-Null
+            }
+            Pop-Location
+        }
     } else {
+        # No git repo - clone fresh
         Write-Host "Cloning Magnitude repository (unity-modifications branch)..."
         
         if (Test-Path $magnitudeDir) {
             Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue
         }
         
-        # Clone with or without token
-        if ($GithubToken) {
-            $repoUrl = "https://$GithubToken@github.com/unifyai/magnitude.git"
-        } else {
-            $repoUrl = "https://github.com/unifyai/magnitude.git"
-        }
-        
-        git clone --depth 1 --branch unity-modifications $repoUrl $magnitudeDir 2>&1
+        git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1
         
         if (Test-Path "$magnitudeDir\package.json") {
             Write-Host "SUCCESS: Magnitude cloned (unity-modifications)" -ForegroundColor Green
@@ -375,66 +439,84 @@ function Install-AgentService {
         }
     }
     
-    # Clone Unity repo and extract agent-service (uses dynamic branch)
+    # =========================================================================
+    # AGENT-SERVICE: Backup .env, delete, re-clone, restore .env
+    # (Cannot git update - it's extracted from sparse checkout, not a git repo)
+    # =========================================================================
+    
+    # Step 1: Backup .env if it exists
+    $envBackup = $null
+    $envFile = "$agentServiceDir\.env"
+    if (Test-Path $envFile) {
+        Write-Host "Backing up .env file..." -ForegroundColor Yellow
+        $envBackup = Get-Content $envFile -Raw
+    }
+    
+    # Step 2: Check if we need to update or install
+    $needsClone = $true
     if (Test-Path "$agentServiceDir\package.json") {
-        Write-Host "Agent Service already installed at: $agentServiceDir" -ForegroundColor Green
+        Write-Host "Agent Service exists - updating..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
     } else {
-        Write-Host "Cloning Unity repository ($unityBranch branch) for agent-service..."
+        Write-Host "Agent Service not found - installing..." -ForegroundColor Cyan
+    }
+    
+    # Step 3: Clone and extract agent-service
+    Write-Host "Cloning Unity repository ($unityBranch branch) for agent-service..."
+    
+    New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
+    
+    if (Test-Path $unityRepoDir) {
+        Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+    }
+    
+    # Sparse checkout to get only agent-service (from dynamic branch)
+    git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1
+    
+    if (Test-Path $unityRepoDir) {
+        Push-Location $unityRepoDir
+        git sparse-checkout set agent-service 2>&1
+        Pop-Location
         
-        New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
-        
-        if (Test-Path $unityRepoDir) {
-            Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
-        }
-        
-        # Clone with or without token
-        if ($GithubToken) {
-            $unityUrl = "https://$GithubToken@github.com/unifyai/unity.git"
-        } else {
-            $unityUrl = "https://github.com/unifyai/unity.git"
-        }
-        
-        # Sparse checkout to get only agent-service (from dynamic branch)
-        git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1
-        
-        if (Test-Path $unityRepoDir) {
-            Push-Location $unityRepoDir
-            git sparse-checkout set agent-service 2>&1
-            Pop-Location
-            
-            # Move agent-service to final location
-            if (Test-Path "$unityRepoDir\agent-service") {
-                if (Test-Path $agentServiceDir) {
-                    Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
-                }
-                Move-Item "$unityRepoDir\agent-service" $agentServiceDir
-                
-                if (Test-Path "$agentServiceDir\package.json") {
-                    Write-Host "SUCCESS: Agent Service extracted" -ForegroundColor Green
-                    
-                    # Install dependencies
-                    Write-Host "Installing Agent Service dependencies..."
-                    Push-Location $agentServiceDir
-                    if (Get-Command bun -ErrorAction SilentlyContinue) {
-                        bun install 2>&1
-                        Write-Host "Dependencies installed" -ForegroundColor Green
-                    } else {
-                        Write-Host "WARNING: Bun not found, trying npm..." -ForegroundColor Yellow
-                        npm install 2>&1
-                    }
-                    Pop-Location
-                } else {
-                    Write-Host "WARNING: Agent Service package.json not found" -ForegroundColor Yellow
-                }
-            } else {
-                Write-Host "WARNING: agent-service folder not found in unity repo" -ForegroundColor Yellow
+        # Move agent-service to final location
+        if (Test-Path "$unityRepoDir\agent-service") {
+            if (Test-Path $agentServiceDir) {
+                Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
             }
+            Move-Item "$unityRepoDir\agent-service" $agentServiceDir
             
-            # Cleanup temp repo
-            Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+            if (Test-Path "$agentServiceDir\package.json") {
+                Write-Host "SUCCESS: Agent Service extracted" -ForegroundColor Green
+                
+                # Install dependencies
+                Write-Host "Installing Agent Service dependencies..."
+                Push-Location $agentServiceDir
+                if (Get-Command bun -ErrorAction SilentlyContinue) {
+                    bun install 2>&1
+                    Write-Host "Dependencies installed" -ForegroundColor Green
+                } else {
+                    Write-Host "WARNING: Bun not found, trying npm..." -ForegroundColor Yellow
+                    npm install 2>&1
+                }
+                Pop-Location
+            } else {
+                Write-Host "WARNING: Agent Service package.json not found" -ForegroundColor Yellow
+            }
         } else {
-            Write-Host "WARNING: Failed to clone unity repository" -ForegroundColor Yellow
+            Write-Host "WARNING: agent-service folder not found in unity repo" -ForegroundColor Yellow
         }
+        
+        # Cleanup temp repo
+        Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "WARNING: Failed to clone unity repository" -ForegroundColor Yellow
+    }
+    
+    # Step 4: Restore .env file if we had a backup
+    if ($envBackup -and (Test-Path $agentServiceDir)) {
+        Write-Host "Restoring .env file..." -ForegroundColor Green
+        $envBackup | Out-File -FilePath $envFile -Encoding UTF8 -NoNewline
+        Write-Host ".env file restored" -ForegroundColor Green
     }
 }
 
