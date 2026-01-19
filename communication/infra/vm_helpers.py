@@ -330,7 +330,6 @@ def create_windows_vm(
     # Fetch secrets from Secret Manager
     github_token = get_secret("DEVBOT_GITHUB_TOKEN")
     anthropic_api_key = get_secret("ANTHROPIC_API_KEY")
-    unify_key = get_secret("unify-key")
 
     # Load the startup script from file (reads config from metadata)
     startup_script = load_startup_script()
@@ -371,9 +370,9 @@ def create_windows_vm(
         )
         logger.info("Added Anthropic API key to VM metadata")
 
-    if unify_key:
-        metadata_items.append(compute_v1.Items(key="unify-key", value=unify_key))
-        logger.info("Added Unify key to VM metadata")
+    # Use the passed unify_apikey directly (same key used for VNC/Windows auth)
+    metadata_items.append(compute_v1.Items(key="unify-key", value=unify_apikey))
+    logger.info("Added Unify key to VM metadata")
 
     # Configure the VM
     instance = compute_v1.Instance(
@@ -561,7 +560,7 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
         if creation_ts:
             # Parse creation timestamp
             creation_dt = datetime.fromisoformat(creation_ts.replace("Z", "+00:00"))
-            creation_ready = creation_dt + timedelta(minutes=15)
+            creation_ready = creation_dt + timedelta(minutes=5)
 
             # Check if there's a last_start_timestamp
             if last_start_ts:
