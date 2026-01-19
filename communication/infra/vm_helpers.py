@@ -584,9 +584,9 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
             "status": instance.status,
             "ip_address": external_ip,
             "hostname": hostname,
-            "desktop_url": f"https://{hostname}/desktop/custom.html"
-            if external_ip
-            else None,
+            "desktop_url": (
+                f"https://{hostname}/desktop/custom.html" if external_ip else None
+            ),
             "machine_type": instance.machine_type.split("/")[-1],
             "zone": ZONE,
             "creation_timestamp": creation_ts or None,
