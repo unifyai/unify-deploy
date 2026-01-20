@@ -369,6 +369,7 @@ def is_job_running(user_id: str, assistant_id: str):
     if response.status_code != 200:
         return False
     logs = response.json()["logs"]
+    print(f"Logs: {logs}")
     return bool(logs)
 
 
