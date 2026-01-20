@@ -29,9 +29,9 @@ def test_get_default_contacts_does_not_include_whatsapp_number():
     contacts = get_default_contacts(assistant_data)
 
     for contact in contacts:
-        assert "whatsapp_number" not in contact, (
-            f"Contact should not have whatsapp_number field: {contact}"
-        )
+        assert (
+            "whatsapp_number" not in contact
+        ), f"Contact should not have whatsapp_number field: {contact}"
 
 
 def test_get_default_contacts_includes_phone_number():
