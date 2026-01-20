@@ -54,7 +54,7 @@ jobs:
         pip install -r requirements-adapters.txt
 
     - name: Run adapter tests
-      run: pytest -vs tests/test_adapters.py
+      run: pytest -vs tests/adapters/
       env:
         GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}

@@ -1,5 +1,7 @@
 """
-Tests for the FastAPI adapters endpoints.
+Integration tests for the FastAPI adapters endpoints.
+
+These tests require a running server and Pub/Sub access.
 """
 
 import time

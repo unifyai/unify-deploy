@@ -1,5 +1,5 @@
 """
-Pytest configuration file for the communication project tests.
+Pytest configuration file for the adapters tests.
 
 This file contains shared fixtures and configuration for testing the adapters server.
 """
@@ -19,7 +19,7 @@ load_dotenv()
 load_dotenv(".env.temp")
 
 # Add the project root to the Python path so tests can import modules
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 
