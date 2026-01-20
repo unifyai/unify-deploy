@@ -411,7 +411,7 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
         response = requests.post(
             f"{ORCHESTRA_URL}/logs",
             json={
-                "project": "AssistantJobs",
+                "project_name": "AssistantJobs",
                 "context": "startup_events",
                 "entries": [
                     {
