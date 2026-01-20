@@ -154,10 +154,11 @@ def get_assistant(
         "assistant_about": assistants[0]["about"],
         "assistant_timezone": assistants[0].get("timezone", "UTC"),
         "assistant_number": assistants[0]["phone"] or "",
-        "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"] or "",
+        "assistant_whatsapp_number": assistants[0].get("assistant_whatsapp_number")
+        or "",
         "assistant_email": assistants[0]["email"] or "",
         "user_number": assistants[0]["user_phone"] or "",
-        "user_whatsapp_number": assistants[0]["user_whatsapp_number"] or "",
+        "user_whatsapp_number": assistants[0].get("user_whatsapp_number") or "",
         "user_email": assistants[0]["user_email"] or "",
         "voice_provider": assistants[0]["voice_provider"],
         "voice_id": assistants[0]["voice_id"],
@@ -183,7 +184,6 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "surname": assistant_data["assistant_surname"],
             "email_address": assistant_data["assistant_email"],
             "phone_number": assistant_data["assistant_number"],
-            "whatsapp_number": assistant_data["assistant_whatsapp_number"],
             "bio": "",
             "rolling_summary": "",
             "respond_to": False,
@@ -195,7 +195,6 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "surname": "",
             "email_address": assistant_data["user_email"],
             "phone_number": assistant_data["user_number"],
-            "whatsapp_number": assistant_data["user_whatsapp_number"],
             "bio": "",
             "rolling_summary": "",
             "respond_to": False,
@@ -308,20 +307,19 @@ def check_valid_contact(
     print(f"Boss contact: {boss_contact}")
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
-        user_number = boss_contact["phone_number"]
-        user_email = boss_contact["email_address"]
-        user_whatsapp_number = boss_contact["whatsapp_number"]
+        boss_user_number = boss_contact.get("phone_number", "")
+        boss_user_email = boss_contact.get("email_address", "")
         if check_contact_details(
             email_address=email_address,
             phone_number=phone_number,
             medium=medium,
-            user_number=user_number,
+            user_number=boss_user_number,
             user_whatsapp_number=user_whatsapp_number,
-            user_email=user_email,
+            user_email=boss_user_email,
         ):
             print(
                 f"Boss user found: {email_address}, {phone_number}, {medium}, "
-                f"{user_number}, {user_whatsapp_number}, {user_email}"
+                f"{boss_user_number}, {user_whatsapp_number}, {boss_user_email}"
             )
             return contacts, True
     else:
@@ -334,9 +332,9 @@ def check_valid_contact(
             email_address=email_address,
             phone_number=phone_number,
             medium=medium,
-            user_number=contact["phone_number"],
-            user_whatsapp_number=contact["whatsapp_number"],
-            user_email=contact["email_address"],
+            user_number=contact.get("phone_number", ""),
+            user_whatsapp_number=assistant_data["user_whatsapp_number"],
+            user_email=contact.get("email_address", ""),
         ):
             print(f"Contact found: {contact}")
             return contacts, True
