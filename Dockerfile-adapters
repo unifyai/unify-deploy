@@ -2,9 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY requirements-adapters.txt requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy pyproject.toml first for better caching
+COPY pyproject.toml ./
+
+# Install dependencies (adapters optional group for lighter weight)
+RUN pip install --no-cache-dir ".[adapters]"
 
 # Copy application code
 COPY adapters/ adapters/

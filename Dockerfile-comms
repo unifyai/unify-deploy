@@ -40,9 +40,11 @@ WORKDIR /app
 # Configure git to use GITHUB_TOKEN for private repo authentication
 RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
-# Copy requirements first for better caching
-COPY requirements-comms.txt requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy pyproject.toml first for better caching
+COPY pyproject.toml ./
+
+# Install dependencies
+RUN pip install --no-cache-dir .
 
 # Copy application code
 COPY communication/ communication/
