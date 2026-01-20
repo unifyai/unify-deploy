@@ -21,7 +21,7 @@ class VMCreateResponse(BaseModel):
     assistant_id: str
     ip_address: str
     hostname: str  # Format: unity-assistant-{id}.vm.unify.ai
-    desktop_url: str  # https://unity-assistant-{id}.vm.unify.ai/desktop/custom.html
+    desktop_url: str  # https://unity-assistant-{id}.vm.unify.ai
     status: str
 
 
