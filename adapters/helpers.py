@@ -351,6 +351,7 @@ def check_valid_contact(
 
 
 def is_job_running(user_id: str, assistant_id: str):
+    """Check if a job is running for this assistant."""
     print(f"Checking if job is running for {user_id} --> {assistant_id}")
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
@@ -371,6 +372,81 @@ def is_job_running(user_id: str, assistant_id: str):
     logs = response.json()["logs"]
     print(f"Logs: {logs}")
     return bool(logs)
+
+
+def mark_job_running(assistant_data: dict, medium: str) -> bool:
+    """Mark a job as running immediately to prevent duplicate startups.
+
+    This creates a record in AssistantJobs with running=True right away,
+    preventing race conditions when multiple adapter requests come in quickly.
+    The Unity container that picks up the startup message will later update this
+    record to add job_name and liveview_url.
+
+    Returns True if successful, False otherwise.
+    """
+    user_id = assistant_data["user_id"]
+    assistant_id = assistant_data["assistant_id"]
+    print(f"Marking job as running for {user_id} --> {assistant_id}")
+
+    shared_key = os.getenv("SHARED_UNIFY_KEY")
+    if not shared_key:
+        print("[mark_job_running] No SHARED_UNIFY_KEY available")
+        return False
+
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+
+    try:
+        # First ensure the project exists
+        try:
+            requests.post(
+                f"{ORCHESTRA_URL}/project",
+                json={"name": "AssistantJobs"},
+                headers={"Authorization": f"Bearer {shared_key}"},
+            )
+        except Exception:
+            pass  # Project may already exist
+
+        # Create the running record with all available info
+        # job_name and liveview_url will be added later by the Unity container
+        response = requests.post(
+            f"{ORCHESTRA_URL}/logs",
+            json={
+                "project": "AssistantJobs",
+                "context": "startup_events",
+                "entries": [
+                    {
+                        "user_id": user_id,
+                        "assistant_id": assistant_id,
+                        "timestamp": timestamp,
+                        "medium": medium,
+                        "user_name": assistant_data["user_name"],
+                        "assistant_name": (
+                            f"{assistant_data['assistant_first_name']} "
+                            f"{assistant_data['assistant_surname']}"
+                        ),
+                        "user_number": assistant_data["user_number"],
+                        "assistant_number": assistant_data["assistant_number"],
+                        "user_email": assistant_data["user_email"],
+                        "assistant_email": assistant_data["assistant_email"],
+                        "running": True,
+                    }
+                ],
+            },
+            headers={"Authorization": f"Bearer {shared_key}"},
+        )
+        if response.status_code in (200, 201):
+            print(f"Marked job as running for {assistant_id}")
+            return True
+        else:
+            print(
+                f"Failed to mark job as running: {response.status_code} "
+                f"{response.text}"
+            )
+            return False
+    except Exception as e:
+        print(f"Error marking job as running: {e}")
+        traceback.print_exc()
+        return False
 
 
 def start_unity_job(assistant: dict, medium: str):
@@ -562,6 +638,9 @@ def build_webhook_context(
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )
     if should_start_job:
+        # Mark as running BEFORE sending the startup message to prevent
+        # race conditions when multiple requests come in quickly
+        mark_job_running(assistant_data, channel)
         start_unity_job(assistant_data, channel)
         create_job(assistant_id)
         job_started = True
