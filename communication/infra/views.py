@@ -2,7 +2,10 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Form, HTTPException
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
+from pydantic import BaseModel
+from typing import Optional
 import json
+import logging
 import os
 from .helpers import (
     setup_kubernetes_client,
@@ -16,7 +19,24 @@ from .helpers import (
     remove_ingress_rule_for_job,
     get_job_readiness_status,
 )
+from .vm_helpers import (
+    provision_windows_vm_full,
+    deprovision_windows_vm_full,
+    start_windows_vm,
+    stop_windows_vm,
+    get_windows_vm_status,
+)
+from .models import (
+    VMCreateRequest,
+    VMActionRequest,
+    VMCreateResponse,
+    VMStatusResponse,
+    VMActionResponse,
+    VMDeleteResponse,
+)
 from communication.helpers import STAGING
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -523,6 +543,9 @@ async def start_job(
     voice_provider: str = Form(""),
     voice_id: str = Form(""),
     voice_mode: str = Form(""),
+    is_user_desktop: str = Form("false"),
+    desktop_mode: str = Form("ubuntu"),
+    desktop_url: str = Form(""),
 ):
     """
     Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
@@ -546,6 +569,9 @@ async def start_job(
         voice_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
         voice_mode: Voice mode (optional, defaults to empty string)
+        is_user_desktop: Whether user provides their own desktop (optional, defaults to "false")
+        desktop_mode: Desktop mode - ubuntu/windows/macos (optional, defaults to "ubuntu")
+        desktop_url: URL to access the desktop (optional, defaults to empty string)
     """
     try:
         # Get credentials from environment variable
@@ -583,6 +609,9 @@ async def start_job(
                 "voice_provider": voice_provider,
                 "voice_id": voice_id,
                 "voice_mode": voice_mode,
+                "is_user_desktop": is_user_desktop.lower() == "true",
+                "desktop_mode": desktop_mode,
+                "desktop_url": desktop_url if desktop_url else None,
             },
         }
 
@@ -818,3 +847,98 @@ async def get_latest_unity_image_commit():
         raise HTTPException(
             status_code=500, detail=f"Failed to get latest Unity image commit: {str(e)}"
         )
+
+
+# =============================================================================
+# Windows VM Management Endpoints
+# =============================================================================
+
+
+@router.post("/vm/create", response_model=VMCreateResponse)
+async def create_vm(request: VMCreateRequest):
+    """
+    Create a new Windows VM with full provisioning:
+    - Reserve static IP
+    - Create DNS A record (unity-assistant-{id}.vm.unify.ai)
+    - Create and start VM with init script
+
+    Called by external hire webhook when assistant has windows_mode=true.
+
+    Authentication: unify_apikey is used for both VNC and Windows password.
+    Windows username is set to the assistant_name.
+    """
+    try:
+        result = provision_windows_vm_full(
+            assistant_id=request.assistant_id,
+            unify_apikey=request.unify_apikey,
+            assistant_name=request.assistant_name,
+        )
+        return VMCreateResponse(**result)
+    except Exception as e:
+        logger.error(f"Failed to create VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/vm/start", response_model=VMActionResponse)
+async def start_vm(request: VMActionRequest):
+    """
+    Start a stopped Windows VM.
+
+    Called by external wakeup webhook when assistant needs to be activated.
+    """
+    try:
+        result = start_windows_vm(request.assistant_id)
+        return VMActionResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to start VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/vm/stop", response_model=VMActionResponse)
+async def stop_vm(request: VMActionRequest):
+    """
+    Stop a running Windows VM (preserves data).
+
+    Called when assistant job/session ends.
+    """
+    try:
+        result = stop_windows_vm(request.assistant_id)
+        return VMActionResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to stop VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/vm/delete", response_model=VMDeleteResponse)
+async def delete_vm(request: VMActionRequest):
+    """
+    Delete a Windows VM with full deprovisioning:
+    - Delete VM
+    - Delete DNS record
+    - Release static IP
+
+    Called by external unhire webhook when assistant is removed.
+    """
+    try:
+        result = deprovision_windows_vm_full(request.assistant_id)
+        return VMDeleteResponse(**result)
+    except Exception as e:
+        logger.error(f"Failed to delete VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/vm/status/{assistant_id}", response_model=VMStatusResponse)
+async def get_vm_status(assistant_id: str):
+    """
+    Get the current status of a Windows VM.
+    """
+    result = get_windows_vm_status(assistant_id)
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"VM not found for assistant {assistant_id}"
+        )
+    return VMStatusResponse(**result)

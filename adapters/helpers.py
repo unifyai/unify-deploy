@@ -106,6 +106,9 @@ def get_assistant(
         "assistant_number": "",
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
+        "is_user_desktop": False,
+        "desktop_mode": "ubuntu",
+        "desktop_url": None,
     }
     if "+15550100002" in phone_check or assistant_id == "default-assistant":
         return default_assistant_data
@@ -125,6 +128,9 @@ def get_assistant(
             "assistant_number": "+0123456789",
             "assistant_email": "default-test-assistant@unify.ai",
             "user_whatsapp_number": "+9876543210",
+            "is_user_desktop": False,
+            "desktop_mode": "ubuntu",
+            "desktop_url": None,
         }
 
     response = requests.get(
@@ -164,6 +170,9 @@ def get_assistant(
         "voice_id": assistants[0]["voice_id"],
         "voice_mode": assistants[0]["voice_mode"],
         "secrets": assistants[0].get("secrets", {}),
+        "is_user_desktop": assistants[0].get("is_user_desktop", False),
+        "desktop_mode": assistants[0].get("desktop_mode", "ubuntu"),
+        "desktop_url": assistants[0].get("desktop_url", None),
     }
 
 
@@ -372,6 +381,11 @@ def start_unity_job(assistant: dict, medium: str):
         print(f"No user name for assistant {assistant_id}")
         return
 
+    # Extract desktop fields
+    is_user_desktop = assistant.get("is_user_desktop", False)
+    desktop_mode = assistant.get("desktop_mode", "ubuntu")
+    desktop_url = assistant.get("desktop_url", None)
+
     # start job
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     try:
@@ -397,6 +411,9 @@ def start_unity_job(assistant: dict, medium: str):
                 "voice_provider": assistant["voice_provider"],
                 "voice_id": assistant["voice_id"],
                 "voice_mode": assistant["voice_mode"],
+                "is_user_desktop": "true" if is_user_desktop else "false",
+                "desktop_mode": desktop_mode,
+                "desktop_url": desktop_url or "",
             },
             timeout=1,
         )
@@ -406,6 +423,35 @@ def start_unity_job(assistant: dict, medium: str):
             print(f"Job started for assistant {assistant_id}")
     except requests.exceptions.Timeout:
         print(f"Job started for assistant {assistant_id} (timeout)")
+
+    # Start Windows VM if conditions are met
+    # Condition: is_user_desktop=False AND desktop_mode="windows"
+    if not is_user_desktop and desktop_mode == "windows":
+        try:
+            vm_response = requests.post(
+                f"{COMMS_URL}/infra/vm/start",
+                headers=headers,
+                json={"assistant_id": assistant_id},
+                timeout=60,
+            )
+            if vm_response.status_code == 200:
+                print(f"Windows VM started for assistant {assistant_id}")
+            elif vm_response.status_code == 404:
+                print(
+                    f"Windows VM not found for assistant {assistant_id} - "
+                    "VM should be created at hire time"
+                )
+            else:
+                print(
+                    f"Failed to start Windows VM for {assistant_id}: "
+                    f"{vm_response.status_code} - {vm_response.text}"
+                )
+        except requests.exceptions.Timeout:
+            print(
+                f"Windows VM start request sent for assistant {assistant_id} (timeout)"
+            )
+        except Exception as e:
+            print(f"Error starting Windows VM for assistant {assistant_id}: {e}")
 
 
 def create_job(assistant_id: str):
