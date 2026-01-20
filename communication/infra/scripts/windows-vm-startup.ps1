@@ -529,6 +529,7 @@ function Install-AgentService {
                 bun install 2>&1 | Out-Null
             } else {
                 npm install 2>&1 | Out-Null
+                npx playwright@1.52.0 install --with-deps chromium | Out-Null
             }
             Save-DependenciesHash -Dir $agentServiceDir
             Pop-Location
@@ -571,6 +572,7 @@ function Install-AgentService {
                             bun install 2>&1 | Out-Null
                         } else {
                             npm install 2>&1 | Out-Null
+                            npx playwright@1.52.0 install --with-deps chromium | Out-Null
                         }
                         Save-DependenciesHash -Dir $agentServiceDir
                         Pop-Location
@@ -606,6 +608,7 @@ function Install-AgentService {
                         bun install 2>&1 | Out-Null
                     } else {
                         npm install 2>&1 | Out-Null
+                        npx playwright@1.52.0 install --with-deps chromium | Out-Null
                     }
                     Save-DependenciesHash -Dir $agentServiceDir
                     Pop-Location
@@ -2170,6 +2173,7 @@ if ($fastMode) {
                         bun install 2>&1 | Out-Null
                     } else {
                         npm install 2>&1 | Out-Null
+                        npx playwright@1.52.0 install --with-deps chromium | Out-Null
                     }
                     Pop-Location
                 }
