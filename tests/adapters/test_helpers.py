@@ -11,7 +11,6 @@ from adapters.helpers import (
     check_contact_details,
 )
 
-
 # --- get_default_contacts tests ---
 
 
