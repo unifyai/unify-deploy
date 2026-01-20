@@ -2,6 +2,7 @@ import json
 import base64
 import traceback
 import time
+import uuid
 from dotenv import load_dotenv
 import os
 import requests
@@ -9,12 +10,12 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from typing import Optional
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, File, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 import traceback
 
-from google.cloud import pubsub_v1
+from google.cloud import pubsub_v1, storage
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 from twilio.twiml.messaging_response import MessagingResponse
@@ -90,7 +91,7 @@ async def twilio_call_webhook(request: Request):
         resp_user = VoiceResponse()
         resp_user.say(
             "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
+            "console.unify.ai to view your assistant details.",
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
@@ -186,7 +187,7 @@ async def twilio_call_status_webhook(request: Request):
     if call_status == "in-progress":
         # get assistant data
         context = build_webhook_context(
-            "phone", assistant_number, user_number, validate_contact=False
+            "phone", assistant_number, user_number, validate_contact=False,
         )
         assistant_id = context["assistant"]["assistant_id"]
         contacts = context["contacts"]
@@ -209,7 +210,7 @@ async def twilio_call_status_webhook(request: Request):
                             "assistant_number": assistant_number,
                             "timestamp": int(time.time() * 1000),
                         },
-                    }
+                    },
                 ).encode("utf-8"),
             )
             if "test" in assistant_id:
@@ -244,7 +245,7 @@ async def twilio_sms_webhook(request: Request):
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
+            "console.unify.ai to view your assistant details.",
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
@@ -271,7 +272,7 @@ async def twilio_sms_webhook(request: Request):
                         "from_number": from_number,
                         "body": body,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -308,7 +309,7 @@ async def twilio_whatsapp_webhook(request: Request):
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
+            "console.unify.ai to view your assistant details.",
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
@@ -335,7 +336,7 @@ async def twilio_whatsapp_webhook(request: Request):
                         "from_number": from_number,
                         "body": body,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -407,7 +408,7 @@ async def teams_call_webhook(request: Request):
     # This uses the same flow as Twilio - the number maps to an assistant
     try:
         context = build_webhook_context(
-            "meet", teams_number, from_uri, validate_contact=False
+            "meet", teams_number, from_uri, validate_contact=False,
         )
         assistant_id = context["assistant"]["assistant_id"]
         contacts = context["contacts"]
@@ -471,7 +472,7 @@ async def teams_call_webhook(request: Request):
                 "success": True,
                 "room_name": room_name,
                 # "assistant_id": assistant_id,
-            }
+            },
         ),
         status_code=200,
         media_type="application/json",
@@ -489,9 +490,139 @@ class UnifyMessagePayload(BaseModel):
     body: Optional[str] = ""
 
 
+# =============================================================================
+# Unify Attachment Upload
+# =============================================================================
+
+# Bucket for storing unify message attachments
+UNIFY_ATTACHMENTS_BUCKET = (
+    "interface-file-system-staging" if STAGING else "interface-file-system"
+)
+
+
+@app.post("/unify/attachment")
+async def unify_attachment_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    assistant_id: str = None,
+):
+    """
+    Upload a file attachment for use in Unify messages.
+
+    The file is stored in GCS and a signed download URL is returned.
+    The returned attachment object can be included in /unify/message requests.
+
+    Args:
+        file: The file to upload (multipart/form-data)
+        assistant_id: Optional assistant ID for organizing storage
+
+    Returns:
+        JSON with attachment details: {"id": str, "filename": str, "url": str}
+    """
+    print("unify_attachment_upload function started")
+
+    # Optional auth via admin key
+    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    auth_header = request.headers.get("Authorization", "")
+    if shared_key and auth_header != f"Bearer {shared_key}":
+        print("Unauthorized unify_attachment request")
+        return Response(status_code=401)
+
+    # Get assistant_id from form data if not provided as query param
+    if not assistant_id:
+        form_data = await request.form()
+        assistant_id = form_data.get("assistant_id", "unknown")
+
+    try:
+        # Read file content
+        file_content = await file.read()
+        filename = file.filename or "attachment"
+
+        # Validate file size (max 25MB to match Gmail limit)
+        max_size_mb = 25
+        file_size_mb = len(file_content) / (1024 * 1024)
+        if file_size_mb > max_size_mb:
+            return Response(
+                content=json.dumps(
+                    {"error": f"File too large: {file_size_mb:.1f}MB exceeds {max_size_mb}MB limit"},
+                ),
+                status_code=400,
+                media_type="application/json",
+            )
+
+        # Generate unique ID for the attachment
+        attachment_id = str(uuid.uuid4())
+
+        # Sanitize filename
+        safe_filename = os.path.basename(filename)
+
+        # Build GCS path: unify_attachments/{assistant_id}/{uuid}_{filename}
+        blob_path = f"unify_attachments/{assistant_id}/{attachment_id}_{safe_filename}"
+
+        # Get GCP credentials and upload
+        creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
+        if not creds_json:
+            print("GCP_SA_KEY not configured")
+            return Response(
+                content=json.dumps({"error": "Storage not configured"}),
+                status_code=500,
+                media_type="application/json",
+            )
+
+        creds = Credentials.from_service_account_info(creds_json)
+        storage_client = storage.Client(credentials=creds)
+        bucket = storage_client.bucket(UNIFY_ATTACHMENTS_BUCKET)
+        blob = bucket.blob(blob_path)
+
+        # Upload the file
+        content_type = file.content_type or "application/octet-stream"
+        blob.upload_from_string(file_content, content_type=content_type)
+
+        print(f"Uploaded attachment to gs://{UNIFY_ATTACHMENTS_BUCKET}/{blob_path}")
+
+        # Generate signed download URL (24 hours expiry)
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=24),
+            method="GET",
+        )
+
+        print(f"Generated signed URL for attachment {attachment_id}")
+
+        return Response(
+            content=json.dumps({
+                "id": attachment_id,
+                "filename": safe_filename,
+                "url": signed_url,
+            }),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    except Exception as e:
+        print(f"Error uploading attachment: {str(e)}")
+        traceback.print_exc()
+        return Response(
+            content=json.dumps({"error": f"Failed to upload attachment: {str(e)}"}),
+            status_code=500,
+            media_type="application/json",
+        )
+
+
+# =============================================================================
+# Unify Message
+# =============================================================================
+
+
 @app.post("/unify/message")
 async def unify_message_webhook(request: Request):
-    """Unify message webhook - handles internal message events."""
+    """
+    Unify message webhook - handles internal message events.
+
+    Accepts an optional 'attachments' array in the request body. Each attachment
+    should be an object with: {"id": str, "filename": str, "url": str}
+    (as returned by /unify/attachment).
+    """
     print("unify_message_webhook function started")
 
     # optional auth via admin key
@@ -508,18 +639,34 @@ async def unify_message_webhook(request: Request):
         assistant_id_input = payload.get("assistant_id", "")
         contact_id = payload.get("contact_id", 1)
         body = payload.get("body", "") or ""
+        attachments = payload.get("attachments") or []
     else:
         form_data = await request.form()
         assistant_id_input = form_data.get("assistant_id", "")
         contact_id = form_data.get("contact_id", 1)
         body = form_data.get("Body", "") or ""
+        # Form data doesn't support attachments well, default to empty
+        attachments = []
 
     if not assistant_id_input:
         print("Assistant ID is required")
         return Response(status_code=400)
 
+    # Validate attachments format
+    validated_attachments = []
+    for att in attachments:
+        if isinstance(att, dict) and att.get("id") and att.get("filename") and att.get("url"):
+            validated_attachments.append({
+                "id": str(att["id"]),
+                "filename": str(att["filename"]),
+                "url": str(att["url"]),
+            })
+        else:
+            print(f"Skipping invalid attachment: {att}")
+
+    attachment_info = f" with {len(validated_attachments)} attachment(s)" if validated_attachments else ""
     print(
-        f"Received unify_message message for assistant_id={assistant_id_input} with body: {body}"
+        f"Received unify_message message for assistant_id={assistant_id_input}{attachment_info} with body: {body}",
     )
 
     # shared context
@@ -552,8 +699,9 @@ async def unify_message_webhook(request: Request):
                         "contacts": contacts,
                         "assistant_id": assistant_id,
                         "body": body,
+                        "attachments": validated_attachments,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -599,7 +747,7 @@ async def unify_meet_webhook(request: Request):
         return Response(status_code=400)
 
     print(
-        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} agent_name={agent_name}"
+        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} agent_name={agent_name}",
     )
 
     # shared context
@@ -634,7 +782,7 @@ async def unify_meet_webhook(request: Request):
                         "agent_name": agent_name,
                         "timestamp": int(time.time() * 1000),
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -689,7 +837,7 @@ async def unity_system_event_webhook(request: Request):
         return Response(status_code=400)
 
     print(
-        f"Received unity_system_event for event_type={event_type} with message={message}"
+        f"Received unity_system_event for event_type={event_type} with message={message}",
     )
 
     # shared context
@@ -723,7 +871,7 @@ async def unity_system_event_webhook(request: Request):
                         "event_type": event_type,
                         "message": message,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -788,7 +936,7 @@ async def unity_pre_hire_webhook(request: Request):
         )
 
     print(
-        f"Received log_pre_hire_chats for assistant_id={assistant_id_input} with {len(body)} messages"
+        f"Received log_pre_hire_chats for assistant_id={assistant_id_input} with {len(body)} messages",
     )
 
     # shared context
@@ -821,7 +969,7 @@ async def unity_pre_hire_webhook(request: Request):
                         "assistant_id": assistant_id,
                         "body": body,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -899,7 +1047,7 @@ async def assistant_update_webhook(request: Request):
                         "success": False,
                         "message": "No job currently running for this assistant",
                         "assistant_id": assistant_id,
-                    }
+                    },
                 ),
                 status_code=200,
                 media_type="application/json",
@@ -936,7 +1084,7 @@ async def assistant_update_webhook(request: Request):
                     "message": "Assistant update published successfully",
                     "assistant_id": assistant_id,
                     "topic_path": topic_path,
-                }
+                },
             ),
             status_code=200,
             media_type="application/json",
@@ -995,13 +1143,13 @@ async def gmail_notification_processor(request: Request):
 
         # process the history and thread
         print(
-            f"assistant_email_address: {assistant_email_address}, history_id: {history_id}"
+            f"assistant_email_address: {assistant_email_address}, history_id: {history_id}",
         )
         thread_id, email_id, last_message, gmail_message_id = get_thread_id(
-            assistant_email_address, history_id, gmail_service
+            assistant_email_address, history_id, gmail_service,
         )
         print(
-            f"thread_id: {thread_id}, email_id: {email_id}, last_message: {last_message}"
+            f"thread_id: {thread_id}, email_id: {email_id}, last_message: {last_message}",
         )
         if not thread_id:
             print(f"No new conversations found for user {assistant_email_address}")
@@ -1085,7 +1233,7 @@ async def outlook_notification_processor(request: Request):
             return Response(status_code=200)
 
         print(
-            f"assistant_email_address: {assistant_email_address}, email_id: {email_id}"
+            f"assistant_email_address: {assistant_email_address}, email_id: {email_id}",
         )
 
         # Get assistant data, secrets, and contacts in one call
@@ -1117,10 +1265,10 @@ async def outlook_notification_processor(request: Request):
 
         # Fetch message details to get the actual sender
         conversation_id, email_id, last_message = await get_outlook_thread_id(
-            email_id, graph_client
+            email_id, graph_client,
         )
         print(
-            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}"
+            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}",
         )
 
         if not conversation_id:
@@ -1217,12 +1365,12 @@ async def teams_notification_processor(request: Request):
         # Extract IDs
         if is_reply:
             message_id = resource_data.get("id") or parse_teams_resource_id(
-                resource, "replies"
+                resource, "replies",
             )
             parent_message_id = parse_teams_resource_id(resource, "messages")
         else:
             message_id = resource_data.get("id") or parse_teams_resource_id(
-                resource, "messages"
+                resource, "messages",
             )
             parent_message_id = None
 
@@ -1232,24 +1380,24 @@ async def teams_notification_processor(request: Request):
             chat_id = None
             if not team_id or not channel_id or not message_id:
                 print(
-                    f"Missing IDs for channel message: team={team_id}, channel={channel_id}, message={message_id}"
+                    f"Missing IDs for channel message: team={team_id}, channel={channel_id}, message={message_id}",
                 )
                 return Response(status_code=200)
             print(
-                f"assistant_email: {assistant_email}, team_id: {team_id}, channel_id: {channel_id}, message_id: {message_id}"
+                f"assistant_email: {assistant_email}, team_id: {team_id}, channel_id: {channel_id}, message_id: {message_id}",
             )
         else:
             chat_id = resource_data.get("chatId") or parse_teams_resource_id(
-                resource, "chats"
+                resource, "chats",
             )
             team_id = channel_id = None
             if not chat_id or not message_id:
                 print(
-                    f"Missing IDs for chat message: chat={chat_id}, message={message_id}"
+                    f"Missing IDs for chat message: chat={chat_id}, message={message_id}",
                 )
                 return Response(status_code=200)
             print(
-                f"assistant_email: {assistant_email}, chat_id: {chat_id}, message_id: {message_id}"
+                f"assistant_email: {assistant_email}, chat_id: {chat_id}, message_id: {message_id}",
             )
 
         # Get assistant data
@@ -1320,11 +1468,11 @@ async def teams_notification_processor(request: Request):
         # Fetch email from user profile if not in message
         if not sender_email and sender_id:
             user_data, _ = await graph_get(
-                f"https://graph.microsoft.com/v1.0/users/{sender_id}?$select=mail,userPrincipalName"
+                f"https://graph.microsoft.com/v1.0/users/{sender_id}?$select=mail,userPrincipalName",
             )
             if user_data:
                 sender_email = user_data.get("mail") or user_data.get(
-                    "userPrincipalName"
+                    "userPrincipalName",
                 )
             if not sender_email:
                 sender_email = f"{sender_id}@teams"
@@ -1392,7 +1540,7 @@ async def teams_notification_processor(request: Request):
                     "thread_id": parent_message_id if is_reply else message_id,
                     "post_subject": None if is_reply else subject,
                     "action": "new_channel_message",
-                }
+                },
             )
         else:
             event_data.update({"chat_id": chat_id, "action": "new_message"})
@@ -1410,7 +1558,7 @@ async def teams_notification_processor(request: Request):
 
         try:
             publish_future = pubsub_client.publish(
-                topic_path, json.dumps(pubsub_message).encode("utf-8")
+                topic_path, json.dumps(pubsub_message).encode("utf-8"),
             )
             publish_future.result(timeout=5)
         except Exception as e:
@@ -1503,7 +1651,7 @@ async def microsoft_oauth_callback(request: Request):
     if error:
         print(f"OAuth error: {error} - {error_description}")
         return Response(
-            content=f"OAuth error: {error}: {error_description}", status_code=400
+            content=f"OAuth error: {error}: {error_description}", status_code=400,
         )
 
     if not code:
@@ -1527,7 +1675,7 @@ async def microsoft_oauth_callback(request: Request):
 
     if not tenant_id or not client_id:
         return Response(
-            content="Missing tenant_id or client_id in state", status_code=400
+            content="Missing tenant_id or client_id in state", status_code=400,
         )
 
     if not assistant_email:
@@ -1576,7 +1724,7 @@ async def microsoft_oauth_callback(request: Request):
 
     if not user_email:
         return Response(
-            content="Could not determine user email from token", status_code=400
+            content="Could not determine user email from token", status_code=400,
         )
 
     # Store tokens as assistant secrets
@@ -1590,19 +1738,19 @@ async def microsoft_oauth_callback(request: Request):
     )
 
     print(
-        f"OAuth complete for {user_email} (assistant: {assistant_email}, id: {assistant_id}), stored={stored}"
+        f"OAuth complete for {user_email} (assistant: {assistant_email}, id: {assistant_id}), stored={stored}",
     )
 
     # Redirect to success page or return JSON
     if redirect_after:
         sep = "&" if "?" in redirect_after else "?"
         return RedirectResponse(
-            f"{redirect_after}{sep}success=true&user_email={user_email}"
+            f"{redirect_after}{sep}success=true&user_email={user_email}",
         )
 
     return Response(
         content=json.dumps(
-            {"success": True, "user_email": user_email, "stored": stored}
+            {"success": True, "user_email": user_email, "stored": stored},
         ),
         media_type="application/json",
     )
@@ -1709,7 +1857,7 @@ async def scheduled_email_watches(request: Request):
             print(error_msg)
             provider = "outlook" if has_ms_token else "gmail"
             results[provider].append(
-                {"email": email, "success": False, "error": error_msg}
+                {"email": email, "success": False, "error": error_msg},
             )
 
     # Renew policy assistant (Gmail-based, staging only)
@@ -1730,7 +1878,7 @@ async def scheduled_email_watches(request: Request):
             print(f"Error renewing policy assistant: {e}")
 
     print(
-        f"Email watch renewal complete: {len(results['gmail'])} Gmail, {len(results['outlook'])} Outlook"
+        f"Email watch renewal complete: {len(results['gmail'])} Gmail, {len(results['outlook'])} Outlook",
     )
     return results
 
@@ -1793,7 +1941,7 @@ async def scheduled_microsoft_tokens(request: Request):
         client_secret = secrets.get("AZURE_CLIENT_SECRET")
         if not all([tenant_id, client_id, client_secret]):
             results["failed"].append(
-                {"email": email, "error": "Missing Azure credentials"}
+                {"email": email, "error": "Missing Azure credentials"},
             )
             continue
 
@@ -1815,7 +1963,7 @@ async def scheduled_microsoft_tokens(request: Request):
                     {
                         "email": email,
                         "error": f"Token refresh failed: {token_resp.text}",
-                    }
+                    },
                 )
                 continue
 
@@ -1849,7 +1997,7 @@ async def scheduled_microsoft_tokens(request: Request):
                         {
                             "email": email,
                             "error": f"Failed to store secret: {response.text}",
-                        }
+                        },
                     )
                     continue
 
@@ -1862,7 +2010,7 @@ async def scheduled_microsoft_tokens(request: Request):
 
     print(
         f"Microsoft token refresh complete: "
-        f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed"
+        f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed",
     )
 
     return results
@@ -1906,7 +2054,7 @@ async def scheduled_teams_watches(request: Request):
             {
                 "email": "default-test-assistant@unify.ai",
                 "secrets": {"MICROSOFT_ACCESS_TOKEN": "test"},
-            }
+            },
         ]
 
     print(f"Processing {len(all_assistants)} assistants for Teams watch renewal")
@@ -1992,15 +2140,15 @@ async def scheduled_teams_watches(request: Request):
                             )
                             if ch_result.get("success"):
                                 results["channels_renewed"].append(
-                                    {"email": email, **ch_result}
+                                    {"email": email, **ch_result},
                                 )
                             else:
                                 results["failed"].append(
-                                    {"email": email, "type": "channel", **ch_result}
+                                    {"email": email, "type": "channel", **ch_result},
                                 )
                             print(
                                 f"Teams channel watch for {email} ({team_id}/{channel_id}): "
-                                f"{ch_result.get('success', False)}"
+                                f"{ch_result.get('success', False)}",
                             )
                         except (ValueError, IndexError) as e:
                             print(f"Could not parse channel subscription: {resource}")
@@ -2014,14 +2162,14 @@ async def scheduled_teams_watches(request: Request):
             print(error_msg)
             traceback.print_exc()
             results["failed"].append(
-                {"email": email, "success": False, "error": error_msg}
+                {"email": email, "success": False, "error": error_msg},
             )
 
     print(
         f"Teams watch renewal complete: "
         f"{len(results['chats_renewed'])} chats, "
         f"{len(results['channels_renewed'])} channels, "
-        f"{len(results['failed'])} failed"
+        f"{len(results['failed'])} failed",
     )
     return results
 
@@ -2031,7 +2179,7 @@ async def scheduled_jobs_create(request: Request):
     """Cloud Run endpoint that creates a new idle job."""
     if not STAGING:
         return Response(
-            content="Production job creation is not enabled", status_code=200
+            content="Production job creation is not enabled", status_code=200,
         )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
@@ -2042,7 +2190,7 @@ async def scheduled_jobs_create(request: Request):
         + commit_hash
     )
     response = requests.post(
-        f"{COMMS_URL}/infra/job/create", data={"image": image}, headers=headers
+        f"{COMMS_URL}/infra/job/create", data={"image": image}, headers=headers,
     )
     return response.json()
 
