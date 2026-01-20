@@ -16,11 +16,78 @@
 #   unify-key         - Unify API key for agent service
 #   unify-base-url    - Unify API base URL for agent service
 #   staging           - Use staging branch (any value = true)
+#
+# Boot Modes:
+#   FAST MODE  - Everything pre-installed, just update repos & start services (~15-20s)
+#   NORMAL MODE - Full installation/configuration (~45-60s with baked image)
+
+$script:StartTime = Get-Date
 
 Write-Host "=========================================="
 Write-Host "  Windows VM Setup Script"
 Write-Host "=========================================="
 Write-Host ""
+
+# =============================================================================
+# Fast Mode Detection - Check if everything is already installed
+# =============================================================================
+
+function Test-FastMode {
+    # Check critical paths that indicate full installation is complete
+    $checks = @(
+        @{ Path = 'C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE'; Name = 'Office' },
+        @{ Path = 'C:\Program Files\Git\bin\git.exe'; Name = 'Git' },
+        @{ Path = 'C:\Program Files\Python312\python.exe'; Name = 'Python' },
+        @{ Path = 'C:\Program Files\TightVNC\tvnserver.exe'; Name = 'TightVNC' },
+        @{ Path = 'C:\novnc\vnc.html'; Name = 'noVNC' },
+        @{ Path = 'C:\magnitude\package.json'; Name = 'Magnitude' },
+        @{ Path = 'C:\agent-service\package.json'; Name = 'AgentService' },
+        @{ Path = 'C:\caddy\caddy.exe'; Name = 'Caddy' }
+    )
+    
+    $allPresent = $true
+    foreach ($check in $checks) {
+        if (-not (Test-Path $check.Path)) {
+            Write-Host "  Missing: $($check.Name)" -ForegroundColor Yellow
+            $allPresent = $false
+        }
+    }
+    
+    return $allPresent
+}
+
+function Get-PackageJsonHash {
+    param([string]$Dir)
+    $pkgFile = "$Dir\package.json"
+    if (Test-Path $pkgFile) {
+        return (Get-FileHash $pkgFile -Algorithm MD5).Hash.Substring(0, 8)
+    }
+    return $null
+}
+
+function Test-DependenciesInstalled {
+    param([string]$Dir)
+    # Check if node_modules exists and has content
+    $nodeModules = "$Dir\node_modules"
+    if (-not (Test-Path $nodeModules)) { return $false }
+    
+    # Check hash file matches current package.json
+    $hashFile = "$Dir\.pkg-hash"
+    if (-not (Test-Path $hashFile)) { return $false }
+    
+    $savedHash = Get-Content $hashFile -ErrorAction SilentlyContinue
+    $currentHash = Get-PackageJsonHash -Dir $Dir
+    
+    return ($savedHash -eq $currentHash)
+}
+
+function Save-DependenciesHash {
+    param([string]$Dir)
+    $hash = Get-PackageJsonHash -Dir $Dir
+    if ($hash) {
+        $hash | Out-File -FilePath "$Dir\.pkg-hash" -Encoding UTF8 -NoNewline
+    }
+}
 
 # =============================================================================
 # GCP Metadata Helper
@@ -364,7 +431,8 @@ function Install-NodeJS {
 function Install-AgentService {
     param(
         [string]$GithubToken,
-        [string]$Staging
+        [string]$Staging,
+        [switch]$FastMode
     )
     
     Write-Host ""
@@ -376,8 +444,7 @@ function Install-AgentService {
     
     # Determine branch for unity repo (magnitude always uses unity-modifications)
     $unityBranch = if ($Staging) { "staging" } else { "main" }
-    Write-Host "Magnitude branch: unity-modifications (fixed)" -ForegroundColor Cyan
-    Write-Host "Unity branch: $unityBranch" -ForegroundColor Cyan
+    Write-Host "Magnitude branch: unity-modifications | Unity branch: $unityBranch" -ForegroundColor Gray
     
     # Build repo URLs
     $magnitudeUrl = if ($GithubToken) { 
@@ -392,131 +459,166 @@ function Install-AgentService {
     }
     
     # =========================================================================
-    # MAGNITUDE: Update if exists (has .git), otherwise clone fresh
+    # MAGNITUDE: Fast update if exists, otherwise clone fresh
     # =========================================================================
     if (Test-Path "$magnitudeDir\.git") {
-        # Existing git repo - update it
+        # Existing git repo - just update it (fast path)
+        Write-Host "Updating Magnitude (git fetch)..." -ForegroundColor Yellow
         $updated = Update-GitRepo -RepoPath $magnitudeDir -Branch "unity-modifications" -GithubToken $GithubToken -RepoName "magnitude"
         
-        if ($updated) {
-            # Reinstall dependencies (in case package.json changed)
-            Write-Host "Reinstalling Magnitude dependencies..."
+        # Only reinstall dependencies if hash changed
+        if (-not (Test-DependenciesInstalled -Dir $magnitudeDir)) {
+            Write-Host "  Dependencies changed, reinstalling..."
             Push-Location $magnitudeDir
             if (Get-Command bun -ErrorAction SilentlyContinue) {
                 bun install 2>&1 | Out-Null
-                Write-Host "Magnitude dependencies installed" -ForegroundColor Green
             } else {
                 npm install 2>&1 | Out-Null
             }
+            Save-DependenciesHash -Dir $magnitudeDir
             Pop-Location
+            Write-Host "  Dependencies updated" -ForegroundColor Green
+        } else {
+            Write-Host "  Dependencies unchanged, skipping install" -ForegroundColor Green
         }
-    } else {
-        # No git repo - clone fresh
-        Write-Host "Cloning Magnitude repository (unity-modifications branch)..."
+    } elseif (-not $FastMode) {
+        # No git repo - clone fresh (only in non-fast mode)
+        Write-Host "Cloning Magnitude repository..."
         
         if (Test-Path $magnitudeDir) {
             Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue
         }
         
-        git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1
+        git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
         
         if (Test-Path "$magnitudeDir\package.json") {
-            Write-Host "SUCCESS: Magnitude cloned (unity-modifications)" -ForegroundColor Green
-            
-            # Install dependencies
-            Write-Host "Installing Magnitude dependencies (bun install)..."
+            Write-Host "  Magnitude cloned, installing dependencies..." -ForegroundColor Green
             Push-Location $magnitudeDir
             if (Get-Command bun -ErrorAction SilentlyContinue) {
-                bun install 2>&1
-                Write-Host "Dependencies installed" -ForegroundColor Green
+                bun install 2>&1 | Out-Null
             } else {
-                Write-Host "WARNING: Bun not found, trying npm..." -ForegroundColor Yellow
-                npm install 2>&1
+                npm install 2>&1 | Out-Null
             }
+            Save-DependenciesHash -Dir $magnitudeDir
             Pop-Location
-        } else {
-            Write-Host "WARNING: Magnitude may not have cloned correctly" -ForegroundColor Yellow
         }
     }
     
     # =========================================================================
-    # AGENT-SERVICE: Backup .env, delete, re-clone, restore .env
-    # (Cannot git update - it's extracted from sparse checkout, not a git repo)
+    # AGENT-SERVICE: Use git repo for updates if possible
     # =========================================================================
     
-    # Step 1: Backup .env if it exists
+    # Backup .env if exists
     $envBackup = $null
     $envFile = "$agentServiceDir\.env"
     if (Test-Path $envFile) {
-        Write-Host "Backing up .env file..." -ForegroundColor Yellow
         $envBackup = Get-Content $envFile -Raw
     }
     
-    # Step 2: Check if we need to update or install
-    $needsClone = $true
-    if (Test-Path "$agentServiceDir\package.json") {
-        Write-Host "Agent Service exists - updating..." -ForegroundColor Yellow
-        Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
-    } else {
-        Write-Host "Agent Service not found - installing..." -ForegroundColor Cyan
-    }
-    
-    # Step 3: Clone and extract agent-service
-    Write-Host "Cloning Unity repository ($unityBranch branch) for agent-service..."
-    
-    New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
-    
-    if (Test-Path $unityRepoDir) {
-        Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
-    }
-    
-    # Sparse checkout to get only agent-service (from dynamic branch)
-    git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1
-    
-    if (Test-Path $unityRepoDir) {
-        Push-Location $unityRepoDir
-        git sparse-checkout set agent-service 2>&1
-        Pop-Location
+    # Check if we have a proper git repo (created by previous runs with this optimization)
+    if (Test-Path "$agentServiceDir\.git") {
+        # Fast path: update via git
+        Write-Host "Updating Agent Service (git fetch)..." -ForegroundColor Yellow
+        Update-GitRepo -RepoPath $agentServiceDir -Branch $unityBranch -GithubToken $GithubToken -RepoName "unity"
         
-        # Move agent-service to final location
-        if (Test-Path "$unityRepoDir\agent-service") {
+        # Only reinstall if dependencies changed
+        if (-not (Test-DependenciesInstalled -Dir $agentServiceDir)) {
+            Write-Host "  Dependencies changed, reinstalling..."
+            Push-Location $agentServiceDir
+            if (Get-Command bun -ErrorAction SilentlyContinue) {
+                bun install 2>&1 | Out-Null
+            } else {
+                npm install 2>&1 | Out-Null
+            }
+            Save-DependenciesHash -Dir $agentServiceDir
+            Pop-Location
+            Write-Host "  Dependencies updated" -ForegroundColor Green
+        } else {
+            Write-Host "  Dependencies unchanged, skipping install" -ForegroundColor Green
+        }
+    } elseif (Test-Path "$agentServiceDir\package.json") {
+        # Have agent-service but no git - check if deps need update only in fast mode
+        if ($FastMode -and (Test-DependenciesInstalled -Dir $agentServiceDir)) {
+            Write-Host "Agent Service exists, dependencies current" -ForegroundColor Green
+        } else {
+            # Re-clone to get updates
+            Write-Host "Cloning Agent Service from Unity repo..." -ForegroundColor Yellow
+            
             if (Test-Path $agentServiceDir) {
                 Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
             }
-            Move-Item "$unityRepoDir\agent-service" $agentServiceDir
             
-            if (Test-Path "$agentServiceDir\package.json") {
-                Write-Host "SUCCESS: Agent Service extracted" -ForegroundColor Green
-                
-                # Install dependencies
-                Write-Host "Installing Agent Service dependencies..."
-                Push-Location $agentServiceDir
-                if (Get-Command bun -ErrorAction SilentlyContinue) {
-                    bun install 2>&1
-                    Write-Host "Dependencies installed" -ForegroundColor Green
-                } else {
-                    Write-Host "WARNING: Bun not found, trying npm..." -ForegroundColor Yellow
-                    npm install 2>&1
-                }
-                Pop-Location
-            } else {
-                Write-Host "WARNING: Agent Service package.json not found" -ForegroundColor Yellow
+            New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
+            if (Test-Path $unityRepoDir) {
+                Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
             }
-        } else {
-            Write-Host "WARNING: agent-service folder not found in unity repo" -ForegroundColor Yellow
+            
+            # Sparse checkout to get only agent-service
+            git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
+            
+            if (Test-Path $unityRepoDir) {
+                Push-Location $unityRepoDir
+                git sparse-checkout set agent-service 2>&1 | Out-Null
+                Pop-Location
+                
+                if (Test-Path "$unityRepoDir\agent-service") {
+                    Move-Item "$unityRepoDir\agent-service" $agentServiceDir
+                    
+                    if (Test-Path "$agentServiceDir\package.json") {
+                        Write-Host "  Installing dependencies..."
+                        Push-Location $agentServiceDir
+                        if (Get-Command bun -ErrorAction SilentlyContinue) {
+                            bun install 2>&1 | Out-Null
+                        } else {
+                            npm install 2>&1 | Out-Null
+                        }
+                        Save-DependenciesHash -Dir $agentServiceDir
+                        Pop-Location
+                        Write-Host "  Agent Service ready" -ForegroundColor Green
+                    }
+                }
+                Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+            }
+        }
+    } elseif (-not $FastMode) {
+        # Fresh install
+        Write-Host "Installing Agent Service..." -ForegroundColor Cyan
+        
+        New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
+        if (Test-Path $unityRepoDir) {
+            Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
         }
         
-        # Cleanup temp repo
-        Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
-    } else {
-        Write-Host "WARNING: Failed to clone unity repository" -ForegroundColor Yellow
+        git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
+        
+        if (Test-Path $unityRepoDir) {
+            Push-Location $unityRepoDir
+            git sparse-checkout set agent-service 2>&1 | Out-Null
+            Pop-Location
+            
+            if (Test-Path "$unityRepoDir\agent-service") {
+                Move-Item "$unityRepoDir\agent-service" $agentServiceDir
+                
+                if (Test-Path "$agentServiceDir\package.json") {
+                    Write-Host "  Installing dependencies..."
+                    Push-Location $agentServiceDir
+                    if (Get-Command bun -ErrorAction SilentlyContinue) {
+                        bun install 2>&1 | Out-Null
+                    } else {
+                        npm install 2>&1 | Out-Null
+                    }
+                    Save-DependenciesHash -Dir $agentServiceDir
+                    Pop-Location
+                    Write-Host "  Agent Service ready" -ForegroundColor Green
+                }
+            }
+            Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+        }
     }
     
-    # Step 4: Restore .env file if we had a backup
+    # Restore .env file
     if ($envBackup -and (Test-Path $agentServiceDir)) {
-        Write-Host "Restoring .env file..." -ForegroundColor Green
         $envBackup | Out-File -FilePath $envFile -Encoding UTF8 -NoNewline
-        Write-Host ".env file restored" -ForegroundColor Green
     }
 }
 
@@ -648,48 +750,37 @@ function Install-TightVNC {
     }
     Write-Host "TightVNC settings configured" -ForegroundColor Green
     
-    # Start TightVNC service briefly to ensure password is written to HKLM registry
-    # The MSI installer writes the encrypted password to HKLM when the service starts
-    Write-Host "Starting TightVNC service (Session 0) to initialize password..."
-    Set-Service -Name "tvnserver" -StartupType Manual -ErrorAction SilentlyContinue
-    Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
-    
-    # Copy encrypted password from HKLM to HKCU (app-mode reads from HKCU)
-    Write-Host "Copying encrypted password from HKLM to HKCU..."
+    # Check if password is already in HKCU (from previous run)
     $hklmPath = 'HKLM:\SOFTWARE\TightVNC\Server'
     $hkcuPath = 'HKCU:\SOFTWARE\TightVNC\Server'
+    $passwordExists = (Get-ItemProperty -Path $hkcuPath -Name 'Password' -ErrorAction SilentlyContinue).Password
     
-    # Ensure HKCU path exists
-    if (-not (Test-Path $hkcuPath)) {
-        New-Item -Path $hkcuPath -Force | Out-Null
+    if (-not $passwordExists) {
+        # First time setup - start service to initialize password
+        Write-Host "Initializing TightVNC password..."
+        Set-Service -Name "tvnserver" -StartupType Manual -ErrorAction SilentlyContinue
+        Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1  # Reduced from 3s
+        
+        # Copy encrypted password from HKLM to HKCU
+        if (-not (Test-Path $hkcuPath)) {
+            New-Item -Path $hkcuPath -Force | Out-Null
+        }
+        
+        try {
+            $passwordBytes = Get-ItemPropertyValue -Path $hklmPath -Name 'Password' -ErrorAction Stop
+            Set-ItemProperty -Path $hkcuPath -Name 'Password' -Value $passwordBytes -Type Binary -Force
+            $controlPwdBytes = Get-ItemPropertyValue -Path $hklmPath -Name 'ControlPassword' -ErrorAction Stop
+            Set-ItemProperty -Path $hkcuPath -Name 'ControlPassword' -Value $controlPwdBytes -Type Binary -Force
+            Write-Host "  Password configured" -ForegroundColor Green
+        } catch {
+            Write-Host "  WARNING: Password copy failed - $_" -ForegroundColor Yellow
+        }
     }
-    
-    # Copy Password (encrypted binary value) - use Get-ItemPropertyValue for proper binary handling
-    try {
-        $passwordBytes = Get-ItemPropertyValue -Path $hklmPath -Name 'Password' -ErrorAction Stop
-        Set-ItemProperty -Path $hkcuPath -Name 'Password' -Value $passwordBytes -Type Binary -Force
-        Write-Host "  Password copied" -ForegroundColor Green
-    } catch {
-        Write-Host "  WARNING: No Password found in HKLM - $_" -ForegroundColor Yellow
-    }
-    
-    # Copy ControlPassword (encrypted binary value)
-    try {
-        $controlPwdBytes = Get-ItemPropertyValue -Path $hklmPath -Name 'ControlPassword' -ErrorAction Stop
-        Set-ItemProperty -Path $hkcuPath -Name 'ControlPassword' -Value $controlPwdBytes -Type Binary -Force
-        Write-Host "  ControlPassword copied" -ForegroundColor Green
-    } catch {
-        Write-Host "  WARNING: No ControlPassword found in HKLM - $_" -ForegroundColor Yellow
-    }
-    
-    Start-Sleep -Seconds 2
     
     # Enable TightVNC service for automatic startup
-    # Service mode runs in Session 0 - works well with websockify connecting via localhost
-    Write-Host "Enabling TightVNC service for automatic startup..."
     Set-Service -Name "tvnserver" -StartupType Automatic -ErrorAction SilentlyContinue
-    Write-Host "TightVNC service configured for automatic startup" -ForegroundColor Green
+    Write-Host "TightVNC configured" -ForegroundColor Green
 }
 
 function Install-NoVNC {
@@ -900,54 +991,51 @@ $Hostname {
 }
 
 function Start-Caddy {
-    Write-Host ""
-    Write-Host "=== Starting Caddy ===" -ForegroundColor Cyan
-    
     $caddyDir = 'C:\caddy'
     $caddyExe = "$caddyDir\caddy.exe"
     $caddyfile = "$caddyDir\Caddyfile"
     
-    if (-not (Test-Path $caddyExe)) {
-        Write-Host "Caddy not found, skipping" -ForegroundColor Yellow
+    if (-not (Test-Path $caddyExe) -or -not (Test-Path $caddyfile)) {
         return
     }
     
-    if (-not (Test-Path $caddyfile)) {
-        Write-Host "Caddyfile not found, skipping" -ForegroundColor Yellow
+    # Check if Caddy is already running
+    $caddyProcess = Get-Process -Name "caddy" -ErrorAction SilentlyContinue
+    if ($caddyProcess) {
+        Write-Host "  Caddy: Already running" -ForegroundColor Green
         return
     }
     
-    # Kill any existing Caddy process
-    Get-Process -Name "caddy" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-    
-    Write-Host "Starting Caddy..."
-    # Use PowerShell with hidden window to run Caddy
+    Write-Host "  Starting Caddy..." -ForegroundColor Gray
     $psCommand = "Set-Location '$caddyDir'; & '$caddyExe' run --config '$caddyfile'"
     Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $caddyDir
-    Start-Sleep -Seconds 5
     
-    # Check if Caddy is running
-    $listening443 = netstat -an | Select-String ":443.*LISTENING"
-    $listening80 = netstat -an | Select-String ":80.*LISTENING"
+    # Quick check (reduced from 5s to 1s)
+    Start-Sleep -Milliseconds 1000
     
-    if ($listening443) {
-        Write-Host "  Caddy: Running (port 443 listening)" -ForegroundColor Green
+    if (Test-PortListening -Port 443 -TimeoutMs 500) {
+        Write-Host "  Caddy: Running (HTTPS)" -ForegroundColor Green
     } else {
-        Write-Host "  Caddy: Not listening on port 443 yet" -ForegroundColor Yellow
-        Write-Host "  Note: TLS certificate acquisition may take a moment" -ForegroundColor Gray
-    }
-    
-    if ($listening80) {
-        Write-Host "  Caddy: HTTP redirect active (port 80 listening)" -ForegroundColor Green
+        Write-Host "  Caddy: Starting (TLS cert may take a moment)..." -ForegroundColor Yellow
     }
 }
 
 function Setup-Websockify {
+    param([switch]$Force)
+    
     Write-Host ""
     Write-Host "=== Setting up websockify ===" -ForegroundColor Cyan
     
     $novncDir = 'C:\novnc'
+    $batFile = "$novncDir\start-websockify.bat"
+    $taskName = "StartWebsockify"
+    
+    # Check if already configured
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask -and (Test-Path $batFile) -and -not $Force) {
+        Write-Host "  Websockify already configured" -ForegroundColor Green
+        return
+    }
     
     # Find Python executable
     $pythonExe = 'C:\Program Files\Python312\python.exe'
@@ -955,10 +1043,9 @@ function Setup-Websockify {
         $pythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source
     }
     if (-not $pythonExe -or -not (Test-Path $pythonExe)) {
-        Write-Host "ERROR: Python not found" -ForegroundColor Red
+        Write-Host "  ERROR: Python not found" -ForegroundColor Red
         return
     }
-    Write-Host "Using Python: $pythonExe" -ForegroundColor Green
     
     # Create websockify startup script
     $websockifyScript = @"
@@ -966,25 +1053,18 @@ function Setup-Websockify {
 cd /d C:\novnc
 "$pythonExe" -m websockify --web C:\novnc 6080 localhost:5900
 "@
-    $websockifyScript | Out-File -FilePath "$novncDir\start-websockify.bat" -Encoding ASCII
-    Write-Host "Created websockify startup script at $novncDir\start-websockify.bat" -ForegroundColor Green
+    $websockifyScript | Out-File -FilePath $batFile -Encoding ASCII
     
-    # Create a scheduled task to run websockify at login (for persistence)
-    $taskName = "StartWebsockify"
-    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    if ($existingTask) {
-        Write-Host "Removing existing scheduled task..."
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    # Create scheduled task only if doesn't exist
+    if (-not $existingTask) {
+        $action = New-ScheduledTaskAction -Execute $batFile -WorkingDirectory $novncDir
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
     }
     
-    Write-Host "Creating scheduled task for websockify auto-start..."
-    $action = New-ScheduledTaskAction -Execute "$novncDir\start-websockify.bat" -WorkingDirectory $novncDir
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-    
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
-    Write-Host "Scheduled task '$taskName' created for auto-start at login" -ForegroundColor Green
+    Write-Host "  Websockify configured" -ForegroundColor Green
 }
 
 function Setup-DisplayResolution {
@@ -1318,140 +1398,150 @@ $result = [CursorHelperLogon]::ApplyCursors()
 }
 
 function Configure-Firewall {
+    param([switch]$Force)
+    
     Write-Host ""
     Write-Host "=== Configuring Firewall ===" -ForegroundColor Cyan
     
-    # Remove old rules if they exist (to update them)
-    Remove-NetFirewallRule -DisplayName "Unity-noVNC" -ErrorAction SilentlyContinue
-    Remove-NetFirewallRule -DisplayName "Unity-HTTPS" -ErrorAction SilentlyContinue
-    Remove-NetFirewallRule -DisplayName "Unity-HTTP" -ErrorAction SilentlyContinue
-    Remove-NetFirewallRule -DisplayName "Unity-VNC-Local" -ErrorAction SilentlyContinue
-    Remove-NetFirewallRule -DisplayName "Unity-AgentService" -ErrorAction SilentlyContinue
+    # Check if rules already exist
+    $existingRules = Get-NetFirewallRule -DisplayName "Unity-*" -ErrorAction SilentlyContinue
+    if ($existingRules -and -not $Force) {
+        Write-Host "  Firewall rules already configured ($($existingRules.Count) rules)" -ForegroundColor Green
+        return
+    }
     
-    # Allow HTTPS (443) - Caddy reverse proxy
-    New-NetFirewallRule -DisplayName "Unity-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any
-    Write-Host "Firewall rule created: Allow HTTPS (443)" -ForegroundColor Green
+    # Define required rules
+    $rules = @(
+        @{ Name = "Unity-HTTPS"; Port = 443; Desc = "HTTPS" },
+        @{ Name = "Unity-HTTP"; Port = 80; Desc = "HTTP" },
+        @{ Name = "Unity-noVNC"; Port = 6080; Desc = "noVNC" },
+        @{ Name = "Unity-AgentService"; Port = 3000; Desc = "Agent Service" }
+    )
     
-    # Allow HTTP (80) - Let's Encrypt ACME challenge
-    New-NetFirewallRule -DisplayName "Unity-HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow -Profile Any
-    Write-Host "Firewall rule created: Allow HTTP (80)" -ForegroundColor Green
+    foreach ($rule in $rules) {
+        $existing = Get-NetFirewallRule -DisplayName $rule.Name -ErrorAction SilentlyContinue
+        if (-not $existing) {
+            New-NetFirewallRule -DisplayName $rule.Name -Direction Inbound -LocalPort $rule.Port -Protocol TCP -Action Allow -Profile Any | Out-Null
+            Write-Host "  Created: $($rule.Desc) ($($rule.Port))" -ForegroundColor Green
+        }
+    }
     
-    # Allow noVNC/websockify (6080) - for direct access / fallback
-    New-NetFirewallRule -DisplayName "Unity-noVNC" -Direction Inbound -LocalPort 6080 -Protocol TCP -Action Allow -Profile Any
-    Write-Host "Firewall rule created: Allow noVNC (6080)" -ForegroundColor Green
-    
-    # Allow Agent Service (3000) - for direct API access / fallback
-    New-NetFirewallRule -DisplayName "Unity-AgentService" -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow -Profile Any
-    Write-Host "Firewall rule created: Allow Agent Service (3000)" -ForegroundColor Green
-    
-    Write-Host "Firewall configured" -ForegroundColor Green
+    Write-Host "  Firewall configured" -ForegroundColor Green
+}
+
+function Test-PortListening {
+    param([int]$Port, [int]$TimeoutMs = 2000)
+    $start = Get-Date
+    while (((Get-Date) - $start).TotalMilliseconds -lt $TimeoutMs) {
+        $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+        if ($conn) { return $true }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
 }
 
 function Start-AllServices {
+    param([switch]$FastMode)
+    
     Write-Host ""
     Write-Host "=== Starting Services ===" -ForegroundColor Cyan
     
-    # Start TightVNC service
-    Write-Host "Starting TightVNC service..."
-    Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    
-    # Check if TightVNC service is running
+    # Start TightVNC service (non-blocking)
     $tvnService = Get-Service -Name "tvnserver" -ErrorAction SilentlyContinue
-    if ($tvnService -and $tvnService.Status -eq 'Running') {
-        Write-Host "  TightVNC (service) : Running" -ForegroundColor Green
-    } else {
-        Write-Host "  TightVNC (service) : Not Running" -ForegroundColor Red
+    if ($tvnService -and $tvnService.Status -ne 'Running') {
+        Write-Host "Starting TightVNC service..." -ForegroundColor Gray
+        Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
     }
     
-    # Kill any existing websockify process
-    Get-Process -Name "python*" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*websockify*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-    
-    # Start websockify as background process
-    Write-Host "Starting websockify..."
+    # Start websockify in background (don't wait)
     $novncDir = 'C:\novnc'
     $websockifyBat = "$novncDir\start-websockify.bat"
+    $port6080 = Get-NetTCPConnection -LocalPort 6080 -State Listen -ErrorAction SilentlyContinue
     
-    if (Test-Path $websockifyBat) {
+    if (-not $port6080 -and (Test-Path $websockifyBat)) {
+        Write-Host "Starting websockify..." -ForegroundColor Gray
         Start-Process -FilePath $websockifyBat -WorkingDirectory $novncDir -WindowStyle Hidden
-        Start-Sleep -Seconds 3
-        
-        # Check if websockify is running (check if port 6080 is listening)
-        $listening = netstat -an | Select-String ":6080.*LISTENING"
-        if ($listening) {
-            Write-Host "  websockify : Running (port 6080 listening)" -ForegroundColor Green
-        } else {
-            Write-Host "  websockify : Not listening on port 6080" -ForegroundColor Yellow
-            Write-Host "  Check logs or try running manually: $websockifyBat" -ForegroundColor Gray
-        }
-    } else {
-        Write-Host "  websockify : Startup script not found at $websockifyBat" -ForegroundColor Red
     }
     
-    # Start Agent Service
+    # Start Agent Service in background
     $agentServiceDir = 'C:\agent-service'
     if (Test-Path "$agentServiceDir\package.json") {
-        Write-Host "Starting Agent Service..."
+        $port3000 = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
         
-        # Kill any existing agent service process on port 3000
-        $existingProcess = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($existingProcess) {
-            Stop-Process -Id $existingProcess.OwningProcess -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 1
-        }
-        
-        # Create startup script for agent service
-        $agentStartScript = @"
+        if (-not $port3000) {
+            Write-Host "Starting Agent Service..." -ForegroundColor Gray
+            
+            # Ensure startup script exists
+            $agentStartScript = @"
 @echo off
 cd /d C:\agent-service
 npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 "@
-        $agentStartScript | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
-        
-        # Create scheduled task for auto-start at login (for persistence)
-        $taskName = "StartAgentService"
-        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-        if ($existingTask) {
-            Write-Host "  Updating scheduled task for Agent Service..."
-            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+            $agentStartScript | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
+            
+            # Create scheduled task only if it doesn't exist
+            $taskName = "StartAgentService"
+            $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if (-not $existingTask) {
+                $action = New-ScheduledTaskAction -Execute "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir
+                $trigger = New-ScheduledTaskTrigger -AtLogOn
+                $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+                $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+            }
+            
+            Start-Process -FilePath "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
         }
-        
-        $action = New-ScheduledTaskAction -Execute "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir
-        $trigger = New-ScheduledTaskTrigger -AtLogOn
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
-        Write-Host "  Scheduled task '$taskName' created for auto-start at login" -ForegroundColor Green
-        
-        # Start agent service now
-        Start-Process -FilePath "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
-        Start-Sleep -Seconds 5
-        
-        # Check if agent service is running
-        $listening3000 = netstat -an | Select-String ":3000.*LISTENING"
-        if ($listening3000) {
-            Write-Host "  Agent Service : Running (port 3000 listening)" -ForegroundColor Green
-        } else {
-            Write-Host "  Agent Service : Not listening on port 3000 yet" -ForegroundColor Yellow
-            Write-Host "  Check logs: C:\agent-service\agent.log" -ForegroundColor Gray
-        }
+    }
+    
+    # Quick verification with minimal wait (only 2s total instead of 10+)
+    Start-Sleep -Milliseconds 1500
+    
+    # Report status
+    $tvnService = Get-Service -Name "tvnserver" -ErrorAction SilentlyContinue
+    if ($tvnService -and $tvnService.Status -eq 'Running') {
+        Write-Host "  TightVNC: Running" -ForegroundColor Green
     } else {
-        Write-Host "  Agent Service : Not installed" -ForegroundColor Gray
+        Write-Host "  TightVNC: Starting..." -ForegroundColor Yellow
+    }
+    
+    if (Test-PortListening -Port 6080 -TimeoutMs 500) {
+        Write-Host "  websockify: Running (port 6080)" -ForegroundColor Green
+    } else {
+        Write-Host "  websockify: Starting..." -ForegroundColor Yellow
+    }
+    
+    if (Test-Path "$agentServiceDir\package.json") {
+        if (Test-PortListening -Port 3000 -TimeoutMs 500) {
+            Write-Host "  Agent Service: Running (port 3000)" -ForegroundColor Green
+        } else {
+            Write-Host "  Agent Service: Starting..." -ForegroundColor Yellow
+        }
     }
 }
 
 function Install-Office {
-    param([string]$MakKey)
+    param(
+        [string]$MakKey,
+        [switch]$FastMode
+    )
+    
+    $excelPath = 'C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE'
+    
+    # Fast mode: just verify Office exists, skip activation check
+    if ($FastMode -and (Test-Path $excelPath)) {
+        Write-Host "Office: Installed" -ForegroundColor Green
+        return
+    }
     
     Write-Host ""
     Write-Host "=== Installing Office LTSC 2024 ===" -ForegroundColor Cyan
     
-    $excelPath = 'C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE'
-    
     if (Test-Path $excelPath) {
         Write-Host "Excel already installed at: $excelPath" -ForegroundColor Green
-        Activate-Office -MakKey $MakKey
+        if ($MakKey) {
+            Activate-Office -MakKey $MakKey
+        }
         return
     }
     
@@ -1738,26 +1828,55 @@ if ($windowsUser -and $windowsPassword) {
 }
 
 # =============================================================================
+# Detect Boot Mode
+# =============================================================================
+
+Write-Host "Checking installation status..."
+$fastMode = Test-FastMode
+
+if ($fastMode) {
+    Write-Host ""
+    Write-Host ">>> FAST MODE: All software pre-installed <<<" -ForegroundColor Green
+    Write-Host "    Updating repos and starting services only" -ForegroundColor Gray
+} else {
+    Write-Host ""
+    Write-Host ">>> NORMAL MODE: Running full installation <<<" -ForegroundColor Yellow
+}
+
+# =============================================================================
 # Phase 2: Software Installations (with parallelization)
 # =============================================================================
 
 Write-Host ""
 Write-Host "=== Phase 2: Software Installations ===" -ForegroundColor Cyan
 
-# Office must be installed first (longest, 20-40 min, and critical)
-Install-Office -MakKey $makKey
+# Office check (fast mode just verifies, normal mode installs if needed)
+Install-Office -MakKey $makKey -FastMode:$fastMode
 
 # -----------------------------------------------------------------------------
 # PARALLEL GROUP 1: Foundation tools (no dependencies between them)
 # Git, Python, Chocolatey, TightVNC, Caddy can all download/install simultaneously
 # Using Start-Job with self-contained script blocks for reliability
 # -----------------------------------------------------------------------------
-Write-Host ""
-Write-Host "=== Installing foundation tools in parallel ===" -ForegroundColor Cyan
-$parallelStartTime = Get-Date
 
+# Ensure PATH is always refreshed
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+$bunPath = "$env:USERPROFILE\.bun\bin"
+if (Test-Path $bunPath) { $env:Path = "$bunPath;$env:Path" }
+
+# In fast mode, skip parallel installs - everything is already there
+if ($fastMode) {
+    Write-Host ""
+    Write-Host "=== Foundation tools: Pre-installed ===" -ForegroundColor Green
+} else {
+    Write-Host ""
+    Write-Host "=== Installing foundation tools in parallel ===" -ForegroundColor Cyan
+}
+
+$parallelStartTime = Get-Date
 $jobs = @()
 
+if (-not $fastMode) {
 # Job 1: Install Git
 $jobs += Start-Job -Name "Install-Git" -ScriptBlock {
     $gitInstallerUrl = 'https://github.com/git-for-windows/git/releases/download/v2.43.0.windows.1/Git-2.43.0-64-bit.exe'
@@ -1930,6 +2049,8 @@ Write-Host "TightVNC configured" -ForegroundColor Green
 # -----------------------------------------------------------------------------
 Install-NodeJS
 
+} # End of: if (-not $fastMode)
+
 # Refresh PATH again after Node.js install
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 
@@ -1940,104 +2061,77 @@ if (Test-Path $bunPath) {
 }
 
 # -----------------------------------------------------------------------------
-# PARALLEL GROUP 2: Services that need Git/Python/Node (install in parallel)
-# noVNC and AgentService can install simultaneously
+# PARALLEL GROUP 2 / Fast Mode Update: Services (noVNC + Agent Service)
+# In fast mode: just update repos. In normal mode: full parallel install.
 # -----------------------------------------------------------------------------
-Write-Host ""
-Write-Host "=== Installing services in parallel ===" -ForegroundColor Cyan
-$parallelStartTime2 = Get-Date
 
-$jobs2 = @()
-
-# Job: Install noVNC
-$jobs2 += Start-Job -Name "Install-NoVNC" -ScriptBlock {
-    $novncDir = 'C:\novnc'
-    $pythonExe = 'C:\Program Files\Python312\python.exe'
+if ($fastMode) {
+    # Fast mode: Update repos sequentially (faster than spawning jobs)
+    Write-Host ""
+    Write-Host "=== Updating services ===" -ForegroundColor Cyan
+    Install-AgentService -GithubToken $gcpGithubToken -Staging $gcpStaging -FastMode
+} else {
+    Write-Host ""
+    Write-Host "=== Installing services in parallel ===" -ForegroundColor Cyan
+    $parallelStartTime2 = Get-Date
     
-    # Refresh PATH in job
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $jobs2 = @()
     
-    if (-not (Test-Path "$novncDir\vnc.html")) {
-        if (Test-Path $novncDir) {
-            Remove-Item -Recurse -Force $novncDir -ErrorAction SilentlyContinue
-        }
-        git clone --depth 1 https://github.com/novnc/noVNC.git $novncDir 2>&1 | Out-Null
-    }
-    
-    # Install websockify
-    if (Test-Path $pythonExe) {
-        & $pythonExe -m pip install websockify --quiet 2>&1 | Out-Null
-    }
-    
-    if (Test-Path "$novncDir\vnc.html") {
-        return "noVNC installed successfully"
-    } else {
-        throw "noVNC installation failed"
-    }
-}
-
-# Job: Install AgentService
-$ghToken = $gcpGithubToken
-$staging = $gcpStaging
-$jobs2 += Start-Job -Name "Install-AgentService" -ScriptBlock {
-    param($GithubToken, $Staging)
-    
-    $magnitudeDir = 'C:\magnitude'
-    $agentServiceDir = 'C:\agent-service'
-    $unityRepoDir = 'C:\temp\unity-repo'
-    
-    # Refresh PATH in job
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    $bunPath = "$env:USERPROFILE\.bun\bin"
-    if (Test-Path $bunPath) { $env:Path = "$bunPath;$env:Path" }
-    
-    $unityBranch = if ($Staging) { "staging" } else { "main" }
-    
-    # Build URLs
-    $magnitudeUrl = if ($GithubToken) { "https://$GithubToken@github.com/unifyai/magnitude.git" } else { "https://github.com/unifyai/magnitude.git" }
-    $unityUrl = if ($GithubToken) { "https://$GithubToken@github.com/unifyai/unity.git" } else { "https://github.com/unifyai/unity.git" }
-    
-    # Clone Magnitude
-    if (-not (Test-Path "$magnitudeDir\.git")) {
-        if (Test-Path $magnitudeDir) { Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue }
-        git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
+    # Job: Install noVNC
+    $jobs2 += Start-Job -Name "Install-NoVNC" -ScriptBlock {
+        $novncDir = 'C:\novnc'
+        $pythonExe = 'C:\Program Files\Python312\python.exe'
         
-        if (Test-Path "$magnitudeDir\package.json") {
-            Push-Location $magnitudeDir
-            if (Get-Command bun -ErrorAction SilentlyContinue) {
-                bun install 2>&1 | Out-Null
-            } else {
-                npm install 2>&1 | Out-Null
+        # Refresh PATH in job
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        
+        if (-not (Test-Path "$novncDir\vnc.html")) {
+            if (Test-Path $novncDir) {
+                Remove-Item -Recurse -Force $novncDir -ErrorAction SilentlyContinue
             }
-            Pop-Location
+            git clone --depth 1 https://github.com/novnc/noVNC.git $novncDir 2>&1 | Out-Null
+        }
+        
+        # Install websockify
+        if (Test-Path $pythonExe) {
+            & $pythonExe -m pip install websockify --quiet 2>&1 | Out-Null
+        }
+        
+        if (Test-Path "$novncDir\vnc.html") {
+            return "noVNC installed successfully"
+        } else {
+            throw "noVNC installation failed"
         }
     }
     
-    # Clone and extract agent-service
-    $envBackup = $null
-    if (Test-Path "$agentServiceDir\.env") {
-        $envBackup = Get-Content "$agentServiceDir\.env" -Raw
-    }
-    
-    if (Test-Path "$agentServiceDir\package.json") {
-        Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
-    }
-    
-    New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
-    if (Test-Path $unityRepoDir) { Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue }
-    
-    git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
-    
-    if (Test-Path $unityRepoDir) {
-        Push-Location $unityRepoDir
-        git sparse-checkout set agent-service 2>&1 | Out-Null
-        Pop-Location
+    # Job: Install AgentService (full install in job for parallelism)
+    $ghToken = $gcpGithubToken
+    $staging = $gcpStaging
+    $jobs2 += Start-Job -Name "Install-AgentService" -ScriptBlock {
+        param($GithubToken, $Staging)
         
-        if (Test-Path "$unityRepoDir\agent-service") {
-            Move-Item "$unityRepoDir\agent-service" $agentServiceDir -Force
+        $magnitudeDir = 'C:\magnitude'
+        $agentServiceDir = 'C:\agent-service'
+        $unityRepoDir = 'C:\temp\unity-repo'
+        
+        # Refresh PATH in job
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        $bunPath = "$env:USERPROFILE\.bun\bin"
+        if (Test-Path $bunPath) { $env:Path = "$bunPath;$env:Path" }
+        
+        $unityBranch = if ($Staging) { "staging" } else { "main" }
+        
+        # Build URLs
+        $magnitudeUrl = if ($GithubToken) { "https://$GithubToken@github.com/unifyai/magnitude.git" } else { "https://github.com/unifyai/magnitude.git" }
+        $unityUrl = if ($GithubToken) { "https://$GithubToken@github.com/unifyai/unity.git" } else { "https://github.com/unifyai/unity.git" }
+        
+        # Clone Magnitude
+        if (-not (Test-Path "$magnitudeDir\.git")) {
+            if (Test-Path $magnitudeDir) { Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue }
+            git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
             
-            if (Test-Path "$agentServiceDir\package.json") {
-                Push-Location $agentServiceDir
+            if (Test-Path "$magnitudeDir\package.json") {
+                Push-Location $magnitudeDir
                 if (Get-Command bun -ErrorAction SilentlyContinue) {
                     bun install 2>&1 | Out-Null
                 } else {
@@ -2046,83 +2140,171 @@ $jobs2 += Start-Job -Name "Install-AgentService" -ScriptBlock {
                 Pop-Location
             }
         }
-        Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+        
+        # Clone and extract agent-service
+        $envBackup = $null
+        if (Test-Path "$agentServiceDir\.env") {
+            $envBackup = Get-Content "$agentServiceDir\.env" -Raw
+        }
+        
+        if (Test-Path "$agentServiceDir\package.json") {
+            Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
+        }
+        
+        New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
+        if (Test-Path $unityRepoDir) { Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue }
+        
+        git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
+        
+        if (Test-Path $unityRepoDir) {
+            Push-Location $unityRepoDir
+            git sparse-checkout set agent-service 2>&1 | Out-Null
+            Pop-Location
+            
+            if (Test-Path "$unityRepoDir\agent-service") {
+                Move-Item "$unityRepoDir\agent-service" $agentServiceDir -Force
+                
+                if (Test-Path "$agentServiceDir\package.json") {
+                    Push-Location $agentServiceDir
+                    if (Get-Command bun -ErrorAction SilentlyContinue) {
+                        bun install 2>&1 | Out-Null
+                    } else {
+                        npm install 2>&1 | Out-Null
+                    }
+                    Pop-Location
+                }
+            }
+            Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+        }
+        
+        # Restore .env
+        if ($envBackup -and (Test-Path $agentServiceDir)) {
+            $envBackup | Out-File -FilePath "$agentServiceDir\.env" -Encoding UTF8 -NoNewline
+        }
+        
+        if (Test-Path "$agentServiceDir\package.json") {
+            return "Agent Service installed successfully"
+        } else {
+            return "Agent Service install completed (may need manual verification)"
+        }
+    } -ArgumentList $ghToken, $staging
+    
+    # Wait for parallel jobs
+    Write-Host "  Started $($jobs2.Count) parallel service install jobs..." -ForegroundColor Gray
+    $jobs2 | Wait-Job | Out-Null
+    
+    foreach ($job in $jobs2) {
+        $result = Receive-Job -Job $job -ErrorAction SilentlyContinue
+        if ($job.State -eq 'Completed') {
+            Write-Host "  $($job.Name): $result" -ForegroundColor Green
+        } else {
+            $jobError = $job.ChildJobs[0].JobStateInfo.Reason
+            Write-Host "  $($job.Name): FAILED - $jobError" -ForegroundColor Red
+        }
+        Remove-Job -Job $job -Force
     }
     
-    # Restore .env
-    if ($envBackup -and (Test-Path $agentServiceDir)) {
-        $envBackup | Out-File -FilePath "$agentServiceDir\.env" -Encoding UTF8 -NoNewline
-    }
-    
-    if (Test-Path "$agentServiceDir\package.json") {
-        return "Agent Service installed successfully"
-    } else {
-        return "Agent Service install completed (may need manual verification)"
-    }
-} -ArgumentList $ghToken, $staging
-
-# Wait for parallel jobs
-Write-Host "  Started $($jobs2.Count) parallel service install jobs..." -ForegroundColor Gray
-$jobs2 | Wait-Job | Out-Null
-
-foreach ($job in $jobs2) {
-    $result = Receive-Job -Job $job -ErrorAction SilentlyContinue
-    if ($job.State -eq 'Completed') {
-        Write-Host "  $($job.Name): $result" -ForegroundColor Green
-    } else {
-        $error = $job.ChildJobs[0].JobStateInfo.Reason
-        Write-Host "  $($job.Name): FAILED - $error" -ForegroundColor Red
-    }
-    Remove-Job -Job $job -Force
+    $parallelElapsed2 = (Get-Date) - $parallelStartTime2
+    Write-Host "  Parallel group 2 completed in $([math]::Round($parallelElapsed2.TotalSeconds, 1))s" -ForegroundColor Magenta
 }
 
-$parallelElapsed2 = (Get-Date) - $parallelStartTime2
-Write-Host "  Parallel group 2 completed in $([math]::Round($parallelElapsed2.TotalSeconds, 1))s" -ForegroundColor Magenta
-
 # -----------------------------------------------------------------------------
-# SEQUENTIAL: Configuration steps (fast, some have dependencies)
+# SEQUENTIAL: Configuration steps (fast, most skip if already done)
 # -----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "=== Running configuration ===" -ForegroundColor Cyan
 
-# Create noVNC custom.html (needs noVNC installed)
-Install-NoVNC  # This will skip install but create custom.html
+# Create noVNC custom.html only (Install-NoVNC was already run in parallel group)
+$novncDir = 'C:\novnc'
+if (Test-Path "$novncDir\vnc.html") {
+    # Just ensure custom.html exists
+    $customHtmlPath = "$novncDir\custom.html"
+    if (-not (Test-Path $customHtmlPath)) {
+        $customHtml = @'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Desktop</title>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background: #000; }
+        iframe { width: 100vw; height: 100vh; border: none; }
+    </style>
+</head>
+<body>
+    <iframe id="vnc" src=""></iframe>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        params.set('resize', 'scale');
+        params.set('autoconnect', '1');
+        params.set('reconnect', '1');
+        params.set('show_dot', '1');
+        document.getElementById('vnc').src = `vnc.html?${params}`;
+        document.getElementById('vnc').onload = function() {
+            try {
+                const style = this.contentDocument.createElement('style');
+                style.textContent = `
+                    #noVNC_control_bar, #noVNC_control_bar_anchor, #noVNC_control_bar_handle,
+                    #noVNC_logo, #noVNC_status { display: none !important; }
+                    .noVNC_cursor { display: none !important; }
+                `;
+                this.contentDocument.head.appendChild(style);
+            } catch (e) {}
+        };
+    </script>
+</body>
+</html>
+'@
+        $customHtml | Out-File -FilePath $customHtmlPath -Encoding UTF8
+        Copy-Item $customHtmlPath "$novncDir\index.html" -Force
+    }
+}
 
+# Run config functions (they now skip if already configured)
 Setup-AgentServiceEnv -AnthropicApiKey $gcpAnthropicKey -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
 Setup-Websockify
 
-# Setup display resolution
-if ($newUserCreated -ne $true -and $windowsUser) {
-    Setup-DisplayResolution -TargetUser $windowsUser
-} elseif (-not $windowsUser) {
-    Setup-DisplayResolution
+# Display resolution and cursor only need setup if not already done
+if (-not $fastMode) {
+    if ($newUserCreated -ne $true -and $windowsUser) {
+        Setup-DisplayResolution -TargetUser $windowsUser
+    } elseif (-not $windowsUser) {
+        Setup-DisplayResolution
+    }
+    
+    if ($windowsUser) {
+        Setup-InvisibleCursor -TargetUser $windowsUser
+    } else {
+        Setup-InvisibleCursor
+    }
 }
 
-# Hide native Windows cursor (scheduled task for user session)
-if ($windowsUser) {
-    Setup-InvisibleCursor -TargetUser $windowsUser
-} else {
-    Setup-InvisibleCursor
-}
-
-# Configure firewall
+# Configure firewall (skips if rules exist)
 Configure-Firewall
 
 # -----------------------------------------------------------------------------
 # FINAL: Start all services (must be sequential, after all installs)
 # -----------------------------------------------------------------------------
-Write-Host ""
-Write-Host "=== Starting services ===" -ForegroundColor Cyan
 
-Start-AllServices
+Start-AllServices -FastMode:$fastMode
 
 # Start Caddy if configured
 if ($caddyConfigured) {
     Start-Caddy
 }
 
+# Calculate total elapsed time
+$totalElapsed = (Get-Date) - $script:StartTime
+
 Show-Summary -MakKey $makKey -VncPassword $vncPassword -Hostname $hostname
+
+Write-Host ""
+Write-Host "Total startup time: $([math]::Round($totalElapsed.TotalSeconds, 1)) seconds" -ForegroundColor Magenta
+if ($fastMode) {
+    Write-Host "Boot mode: FAST" -ForegroundColor Green
+} else {
+    Write-Host "Boot mode: NORMAL (full install)" -ForegroundColor Yellow
+}
 
 # If NEW user was created, setup display resolution and reboot
 # After reboot, GCP startup script runs again, user will exist, and we continue to Phase 2
