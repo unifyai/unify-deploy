@@ -90,6 +90,46 @@ function Save-DependenciesHash {
 }
 
 # =============================================================================
+# Commit Hash Tracking - For detecting code changes in repos without .git
+# =============================================================================
+
+function Get-RemoteCommitHash {
+    param(
+        [string]$RepoUrl,
+        [string]$Branch
+    )
+    try {
+        # Use git ls-remote (lightweight, no clone needed)
+        $output = git ls-remote $RepoUrl "refs/heads/$Branch" 2>&1
+        if ($output -match '^([a-f0-9]+)\s') {
+            return $matches[1].Substring(0, 12)  # Short hash
+        }
+    } catch {
+        Write-Host "  WARNING: Failed to get remote commit hash - $_" -ForegroundColor Yellow
+    }
+    return $null
+}
+
+function Get-SavedCommitHash {
+    param([string]$Dir)
+    $hashFile = "$Dir\.commit-hash"
+    if (Test-Path $hashFile) {
+        return (Get-Content $hashFile -ErrorAction SilentlyContinue).Trim()
+    }
+    return $null
+}
+
+function Save-CommitHash {
+    param(
+        [string]$Dir,
+        [string]$Hash
+    )
+    if ($Hash) {
+        $Hash | Out-File -FilePath "$Dir\.commit-hash" -Encoding UTF8 -NoNewline
+    }
+}
+
+# =============================================================================
 # GCP Metadata Helper
 # =============================================================================
 
@@ -195,9 +235,14 @@ function Update-GitRepo {
         Write-Host "  Resetting to origin/$Branch..."
         git reset --hard origin/$Branch 2>&1 | Out-Null
         
-        # Get current commit for logging
-        $commit = git rev-parse --short HEAD 2>&1
+        # Get current commit for logging and save hash
+        $commit = git rev-parse --short=12 HEAD 2>&1
         Write-Host "  Updated to commit: $commit" -ForegroundColor Green
+        
+        # Save commit hash for future update checks (works for repos without .git too)
+        if ($commit) {
+            $commit | Out-File -FilePath "$RepoPath\.commit-hash" -Encoding UTF8 -NoNewline
+        }
         
         Pop-Location
         return $true
@@ -492,8 +537,13 @@ function Install-AgentService {
         git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
         
         if (Test-Path "$magnitudeDir\package.json") {
-            Write-Host "  Magnitude cloned, installing dependencies..." -ForegroundColor Green
+            # Save commit hash for tracking
             Push-Location $magnitudeDir
+            $commitHash = (git rev-parse --short=12 HEAD 2>&1)
+            if ($commitHash) {
+                Save-CommitHash -Dir $magnitudeDir -Hash $commitHash
+            }
+            Write-Host "  Magnitude cloned (commit: $commitHash), installing dependencies..." -ForegroundColor Green
             if (Get-Command bun -ErrorAction SilentlyContinue) {
                 bun install 2>&1 | Out-Null
             } else {
@@ -538,10 +588,19 @@ function Install-AgentService {
             Write-Host "  Dependencies unchanged, skipping install" -ForegroundColor Green
         }
     } elseif (Test-Path "$agentServiceDir\package.json") {
-        # Have agent-service but no git - check if deps need update only in fast mode
-        if ($FastMode -and (Test-DependenciesInstalled -Dir $agentServiceDir)) {
-            Write-Host "Agent Service exists, dependencies current" -ForegroundColor Green
-        } else {
+        # Have agent-service but no git - check remote commit to detect code changes
+        $savedHash = Get-SavedCommitHash -Dir $agentServiceDir
+        $remoteHash = Get-RemoteCommitHash -RepoUrl $unityUrl -Branch $unityBranch
+        
+        $needsUpdate = $true
+        if ($FastMode -and $savedHash -and $remoteHash -and ($savedHash -eq $remoteHash)) {
+            Write-Host "Agent Service up-to-date (commit: $savedHash)" -ForegroundColor Green
+            $needsUpdate = $false
+        } elseif ($savedHash -and $remoteHash) {
+            Write-Host "Agent Service update available ($savedHash -> $remoteHash)" -ForegroundColor Yellow
+        }
+        
+        if ($needsUpdate) {
             # Re-clone to get updates
             Write-Host "Cloning Agent Service from Unity repo..." -ForegroundColor Yellow
             
@@ -558,12 +617,20 @@ function Install-AgentService {
             git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
             
             if (Test-Path $unityRepoDir) {
+                # Get commit hash before extracting
+                $commitHash = $null
                 Push-Location $unityRepoDir
+                $commitHash = (git rev-parse --short=12 HEAD 2>&1)
                 git sparse-checkout set agent-service 2>&1 | Out-Null
                 Pop-Location
                 
                 if (Test-Path "$unityRepoDir\agent-service") {
                     Move-Item "$unityRepoDir\agent-service" $agentServiceDir
+                    
+                    # Save commit hash for future update checks
+                    if ($commitHash) {
+                        Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
+                    }
                     
                     if (Test-Path "$agentServiceDir\package.json") {
                         Write-Host "  Installing dependencies..."
@@ -576,7 +643,7 @@ function Install-AgentService {
                         }
                         Save-DependenciesHash -Dir $agentServiceDir
                         Pop-Location
-                        Write-Host "  Agent Service ready" -ForegroundColor Green
+                        Write-Host "  Agent Service ready (commit: $commitHash)" -ForegroundColor Green
                     }
                 }
                 Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
@@ -594,12 +661,20 @@ function Install-AgentService {
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
         
         if (Test-Path $unityRepoDir) {
+            # Get commit hash before extracting
+            $commitHash = $null
             Push-Location $unityRepoDir
+            $commitHash = (git rev-parse --short=12 HEAD 2>&1)
             git sparse-checkout set agent-service 2>&1 | Out-Null
             Pop-Location
             
             if (Test-Path "$unityRepoDir\agent-service") {
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir
+                
+                # Save commit hash for future update checks
+                if ($commitHash) {
+                    Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
+                }
                 
                 if (Test-Path "$agentServiceDir\package.json") {
                     Write-Host "  Installing dependencies..."
@@ -612,7 +687,7 @@ function Install-AgentService {
                     }
                     Save-DependenciesHash -Dir $agentServiceDir
                     Pop-Location
-                    Write-Host "  Agent Service ready" -ForegroundColor Green
+                    Write-Host "  Agent Service ready (commit: $commitHash)" -ForegroundColor Green
                 }
             }
             Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
@@ -2135,6 +2210,11 @@ if ($fastMode) {
             
             if (Test-Path "$magnitudeDir\package.json") {
                 Push-Location $magnitudeDir
+                # Save commit hash for tracking
+                $magCommitHash = (git rev-parse --short=12 HEAD 2>&1)
+                if ($magCommitHash) {
+                    $magCommitHash | Out-File -FilePath "$magnitudeDir\.commit-hash" -Encoding UTF8 -NoNewline
+                }
                 if (Get-Command bun -ErrorAction SilentlyContinue) {
                     bun install 2>&1 | Out-Null
                 } else {
@@ -2160,12 +2240,20 @@ if ($fastMode) {
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
         
         if (Test-Path $unityRepoDir) {
+            # Get commit hash before extracting
+            $commitHash = $null
             Push-Location $unityRepoDir
+            $commitHash = (git rev-parse --short=12 HEAD 2>&1)
             git sparse-checkout set agent-service 2>&1 | Out-Null
             Pop-Location
             
             if (Test-Path "$unityRepoDir\agent-service") {
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir -Force
+                
+                # Save commit hash for future update checks
+                if ($commitHash) {
+                    $commitHash | Out-File -FilePath "$agentServiceDir\.commit-hash" -Encoding UTF8 -NoNewline
+                }
                 
                 if (Test-Path "$agentServiceDir\package.json") {
                     Push-Location $agentServiceDir
@@ -2187,7 +2275,8 @@ if ($fastMode) {
         }
         
         if (Test-Path "$agentServiceDir\package.json") {
-            return "Agent Service installed successfully"
+            $savedHash = if (Test-Path "$agentServiceDir\.commit-hash") { Get-Content "$agentServiceDir\.commit-hash" } else { "unknown" }
+            return "Agent Service installed successfully (commit: $savedHash)"
         } else {
             return "Agent Service install completed (may need manual verification)"
         }
