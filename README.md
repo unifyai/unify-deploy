@@ -121,7 +121,7 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
 
 **Authenticated JSON Endpoints**:
 
-- `POST /phone/dispatch-agent`
+- `POST /phone/dispatch-livekit-agent`
 - `POST /phone/send-call`
 - `POST /phone/send-text`
 - `GET  /phone/available-countries`
@@ -174,4 +174,3 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
 - **Communication API**: Build and deploy via Cloud Run (or any container platform), ensuring the `PORT` environment variable is respected.
 
 See `.github/workflows` and `cloudbuild/` for CI/CD examples.
-

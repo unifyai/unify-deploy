@@ -62,13 +62,13 @@ def create_conference_response(conference_name, sip_uri, with_status=False):
 
 
 def add_user_to_conference(
-    conference_name, from_number, to_number, sip_uri, connect_third_party=False
+    conference_name, from_number, to_number, sip_uri, connect_third_party=False,
 ):
     twilio_client = get_twilio_client()
 
     if connect_third_party:
         conferences = twilio_client.conferences.list(
-            friendly_name=conference_name, status="in-progress"
+            friendly_name=conference_name, status="in-progress",
         )
         participants = twilio_client.conferences(conferences[0].sid).participants.list()
         for participant in participants:
@@ -76,11 +76,11 @@ def add_user_to_conference(
             # Identify Livekit Agent and mute
             if "livekit.cloud" in call.to:
                 twilio_client.conferences(conferences[0].sid).participants(
-                    participant.sid
+                    participant.sid,
                 ).update(muted=True)
                 break
         response = create_conference_response(
-            conference_name, sip_uri, with_status=True
+            conference_name, sip_uri, with_status=True,
         )
     else:
         response = create_conference_response(conference_name, sip_uri)
@@ -113,13 +113,13 @@ async def check_recording_status(request: Request):
     # Get recording from Twilio
     recording_url = recording_url + ".mp3"
     async with httpx.AsyncClient(
-        auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+        auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")),
     ) as httpx_client:
         resp = await httpx_client.get(recording_url)
     if resp.status_code >= 400:
         print("Failed to get recording from Twilio")
         raise HTTPException(
-            status_code=resp.status_code, detail="Failed to get recording from Twilio"
+            status_code=resp.status_code, detail="Failed to get recording from Twilio",
         )
 
     # Extract recording bytes
@@ -163,7 +163,7 @@ async def check_recording_status(request: Request):
     if resp.status_code >= 400:
         print("Failed to get assistants from Unify")
         raise HTTPException(
-            status_code=resp.status_code, detail="Failed to get assistants from Unify"
+            status_code=resp.status_code, detail="Failed to get assistants from Unify",
         )
     for assistant in assistants:
         if assistant["phone"] in [call._from, call.to]:
@@ -189,7 +189,7 @@ async def check_recording_status(request: Request):
         print("Failed to upload recording to Unify")
         print(resp.text)
         raise HTTPException(
-            status_code=resp.status_code, detail="Failed to upload recording to Unify"
+            status_code=resp.status_code, detail="Failed to upload recording to Unify",
         )
     return {"success": True, "recording_url": recording_url}
 
@@ -202,22 +202,22 @@ def get_livekit_api():
 
     if not url or not api_key or not api_secret:
         raise RuntimeError(
-            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set"
+            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set",
         )
 
     return LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
 
 
-async def create_room_and_dispatch_agent(
-    room_name: str, agent_name: str, metadata: dict = None
+async def create_room_and_dispatch_livekit_agent(
+    room_name: str, livekit_agent_name: str, metadata: dict = None,
 ):
-    """Create a LiveKit room and dispatch an agent to it"""
+    """Create a LiveKit room and dispatch a LiveKit agent to it"""
     livekit_api = get_livekit_api()
 
     try:
         # Create dispatch request - this will create the room if it doesn't exist
         dispatch_request = CreateAgentDispatchRequest(
-            agent_name=agent_name,
+            agent_name=livekit_agent_name,  # LiveKit API expects 'agent_name'
             room=room_name,
             metadata=json.dumps(metadata) if metadata else None,
         )
@@ -225,27 +225,27 @@ async def create_room_and_dispatch_agent(
         # Dispatch agent to room (creates room automatically if needed)
         dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
         print(
-            f"Successfully created room '{room_name}' and dispatched agent '{agent_name}'"
+            f"Successfully created room '{room_name}' and dispatched LiveKit agent '{livekit_agent_name}'",
         )
         print(f"Dispatch ID: {dispatch.id}")
 
         return dispatch
     except Exception as e:
-        print(f"Error creating room and dispatching agent: {str(e)}")
+        print(f"Error creating room and dispatching LiveKit agent: {str(e)}")
         raise
     finally:
         await livekit_api.aclose()
 
 
 # Endpoints - JSON format
-@auth_router.post("/dispatch-agent")
-async def dispatch_agent(request: Request):
+@auth_router.post("/dispatch-livekit-agent")
+async def dispatch_livekit_agent(request: Request):
     data = await request.json()
-    agent_name = data.get("agent_name")
+    livekit_agent_name = data.get("livekit_agent_name")
     room_name = data.get("room_name")
     if not room_name:
-        room_name = agent_name
-    await create_room_and_dispatch_agent(room_name, agent_name)
+        room_name = livekit_agent_name
+    await create_room_and_dispatch_livekit_agent(room_name, livekit_agent_name)
     return {"success": True}
 
 
@@ -314,14 +314,14 @@ async def create_phone_number(request: Request):
     numbers = []
     try:
         numbers += twilio_client.available_phone_numbers(phone_country).local.list(
-            limit=1, sms_enabled=True, voice_enabled=True, beta=False
+            limit=1, sms_enabled=True, voice_enabled=True, beta=False,
         )
     except Exception as e:
         pass
 
     try:
         numbers += twilio_client.available_phone_numbers(phone_country).mobile.list(
-            limit=1, sms_enabled=True, voice_enabled=True, beta=False
+            limit=1, sms_enabled=True, voice_enabled=True, beta=False,
         )
     except Exception as e:
         pass
@@ -377,7 +377,7 @@ async def delete_phone_number(request: Request):
 
     # Find the purchased number by E.164
     incoming_list = twilio_client.incoming_phone_numbers.list(
-        phone_number=phone_number, limit=1
+        phone_number=phone_number, limit=1,
     )
     if not incoming_list:
         raise HTTPException(status_code=404, detail="Phone number not found")
@@ -396,7 +396,7 @@ async def delete_phone_number(request: Request):
     for item in sip_its.items:
         if phone_number[1:] in item.name:
             await lkapi.sip.delete_sip_trunk(
-                DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id)
+                DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id),
             )
             break
 
@@ -425,7 +425,7 @@ async def hang_up(request: Request):
 
     twilio_client = get_twilio_client()
     conferences = twilio_client.conferences.list(
-        friendly_name=conference_name, status="in-progress"
+        friendly_name=conference_name, status="in-progress",
     )
     conference = (
         twilio_client.conferences(conferences[0].sid).participants(call_sid).delete()
@@ -440,10 +440,10 @@ async def end_conference(request: Request):
 
     twilio_client = get_twilio_client()
     conferences = twilio_client.conferences.list(
-        friendly_name=conference_name, status="in-progress"
+        friendly_name=conference_name, status="in-progress",
     )
     conference = twilio_client.conferences(conferences[0].sid).update(
-        status="completed"
+        status="completed",
     )
     return {"success": True, "status": conference.status}
 
@@ -460,7 +460,7 @@ async def conference_status(request: Request):
         participants = twilio_client.conferences(conference_sid).participants.list()
         for participant in participants:
             twilio_client.conferences(conference_sid).participants(
-                participant.sid
+                participant.sid,
             ).update(muted=False)
     return Response(status_code=200)
 

@@ -233,7 +233,7 @@ def check_contact_details(
     """
     print(
         f"Checking contact details: {email_address}, {phone_number}, {medium}, "
-        f"{user_number}, {user_whatsapp_number}, {user_email}"
+        f"{user_number}, {user_whatsapp_number}, {user_email}",
     )
     if medium == "email" and user_email == email_address:
         return True
@@ -271,7 +271,7 @@ def check_valid_contact(
     """
     print(
         f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
-        f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}"
+        f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}",
     )
     if assistant_data["assistant_id"] in [4, 5, 6, 7, 8]:
         return [], True
@@ -297,7 +297,7 @@ def check_valid_contact(
             ):
                 print(
                     f"Boss user found: {email_address}, {phone_number}, {medium}, "
-                    f"{user_number}, {user_whatsapp_number}, {user_email}"
+                    f"{user_number}, {user_whatsapp_number}, {user_email}",
                 )
                 return default_contacts, True
 
@@ -328,7 +328,7 @@ def check_valid_contact(
         ):
             print(
                 f"Boss user found: {email_address}, {phone_number}, {medium}, "
-                f"{boss_user_number}, {user_whatsapp_number}, {boss_user_email}"
+                f"{boss_user_number}, {user_whatsapp_number}, {boss_user_email}",
             )
             return contacts, True
     else:
@@ -429,7 +429,7 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
                         "user_email": assistant_data["user_email"],
                         "assistant_email": assistant_data["assistant_email"],
                         "running": True,
-                    }
+                    },
                 ],
             },
             headers={"Authorization": f"Bearer {shared_key}"},
@@ -440,7 +440,7 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
         else:
             print(
                 f"Failed to mark job as running: {response.status_code} "
-                f"{response.text}"
+                f"{response.text}",
             )
             return False
     except Exception as e:
@@ -516,16 +516,16 @@ def start_unity_job(assistant: dict, medium: str):
             elif vm_response.status_code == 404:
                 print(
                     f"Windows VM not found for assistant {assistant_id} - "
-                    "VM should be created at hire time"
+                    "VM should be created at hire time",
                 )
             else:
                 print(
                     f"Failed to start Windows VM for {assistant_id}: "
-                    f"{vm_response.status_code} - {vm_response.text}"
+                    f"{vm_response.status_code} - {vm_response.text}",
                 )
         except requests.exceptions.Timeout:
             print(
-                f"Windows VM start request sent for assistant {assistant_id} (timeout)"
+                f"Windows VM start request sent for assistant {assistant_id} (timeout)",
             )
         except Exception as e:
             print(f"Error starting Windows VM for assistant {assistant_id}: {e}")
@@ -550,7 +550,7 @@ def create_job(assistant_id: str):
         return True
     except Exception as e:
         print(
-            f"Error sending idle job creation request for assistant {assistant_id}: {e}"
+            f"Error sending idle job creation request for assistant {assistant_id}: {e}",
         )
         return False
 
@@ -673,22 +673,22 @@ def get_livekit_api():
 
     if not url or not api_key or not api_secret:
         raise RuntimeError(
-            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set"
+            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set",
         )
 
     return api.LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
 
 
-async def create_room_and_dispatch_agent(
-    room_name: str, agent_name: str, metadata: dict = None
+async def create_room_and_dispatch_livekit_agent(
+    room_name: str, livekit_agent_name: str, metadata: dict = None,
 ):
-    """Create a LiveKit room and dispatch an agent to it"""
+    """Create a LiveKit room and dispatch a LiveKit agent to it"""
     livekit_api = get_livekit_api()
 
     try:
         # Create dispatch request - this will create the room if it doesn't exist
         dispatch_request = api.CreateAgentDispatchRequest(
-            agent_name=agent_name,
+            agent_name=livekit_agent_name,  # LiveKit API expects 'agent_name'
             room=room_name,
             metadata=json.dumps(metadata) if metadata else None,
         )
@@ -696,13 +696,13 @@ async def create_room_and_dispatch_agent(
         # Dispatch agent to room (creates room automatically if needed)
         dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
         print(
-            f"Successfully created room '{room_name}' and dispatched agent '{agent_name}'"
+            f"Successfully created room '{room_name}' and dispatched LiveKit agent '{livekit_agent_name}'",
         )
         print(f"Dispatch ID: {dispatch.id}")
 
         return dispatch
     except Exception as e:
-        print(f"Error creating room and dispatching agent: {str(e)}")
+        print(f"Error creating room and dispatching LiveKit agent: {str(e)}")
         raise
     finally:
         await livekit_api.aclose()
@@ -743,13 +743,13 @@ def create_conference_response(conference_name, with_status=False):
 
 
 def add_user_to_conference(
-    conference_name, from_number, to_number_uri, connect_third_party=False
+    conference_name, from_number, to_number_uri, connect_third_party=False,
 ):
     twilio_client = get_twilio_client()
 
     if connect_third_party:
         conferences = twilio_client.conferences.list(
-            friendly_name=conference_name, status="in-progress"
+            friendly_name=conference_name, status="in-progress",
         )
         participants = twilio_client.conferences(conferences[0].sid).participants.list()
         for participant in participants:
@@ -757,7 +757,7 @@ def add_user_to_conference(
             # Identify Livekit Agent and mute
             if "livekit.cloud" in call.to:
                 twilio_client.conferences(conferences[0].sid).participants(
-                    participant.sid
+                    participant.sid,
                 ).update(muted=True)
                 break
         response = create_conference_response(conference_name, with_status=True)
@@ -782,7 +782,7 @@ def _strip_quoted_text(text: str) -> str:
         if stripped.startswith(">"):
             continue
         if re.match(r"On .+wrote:", stripped) or stripped.startswith(
-            "-----Original Message-----"
+            "-----Original Message-----",
         ):
             break
         cleaned.append(line)
@@ -803,7 +803,7 @@ class TokenCredentialFromSecret(TokenCredential):
     def get_token(self, *scopes, **kwargs) -> AccessToken:
         # Expiry doesn't matter - scheduled job keeps token fresh
         return AccessToken(
-            self._token, int(datetime.now(tz=timezone.utc).timestamp()) + 3600
+            self._token, int(datetime.now(tz=timezone.utc).timestamp()) + 3600,
         )
 
 
@@ -856,13 +856,13 @@ async def get_outlook_thread_id(email_id: str, graph_client):
                     "bccRecipients",
                     "receivedDateTime",
                     "hasAttachments",
-                ]
+                ],
             )
         )
 
         # Use /me endpoint for delegated permissions
         message = await graph_client.me.messages.by_message_id(email_id).get(
-            request_configuration=request_config
+            request_configuration=request_config,
         )
 
         if not message:
@@ -892,7 +892,7 @@ async def get_outlook_thread_id(email_id: str, graph_client):
 
         conversation_id = message.conversation_id
         print(
-            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}"
+            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}",
         )
 
         return conversation_id, email_id, last_message
@@ -948,7 +948,7 @@ def _collect_attachments(payload):
                 "filename": filename or "",
                 "mimeType": mime_type,
                 "size": size,
-            }
+            },
         )
     for part in payload.get("parts", []):
         attachments.extend(_collect_attachments(part))
@@ -981,7 +981,7 @@ def _gmail_thread_to_conversation(thread):
                 ),
                 "subject": _header(headers, "Subject").replace("Re: ", ""),
                 "content": _payload_text(payload),
-            }
+            },
         )
     return convo
 
@@ -1012,7 +1012,7 @@ def get_thread_id(user_id, history_id, gmail_service):
                         q="is:unread newer_than:1d",
                     )
                     .execute()
-                )
+                ),
             ]
 
         # Process each history entry
@@ -1054,7 +1054,7 @@ def get_thread_id(user_id, history_id, gmail_service):
                 continue
 
             gmail_service.users().messages().modify(
-                userId=user_id, id=msg_id, body={"removeLabelIds": ["UNREAD"]}
+                userId=user_id, id=msg_id, body={"removeLabelIds": ["UNREAD"]},
             ).execute()
 
             # Get the thread for this message
@@ -1169,22 +1169,22 @@ def publish_outlook_thread_id(
             msg_id = publish_future.result(timeout=10)
             print(f"Message ID: {msg_id}")
         print(
-            f"Published conversation_id {conversation_id} for user {user_id} to {topic_path}"
+            f"Published conversation_id {conversation_id} for user {user_id} to {topic_path}",
         )
     except Exception as e:
         print(
-            f"Failed to publish conversation_id {conversation_id} for user {user_id}: {e}"
+            f"Failed to publish conversation_id {conversation_id} for user {user_id}: {e}",
         )
 
 
-def dispatch_agent(agent_name: str):
+def dispatch_livekit_agent(livekit_agent_name: str):
     response = requests.post(
-        f"{COMMS_URL}/phone/dispatch-agent",
+        f"{COMMS_URL}/phone/dispatch-livekit-agent",
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-        json={"agent_name": agent_name},
+        json={"livekit_agent_name": livekit_agent_name},
     )
     if response.status_code != 200:
-        print(f"Failed to dispatch agent. Status: {response.status_code}")
+        print(f"Failed to dispatch LiveKit agent. Status: {response.status_code}")
         return False
     return True
 
@@ -1240,7 +1240,7 @@ async def get_microsoft_user_info(access_token: str) -> dict:
 
 
 async def store_microsoft_tokens(
-    assistant_id: str, old_secrets: dict, new_secrets: dict, api_key: str
+    assistant_id: str, old_secrets: dict, new_secrets: dict, api_key: str,
 ) -> bool:
     """
     Store Microsoft OAuth tokens as assistant secrets.
@@ -1286,7 +1286,7 @@ async def store_microsoft_tokens(
                     print(f"Stored {secret_name} for assistant {assistant_id}")
                 else:
                     print(
-                        f"Failed to store {secret_name}: {response.status_code} - {response.text}"
+                        f"Failed to store {secret_name}: {response.status_code} - {response.text}",
                     )
                     success = False
             except Exception as e:

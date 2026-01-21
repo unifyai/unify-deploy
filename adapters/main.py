@@ -27,7 +27,7 @@ from .helpers import (
     check_valid_contact,
     create_conference_response,
     create_job,
-    dispatch_agent,
+    dispatch_livekit_agent,
     get_assistant,
     get_graph_client_from_token,
     get_outlook_thread_id,
@@ -162,8 +162,8 @@ async def twilio_call_webhook(request: Request):
 
         print(f"Assistant ID: {assistant_id}")
         if assistant_id == "default-assistant":
-            print(f"Dispatching agent {room_name}")
-            dispatch_agent(room_name)
+            print(f"Dispatching LiveKit agent {room_name}")
+            dispatch_livekit_agent(room_name)
 
         print("Conference setup completed")
     except Exception as e:
@@ -756,10 +756,10 @@ async def unify_meet_webhook(request: Request):
         form_data = await request.form()
         payload = dict(form_data)
 
-    agent_name = payload.get("agent_name", "")
+    livekit_agent_name = payload.get("livekit_agent_name", "")
     room_name = payload.get("room_name", "")
-    if not agent_name or not room_name:
-        print("agent_name and room_name are required")
+    if not livekit_agent_name or not room_name:
+        print("livekit_agent_name and room_name are required")
         return Response(status_code=400)
 
     assistant_id_input = payload.get("assistant_id", "")
@@ -768,7 +768,7 @@ async def unify_meet_webhook(request: Request):
         return Response(status_code=400)
 
     print(
-        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} agent_name={agent_name}",
+        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} livekit_agent_name={livekit_agent_name}",
     )
 
     # shared context
@@ -800,7 +800,7 @@ async def unify_meet_webhook(request: Request):
                         "contacts": contacts,
                         "assistant_id": assistant_id,
                         "livekit_room": room_name,
-                        "agent_name": agent_name,
+                        "livekit_agent_name": livekit_agent_name,
                         "timestamp": int(time.time() * 1000),
                     },
                 },
