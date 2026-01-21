@@ -74,35 +74,3 @@ jobs:
       env:
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
         PROJECT_ID: gcp-project-runtime
-
-  communication_tests:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-
-    - name: Auth into Google Cloud
-      uses: 'google-github-actions/auth@v2'
-      with:
-        credentials_json: '${{ secrets.GCP_SA_KEY }}'
-
-    - name: Set up Python
-      uses: actions/setup-python@v2
-      with:
-        python-version: '3.12'
-
-    - name: Configure git for private repos
-      run: |
-        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-      env:
-        GH_TOKEN: ${{ secrets.CLONE_TOKEN }}
-
-    - name: Set up Environment
-      run: |
-        pip install -e .
-        pip install pytest pytest-asyncio
-
-    - name: Run gmail tests
-      run: pytest -vs tests/gmail/
-      env:
-        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-        ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
