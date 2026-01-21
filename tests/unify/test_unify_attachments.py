@@ -32,7 +32,9 @@ def setup_mocks():
 def mock_storage_client():
     """Mock the GCS storage client."""
     mock_blob = MagicMock()
-    mock_blob.generate_signed_url.return_value = "https://storage.googleapis.com/signed-url"
+    mock_blob.generate_signed_url.return_value = (
+        "https://storage.googleapis.com/signed-url"
+    )
     mock_blob.upload_from_string = MagicMock()
 
     mock_bucket = MagicMock()
@@ -64,7 +66,8 @@ def client(mock_storage_client, mock_pubsub_client):
 
     # Mock all external dependencies at the module level
     with patch.dict(
-        "sys.modules", {
+        "sys.modules",
+        {
             "azure": MagicMock(),
             "azure.core": MagicMock(),
             "azure.core.credentials": MagicMock(),
@@ -100,11 +103,17 @@ def client(mock_storage_client, mock_pubsub_client):
 
             # Now patch the specific clients inside the app module
             with patch.object(
-                sys.modules["adapters.main"].storage, "Client", return_value=storage_client,
+                sys.modules["adapters.main"].storage,
+                "Client",
+                return_value=storage_client,
             ), patch.object(
-                sys.modules["adapters.main"].pubsub_v1, "PublisherClient", return_value=mock_pubsub_client,
+                sys.modules["adapters.main"].pubsub_v1,
+                "PublisherClient",
+                return_value=mock_pubsub_client,
             ), patch.object(
-                sys.modules["adapters.main"].Credentials, "from_service_account_info", return_value=MagicMock(),
+                sys.modules["adapters.main"].Credentials,
+                "from_service_account_info",
+                return_value=MagicMock(),
             ):
                 test_client = TestClient(app)
                 test_client.headers["Authorization"] = "Bearer test-admin-key"
@@ -178,7 +187,13 @@ class TestUnifyAttachmentUpload:
         """Reject files exceeding 25MB limit."""
         # Create content larger than 25MB
         large_content = b"x" * (26 * 1024 * 1024)
-        files = {"file": ("large_file.bin", io.BytesIO(large_content), "application/octet-stream")}
+        files = {
+            "file": (
+                "large_file.bin",
+                io.BytesIO(large_content),
+                "application/octet-stream",
+            )
+        }
 
         response = client.post(
             "/unify/attachment",
@@ -205,7 +220,9 @@ class TestUnifyAttachmentUpload:
         """Ensure filename is sanitized (no path traversal)."""
         file_content = b"content"
         # Try to include path in filename
-        files = {"file": ("../../../etc/passwd", io.BytesIO(file_content), "text/plain")}
+        files = {
+            "file": ("../../../etc/passwd", io.BytesIO(file_content), "text/plain")
+        }
 
         response = client.post(
             "/unify/attachment",

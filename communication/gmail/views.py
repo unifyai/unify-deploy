@@ -109,7 +109,9 @@ async def send_email(request: Request):
     subject = data.get("subject", "")
     body = data.get("body")
     in_reply_to = data.get("in_reply_to")  # email_id to reply to (threading id)
-    attachment = data.get("attachment")  # Optional: {"filename": str, "content_base64": str}
+    attachment = data.get(
+        "attachment"
+    )  # Optional: {"filename": str, "content_base64": str}
 
     if not sender or not to or body is None:
         raise HTTPException(
