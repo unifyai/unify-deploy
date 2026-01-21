@@ -102,18 +102,22 @@ def client(mock_storage_client, mock_pubsub_client):
             from fastapi.testclient import TestClient
 
             # Now patch the specific clients inside the app module
-            with patch.object(
-                sys.modules["adapters.main"].storage,
-                "Client",
-                return_value=storage_client,
-            ), patch.object(
-                sys.modules["adapters.main"].pubsub_v1,
-                "PublisherClient",
-                return_value=mock_pubsub_client,
-            ), patch.object(
-                sys.modules["adapters.main"].Credentials,
-                "from_service_account_info",
-                return_value=MagicMock(),
+            with (
+                patch.object(
+                    sys.modules["adapters.main"].storage,
+                    "Client",
+                    return_value=storage_client,
+                ),
+                patch.object(
+                    sys.modules["adapters.main"].pubsub_v1,
+                    "PublisherClient",
+                    return_value=mock_pubsub_client,
+                ),
+                patch.object(
+                    sys.modules["adapters.main"].Credentials,
+                    "from_service_account_info",
+                    return_value=MagicMock(),
+                ),
             ):
                 test_client = TestClient(app)
                 test_client.headers["Authorization"] = "Bearer test-admin-key"
