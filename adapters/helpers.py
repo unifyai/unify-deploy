@@ -155,7 +155,7 @@ def get_assistant(
         "user_name": f"{assistants[0]['user_first_name']} {assistants[0]['user_last_name']}",
         "assistant_first_name": assistants[0]["first_name"],
         "assistant_surname": assistants[0]["surname"],
-        "assistant_age": assistants[0]["age"],
+        "assistant_age": str(assistants[0].get("age", "")),
         "assistant_nationality": assistants[0]["nationality"],
         "assistant_about": assistants[0]["about"],
         "assistant_timezone": assistants[0].get("timezone", "UTC"),
