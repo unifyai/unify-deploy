@@ -15,7 +15,8 @@ import json
 
 subscriber = pubsub_v1.SubscriberClient()
 subscription_path = subscriber.subscription_path(
-    os.getenv("PROJECT_ID"), "unity-default-test-assistant-staging-sub",
+    os.getenv("PROJECT_ID"),
+    "unity-default-test-assistant-staging-sub",
 )
 
 
@@ -33,7 +34,8 @@ def test_twilio_call_status_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -69,7 +71,8 @@ def test_twilio_call_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -114,7 +117,8 @@ def test_twilio_sms_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -153,7 +157,8 @@ def test_twilio_whatsapp_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -184,14 +189,18 @@ def test_unify_message_webhook(test_client):
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers,
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -225,14 +234,18 @@ def test_log_pre_hire_chats_webhook(test_client):
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers,
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -264,14 +277,18 @@ def test_unify_meet_webhook(test_client):
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers,
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -303,13 +320,17 @@ def test_unity_system_event_webhook(test_client):
     }
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=form_payload, headers=headers,
+        "POST",
+        endpoint,
+        json=form_payload,
+        headers=headers,
     )
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub
     pubsub_msg = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = pubsub_msg.ack_id
     pubsub_msg = pubsub_msg.message
@@ -390,7 +411,8 @@ def test_assistant_update_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1,
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -466,7 +488,9 @@ def test_microsoft_router_validation_token(test_client):
     validation_token = "test-validation-token-12345"
 
     response = test_client.make_request(
-        "POST", endpoint, params={"validationToken": validation_token},
+        "POST",
+        endpoint,
+        params={"validationToken": validation_token},
     )
 
     assert response.status_code == 200
@@ -580,7 +604,10 @@ def test_unify_message_webhook_missing_assistant_id(test_client):
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers,
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 400
@@ -611,7 +638,10 @@ def test_unify_meet_webhook_missing_required_fields(test_client):
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers,
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 400
