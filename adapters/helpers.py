@@ -680,7 +680,9 @@ def get_livekit_api():
 
 
 async def create_room_and_dispatch_livekit_agent(
-    room_name: str, livekit_agent_name: str, metadata: dict = None,
+    room_name: str,
+    livekit_agent_name: str,
+    metadata: dict = None,
 ):
     """Create a LiveKit room and dispatch a LiveKit agent to it"""
     livekit_api = get_livekit_api()
@@ -743,13 +745,17 @@ def create_conference_response(conference_name, with_status=False):
 
 
 def add_user_to_conference(
-    conference_name, from_number, to_number_uri, connect_third_party=False,
+    conference_name,
+    from_number,
+    to_number_uri,
+    connect_third_party=False,
 ):
     twilio_client = get_twilio_client()
 
     if connect_third_party:
         conferences = twilio_client.conferences.list(
-            friendly_name=conference_name, status="in-progress",
+            friendly_name=conference_name,
+            status="in-progress",
         )
         participants = twilio_client.conferences(conferences[0].sid).participants.list()
         for participant in participants:
@@ -803,7 +809,8 @@ class TokenCredentialFromSecret(TokenCredential):
     def get_token(self, *scopes, **kwargs) -> AccessToken:
         # Expiry doesn't matter - scheduled job keeps token fresh
         return AccessToken(
-            self._token, int(datetime.now(tz=timezone.utc).timestamp()) + 3600,
+            self._token,
+            int(datetime.now(tz=timezone.utc).timestamp()) + 3600,
         )
 
 
@@ -1054,7 +1061,9 @@ def get_thread_id(user_id, history_id, gmail_service):
                 continue
 
             gmail_service.users().messages().modify(
-                userId=user_id, id=msg_id, body={"removeLabelIds": ["UNREAD"]},
+                userId=user_id,
+                id=msg_id,
+                body={"removeLabelIds": ["UNREAD"]},
             ).execute()
 
             # Get the thread for this message
@@ -1240,7 +1249,10 @@ async def get_microsoft_user_info(access_token: str) -> dict:
 
 
 async def store_microsoft_tokens(
-    assistant_id: str, old_secrets: dict, new_secrets: dict, api_key: str,
+    assistant_id: str,
+    old_secrets: dict,
+    new_secrets: dict,
+    api_key: str,
 ) -> bool:
     """
     Store Microsoft OAuth tokens as assistant secrets.

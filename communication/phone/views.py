@@ -62,13 +62,18 @@ def create_conference_response(conference_name, sip_uri, with_status=False):
 
 
 def add_user_to_conference(
-    conference_name, from_number, to_number, sip_uri, connect_third_party=False,
+    conference_name,
+    from_number,
+    to_number,
+    sip_uri,
+    connect_third_party=False,
 ):
     twilio_client = get_twilio_client()
 
     if connect_third_party:
         conferences = twilio_client.conferences.list(
-            friendly_name=conference_name, status="in-progress",
+            friendly_name=conference_name,
+            status="in-progress",
         )
         participants = twilio_client.conferences(conferences[0].sid).participants.list()
         for participant in participants:
@@ -80,7 +85,9 @@ def add_user_to_conference(
                 ).update(muted=True)
                 break
         response = create_conference_response(
-            conference_name, sip_uri, with_status=True,
+            conference_name,
+            sip_uri,
+            with_status=True,
         )
     else:
         response = create_conference_response(conference_name, sip_uri)
@@ -119,7 +126,8 @@ async def check_recording_status(request: Request):
     if resp.status_code >= 400:
         print("Failed to get recording from Twilio")
         raise HTTPException(
-            status_code=resp.status_code, detail="Failed to get recording from Twilio",
+            status_code=resp.status_code,
+            detail="Failed to get recording from Twilio",
         )
 
     # Extract recording bytes
@@ -163,7 +171,8 @@ async def check_recording_status(request: Request):
     if resp.status_code >= 400:
         print("Failed to get assistants from Unify")
         raise HTTPException(
-            status_code=resp.status_code, detail="Failed to get assistants from Unify",
+            status_code=resp.status_code,
+            detail="Failed to get assistants from Unify",
         )
     for assistant in assistants:
         if assistant["phone"] in [call._from, call.to]:
@@ -189,7 +198,8 @@ async def check_recording_status(request: Request):
         print("Failed to upload recording to Unify")
         print(resp.text)
         raise HTTPException(
-            status_code=resp.status_code, detail="Failed to upload recording to Unify",
+            status_code=resp.status_code,
+            detail="Failed to upload recording to Unify",
         )
     return {"success": True, "recording_url": recording_url}
 
@@ -209,7 +219,9 @@ def get_livekit_api():
 
 
 async def create_room_and_dispatch_livekit_agent(
-    room_name: str, livekit_agent_name: str, metadata: dict = None,
+    room_name: str,
+    livekit_agent_name: str,
+    metadata: dict = None,
 ):
     """Create a LiveKit room and dispatch a LiveKit agent to it"""
     livekit_api = get_livekit_api()
@@ -314,14 +326,20 @@ async def create_phone_number(request: Request):
     numbers = []
     try:
         numbers += twilio_client.available_phone_numbers(phone_country).local.list(
-            limit=1, sms_enabled=True, voice_enabled=True, beta=False,
+            limit=1,
+            sms_enabled=True,
+            voice_enabled=True,
+            beta=False,
         )
     except Exception as e:
         pass
 
     try:
         numbers += twilio_client.available_phone_numbers(phone_country).mobile.list(
-            limit=1, sms_enabled=True, voice_enabled=True, beta=False,
+            limit=1,
+            sms_enabled=True,
+            voice_enabled=True,
+            beta=False,
         )
     except Exception as e:
         pass
@@ -377,7 +395,8 @@ async def delete_phone_number(request: Request):
 
     # Find the purchased number by E.164
     incoming_list = twilio_client.incoming_phone_numbers.list(
-        phone_number=phone_number, limit=1,
+        phone_number=phone_number,
+        limit=1,
     )
     if not incoming_list:
         raise HTTPException(status_code=404, detail="Phone number not found")
@@ -425,7 +444,8 @@ async def hang_up(request: Request):
 
     twilio_client = get_twilio_client()
     conferences = twilio_client.conferences.list(
-        friendly_name=conference_name, status="in-progress",
+        friendly_name=conference_name,
+        status="in-progress",
     )
     conference = (
         twilio_client.conferences(conferences[0].sid).participants(call_sid).delete()
@@ -440,7 +460,8 @@ async def end_conference(request: Request):
 
     twilio_client = get_twilio_client()
     conferences = twilio_client.conferences.list(
-        friendly_name=conference_name, status="in-progress",
+        friendly_name=conference_name,
+        status="in-progress",
     )
     conference = twilio_client.conferences(conferences[0].sid).update(
         status="completed",
