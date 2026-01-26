@@ -1,0 +1,70 @@
+# =============================================================================
+# Caddy Configuration Template
+# This file is used as a template; the actual Caddyfile is generated at runtime
+# by startup.sh with the hostname from GCP metadata.
+#
+# Variables (replaced at runtime):
+#   ${HOSTNAME} - DNS hostname for HTTPS (e.g., vm.example.com)
+# =============================================================================
+
+${HOSTNAME} {
+    # ==========================================================================
+    # WebSocket Support for noVNC
+    # noVNC uses WebSocket for VNC communication
+    # ==========================================================================
+    @websocket {
+        path /desktop/*
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @websocket localhost:6080
+
+    # ==========================================================================
+    # Desktop Routes (noVNC)
+    # ==========================================================================
+    
+    # Redirect /desktop to /desktop/
+    @desktop_exact path /desktop
+    handle @desktop_exact {
+        redir /desktop/ permanent
+    }
+
+    # Serve noVNC at /desktop/*
+    handle_path /desktop/* {
+        reverse_proxy localhost:6080
+    }
+
+    # ==========================================================================
+    # API Routes (Agent Service)
+    # ==========================================================================
+    
+    # Redirect /api to /api/
+    @api_exact path /api
+    handle @api_exact {
+        redir /api/ permanent
+    }
+
+    # Proxy API requests to Agent Service
+    handle_path /api/* {
+        reverse_proxy localhost:3000
+    }
+
+    # ==========================================================================
+    # Default Handler
+    # ==========================================================================
+    handle {
+        respond "Not Found" 404
+    }
+
+    # ==========================================================================
+    # Logging
+    # ==========================================================================
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+        format console
+    }
+}
+
