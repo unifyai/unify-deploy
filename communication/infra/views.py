@@ -13,18 +13,13 @@ from .helpers import (
     delete_job,
     get_job_logs,
     suspend_job,
-    create_external_service_for_job,
-    delete_service,
-    add_ingress_rule_for_job,
-    remove_ingress_rule_for_job,
-    get_job_readiness_status,
 )
 from .vm_helpers import (
-    provision_windows_vm_full,
-    deprovision_windows_vm_full,
-    start_windows_vm,
-    stop_windows_vm,
-    get_windows_vm_status,
+    provision_vm_full,
+    deprovision_vm_full,
+    start_vm,
+    stop_vm,
+    get_vm_status,
 )
 from .models import (
     VMCreateRequest,
@@ -179,166 +174,6 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
         raise HTTPException(status_code=500, detail=f"Failed to delete topic: {str(e)}")
 
 
-# create external service for a job
-@router.post("/job/expose")
-async def expose_job_service(
-    job_name: str = Form(...),
-    namespace: str = Form(DEFAULT_NAMESPACE),
-    port: int = Form(6080),
-    service_name: str = Form(""),
-    attach_owner: bool = Form(True),
-):
-    """
-    Create a ClusterIP Service and add an Ingress rule to expose the Job via HTTPS.
-    Returns the service name and HTTPS URL.
-    """
-    try:
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
-            )
-
-        name = service_name or f"unity-svc-{job_name}"
-        # If attaching owner, look up job UID to set ownerReferences
-        job_uid = None
-        if attach_owner:
-            try:
-                job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
-                job_uid = job.metadata.uid
-            except Exception:
-                job_uid = None
-
-        # Create ClusterIP service
-        svc = create_external_service_for_job(
-            core_api=core_api,
-            job_name=job_name,
-            namespace=namespace,
-            port=port,
-            service_name=name,
-            job_uid=job_uid,
-        )
-        if not svc:
-            raise HTTPException(status_code=500, detail="Failed to create Service")
-
-        # Add Ingress rule
-        ingress_result = add_ingress_rule_for_job(
-            networking_api=networking_api,
-            job_name=job_name,
-            service_name=name,
-            namespace=namespace,
-            port=port,
-        )
-
-        return {
-            "success": True,
-            "service_name": name,
-            "namespace": namespace,
-            "port": port,
-            "external": {
-                "ready": ingress_result["success"],
-                "url": ingress_result.get("url"),
-                "hostname": ingress_result.get("hostname"),
-                "type": "ingress",
-            },
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to expose service: {str(e)}"
-        )
-
-
-# get external url for a service with readiness check
-@router.get("/job/service/ip")
-async def get_job_service_ip(
-    service_name: str,
-    namespace: str = DEFAULT_NAMESPACE,
-):
-    """Get the HTTPS URL for a job service with readiness status.
-
-    Ready = K8s checks pass AND 5 minutes have elapsed since job creation
-    (to allow for GCE LB propagation).
-
-    Args:
-        service_name: Name of the service (e.g., unity-svc-unity-2024-12-08-10-00-00)
-        namespace: Kubernetes namespace (default: "default")
-    """
-    try:
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
-            )
-
-        # Extract job_name from service_name (unity-svc-{job_name})
-        job_name = service_name.replace("unity-svc-", "")
-
-        # Get comprehensive readiness status
-        readiness_info = get_job_readiness_status(
-            core_api=core_api,
-            networking_api=networking_api,
-            job_name=job_name,
-            service_name=service_name,
-            namespace=namespace,
-        )
-
-        return {
-            "success": True,
-            "service_name": service_name,
-            "namespace": namespace,
-            "external": readiness_info,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get service URL: {str(e)}"
-        )
-
-
-# delete external service
-@router.delete("/job/service")
-async def delete_job_service(
-    service_name: str = Form(...), namespace: str = Form(DEFAULT_NAMESPACE)
-):
-    """Delete a Service and its associated Ingress rule."""
-    try:
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
-            )
-
-        # Extract job_name from service_name
-        job_name = service_name.replace("unity-svc-", "")
-
-        # Remove Ingress rule first
-        remove_ingress_rule_for_job(
-            networking_api=networking_api,
-            job_name=job_name,
-        )
-
-        # Delete the service
-        ok = delete_service(core_api, service_name, namespace)
-        if ok:
-            return {
-                "success": True,
-                "message": f"Service and Ingress rule deleted: {service_name}",
-                "service_name": service_name,
-            }
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete service: {service_name}"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete service: {str(e)}"
-        )
-
-
 # create kubernetes job
 @router.post("/job/create")
 async def create_kubernetes_job(
@@ -346,14 +181,12 @@ async def create_kubernetes_job(
     image: str = Form(
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
     ),
-    expose_service: bool = Form(True),
-    expose_port: int = Form(6080),
-    service_name: str = Form(""),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
 
     Args:
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
         image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
@@ -383,7 +216,7 @@ async def create_kubernetes_job(
         )
 
         if job:
-            response = {
+            return {
                 "success": True,
                 "message": "Kubernetes job created successfully",
                 "job_name": job.metadata.name,
@@ -396,39 +229,6 @@ async def create_kubernetes_job(
                     else None
                 ),
             }
-
-            # Optionally expose the job via Ingress
-            if expose_service:
-                name = service_name or f"unity-svc-{job.metadata.name}"
-                svc = create_external_service_for_job(
-                    core_api=core_api,
-                    job_name=job.metadata.name,
-                    namespace=namespace,
-                    port=expose_port,
-                    service_name=name,
-                    job_uid=job.metadata.uid,
-                )
-                if svc:
-                    # Add Ingress rule for HTTPS access
-                    ingress_result = add_ingress_rule_for_job(
-                        networking_api=networking_api,
-                        job_name=job.metadata.name,
-                        service_name=name,
-                        namespace=namespace,
-                        port=expose_port,
-                    )
-                    response["service"] = {
-                        "service_name": name,
-                        "port": expose_port,
-                        "external": {
-                            "ready": ingress_result["success"],
-                            "url": ingress_result.get("url"),
-                            "hostname": ingress_result.get("hostname"),
-                            "type": "ingress",
-                        },
-                    }
-
-            return response
         else:
             raise HTTPException(
                 status_code=500,
@@ -448,15 +248,13 @@ async def create_kubernetes_job(
 async def delete_kubernetes_job(
     job_name: str = Form(...),
     namespace: str = Form(DEFAULT_NAMESPACE),
-    delete_services: bool = Form(False),
-    delete_ingress: bool = Form(True),
 ):
     """
     Delete a Kubernetes Job for a Unity assistant.
 
     Args:
         job_name: Name of the job (required)
-        namespace: Kubernetes namespace (optional, defaults to "default")
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
     """
     try:
         # Initialize Kubernetes client
@@ -466,50 +264,15 @@ async def delete_kubernetes_job(
                 status_code=500, detail="Failed to connect to Kubernetes cluster"
             )
 
-        deleted_services = []
-        failed_services = []
-
-        # Optionally delete any services associated with this job
-        if delete_services:
-            try:
-                svcs = core_api.list_namespaced_service(
-                    namespace=namespace, label_selector=f"job-name={job_name}"
-                )
-                for svc in svcs.items:
-                    svc_name = svc.metadata.name
-                    # Remove Ingress rule first
-                    remove_ingress_rule_for_job(
-                        networking_api=networking_api,
-                        job_name=job_name,
-                    )
-                    ok = delete_service(core_api, svc_name, namespace)
-                    if ok:
-                        deleted_services.append(svc_name)
-                    else:
-                        failed_services.append(svc_name)
-            except Exception:
-                # Continue even if listing services fails
-                pass
-
         # Delete the job
         success = delete_job(batch_api, job_name, namespace)
 
         if success:
-
-            # Optionally delete the ingress rule only when job delete is successful
-            if delete_ingress:
-                remove_ingress_rule_for_job(
-                    networking_api=networking_api,
-                    job_name=job_name,
-                )
-
             return {
                 "success": True,
                 "message": f"Job deleted successfully: {job_name}",
                 "job_name": job_name,
                 "namespace": namespace,
-                "deleted_services": deleted_services,
-                "failed_services": failed_services,
             }
         else:
             raise HTTPException(
@@ -850,28 +613,32 @@ async def get_latest_unity_image_commit():
 
 
 # =============================================================================
-# Windows VM Management Endpoints
+# VM Management Endpoints (Windows and Ubuntu)
 # =============================================================================
 
 
 @router.post("/vm/create", response_model=VMCreateResponse)
-async def create_vm(request: VMCreateRequest):
+async def create_vm_endpoint(request: VMCreateRequest):
     """
-    Create a new Windows VM with full provisioning:
+    Create a new VM (Windows or Ubuntu) with full provisioning:
     - Reserve static IP
     - Create DNS A record (unity-assistant-{id}.vm.unify.ai)
     - Create and start VM with init script
 
-    Called by external hire webhook when assistant has windows_mode=true.
+    Called by external hire webhook when assistant has desktop_mode set.
 
-    Authentication: unify_apikey is used for both VNC and Windows password.
-    Windows username is set to the assistant_name.
+    Args:
+        assistant_id: The assistant ID (numeric string)
+        unify_apikey: Unify API key (used for VNC password and Windows password)
+        assistant_name: Assistant name (used for Windows username, ignored for Ubuntu)
+        vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = provision_windows_vm_full(
+        result = provision_vm_full(
             assistant_id=request.assistant_id,
             unify_apikey=request.unify_apikey,
             assistant_name=request.assistant_name,
+            vm_type=request.vm_type,
         )
         return VMCreateResponse(**result)
     except Exception as e:
@@ -880,14 +647,18 @@ async def create_vm(request: VMCreateRequest):
 
 
 @router.post("/vm/start", response_model=VMActionResponse)
-async def start_vm(request: VMActionRequest):
+async def start_vm_endpoint(request: VMActionRequest):
     """
-    Start a stopped Windows VM.
+    Start a stopped VM (Windows or Ubuntu).
 
     Called by external wakeup webhook when assistant needs to be activated.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = start_windows_vm(request.assistant_id)
+        result = start_vm(request.assistant_id, request.vm_type)
         return VMActionResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -897,14 +668,18 @@ async def start_vm(request: VMActionRequest):
 
 
 @router.post("/vm/stop", response_model=VMActionResponse)
-async def stop_vm(request: VMActionRequest):
+async def stop_vm_endpoint(request: VMActionRequest):
     """
-    Stop a running Windows VM (preserves data).
+    Stop a running VM (Windows or Ubuntu). Preserves data.
 
     Called when assistant job/session ends.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = stop_windows_vm(request.assistant_id)
+        result = stop_vm(request.assistant_id, request.vm_type)
         return VMActionResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -914,17 +689,21 @@ async def stop_vm(request: VMActionRequest):
 
 
 @router.delete("/vm/delete", response_model=VMDeleteResponse)
-async def delete_vm(request: VMActionRequest):
+async def delete_vm_endpoint(request: VMActionRequest):
     """
-    Delete a Windows VM with full deprovisioning:
+    Delete a VM (Windows or Ubuntu) with full deprovisioning:
     - Delete VM
     - Delete DNS record
     - Release static IP
 
     Called by external unhire webhook when assistant is removed.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = deprovision_windows_vm_full(request.assistant_id)
+        result = deprovision_vm_full(request.assistant_id, request.vm_type)
         return VMDeleteResponse(**result)
     except Exception as e:
         logger.error(f"Failed to delete VM: {e}")
@@ -932,11 +711,15 @@ async def delete_vm(request: VMActionRequest):
 
 
 @router.get("/vm/status/{assistant_id}", response_model=VMStatusResponse)
-async def get_vm_status(assistant_id: str):
+async def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
     """
-    Get the current status of a Windows VM.
+    Get the current status of a VM (Windows or Ubuntu).
+
+    Args:
+        assistant_id: The assistant ID (path parameter)
+        vm_type: "windows" or "ubuntu" (query parameter, defaults to "windows")
     """
-    result = get_windows_vm_status(assistant_id)
+    result = get_vm_status(assistant_id, vm_type)
     if result is None:
         raise HTTPException(
             status_code=404, detail=f"VM not found for assistant {assistant_id}"
