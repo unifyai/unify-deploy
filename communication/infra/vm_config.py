@@ -72,16 +72,6 @@ UBUNTU_INIT_SCRIPT_PATH = os.path.join(
 )
 
 # =============================================================================
-# Legacy aliases (for backward compatibility)
-# =============================================================================
-VM_MACHINE_TYPE = WINDOWS_VM_MACHINE_TYPE
-VM_DISK_SIZE_GB = WINDOWS_VM_DISK_SIZE_GB
-VM_IMAGE_FAMILY = WINDOWS_VM_IMAGE_FAMILY
-VM_IMAGE_PROJECT = WINDOWS_VM_IMAGE_PROJECT
-VM_TAGS = WINDOWS_VM_TAGS
-INIT_SCRIPT_PATH = WINDOWS_INIT_SCRIPT_PATH
-
-# =============================================================================
 # Secrets (loaded from Secret Manager in production)
 # =============================================================================
 MAK_KEY = os.getenv("MAK_KEY", "")
