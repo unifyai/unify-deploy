@@ -1,4 +1,4 @@
-# linux-vm.pkr.hcl - Packer template for Unity Linux VM base image
+# ubuntu-vm.pkr.hcl - Packer template for Unity Ubuntu VM base image
 #
 # This creates a custom Ubuntu image with pre-installed software:
 # - XFCE4 Desktop (full)
@@ -16,10 +16,10 @@
 #
 # Usage:
 #   packer init .
-#   packer build -var "project_id=YOUR_PROJECT" linux-vm.pkr.hcl
+#   packer build -var "project_id=YOUR_PROJECT" ubuntu-vm.pkr.hcl
 #
 # With service account credentials:
-#   packer build -var "project_id=YOUR_PROJECT" -var "credentials_file=/path/to/sa.json" linux-vm.pkr.hcl
+#   packer build -var "project_id=YOUR_PROJECT" -var "credentials_file=/path/to/sa.json" ubuntu-vm.pkr.hcl
 
 packer {
   required_plugins {
@@ -65,7 +65,7 @@ variable "disk_size" {
 
 variable "image_family" {
   type        = string
-  default     = "unity-linux-vm"
+  default     = "unity-ubuntu-vm"
   description = "Image family name for the output image"
 }
 
@@ -85,7 +85,7 @@ variable "subnetwork" {
 # Source: Ubuntu 22.04 LTS
 # =============================================================================
 
-source "googlecompute" "linux-vm" {
+source "googlecompute" "ubuntu-vm" {
   project_id       = var.project_id
   credentials_file = var.credentials_file != "" ? var.credentials_file : null
   zone             = var.zone
@@ -98,10 +98,10 @@ source "googlecompute" "linux-vm" {
   # Output image configuration
   image_name        = "${var.image_family}-{{timestamp}}"
   image_family      = var.image_family
-  image_description = "Unity Linux VM with XFCE4, TigerVNC, noVNC, Node.js, Playwright, Caddy. SSH enabled."
+  image_description = "Unity Ubuntu VM with XFCE4, TigerVNC, noVNC, Node.js, Playwright, Caddy. SSH enabled."
   image_labels = {
     "managed-by" = "packer"
-    "purpose"    = "unity-linux-vm"
+    "purpose"    = "unity-ubuntu-vm"
   }
 
   # Disk configuration
@@ -129,7 +129,7 @@ source "googlecompute" "linux-vm" {
 # =============================================================================
 
 build {
-  sources = ["source.googlecompute.linux-vm"]
+  sources = ["source.googlecompute.ubuntu-vm"]
 
   # Upload the base installation script
   provisioner "file" {
@@ -191,7 +191,7 @@ build {
       "echo '  - Caddy'",
       "echo '  - supervisord'",
       "echo ''",
-      "echo 'Use linux-vm-startup.sh at instance creation for:'",
+      "echo 'Use ubuntu-vm-startup.sh at instance creation for:'",
       "echo '  - VNC password, repos, API keys, services'"
     ]
   }

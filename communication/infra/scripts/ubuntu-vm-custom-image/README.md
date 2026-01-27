@@ -1,6 +1,6 @@
-# Linux VM Custom Image (Packer)
+# Ubuntu VM Custom Image (Packer)
 
-Creates a custom GCP Ubuntu image with pre-installed software for Unity Linux VMs.
+Creates a custom GCP Ubuntu image with pre-installed software for Unity Ubuntu VMs.
 
 This is equivalent to the Windows VM approach using `windows-vm-custom-image/`.
 
@@ -43,26 +43,26 @@ cd packer
 packer init .
 
 # Build the image
-packer build -var "project_id=YOUR_PROJECT_ID" linux-vm.pkr.hcl
+packer build -var "project_id=YOUR_PROJECT_ID" ubuntu-vm.pkr.hcl
 
 # With custom zone
 packer build \
   -var "project_id=YOUR_PROJECT_ID" \
   -var "zone=us-west1-a" \
-  linux-vm.pkr.hcl
+  ubuntu-vm.pkr.hcl
 
 # With service account
 packer build \
   -var "project_id=YOUR_PROJECT_ID" \
   -var "credentials_file=/path/to/sa.json" \
-  linux-vm.pkr.hcl
+  ubuntu-vm.pkr.hcl
 ```
 
 ### Build Output
 
 The image is created in your project with:
-- **Image family**: `unity-linux-vm`
-- **Image name**: `unity-linux-vm-{timestamp}`
+- **Image family**: `unity-ubuntu-vm`
+- **Image name**: `unity-ubuntu-vm-{timestamp}`
 
 ## Creating a VM from the Image
 
@@ -70,20 +70,20 @@ The image is created in your project with:
 
 ```bash
 # Reserve static IP (optional)
-gcloud compute addresses create linux-vm-ip \
+gcloud compute addresses create ubuntu-vm-ip \
   --region=us-central1 \
   --network-tier=PREMIUM
 
 # Create VM
-gcloud compute instances create linux-vm-test \
+gcloud compute instances create ubuntu-vm-test \
   --project=YOUR_PROJECT_ID \
   --zone=us-central1-a \
   --machine-type=e2-standard-2 \
-  --image-family=unity-linux-vm \
+  --image-family=unity-ubuntu-vm \
   --image-project=YOUR_PROJECT_ID \
-  --address=linux-vm-ip \
+  --address=ubuntu-vm-ip \
   --tags=http-server,https-server \
-  --metadata-from-file=startup-script=../linux-vm-startup.sh \
+  --metadata-from-file=startup-script=../ubuntu-vm-startup.sh \
   --metadata=^::^vnc-password=YOUR_VNC_PASSWORD::hostname=vm.example.com::github-token=ghp_xxx::anthropic-api-key=sk-ant-xxx::unify-key=xxx
 ```
 
@@ -95,7 +95,7 @@ from google.cloud import compute_v1
 # Create disk from image family
 disk = compute_v1.AttachedDisk()
 disk.initialize_params = compute_v1.AttachedDiskInitializeParams()
-disk.initialize_params.source_image = f"projects/{project_id}/global/images/family/unity-linux-vm"
+disk.initialize_params.source_image = f"projects/{project_id}/global/images/family/unity-ubuntu-vm"
 disk.initialize_params.disk_size_gb = 50
 disk.initialize_params.disk_type = f"zones/{zone}/diskTypes/pd-ssd"
 disk.boot = True
@@ -104,7 +104,7 @@ disk.auto_delete = True
 # Set metadata
 metadata = compute_v1.Metadata()
 metadata.items = [
-    {"key": "startup-script", "value": open("linux-vm-startup.sh").read()},
+    {"key": "startup-script", "value": open("ubuntu-vm-startup.sh").read()},
     {"key": "vnc-password", "value": "xxx"},
     {"key": "hostname", "value": "vm.example.com"},
     {"key": "github-token", "value": "ghp_xxx"},
@@ -145,17 +145,17 @@ metadata.items = [
 ## Directory Structure
 
 ```
-linux-vm-custom-image/
+ubuntu-vm-custom-image/
 ├── packer/
-│   ├── linux-vm.pkr.hcl          # Packer template
+│   ├── ubuntu-vm.pkr.hcl          # Packer template
 │   ├── scripts/
-│   │   └── install-base.sh       # Pre-install script
+│   │   └── install-base.sh        # Pre-install script
 │   └── files/
-│       ├── supervisord.conf      # Process manager config
-│       └── novnc-custom.html     # Custom noVNC wrapper
+│       ├── supervisord.conf       # Process manager config
+│       └── novnc-custom.html      # Custom noVNC wrapper
 └── README.md
 
-../linux-vm-startup.sh             # Runtime startup script
+../ubuntu-vm-startup.sh             # Runtime startup script
 ```
 
 ## Firewall Rules
@@ -178,7 +178,7 @@ gcloud compute firewall-rules create allow-agent-service --allow=tcp:3000 --targ
 
 ```bash
 # SSH into VM
-gcloud compute ssh linux-vm-test --zone=us-central1-a
+gcloud compute ssh ubuntu-vm-test --zone=us-central1-a
 
 # View startup script output
 sudo journalctl -u google-startup-scripts.service
@@ -190,16 +190,15 @@ sudo tail -f /var/log/supervisor/agent-service.log
 sudo tail -f /var/log/caddy/access.log
 ```
 
-## Comparison: Windows vs Linux
+## Comparison: Windows vs Ubuntu
 
-| Feature | Windows | Linux |
-|---------|---------|-------|
+| Feature | Windows | Ubuntu |
+|---------|---------|--------|
 | Base Image | `windows-2025` | `ubuntu-2204-lts` |
-| Image Family | `unity-windows-vm` | `unity-linux-vm` |
+| Image Family | `unity-windows-vm` | `unity-ubuntu-vm` |
 | Startup Script Key | `windows-startup-script-ps1` | `startup-script` |
 | Desktop | Windows Explorer | XFCE4 |
 | VNC Server | TightVNC | TigerVNC |
 | Communicator | WinRM | SSH |
 | Build Time | ~60 min (Office) | ~15 min |
 | Image Size | ~15GB | ~5GB |
-

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Linux VM Startup Script
+# Ubuntu VM Startup Script
 # Equivalent to: windows-vm-startup.ps1
 #
 # This script runs on VM boot via GCP startup-script metadata and:
@@ -21,9 +21,9 @@
 #
 # Usage (GCP):
 #   gcloud compute instances create VM_NAME \
-#     --image-family=unity-linux-vm \
+#     --image-family=unity-ubuntu-vm \
 #     --image-project=YOUR_PROJECT \
-#     --metadata-from-file=startup-script=linux-vm-startup.sh \
+#     --metadata-from-file=startup-script=ubuntu-vm-startup.sh \
 #     --metadata=vnc-password=xxx,hostname=vm.example.com,...
 # =============================================================================
 
@@ -47,7 +47,7 @@ export HOME=/root
 export PATH="/root/.bun/bin:$PATH"
 
 echo "=========================================="
-echo "  Linux VM Startup Script"
+echo "  Ubuntu VM Startup Script"
 echo "=========================================="
 echo ""
 
@@ -376,7 +376,7 @@ mkdir -p /var/log/caddy
 
 if [[ -n "$CONFIG_HOSTNAME" ]]; then
     cat > /etc/caddy/Caddyfile << EOF
-# Linux VM - Caddy Configuration
+# Ubuntu VM - Caddy Configuration
 # Hostname: $CONFIG_HOSTNAME
 # Generated: $(date)
 

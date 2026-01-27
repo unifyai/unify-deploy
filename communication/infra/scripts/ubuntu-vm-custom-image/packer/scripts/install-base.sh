@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# install-base.sh - Packer provisioner script for Unity Linux VM
+# install-base.sh - Packer provisioner script for Unity Ubuntu VM
 #
 # This script pre-installs all software into the base image:
 # - XFCE4 Desktop (full)
@@ -25,7 +25,7 @@ PLAYWRIGHT_VERSION="1.52.0"
 CADDY_VERSION="2.7.6"
 
 echo "=========================================="
-echo "  Unity Linux VM Base Image Build"
+echo "  Unity Ubuntu VM Base Image Build"
 echo "=========================================="
 echo ""
 
