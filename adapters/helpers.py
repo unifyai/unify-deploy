@@ -501,34 +501,35 @@ def start_unity_job(assistant: dict, medium: str):
     except requests.exceptions.Timeout:
         print(f"Job started for assistant {assistant_id} (timeout)")
 
-    # Start Windows VM if conditions are met
-    # Condition: is_user_desktop=False AND desktop_mode="windows"
-    if not is_user_desktop and desktop_mode == "windows":
+    # Start VM if conditions are met
+    # Condition: is_user_desktop=False AND desktop_mode in ("windows", "ubuntu")
+    if not is_user_desktop and desktop_mode in ("windows", "ubuntu"):
+        vm_type = desktop_mode  # "windows" or "ubuntu"
         try:
             vm_response = requests.post(
                 f"{COMMS_URL}/infra/vm/start",
                 headers=headers,
-                json={"assistant_id": assistant_id},
+                json={"assistant_id": assistant_id, "vm_type": vm_type},
                 timeout=60,
             )
             if vm_response.status_code == 200:
-                print(f"Windows VM started for assistant {assistant_id}")
+                print(f"{vm_type.capitalize()} VM started for assistant {assistant_id}")
             elif vm_response.status_code == 404:
                 print(
-                    f"Windows VM not found for assistant {assistant_id} - "
+                    f"{vm_type.capitalize()} VM not found for assistant {assistant_id} - "
                     "VM should be created at hire time",
                 )
             else:
                 print(
-                    f"Failed to start Windows VM for {assistant_id}: "
+                    f"Failed to start {vm_type} VM for {assistant_id}: "
                     f"{vm_response.status_code} - {vm_response.text}",
                 )
         except requests.exceptions.Timeout:
             print(
-                f"Windows VM start request sent for assistant {assistant_id} (timeout)",
+                f"{vm_type.capitalize()} VM start request sent for assistant {assistant_id} (timeout)",
             )
         except Exception as e:
-            print(f"Error starting Windows VM for assistant {assistant_id}: {e}")
+            print(f"Error starting {vm_type} VM for assistant {assistant_id}: {e}")
 
 
 def create_job(assistant_id: str):
