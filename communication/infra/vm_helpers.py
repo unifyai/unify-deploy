@@ -1,7 +1,7 @@
 """
-Windows VM Lifecycle Management Helpers
+VM Lifecycle Management Helpers
 
-This module provides functions for managing Windows VMs on GCP, including:
+This module provides functions for managing VMs on GCP (Windows and Ubuntu), including:
 - Static IP reservation and release
 - DNS A record management
 - VM creation, start, stop, and deletion
@@ -35,16 +35,24 @@ from .vm_config import (
     ZONE,
     DNS_ZONE_NAME,
     DOMAIN_SUFFIX,
-    VM_MACHINE_TYPE,
-    VM_DISK_SIZE_GB,
     VM_DISK_TYPE,
-    VM_IMAGE_FAMILY,
-    VM_IMAGE_PROJECT,
     VM_NETWORK,
-    VM_TAGS,
     ENV_SUFFIX,
-    INIT_SCRIPT_PATH,
     MAK_KEY,
+    # Windows VM config
+    WINDOWS_VM_MACHINE_TYPE,
+    WINDOWS_VM_DISK_SIZE_GB,
+    WINDOWS_VM_IMAGE_FAMILY,
+    WINDOWS_VM_IMAGE_PROJECT,
+    WINDOWS_VM_TAGS,
+    WINDOWS_INIT_SCRIPT_PATH,
+    # Ubuntu VM config
+    UBUNTU_VM_MACHINE_TYPE,
+    UBUNTU_VM_DISK_SIZE_GB,
+    UBUNTU_VM_IMAGE_FAMILY,
+    UBUNTU_VM_IMAGE_PROJECT,
+    UBUNTU_VM_TAGS,
+    UBUNTU_INIT_SCRIPT_PATH,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,23 +92,34 @@ def get_secret(secret_name: str, project_id: str = None) -> Optional[str]:
 # =============================================================================
 
 
-def get_vm_name(assistant_id: str) -> str:
-    """Generate consistent VM name from assistant ID."""
-    # Sanitize assistant_id for GCP naming (lowercase, alphanumeric, hyphens)
+def get_vm_name(assistant_id: str, vm_type: str = "windows") -> str:
+    """Generate consistent VM name from assistant ID and type.
+
+    Windows: unity-win-{id}{-staging}
+    Ubuntu: unity-ubuntu-{id}{-staging}
+    """
     sanitized = assistant_id.lower().replace("_", "-")
-    return f"unity-win-{sanitized}{ENV_SUFFIX}"
+    prefix = "unity-win" if vm_type == "windows" else "unity-ubuntu"
+    return f"{prefix}-{sanitized}{ENV_SUFFIX}"
 
 
-def get_static_ip_name(assistant_id: str) -> str:
-    """Generate consistent static IP name from assistant ID."""
+def get_static_ip_name(assistant_id: str, vm_type: str = "windows") -> str:
+    """Generate consistent static IP name from assistant ID and type.
+
+    Windows: unity-win-ip-{id}{-staging}
+    Ubuntu: unity-ubuntu-ip-{id}{-staging}
+    """
     sanitized = assistant_id.lower().replace("_", "-")
-    return f"unity-win-ip-{sanitized}{ENV_SUFFIX}"
+    prefix = "unity-win-ip" if vm_type == "windows" else "unity-ubuntu-ip"
+    return f"{prefix}-{sanitized}{ENV_SUFFIX}"
 
 
 def get_dns_hostname(assistant_id: str) -> str:
     """Generate consistent DNS hostname from assistant ID.
 
-    Format: unity-assistant-{id}.vm.unify.ai
+    Format: unity-assistant-{id}{-staging}.vm.unify.ai
+
+    NOTE: Same for both Windows and Ubuntu - only one VM per assistant.
     """
     return f"unity-assistant-{assistant_id}{ENV_SUFFIX}.{DOMAIN_SUFFIX}"
 
@@ -110,21 +129,26 @@ def get_dns_hostname(assistant_id: str) -> str:
 # =============================================================================
 
 
-def reserve_static_ip(assistant_id: str) -> str:
+def reserve_static_ip(assistant_id: str, vm_type: str = "windows") -> str:
     """
     Reserve a static external IP address for the VM.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         The reserved IP address string.
     """
     client = compute_v1.AddressesClient()
-    ip_name = get_static_ip_name(assistant_id)
+    ip_name = get_static_ip_name(assistant_id, vm_type)
+    type_label = "Windows" if vm_type == "windows" else "Ubuntu"
 
     address = compute_v1.Address(
         name=ip_name,
         address_type="EXTERNAL",
         network_tier="PREMIUM",
-        description=f"Static IP for Unity Windows VM - Assistant {assistant_id}",
+        description=f"Static IP for Unity {type_label} VM - Assistant {assistant_id}",
     )
 
     try:
@@ -143,15 +167,19 @@ def reserve_static_ip(assistant_id: str) -> str:
     return result.address
 
 
-def release_static_ip(assistant_id: str) -> bool:
+def release_static_ip(assistant_id: str, vm_type: str = "windows") -> bool:
     """
     Release the static IP address.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         True if released, False if not found.
     """
     client = compute_v1.AddressesClient()
-    ip_name = get_static_ip_name(assistant_id)
+    ip_name = get_static_ip_name(assistant_id, vm_type)
 
     try:
         operation = client.delete(
@@ -167,10 +195,10 @@ def release_static_ip(assistant_id: str) -> bool:
         return False
 
 
-def get_static_ip(assistant_id: str) -> Optional[str]:
+def get_static_ip(assistant_id: str, vm_type: str = "windows") -> Optional[str]:
     """Get the static IP address if it exists."""
     client = compute_v1.AddressesClient()
-    ip_name = get_static_ip_name(assistant_id)
+    ip_name = get_static_ip_name(assistant_id, vm_type)
 
     try:
         result = client.get(project=VM_PROJECT_ID, region=REGION, address=ip_name)
@@ -254,7 +282,7 @@ def delete_dns_record(assistant_id: str) -> bool:
 
 
 # =============================================================================
-# Startup Script
+# Startup Scripts
 # =============================================================================
 
 
@@ -264,26 +292,36 @@ def generate_vnc_password(length: int = 12) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
-def load_startup_script() -> str:
+def load_windows_startup_script() -> str:
     """
     Load the Windows init script from file.
-
-    The script reads configuration from GCP instance metadata keys:
-    - windows-username: Windows user to create
-    - windows-password: Windows user password
-    - vnc-password: VNC/TightVNC password
-    - hostname: DNS hostname for Caddy HTTPS
-    - office-mak-key: Office MAK activation key (optional)
 
     Returns:
         The PowerShell startup script content.
     """
-    with open(INIT_SCRIPT_PATH, "r") as f:
+    with open(WINDOWS_INIT_SCRIPT_PATH, "r") as f:
         return f.read()
 
 
+def load_ubuntu_startup_script() -> str:
+    """
+    Load the Ubuntu init script from file.
+
+    Returns:
+        The bash startup script content.
+    """
+    with open(UBUNTU_INIT_SCRIPT_PATH, "r") as f:
+        return f.read()
+
+
+# Legacy alias for backward compatibility
+def load_startup_script() -> str:
+    """Load the Windows init script from file (legacy alias)."""
+    return load_windows_startup_script()
+
+
 # =============================================================================
-# VM Lifecycle Management
+# VM Creation - Windows
 # =============================================================================
 
 
@@ -297,8 +335,7 @@ def create_windows_vm(
     """
     Create a new Windows VM with the specified configuration.
 
-    The startup script reads configuration from GCP instance metadata keys,
-    matching the format expected by init2024.ps1:
+    The startup script reads configuration from GCP instance metadata keys:
     - windows-username, windows-password: Windows user credentials
     - vnc-password: VNC password for TightVNC
     - hostname: DNS hostname for Caddy HTTPS
@@ -319,7 +356,7 @@ def create_windows_vm(
         Dict with VM details including name, ip, hostname, status.
     """
     client = compute_v1.InstancesClient()
-    vm_name = get_vm_name(assistant_id)
+    vm_name = get_vm_name(assistant_id, vm_type="windows")
 
     # Use unify_apikey for both VNC and Windows password
     # Use assistant_name for Windows username
@@ -332,7 +369,7 @@ def create_windows_vm(
     anthropic_api_key = get_secret("ANTHROPIC_API_KEY")
 
     # Load the startup script from file (reads config from metadata)
-    startup_script = load_startup_script()
+    startup_script = load_windows_startup_script()
 
     # Build metadata items - script reads these at runtime
     metadata_items = [
@@ -377,21 +414,21 @@ def create_windows_vm(
     # Configure the VM
     instance = compute_v1.Instance(
         name=vm_name,
-        machine_type=f"zones/{ZONE}/machineTypes/{VM_MACHINE_TYPE}",
+        machine_type=f"zones/{ZONE}/machineTypes/{WINDOWS_VM_MACHINE_TYPE}",
         description=f"Unity Windows VM for Assistant {assistant_id}",
         labels={
             "unity-assistant": assistant_id.lower().replace("_", "-"),
             "unity-type": "windows-vm",
         },
-        tags=compute_v1.Tags(items=VM_TAGS),
+        tags=compute_v1.Tags(items=WINDOWS_VM_TAGS),
         disks=[
             compute_v1.AttachedDisk(
                 boot=True,
                 auto_delete=True,
                 initialize_params=compute_v1.AttachedDiskInitializeParams(
-                    disk_size_gb=VM_DISK_SIZE_GB,
+                    disk_size_gb=WINDOWS_VM_DISK_SIZE_GB,
                     disk_type=f"zones/{ZONE}/diskTypes/{VM_DISK_TYPE}",
-                    source_image=f"projects/{VM_IMAGE_PROJECT}/global/images/family/{VM_IMAGE_FAMILY}",
+                    source_image=f"projects/{WINDOWS_VM_IMAGE_PROJECT}/global/images/family/{WINDOWS_VM_IMAGE_FAMILY}",
                 ),
             )
         ],
@@ -436,15 +473,163 @@ def create_windows_vm(
     }
 
 
-def start_windows_vm(assistant_id: str) -> Dict[str, Any]:
+# =============================================================================
+# VM Creation - Ubuntu
+# =============================================================================
+
+
+def create_ubuntu_vm(
+    assistant_id: str,
+    static_ip: str,
+    hostname: str,
+    unify_apikey: str,
+    assistant_name: str,
+) -> Dict[str, Any]:
     """
-    Start a stopped Windows VM.
+    Create a new Ubuntu VM with the specified configuration.
+
+    Uses custom Ubuntu image (unity-ubuntu-vm) with bash startup script.
+    The startup script reads configuration from GCP instance metadata keys:
+    - vnc-password: VNC password
+    - hostname: DNS hostname for Caddy HTTPS
+    - github-token: GitHub PAT for cloning repos
+    - anthropic-api-key: Anthropic API key for agent service
+    - unify-key: Unify API key for agent service
+    - unify-base-url: Unify API base URL
+    - staging: Use staging branch
+
+    Args:
+        assistant_id: The assistant ID (numeric string)
+        static_ip: The static IP to assign
+        hostname: The DNS hostname (unity-assistant-{id}.vm.unify.ai)
+        unify_apikey: Unify API key (used for VNC password)
+        assistant_name: Assistant name (not used for Ubuntu, kept for API consistency)
+
+    Returns:
+        Dict with VM details including name, ip, hostname, status.
+    """
+    client = compute_v1.InstancesClient()
+    vm_name = get_vm_name(assistant_id, vm_type="ubuntu")
+
+    # Use unify_apikey for VNC password (same as Windows)
+    vnc_password = unify_apikey
+
+    # Fetch secrets from Secret Manager
+    github_token = get_secret("DEVBOT_GITHUB_TOKEN")
+    anthropic_api_key = get_secret("ANTHROPIC_API_KEY")
+
+    # Load the startup script from file
+    startup_script = load_ubuntu_startup_script()
+
+    # Build metadata items - script reads these at runtime
+    metadata_items = [
+        # The bash startup script
+        compute_v1.Items(key="startup-script", value=startup_script),
+        # Configuration metadata keys (read by the script via GCP metadata API)
+        compute_v1.Items(key="vnc-password", value=vnc_password),
+        compute_v1.Items(key="hostname", value=hostname),
+        # Unify base URL (derived from STAGING flag)
+        compute_v1.Items(key="unify-base-url", value=UNIFY_BASE_URL),
+    ]
+
+    # Add staging flag only when STAGING is true
+    if STAGING:
+        metadata_items.append(compute_v1.Items(key="staging", value="true"))
+        logger.info("Added staging=true to VM metadata")
+
+    # Add secrets from Secret Manager (if available)
+    if github_token:
+        metadata_items.append(compute_v1.Items(key="github-token", value=github_token))
+        logger.info("Added GitHub token to VM metadata")
+
+    if anthropic_api_key:
+        metadata_items.append(
+            compute_v1.Items(key="anthropic-api-key", value=anthropic_api_key)
+        )
+        logger.info("Added Anthropic API key to VM metadata")
+
+    # Use the passed unify_apikey directly
+    metadata_items.append(compute_v1.Items(key="unify-key", value=unify_apikey))
+    logger.info("Added Unify key to VM metadata")
+
+    # Configure the VM
+    instance = compute_v1.Instance(
+        name=vm_name,
+        machine_type=f"zones/{ZONE}/machineTypes/{UBUNTU_VM_MACHINE_TYPE}",
+        description=f"Unity Ubuntu VM for Assistant {assistant_id}",
+        labels={
+            "unity-assistant": assistant_id.lower().replace("_", "-"),
+            "unity-type": "ubuntu-vm",
+        },
+        tags=compute_v1.Tags(items=UBUNTU_VM_TAGS),
+        disks=[
+            compute_v1.AttachedDisk(
+                boot=True,
+                auto_delete=True,
+                initialize_params=compute_v1.AttachedDiskInitializeParams(
+                    disk_size_gb=UBUNTU_VM_DISK_SIZE_GB,
+                    disk_type=f"zones/{ZONE}/diskTypes/{VM_DISK_TYPE}",
+                    source_image=f"projects/{UBUNTU_VM_IMAGE_PROJECT}/global/images/family/{UBUNTU_VM_IMAGE_FAMILY}",
+                ),
+            )
+        ],
+        network_interfaces=[
+            compute_v1.NetworkInterface(
+                network=f"global/networks/{VM_NETWORK}",
+                access_configs=[
+                    compute_v1.AccessConfig(
+                        name="External NAT",
+                        type_="ONE_TO_ONE_NAT",
+                        nat_i_p=static_ip,
+                        network_tier="PREMIUM",
+                    )
+                ],
+            )
+        ],
+        metadata=compute_v1.Metadata(items=metadata_items),
+        scheduling=compute_v1.Scheduling(
+            on_host_maintenance="MIGRATE",
+            automatic_restart=True,
+        ),
+    )
+
+    operation = client.insert(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        instance_resource=instance,
+    )
+    operation.result()  # Wait for completion
+
+    logger.info(f"Created Ubuntu VM: {vm_name} with IP {static_ip}")
+
+    return {
+        "vm_name": vm_name,
+        "assistant_id": assistant_id,
+        "ip_address": static_ip,
+        "hostname": hostname,
+        "desktop_url": f"https://{hostname}",
+        "status": "RUNNING",
+    }
+
+
+# =============================================================================
+# VM Lifecycle Management (Generalized)
+# =============================================================================
+
+
+def start_vm(assistant_id: str, vm_type: str = "windows") -> Dict[str, Any]:
+    """
+    Start a stopped VM (Windows or Ubuntu).
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         Dict with VM status.
     """
     client = compute_v1.InstancesClient()
-    vm_name = get_vm_name(assistant_id)
+    vm_name = get_vm_name(assistant_id, vm_type)
 
     try:
         operation = client.start(
@@ -453,7 +638,7 @@ def start_windows_vm(assistant_id: str) -> Dict[str, Any]:
             instance=vm_name,
         )
         operation.result()
-        logger.info(f"Started Windows VM: {vm_name}")
+        logger.info(f"Started {vm_type} VM: {vm_name}")
 
         return {
             "vm_name": vm_name,
@@ -466,15 +651,19 @@ def start_windows_vm(assistant_id: str) -> Dict[str, Any]:
         raise ValueError(f"VM not found for assistant {assistant_id}")
 
 
-def stop_windows_vm(assistant_id: str) -> Dict[str, Any]:
+def stop_vm(assistant_id: str, vm_type: str = "windows") -> Dict[str, Any]:
     """
-    Stop a running Windows VM (preserves disk and data).
+    Stop a running VM (Windows or Ubuntu). Preserves disk and data.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         Dict with VM status.
     """
     client = compute_v1.InstancesClient()
-    vm_name = get_vm_name(assistant_id)
+    vm_name = get_vm_name(assistant_id, vm_type)
 
     try:
         operation = client.stop(
@@ -483,7 +672,7 @@ def stop_windows_vm(assistant_id: str) -> Dict[str, Any]:
             instance=vm_name,
         )
         operation.result()
-        logger.info(f"Stopped Windows VM: {vm_name}")
+        logger.info(f"Stopped {vm_type} VM: {vm_name}")
 
         return {
             "vm_name": vm_name,
@@ -496,15 +685,19 @@ def stop_windows_vm(assistant_id: str) -> Dict[str, Any]:
         raise ValueError(f"VM not found for assistant {assistant_id}")
 
 
-def delete_windows_vm(assistant_id: str) -> bool:
+def delete_vm(assistant_id: str, vm_type: str = "windows") -> bool:
     """
-    Delete a Windows VM.
+    Delete a VM (Windows or Ubuntu).
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         True if deleted, False if not found.
     """
     client = compute_v1.InstancesClient()
-    vm_name = get_vm_name(assistant_id)
+    vm_name = get_vm_name(assistant_id, vm_type)
 
     try:
         operation = client.delete(
@@ -513,22 +706,26 @@ def delete_windows_vm(assistant_id: str) -> bool:
             instance=vm_name,
         )
         operation.result()
-        logger.info(f"Deleted Windows VM: {vm_name}")
+        logger.info(f"Deleted {vm_type} VM: {vm_name}")
         return True
     except NotFound:
         logger.warning(f"VM not found: {vm_name}")
         return False
 
 
-def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
+def get_vm_status(assistant_id: str, vm_type: str = "windows") -> Optional[Dict[str, Any]]:
     """
-    Get the current status of a Windows VM.
+    Get the current status of a VM (Windows or Ubuntu).
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         Dict with VM details and status, or None if not found.
     """
     client = compute_v1.InstancesClient()
-    vm_name = get_vm_name(assistant_id)
+    vm_name = get_vm_name(assistant_id, vm_type)
 
     try:
         instance = client.get(
@@ -553,21 +750,23 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
         creation_ts = instance.creation_timestamp  # RFC 3339 string
         last_start_ts = instance.last_start_timestamp  # RFC 3339 string or empty
 
-        # Calculate vm_ready_at: max(creation+15min, last_start+2min)
+        # Calculate vm_ready_at: max(creation+Xmin, last_start+20sec)
+        # Windows: 5 min after creation, Ubuntu: 2 min after creation
         vm_ready_at = None
         vm_ready = False
 
         if creation_ts:
             # Parse creation timestamp
             creation_dt = datetime.fromisoformat(creation_ts.replace("Z", "+00:00"))
-            creation_ready = creation_dt + timedelta(minutes=5)
+            creation_wait_minutes = 2 if vm_type == "ubuntu" else 5
+            creation_ready = creation_dt + timedelta(minutes=creation_wait_minutes)
 
             # Check if there's a last_start_timestamp
             if last_start_ts:
                 last_start_dt = datetime.fromisoformat(
                     last_start_ts.replace("Z", "+00:00")
                 )
-                start_ready = last_start_dt + timedelta(seconds=20)
+                start_ready = last_start_dt + timedelta(seconds=30)
                 # Take the max (whichever requires longer wait)
                 ready_at_dt = max(creation_ready, start_ready)
             else:
@@ -596,17 +795,43 @@ def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
 
 
 # =============================================================================
+# Legacy aliases (for backward compatibility)
+# =============================================================================
+
+
+def start_windows_vm(assistant_id: str) -> Dict[str, Any]:
+    """Start a stopped Windows VM (legacy alias)."""
+    return start_vm(assistant_id, vm_type="windows")
+
+
+def stop_windows_vm(assistant_id: str) -> Dict[str, Any]:
+    """Stop a running Windows VM (legacy alias)."""
+    return stop_vm(assistant_id, vm_type="windows")
+
+
+def delete_windows_vm(assistant_id: str) -> bool:
+    """Delete a Windows VM (legacy alias)."""
+    return delete_vm(assistant_id, vm_type="windows")
+
+
+def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
+    """Get Windows VM status (legacy alias)."""
+    return get_vm_status(assistant_id, vm_type="windows")
+
+
+# =============================================================================
 # Orchestration Functions
 # =============================================================================
 
 
-def provision_windows_vm_full(
+def provision_vm_full(
     assistant_id: str,
     unify_apikey: str,
     assistant_name: str,
+    vm_type: str = "windows",
 ) -> Dict[str, Any]:
     """
-    Full provisioning of a Windows VM:
+    Full provisioning of a VM (Windows or Ubuntu):
     1. Reserve static IP
     2. Create DNS A record
     3. Create and start VM
@@ -615,45 +840,59 @@ def provision_windows_vm_full(
         assistant_id: The assistant ID (numeric string)
         unify_apikey: Unify API key (used for VNC and Windows password)
         assistant_name: Assistant name (used for Windows username)
+        vm_type: "windows" or "ubuntu"
 
     Returns:
         Dict with full VM details.
     """
-    logger.info(f"Starting full provisioning for assistant: {assistant_id}")
+    logger.info(f"Starting full provisioning for assistant: {assistant_id} (type: {vm_type})")
 
     # Step 1: Reserve static IP
-    static_ip = reserve_static_ip(assistant_id)
+    static_ip = reserve_static_ip(assistant_id, vm_type)
     logger.info(f"Reserved static IP: {static_ip}")
 
-    # Step 2: Create DNS record
+    # Step 2: Create DNS record (shared hostname for both types)
     hostname = get_dns_hostname(assistant_id)
     create_dns_record(assistant_id, static_ip)
     logger.info(f"Created DNS record: {hostname} -> {static_ip}")
 
-    # Step 3: Create VM
-    result = create_windows_vm(
-        assistant_id=assistant_id,
-        static_ip=static_ip,
-        hostname=hostname,
-        unify_apikey=unify_apikey,
-        assistant_name=assistant_name,
-    )
+    # Step 3: Create VM based on type
+    if vm_type == "ubuntu":
+        result = create_ubuntu_vm(
+            assistant_id=assistant_id,
+            static_ip=static_ip,
+            hostname=hostname,
+            unify_apikey=unify_apikey,
+            assistant_name=assistant_name,
+        )
+    else:
+        result = create_windows_vm(
+            assistant_id=assistant_id,
+            static_ip=static_ip,
+            hostname=hostname,
+            unify_apikey=unify_apikey,
+            assistant_name=assistant_name,
+        )
 
     logger.info(f"Full provisioning complete for assistant: {assistant_id}")
     return result
 
 
-def deprovision_windows_vm_full(assistant_id: str) -> Dict[str, Any]:
+def deprovision_vm_full(assistant_id: str, vm_type: str = "windows") -> Dict[str, Any]:
     """
-    Full deprovisioning of a Windows VM:
+    Full deprovisioning of a VM (Windows or Ubuntu):
     1. Delete VM
     2. Delete DNS record
     3. Release static IP
 
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu"
+
     Returns:
         Dict with deprovisioning status.
     """
-    logger.info(f"Starting full deprovisioning for assistant: {assistant_id}")
+    logger.info(f"Starting full deprovisioning for assistant: {assistant_id} (type: {vm_type})")
 
     results = {
         "assistant_id": assistant_id,
@@ -663,13 +902,29 @@ def deprovision_windows_vm_full(assistant_id: str) -> Dict[str, Any]:
     }
 
     # Step 1: Delete VM
-    results["vm_deleted"] = delete_windows_vm(assistant_id)
+    results["vm_deleted"] = delete_vm(assistant_id, vm_type)
 
-    # Step 2: Delete DNS record
+    # Step 2: Delete DNS record (shared hostname)
     results["dns_deleted"] = delete_dns_record(assistant_id)
 
     # Step 3: Release static IP
-    results["ip_released"] = release_static_ip(assistant_id)
+    results["ip_released"] = release_static_ip(assistant_id, vm_type)
 
     logger.info(f"Full deprovisioning complete for assistant: {assistant_id}")
     return results
+
+
+# Legacy aliases for backward compatibility
+def provision_windows_vm_full(
+    assistant_id: str,
+    unify_apikey: str,
+    assistant_name: str,
+) -> Dict[str, Any]:
+    """Full provisioning of a Windows VM (legacy alias)."""
+    return provision_vm_full(assistant_id, unify_apikey, assistant_name, vm_type="windows")
+
+
+def deprovision_windows_vm_full(assistant_id: str) -> Dict[str, Any]:
+    """Full deprovisioning of a Windows VM (legacy alias)."""
+    return deprovision_vm_full(assistant_id, vm_type="windows")
+

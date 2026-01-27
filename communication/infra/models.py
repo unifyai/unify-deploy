@@ -1,19 +1,23 @@
 """
-Windows VM Management - Request/Response Models
+VM Management - Request/Response Models
+
+Supports both Windows and Ubuntu VMs via vm_type parameter.
 """
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
 
 
 class VMCreateRequest(BaseModel):
     assistant_id: str  # Numeric ID (e.g., "12345")
-    unify_apikey: str  # Required - used for VNC and Windows password
-    assistant_name: str  # Required - used for Windows username
+    unify_apikey: str  # Required - used for VNC password (and Windows password for Windows VMs)
+    assistant_name: str  # Required - used for Windows username (ignored for Ubuntu VMs)
+    vm_type: Literal["windows", "ubuntu"] = "windows"  # VM type: "windows" or "ubuntu"
 
 
 class VMActionRequest(BaseModel):
     assistant_id: str
+    vm_type: Literal["windows", "ubuntu"] = "windows"  # VM type: "windows" or "ubuntu"
 
 
 class VMCreateResponse(BaseModel):
