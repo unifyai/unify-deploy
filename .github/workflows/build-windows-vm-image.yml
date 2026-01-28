@@ -1,0 +1,119 @@
+name: Build Windows VM Image
+
+on:
+  # Manual trigger - always runs build
+  workflow_dispatch:
+
+  # Push events - build only runs if commit message contains [build-windows-vm-image]
+  push:
+    branches:
+      - '**'
+
+jobs:
+  # Determine if build should run based on trigger and commit message
+  should-build:
+    runs-on: ubuntu-latest
+    outputs:
+      run_build: ${{ steps.check.outputs.run_build }}
+    steps:
+      - name: Check if build should run
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          # workflow_dispatch always runs build
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "run_build=true" >> "$GITHUB_OUTPUT"
+            echo "Build triggered by workflow_dispatch"
+            exit 0
+          fi
+
+          # For push events, check commit message for [build-windows-vm-image]
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            if [[ "$COMMIT_MSG" == *"[build-windows-vm-image]"* ]]; then
+              echo "run_build=true" >> "$GITHUB_OUTPUT"
+              echo "Build triggered by commit message containing [build-windows-vm-image]"
+            else
+              echo "run_build=false" >> "$GITHUB_OUTPUT"
+              echo "Skipping build - commit message does not contain [build-windows-vm-image]"
+            fi
+            exit 0
+          fi
+
+          # Default: don't run build
+          echo "run_build=false" >> "$GITHUB_OUTPUT"
+          echo "Skipping build - unknown event type"
+
+  build:
+    runs-on: ubuntu-latest
+    needs: should-build
+    if: needs.should-build.outputs.run_build == 'true'
+    timeout-minutes: 90  # Windows build takes longer due to Office installation
+
+    env:
+      GCP_PROJECT_ID: gcp-project-runtime
+      PACKER_DIR: communication/infra/scripts/windows-vm-custom-image/packer
+      IMAGE_FAMILY: unity-windows-vm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install Packer
+        uses: hashicorp/setup-packer@main
+
+      - name: Initialize Packer
+        working-directory: ${{ env.PACKER_DIR }}
+        run: packer init .
+
+      - name: Validate Packer template
+        working-directory: ${{ env.PACKER_DIR }}
+        run: packer validate -var "project_id=${{ env.GCP_PROJECT_ID }}" windows-vm.pkr.hcl
+
+      - name: Build image
+        working-directory: ${{ env.PACKER_DIR }}
+        run: packer build -var "project_id=${{ env.GCP_PROJECT_ID }}" windows-vm.pkr.hcl
+
+      - name: Cleanup old images (older than 24 hours)
+        run: |
+          echo "Finding images older than 24 hours in family ${{ env.IMAGE_FAMILY }}..."
+          
+          # Get cutoff timestamp (24 hours ago)
+          CUTOFF=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%S')
+          echo "Cutoff time: $CUTOFF"
+          
+          # List images older than cutoff
+          OLD_IMAGES=$(gcloud compute images list \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --filter="family=${{ env.IMAGE_FAMILY }} AND creationTimestamp<'${CUTOFF}'" \
+            --format="value(name)" 2>/dev/null || true)
+          
+          if [[ -z "$OLD_IMAGES" ]]; then
+            echo "No old images to delete."
+            exit 0
+          fi
+          
+          echo "Images to delete:"
+          echo "$OLD_IMAGES"
+          
+          # Delete each old image
+          echo "$OLD_IMAGES" | while read -r IMAGE_NAME; do
+            if [[ -n "$IMAGE_NAME" ]]; then
+              echo "Deleting: $IMAGE_NAME"
+              gcloud compute images delete "$IMAGE_NAME" \
+                --project=${{ env.GCP_PROJECT_ID }} \
+                --quiet || echo "Failed to delete $IMAGE_NAME"
+            fi
+          done
+          
+          echo "Cleanup complete."
+
