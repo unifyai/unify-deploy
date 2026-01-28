@@ -205,7 +205,6 @@ def create_unity_job(
                                 "ports": [
                                     {"containerPort": 8000},
                                     {"containerPort": 6379},
-                                    {"containerPort": 6080},
                                 ],
                                 "envFrom": [
                                     {"configMapRef": {"name": "unity-config"}},
