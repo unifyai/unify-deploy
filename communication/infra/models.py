@@ -10,7 +10,9 @@ from typing import Optional, Literal
 
 class VMCreateRequest(BaseModel):
     assistant_id: str  # Numeric ID (e.g., "12345")
-    unify_apikey: str  # Required - used for VNC password (and Windows password for Windows VMs)
+    unify_apikey: (
+        str  # Required - used for VNC password (and Windows password for Windows VMs)
+    )
     assistant_name: str  # Required - used for Windows username (ignored for Ubuntu VMs)
     vm_type: Literal["windows", "ubuntu"] = "windows"  # VM type: "windows" or "ubuntu"
 

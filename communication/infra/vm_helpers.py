@@ -713,7 +713,9 @@ def delete_vm(assistant_id: str, vm_type: str = "windows") -> bool:
         return False
 
 
-def get_vm_status(assistant_id: str, vm_type: str = "windows") -> Optional[Dict[str, Any]]:
+def get_vm_status(
+    assistant_id: str, vm_type: str = "windows"
+) -> Optional[Dict[str, Any]]:
     """
     Get the current status of a VM (Windows or Ubuntu).
 
@@ -845,7 +847,9 @@ def provision_vm_full(
     Returns:
         Dict with full VM details.
     """
-    logger.info(f"Starting full provisioning for assistant: {assistant_id} (type: {vm_type})")
+    logger.info(
+        f"Starting full provisioning for assistant: {assistant_id} (type: {vm_type})"
+    )
 
     # Step 1: Reserve static IP
     static_ip = reserve_static_ip(assistant_id, vm_type)
@@ -892,7 +896,9 @@ def deprovision_vm_full(assistant_id: str, vm_type: str = "windows") -> Dict[str
     Returns:
         Dict with deprovisioning status.
     """
-    logger.info(f"Starting full deprovisioning for assistant: {assistant_id} (type: {vm_type})")
+    logger.info(
+        f"Starting full deprovisioning for assistant: {assistant_id} (type: {vm_type})"
+    )
 
     results = {
         "assistant_id": assistant_id,
@@ -921,10 +927,11 @@ def provision_windows_vm_full(
     assistant_name: str,
 ) -> Dict[str, Any]:
     """Full provisioning of a Windows VM (legacy alias)."""
-    return provision_vm_full(assistant_id, unify_apikey, assistant_name, vm_type="windows")
+    return provision_vm_full(
+        assistant_id, unify_apikey, assistant_name, vm_type="windows"
+    )
 
 
 def deprovision_windows_vm_full(assistant_id: str) -> Dict[str, Any]:
     """Full deprovisioning of a Windows VM (legacy alias)."""
     return deprovision_vm_full(assistant_id, vm_type="windows")
-
