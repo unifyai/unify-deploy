@@ -306,9 +306,11 @@ async def start_job(
     voice_provider: str = Form(""),
     voice_id: str = Form(""),
     voice_mode: str = Form(""),
-    is_user_desktop: str = Form("false"),
     desktop_mode: str = Form("ubuntu"),
     desktop_url: str = Form(""),
+    user_desktop_mode: str = Form(""),
+    user_desktop_filesys_sync: str = Form("false"),
+    user_desktop_url: str = Form(""),
 ):
     """
     Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
@@ -332,9 +334,11 @@ async def start_job(
         voice_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
         voice_mode: Voice mode (optional, defaults to empty string)
-        is_user_desktop: Whether user provides their own desktop (optional, defaults to "false")
         desktop_mode: Desktop mode - ubuntu/windows/macos (optional, defaults to "ubuntu")
-        desktop_url: URL to access the desktop (optional, defaults to empty string)
+        desktop_url: URL to access the VM desktop (optional, defaults to empty string)
+        user_desktop_mode: User's own desktop mode - ubuntu/windows/macos (optional)
+        user_desktop_filesys_sync: Whether to sync user desktop filesystem (optional, defaults to "false")
+        user_desktop_url: URL to user's own desktop (optional)
     """
     try:
         # Get credentials from environment variable
@@ -372,9 +376,11 @@ async def start_job(
                 "voice_provider": voice_provider,
                 "voice_id": voice_id,
                 "voice_mode": voice_mode,
-                "is_user_desktop": is_user_desktop.lower() == "true",
                 "desktop_mode": desktop_mode,
                 "desktop_url": desktop_url if desktop_url else None,
+                "user_desktop_mode": user_desktop_mode if user_desktop_mode else None,
+                "user_desktop_filesys_sync": user_desktop_filesys_sync.lower() == "true",
+                "user_desktop_url": user_desktop_url if user_desktop_url else None,
             },
         }
 

@@ -106,9 +106,11 @@ def get_assistant(
         "assistant_number": "",
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
-        "is_user_desktop": False,
         "desktop_mode": "ubuntu",
         "desktop_url": None,
+        "user_desktop_mode": None,
+        "user_desktop_filesys_sync": False,
+        "user_desktop_url": None,
     }
     if "+15550100002" in phone_check or assistant_id == "default-assistant":
         return default_assistant_data
@@ -128,9 +130,6 @@ def get_assistant(
             "assistant_number": "+0123456789",
             "assistant_email": "default-test-assistant@unify.ai",
             "user_whatsapp_number": "+9876543210",
-            "is_user_desktop": False,
-            "desktop_mode": "ubuntu",
-            "desktop_url": None,
         }
 
     response = requests.get(
@@ -170,9 +169,11 @@ def get_assistant(
         "voice_id": assistants[0]["voice_id"],
         "voice_mode": assistants[0]["voice_mode"],
         "secrets": assistants[0].get("secrets", {}),
-        "is_user_desktop": assistants[0].get("is_user_desktop", False),
         "desktop_mode": assistants[0].get("desktop_mode", "ubuntu"),
         "desktop_url": assistants[0].get("desktop_url", None),
+        "user_desktop_mode": assistants[0].get("user_desktop_mode", None),
+        "user_desktop_filesys_sync": assistants[0].get("user_desktop_filesys_sync", False),
+        "user_desktop_url": assistants[0].get("user_desktop_url", None),
     }
 
 
@@ -459,9 +460,11 @@ def start_unity_job(assistant: dict, medium: str):
         return
 
     # Extract desktop fields
-    is_user_desktop = assistant.get("is_user_desktop", False)
     desktop_mode = assistant.get("desktop_mode", "ubuntu")
     desktop_url = assistant.get("desktop_url", None)
+    user_desktop_mode = assistant.get("user_desktop_mode", None)
+    user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
+    user_desktop_url = assistant.get("user_desktop_url", None)
 
     # start job
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
@@ -488,9 +491,11 @@ def start_unity_job(assistant: dict, medium: str):
                 "voice_provider": assistant["voice_provider"],
                 "voice_id": assistant["voice_id"],
                 "voice_mode": assistant["voice_mode"],
-                "is_user_desktop": "true" if is_user_desktop else "false",
                 "desktop_mode": desktop_mode,
                 "desktop_url": desktop_url or "",
+                "user_desktop_mode": user_desktop_mode or "",
+                "user_desktop_filesys_sync": "true" if user_desktop_filesys_sync else "false",
+                "user_desktop_url": user_desktop_url or "",
             },
             timeout=1,
         )
@@ -501,9 +506,8 @@ def start_unity_job(assistant: dict, medium: str):
     except requests.exceptions.Timeout:
         print(f"Job started for assistant {assistant_id} (timeout)")
 
-    # Start VM if conditions are met
-    # Condition: is_user_desktop=False AND desktop_mode in ("windows", "ubuntu")
-    if not is_user_desktop and desktop_mode in ("windows", "ubuntu"):
+    # Start VM if desktop_mode requires it
+    if desktop_mode in ("windows", "ubuntu"):
         vm_type = desktop_mode  # "windows" or "ubuntu"
         try:
             vm_response = requests.post(
