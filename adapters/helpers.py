@@ -172,7 +172,9 @@ def get_assistant(
         "desktop_mode": assistants[0].get("desktop_mode", "ubuntu"),
         "desktop_url": assistants[0].get("desktop_url", None),
         "user_desktop_mode": assistants[0].get("user_desktop_mode", None),
-        "user_desktop_filesys_sync": assistants[0].get("user_desktop_filesys_sync", False),
+        "user_desktop_filesys_sync": assistants[0].get(
+            "user_desktop_filesys_sync", False
+        ),
         "user_desktop_url": assistants[0].get("user_desktop_url", None),
     }
 
@@ -494,7 +496,9 @@ def start_unity_job(assistant: dict, medium: str):
                 "desktop_mode": desktop_mode,
                 "desktop_url": desktop_url or "",
                 "user_desktop_mode": user_desktop_mode or "",
-                "user_desktop_filesys_sync": "true" if user_desktop_filesys_sync else "false",
+                "user_desktop_filesys_sync": (
+                    "true" if user_desktop_filesys_sync else "false"
+                ),
                 "user_desktop_url": user_desktop_url or "",
             },
             timeout=1,

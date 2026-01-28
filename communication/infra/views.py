@@ -379,7 +379,8 @@ async def start_job(
                 "desktop_mode": desktop_mode,
                 "desktop_url": desktop_url if desktop_url else None,
                 "user_desktop_mode": user_desktop_mode if user_desktop_mode else None,
-                "user_desktop_filesys_sync": user_desktop_filesys_sync.lower() == "true",
+                "user_desktop_filesys_sync": user_desktop_filesys_sync.lower()
+                == "true",
                 "user_desktop_url": user_desktop_url if user_desktop_url else None,
             },
         }
