@@ -198,7 +198,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "phone_number": assistant_data["assistant_number"],
             "bio": "",
             "rolling_summary": "",
-            "respond_to": False,
+            "should_respond": False,
             "response_policy": "",
         },
         {
@@ -209,7 +209,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "phone_number": assistant_data["user_number"],
             "bio": "",
             "rolling_summary": "",
-            "respond_to": False,
+            "should_respond": False,
             "response_policy": "",
         },
     ]
