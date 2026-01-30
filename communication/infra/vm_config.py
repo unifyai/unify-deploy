@@ -46,7 +46,7 @@ WINDOWS_VM_MACHINE_TYPE = "e2-standard-4"  # 4 vCPU, 16GB RAM
 WINDOWS_VM_DISK_SIZE_GB = 100
 WINDOWS_VM_IMAGE_FAMILY = "unity-windows-vm"
 WINDOWS_VM_IMAGE_PROJECT = "gcp-project-runtime"
-WINDOWS_VM_TAGS = ["unity-windows-vm", "https-server", "http-server"]
+WINDOWS_VM_TAGS = ["unity-windows-vm", "https-server", "http-server", "allow-2222"]
 
 # Path to the Windows init script
 WINDOWS_INIT_SCRIPT_PATH = os.path.join(
@@ -62,7 +62,12 @@ UBUNTU_VM_MACHINE_TYPE = "e2-standard-2"  # 2 vCPU, 8GB RAM
 UBUNTU_VM_DISK_SIZE_GB = 50
 UBUNTU_VM_IMAGE_FAMILY = "unity-ubuntu-vm"
 UBUNTU_VM_IMAGE_PROJECT = "gcp-project-runtime"
-UBUNTU_VM_TAGS = ["unity-ubuntu-vm", "https-server", "http-server", "allow-6080"]
+UBUNTU_VM_TAGS = ["unity-ubuntu-vm", "https-server", "http-server", "allow-2222"]
+
+# =============================================================================
+# SSH File Sync Configuration
+# =============================================================================
+SSH_SYNC_PORT = 2222  # Dedicated port for file sync (avoids conflicts with default SSH)
 
 # Path to the Ubuntu init script
 UBUNTU_INIT_SCRIPT_PATH = os.path.join(

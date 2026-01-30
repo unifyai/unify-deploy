@@ -11,9 +11,9 @@ from typing import Optional, Literal
 class VMCreateRequest(BaseModel):
     assistant_id: str  # Numeric ID (e.g., "12345")
     unify_apikey: (
-        str  # Required - used for VNC password (and Windows password for Windows VMs)
+        str  # Required - used for VNC password, Windows password, and secret storage
     )
-    assistant_name: str  # Required - used for Windows username (ignored for Ubuntu VMs)
+    assistant_name: str  # Required - used for Windows/SSH username
     vm_type: Literal["windows", "ubuntu"] = "windows"  # VM type: "windows" or "ubuntu"
 
 
@@ -29,6 +29,9 @@ class VMCreateResponse(BaseModel):
     hostname: str  # Format: unity-assistant-{id}.vm.unify.ai
     desktop_url: str  # https://unity-assistant-{id}.vm.unify.ai
     status: str
+    # SSH file sync configuration
+    ssh_username: Optional[str] = None  # SSH username for file sync (e.g., "JohnDoe")
+    ssh_port: Optional[int] = None  # SSH port for file sync (2222)
 
 
 class VMStatusResponse(BaseModel):

@@ -6,19 +6,21 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 - DNS A record management
 - VM creation, start, stop, and deletion
 - Full provisioning and deprovisioning orchestration
+- SSH key generation for file sync
 """
 
 import logging
 import os
-import secrets
-import string
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
+import requests
 from google.cloud import compute_v1
 from google.cloud import dns
 from google.cloud import secretmanager
 from google.api_core.exceptions import NotFound, Conflict
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 # Environment detection
 STAGING = os.environ.get("STAGING", "false").lower() == "true"
@@ -39,6 +41,7 @@ from .vm_config import (
     VM_NETWORK,
     ENV_SUFFIX,
     MAK_KEY,
+    SSH_SYNC_PORT,
     # Windows VM config
     WINDOWS_VM_MACHINE_TYPE,
     WINDOWS_VM_DISK_SIZE_GB,
@@ -195,18 +198,6 @@ def release_static_ip(assistant_id: str, vm_type: str = "windows") -> bool:
         return False
 
 
-def get_static_ip(assistant_id: str, vm_type: str = "windows") -> Optional[str]:
-    """Get the static IP address if it exists."""
-    client = compute_v1.AddressesClient()
-    ip_name = get_static_ip_name(assistant_id, vm_type)
-
-    try:
-        result = client.get(project=VM_PROJECT_ID, region=REGION, address=ip_name)
-        return result.address
-    except NotFound:
-        return None
-
-
 # =============================================================================
 # DNS Management
 # =============================================================================
@@ -286,12 +277,6 @@ def delete_dns_record(assistant_id: str) -> bool:
 # =============================================================================
 
 
-def generate_vnc_password(length: int = 12) -> str:
-    """Generate a random VNC password."""
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
-
-
 def load_windows_startup_script() -> str:
     """
     Load the Windows init script from file.
@@ -314,10 +299,104 @@ def load_ubuntu_startup_script() -> str:
         return f.read()
 
 
-# Legacy alias for backward compatibility
-def load_startup_script() -> str:
-    """Load the Windows init script from file (legacy alias)."""
-    return load_windows_startup_script()
+# =============================================================================
+# SSH Key Generation for File Sync
+# =============================================================================
+
+
+def generate_ssh_keypair() -> Tuple[str, str]:
+    """Generate an Ed25519 SSH keypair for VM file sync.
+
+    Returns:
+        Tuple of (private_key_pem, public_key_openssh)
+        - private_key_pem: OpenSSH format private key (PEM)
+        - public_key_openssh: OpenSSH format public key (single line)
+    """
+    # Generate Ed25519 private key
+    private_key = ed25519.Ed25519PrivateKey.generate()
+
+    # Serialize private key to OpenSSH format
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.OpenSSH,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+
+    # Serialize public key to OpenSSH format
+    public_key = private_key.public_key()
+    public_key_openssh = public_key.public_bytes(
+        encoding=serialization.Encoding.OpenSSH,
+        format=serialization.PublicFormat.OpenSSH,
+    ).decode("utf-8")
+
+    # Add comment to public key
+    public_key_openssh = f"{public_key_openssh} unity-file-sync"
+
+    return private_key_pem, public_key_openssh
+
+
+def store_ssh_private_key(
+    assistant_id: str,
+    private_key: str,
+    api_key: str,
+) -> bool:
+    """Store SSH private key as an assistant secret via Orchestra API.
+
+    Uses the assistant secrets API to store the private key so it can
+    be retrieved by the Unity assistant for file sync.
+
+    Args:
+        assistant_id: The assistant ID
+        private_key: The SSH private key (PEM format)
+        api_key: Unify API key for authentication
+
+    Returns:
+        True if stored successfully, False otherwise
+    """
+    secret_name = "vm_ssh_private_key"
+    url = f"{UNIFY_BASE_URL}/assistant/{assistant_id}/secret"
+
+    try:
+        response = requests.post(
+            url,
+            json={
+                "secret_name": secret_name,
+                "secret_value": private_key,
+                "description": "SSH private key for VM file sync (Ed25519)",
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
+        )
+
+        if response.status_code in (200, 201):
+            logger.info(f"Stored SSH private key for assistant {assistant_id}")
+            return True
+        elif response.status_code == 409:
+            # Secret already exists, update it
+            update_url = f"{url}/{secret_name}"
+            update_response = requests.put(
+                update_url,
+                json={"secret_value": private_key},
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=30,
+            )
+            if update_response.status_code == 200:
+                logger.info(f"Updated SSH private key for assistant {assistant_id}")
+                return True
+            else:
+                logger.error(
+                    f"Failed to update SSH key: {update_response.status_code} "
+                    f"{update_response.text}"
+                )
+                return False
+        else:
+            logger.error(
+                f"Failed to store SSH key: {response.status_code} {response.text}"
+            )
+            return False
+    except Exception as e:
+        logger.error(f"Error storing SSH private key: {e}")
+        return False
 
 
 # =============================================================================
@@ -331,6 +410,7 @@ def create_windows_vm(
     hostname: str,
     unify_apikey: str,
     assistant_name: str,
+    ssh_public_key: str = "",
 ) -> Dict[str, Any]:
     """
     Create a new Windows VM with the specified configuration.
@@ -344,16 +424,19 @@ def create_windows_vm(
     - anthropic-api-key: Anthropic API key for agent service
     - unify-key: Unify API key for agent service
     - unify-base-url: Unify API base URL
+    - ssh-public-key: SSH public key for file sync (optional)
+    Note: SSH uses windows-username for authentication (no separate ssh-username).
 
     Args:
         assistant_id: The assistant ID (numeric string)
         static_ip: The static IP to assign
         hostname: The DNS hostname (unity-assistant-{id}.vm.unify.ai)
         unify_apikey: Unify API key (used for VNC password and Windows password)
-        assistant_name: Assistant name (used for Windows username)
+        assistant_name: Assistant name (used for Windows username and SSH auth)
+        ssh_public_key: SSH public key for file sync (optional)
 
     Returns:
-        Dict with VM details including name, ip, hostname, status.
+        Dict with VM details including name, ip, hostname, status, ssh_username, ssh_port.
     """
     client = compute_v1.InstancesClient()
     vm_name = get_vm_name(assistant_id, vm_type="windows")
@@ -386,6 +469,14 @@ def create_windows_vm(
         # Unify base URL (derived from STAGING flag)
         compute_v1.Items(key="unify-base-url", value=UNIFY_BASE_URL),
     ]
+
+    # Add SSH file sync metadata if provided
+    # Note: Windows uses windows-username for SSH auth (no separate ssh-username needed)
+    if ssh_public_key:
+        metadata_items.append(
+            compute_v1.Items(key="ssh-public-key", value=ssh_public_key)
+        )
+        logger.info(f"Added SSH public key for file sync (uses Windows user: {windows_username})")
 
     # Add MAK key if configured
     if MAK_KEY:
@@ -470,6 +561,9 @@ def create_windows_vm(
         "hostname": hostname,
         "desktop_url": f"https://{hostname}",
         "status": "RUNNING",
+        # SSH uses the Windows username for authentication
+        "ssh_username": windows_username if ssh_public_key else None,
+        "ssh_port": SSH_SYNC_PORT if ssh_public_key else None,
     }
 
 
@@ -484,6 +578,8 @@ def create_ubuntu_vm(
     hostname: str,
     unify_apikey: str,
     assistant_name: str,
+    ssh_public_key: str = "",
+    ssh_username: str = "",
 ) -> Dict[str, Any]:
     """
     Create a new Ubuntu VM with the specified configuration.
@@ -497,16 +593,20 @@ def create_ubuntu_vm(
     - unify-key: Unify API key for agent service
     - unify-base-url: Unify API base URL
     - staging: Use staging branch
+    - ssh-public-key: SSH public key for file sync (optional)
+    - ssh-username: SSH username for file sync (optional)
 
     Args:
         assistant_id: The assistant ID (numeric string)
         static_ip: The static IP to assign
         hostname: The DNS hostname (unity-assistant-{id}.vm.unify.ai)
         unify_apikey: Unify API key (used for VNC password)
-        assistant_name: Assistant name (not used for Ubuntu, kept for API consistency)
+        assistant_name: Assistant name (used for SSH username derivation)
+        ssh_public_key: SSH public key for file sync (optional)
+        ssh_username: SSH username for file sync (optional)
 
     Returns:
-        Dict with VM details including name, ip, hostname, status.
+        Dict with VM details including name, ip, hostname, status, ssh_username, ssh_port.
     """
     client = compute_v1.InstancesClient()
     vm_name = get_vm_name(assistant_id, vm_type="ubuntu")
@@ -531,6 +631,14 @@ def create_ubuntu_vm(
         # Unify base URL (derived from STAGING flag)
         compute_v1.Items(key="unify-base-url", value=UNIFY_BASE_URL),
     ]
+
+    # Add SSH file sync metadata if provided
+    if ssh_public_key and ssh_username:
+        metadata_items.append(
+            compute_v1.Items(key="ssh-public-key", value=ssh_public_key)
+        )
+        metadata_items.append(compute_v1.Items(key="ssh-username", value=ssh_username))
+        logger.info(f"Added SSH file sync config for user: {ssh_username}")
 
     # Add staging flag only when STAGING is true
     if STAGING:
@@ -609,6 +717,8 @@ def create_ubuntu_vm(
         "hostname": hostname,
         "desktop_url": f"https://{hostname}",
         "status": "RUNNING",
+        "ssh_username": ssh_username or None,
+        "ssh_port": SSH_SYNC_PORT if ssh_username else None,
     }
 
 
@@ -797,31 +907,6 @@ def get_vm_status(
 
 
 # =============================================================================
-# Legacy aliases (for backward compatibility)
-# =============================================================================
-
-
-def start_windows_vm(assistant_id: str) -> Dict[str, Any]:
-    """Start a stopped Windows VM (legacy alias)."""
-    return start_vm(assistant_id, vm_type="windows")
-
-
-def stop_windows_vm(assistant_id: str) -> Dict[str, Any]:
-    """Stop a running Windows VM (legacy alias)."""
-    return stop_vm(assistant_id, vm_type="windows")
-
-
-def delete_windows_vm(assistant_id: str) -> bool:
-    """Delete a Windows VM (legacy alias)."""
-    return delete_vm(assistant_id, vm_type="windows")
-
-
-def get_windows_vm_status(assistant_id: str) -> Optional[Dict[str, Any]]:
-    """Get Windows VM status (legacy alias)."""
-    return get_vm_status(assistant_id, vm_type="windows")
-
-
-# =============================================================================
 # Orchestration Functions
 # =============================================================================
 
@@ -834,48 +919,69 @@ def provision_vm_full(
 ) -> Dict[str, Any]:
     """
     Full provisioning of a VM (Windows or Ubuntu):
-    1. Reserve static IP
-    2. Create DNS A record
-    3. Create and start VM
+    1. Generate SSH keypair for file sync
+    2. Store SSH private key as assistant secret
+    3. Reserve static IP
+    4. Create DNS A record
+    5. Create and start VM with SSH public key
 
     Args:
         assistant_id: The assistant ID (numeric string)
-        unify_apikey: Unify API key (used for VNC and Windows password)
-        assistant_name: Assistant name (used for Windows username)
+        unify_apikey: Unify API key (used for VNC, Windows password, and secret storage)
+        assistant_name: Assistant name (used for Windows/SSH username)
         vm_type: "windows" or "ubuntu"
 
     Returns:
-        Dict with full VM details.
+        Dict with full VM details including ssh_username and ssh_port.
     """
     logger.info(
         f"Starting full provisioning for assistant: {assistant_id} (type: {vm_type})"
     )
 
-    # Step 1: Reserve static IP
+    # Step 1: Generate SSH keypair for file sync
+    # Note: assistant_name is already formatted (e.g., "JohnDoe") by the caller
+    ssh_username = assistant_name
+    private_key, public_key = generate_ssh_keypair()
+    logger.info(f"Generated SSH keypair for user: {ssh_username}")
+
+    # Step 2: Store private key as assistant secret
+    key_stored = store_ssh_private_key(assistant_id, private_key, unify_apikey)
+    if not key_stored:
+        logger.warning(
+            f"Failed to store SSH private key for assistant {assistant_id}, "
+            "file sync may not work"
+        )
+
+    # Step 3: Reserve static IP
     static_ip = reserve_static_ip(assistant_id, vm_type)
     logger.info(f"Reserved static IP: {static_ip}")
 
-    # Step 2: Create DNS record (shared hostname for both types)
+    # Step 4: Create DNS record (shared hostname for both types)
     hostname = get_dns_hostname(assistant_id)
     create_dns_record(assistant_id, static_ip)
     logger.info(f"Created DNS record: {hostname} -> {static_ip}")
 
-    # Step 3: Create VM based on type
+    # Step 5: Create VM based on type (with SSH credentials)
     if vm_type == "ubuntu":
+        # Ubuntu uses ssh_username for SSH file sync
         result = create_ubuntu_vm(
             assistant_id=assistant_id,
             static_ip=static_ip,
             hostname=hostname,
             unify_apikey=unify_apikey,
             assistant_name=assistant_name,
+            ssh_public_key=public_key,
+            ssh_username=ssh_username,
         )
     else:
+        # Windows uses windows-username for SSH (no separate ssh_username)
         result = create_windows_vm(
             assistant_id=assistant_id,
             static_ip=static_ip,
             hostname=hostname,
             unify_apikey=unify_apikey,
             assistant_name=assistant_name,
+            ssh_public_key=public_key,
         )
 
     logger.info(f"Full provisioning complete for assistant: {assistant_id}")
@@ -918,20 +1024,3 @@ def deprovision_vm_full(assistant_id: str, vm_type: str = "windows") -> Dict[str
 
     logger.info(f"Full deprovisioning complete for assistant: {assistant_id}")
     return results
-
-
-# Legacy aliases for backward compatibility
-def provision_windows_vm_full(
-    assistant_id: str,
-    unify_apikey: str,
-    assistant_name: str,
-) -> Dict[str, Any]:
-    """Full provisioning of a Windows VM (legacy alias)."""
-    return provision_vm_full(
-        assistant_id, unify_apikey, assistant_name, vm_type="windows"
-    )
-
-
-def deprovision_windows_vm_full(assistant_id: str) -> Dict[str, Any]:
-    """Full deprovisioning of a Windows VM (legacy alias)."""
-    return deprovision_vm_full(assistant_id, vm_type="windows")
