@@ -175,11 +175,13 @@ setup_ssh_file_sync() {
         usermod -d /Unity "$SSH_USERNAME" 2>/dev/null || true
     fi
     
-    # 2. Create /Unity directory structure for file sync
-    mkdir -p /Unity/Downloads /Unity/user_files
+    # 2. Create /Unity/Local directory for file sync
+    # Note: Subdirectories (Downloads, user_files, etc.) are created by sync process
+    mkdir -p /Unity/Local
     chown -R "$SSH_USERNAME:$SSH_USERNAME" /Unity
     chmod 755 /Unity
-    echo "  Created /Unity directory structure"
+    chmod 755 /Unity/Local
+    echo "  Created /Unity/Local sync directory"
     
     # 3. Setup SSH authorized_keys for the user
     mkdir -p /Unity/.ssh
@@ -227,8 +229,8 @@ SSHEOF
     echo "SSH file sync configured:"
     echo "  User: $SSH_USERNAME"
     echo "  Port: 2222"
-    echo "  Home: /Unity"
-    echo "  Mode: SFTP-only (chrooted)"
+    echo "  Sync Path: /Unity/Local"
+    echo "  Mode: SFTP-only"
 }
 
 # Run SSH setup
