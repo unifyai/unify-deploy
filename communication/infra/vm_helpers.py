@@ -476,7 +476,9 @@ def create_windows_vm(
         metadata_items.append(
             compute_v1.Items(key="ssh-public-key", value=ssh_public_key)
         )
-        logger.info(f"Added SSH public key for file sync (uses Windows user: {windows_username})")
+        logger.info(
+            f"Added SSH public key for file sync (uses Windows user: {windows_username})"
+        )
 
     # Add MAK key if configured
     if MAK_KEY:
