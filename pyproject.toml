@@ -40,6 +40,9 @@ dependencies = [
 
     # Infrastructure
     "kubernetes>=28.1.0",
+
+    # SSH key generation for VM file sync
+    "cryptography>=42.0.0",
 ]
 
 [project.optional-dependencies]
