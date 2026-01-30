@@ -11,6 +11,7 @@
 #   hostname          - DNS hostname for Caddy HTTPS (e.g., vm.example.com)
 #   windows-username  - Windows user to create for auto-logon
 #   windows-password  - Password for Windows user
+#   office-mak-key    - Office MAK activation key
 #   github-token      - GitHub PAT for cloning private repos
 #   anthropic-api-key - Anthropic API key for agent service
 #   unify-key         - Unify API key for agent service
@@ -1999,6 +2000,7 @@ $gcpUnifyKey = Get-GCPMetadata -Key "unify-key"
 $gcpUnifyBaseUrl = Get-GCPMetadata -Key "unify-base-url"
 $gcpStaging = Get-GCPMetadata -Key "staging"
 $gcpSshPublicKey = Get-GCPMetadata -Key "ssh-public-key"
+$gcpMakKey = Get-GCPMetadata -Key "office-mak-key"
 # Note: SSH uses windows-username for authentication (no separate ssh-username needed)
 
 if ($gcpHostname) {
@@ -2016,9 +2018,12 @@ if ($gcpStaging) {
 if ($gcpSshPublicKey) {
     Write-Host "Found ssh-public-key metadata: (set, will use windows-username for SSH)" -ForegroundColor Cyan
 }
+if ($gcpMakKey) {
+    Write-Host "Found office-mak-key metadata: (set)" -ForegroundColor Cyan
+}
 
-# Parse arguments (GCP metadata takes precedence for vnc-password)
-$makKey = $args[0]
+# Parse arguments (GCP metadata takes precedence)
+$makKey = if ($gcpMakKey) { $gcpMakKey } elseif ($args[0]) { $args[0] } else { $null }
 $vncPassword = if ($gcpVncPassword) { $gcpVncPassword } elseif ($args[1]) { $args[1] } else { "unify123" }
 $hostname = if ($gcpHostname) { $gcpHostname } else { $null }
 $windowsUser = if ($gcpWindowsUser) { $gcpWindowsUser } else { $null }
