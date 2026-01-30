@@ -492,7 +492,7 @@ async def teams_call_webhook(request: Request):
 
 class UnifyMessagePayload(BaseModel):
     assistant_id: str
-    contact_id: Optional[int] = 1
+    contact_id: int  # Required - no default to prevent silent privilege escalation
     body: Optional[str] = ""
 
 
@@ -551,7 +551,7 @@ async def unify_attachment_upload(
             return Response(
                 content=json.dumps(
                     {
-                        "error": f"File too large: {file_size_mb:.1f}MB exceeds {max_size_mb}MB limit"
+                        "error": f"File too large: {file_size_mb:.1f}MB exceeds {max_size_mb}MB limit",
                     },
                 ),
                 status_code=400,
@@ -603,7 +603,7 @@ async def unify_attachment_upload(
                     "id": attachment_id,
                     "filename": safe_filename,
                     "url": signed_url,
-                }
+                },
             ),
             status_code=200,
             media_type="application/json",
@@ -647,13 +647,13 @@ async def unify_message_webhook(request: Request):
     if "application/json" in content_type:
         payload = await request.json()
         assistant_id_input = payload.get("assistant_id", "")
-        contact_id = payload.get("contact_id", 1)
+        contact_id = payload.get("contact_id")
         body = payload.get("body", "") or ""
         attachments = payload.get("attachments") or []
     else:
         form_data = await request.form()
         assistant_id_input = form_data.get("assistant_id", "")
-        contact_id = form_data.get("contact_id", 1)
+        contact_id = form_data.get("contact_id")
         body = form_data.get("Body", "") or ""
         # Form data doesn't support attachments well, default to empty
         attachments = []
@@ -661,6 +661,10 @@ async def unify_message_webhook(request: Request):
     if not assistant_id_input:
         print("Assistant ID is required")
         return Response(status_code=400)
+
+    if contact_id is None:
+        print("contact_id is required for unify_message")
+        return Response(status_code=400, content="contact_id is required")
 
     # Validate attachments format
     validated_attachments = []
@@ -676,7 +680,7 @@ async def unify_message_webhook(request: Request):
                     "id": str(att["id"]),
                     "filename": str(att["filename"]),
                     "url": str(att["url"]),
-                }
+                },
             )
         else:
             print(f"Skipping invalid attachment: {att}")
