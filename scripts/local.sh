@@ -105,7 +105,26 @@ check_gcloud() {
   return 0
 }
 
+check_java() {
+  # Pub/Sub emulator requires Java 7+
+  if ! command -v java &>/dev/null; then
+    log_error "Java is required for Pub/Sub emulator but not installed"
+    log_info "Install Java with one of:"
+    log_info "  macOS:  brew install openjdk"
+    log_info "  Ubuntu: sudo apt install default-jdk"
+    log_info "  Or use: $0 start --no-emulator"
+    return 1
+  fi
+  log_success "Java is available"
+  return 0
+}
+
 check_pubsub_emulator() {
+  # First check Java (required for emulator)
+  if ! check_java; then
+    return 1
+  fi
+
   # Check if pubsub-emulator component is installed
   if ! gcloud components list 2>/dev/null | grep -q "pubsub-emulator.*Installed"; then
     log_warn "Pub/Sub emulator not installed"
@@ -115,6 +134,17 @@ check_pubsub_emulator() {
       return 1
     fi
   fi
+
+  # Check if beta commands are installed (needed for emulators command)
+  if ! gcloud components list 2>/dev/null | grep -q "gcloud Beta Commands.*Installed"; then
+    log_warn "gcloud beta commands not installed"
+    log_info "Installing with: gcloud components install beta"
+    if ! gcloud components install beta --quiet; then
+      log_error "Failed to install gcloud beta commands"
+      return 1
+    fi
+  fi
+
   log_success "Pub/Sub emulator is available"
   return 0
 }
