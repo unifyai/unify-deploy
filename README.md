@@ -149,7 +149,15 @@ export UNIFY_BASE_URL="http://127.0.0.1:8000/v0"
 **Prerequisites:**
 - Python 3.11+
 - Google Cloud SDK (`gcloud`) for Pub/Sub emulator
-- Install emulator: `gcloud components install pubsub-emulator`
+- **Java 7+** (required by Pub/Sub emulator)
+  - macOS: `brew install openjdk`
+  - Ubuntu: `sudo apt install default-jdk`
+- Install emulator components:
+  ```bash
+  gcloud components install pubsub-emulator beta
+  ```
+
+> **Note:** If Java is not installed, `local.sh` will display an error with installation instructions. You can still run `./scripts/local.sh start --no-emulator` to use real GCP Pub/Sub instead.
 
 ---
 
