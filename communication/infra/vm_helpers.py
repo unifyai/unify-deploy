@@ -24,11 +24,16 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 # Environment detection
 STAGING = os.environ.get("STAGING", "false").lower() == "true"
-UNIFY_BASE_URL = (
+
+# Orchestra URL priority:
+# 1. UNIFY_BASE_URL environment variable (for local orchestra or custom deployments)
+# 2. Default based on STAGING flag (production vs staging)
+_default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
     else "https://service.a.run.app/v0"
 )
+UNIFY_BASE_URL = os.environ.get("UNIFY_BASE_URL", _default_orchestra_url)
 
 from .vm_config import (
     VM_PROJECT_ID,
@@ -386,12 +391,12 @@ def store_ssh_private_key(
             else:
                 logger.error(
                     f"Failed to update SSH key: {update_response.status_code} "
-                    f"{update_response.text}"
+                    f"{update_response.text}",
                 )
                 return False
         else:
             logger.error(
-                f"Failed to store SSH key: {response.status_code} {response.text}"
+                f"Failed to store SSH key: {response.status_code} {response.text}",
             )
             return False
     except Exception as e:
@@ -474,10 +479,10 @@ def create_windows_vm(
     # Note: Windows uses windows-username for SSH auth (no separate ssh-username needed)
     if ssh_public_key:
         metadata_items.append(
-            compute_v1.Items(key="ssh-public-key", value=ssh_public_key)
+            compute_v1.Items(key="ssh-public-key", value=ssh_public_key),
         )
         logger.info(
-            f"Added SSH public key for file sync (uses Windows user: {windows_username})"
+            f"Added SSH public key for file sync (uses Windows user: {windows_username})",
         )
 
     # Add MAK key if configured
@@ -496,7 +501,7 @@ def create_windows_vm(
 
     if anthropic_api_key:
         metadata_items.append(
-            compute_v1.Items(key="anthropic-api-key", value=anthropic_api_key)
+            compute_v1.Items(key="anthropic-api-key", value=anthropic_api_key),
         )
         logger.info("Added Anthropic API key to VM metadata")
 
@@ -523,7 +528,7 @@ def create_windows_vm(
                     disk_type=f"zones/{ZONE}/diskTypes/{VM_DISK_TYPE}",
                     source_image=f"projects/{WINDOWS_VM_IMAGE_PROJECT}/global/images/family/{WINDOWS_VM_IMAGE_FAMILY}",
                 ),
-            )
+            ),
         ],
         network_interfaces=[
             compute_v1.NetworkInterface(
@@ -534,9 +539,9 @@ def create_windows_vm(
                         type_="ONE_TO_ONE_NAT",
                         nat_i_p=static_ip,
                         network_tier="PREMIUM",
-                    )
+                    ),
                 ],
-            )
+            ),
         ],
         metadata=compute_v1.Metadata(items=metadata_items),
         # Enable virtual display for VNC/noVNC to capture
@@ -637,7 +642,7 @@ def create_ubuntu_vm(
     # Add SSH file sync metadata if provided
     if ssh_public_key and ssh_username:
         metadata_items.append(
-            compute_v1.Items(key="ssh-public-key", value=ssh_public_key)
+            compute_v1.Items(key="ssh-public-key", value=ssh_public_key),
         )
         metadata_items.append(compute_v1.Items(key="ssh-username", value=ssh_username))
         logger.info(f"Added SSH file sync config for user: {ssh_username}")
@@ -654,7 +659,7 @@ def create_ubuntu_vm(
 
     if anthropic_api_key:
         metadata_items.append(
-            compute_v1.Items(key="anthropic-api-key", value=anthropic_api_key)
+            compute_v1.Items(key="anthropic-api-key", value=anthropic_api_key),
         )
         logger.info("Added Anthropic API key to VM metadata")
 
@@ -681,7 +686,7 @@ def create_ubuntu_vm(
                     disk_type=f"zones/{ZONE}/diskTypes/{VM_DISK_TYPE}",
                     source_image=f"projects/{UBUNTU_VM_IMAGE_PROJECT}/global/images/family/{UBUNTU_VM_IMAGE_FAMILY}",
                 ),
-            )
+            ),
         ],
         network_interfaces=[
             compute_v1.NetworkInterface(
@@ -692,9 +697,9 @@ def create_ubuntu_vm(
                         type_="ONE_TO_ONE_NAT",
                         nat_i_p=static_ip,
                         network_tier="PREMIUM",
-                    )
+                    ),
                 ],
-            )
+            ),
         ],
         metadata=compute_v1.Metadata(items=metadata_items),
         scheduling=compute_v1.Scheduling(
@@ -826,7 +831,8 @@ def delete_vm(assistant_id: str, vm_type: str = "windows") -> bool:
 
 
 def get_vm_status(
-    assistant_id: str, vm_type: str = "windows"
+    assistant_id: str,
+    vm_type: str = "windows",
 ) -> Optional[Dict[str, Any]]:
     """
     Get the current status of a VM (Windows or Ubuntu).
@@ -878,7 +884,7 @@ def get_vm_status(
             # Check if there's a last_start_timestamp
             if last_start_ts:
                 last_start_dt = datetime.fromisoformat(
-                    last_start_ts.replace("Z", "+00:00")
+                    last_start_ts.replace("Z", "+00:00"),
                 )
                 start_ready = last_start_dt + timedelta(seconds=30)
                 # Take the max (whichever requires longer wait)
@@ -937,7 +943,7 @@ def provision_vm_full(
         Dict with full VM details including ssh_username and ssh_port.
     """
     logger.info(
-        f"Starting full provisioning for assistant: {assistant_id} (type: {vm_type})"
+        f"Starting full provisioning for assistant: {assistant_id} (type: {vm_type})",
     )
 
     # Step 1: Generate SSH keypair for file sync
@@ -951,7 +957,7 @@ def provision_vm_full(
     if not key_stored:
         logger.warning(
             f"Failed to store SSH private key for assistant {assistant_id}, "
-            "file sync may not work"
+            "file sync may not work",
         )
 
     # Step 3: Reserve static IP
@@ -1005,7 +1011,7 @@ def deprovision_vm_full(assistant_id: str, vm_type: str = "windows") -> Dict[str
         Dict with deprovisioning status.
     """
     logger.info(
-        f"Starting full deprovisioning for assistant: {assistant_id} (type: {vm_type})"
+        f"Starting full deprovisioning for assistant: {assistant_id} (type: {vm_type})",
     )
 
     results = {

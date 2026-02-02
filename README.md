@@ -89,6 +89,68 @@ functions-framework --target=twilio_call_webhook --port=8081
 # Repeat for other entry points (twilio_msg_webhook, twilio_whatsapp_webhook, etc.)
 ```
 
+### Local Development with `local.sh`
+
+For integration testing with the Unity repository, use the `scripts/local.sh` script which provides:
+
+1. **Pub/Sub Emulator** — Local Google Cloud Pub/Sub emulator (no cloud credentials needed)
+2. **Adapters Service** — FastAPI server for webhook handling
+3. **Automatic Topic Creation** — Creates test topics/subscriptions for test assistants
+
+**Quick Start:**
+```bash
+# Start with Pub/Sub emulator (recommended for local testing)
+./scripts/local.sh start
+
+# Or set environment variables automatically
+eval "$(./scripts/local.sh start)"
+
+# Check status
+./scripts/local.sh status
+
+# Stop all services
+./scripts/local.sh stop
+```
+
+**Options:**
+```bash
+# Start without Pub/Sub emulator (use real GCP Pub/Sub)
+./scripts/local.sh start --no-emulator
+
+# Also start the Communication service (for outbound APIs)
+./scripts/local.sh start --with-comms
+```
+
+**Integration with Local Orchestra:**
+
+When running local orchestra (via Unity's `parallel_run.sh`), set `UNIFY_BASE_URL` to point communication services to the local orchestra instance:
+
+```bash
+# Unity repo starts local orchestra at http://127.0.0.1:8000/v0
+export UNIFY_BASE_URL="http://127.0.0.1:8000/v0"
+
+# Communication services will now use local orchestra
+./scripts/local.sh start
+```
+
+**Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADAPTERS_PORT` | 8081 | Port for Adapters service |
+| `COMMS_PORT` | 8082 | Port for Communication service |
+| `PUBSUB_EMULATOR_PORT` | 8085 | Port for Pub/Sub emulator |
+| `PROJECT_ID` | local-test-project | GCP project ID for Pub/Sub topics |
+| `TEST_ASSISTANT_ID` | default-test-assistant | Assistant ID for test topics |
+| `UNIFY_BASE_URL` | (staging/prod URL) | Orchestra URL (for local orchestra) |
+| `ORCHESTRA_ADMIN_KEY` | — | Admin key for Orchestra auth |
+| `STAGING` | true | Set topic suffix (-staging) |
+
+**Prerequisites:**
+- Python 3.11+
+- Google Cloud SDK (`gcloud`) for Pub/Sub emulator
+- Install emulator: `gcloud components install pubsub-emulator`
+
 ---
 
 ## Adapters (Webhooks)

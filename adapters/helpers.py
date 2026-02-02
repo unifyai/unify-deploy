@@ -1,4 +1,3 @@
-import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
 import httpx
@@ -7,10 +6,8 @@ import os
 import re
 import traceback
 import requests
-from functools import wraps
 from urllib.parse import quote_plus
 
-from fastapi import Request, Response
 
 from google.cloud import pubsub_v1
 
@@ -25,11 +22,17 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
 )
 
 STAGING = os.getenv("STAGING")
-ORCHESTRA_URL = (
+
+# Orchestra URL priority:
+# 1. UNIFY_BASE_URL environment variable (for local orchestra or custom deployments)
+# 2. Default based on STAGING flag (production vs staging)
+_default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
     else "https://service.a.run.app/v0"
 )
+ORCHESTRA_URL = os.getenv("UNIFY_BASE_URL", _default_orchestra_url)
+
 COMMS_URL = os.getenv("UNITY_COMMS_URL")
 ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
 
@@ -173,7 +176,8 @@ def get_assistant(
         "desktop_url": assistants[0].get("desktop_url", None),
         "user_desktop_mode": assistants[0].get("user_desktop_mode", None),
         "user_desktop_filesys_sync": assistants[0].get(
-            "user_desktop_filesys_sync", False
+            "user_desktop_filesys_sync",
+            False,
         ),
         "user_desktop_url": assistants[0].get("user_desktop_url", None),
     }

@@ -8,11 +8,17 @@ from azure.core.credentials import AccessToken, TokenCredential
 from msgraph import GraphServiceClient
 
 STAGING = os.getenv("STAGING")
-ORCHESTRA_URL = (
+
+# Orchestra URL priority:
+# 1. UNIFY_BASE_URL environment variable (for local orchestra or custom deployments)
+# 2. Default based on STAGING flag (production vs staging)
+_default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
     else "https://service.a.run.app/v0"
 )
+ORCHESTRA_URL = os.getenv("UNIFY_BASE_URL", _default_orchestra_url)
+
 ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
 
 
@@ -25,7 +31,8 @@ class TokenCredentialFromSecret(TokenCredential):
     def get_token(self, *scopes, **kwargs) -> AccessToken:
         # Expiry doesn't matter - scheduled job keeps token fresh
         return AccessToken(
-            self._token, int(datetime.now(tz=timezone.utc).timestamp()) + 3600
+            self._token,
+            int(datetime.now(tz=timezone.utc).timestamp()) + 3600,
         )
 
 
@@ -34,7 +41,8 @@ async def get_graph_client(user_email: str) -> GraphServiceClient:
     admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     if not admin_key:
         raise HTTPException(
-            status_code=500, detail="ORCHESTRA_ADMIN_KEY not configured"
+            status_code=500,
+            detail="ORCHESTRA_ADMIN_KEY not configured",
         )
 
     async with httpx.AsyncClient() as client:
@@ -47,13 +55,15 @@ async def get_graph_client(user_email: str) -> GraphServiceClient:
 
     if response.status_code != 200:
         raise HTTPException(
-            status_code=404, detail=f"Assistant not found: {user_email}"
+            status_code=404,
+            detail=f"Assistant not found: {user_email}",
         )
 
     assistants = response.json().get("info", [])
     if not assistants:
         raise HTTPException(
-            status_code=404, detail=f"Assistant not found: {user_email}"
+            status_code=404,
+            detail=f"Assistant not found: {user_email}",
         )
 
     secrets = assistants[0].get("secrets", {})
