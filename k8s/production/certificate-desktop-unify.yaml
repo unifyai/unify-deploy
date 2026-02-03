@@ -9,5 +9,5 @@ spec:
     name: letsencrypt-dns
     kind: ClusterIssuer
   dnsNames:
-    - "*.desktop.unify.ai"
-    - "desktop.unify.ai"
+  - "*.desktop.unify.ai"
+  - "desktop.unify.ai"

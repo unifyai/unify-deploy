@@ -8,9 +8,9 @@ metadata:
     kubernetes.io/ingress.global-static-ip-name: "unity-ingress-ip"
 spec:
   tls:
-    - hosts:
-        - "*.desktop.unify.ai"
-      secretName: desktop-unify-wildcard-tls
+  - hosts:
+    - "*.desktop.unify.ai"
+    secretName: desktop-unify-wildcard-tls
   defaultBackend:
     service:
       name: default-http-backend

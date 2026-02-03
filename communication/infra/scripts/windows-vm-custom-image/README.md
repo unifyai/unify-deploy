@@ -112,4 +112,3 @@ custom-win/
 ```
 
 The startup script remains at: `communication/infra/scripts/windows-vm-startup.ps1`
-

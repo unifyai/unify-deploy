@@ -221,17 +221,17 @@ SIP (Session Initiation Protocol) separates **signaling** (call setup) from **me
 
 ```
 1. Teams User clicks "Call AI Assistant"
-   
+
 2. Teams sends SIP INVITE to your SBC
    Teams → sbc.yourdomain.com (your SBC)
-   
+
    INVITE sip:ai-assistant@sbc.yourdomain.com
    From: teams-user@company.com
    SDP: [Teams' IP address and ports for audio]
 
 3. SBC receives INVITE, rewrites destination, forwards to LiveKit
    SBC → LiveKit SIP
-   
+
    INVITE sip:room@your-project.sip.livekit.cloud
 
 4. LiveKit accepts, sends back 200 OK with its audio details
@@ -517,7 +517,7 @@ For a self-hosted Kamailio SBC, you need to:
 ```kamailio
 request_route {
     # ... other routing logic ...
-    
+
     if (is_method("OPTIONS")) {
         xlog("L_INFO", "OPTIONS request - responding 200 OK\n");
         sl_send_reply("200", "OK");
@@ -774,10 +774,10 @@ Teams → sbc.yourdomain.com (your VM) → LiveKit SIP
 1. Go to [Twilio Console](https://console.twilio.com) → **Elastic SIP Trunking**
 2. Create a new SIP Trunk:
    - **Friendly Name:** `Teams-to-LiveKit`
-   
+
 3. Configure Origination (Teams → Twilio):
    - **Origination SIP URI:** Your Twilio SIP domain
-   
+
 4. Configure Termination (Twilio → LiveKit):
    - **Termination SIP URI:** `sip:your-trunk.sip.livekit.cloud`
    - **Transport:** TLS
@@ -922,7 +922,7 @@ Grant-CsOnlineVoiceRoutingPolicy -Identity "ai-assistant@yourdomain.com" `
 
 ```powershell
 # Check the resource account configuration
-Get-CsOnlineUser -Identity "ai-assistant@yourdomain.com" | 
+Get-CsOnlineUser -Identity "ai-assistant@yourdomain.com" |
     Select-Object DisplayName, EnterpriseVoiceEnabled, OnlineVoiceRoutingPolicy
 ```
 
@@ -960,7 +960,7 @@ async def create_teams_sip_trunk():
         api_key=os.getenv("LIVEKIT_API_KEY"),
         api_secret=os.getenv("LIVEKIT_API_SECRET"),
     )
-    
+
     sip_trunk = SIPInboundTrunkInfo(
         name="Teams-Direct-Routing",
         # Accept calls from any number (Resource Account doesn't have a real number)
@@ -968,11 +968,11 @@ async def create_teams_sip_trunk():
         # Restrict to your SBC's IP for security
         allowed_addresses=["YOUR_SBC_IP_ADDRESS"],
     )
-    
+
     request = CreateSIPInboundTrunkRequest(trunk=sip_trunk)
     result = await lkapi.sip.create_sip_inbound_trunk(request)
     print(f"Created SIP trunk: {result.sip_trunk_id}")
-    
+
     await lkapi.aclose()
     return result
 ```
@@ -1037,15 +1037,15 @@ async def teams_call_webhook(request: Request):
     This is called when LiveKit receives a SIP call from your SBC.
     """
     data = await request.json()
-    
+
     # Extract call info from SIP headers
     # NOTE: caller_id is often anonymous/empty for forwarded calls (see Known Issues)
     caller_id = data.get("from_number", "")  # May be empty or Resource Account ID
     sip_trunk_id = data.get("sip_trunk_id", "")
     room_name = data.get("room_name", "")
-    
+
     print(f"Teams call received from {caller_id} in room {room_name}")
-    
+
     # Build context and dispatch agent (similar to your phone webhook)
     context = build_webhook_context(
         channel="teams",
@@ -1054,14 +1054,14 @@ async def teams_call_webhook(request: Request):
         validate_contact=False,
         ensure_job=True,
     )
-    
+
     assistant_id = context["assistant"]["assistant_id"]
-    
+
     # Publish to Pub/Sub for your agent to handle
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}"
     topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-    
+
     pubsub_client.publish(
         topic_path,
         json.dumps({
@@ -1075,7 +1075,7 @@ async def teams_call_webhook(request: Request):
             },
         }).encode("utf-8"),
     )
-    
+
     return {"status": "ok"}
 ```
 
@@ -1093,7 +1093,7 @@ async def setup_teams_dispatch():
         api_key=os.getenv("LIVEKIT_API_KEY"),
         api_secret=os.getenv("LIVEKIT_API_SECRET"),
     )
-    
+
     # Create dispatch rule to auto-create rooms and dispatch agents
     dispatch_rule = SIPDispatchRuleInfo(
         name="Teams-Calls",
@@ -1107,11 +1107,11 @@ async def setup_teams_dispatch():
         # Optional: webhook for custom handling
         metadata=json.dumps({"source": "teams"}),
     )
-    
+
     await lkapi.sip.create_sip_dispatch_rule(
         CreateSIPDispatchRuleRequest(rule=dispatch_rule)
     )
-    
+
     await lkapi.aclose()
 ```
 
@@ -1397,7 +1397,7 @@ Check the flow:
    ```kamailio
    # Wrong:
    $var(new_to) = "<sip:+123@domain>";
-   
+
    # Correct:
    $var(new_to) = "sip:+123@domain";
    uac_replace_to("", "$var(new_to)");
@@ -1632,7 +1632,7 @@ This appears to be undocumented client-side behavior in Teams when Media Bypass 
 
 **Status:** Intermittent issue affecting new Teams desktop client (as of late 2024)
 
-**Symptoms:** 
+**Symptoms:**
 - Calls work from Teams **web client** (teams.microsoft.com)
 - Calls fail from new Teams **desktop client** (disconnects after ~0.8 seconds)
 - LiveKit logs show `CLIENT_INITIATED` disconnect
@@ -1984,7 +1984,7 @@ modparam("tls", "config", "/etc/kamailio/tls.cfg")
 
 request_route {
     xlog("L_INFO", "=== Incoming $rm from $fu to $ru ($si:$sp) ===\n");
-    
+
     if (!mf_process_maxfwd_header("10")) {
         sl_send_reply("483", "Too Many Hops");
         exit;

@@ -252,4 +252,3 @@ echo "  - Caddy: $(caddy version)"
 echo "  - Playwright: ${PLAYWRIGHT_VERSION}"
 echo "  - supervisord: $(supervisord --version)"
 echo ""
-

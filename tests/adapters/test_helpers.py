@@ -5,7 +5,6 @@ These tests verify contact handling logic after the whatsapp_number field
 was removed from the contact schema.
 """
 
-import pytest
 from adapters.helpers import (
     get_default_contacts,
     check_contact_details,

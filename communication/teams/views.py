@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 
 from msgraph.generated.models.chat_message import ChatMessage
 from msgraph.generated.models.item_body import ItemBody
@@ -37,7 +37,8 @@ async def send_teams_chat(request: Request):
 
     if not sender or not chat_id or body is None:
         raise HTTPException(
-            status_code=400, detail="Missing required fields: from, chat_id, body"
+            status_code=400,
+            detail="Missing required fields: from, chat_id, body",
         )
 
     try:
@@ -47,7 +48,7 @@ async def send_teams_chat(request: Request):
             body=ItemBody(
                 content=body,
                 content_type=BodyType.Html if content_type == "html" else BodyType.Text,
-            )
+            ),
         )
 
         result = await graph.me.chats.by_chat_id(chat_id).messages.post(message)
@@ -86,7 +87,7 @@ async def list_teams_chats(user_email: str):
                         if chat.created_date_time
                         else None
                     ),
-                }
+                },
             )
 
         return {"success": True, "chats": chat_list}
@@ -148,7 +149,7 @@ async def watch_teams_chat(request: Request):
                         expiration_date_time=datetime.now(timezone.utc)
                         + timedelta(minutes=60),
                         client_state=client_state,
-                    )
+                    ),
                 )
                 logging.info(f"Teams chat watch created for {user_email}: {result.id}")
                 return {
@@ -164,7 +165,7 @@ async def watch_teams_chat(request: Request):
                 )
                 if is_validation_timeout and attempt < MAX_RETRIES:
                     logging.warning(
-                        f"Teams chat watch validation timeout for {user_email}, retrying..."
+                        f"Teams chat watch validation timeout for {user_email}, retrying...",
                     )
                     continue
                 raise
@@ -201,7 +202,8 @@ async def delete_teams_watch(request: Request):
                 return {"success": True, "primary_email": primary_email}
 
         raise HTTPException(
-            status_code=404, detail=f"No subscription found for {primary_email}"
+            status_code=404,
+            detail=f"No subscription found for {primary_email}",
         )
 
     except HTTPException:
@@ -258,7 +260,7 @@ async def get_teams_chat_messages(
                         if msg.created_date_time
                         else None
                     ),
-                }
+                },
             )
 
         return {"success": True, "messages": message_list}
@@ -294,7 +296,7 @@ async def list_joined_teams(user_email: str):
                     "id": team.id,
                     "display_name": team.display_name,
                     "description": team.description,
-                }
+                },
             )
 
         return {"success": True, "teams": team_list}
@@ -333,7 +335,7 @@ async def list_team_channels(team_id: str, user_email: str):
                         if channel.membership_type
                         else None
                     ),
-                }
+                },
             )
 
         return {"success": True, "channels": channel_list}
@@ -403,10 +405,10 @@ async def watch_teams_channel(request: Request):
                         expiration_date_time=datetime.now(timezone.utc)
                         + timedelta(minutes=60),
                         client_state=client_state,
-                    )
+                    ),
                 )
                 logging.info(
-                    f"Teams channel watch created for {user_email} on {team_id}/{channel_id}: {result.id}"
+                    f"Teams channel watch created for {user_email} on {team_id}/{channel_id}: {result.id}",
                 )
                 return {
                     "success": True,
@@ -424,7 +426,7 @@ async def watch_teams_channel(request: Request):
                 if is_validation_timeout and attempt < MAX_RETRIES:
                     logging.warning(
                         f"Teams channel watch validation timeout for {user_email} "
-                        f"on {team_id}/{channel_id}, retrying..."
+                        f"on {team_id}/{channel_id}, retrying...",
                     )
                     continue
                 raise
@@ -469,7 +471,7 @@ async def delete_teams_channel_watch(request: Request):
             if sub.resource and sub.resource.lower() == target_resource.lower():
                 await graph.subscriptions.by_subscription_id(sub.id).delete()
                 logging.info(
-                    f"Teams channel watch deleted for {primary_email} on {team_id}/{channel_id}"
+                    f"Teams channel watch deleted for {primary_email} on {team_id}/{channel_id}",
                 )
                 return {
                     "success": True,
@@ -517,7 +519,8 @@ async def send_teams_channel_message(
 
     if not sender or body is None:
         raise HTTPException(
-            status_code=400, detail="Missing required fields: from, body"
+            status_code=400,
+            detail="Missing required fields: from, body",
         )
 
     try:
@@ -527,7 +530,7 @@ async def send_teams_channel_message(
             body=ItemBody(
                 content=body,
                 content_type=BodyType.Html if content_type == "html" else BodyType.Text,
-            )
+            ),
         )
 
         result = (
@@ -537,7 +540,7 @@ async def send_teams_channel_message(
         )
 
         logging.info(
-            f"Teams channel message sent from {sender} to {team_id}/{channel_id}"
+            f"Teams channel message sent from {sender} to {team_id}/{channel_id}",
         )
         return {"success": True, "message_id": result.id}
 
@@ -601,7 +604,7 @@ async def get_teams_channel_messages(
                         if msg.created_date_time
                         else None
                     ),
-                }
+                },
             )
 
         return {"success": True, "messages": message_list}

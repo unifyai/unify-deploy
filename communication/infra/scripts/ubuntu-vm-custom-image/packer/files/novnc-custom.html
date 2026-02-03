@@ -71,10 +71,10 @@
         (function() {
             const iframe = document.getElementById('vnc');
             const loading = document.getElementById('loading');
-            
+
             // Build VNC URL with parameters
             const params = new URLSearchParams(window.location.search);
-            
+
             // Set default parameters for better UX
             params.set('resize', 'scale');       // Scale to fit window
             params.set('autoconnect', '1');      // Auto-connect on load
@@ -82,16 +82,16 @@
             params.set('reconnect_delay', '1000'); // 1 second reconnect delay
             params.set('show_dot', '1');         // Show dot cursor
             params.set('view_only', '0');        // Allow control
-            
+
             // Load the actual noVNC client
             iframe.src = 'vnc.html?' + params.toString();
-            
+
             // Hide loading when iframe loads
             iframe.onload = function() {
                 // Small delay to ensure VNC is rendered
                 setTimeout(function() {
                     loading.classList.add('hidden');
-                    
+
                     // Inject CSS to hide noVNC controls and cursor
                     try {
                         const doc = iframe.contentDocument;
@@ -134,7 +134,7 @@
                     }
                 }, 500);
             };
-            
+
             // Handle errors
             iframe.onerror = function() {
                 loading.querySelector('.loading-text').textContent = 'Failed to connect. Retrying...';
@@ -146,4 +146,3 @@
     </script>
 </body>
 </html>
-

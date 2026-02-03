@@ -30,8 +30,10 @@ async def list_sites(user_email: str, search: Optional[str] = None):
         if search:
             sites = await graph.sites.get(
                 request_configuration=lambda c: setattr(
-                    c.query_parameters, "search", search
-                )
+                    c.query_parameters,
+                    "search",
+                    search,
+                ),
             )
         else:
             # Get sites the user is following or has access to
@@ -46,7 +48,7 @@ async def list_sites(user_email: str, search: Optional[str] = None):
                     "description": site.description,
                 }
                 for site in (sites.value or [])
-            ]
+            ],
         }
 
     except Exception as e:
@@ -112,7 +114,7 @@ async def list_user_drives(user_email: str):
                     "drive_type": my_drive.drive_type,
                     "web_url": my_drive.web_url,
                     "is_personal": True,
-                }
+                },
             )
 
         for drive in drives.value or []:
@@ -124,7 +126,7 @@ async def list_user_drives(user_email: str):
                         "drive_type": drive.drive_type,
                         "web_url": drive.web_url,
                         "is_personal": False,
-                    }
+                    },
                 )
 
         return {"drives": all_drives}
@@ -158,7 +160,7 @@ async def list_site_drives(user_email: str, site_id: str):
                     "web_url": drive.web_url,
                 }
                 for drive in (drives.value or [])
-            ]
+            ],
         }
 
     except Exception as e:
@@ -225,7 +227,7 @@ async def list_items(
                     "web_url": item.web_url,
                 }
                 for item in (items.value or [])
-            ]
+            ],
         }
 
     except Exception as e:
@@ -344,7 +346,8 @@ async def upload_file(request: Request, user_email: str, drive_id: str):
 
         if not path or content is None:
             raise HTTPException(
-                status_code=400, detail="Missing required fields: path, content"
+                status_code=400,
+                detail="Missing required fields: path, content",
             )
 
         graph = await get_graph_client(user_email)
@@ -414,7 +417,7 @@ async def create_folder(request: Request, user_email: str, drive_id: str):
 
         if parent_path:
             result = await drive_ref.root.item_with_path(parent_path).children.post(
-                new_folder
+                new_folder,
             )
         else:
             result = await drive_ref.root.children.post(new_folder)
@@ -500,7 +503,7 @@ async def search_files(user_email: str, drive_id: str, q: str):
                     "web_url": item.web_url,
                 }
                 for item in (results.value or [])
-            ]
+            ],
         }
 
     except Exception as e:

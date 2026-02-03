@@ -2,7 +2,6 @@ import os
 import httpx
 import base64
 import json
-import time
 from fastapi import APIRouter, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
 from livekit.api import (

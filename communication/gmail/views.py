@@ -41,7 +41,9 @@ def get_gmail_service(sender_email: str):
         "https://www.googleapis.com/auth/gmail.modify",
     ]
     creds = Credentials.from_service_account_info(
-        creds_json, scopes=scopes, subject=sender_email
+        creds_json,
+        scopes=scopes,
+        subject=sender_email,
     )
     return build("gmail", "v1", credentials=creds)
 
@@ -110,12 +112,13 @@ async def send_email(request: Request):
     body = data.get("body")
     in_reply_to = data.get("in_reply_to")  # email_id to reply to (threading id)
     attachment = data.get(
-        "attachment"
+        "attachment",
     )  # Optional: {"filename": str, "content_base64": str}
 
     if not sender or not to or body is None:
         raise HTTPException(
-            status_code=400, detail="Missing required fields: 'from', 'to', 'body'"
+            status_code=400,
+            detail="Missing required fields: 'from', 'to', 'body'",
         )
 
     # initialize message
@@ -181,7 +184,8 @@ async def watch_email(request: Request):
     )
     gmail_service = build("gmail", "v1", credentials=creds)
     topic_name = "projects/gcp-project-runtime/topics/" + data.get(
-        "topic_name", "gmail-notifications"
+        "topic_name",
+        "gmail-notifications",
     )
     watch_request = {"labelIds": ["INBOX"], "topicName": topic_name}
     watch_resp = (
@@ -219,7 +223,7 @@ async def get_attachment(
             content=file_bytes,
             media_type="application/octet-stream",
             headers={
-                "Content-Disposition": f"attachment; filename={filename or 'attachment'}"
+                "Content-Disposition": f"attachment; filename={filename or 'attachment'}",
             },
         )
     except HTTPException:

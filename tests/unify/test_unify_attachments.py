@@ -196,7 +196,7 @@ class TestUnifyAttachmentUpload:
                 "large_file.bin",
                 io.BytesIO(large_content),
                 "application/octet-stream",
-            )
+            ),
         }
 
         response = client.post(
@@ -225,7 +225,7 @@ class TestUnifyAttachmentUpload:
         file_content = b"content"
         # Try to include path in filename
         files = {
-            "file": ("../../../etc/passwd", io.BytesIO(file_content), "text/plain")
+            "file": ("../../../etc/passwd", io.BytesIO(file_content), "text/plain"),
         }
 
         response = client.post(

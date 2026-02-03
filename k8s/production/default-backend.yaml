@@ -1,3 +1,4 @@
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -6,8 +7,8 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - port: 80
-      targetPort: 8080
+  - port: 80
+    targetPort: 8080
   selector:
     app: default-http-backend
 ---
@@ -27,14 +28,14 @@ spec:
         app: default-http-backend
     spec:
       containers:
-        - name: backend
-          image: gcr.io/google_containers/defaultbackend:1.4
-          ports:
-            - containerPort: 8080
-          resources:
-            requests:
-              cpu: 10m
-              memory: 20Mi
-            limits:
-              cpu: 10m
-              memory: 20Mi
+      - name: backend
+        image: gcr.io/google_containers/defaultbackend:1.4
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 10m
+            memory: 20Mi
+          limits:
+            cpu: 10m
+            memory: 20Mi

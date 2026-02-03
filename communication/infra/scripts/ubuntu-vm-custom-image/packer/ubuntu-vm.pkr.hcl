@@ -155,7 +155,7 @@ build {
       "chmod +x /tmp/install-base.sh",
       "sudo /tmp/install-base.sh"
     ]
-    
+
     # Increase timeout for installations
     timeout = "30m"
   }
@@ -196,4 +196,3 @@ build {
     ]
   }
 }
-

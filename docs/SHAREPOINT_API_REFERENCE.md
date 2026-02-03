@@ -699,4 +699,3 @@ Microsoft Graph API has rate limits. If you receive `429 Too Many Requests`, imp
 - [Microsoft Graph Files API](https://learn.microsoft.com/en-us/graph/api/resources/driveitem)
 - [SharePoint Sites API](https://learn.microsoft.com/en-us/graph/api/resources/site)
 - [OneDrive API](https://learn.microsoft.com/en-us/graph/api/resources/onedrive)
-

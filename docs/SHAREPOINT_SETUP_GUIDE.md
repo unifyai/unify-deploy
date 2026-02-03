@@ -141,7 +141,7 @@ SHAREPOINT_DRIVE_ID=your-default-drive-id
 When requesting tokens, include the SharePoint scopes in your auth request:
 
 ```
-scope=https://graph.microsoft.com/Sites.ReadWrite.All 
+scope=https://graph.microsoft.com/Sites.ReadWrite.All
       https://graph.microsoft.com/Files.ReadWrite.All
       offline_access
       ... your existing scopes ...
@@ -276,7 +276,7 @@ async def list_files(
         items = await graph_client.drives.by_drive_id(
             drive_id
         ).root.item_with_path(folder_path).children.get()
-    
+
     return [
         {
             "id": item.id,
@@ -302,7 +302,7 @@ async def download_file(
     content = await graph_client.drives.by_drive_id(
         drive_id
     ).items.by_drive_item_id(item_id).content.get()
-    
+
     return content  # Returns bytes
 ```
 
@@ -323,7 +323,7 @@ async def upload_file(
             drive_id
         ).root.item_with_path(f"{folder_path}/{filename}").content.put(content)
         return result
-    
+
     # For larger files, use upload session
     # See: https://learn.microsoft.com/en-us/graph/api/driveitem-createuploadsession
     pass
@@ -346,11 +346,11 @@ async def create_folder(
         name=folder_name,
         folder=Folder(),
     )
-    
+
     result = await graph_client.drives.by_drive_id(
         drive_id
     ).root.item_with_path(parent_path).children.post(new_folder)
-    
+
     return {
         "id": result.id,
         "name": result.name,
@@ -370,7 +370,7 @@ async def delete_item(
     await graph_client.drives.by_drive_id(
         drive_id
     ).items.by_drive_item_id(item_id).delete()
-    
+
     return {"success": True}
 ```
 
@@ -386,7 +386,7 @@ async def search_files(
     results = await graph_client.drives.by_drive_id(
         drive_id
     ).root.search_with_q(query).get()
-    
+
     return [
         {
             "id": item.id,
@@ -417,11 +417,11 @@ async def create_sharing_link(
         type=link_type,
         scope=scope,
     )
-    
+
     result = await graph_client.drives.by_drive_id(
         drive_id
     ).items.by_drive_item_id(item_id).create_link.post(request_body)
-    
+
     return {
         "link": result.link.web_url,
         "type": result.link.type,
@@ -438,7 +438,7 @@ async def get_user_onedrive(
 ):
     """Get a specific user's OneDrive."""
     drive = await graph_client.users.by_user_id(user_email).drive.get()
-    
+
     return {
         "id": drive.id,
         "name": drive.name,
@@ -468,7 +468,7 @@ async def watch_drive(
     """Subscribe to changes in a drive."""
     # SharePoint/OneDrive subscriptions expire in max 30 days
     expiration = datetime.utcnow() + timedelta(days=30)
-    
+
     subscription = Subscription(
         change_type="updated",  # "created", "updated", "deleted", or combined
         notification_url=webhook_url,
@@ -476,9 +476,9 @@ async def watch_drive(
         expiration_date_time=expiration,
         client_state="your-secret-state",
     )
-    
+
     result = await graph_client.subscriptions.post(subscription)
-    
+
     return {
         "subscription_id": result.id,
         "expiration": result.expiration_date_time.isoformat(),
@@ -495,22 +495,22 @@ async def sharepoint_webhook(request: Request):
     validation_token = request.query_params.get("validationToken")
     if validation_token:
         return Response(content=validation_token, media_type="text/plain")
-    
+
     # Process notifications
     data = await request.json()
-    
+
     for notification in data.get("value", []):
         if notification.get("clientState") != "your-secret-state":
             continue
-        
+
         resource = notification.get("resource")
         change_type = notification.get("changeType")
-        
+
         print(f"SharePoint change: {change_type} on {resource}")
-        
+
         # Use delta query to get actual changes
         # See: https://learn.microsoft.com/en-us/graph/api/driveitem-delta
-    
+
     return Response(status_code=202)
 ```
 
@@ -530,7 +530,7 @@ async def get_drive_changes(
     else:
         # Initial sync - get all items
         delta = await graph_client.drives.by_drive_id(drive_id).root.delta.get()
-    
+
     changes = []
     for item in delta.value:
         changes.append({
@@ -539,10 +539,10 @@ async def get_drive_changes(
             "deleted": item.deleted is not None,
             "modified": item.last_modified_date_time,
         })
-    
+
     # Store delta_link for next call
     next_delta_link = delta.odata_delta_link
-    
+
     return {
         "changes": changes,
         "delta_link": next_delta_link,
@@ -639,14 +639,14 @@ router = APIRouter()
 async def list_sites(user_email: str, search: Optional[str] = None):
     """List SharePoint sites the user has access to."""
     graph = await get_graph_client(user_email)  # Gets token for this user
-    
+
     if search:
         sites = await graph.sites.get(
             request_configuration=lambda c: setattr(c.query_parameters, "search", search)
         )
     else:
         sites = await graph.sites.get()
-    
+
     return {
         "sites": [
             {"id": s.id, "name": s.display_name, "url": s.web_url}
@@ -659,10 +659,10 @@ async def list_sites(user_email: str, search: Optional[str] = None):
 async def list_user_drives(user_email: str):
     """List user's OneDrive and accessible drives."""
     graph = await get_graph_client(user_email)
-    
+
     # Get user's personal OneDrive
     my_drive = await graph.me.drive.get()
-    
+
     return {
         "drives": [{
             "id": my_drive.id,
@@ -678,7 +678,7 @@ async def list_site_drives(user_email: str, site_id: str):
     """List drives (document libraries) in a SharePoint site."""
     graph = await get_graph_client(user_email)
     drives = await graph.sites.by_site_id(site_id).drives.get()
-    
+
     return {
         "drives": [
             {"id": d.id, "name": d.name, "type": d.drive_type}
@@ -691,17 +691,17 @@ async def list_site_drives(user_email: str, site_id: str):
 async def list_items(user_email: str, drive_id: str, path: Optional[str] = None):
     """List files in a drive folder."""
     graph = await get_graph_client(user_email)
-    
+
     if drive_id == "me":
         drive_ref = graph.me.drive
     else:
         drive_ref = graph.drives.by_drive_id(drive_id)
-    
+
     if path:
         items = await drive_ref.root.item_with_path(path).children.get()
     else:
         items = await drive_ref.root.children.get()
-    
+
     return {
         "items": [
             {
@@ -720,15 +720,15 @@ async def list_items(user_email: str, drive_id: str, path: Optional[str] = None)
 async def download_file(user_email: str, drive_id: str, item_id: str):
     """Download file content."""
     graph = await get_graph_client(user_email)
-    
+
     if drive_id == "me":
         drive_ref = graph.me.drive
     else:
         drive_ref = graph.drives.by_drive_id(drive_id)
-    
+
     item = await drive_ref.items.by_drive_item_id(item_id).get()
     content = await drive_ref.items.by_drive_item_id(item_id).content.get()
-    
+
     return Response(
         content=content,
         media_type="application/octet-stream",
@@ -742,25 +742,25 @@ async def upload_file(request: Request, user_email: str, drive_id: str):
     data = await request.json()
     path = data.get("path")
     content = data.get("content")
-    
+
     if not path or content is None:
         raise HTTPException(status_code=400, detail="Missing path or content")
-    
+
     import base64
     try:
         file_bytes = base64.b64decode(content)
     except Exception:
         file_bytes = content.encode("utf-8")
-    
+
     graph = await get_graph_client(user_email)
-    
+
     if drive_id == "me":
         drive_ref = graph.me.drive
     else:
         drive_ref = graph.drives.by_drive_id(drive_id)
-    
+
     result = await drive_ref.root.item_with_path(path).content.put(file_bytes)
-    
+
     return {"success": True, "id": result.id, "web_url": result.web_url}
 
 
@@ -768,12 +768,12 @@ async def upload_file(request: Request, user_email: str, drive_id: str):
 async def delete_item(user_email: str, drive_id: str, item_id: str):
     """Delete a file or folder."""
     graph = await get_graph_client(user_email)
-    
+
     if drive_id == "me":
         await graph.me.drive.items.by_drive_item_id(item_id).delete()
     else:
         await graph.drives.by_drive_id(drive_id).items.by_drive_item_id(item_id).delete()
-    
+
     return {"success": True}
 
 
@@ -783,24 +783,24 @@ async def create_folder(request: Request, user_email: str, drive_id: str):
     data = await request.json()
     folder_name = data.get("name")
     parent_path = data.get("parent_path")
-    
+
     if not folder_name:
         raise HTTPException(status_code=400, detail="Missing folder name")
-    
+
     graph = await get_graph_client(user_email)
-    
+
     if drive_id == "me":
         drive_ref = graph.me.drive
     else:
         drive_ref = graph.drives.by_drive_id(drive_id)
-    
+
     new_folder = DriveItem(name=folder_name, folder=Folder())
-    
+
     if parent_path:
         result = await drive_ref.root.item_with_path(parent_path).children.post(new_folder)
     else:
         result = await drive_ref.root.children.post(new_folder)
-    
+
     return {"success": True, "id": result.id, "web_url": result.web_url}
 
 
@@ -808,12 +808,12 @@ async def create_folder(request: Request, user_email: str, drive_id: str):
 async def search_files(user_email: str, drive_id: str, q: str):
     """Search files in a drive."""
     graph = await get_graph_client(user_email)
-    
+
     if drive_id == "me":
         results = await graph.me.drive.root.search_with_q(q).get()
     else:
         results = await graph.drives.by_drive_id(drive_id).root.search_with_q(q).get()
-    
+
     return {
         "results": [
             {"id": i.id, "name": i.name, "web_url": i.web_url}

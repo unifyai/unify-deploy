@@ -2,7 +2,6 @@
 Pytest configuration for unify tests.
 """
 
-import os
 import sys
 from pathlib import Path
 

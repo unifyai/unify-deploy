@@ -129,16 +129,16 @@ source "googlecompute" "windows-vm" {
     windows-startup-script-ps1 = <<-EOF
       # Enable WinRM for Packer provisioning
       Set-ExecutionPolicy Bypass -Scope Process -Force
-      
+
       # Configure WinRM
       winrm quickconfig -q
       winrm set winrm/config/service '@{AllowUnencrypted="true"}'
       winrm set winrm/config/service/auth '@{Basic="true"}'
       winrm set winrm/config/winrs '@{MaxMemoryPerShellMB="1024"}'
-      
+
       # Allow WinRM through firewall
       netsh advfirewall firewall add rule name="WinRM-HTTPS" dir=in localport=5986 protocol=TCP action=allow
-      
+
       # Restart WinRM service
       Restart-Service WinRM
     EOF
@@ -146,7 +146,7 @@ source "googlecompute" "windows-vm" {
 
   # Service account (optional - uses default if not specified)
   # service_account_email = "packer@YOUR_PROJECT.iam.gserviceaccount.com"
-  
+
   # Scopes needed for the build VM
   scopes = [
     "https://www.googleapis.com/auth/compute",
@@ -176,7 +176,7 @@ build {
       "& C:\\temp\\install-base.ps1",
       "Write-Host 'Base image provisioning complete.'"
     ]
-    
+
     # Increase timeout for Office installation (~40 min)
     timeout = "30m"
   }
@@ -199,7 +199,7 @@ build {
       "Write-Host ''",
       "Write-Host 'Pre-installed software:'",
       "Write-Host '  - Office LTSC 2024 (Word, Excel, PowerPoint)'",
-      "Write-Host '  - Git for Windows'", 
+      "Write-Host '  - Git for Windows'",
       "Write-Host '  - Python 3.12'",
       "Write-Host '  - Node.js v22 + npm + Bun'",
       "Write-Host '  - noVNC + websockify'",
@@ -212,4 +212,3 @@ build {
     ]
   }
 }
-

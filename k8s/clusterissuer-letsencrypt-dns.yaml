@@ -9,10 +9,10 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-dns-account-key
     solvers:
-      - dns01:
-          cloudDNS:
-            project: gcp-project-dns
-            hostedZoneName: unifyai
-            serviceAccountSecretRef:
-              name: cert-manager-dns
-              key: key.json
+    - dns01:
+        cloudDNS:
+          project: gcp-project-dns
+          hostedZoneName: unifyai
+          serviceAccountSecretRef:
+            name: cert-manager-dns
+            key: key.json

@@ -2,8 +2,6 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Form, HTTPException
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
-from pydantic import BaseModel
-from typing import Optional
 import json
 import logging
 import os
@@ -62,10 +60,12 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
         # Create the topic path using the project ID and assistant ID
         topic_path = publisher.topic_path(PROJECT_ID, topic_name)
         subscription_path = subscriber.subscription_path(
-            PROJECT_ID, f"{topic_name}-sub"
+            PROJECT_ID,
+            f"{topic_name}-sub",
         )
         outbound_subscription_path = subscriber.subscription_path(
-            PROJECT_ID, f"{topic_name}-outbound-sub"
+            PROJECT_ID,
+            f"{topic_name}-outbound-sub",
         )
 
         # Create the topic if it doesn't already exist
@@ -119,7 +119,8 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
         }
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to create topic and subscription: {str(e)}"
+            status_code=500,
+            detail=f"Failed to create topic and subscription: {str(e)}",
         )
 
 
@@ -145,11 +146,11 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
         # Delete all subscriptions attached to the topic (if any)
         try:
             for subscription_name in publisher.list_topic_subscriptions(
-                request={"topic": topic_path}
+                request={"topic": topic_path},
             ):
                 try:
                     subscriber.delete_subscription(
-                        request={"subscription": subscription_name}
+                        request={"subscription": subscription_name},
                     )
                 except Exception as sub_err:
                     # If the subscription was already deleted, continue
@@ -179,7 +180,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 async def create_kubernetes_job(
     namespace: str = Form(DEFAULT_NAMESPACE),
     image: str = Form(
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
     ),
 ):
     """
@@ -239,7 +240,8 @@ async def create_kubernetes_job(
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to create Kubernetes job: {str(e)}"
+            status_code=500,
+            detail=f"Failed to create Kubernetes job: {str(e)}",
         )
 
 
@@ -261,7 +263,8 @@ async def delete_kubernetes_job(
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
             )
 
         # Delete the job
@@ -276,7 +279,8 @@ async def delete_kubernetes_job(
             }
         else:
             raise HTTPException(
-                status_code=500, detail=f"Failed to delete job: {job_name}"
+                status_code=500,
+                detail=f"Failed to delete job: {job_name}",
             )
 
     except HTTPException:
@@ -404,7 +408,8 @@ async def start_job(
 
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to publish job start request: {str(e)}"
+            status_code=500,
+            detail=f"Failed to publish job start request: {str(e)}",
         )
 
 
@@ -419,7 +424,8 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
             )
         # Suspend the job
         success = suspend_job(batch_api, job_name, namespace)
@@ -430,7 +436,8 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
             }
         else:
             raise HTTPException(
-                status_code=500, detail=f"Failed to suspend job: {job_name}"
+                status_code=500,
+                detail=f"Failed to suspend job: {job_name}",
             )
     except HTTPException:
         raise
@@ -453,12 +460,14 @@ async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
             )
 
         # List jobs
         jobs = batch_api.list_namespaced_job(
-            namespace=namespace, label_selector="app=unity"
+            namespace=namespace,
+            label_selector="app=unity",
         )
         job_items = list(
             filter(
@@ -471,7 +480,7 @@ async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 
                 )
                 < timedelta(hours=hours),
                 jobs.items,
-            )
+            ),
         )
         print(f"Job items: {map(lambda job: job.metadata.name, job_items)}")
 
@@ -518,7 +527,9 @@ async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 
 # get job logs
 @router.get("/job/logs")
 async def get_job_logs_endpoint(
-    job_name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: int = 10
+    job_name: str,
+    namespace: str = DEFAULT_NAMESPACE,
+    tail_lines: int = 10,
 ):
     """
     Get logs from a Kubernetes Job.
@@ -533,7 +544,8 @@ async def get_job_logs_endpoint(
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
             )
 
         # Get logs
@@ -615,7 +627,8 @@ async def get_latest_unity_image_commit():
 
         traceback.print_exc()
         raise HTTPException(
-            status_code=500, detail=f"Failed to get latest Unity image commit: {str(e)}"
+            status_code=500,
+            detail=f"Failed to get latest Unity image commit: {str(e)}",
         )
 
 
@@ -729,6 +742,7 @@ async def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
     result = get_vm_status(assistant_id, vm_type)
     if result is None:
         raise HTTPException(
-            status_code=404, detail=f"VM not found for assistant {assistant_id}"
+            status_code=404,
+            detail=f"VM not found for assistant {assistant_id}",
         )
     return VMStatusResponse(**result)

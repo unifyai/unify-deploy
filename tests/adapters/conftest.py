@@ -125,5 +125,6 @@ def test_client(adapters_server: str):
 def pytest_configure(config):
     """Configure pytest with custom options."""
     config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+        "markers",
+        "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     )
