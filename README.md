@@ -141,10 +141,20 @@ export ORCHESTRA_URL="http://127.0.0.1:8000/v0"
 | `COMMS_PORT` | 8082 | Port for Communication service |
 | `PUBSUB_EMULATOR_PORT` | 8085 | Port for Pub/Sub emulator |
 | `GCP_PROJECT_ID` | local-test-project | GCP project ID for Pub/Sub topics |
+| `GCP_SA_KEY` | — | GCP service account credentials (see note below) |
 | `TEST_ASSISTANT_ID` | default-test-assistant | Assistant ID for test topics |
 | `ORCHESTRA_URL` | (staging/prod URL) | Orchestra URL (for local orchestra) |
 | `ORCHESTRA_ADMIN_KEY` | — | Admin key for Orchestra auth |
 | `STAGING` | true | Set topic suffix (-staging) |
+
+> **Important: `GCP_SA_KEY` vs `GOOGLE_APPLICATION_CREDENTIALS`**
+>
+> This repo uses `GCP_SA_KEY` which contains the **JSON content** of the service account credentials directly (not a file path). This differs from the standard `GOOGLE_APPLICATION_CREDENTIALS` which expects a **file path**.
+>
+> - `GCP_SA_KEY` = JSON string content → parsed with `json.loads()` → used with `Credentials.from_service_account_info()`
+> - `GOOGLE_APPLICATION_CREDENTIALS` = file path → used with `Credentials.from_service_account_file()`
+>
+> The JSON-content approach simplifies containerized deployments by avoiding file mounting.
 
 **Prerequisites:**
 - Python 3.11+
