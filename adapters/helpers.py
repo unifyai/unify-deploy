@@ -1122,7 +1122,7 @@ def publish_gmail_thread_id(
     try:
         publisher = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
             "thread": "email",
@@ -1164,7 +1164,7 @@ def publish_outlook_thread_id(
     try:
         publisher = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
             "thread": "email",

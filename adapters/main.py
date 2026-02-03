@@ -109,7 +109,7 @@ async def twilio_call_webhook(request: Request):
     # publish to Pub/Sub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
         pubsub_message = {
@@ -206,7 +206,7 @@ async def twilio_call_status_webhook(request: Request):
         # publish to pubsub
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
         print(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
         try:
             publish_future = pubsub_client.publish(
@@ -270,7 +270,7 @@ async def twilio_sms_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -334,7 +334,7 @@ async def twilio_whatsapp_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -446,7 +446,7 @@ async def teams_call_webhook(request: Request):
     pubsub_client = pubsub_v1.PublisherClient()
     # topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_name = "test"
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing Teams call to Pub/Sub at path: {topic_path}")
 
     try:
@@ -720,7 +720,7 @@ async def unify_message_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -801,7 +801,7 @@ async def unify_meet_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -891,7 +891,7 @@ async def unity_system_event_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -990,7 +990,7 @@ async def unity_pre_hire_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -1094,7 +1094,7 @@ async def assistant_update_webhook(request: Request):
         # Job is running, publish to assistant topic
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         # Prepare message in the same format as startup event
         message_data = {"thread": "assistant_update", "event": assistant_data}
@@ -1588,7 +1588,7 @@ async def teams_notification_processor(request: Request):
         # Publish to Pub/Sub
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         pubsub_message = {
             "thread": "teams_channel" if is_channel_message else "teams_chat",

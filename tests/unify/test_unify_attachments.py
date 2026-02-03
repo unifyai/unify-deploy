@@ -24,7 +24,7 @@ def setup_mocks():
     # Set required environment variables
     os.environ["GCP_SA_KEY"] = '{"type": "service_account", "project_id": "test"}'
     os.environ["ORCHESTRA_ADMIN_KEY"] = "test-admin-key"
-    os.environ["PROJECT_ID"] = "test-project"
+    os.environ["GCP_PROJECT_ID"] = "test-project"
     os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
 
 

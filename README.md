@@ -140,7 +140,7 @@ export ORCHESTRA_URL="http://127.0.0.1:8000/v0"
 | `ADAPTERS_PORT` | 8081 | Port for Adapters service |
 | `COMMS_PORT` | 8082 | Port for Communication service |
 | `PUBSUB_EMULATOR_PORT` | 8085 | Port for Pub/Sub emulator |
-| `PROJECT_ID` | local-test-project | GCP project ID for Pub/Sub topics |
+| `GCP_PROJECT_ID` | local-test-project | GCP project ID for Pub/Sub topics |
 | `TEST_ASSISTANT_ID` | default-test-assistant | Assistant ID for test topics |
 | `ORCHESTRA_URL` | (staging/prod URL) | Orchestra URL (for local orchestra) |
 | `ORCHESTRA_ADMIN_KEY` | — | Admin key for Orchestra auth |

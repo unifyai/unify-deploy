@@ -25,7 +25,7 @@
 #   COMMS_PORT               Communication service port (default: 8082)
 #   PUBSUB_EMULATOR_PORT     Pub/Sub emulator port (default: 8085)
 #   ORCHESTRA_URL           Orchestra URL (if set, used instead of default)
-#   PROJECT_ID               GCP project ID for Pub/Sub (default: local-test-project)
+#   GCP_PROJECT_ID           GCP project ID for Pub/Sub (default: local-test-project)
 #
 # Test Assistant:
 #   Creates topics/subscriptions for 'default-test-assistant' on start.
@@ -52,7 +52,7 @@ COMMS_PORT="${COMMS_PORT:-8082}"
 PUBSUB_EMULATOR_PORT="${PUBSUB_EMULATOR_PORT:-8085}"
 
 # Project ID for Pub/Sub (can be anything for emulator)
-PROJECT_ID="${PROJECT_ID:-local-test-project}"
+GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
 
 # Test assistant ID
 TEST_ASSISTANT_ID="${TEST_ASSISTANT_ID:-default-test-assistant}"
@@ -212,7 +212,7 @@ start_pubsub_emulator() {
 
   # Start emulator in background
   gcloud beta emulators pubsub start \
-    --project="$PROJECT_ID" \
+    --project="$GCP_PROJECT_ID" \
     --host-port="localhost:${PUBSUB_EMULATOR_PORT}" \
     > "$EMULATOR_LOGFILE" 2>&1 &
   local pid=$!
@@ -274,8 +274,8 @@ create_pubsub_topics() {
   )
 
   for topic in "${topics[@]}"; do
-    local topic_path="projects/${PROJECT_ID}/topics/${topic}"
-    local sub_path="projects/${PROJECT_ID}/subscriptions/${topic}-sub"
+    local topic_path="projects/${GCP_PROJECT_ID}/topics/${topic}"
+    local sub_path="projects/${GCP_PROJECT_ID}/subscriptions/${topic}-sub"
 
     # Create topic
     if curl -s -X PUT "${base_url}/${topic_path}" -H "Content-Type: application/json" -d '{}' &>/dev/null; then
@@ -330,7 +330,7 @@ start_adapters_service() {
 
   # Set environment for the service
   local env_vars=(
-    "PROJECT_ID=$PROJECT_ID"
+    "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     "STAGING=$STAGING"
     "UNITY_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
   )
@@ -427,7 +427,7 @@ start_comms_service() {
 
   # Set environment for the service
   local env_vars=(
-    "PROJECT_ID=$PROJECT_ID"
+    "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     "STAGING=$STAGING"
     "UNITY_COMMS_URL=$LOCAL_COMMS_URL"
   )
@@ -566,7 +566,7 @@ cmd_start() {
       echo "COMMS_PORT=$COMMS_PORT"
       echo "UNITY_COMMS_URL=$LOCAL_COMMS_URL"
     fi
-    echo "PROJECT_ID=$PROJECT_ID"
+    echo "GCP_PROJECT_ID=$GCP_PROJECT_ID"
     echo "TEST_ASSISTANT_ID=$TEST_ASSISTANT_ID"
   } > "$CONFIG_FILE"
 
@@ -661,7 +661,7 @@ cmd_status() {
   echo "  Adapters Port:    $ADAPTERS_PORT"
   echo "  Comms Port:       $COMMS_PORT"
   echo "  Emulator Port:    $PUBSUB_EMULATOR_PORT"
-  echo "  Project ID:       $PROJECT_ID"
+  echo "  GCP Project ID:       $GCP_PROJECT_ID"
   echo "  Test Assistant:   $TEST_ASSISTANT_ID"
   echo ""
 
@@ -711,7 +711,7 @@ cmd_help() {
   echo "  ADAPTERS_PORT          Adapters service port (default: 8081)"
   echo "  COMMS_PORT             Communication service port (default: 8082)"
   echo "  PUBSUB_EMULATOR_PORT   Pub/Sub emulator port (default: 8085)"
-  echo "  PROJECT_ID             GCP project ID (default: local-test-project)"
+  echo "  GCP_PROJECT_ID                   GCP project ID (default: local-test-project)"
   echo "  TEST_ASSISTANT_ID      Test assistant ID (default: default-test-assistant)"
   echo "  ORCHESTRA_URL         Orchestra URL (if using local orchestra)"
   echo "  ORCHESTRA_ADMIN_KEY    Admin key for Orchestra auth"

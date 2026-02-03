@@ -126,10 +126,10 @@ jobs:
         UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
         UNITY_ADAPTERS_URL: ${{ secrets.UNITY_ADAPTERS_URL }}
         STAGING: true
-        PROJECT_ID: gcp-project-runtime
+        GCP_PROJECT_ID: gcp-project-runtime
 
     - name: Run unify attachment tests
       run: pytest -vs tests/unify/
       env:
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
-        PROJECT_ID: gcp-project-runtime
+        GCP_PROJECT_ID: gcp-project-runtime

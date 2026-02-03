@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Project ID from the existing codebase
-PROJECT_ID = "gcp-project-runtime"
+GCP_PROJECT_ID = "gcp-project-runtime"
 # Default region for Cloud Run jobs
 DEFAULT_REGION = "us-central1"
 # Namespace based on environment
@@ -58,13 +58,13 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
         subscriber = pubsub_v1.SubscriberClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_path = publisher.topic_path(PROJECT_ID, topic_name)
+        topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
         subscription_path = subscriber.subscription_path(
-            PROJECT_ID,
+            GCP_PROJECT_ID,
             f"{topic_name}-sub",
         )
         outbound_subscription_path = subscriber.subscription_path(
-            PROJECT_ID,
+            GCP_PROJECT_ID,
             f"{topic_name}-outbound-sub",
         )
 
@@ -115,7 +115,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             "message": "Topic and subscription ensured with no expiration",
             "topic_name": topic_path,
             "subscription_name": subscription_path,
-            "project_id": PROJECT_ID,
+            "project_id": GCP_PROJECT_ID,
         }
     except Exception as e:
         raise HTTPException(
@@ -141,7 +141,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
         subscriber = pubsub_v1.SubscriberClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_path = publisher.topic_path(PROJECT_ID, topic_name)
+        topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
 
         # Delete all subscriptions attached to the topic (if any)
         try:
@@ -168,7 +168,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
             "success": True,
             "message": f"Topic deleted successfully",
             "topic_name": topic_path,
-            "project_id": PROJECT_ID,
+            "project_id": GCP_PROJECT_ID,
         }
 
     except Exception as e:
@@ -354,7 +354,7 @@ async def start_job(
 
         # Create the topic path
         topic_path = publisher.topic_path(
-            PROJECT_ID,
+            GCP_PROJECT_ID,
             "unity-startup" if not STAGING else "unity-startup-staging",
         )
 
@@ -403,7 +403,7 @@ async def start_job(
             "topic_path": topic_path,
             "assistant_id": assistant_id,
             "is_staging": bool(STAGING),
-            "project_id": PROJECT_ID,
+            "project_id": GCP_PROJECT_ID,
         }
 
     except Exception as e:

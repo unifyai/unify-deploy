@@ -15,7 +15,7 @@ import json
 
 subscriber = pubsub_v1.SubscriberClient()
 subscription_path = subscriber.subscription_path(
-    os.getenv("PROJECT_ID"),
+    os.getenv("GCP_PROJECT_ID"),
     "unity-default-test-assistant-staging-sub",
 )
 

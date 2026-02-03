@@ -1060,7 +1060,7 @@ async def teams_call_webhook(request: Request):
     # Publish to Pub/Sub for your agent to handle
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}"
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
     pubsub_client.publish(
         topic_path,
