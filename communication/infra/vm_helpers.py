@@ -25,15 +25,12 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 # Environment detection
 STAGING = os.environ.get("STAGING", "false").lower() == "true"
 
-# Orchestra URL priority:
-# 1. UNIFY_BASE_URL environment variable (for local orchestra or custom deployments)
-# 2. Default based on STAGING flag (production vs staging)
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
     else "https://service.a.run.app/v0"
 )
-UNIFY_BASE_URL = os.environ.get("UNIFY_BASE_URL", _default_orchestra_url)
+ORCHESTRA_URL = os.environ.get("ORCHESTRA_URL", _default_orchestra_url)
 
 from .vm_config import (
     VM_PROJECT_ID,
@@ -359,7 +356,7 @@ def store_ssh_private_key(
         True if stored successfully, False otherwise
     """
     secret_name = "vm_ssh_private_key"
-    url = f"{UNIFY_BASE_URL}/assistant/{assistant_id}/secret"
+    url = f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret"
 
     try:
         response = requests.post(
@@ -471,8 +468,8 @@ def create_windows_vm(
         compute_v1.Items(key="windows-password", value=windows_password),
         compute_v1.Items(key="vnc-password", value=vnc_password),
         compute_v1.Items(key="hostname", value=hostname),
-        # Unify base URL (derived from STAGING flag)
-        compute_v1.Items(key="unify-base-url", value=UNIFY_BASE_URL),
+        # Orchestra URL (derived from STAGING flag)
+        compute_v1.Items(key="orchestra-url", value=ORCHESTRA_URL),
     ]
 
     # Add SSH file sync metadata if provided
@@ -635,8 +632,8 @@ def create_ubuntu_vm(
         # Configuration metadata keys (read by the script via GCP metadata API)
         compute_v1.Items(key="vnc-password", value=vnc_password),
         compute_v1.Items(key="hostname", value=hostname),
-        # Unify base URL (derived from STAGING flag)
-        compute_v1.Items(key="unify-base-url", value=UNIFY_BASE_URL),
+        # Orchestra URL (derived from STAGING flag)
+        compute_v1.Items(key="orchestra-url", value=ORCHESTRA_URL),
     ]
 
     # Add SSH file sync metadata if provided

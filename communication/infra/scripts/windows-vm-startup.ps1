@@ -15,7 +15,7 @@
 #   github-token      - GitHub PAT for cloning private repos
 #   anthropic-api-key - Anthropic API key for agent service
 #   unify-key         - Unify API key for agent service
-#   unify-base-url    - Unify API base URL for agent service
+#   orchestra-url    - Unify API base URL for agent service
 #   staging           - Use staging branch (any value = true)
 #   ssh-public-key    - SSH public key for file sync (Ed25519)
 #                       Note: SSH uses windows-username for authentication
@@ -47,7 +47,7 @@ function Test-FastMode {
         @{ Path = 'C:\agent-service\package.json'; Name = 'AgentService' },
         @{ Path = 'C:\caddy\caddy.exe'; Name = 'Caddy' }
     )
-    
+
     $allPresent = $true
     foreach ($check in $checks) {
         if (-not (Test-Path $check.Path)) {
@@ -55,7 +55,7 @@ function Test-FastMode {
             $allPresent = $false
         }
     }
-    
+
     return $allPresent
 }
 
@@ -73,14 +73,14 @@ function Test-DependenciesInstalled {
     # Check if node_modules exists and has content
     $nodeModules = "$Dir\node_modules"
     if (-not (Test-Path $nodeModules)) { return $false }
-    
+
     # Check hash file matches current package.json
     $hashFile = "$Dir\.pkg-hash"
     if (-not (Test-Path $hashFile)) { return $false }
-    
+
     $savedHash = Get-Content $hashFile -ErrorAction SilentlyContinue
     $currentHash = Get-PackageJsonHash -Dir $Dir
-    
+
     return ($savedHash -eq $currentHash)
 }
 
@@ -153,20 +153,20 @@ function Setup-WindowsUser {
         [string]$Username,
         [string]$Password
     )
-    
+
     if (-not $Username -or -not $Password) {
         Write-Host "No Windows user credentials provided, skipping user setup" -ForegroundColor Yellow
         return $null  # No user setup needed
     }
-    
+
     Write-Host ""
     Write-Host "=== Setting up Windows User ===" -ForegroundColor Cyan
-    
+
     $securePassword = ConvertTo-SecureString $Password -AsPlainText -Force
-    
+
     # Check if user exists
     $existingUser = Get-LocalUser -Name $Username -ErrorAction SilentlyContinue
-    
+
     if ($existingUser) {
         Write-Host "User '$Username' already exists, updating password..." -ForegroundColor Yellow
         Set-LocalUser -Name $Username -Password $securePassword
@@ -185,22 +185,22 @@ function Configure-AutoLogon {
         [string]$Username,
         [string]$Password
     )
-    
+
     if (-not $Username -or -not $Password) {
         Write-Host "No auto-logon credentials provided, skipping" -ForegroundColor Yellow
         return
     }
-    
+
     Write-Host ""
     Write-Host "=== Configuring Auto-Logon ===" -ForegroundColor Cyan
-    
+
     $regPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-    
+
     Set-ItemProperty -Path $regPath -Name 'AutoAdminLogon' -Value '1' -Type String
     Set-ItemProperty -Path $regPath -Name 'DefaultUserName' -Value $Username -Type String
     Set-ItemProperty -Path $regPath -Name 'DefaultPassword' -Value $Password -Type String
     Set-ItemProperty -Path $regPath -Name 'DefaultDomainName' -Value '.' -Type String
-    
+
     Write-Host "Auto-logon configured for user: $Username" -ForegroundColor Green
     Write-Host "Note: Auto-logon will take effect after next reboot" -ForegroundColor Yellow
 }
@@ -214,16 +214,16 @@ function Setup-SSHFileSync {
         [string]$WindowsUsername,
         [string]$SshPublicKey
     )
-    
+
     if (-not $WindowsUsername -or -not $SshPublicKey) {
         Write-Host "SSH file sync not configured (missing Windows username or public key)" -ForegroundColor Yellow
         return $false
     }
-    
+
     Write-Host ""
     Write-Host "=== Configuring SSH File Sync ===" -ForegroundColor Cyan
     Write-Host "  Username: $WindowsUsername (Windows user)"
-    
+
     # 1. Install OpenSSH Server if not present
     $sshServerCapability = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
     if ($sshServerCapability.State -ne 'Installed') {
@@ -233,7 +233,7 @@ function Setup-SSHFileSync {
     } else {
         Write-Host "  OpenSSH Server already installed" -ForegroundColor Green
     }
-    
+
     # 2. Create C:\Unity\Local directory for file sync
     # Note: Subdirectories (Downloads, user_files, etc.) are created by sync process
     $unityDir = "C:\Unity"
@@ -245,48 +245,48 @@ function Setup-SSHFileSync {
         New-Item -ItemType Directory -Force -Path $syncDir | Out-Null
     }
     Write-Host "  Created C:\Unity\Local sync directory"
-    
+
     # 3. Setup authorized_keys for the Windows user
     # For administrators on Windows, keys go in C:\ProgramData\ssh\administrators_authorized_keys
     # For regular users, keys go in C:\Users\{username}\.ssh\authorized_keys
     $userProfileDir = "C:\Users\$WindowsUsername"
     $userSshDir = "$userProfileDir\.ssh"
-    
+
     # Create user's .ssh directory
     if (-not (Test-Path $userSshDir)) {
         New-Item -ItemType Directory -Force -Path $userSshDir | Out-Null
     }
-    
+
     # Write public key to user's authorized_keys
     $authorizedKeysPath = "$userSshDir\authorized_keys"
     Set-Content -Path $authorizedKeysPath -Value $SshPublicKey -Encoding UTF8
-    
+
     # Set proper permissions on .ssh directory and authorized_keys
     # Windows OpenSSH is picky about permissions
     icacls $userSshDir /inheritance:r /grant "${WindowsUsername}:F" /grant "SYSTEM:F" /grant "Administrators:F" | Out-Null
     icacls $authorizedKeysPath /inheritance:r /grant "${WindowsUsername}:F" /grant "SYSTEM:F" /grant "Administrators:F" | Out-Null
     Write-Host "  Configured authorized_keys for $WindowsUsername"
-    
+
     # Also set up administrators_authorized_keys for admin users (Windows OpenSSH special handling)
     $adminKeysPath = "$env:ProgramData\ssh\administrators_authorized_keys"
     Set-Content -Path $adminKeysPath -Value $SshPublicKey -Encoding UTF8
     icacls $adminKeysPath /inheritance:r /grant "SYSTEM:F" /grant "Administrators:F" | Out-Null
     Write-Host "  Configured administrators_authorized_keys"
-    
+
     # 4. Configure SSHD to listen on port 2222
     $sshdConfigPath = "$env:ProgramData\ssh\sshd_config"
-    
+
     # Ensure ssh directory exists
     if (-not (Test-Path "$env:ProgramData\ssh")) {
         New-Item -ItemType Directory -Force -Path "$env:ProgramData\ssh" | Out-Null
     }
-    
+
     # Check if we already configured port 2222
     $configContent = ""
     if (Test-Path $sshdConfigPath) {
         $configContent = Get-Content $sshdConfigPath -Raw -ErrorAction SilentlyContinue
     }
-    
+
     if ($configContent -notmatch "Port 2222") {
         # Create or update sshd_config
         # Note: Using simplified config without Match blocks - they cause issues with Windows OpenSSH
@@ -310,7 +310,7 @@ Subsystem sftp sftp-server.exe
     } else {
         Write-Host "  SSHD already configured for port 2222"
     }
-    
+
     # 5. Configure firewall rule for port 2222
     $firewallRuleName = "Unity SSH File Sync (Port 2222)"
     $existingRule = Get-NetFirewallRule -DisplayName $firewallRuleName -ErrorAction SilentlyContinue
@@ -320,17 +320,17 @@ Subsystem sftp sftp-server.exe
     } else {
         Write-Host "  Firewall rule for port 2222 already exists"
     }
-    
+
     # 6. Start and enable SSH service
     Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
     Start-Service sshd -ErrorAction SilentlyContinue
     Write-Host "  Started SSH service"
-    
+
     Write-Host "SSH file sync configured:" -ForegroundColor Green
     Write-Host "  User: $WindowsUsername"
     Write-Host "  Port: 2222"
     Write-Host "  Sync Path: C:\Unity\Local"
-    
+
     return $true
 }
 
@@ -345,10 +345,10 @@ function Update-GitRepo {
         [string]$GithubToken,
         [string]$RepoName
     )
-    
+
     Write-Host "Updating $RepoName at $RepoPath..." -ForegroundColor Yellow
     Push-Location $RepoPath
-    
+
     try {
         # Update remote URL if token provided (in case it changed)
         if ($GithubToken) {
@@ -358,24 +358,24 @@ function Update-GitRepo {
                 git remote set-url origin $newUrl 2>&1 | Out-Null
             }
         }
-        
+
         # Fetch latest from remote (works with shallow clones)
         Write-Host "  Fetching latest from origin/$Branch..."
         git fetch --depth 1 origin $Branch 2>&1 | Out-Null
-        
+
         # Reset to latest remote state (discards local changes but keeps untracked files)
         Write-Host "  Resetting to origin/$Branch..."
         git reset --hard origin/$Branch 2>&1 | Out-Null
-        
+
         # Get current commit for logging and save hash
         $commit = git rev-parse --short=12 HEAD 2>&1
         Write-Host "  Updated to commit: $commit" -ForegroundColor Green
-        
+
         # Save commit hash for future update checks (works for repos without .git too)
         if ($commit) {
             $commit | Out-File -FilePath "$RepoPath\.commit-hash" -Encoding UTF8 -NoNewline
         }
-        
+
         Pop-Location
         return $true
     } catch {
@@ -388,32 +388,32 @@ function Update-GitRepo {
 function Install-Git {
     Write-Host ""
     Write-Host "=== Installing Git CLI ===" -ForegroundColor Cyan
-    
+
     if (Get-Command git -ErrorAction SilentlyContinue) {
         $gitVersion = git --version
         Write-Host "Git already installed - $gitVersion" -ForegroundColor Green
         return
     }
-    
+
     Write-Host "Git not found. Installing Git for Windows..."
-    
+
     $gitInstallerUrl = 'https://github.com/git-for-windows/git/releases/download/v2.43.0.windows.1/Git-2.43.0-64-bit.exe'
     $gitInstallerPath = 'C:\temp\git-installer.exe'
-    
+
     New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
-    
+
     Write-Host "Downloading Git for Windows..."
     Write-Host "URL: $gitInstallerUrl"
     Invoke-WebRequest -Uri $gitInstallerUrl -OutFile $gitInstallerPath
-    
+
     Write-Host "Installing Git (silent install)..."
     $gitProcess = Start-Process -FilePath $gitInstallerPath -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh"' -PassThru -Wait -NoNewWindow
-    
+
     Write-Host "Git installation exit code: $($gitProcess.ExitCode)"
-    
+
     # Refresh PATH
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    
+
     # Verify Git installation
     if (Get-Command git -ErrorAction SilentlyContinue) {
         $gitVersion = git --version
@@ -425,7 +425,7 @@ function Install-Git {
             Write-Host "Git executable found at expected location." -ForegroundColor Green
         }
     }
-    
+
     # Cleanup installer
     Remove-Item $gitInstallerPath -Force -ErrorAction SilentlyContinue
 }
@@ -433,7 +433,7 @@ function Install-Git {
 function Install-Python {
     Write-Host ""
     Write-Host "=== Installing Python 3 ===" -ForegroundColor Cyan
-    
+
     # Check if real Python is installed (not Windows Store stub)
     if (Get-Command python -ErrorAction SilentlyContinue) {
         $checkPythonPath = (Get-Command python).Source
@@ -445,38 +445,38 @@ function Install-Python {
             }
         }
     }
-    
+
     Write-Host "Python not found (or only Windows Store stub). Installing Python 3.12.2..."
-    
+
     # Note about Windows Store alias
     $aliasPath = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
     if (Test-Path "$aliasPath\python.exe") {
         Write-Host "Note: Windows Store Python alias detected - real Python will take precedence after install." -ForegroundColor Gray
     }
-    
+
     $pythonInstallerUrl = 'https://www.python.org/ftp/python/3.12.2/python-3.12.2-amd64.exe'
     $pythonInstallerPath = 'C:\temp\python-installer.exe'
-    
+
     New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
-    
+
     Write-Host "Downloading Python 3.12.2..."
     Write-Host "URL: $pythonInstallerUrl"
     Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pythonInstallerPath
-    
+
     Write-Host "Installing Python (silent install with PATH)..."
     $pythonProcess = Start-Process -FilePath $pythonInstallerPath -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0' -PassThru -Wait -NoNewWindow
-    
+
     Write-Host "Python installation exit code: $($pythonProcess.ExitCode)"
-    
+
     # Refresh PATH
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    
+
     # Verify Python installation
     $realPythonPath = 'C:\Program Files\Python312\python.exe'
     if (Test-Path $realPythonPath) {
         $pythonVersion = & $realPythonPath --version 2>&1
         Write-Host "SUCCESS: Python installed - $pythonVersion" -ForegroundColor Green
-        
+
         # Upgrade pip
         Write-Host "Upgrading pip..."
         & $realPythonPath -m pip install --upgrade pip
@@ -485,7 +485,7 @@ function Install-Python {
         if ($checkPath -notlike '*\WindowsApps\*') {
             $pythonVersion = python --version 2>&1
             Write-Host "SUCCESS: Python installed - $pythonVersion" -ForegroundColor Green
-            
+
             # Upgrade pip
             Write-Host "Upgrading pip..."
             python -m pip install --upgrade pip
@@ -497,7 +497,7 @@ function Install-Python {
             Write-Host "Python executable found at expected location." -ForegroundColor Green
         }
     }
-    
+
     # Cleanup installer
     Remove-Item $pythonInstallerPath -Force -ErrorAction SilentlyContinue
 }
@@ -505,25 +505,25 @@ function Install-Python {
 function Install-Chocolatey {
     Write-Host ""
     Write-Host "=== Installing Chocolatey ===" -ForegroundColor Cyan
-    
+
     if (Get-Command choco -ErrorAction SilentlyContinue) {
         $chocoVersion = choco --version
         Write-Host "Chocolatey already installed - v$chocoVersion" -ForegroundColor Green
         return
     }
-    
+
     Write-Host "Installing Chocolatey package manager..."
-    
+
     # Set execution policy for this process
     Set-ExecutionPolicy Bypass -Scope Process -Force
-    
+
     # Install Chocolatey
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-    
+
     # Refresh PATH
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    
+
     if (Get-Command choco -ErrorAction SilentlyContinue) {
         $chocoVersion = choco --version
         Write-Host "SUCCESS: Chocolatey installed - v$chocoVersion" -ForegroundColor Green
@@ -535,25 +535,25 @@ function Install-Chocolatey {
 function Install-NodeJS {
     Write-Host ""
     Write-Host "=== Installing Node.js v22, Bun, and npx ===" -ForegroundColor Cyan
-    
+
     # Check if Node.js is already installed
     if (Get-Command node -ErrorAction SilentlyContinue) {
         $nodeVersion = node --version
         Write-Host "Node.js already installed - $nodeVersion" -ForegroundColor Green
     } else {
         Write-Host "Installing Node.js v22 via Chocolatey..."
-        
+
         # Ensure Chocolatey is available
         if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
             Write-Host "ERROR: Chocolatey not found, cannot install Node.js" -ForegroundColor Red
             return
         }
-        
+
         choco install nodejs --version=22.12.0 -y --no-progress
-        
+
         # Refresh PATH
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        
+
         if (Get-Command node -ErrorAction SilentlyContinue) {
             $nodeVersion = node --version
             Write-Host "SUCCESS: Node.js installed - $nodeVersion" -ForegroundColor Green
@@ -561,13 +561,13 @@ function Install-NodeJS {
             Write-Host "WARNING: Node.js may not be in PATH yet" -ForegroundColor Yellow
         }
     }
-    
+
     # Check npm
     if (Get-Command npm -ErrorAction SilentlyContinue) {
         $npmVersion = npm --version
         Write-Host "npm available - v$npmVersion" -ForegroundColor Green
     }
-    
+
     # Install Bun
     Write-Host ""
     Write-Host "Installing Bun..."
@@ -578,13 +578,13 @@ function Install-NodeJS {
         # Install Bun via PowerShell installer
         try {
             Invoke-RestMethod -Uri "https://bun.sh/install.ps1" | Invoke-Expression
-            
+
             # Add Bun to PATH for current session
             $bunPath = "$env:USERPROFILE\.bun\bin"
             if (Test-Path $bunPath) {
                 $env:Path = "$bunPath;$env:Path"
             }
-            
+
             if (Get-Command bun -ErrorAction SilentlyContinue) {
                 $bunVersion = bun --version
                 Write-Host "SUCCESS: Bun installed - v$bunVersion" -ForegroundColor Green
@@ -596,7 +596,7 @@ function Install-NodeJS {
             Write-Host "WARNING: Failed to install Bun - $_" -ForegroundColor Yellow
         }
     }
-    
+
     # Verify npx is available (comes with npm)
     if (Get-Command npx -ErrorAction SilentlyContinue) {
         Write-Host "npx available" -ForegroundColor Green
@@ -611,30 +611,30 @@ function Install-AgentService {
         [string]$Staging,
         [switch]$FastMode
     )
-    
+
     Write-Host ""
     Write-Host "=== Installing/Updating Magnitude & Agent Service ===" -ForegroundColor Cyan
-    
+
     $magnitudeDir = 'C:\magnitude'
     $agentServiceDir = 'C:\agent-service'
     $unityRepoDir = 'C:\temp\unity-repo'
-    
+
     # Determine branch for unity repo (magnitude always uses unity-modifications)
     $unityBranch = if ($Staging) { "staging" } else { "main" }
     Write-Host "Magnitude branch: unity-modifications | Unity branch: $unityBranch" -ForegroundColor Gray
-    
+
     # Build repo URLs
-    $magnitudeUrl = if ($GithubToken) { 
-        "https://$GithubToken@github.com/unifyai/magnitude.git" 
-    } else { 
-        "https://github.com/unifyai/magnitude.git" 
+    $magnitudeUrl = if ($GithubToken) {
+        "https://$GithubToken@github.com/unifyai/magnitude.git"
+    } else {
+        "https://github.com/unifyai/magnitude.git"
     }
-    $unityUrl = if ($GithubToken) { 
-        "https://$GithubToken@github.com/unifyai/unity.git" 
-    } else { 
-        "https://github.com/unifyai/unity.git" 
+    $unityUrl = if ($GithubToken) {
+        "https://$GithubToken@github.com/unifyai/unity.git"
+    } else {
+        "https://github.com/unifyai/unity.git"
     }
-    
+
     # =========================================================================
     # MAGNITUDE: Fast update if exists, otherwise clone fresh
     # =========================================================================
@@ -642,7 +642,7 @@ function Install-AgentService {
         # Existing git repo - just update it (fast path)
         Write-Host "Updating Magnitude (git fetch)..." -ForegroundColor Yellow
         $updated = Update-GitRepo -RepoPath $magnitudeDir -Branch "unity-modifications" -GithubToken $GithubToken -RepoName "magnitude"
-        
+
         # Only reinstall dependencies if hash changed
         if (-not (Test-DependenciesInstalled -Dir $magnitudeDir)) {
             Write-Host "  Dependencies changed, reinstalling..."
@@ -661,13 +661,13 @@ function Install-AgentService {
     } elseif (-not $FastMode) {
         # No git repo - clone fresh (only in non-fast mode)
         Write-Host "Cloning Magnitude repository..."
-        
+
         if (Test-Path $magnitudeDir) {
             Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue
         }
-        
+
         git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
-        
+
         if (Test-Path "$magnitudeDir\package.json") {
             # Save commit hash for tracking
             Push-Location $magnitudeDir
@@ -685,24 +685,24 @@ function Install-AgentService {
             Pop-Location
         }
     }
-    
+
     # =========================================================================
     # AGENT-SERVICE: Use git repo for updates if possible
     # =========================================================================
-    
+
     # Backup .env if exists
     $envBackup = $null
     $envFile = "$agentServiceDir\.env"
     if (Test-Path $envFile) {
         $envBackup = Get-Content $envFile -Raw
     }
-    
+
     # Check if we have a proper git repo (created by previous runs with this optimization)
     if (Test-Path "$agentServiceDir\.git") {
         # Fast path: update via git
         Write-Host "Updating Agent Service (git fetch)..." -ForegroundColor Yellow
         Update-GitRepo -RepoPath $agentServiceDir -Branch $unityBranch -GithubToken $GithubToken -RepoName "unity"
-        
+
         # Only reinstall if dependencies changed
         if (-not (Test-DependenciesInstalled -Dir $agentServiceDir)) {
             Write-Host "  Dependencies changed, reinstalling..."
@@ -723,7 +723,7 @@ function Install-AgentService {
         # Have agent-service but no git - check remote commit to detect code changes
         $savedHash = Get-SavedCommitHash -Dir $agentServiceDir
         $remoteHash = Get-RemoteCommitHash -RepoUrl $unityUrl -Branch $unityBranch
-        
+
         $needsUpdate = $true
         if ($FastMode -and $savedHash -and $remoteHash -and ($savedHash -eq $remoteHash)) {
             Write-Host "Agent Service up-to-date (commit: $savedHash)" -ForegroundColor Green
@@ -731,23 +731,23 @@ function Install-AgentService {
         } elseif ($savedHash -and $remoteHash) {
             Write-Host "Agent Service update available ($savedHash -> $remoteHash)" -ForegroundColor Yellow
         }
-        
+
         if ($needsUpdate) {
             # Re-clone to get updates
             Write-Host "Cloning Agent Service from Unity repo..." -ForegroundColor Yellow
-            
+
             if (Test-Path $agentServiceDir) {
                 Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
             }
-            
+
             New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
             if (Test-Path $unityRepoDir) {
                 Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
             }
-            
+
             # Sparse checkout to get only agent-service
             git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
-            
+
             if (Test-Path $unityRepoDir) {
                 # Get commit hash before extracting
                 $commitHash = $null
@@ -755,15 +755,15 @@ function Install-AgentService {
                 $commitHash = (git rev-parse --short=12 HEAD 2>&1)
                 git sparse-checkout set agent-service 2>&1 | Out-Null
                 Pop-Location
-                
+
                 if (Test-Path "$unityRepoDir\agent-service") {
                     Move-Item "$unityRepoDir\agent-service" $agentServiceDir
-                    
+
                     # Save commit hash for future update checks
                     if ($commitHash) {
                         Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
                     }
-                    
+
                     if (Test-Path "$agentServiceDir\package.json") {
                         Write-Host "  Installing dependencies..."
                         Push-Location $agentServiceDir
@@ -784,14 +784,14 @@ function Install-AgentService {
     } elseif (-not $FastMode) {
         # Fresh install
         Write-Host "Installing Agent Service..." -ForegroundColor Cyan
-        
+
         New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
         if (Test-Path $unityRepoDir) {
             Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
         }
-        
+
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
-        
+
         if (Test-Path $unityRepoDir) {
             # Get commit hash before extracting
             $commitHash = $null
@@ -799,15 +799,15 @@ function Install-AgentService {
             $commitHash = (git rev-parse --short=12 HEAD 2>&1)
             git sparse-checkout set agent-service 2>&1 | Out-Null
             Pop-Location
-            
+
             if (Test-Path "$unityRepoDir\agent-service") {
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir
-                
+
                 # Save commit hash for future update checks
                 if ($commitHash) {
                     Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
                 }
-                
+
                 if (Test-Path "$agentServiceDir\package.json") {
                     Write-Host "  Installing dependencies..."
                     Push-Location $agentServiceDir
@@ -825,7 +825,7 @@ function Install-AgentService {
             Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
         }
     }
-    
+
     # Restore .env file
     if ($envBackup -and (Test-Path $agentServiceDir)) {
         $envBackup | Out-File -FilePath $envFile -Encoding UTF8 -NoNewline
@@ -838,18 +838,18 @@ function Setup-AgentServiceEnv {
         [string]$UnifyKey,
         [string]$UnifyBaseUrl
     )
-    
+
     Write-Host ""
     Write-Host "=== Setting up Agent Service Environment ===" -ForegroundColor Cyan
-    
+
     $agentServiceDir = 'C:\agent-service'
     $envFile = "$agentServiceDir\.env"
-    
+
     if (-not (Test-Path $agentServiceDir)) {
         Write-Host "Agent Service not installed, skipping .env setup" -ForegroundColor Yellow
         return
     }
-    
+
     # Create .env file
     $envContent = @"
 # Agent Service Environment Configuration
@@ -858,52 +858,52 @@ function Setup-AgentServiceEnv {
 PORT=3000
 NODE_ENV=production
 "@
-    
+
     if ($AnthropicApiKey) {
         $envContent += "`nANTHROPIC_API_KEY=$AnthropicApiKey"
         Write-Host "  ANTHROPIC_API_KEY: (set)" -ForegroundColor Green
     } else {
         Write-Host "  ANTHROPIC_API_KEY: (not provided)" -ForegroundColor Yellow
     }
-    
+
     if ($UnifyKey) {
         $envContent += "`nUNIFY_KEY=$UnifyKey"
         Write-Host "  UNIFY_KEY: (set)" -ForegroundColor Green
     } else {
         Write-Host "  UNIFY_KEY: (not provided)" -ForegroundColor Yellow
     }
-    
+
     if ($UnifyBaseUrl) {
-        $envContent += "`nUNIFY_BASE_URL=$UnifyBaseUrl"
-        Write-Host "  UNIFY_BASE_URL: $UnifyBaseUrl" -ForegroundColor Green
+        $envContent += "`nORCHESTRA_URL=$UnifyBaseUrl"
+        Write-Host "  ORCHESTRA_URL: $UnifyBaseUrl" -ForegroundColor Green
     }
-    
+
     $envContent | Out-File -FilePath $envFile -Encoding UTF8
     Write-Host ".env file created at: $envFile" -ForegroundColor Green
 }
 
 function Install-TightVNC {
     param([string]$Password = "unify123")
-    
+
     Write-Host ""
     Write-Host "=== Installing TightVNC Server ===" -ForegroundColor Cyan
-    
+
     $tvnServerPath = 'C:\Program Files\TightVNC\tvnserver.exe'
-    
+
     if (Test-Path $tvnServerPath) {
         Write-Host "TightVNC already installed at: $tvnServerPath" -ForegroundColor Green
     } else {
         Write-Host "Using VNC password: $Password" -ForegroundColor Yellow
-        
+
         $vncInstallerUrl = 'https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi'
         $vncInstallerPath = 'C:\temp\tightvnc.msi'
-        
+
         New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
-        
+
         Write-Host "Downloading TightVNC..."
         Write-Host "URL: $vncInstallerUrl"
         Invoke-WebRequest -Uri $vncInstallerUrl -OutFile $vncInstallerPath -UseBasicParsing
-        
+
         Write-Host "Installing TightVNC (silent)..."
         $vncArgs = @(
             "/i", $vncInstallerPath,
@@ -919,19 +919,19 @@ function Install-TightVNC {
             "VALUE_OF_CONTROLPASSWORD=$Password"
         )
         $vncProcess = Start-Process msiexec.exe -ArgumentList $vncArgs -Wait -NoNewWindow -PassThru
-        
+
         Write-Host "TightVNC installation exit code: $($vncProcess.ExitCode)"
-        
+
         if (Test-Path $tvnServerPath) {
             Write-Host "SUCCESS: TightVNC installed" -ForegroundColor Green
         } else {
             Write-Host "WARNING: TightVNC may not have installed correctly" -ForegroundColor Yellow
         }
-        
+
         # Cleanup
         Remove-Item $vncInstallerPath -Force -ErrorAction SilentlyContinue
     }
-    
+
     # Configure TightVNC registry settings (required for proper operation)
     # Note: App-mode may read from HKCU, service mode reads from HKLM
     Write-Host "Configuring TightVNC settings..."
@@ -959,24 +959,24 @@ function Install-TightVNC {
         Write-Host "  Configured: $regPath" -ForegroundColor Green
     }
     Write-Host "TightVNC settings configured" -ForegroundColor Green
-    
+
     # Check if password is already in HKCU (from previous run)
     $hklmPath = 'HKLM:\SOFTWARE\TightVNC\Server'
     $hkcuPath = 'HKCU:\SOFTWARE\TightVNC\Server'
     $passwordExists = (Get-ItemProperty -Path $hkcuPath -Name 'Password' -ErrorAction SilentlyContinue).Password
-    
+
     if (-not $passwordExists) {
         # First time setup - start service to initialize password
         Write-Host "Initializing TightVNC password..."
         Set-Service -Name "tvnserver" -StartupType Manual -ErrorAction SilentlyContinue
         Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1  # Reduced from 3s
-        
+
         # Copy encrypted password from HKLM to HKCU
         if (-not (Test-Path $hkcuPath)) {
             New-Item -Path $hkcuPath -Force | Out-Null
         }
-        
+
         try {
             $passwordBytes = Get-ItemPropertyValue -Path $hklmPath -Name 'Password' -ErrorAction Stop
             Set-ItemProperty -Path $hkcuPath -Name 'Password' -Value $passwordBytes -Type Binary -Force
@@ -987,7 +987,7 @@ function Install-TightVNC {
             Write-Host "  WARNING: Password copy failed - $_" -ForegroundColor Yellow
         }
     }
-    
+
     # Enable TightVNC service for automatic startup
     Set-Service -Name "tvnserver" -StartupType Automatic -ErrorAction SilentlyContinue
     Write-Host "TightVNC configured" -ForegroundColor Green
@@ -996,9 +996,9 @@ function Install-TightVNC {
 function Install-NoVNC {
     Write-Host ""
     Write-Host "=== Installing noVNC and websockify ===" -ForegroundColor Cyan
-    
+
     $novncDir = 'C:\novnc'
-    
+
     # Clone noVNC if not present
     if (Test-Path "$novncDir\vnc.html") {
         Write-Host "noVNC already installed at: $novncDir" -ForegroundColor Green
@@ -1007,16 +1007,16 @@ function Install-NoVNC {
         if (Test-Path $novncDir) {
             Remove-Item -Recurse -Force $novncDir -ErrorAction SilentlyContinue
         }
-        
+
         git clone --depth 1 https://github.com/novnc/noVNC.git $novncDir
-        
+
         if (Test-Path "$novncDir\vnc.html") {
             Write-Host "SUCCESS: noVNC installed" -ForegroundColor Green
         } else {
             Write-Host "WARNING: noVNC may not have installed correctly" -ForegroundColor Yellow
         }
     }
-    
+
     # Always create/update custom.html (iframe wrapper for clean noVNC experience)
     # Hides control bar, logo, and remote cursor via CSS injection
     if (Test-Path "$novncDir\vnc.html") {
@@ -1050,7 +1050,7 @@ function Install-NoVNC {
                     #noVNC_control_bar_handle,
                     #noVNC_logo,
                     #noVNC_status { display: none !important; }
-                    
+
                     /* Hide remote cursor - use local browser cursor only */
                     .noVNC_cursor { display: none !important; }
                 `;
@@ -1067,7 +1067,7 @@ function Install-NoVNC {
         Copy-Item "$novncDir\custom.html" "$novncDir\index.html" -Force
         Write-Host "Created/updated custom.html and set as index.html" -ForegroundColor Green
     }
-    
+
     # Install websockify via pip
     Write-Host "Installing websockify via pip..."
     $pythonExe = 'C:\Program Files\Python312\python.exe'
@@ -1089,29 +1089,29 @@ function Install-NoVNC {
 function Install-Caddy {
     Write-Host ""
     Write-Host "=== Installing Caddy Web Server ===" -ForegroundColor Cyan
-    
+
     $caddyDir = 'C:\caddy'
     $caddyExe = "$caddyDir\caddy.exe"
-    
+
     if (Test-Path $caddyExe) {
         Write-Host "Caddy already installed at: $caddyExe" -ForegroundColor Green
         return
     }
-    
+
     New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
-    
+
     # Download Caddy for Windows
     Write-Host "Downloading Caddy..."
     $caddyUrl = "https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip"
     $caddyZip = "$caddyDir\caddy.zip"
-    
+
     try {
         Invoke-WebRequest -Uri $caddyUrl -OutFile $caddyZip -UseBasicParsing
-        
+
         Write-Host "Extracting Caddy..."
         Expand-Archive -Path $caddyZip -DestinationPath $caddyDir -Force
         Remove-Item $caddyZip -Force -ErrorAction SilentlyContinue
-        
+
         if (Test-Path $caddyExe) {
             Write-Host "SUCCESS: Caddy installed at $caddyExe" -ForegroundColor Green
         } else {
@@ -1124,21 +1124,21 @@ function Install-Caddy {
 
 function Setup-Caddyfile {
     param([string]$Hostname)
-    
+
     Write-Host ""
     Write-Host "=== Creating Caddyfile ===" -ForegroundColor Cyan
-    
+
     if (-not $Hostname) {
         Write-Host "No hostname provided, skipping Caddy configuration" -ForegroundColor Yellow
         Write-Host "Caddy will not provide HTTPS - use HTTP on port 6080 instead" -ForegroundColor Yellow
         return $false
     }
-    
+
     $caddyDir = 'C:\caddy'
     $caddyfile = "$caddyDir\Caddyfile"
-    
+
     New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
-    
+
     # Routing: /desktop -> noVNC (6080), /api -> Agent Service (3000)
     # Root path (/) returns 404
     $caddyConfig = @"
@@ -1192,11 +1192,11 @@ $Hostname {
     }
 }
 "@
-    
+
     $caddyConfig | Out-File -FilePath $caddyfile -Encoding UTF8
     Write-Host "Caddyfile created at: $caddyfile" -ForegroundColor Green
     Write-Host "  HTTPS route: https://$Hostname/desktop/ -> noVNC (localhost:6080)" -ForegroundColor Gray
-    
+
     return $true
 }
 
@@ -1204,25 +1204,25 @@ function Start-Caddy {
     $caddyDir = 'C:\caddy'
     $caddyExe = "$caddyDir\caddy.exe"
     $caddyfile = "$caddyDir\Caddyfile"
-    
+
     if (-not (Test-Path $caddyExe) -or -not (Test-Path $caddyfile)) {
         return
     }
-    
+
     # Check if Caddy is already running
     $caddyProcess = Get-Process -Name "caddy" -ErrorAction SilentlyContinue
     if ($caddyProcess) {
         Write-Host "  Caddy: Already running" -ForegroundColor Green
         return
     }
-    
+
     Write-Host "  Starting Caddy..." -ForegroundColor Gray
     $psCommand = "Set-Location '$caddyDir'; & '$caddyExe' run --config '$caddyfile'"
     Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $caddyDir
-    
+
     # Quick check (reduced from 5s to 1s)
     Start-Sleep -Milliseconds 1000
-    
+
     if (Test-PortListening -Port 443 -TimeoutMs 500) {
         Write-Host "  Caddy: Running (HTTPS)" -ForegroundColor Green
     } else {
@@ -1232,21 +1232,21 @@ function Start-Caddy {
 
 function Setup-Websockify {
     param([switch]$Force)
-    
+
     Write-Host ""
     Write-Host "=== Setting up websockify ===" -ForegroundColor Cyan
-    
+
     $novncDir = 'C:\novnc'
     $batFile = "$novncDir\start-websockify.bat"
     $taskName = "StartWebsockify"
-    
+
     # Check if already configured
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($existingTask -and (Test-Path $batFile) -and -not $Force) {
         Write-Host "  Websockify already configured" -ForegroundColor Green
         return
     }
-    
+
     # Find Python executable
     $pythonExe = 'C:\Program Files\Python312\python.exe'
     if (-not (Test-Path $pythonExe)) {
@@ -1256,7 +1256,7 @@ function Setup-Websockify {
         Write-Host "  ERROR: Python not found" -ForegroundColor Red
         return
     }
-    
+
     # Create websockify startup script
     $websockifyScript = @"
 @echo off
@@ -1264,7 +1264,7 @@ cd /d C:\novnc
 "$pythonExe" -m websockify --web C:\novnc 6080 localhost:5900
 "@
     $websockifyScript | Out-File -FilePath $batFile -Encoding ASCII
-    
+
     # Create scheduled task only if doesn't exist
     if (-not $existingTask) {
         $action = New-ScheduledTaskAction -Execute $batFile -WorkingDirectory $novncDir
@@ -1273,7 +1273,7 @@ cd /d C:\novnc
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
     }
-    
+
     Write-Host "  Websockify configured" -ForegroundColor Green
 }
 
@@ -1283,13 +1283,13 @@ function Setup-DisplayResolution {
         [int]$Height = 1080,
         [string]$TargetUser
     )
-    
+
     Write-Host ""
     Write-Host "=== Setting up Display Resolution ($Width x $Height) ===" -ForegroundColor Cyan
-    
+
     $novncDir = 'C:\novnc'
     New-Item -ItemType Directory -Force -Path $novncDir | Out-Null
-    
+
     # Create PowerShell script that sets display resolution using Windows API
     $resolutionScript = @"
 # Set display resolution to ${Width}x${Height}
@@ -1302,17 +1302,17 @@ using System.Runtime.InteropServices;
 public class DisplaySettings {
     [DllImport("user32.dll")]
     public static extern int EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
-    
+
     [DllImport("user32.dll")]
     public static extern int ChangeDisplaySettings(ref DEVMODE devMode, int flags);
-    
+
     public const int ENUM_CURRENT_SETTINGS = -1;
     public const int CDS_UPDATEREGISTRY = 0x01;
     public const int CDS_TEST = 0x02;
     public const int DISP_CHANGE_SUCCESSFUL = 0;
     public const int DM_PELSWIDTH = 0x80000;
     public const int DM_PELSHEIGHT = 0x100000;
-    
+
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
     public struct DEVMODE {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
@@ -1348,26 +1348,26 @@ public class DisplaySettings {
         public int dmPanningWidth;
         public int dmPanningHeight;
     }
-    
+
     public static int SetResolution(int width, int height) {
         DEVMODE dm = new DEVMODE();
         dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
-        
+
         // Get current settings first
         if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm) == 0) {
             return -1;
         }
-        
+
         dm.dmPelsWidth = width;
         dm.dmPelsHeight = height;
         dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
-        
+
         // Test if the resolution is valid
         int testResult = ChangeDisplaySettings(ref dm, CDS_TEST);
         if (testResult != DISP_CHANGE_SUCCESSFUL) {
             return testResult;
         }
-        
+
         // Apply the resolution
         return ChangeDisplaySettings(ref dm, CDS_UPDATEREGISTRY);
     }
@@ -1387,11 +1387,11 @@ if (`$result -eq 0) {
     "Failed to set resolution, error code: `$result" | Out-File -FilePath "C:\novnc\resolution.log" -Append -Encoding UTF8
 }
 "@
-    
+
     $scriptPath = "$novncDir\set-resolution.ps1"
     $resolutionScript | Out-File -FilePath $scriptPath -Encoding UTF8
     Write-Host "Created resolution script at $scriptPath" -ForegroundColor Green
-    
+
     # Create scheduled task to run resolution script at login (before TightVNC starts)
     $taskName = "SetDisplayResolution"
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -1399,12 +1399,12 @@ if (`$result -eq 0) {
         Write-Host "Removing existing scheduled task..."
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     }
-    
+
     Write-Host "Creating scheduled task for display resolution (hidden)..."
     # Execute PowerShell directly with hidden window (delay is handled via task settings)
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 3; & '$scriptPath'`"" -WorkingDirectory $novncDir
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-    
+
     # If TargetUser specified, schedule for that user's logon (runs in their interactive session)
     if ($TargetUser) {
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
@@ -1416,7 +1416,7 @@ if (`$result -eq 0) {
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest | Out-Null
         Write-Host "Scheduled task '$taskName' created for any user at login" -ForegroundColor Green
     }
-    
+
     # Also run immediately in current session (only effective for manual/interactive runs)
     Write-Host "Applying display resolution now..."
     & powershell.exe -ExecutionPolicy Bypass -File $scriptPath
@@ -1427,16 +1427,16 @@ function Setup-InvisibleCursor {
     param(
         [string]$TargetUser
     )
-    
+
     Write-Host ""
     Write-Host "=== Setting up Invisible Cursor ===" -ForegroundColor Cyan
-    
+
     $cursorDir = 'C:\Windows\Cursors'
     $blankCursorPath = "$cursorDir\blank.cur"
     $novncDir = 'C:\novnc'
-    
+
     New-Item -ItemType Directory -Force -Path $novncDir | Out-Null
-    
+
     # Check if blank cursor already exists
     if (Test-Path $blankCursorPath) {
         Write-Host "Blank cursor already exists at: $blankCursorPath" -ForegroundColor Green
@@ -1448,7 +1448,7 @@ function Setup-InvisibleCursor {
             0x02, 0x00,       # Type (2 = cursor)
             0x01, 0x00        # Number of images (1)
         )
-        
+
         $curDirEntry = [byte[]]@(
             0x20,             # Width (32)
             0x20,             # Height (32)
@@ -1459,7 +1459,7 @@ function Setup-InvisibleCursor {
             0x30, 0x01, 0x00, 0x00,  # Size of image data (304 bytes)
             0x16, 0x00, 0x00, 0x00   # Offset to image data (22 bytes)
         )
-        
+
         # BITMAPINFOHEADER for 32x32 1-bit cursor
         $bmpHeader = [byte[]]@(
             0x28, 0x00, 0x00, 0x00,  # Header size (40)
@@ -1474,25 +1474,25 @@ function Setup-InvisibleCursor {
             0x00, 0x00, 0x00, 0x00,  # Colors used
             0x00, 0x00, 0x00, 0x00   # Important colors
         )
-        
+
         # Color table (2 entries for 1-bit: black and white)
         $colorTable = [byte[]]@(
             0x00, 0x00, 0x00, 0x00,  # Black (BGRX)
             0xFF, 0xFF, 0xFF, 0x00   # White (BGRX)
         )
-        
+
         # XOR mask: 32x32 bits = 128 bytes (all zeros = use AND mask colors)
         $xorMask = New-Object byte[] 128
-        
+
         # AND mask: 32x32 bits = 128 bytes (all 1s = fully transparent)
         $andMask = New-Object byte[] 128
         for ($i = 0; $i -lt 128; $i++) {
             $andMask[$i] = 0xFF
         }
-        
+
         # Combine all parts
         $cursorData = $curHeader + $curDirEntry + $bmpHeader + $colorTable + $xorMask + $andMask
-        
+
         try {
             [System.IO.File]::WriteAllBytes($blankCursorPath, $cursorData)
             Write-Host "Created blank cursor at: $blankCursorPath" -ForegroundColor Green
@@ -1501,7 +1501,7 @@ function Setup-InvisibleCursor {
             return
         }
     }
-    
+
     # Create PowerShell script that applies invisible cursor (runs in user's session)
     $cursorScript = @'
 # Apply invisible cursor settings
@@ -1542,11 +1542,11 @@ using System.Runtime.InteropServices;
 public class CursorHelperLogon {
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SystemParametersInfo(int uAction, int uParam, int lpvParam, int fuWinIni);
-    
+
     public const int SPI_SETCURSORS = 0x0057;
     public const int SPIF_UPDATEINIFILE = 0x01;
     public const int SPIF_SENDCHANGE = 0x02;
-    
+
     public static bool ApplyCursors() {
         return SystemParametersInfo(SPI_SETCURSORS, 0, 0, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
     }
@@ -1562,11 +1562,11 @@ try {
 $result = [CursorHelperLogon]::ApplyCursors()
 "$(Get-Date): Cursor applied, result: $result" | Out-File -FilePath "C:\novnc\cursor.log" -Append -Encoding UTF8
 '@
-    
+
     $scriptPath = "$novncDir\set-invisible-cursor.ps1"
     $cursorScript | Out-File -FilePath $scriptPath -Encoding UTF8
     Write-Host "Created cursor script at $scriptPath" -ForegroundColor Green
-    
+
     # Create scheduled task to run cursor script at login (runs in user's interactive session)
     $taskName = "SetInvisibleCursor"
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -1574,12 +1574,12 @@ $result = [CursorHelperLogon]::ApplyCursors()
         Write-Host "Removing existing scheduled task..."
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     }
-    
+
     Write-Host "Creating scheduled task for invisible cursor (hidden)..."
     # Execute PowerShell with hidden window, small delay to ensure desktop is ready
     $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 2; & '$scriptPath'`"" -WorkingDirectory $novncDir
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-    
+
     # If TargetUser specified, schedule for that user's logon (runs in their interactive session)
     if ($TargetUser) {
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
@@ -1591,11 +1591,11 @@ $result = [CursorHelperLogon]::ApplyCursors()
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Highest | Out-Null
         Write-Host "Scheduled task '$taskName' created for any user at login" -ForegroundColor Green
     }
-    
+
     # Also try to apply immediately in current session (only effective for interactive runs)
     # For existing logged-in users, we trigger the scheduled task to run now
     Write-Host "Applying cursor changes now..."
-    
+
     # Try to run the task immediately for existing sessions
     try {
         Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -1603,23 +1603,23 @@ $result = [CursorHelperLogon]::ApplyCursors()
     } catch {
         Write-Host "Cursor task scheduled (will apply at next logon)" -ForegroundColor Yellow
     }
-    
+
     Write-Host "Note: Native Windows cursor will be invisible for VNC streaming" -ForegroundColor Gray
 }
 
 function Configure-Firewall {
     param([switch]$Force)
-    
+
     Write-Host ""
     Write-Host "=== Configuring Firewall ===" -ForegroundColor Cyan
-    
+
     # Check if rules already exist
     $existingRules = Get-NetFirewallRule -DisplayName "Unity-*" -ErrorAction SilentlyContinue
     if ($existingRules -and -not $Force) {
         Write-Host "  Firewall rules already configured ($($existingRules.Count) rules)" -ForegroundColor Green
         return
     }
-    
+
     # Define required rules
     $rules = @(
         @{ Name = "Unity-HTTPS"; Port = 443; Desc = "HTTPS" },
@@ -1627,7 +1627,7 @@ function Configure-Firewall {
         @{ Name = "Unity-noVNC"; Port = 6080; Desc = "noVNC" },
         @{ Name = "Unity-AgentService"; Port = 3000; Desc = "Agent Service" }
     )
-    
+
     foreach ($rule in $rules) {
         $existing = Get-NetFirewallRule -DisplayName $rule.Name -ErrorAction SilentlyContinue
         if (-not $existing) {
@@ -1635,7 +1635,7 @@ function Configure-Firewall {
             Write-Host "  Created: $($rule.Desc) ($($rule.Port))" -ForegroundColor Green
         }
     }
-    
+
     Write-Host "  Firewall configured" -ForegroundColor Green
 }
 
@@ -1652,35 +1652,35 @@ function Test-PortListening {
 
 function Start-AllServices {
     param([switch]$FastMode)
-    
+
     Write-Host ""
     Write-Host "=== Starting Services ===" -ForegroundColor Cyan
-    
+
     # Start TightVNC service (non-blocking)
     $tvnService = Get-Service -Name "tvnserver" -ErrorAction SilentlyContinue
     if ($tvnService -and $tvnService.Status -ne 'Running') {
         Write-Host "Starting TightVNC service..." -ForegroundColor Gray
         Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
     }
-    
+
     # Start websockify in background (don't wait)
     $novncDir = 'C:\novnc'
     $websockifyBat = "$novncDir\start-websockify.bat"
     $port6080 = Get-NetTCPConnection -LocalPort 6080 -State Listen -ErrorAction SilentlyContinue
-    
+
     if (-not $port6080 -and (Test-Path $websockifyBat)) {
         Write-Host "Starting websockify..." -ForegroundColor Gray
         Start-Process -FilePath $websockifyBat -WorkingDirectory $novncDir -WindowStyle Hidden
     }
-    
+
     # Start Agent Service in background
     $agentServiceDir = 'C:\agent-service'
     if (Test-Path "$agentServiceDir\package.json") {
         $port3000 = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
-        
+
         if (-not $port3000) {
             Write-Host "Starting Agent Service..." -ForegroundColor Gray
-            
+
             # Ensure startup script exists
             $agentStartScript = @"
 @echo off
@@ -1688,7 +1688,7 @@ cd /d C:\agent-service
 npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 "@
             $agentStartScript | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
-            
+
             # Create scheduled task only if it doesn't exist
             $taskName = "StartAgentService"
             $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
@@ -1699,14 +1699,14 @@ npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
                 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
                 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
             }
-            
+
             Start-Process -FilePath "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
         }
     }
-    
+
     # Quick verification with minimal wait (only 2s total instead of 10+)
     Start-Sleep -Milliseconds 1500
-    
+
     # Report status
     $tvnService = Get-Service -Name "tvnserver" -ErrorAction SilentlyContinue
     if ($tvnService -and $tvnService.Status -eq 'Running') {
@@ -1714,13 +1714,13 @@ npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
     } else {
         Write-Host "  TightVNC: Starting..." -ForegroundColor Yellow
     }
-    
+
     if (Test-PortListening -Port 6080 -TimeoutMs 500) {
         Write-Host "  websockify: Running (port 6080)" -ForegroundColor Green
     } else {
         Write-Host "  websockify: Starting..." -ForegroundColor Yellow
     }
-    
+
     if (Test-Path "$agentServiceDir\package.json") {
         if (Test-PortListening -Port 3000 -TimeoutMs 500) {
             Write-Host "  Agent Service: Running (port 3000)" -ForegroundColor Green
@@ -1735,18 +1735,18 @@ function Install-Office {
         [string]$MakKey,
         [switch]$FastMode
     )
-    
+
     $excelPath = 'C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE'
-    
+
     # Fast mode: just verify Office exists, skip activation check
     if ($FastMode -and (Test-Path $excelPath)) {
         Write-Host "Office: Installed" -ForegroundColor Green
         return
     }
-    
+
     Write-Host ""
     Write-Host "=== Installing Office LTSC 2024 ===" -ForegroundColor Cyan
-    
+
     if (Test-Path $excelPath) {
         Write-Host "Excel already installed at: $excelPath" -ForegroundColor Green
         if ($MakKey) {
@@ -1754,13 +1754,13 @@ function Install-Office {
         }
         return
     }
-    
+
     Write-Host "Excel not found. Proceeding with installation..." -ForegroundColor Yellow
-    
+
     # Step 1: Download Office Deployment Tool
     Write-Host ""
     Write-Host "Downloading Office Deployment Tool..." -ForegroundColor Cyan
-    
+
     New-Item -ItemType Directory -Force -Path C:\odt | Out-Null
     $odtUrl = 'https://download.microsoft.com/download/2/7/A/27AF1BE6-DD20-4CB4-B154-EBAB8A7D4A7E/officedeploymenttool_18129-20030.exe'
     Write-Host "Downloading from: $odtUrl"
@@ -1768,11 +1768,11 @@ function Install-Office {
     Write-Host "Extracting ODT..."
     Start-Process -FilePath C:\odt\odt.exe -ArgumentList '/quiet /extract:C:\odt' -Wait -NoNewWindow
     Write-Host "ODT ready at C:\odt" -ForegroundColor Green
-    
+
     # Step 2: Create Office Configuration File
     Write-Host ""
     Write-Host "Creating Office configuration file..." -ForegroundColor Cyan
-    
+
     $configXml = @"
 <Configuration>
   <Add OfficeClientEdition="64" Channel="PerpetualVL2024">
@@ -1794,34 +1794,34 @@ function Install-Office {
   <Property Name="FORCEAPPSHUTDOWN" Value="TRUE" />
 </Configuration>
 "@
-    
+
     $configXml | Out-File -FilePath C:\odt\config.xml -Encoding UTF8
     Write-Host "Configuration saved to C:\odt\config.xml" -ForegroundColor Green
     Write-Host "Components to install: Word, Excel, PowerPoint"
     Write-Host "Excluded: Access, Groove, Lync, OneDrive, OneNote, Outlook, Publisher, Teams"
-    
+
     # Step 3: Install Office LTSC 2024
     Write-Host ""
     Write-Host "Installing Office LTSC 2024..." -ForegroundColor Cyan
     Write-Host "WARNING: This takes 20-40 minutes for download + install!" -ForegroundColor Yellow
     Write-Host "Start time: $(Get-Date)"
-    
+
     # Create logs directory
     New-Item -ItemType Directory -Force -Path C:\odt\logs | Out-Null
-    
+
     # Run setup with logging
     $process = Start-Process -FilePath 'C:\odt\setup.exe' -ArgumentList '/configure C:\odt\config.xml' -PassThru -Wait -NoNewWindow
-    
+
     Write-Host ""
     Write-Host "End time: $(Get-Date)"
     Write-Host "Exit code: $($process.ExitCode)"
-    
+
     # Check logs if available
     Get-ChildItem 'C:\odt\logs\*.log' -ErrorAction SilentlyContinue | ForEach-Object {
         Write-Host "=== Log: $($_.Name) ===" -ForegroundColor Gray
         Get-Content $_.FullName | Select-Object -Last 20
     }
-    
+
     # Verify installation
     if (Test-Path $excelPath) {
         Write-Host ""
@@ -1834,29 +1834,29 @@ function Install-Office {
         Get-ChildItem 'C:\Program Files (x86)\Microsoft Office' -Recurse -Filter 'EXCEL.EXE' -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "Found: $($_.FullName)" }
         throw 'Excel not found!'
     }
-    
+
     # Step 4: Configure Excel for headless automation
     Write-Host ""
     Write-Host "Configuring Excel for headless automation..." -ForegroundColor Cyan
-    
+
     # Disable first-run dialogs and protected view
     $regPath = 'HKCU:\Software\Microsoft\Office\16.0\Excel\Security\ProtectedView'
     New-Item -Path $regPath -Force | Out-Null
     Set-ItemProperty -Path $regPath -Name 'DisableInternetFilesInPV' -Value 1 -Type DWord
     Set-ItemProperty -Path $regPath -Name 'DisableAttachementsInPV' -Value 1 -Type DWord
     Set-ItemProperty -Path $regPath -Name 'DisableUnsafeLocationsInPV' -Value 1 -Type DWord
-    
+
     # Disable startup screen
     $regPath = 'HKCU:\Software\Microsoft\Office\16.0\Common\General'
     New-Item -Path $regPath -Force | Out-Null
     Set-ItemProperty -Path $regPath -Name 'ShownFirstRunOptin' -Value 1 -Type DWord
     Set-ItemProperty -Path $regPath -Name 'DisableBootToOfficeStart' -Value 1 -Type DWord
-    
+
     Write-Host "Excel configured for headless automation" -ForegroundColor Green
-    
+
     # Activate Office
     Activate-Office -MakKey $MakKey
-    
+
     # Cleanup note
     Write-Host ""
     Write-Host "ODT files kept at C:\odt (delete manually if desired)" -ForegroundColor Gray
@@ -1864,12 +1864,12 @@ function Install-Office {
 
 function Activate-Office {
     param([string]$MakKey)
-    
+
     Write-Host ""
     Write-Host "=== Office Activation ===" -ForegroundColor Cyan
-    
+
     $ospp = 'C:\Program Files\Microsoft Office\root\Office16\ospp.vbs'
-    
+
     if ($MakKey) {
         Write-Host "Activating Office with MAK key..."
         if (Test-Path $ospp) {
@@ -1900,7 +1900,7 @@ function Show-Summary {
         [string]$VncPassword,
         [string]$Hostname
     )
-    
+
     Write-Host ""
     Write-Host "=========================================="
     Write-Host "  Installation Complete!"
@@ -1950,10 +1950,10 @@ function Show-Summary {
         Write-Host "  Caddy:         C:\caddy\access.log"
     }
     Write-Host ""
-    
+
     # Access information
     $ipAddress = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch "Loopback" } | Select-Object -First 1).IPAddress
-    
+
     if ($Hostname) {
         Write-Host "HTTPS Access (via Caddy):" -ForegroundColor Cyan
         Write-Host "  Desktop: https://$Hostname/desktop/" -ForegroundColor Green
@@ -1970,12 +1970,12 @@ function Show-Summary {
     Write-Host ""
     Write-Host "VNC Password: $VncPassword" -ForegroundColor Cyan
     Write-Host ""
-    
+
     if (-not $MakKey) {
         Write-Host "REMINDER: Office is not activated. Run with MAK key to activate:" -ForegroundColor Yellow
         Write-Host '  .\init.ps1 "MAK-KEY" "VNC-PASSWORD"' -ForegroundColor Gray
     }
-    
+
     Write-Host ""
     Write-Host "Script usage:" -ForegroundColor Cyan
     Write-Host '  .\init.ps1                        # Defaults only'
@@ -1997,7 +1997,7 @@ $gcpWindowsPassword = Get-GCPMetadata -Key "windows-password"
 $gcpGithubToken = Get-GCPMetadata -Key "github-token"
 $gcpAnthropicKey = Get-GCPMetadata -Key "anthropic-api-key"
 $gcpUnifyKey = Get-GCPMetadata -Key "unify-key"
-$gcpUnifyBaseUrl = Get-GCPMetadata -Key "unify-base-url"
+$gcpUnifyBaseUrl = Get-GCPMetadata -Key "orchestra-url"
 $gcpStaging = Get-GCPMetadata -Key "staging"
 $gcpSshPublicKey = Get-GCPMetadata -Key "ssh-public-key"
 $gcpMakKey = Get-GCPMetadata -Key "office-mak-key"
@@ -2104,16 +2104,16 @@ if (-not $fastMode) {
 $jobs += Start-Job -Name "Install-Git" -ScriptBlock {
     $gitInstallerUrl = 'https://github.com/git-for-windows/git/releases/download/v2.43.0.windows.1/Git-2.43.0-64-bit.exe'
     $gitInstallerPath = 'C:\temp\git-installer.exe'
-    
+
     if (Get-Command git -ErrorAction SilentlyContinue) {
         return "Git already installed"
     }
-    
+
     New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
     Invoke-WebRequest -Uri $gitInstallerUrl -OutFile $gitInstallerPath
     $proc = Start-Process -FilePath $gitInstallerPath -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh"' -PassThru -Wait -NoNewWindow
     Remove-Item $gitInstallerPath -Force -ErrorAction SilentlyContinue
-    
+
     if (Test-Path 'C:\Program Files\Git\bin\git.exe') {
         return "Git installed successfully (exit code: $($proc.ExitCode))"
     } else {
@@ -2126,16 +2126,16 @@ $jobs += Start-Job -Name "Install-Python" -ScriptBlock {
     $pythonInstallerUrl = 'https://www.python.org/ftp/python/3.12.2/python-3.12.2-amd64.exe'
     $pythonInstallerPath = 'C:\temp\python-installer.exe'
     $realPythonPath = 'C:\Program Files\Python312\python.exe'
-    
+
     if (Test-Path $realPythonPath) {
         return "Python already installed"
     }
-    
+
     New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
     Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $pythonInstallerPath
     $proc = Start-Process -FilePath $pythonInstallerPath -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0' -PassThru -Wait -NoNewWindow
     Remove-Item $pythonInstallerPath -Force -ErrorAction SilentlyContinue
-    
+
     if (Test-Path $realPythonPath) {
         # Upgrade pip
         & $realPythonPath -m pip install --upgrade pip 2>&1 | Out-Null
@@ -2150,11 +2150,11 @@ $jobs += Start-Job -Name "Install-Chocolatey" -ScriptBlock {
     if (Test-Path 'C:\ProgramData\chocolatey\bin\choco.exe') {
         return "Chocolatey already installed"
     }
-    
+
     Set-ExecutionPolicy Bypass -Scope Process -Force
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
     Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-    
+
     if (Test-Path 'C:\ProgramData\chocolatey\bin\choco.exe') {
         return "Chocolatey installed successfully"
     } else {
@@ -2166,19 +2166,19 @@ $jobs += Start-Job -Name "Install-Chocolatey" -ScriptBlock {
 $vncPwd = $vncPassword  # Capture for job scope
 $jobs += Start-Job -Name "Install-TightVNC" -ScriptBlock {
     param($Password)
-    
+
     $tvnServerPath = 'C:\Program Files\TightVNC\tvnserver.exe'
-    
+
     if (Test-Path $tvnServerPath) {
         return "TightVNC already installed"
     }
-    
+
     $vncInstallerUrl = 'https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi'
     $vncInstallerPath = 'C:\temp\tightvnc.msi'
-    
+
     New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
     Invoke-WebRequest -Uri $vncInstallerUrl -OutFile $vncInstallerPath -UseBasicParsing
-    
+
     $vncArgs = @(
         "/i", $vncInstallerPath,
         "/quiet", "/norestart",
@@ -2190,7 +2190,7 @@ $jobs += Start-Job -Name "Install-TightVNC" -ScriptBlock {
     )
     $proc = Start-Process msiexec.exe -ArgumentList $vncArgs -Wait -NoNewWindow -PassThru
     Remove-Item $vncInstallerPath -Force -ErrorAction SilentlyContinue
-    
+
     if (Test-Path $tvnServerPath) {
         return "TightVNC installed successfully (exit code: $($proc.ExitCode))"
     } else {
@@ -2202,19 +2202,19 @@ $jobs += Start-Job -Name "Install-TightVNC" -ScriptBlock {
 $jobs += Start-Job -Name "Install-Caddy" -ScriptBlock {
     $caddyDir = 'C:\caddy'
     $caddyExe = "$caddyDir\caddy.exe"
-    
+
     if (Test-Path $caddyExe) {
         return "Caddy already installed"
     }
-    
+
     New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
     $caddyUrl = "https://github.com/caddyserver/caddy/releases/download/v2.7.6/caddy_2.7.6_windows_amd64.zip"
     $caddyZip = "$caddyDir\caddy.zip"
-    
+
     Invoke-WebRequest -Uri $caddyUrl -OutFile $caddyZip -UseBasicParsing
     Expand-Archive -Path $caddyZip -DestinationPath $caddyDir -Force
     Remove-Item $caddyZip -Force -ErrorAction SilentlyContinue
-    
+
     if (Test-Path $caddyExe) {
         return "Caddy installed successfully"
     } else {
@@ -2230,7 +2230,7 @@ $jobs | Wait-Job | Out-Null
 foreach ($job in $jobs) {
     $result = Receive-Job -Job $job -ErrorAction SilentlyContinue
     $error = $job.ChildJobs[0].JobStateInfo.Reason
-    
+
     if ($job.State -eq 'Completed') {
         Write-Host "  $($job.Name): $result" -ForegroundColor Green
     } else {
@@ -2297,62 +2297,62 @@ if ($fastMode) {
     Write-Host ""
     Write-Host "=== Installing services in parallel ===" -ForegroundColor Cyan
     $parallelStartTime2 = Get-Date
-    
+
     $jobs2 = @()
-    
+
     # Job: Install noVNC
     $jobs2 += Start-Job -Name "Install-NoVNC" -ScriptBlock {
         $novncDir = 'C:\novnc'
         $pythonExe = 'C:\Program Files\Python312\python.exe'
-        
+
         # Refresh PATH in job
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-        
+
         if (-not (Test-Path "$novncDir\vnc.html")) {
             if (Test-Path $novncDir) {
                 Remove-Item -Recurse -Force $novncDir -ErrorAction SilentlyContinue
             }
             git clone --depth 1 https://github.com/novnc/noVNC.git $novncDir 2>&1 | Out-Null
         }
-        
+
         # Install websockify
         if (Test-Path $pythonExe) {
             & $pythonExe -m pip install websockify --quiet 2>&1 | Out-Null
         }
-        
+
         if (Test-Path "$novncDir\vnc.html") {
             return "noVNC installed successfully"
         } else {
             throw "noVNC installation failed"
         }
     }
-    
+
     # Job: Install AgentService (full install in job for parallelism)
     $ghToken = $gcpGithubToken
     $staging = $gcpStaging
     $jobs2 += Start-Job -Name "Install-AgentService" -ScriptBlock {
         param($GithubToken, $Staging)
-        
+
         $magnitudeDir = 'C:\magnitude'
         $agentServiceDir = 'C:\agent-service'
         $unityRepoDir = 'C:\temp\unity-repo'
-        
+
         # Refresh PATH in job
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
         $bunPath = "$env:USERPROFILE\.bun\bin"
         if (Test-Path $bunPath) { $env:Path = "$bunPath;$env:Path" }
-        
+
         $unityBranch = if ($Staging) { "staging" } else { "main" }
-        
+
         # Build URLs
         $magnitudeUrl = if ($GithubToken) { "https://$GithubToken@github.com/unifyai/magnitude.git" } else { "https://github.com/unifyai/magnitude.git" }
         $unityUrl = if ($GithubToken) { "https://$GithubToken@github.com/unifyai/unity.git" } else { "https://github.com/unifyai/unity.git" }
-        
+
         # Clone Magnitude
         if (-not (Test-Path "$magnitudeDir\.git")) {
             if (Test-Path $magnitudeDir) { Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue }
             git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
-            
+
             if (Test-Path "$magnitudeDir\package.json") {
                 Push-Location $magnitudeDir
                 # Save commit hash for tracking
@@ -2368,22 +2368,22 @@ if ($fastMode) {
                 Pop-Location
             }
         }
-        
+
         # Clone and extract agent-service
         $envBackup = $null
         if (Test-Path "$agentServiceDir\.env") {
             $envBackup = Get-Content "$agentServiceDir\.env" -Raw
         }
-        
+
         if (Test-Path "$agentServiceDir\package.json") {
             Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
         }
-        
+
         New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
         if (Test-Path $unityRepoDir) { Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue }
-        
+
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
-        
+
         if (Test-Path $unityRepoDir) {
             # Get commit hash before extracting
             $commitHash = $null
@@ -2391,15 +2391,15 @@ if ($fastMode) {
             $commitHash = (git rev-parse --short=12 HEAD 2>&1)
             git sparse-checkout set agent-service 2>&1 | Out-Null
             Pop-Location
-            
+
             if (Test-Path "$unityRepoDir\agent-service") {
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir -Force
-                
+
                 # Save commit hash for future update checks
                 if ($commitHash) {
                     $commitHash | Out-File -FilePath "$agentServiceDir\.commit-hash" -Encoding UTF8 -NoNewline
                 }
-                
+
                 if (Test-Path "$agentServiceDir\package.json") {
                     Push-Location $agentServiceDir
                     if (Get-Command bun -ErrorAction SilentlyContinue) {
@@ -2413,12 +2413,12 @@ if ($fastMode) {
             }
             Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
         }
-        
+
         # Restore .env
         if ($envBackup -and (Test-Path $agentServiceDir)) {
             $envBackup | Out-File -FilePath "$agentServiceDir\.env" -Encoding UTF8 -NoNewline
         }
-        
+
         if (Test-Path "$agentServiceDir\package.json") {
             $savedHash = if (Test-Path "$agentServiceDir\.commit-hash") { Get-Content "$agentServiceDir\.commit-hash" } else { "unknown" }
             return "Agent Service installed successfully (commit: $savedHash)"
@@ -2426,11 +2426,11 @@ if ($fastMode) {
             return "Agent Service install completed (may need manual verification)"
         }
     } -ArgumentList $ghToken, $staging
-    
+
     # Wait for parallel jobs
     Write-Host "  Started $($jobs2.Count) parallel service install jobs..." -ForegroundColor Gray
     $jobs2 | Wait-Job | Out-Null
-    
+
     foreach ($job in $jobs2) {
         $result = Receive-Job -Job $job -ErrorAction SilentlyContinue
         if ($job.State -eq 'Completed') {
@@ -2441,7 +2441,7 @@ if ($fastMode) {
         }
         Remove-Job -Job $job -Force
     }
-    
+
     $parallelElapsed2 = (Get-Date) - $parallelStartTime2
     Write-Host "  Parallel group 2 completed in $([math]::Round($parallelElapsed2.TotalSeconds, 1))s" -ForegroundColor Magenta
 }
@@ -2509,7 +2509,7 @@ if (-not $fastMode) {
     } elseif (-not $windowsUser) {
         Setup-DisplayResolution
     }
-    
+
     if ($windowsUser) {
         Setup-InvisibleCursor -TargetUser $windowsUser
     } else {
@@ -2555,18 +2555,18 @@ if ($fastMode) {
 if ($newUserCreated -eq $true) {
     Write-Host ""
     Write-Host "=== New User Created - Preparing for Reboot ===" -ForegroundColor Cyan
-    
+
     # Setup display resolution task for the new user (will run at their logon after reboot)
     Setup-DisplayResolution -TargetUser $windowsUser
-    
+
     # Setup invisible cursor task for the new user (will run at their logon after reboot)
     Setup-InvisibleCursor -TargetUser $windowsUser
-    
+
     Write-Host ""
     Write-Host "Rebooting in 10 seconds to activate auto-logon..." -ForegroundColor Yellow
     Write-Host "After reboot, the script will resume with software installations." -ForegroundColor Yellow
     Write-Host ""
-    
+
     Start-Sleep -Seconds 10
     Restart-Computer -Force
 } else {

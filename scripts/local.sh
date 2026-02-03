@@ -24,7 +24,7 @@
 #   ADAPTERS_PORT            Adapters service port (default: 8081)
 #   COMMS_PORT               Communication service port (default: 8082)
 #   PUBSUB_EMULATOR_PORT     Pub/Sub emulator port (default: 8085)
-#   UNIFY_BASE_URL           Orchestra URL (if set, used instead of default)
+#   ORCHESTRA_URL           Orchestra URL (if set, used instead of default)
 #   PROJECT_ID               GCP project ID for Pub/Sub (default: local-test-project)
 #
 # Test Assistant:
@@ -345,9 +345,9 @@ start_adapters_service() {
     env_vars+=("ORCHESTRA_ADMIN_KEY=$ORCHESTRA_ADMIN_KEY")
   fi
 
-  # Add UNIFY_BASE_URL if set (for local orchestra)
-  if [[ -n "${UNIFY_BASE_URL:-}" ]]; then
-    env_vars+=("UNIFY_BASE_URL=$UNIFY_BASE_URL")
+  # Add ORCHESTRA_URL if set (for local orchestra)
+  if [[ -n "${ORCHESTRA_URL:-}" ]]; then
+    env_vars+=("ORCHESTRA_URL=$ORCHESTRA_URL")
   fi
 
   # Start the service
@@ -713,7 +713,7 @@ cmd_help() {
   echo "  PUBSUB_EMULATOR_PORT   Pub/Sub emulator port (default: 8085)"
   echo "  PROJECT_ID             GCP project ID (default: local-test-project)"
   echo "  TEST_ASSISTANT_ID      Test assistant ID (default: default-test-assistant)"
-  echo "  UNIFY_BASE_URL         Orchestra URL (if using local orchestra)"
+  echo "  ORCHESTRA_URL         Orchestra URL (if using local orchestra)"
   echo "  ORCHESTRA_ADMIN_KEY    Admin key for Orchestra auth"
   echo "  STAGING                Set to 'true' for staging topics (default: true)"
   echo ""

@@ -3,7 +3,6 @@ import os
 import subprocess
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
-from communication.helpers import STAGING
 
 
 def setup_kubernetes_client():
@@ -167,7 +166,7 @@ def create_unity_job(
             env_vars = [
                 {"name": "STAGING", "value": "true"},
                 {
-                    "name": "UNIFY_BASE_URL",
+                    "name": "ORCHESTRA_URL",
                     "value": "https://service.a.run.app/v0",
                 },
                 {
@@ -220,12 +219,12 @@ def create_unity_job(
                                         "name": "sa-key",
                                         "mountPath": "/secrets",
                                         "readOnly": True,
-                                    }
+                                    },
                                 ],
-                            }
+                            },
                         ],
                         "volumes": [
-                            {"name": "sa-key", "secret": {"secretName": "comm-sa-key"}}
+                            {"name": "sa-key", "secret": {"secretName": "comm-sa-key"}},
                         ],
                     },
                 },
@@ -239,7 +238,8 @@ def create_unity_job(
         # Create the job
         try:
             api_response = batch_api.create_namespaced_job(
-                namespace=namespace, body=job_manifest
+                namespace=namespace,
+                body=job_manifest,
             )
 
             print(f"✅ Job created successfully!")
@@ -263,7 +263,10 @@ def create_unity_job(
 
 
 def get_job_logs(
-    core_api, job_name: str, namespace: str = "default", tail_lines: int = 10
+    core_api,
+    job_name: str,
+    namespace: str = "default",
+    tail_lines: int = 10,
 ):
     """
     Get logs from pods associated with a Kubernetes job.

@@ -123,11 +123,11 @@ eval "$(./scripts/local.sh start)"
 
 **Integration with Local Orchestra:**
 
-When running local orchestra (via Unity's `parallel_run.sh`), set `UNIFY_BASE_URL` to point communication services to the local orchestra instance:
+When running local orchestra (via Unity's `parallel_run.sh`), set `ORCHESTRA_URL` to point communication services to the local orchestra instance:
 
 ```bash
 # Unity repo starts local orchestra at http://127.0.0.1:8000/v0
-export UNIFY_BASE_URL="http://127.0.0.1:8000/v0"
+export ORCHESTRA_URL="http://127.0.0.1:8000/v0"
 
 # Communication services will now use local orchestra
 ./scripts/local.sh start
@@ -142,7 +142,7 @@ export UNIFY_BASE_URL="http://127.0.0.1:8000/v0"
 | `PUBSUB_EMULATOR_PORT` | 8085 | Port for Pub/Sub emulator |
 | `PROJECT_ID` | local-test-project | GCP project ID for Pub/Sub topics |
 | `TEST_ASSISTANT_ID` | default-test-assistant | Assistant ID for test topics |
-| `UNIFY_BASE_URL` | (staging/prod URL) | Orchestra URL (for local orchestra) |
+| `ORCHESTRA_URL` | (staging/prod URL) | Orchestra URL (for local orchestra) |
 | `ORCHESTRA_ADMIN_KEY` | — | Admin key for Orchestra auth |
 | `STAGING` | true | Set topic suffix (-staging) |
 

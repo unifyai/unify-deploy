@@ -23,15 +23,12 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
 
 STAGING = os.getenv("STAGING")
 
-# Orchestra URL priority:
-# 1. UNIFY_BASE_URL environment variable (for local orchestra or custom deployments)
-# 2. Default based on STAGING flag (production vs staging)
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
     else "https://service.a.run.app/v0"
 )
-ORCHESTRA_URL = os.getenv("UNIFY_BASE_URL", _default_orchestra_url)
+ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
 
 COMMS_URL = os.getenv("UNITY_COMMS_URL")
 ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")

@@ -16,7 +16,7 @@
 #   github-token      - GitHub PAT for cloning private repos
 #   anthropic-api-key - Anthropic API key for agent service
 #   unify-key         - Unify API key for agent service
-#   unify-base-url    - Unify API base URL for agent service
+#   orchestra-url    - Unify API base URL for agent service
 #   staging           - Use staging branch (any value = true)
 #   ssh-username      - SSH username for file sync (e.g., JohnDoe)
 #   ssh-public-key    - SSH public key for file sync (Ed25519)
@@ -71,7 +71,7 @@ CONFIG_HOSTNAME=$(get_metadata "hostname")
 GITHUB_TOKEN=$(get_metadata "github-token")
 ANTHROPIC_API_KEY=$(get_metadata "anthropic-api-key")
 UNIFY_KEY=$(get_metadata "unify-key")
-UNIFY_BASE_URL=$(get_metadata "unify-base-url")
+ORCHESTRA_URL=$(get_metadata "orchestra-url")
 STAGING=$(get_metadata "staging")
 SSH_USERNAME=$(get_metadata "ssh-username")
 SSH_PUBLIC_KEY=$(get_metadata "ssh-public-key")
@@ -100,7 +100,7 @@ fast_mode_check() {
         "/agent-service/node_modules"
         "/novnc/vnc.html"
     )
-    
+
     for path in "${checks[@]}"; do
         if [[ ! -e "$path" ]]; then
             echo "  Missing: $path"
@@ -156,14 +156,14 @@ echo "VNC password configured"
 setup_ssh_file_sync() {
     echo ""
     echo "=== Configuring SSH File Sync ==="
-    
+
     if [[ -z "$SSH_USERNAME" || -z "$SSH_PUBLIC_KEY" ]]; then
         echo "SSH file sync not configured (missing username or public key)"
         return
     fi
-    
+
     echo "Setting up SSH file sync for user: $SSH_USERNAME"
-    
+
     # 1. Create user with /Unity as home directory (if doesn't exist)
     if ! id "$SSH_USERNAME" &>/dev/null; then
         # Create the user with /Unity as home, no password (SSH key only)
@@ -174,7 +174,7 @@ setup_ssh_file_sync() {
         # Ensure home directory is /Unity
         usermod -d /Unity "$SSH_USERNAME" 2>/dev/null || true
     fi
-    
+
     # 2. Create /Unity/Local directory for file sync
     # Note: Subdirectories (Downloads, user_files, etc.) are created by sync process
     mkdir -p /Unity/Local
@@ -182,7 +182,7 @@ setup_ssh_file_sync() {
     chmod 755 /Unity
     chmod 755 /Unity/Local
     echo "  Created /Unity/Local sync directory"
-    
+
     # 3. Setup SSH authorized_keys for the user
     mkdir -p /Unity/.ssh
     echo "$SSH_PUBLIC_KEY" > /Unity/.ssh/authorized_keys
@@ -190,13 +190,13 @@ setup_ssh_file_sync() {
     chmod 700 /Unity/.ssh
     chmod 600 /Unity/.ssh/authorized_keys
     echo "  Configured SSH authorized_keys"
-    
+
     # 4. Configure SSHD for file sync on port 2222
     # Check if we already configured port 2222
     if ! grep -q "^Port 2222" /etc/ssh/sshd_config; then
         # Backup original config
         cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
-        
+
         # Add port 2222 and SFTP configuration for file sync user
         # Keep port 22 for normal SSH access, add 2222 for file sync
         cat >> /etc/ssh/sshd_config << SSHEOF
@@ -216,16 +216,16 @@ Match User $SSH_USERNAME
     X11Forwarding no
     PasswordAuthentication no
 SSHEOF
-        
+
         echo "  Added SSHD configuration for port 2222"
     else
         echo "  SSHD port 2222 already configured"
     fi
-    
+
     # 5. Restart SSHD to apply changes
     systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
     echo "  Restarted SSHD"
-    
+
     echo "SSH file sync configured:"
     echo "  User: $SSH_USERNAME"
     echo "  Port: 2222"
@@ -256,20 +256,20 @@ save_pkg_hash() {
 
 check_deps_installed() {
     local dir=$1
-    
+
     # Check if node_modules exists
     if [[ ! -d "$dir/node_modules" ]]; then
         return 1
     fi
-    
+
     # Check if hash matches
     local saved_hash=$(cat "$dir/.pkg-hash" 2>/dev/null || echo "")
     local current_hash=$(get_pkg_hash "$dir")
-    
+
     if [[ "$saved_hash" == "$current_hash" && -n "$saved_hash" ]]; then
         return 0
     fi
-    
+
     return 1
 }
 
@@ -278,22 +278,22 @@ update_repo() {
     local branch=$2
     local repo_url=$3
     local name=$4
-    
+
     if [[ -d "$dir/.git" ]]; then
         echo "Updating $name (git fetch)..."
         cd "$dir"
-        
+
         # Update remote URL if token provided
         if [[ -n "$GITHUB_TOKEN" ]]; then
             git remote set-url origin "$repo_url" 2>/dev/null || true
         fi
-        
+
         git fetch --depth 1 origin "$branch" 2>&1 || true
         git reset --hard "origin/$branch" 2>&1 || true
-        
+
         local commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
         echo "  Updated to commit: $commit"
-        
+
         # Check if dependencies need reinstall
         if ! check_deps_installed "$dir"; then
             echo "  Dependencies changed, reinstalling..."
@@ -373,25 +373,25 @@ fi
 
 if [[ ! -f "/agent-service/package.json" ]]; then
     echo "Installing Agent Service from Unity repo..."
-    
+
     # Sparse checkout agent-service from unity repo
     tmp_dir=$(mktemp -d)
     echo "  Cloning unity repo (sparse)..."
     git clone --depth 1 --branch "$UNITY_BRANCH" --filter=blob:none --sparse "$UNITY_URL" "$tmp_dir" 2>&1
-    
+
     cd "$tmp_dir"
     git sparse-checkout set agent-service 2>&1
-    
+
     # Move to final location
     rm -rf /agent-service
     mv agent-service /agent-service
-    
+
     # Save commit hash for tracking
     commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
     echo "$commit" > /agent-service/.commit-hash
-    
+
     rm -rf "$tmp_dir"
-    
+
     echo "  Installing dependencies..."
     cd /agent-service
     if command -v bun &>/dev/null; then
@@ -399,11 +399,11 @@ if [[ ! -f "/agent-service/package.json" ]]; then
     else
         npm install 2>&1
     fi
-    
+
     # Install Playwright browsers
     echo "  Installing Playwright Chromium..."
     npx playwright@1.52.0 install --with-deps chromium 2>&1 || true
-    
+
     save_pkg_hash /agent-service
     echo "Agent Service installed (commit: $commit)"
 else
@@ -450,9 +450,9 @@ else
     echo "  UNIFY_KEY: (not provided)"
 fi
 
-if [[ -n "$UNIFY_BASE_URL" ]]; then
-    echo "UNIFY_BASE_URL=$UNIFY_BASE_URL" >> /agent-service/.env
-    echo "  UNIFY_BASE_URL: $UNIFY_BASE_URL"
+if [[ -n "$ORCHESTRA_URL" ]]; then
+    echo "ORCHESTRA_URL=$ORCHESTRA_URL" >> /agent-service/.env
+    echo "  ORCHESTRA_URL: $ORCHESTRA_URL"
 fi
 
 echo ".env file configured"
@@ -528,7 +528,7 @@ else
     echo "  noVNC:         http://<ip>:6080"
     echo "  Agent Service: http://<ip>:3000"
     CADDY_ENABLED=false
-    
+
     # Create empty Caddyfile to prevent errors
     echo "# No hostname configured" > /etc/caddy/Caddyfile
 fi
@@ -605,4 +605,3 @@ export VNC_DEPTH=${VNC_DEPTH:-24}
 
 # Start supervisord in foreground (keeps the script running)
 exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/unity-vm.conf
-
