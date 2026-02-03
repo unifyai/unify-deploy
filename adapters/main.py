@@ -184,7 +184,8 @@ async def twilio_call_status_webhook(request: Request):
     print(f"twilio_call_status_webhook function started: {call_status}")
     print(f"User {user_number} called by {assistant_number}")
 
-    if call_status == "in-progress":
+    # Handle call answered (in-progress) or not answered (no-answer, busy, canceled, failed)
+    if call_status in ("in-progress", "no-answer", "busy", "canceled", "failed"):
         # get assistant data
         context = build_webhook_context(
             "phone",
@@ -195,22 +196,30 @@ async def twilio_call_status_webhook(request: Request):
         assistant_id = context["assistant"]["assistant_id"]
         contacts = context["contacts"]
 
+        # Determine thread type based on call status
+        if call_status == "in-progress":
+            thread = "call_answered"
+        else:
+            # no-answer, busy, canceled, failed are all "not answered" scenarios
+            thread = "call_not_answered"
+
         # publish to pubsub
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-        print(f"Publishing call to Pub/Sub at path: {topic_path}")
+        print(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
         try:
             publish_future = pubsub_client.publish(
                 topic_path,
                 json.dumps(
                     {
-                        "thread": "call_answered",
+                        "thread": thread,
                         "event": {
                             "contacts": contacts,
                             "assistant_id": assistant_id,
                             "user_number": user_number,
                             "assistant_number": assistant_number,
+                            "call_status": call_status,
                             "timestamp": int(time.time() * 1000),
                         },
                     },
@@ -219,7 +228,7 @@ async def twilio_call_status_webhook(request: Request):
             if "test" in assistant_id:
                 status_id = publish_future.result(timeout=10)
                 print(f"Message ID: {status_id}")
-            print("Call published to Pub/Sub successfully")
+            print(f"{thread} published to Pub/Sub successfully")
         except Exception as e:
             print(f"Error publishing to Pub/Sub: {str(e)}")
 
