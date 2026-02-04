@@ -875,7 +875,7 @@ def get_vm_status(
         if creation_ts:
             # Parse creation timestamp
             creation_dt = datetime.fromisoformat(creation_ts.replace("Z", "+00:00"))
-            creation_wait_minutes = 2 if vm_type == "ubuntu" else 5
+            creation_wait_minutes = 3 if vm_type == "ubuntu" else 8
             creation_ready = creation_dt + timedelta(minutes=creation_wait_minutes)
 
             # Check if there's a last_start_timestamp
@@ -883,7 +883,8 @@ def get_vm_status(
                 last_start_dt = datetime.fromisoformat(
                     last_start_ts.replace("Z", "+00:00"),
                 )
-                start_ready = last_start_dt + timedelta(seconds=30)
+                start_wait_seconds = 30 if vm_type == "ubuntu" else 50
+                start_ready = last_start_dt + timedelta(seconds=start_wait_seconds)
                 # Take the max (whichever requires longer wait)
                 ready_at_dt = max(creation_ready, start_ready)
             else:
