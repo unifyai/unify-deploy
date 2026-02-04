@@ -494,6 +494,36 @@ function Install-Office-Base {
     Write-Host "Office installed but NOT activated (activation done at instance boot if MAK key provided)" -ForegroundColor Yellow
 }
 
+function Disable-ServerManager-AutoStart {
+    Write-Host ""
+    Write-Host "=== Disabling Server Manager Auto-Start ===" -ForegroundColor Cyan
+    
+    # Disable the Server Manager scheduled task that launches it at logon
+    $task = Get-ScheduledTask -TaskName "ServerManager" -ErrorAction SilentlyContinue
+    if ($task) {
+        Disable-ScheduledTask -TaskName "ServerManager" -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "Disabled ServerManager scheduled task" -ForegroundColor Green
+    } else {
+        Write-Host "ServerManager scheduled task not found (may not be Windows Server)" -ForegroundColor Yellow
+    }
+    
+    # Also set registry key for all users to prevent Server Manager at logon
+    # This applies to any user that logs in
+    $regPath = 'HKLM:\SOFTWARE\Microsoft\ServerManager'
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+    }
+    Set-ItemProperty -Path $regPath -Name 'DoNotOpenServerManagerAtLogon' -Value 1 -Type DWord -Force
+    Write-Host "Set DoNotOpenServerManagerAtLogon registry key (machine-wide)" -ForegroundColor Green
+    
+    # Set for default user profile (applies to newly created users)
+    $defaultUserReg = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    # Note: The per-user setting would be at HKCU, but we can't set that for future users during Packer build
+    # The machine-wide setting above and disabled scheduled task should handle it
+    
+    Write-Host "Server Manager auto-start disabled" -ForegroundColor Green
+}
+
 function Configure-Firewall-Base {
     Write-Host ""
     Write-Host "=== Configuring Firewall (base) ===" -ForegroundColor Cyan
@@ -547,6 +577,7 @@ Install-NoVNC-Base      # noVNC repo + websockify pip (no scheduled task - that'
 Install-Caddy-Base      # Caddy binary only (no Caddyfile - that's created at startup with hostname)
 Install-Office-Base     # Office without activation (activation done at startup with MAK key)
 Configure-Firewall-Base # Unity firewall rules (RDP untouched)
+Disable-ServerManager-AutoStart  # Prevent Server Manager GUI from opening at logon
 
 # Note: Cleanup is done by Packer after this script completes
 # See windows-vm.pkr.hcl for the cleanup provisioner
@@ -568,6 +599,7 @@ Write-Host "  - noVNC + websockify"
 Write-Host "  - Caddy (binary only)"
 Write-Host "  - Microsoft Office LTSC 2024 (Word, Excel, PowerPoint) - NOT activated"
 Write-Host "  - Firewall rules (ports 80, 443, 3000, 6080)"
+Write-Host "  - Server Manager auto-start disabled"
 Write-Host ""
 Write-Host "Preserved from GCP Windows image:" -ForegroundColor Cyan
 Write-Host "  - RDP (port 3389) - always available for remote access"
