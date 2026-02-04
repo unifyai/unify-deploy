@@ -206,6 +206,23 @@ xdg-mime default chromium-browser.desktop x-scheme-handler/https 2>/dev/null || 
 xdg-mime default chromium-browser.desktop text/html 2>/dev/null || true
 
 echo "  Configured MIME type handlers"
+
+# Create XFCE helper definition for Chromium
+# This is required for XFCE's exo-open to recognize Chromium as a browser option
+mkdir -p /usr/share/xfce4/helpers
+cat > /usr/share/xfce4/helpers/chromium-browser.desktop << 'HELPERFILE'
+[Desktop Entry]
+Version=1.0
+Type=X-XFCE-Helper
+Name=Chromium Web Browser
+Icon=web-browser
+X-XFCE-Binaries=chromium-browser;/usr/local/bin/chromium-browser;
+X-XFCE-Category=WebBrowser
+X-XFCE-Commands=%B;
+X-XFCE-CommandsWithParameter=%B %s;
+HELPERFILE
+
+echo "  Created XFCE helper definition"
 echo "Chromium configured as default browser"
 
 # =============================================================================
@@ -283,9 +300,21 @@ mkdir -p /root/.config/xfce4/terminal
 cat > /root/.config/xfce4/terminal/terminalrc << 'EOF'
 [Configuration]
 MiscDefaultWorkingDir=/Unity
+MiscDefaultWorkingDirSpec=TERMINAL_DEFAULT_WORKING_DIR_CUSTOM
 EOF
 
 echo "  Configured terminal default directory: /Unity"
+
+# Create a wrapper script that ensures terminal starts in /Unity
+# This is a robust fallback that works regardless of config file state
+cat > /usr/local/bin/xfce4-terminal-unity << 'TERMWRAPPER'
+#!/bin/bash
+# Wrapper to ensure terminal starts in /Unity
+exec /usr/bin/xfce4-terminal --default-working-directory=/Unity "$@"
+TERMWRAPPER
+chmod +x /usr/local/bin/xfce4-terminal-unity
+
+echo "  Created terminal wrapper script"
 
 # Create custom .desktop launcher for Terminal Emulator that starts in /Unity
 # Files in ~/.local/share/applications/ override system .desktop files
@@ -296,7 +325,7 @@ Version=1.0
 Name=Terminal Emulator
 GenericName=Terminal Emulator
 Comment=Use the command line
-Exec=xfce4-terminal --default-working-directory=/Unity
+Exec=/usr/local/bin/xfce4-terminal-unity
 Icon=org.xfce.terminalemulator
 Terminal=false
 Type=Application
@@ -304,6 +333,9 @@ Categories=System;TerminalEmulator;X-XFCE;
 StartupNotify=true
 Keywords=shell;prompt;command;commandline;cmd;
 EOF
+
+# Also override the system .desktop file to ensure panel launchers use it
+cp /root/.local/share/applications/xfce4-terminal.desktop /usr/share/applications/xfce4-terminal.desktop
 
 echo "  Created custom terminal launcher (starts in /Unity)"
 
