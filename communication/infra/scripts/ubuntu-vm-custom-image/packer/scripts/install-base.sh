@@ -152,6 +152,63 @@ npx playwright@${PLAYWRIGHT_VERSION} install --with-deps chromium
 echo "Playwright + Chromium installed"
 
 # =============================================================================
+# Configure Chromium as Default Browser
+# =============================================================================
+echo ""
+echo "=== Configuring Chromium as default browser ==="
+
+# Create wrapper script that finds and launches Playwright's Chromium
+cat > /usr/local/bin/chromium-browser << 'CHROMEWRAPPER'
+#!/bin/bash
+# Wrapper script for Playwright Chromium
+# Finds the Chromium binary in Playwright's cache and launches it
+CHROME_PATH=$(find /root/.cache/ms-playwright -name "chrome" -type f -executable 2>/dev/null | head -1)
+if [[ -z "$CHROME_PATH" ]]; then
+    echo "Error: Chromium not found in Playwright cache" >&2
+    exit 1
+fi
+exec "$CHROME_PATH" --no-sandbox "$@"
+CHROMEWRAPPER
+chmod +x /usr/local/bin/chromium-browser
+
+echo "  Created /usr/local/bin/chromium-browser wrapper"
+
+# Create .desktop file for Chromium
+cat > /usr/share/applications/chromium-browser.desktop << 'DESKTOPFILE'
+[Desktop Entry]
+Version=1.0
+Name=Chromium Web Browser
+GenericName=Web Browser
+Comment=Access the Internet
+Exec=/usr/local/bin/chromium-browser %U
+Terminal=false
+Type=Application
+Icon=web-browser
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+DESKTOPFILE
+
+echo "  Created chromium-browser.desktop"
+
+# Register as x-www-browser alternative (Debian/Ubuntu standard)
+update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/local/bin/chromium-browser 100
+update-alternatives --set x-www-browser /usr/local/bin/chromium-browser
+
+echo "  Registered as x-www-browser alternative"
+
+# Update desktop database and set XDG defaults
+update-desktop-database /usr/share/applications/ 2>/dev/null || true
+
+# Set XDG MIME type handlers for http/https URLs
+xdg-mime default chromium-browser.desktop x-scheme-handler/http 2>/dev/null || true
+xdg-mime default chromium-browser.desktop x-scheme-handler/https 2>/dev/null || true
+xdg-mime default chromium-browser.desktop text/html 2>/dev/null || true
+
+echo "  Configured MIME type handlers"
+echo "Chromium configured as default browser"
+
+# =============================================================================
 # Create directories
 # =============================================================================
 echo ""
@@ -163,6 +220,7 @@ mkdir -p /var/log/caddy
 mkdir -p /var/log/supervisor
 mkdir -p /magnitude
 mkdir -p /agent-service
+mkdir -p /Unity
 
 # =============================================================================
 # supervisord configuration
@@ -212,6 +270,43 @@ cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml << 'E
 </channel>
 EOF
 
+# Configure XFCE preferred applications (helpers.rc)
+cat > /root/.config/xfce4/helpers.rc << 'EOF'
+WebBrowser=chromium-browser
+TerminalEmulator=xfce4-terminal
+EOF
+
+echo "  Configured XFCE preferred applications"
+
+# Configure xfce4-terminal to start in /Unity by default
+mkdir -p /root/.config/xfce4/terminal
+cat > /root/.config/xfce4/terminal/terminalrc << 'EOF'
+[Configuration]
+MiscDefaultWorkingDir=/Unity
+EOF
+
+echo "  Configured terminal default directory: /Unity"
+
+# Create custom .desktop launcher for Terminal Emulator that starts in /Unity
+# Files in ~/.local/share/applications/ override system .desktop files
+mkdir -p /root/.local/share/applications
+cat > /root/.local/share/applications/xfce4-terminal.desktop << 'EOF'
+[Desktop Entry]
+Version=1.0
+Name=Terminal Emulator
+GenericName=Terminal Emulator
+Comment=Use the command line
+Exec=xfce4-terminal --default-working-directory=/Unity
+Icon=org.xfce.terminalemulator
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;X-XFCE;
+StartupNotify=true
+Keywords=shell;prompt;command;commandline;cmd;
+EOF
+
+echo "  Created custom terminal launcher (starts in /Unity)"
+
 echo "XFCE configured"
 
 # =============================================================================
@@ -250,5 +345,11 @@ echo "  - npm: $(npm --version)"
 echo "  - Bun: $($BUN_INSTALL/bin/bun --version 2>/dev/null || echo 'installed')"
 echo "  - Caddy: $(caddy version)"
 echo "  - Playwright: ${PLAYWRIGHT_VERSION}"
+echo "  - Chromium: (default browser)"
 echo "  - supervisord: $(supervisord --version)"
 echo ""
+echo "Configuration:"
+echo "  - Default browser: Chromium (Playwright)"
+echo "  - Terminal starts in: /Unity"
+echo ""
+
