@@ -509,10 +509,118 @@ class UnifyMessagePayload(BaseModel):
 # Unify Attachment Upload
 # =============================================================================
 
-# Bucket for storing unify message attachments
-UNIFY_ATTACHMENTS_BUCKET = (
-    "interface-file-system-staging" if STAGING else "interface-file-system"
-)
+# Bucket for storing unify message attachments (single bucket for all environments)
+UNIFY_ATTACHMENTS_BUCKET = "unify-message-attachments"
+
+# File type validation - allowed extensions
+ALLOWED_EXTENSIONS = {
+    # Images
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico",
+    # Documents
+    ".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt",
+    # Spreadsheets
+    ".xls", ".xlsx", ".csv", ".ods",
+    # Presentations
+    ".ppt", ".pptx", ".odp",
+    # Archives (for document bundles)
+    ".zip",
+    # Data
+    ".json", ".xml", ".yaml", ".yml",
+}
+
+# Blocked extensions (executables, scripts)
+BLOCKED_EXTENSIONS = {
+    ".exe", ".bat", ".cmd", ".sh", ".ps1", ".dll", ".so", ".dylib",
+    ".app", ".msi", ".com", ".scr", ".vbs", ".js", ".jse", ".wsf",
+    ".wsh", ".psc1", ".reg", ".inf", ".lnk", ".pif",
+}
+
+# Allowed MIME types
+ALLOWED_MIME_TYPES = {
+    # Images
+    "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml",
+    "image/bmp", "image/x-icon",
+    # Documents
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+    "application/rtf",
+    "application/vnd.oasis.opendocument.text",
+    # Spreadsheets
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    # Presentations
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.presentation",
+    # Archives
+    "application/zip",
+    # Data
+    "application/json",
+    "application/xml",
+    "text/xml",
+    "application/x-yaml",
+    "text/yaml",
+    # Generic (for unknown but allowed extensions)
+    "application/octet-stream",
+}
+
+# Maximum attachments per message
+MAX_ATTACHMENTS_PER_MESSAGE = 10
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize filename to prevent path traversal attacks.
+    Handles both Unix (/) and Windows (\\) path separators.
+    """
+    # Replace backslashes with forward slashes for consistent handling
+    normalized = filename.replace("\\", "/")
+    # Extract just the filename (basename)
+    basename = os.path.basename(normalized)
+    # Remove any remaining path traversal attempts
+    basename = basename.replace("..", "")
+    # If empty after sanitization, use default
+    return basename if basename else "attachment"
+
+
+def get_file_extension(filename: str) -> str:
+    """Get lowercase file extension including the dot."""
+    _, ext = os.path.splitext(filename)
+    return ext.lower()
+
+
+def validate_file_type(filename: str, content_type: str) -> tuple[bool, str]:
+    """
+    Validate file type against blocklist and allowlist.
+    
+    Returns (is_valid, error_message).
+    """
+    ext = get_file_extension(filename)
+    
+    # Check blocklist first (security)
+    if ext in BLOCKED_EXTENSIONS:
+        return False, f"File type '{ext}' is blocked for security reasons"
+    
+    # Check extension allowlist
+    if ext and ext not in ALLOWED_EXTENSIONS:
+        return False, f"File type '{ext}' is not allowed. Allowed types: images, documents, spreadsheets, presentations, zip, json, xml, yaml"
+    
+    # Check MIME type (but be lenient - some clients send wrong MIME types)
+    # Only block if MIME type is clearly executable
+    blocked_mimes = {
+        "application/x-msdownload",
+        "application/x-msdos-program",
+        "application/x-sh",
+        "application/x-shellscript",
+    }
+    if content_type in blocked_mimes:
+        return False, f"MIME type '{content_type}' is blocked for security reasons"
+    
+    return True, ""
 
 
 @app.post("/unify/attachment")
@@ -524,7 +632,7 @@ async def unify_attachment_upload(
     """
     Upload a file attachment for use in Unify messages.
 
-    The file is stored in GCS and a signed download URL is returned.
+    The file is stored in GCS and both permanent (gs://) and signed URLs are returned.
     The returned attachment object can be included in /unify/message requests.
 
     Args:
@@ -532,7 +640,13 @@ async def unify_attachment_upload(
         assistant_id: Optional assistant ID for organizing storage
 
     Returns:
-        JSON with attachment details: {"id": str, "filename": str, "url": str}
+        JSON with attachment details including:
+        - id: Unique attachment ID
+        - filename: Sanitized filename
+        - gs_url: Permanent GCS URL (gs://bucket/path)
+        - url: Signed download URL (temporary, for backwards compatibility)
+        - content_type: MIME type
+        - size_bytes: File size in bytes
     """
     print("unify_attachment_upload function started")
 
@@ -552,15 +666,30 @@ async def unify_attachment_upload(
         # Read file content
         file_content = await file.read()
         filename = file.filename or "attachment"
+        content_type = file.content_type or "application/octet-stream"
+        file_size = len(file_content)
+
+        # Sanitize filename (handles both Unix and Windows path separators)
+        safe_filename = sanitize_filename(filename)
+
+        # Validate file type
+        is_valid, error_msg = validate_file_type(safe_filename, content_type)
+        if not is_valid:
+            print(f"File type validation failed: {error_msg}")
+            return Response(
+                content=json.dumps({"error": error_msg}),
+                status_code=400,
+                media_type="application/json",
+            )
 
         # Validate file size (max 25MB to match Gmail limit)
-        max_size_mb = 25
-        file_size_mb = len(file_content) / (1024 * 1024)
-        if file_size_mb > max_size_mb:
+        max_size_bytes = 25 * 1024 * 1024
+        if file_size > max_size_bytes:
+            file_size_mb = file_size / (1024 * 1024)
             return Response(
                 content=json.dumps(
                     {
-                        "error": f"File too large: {file_size_mb:.1f}MB exceeds {max_size_mb}MB limit",
+                        "error": f"File too large: {file_size_mb:.1f}MB exceeds 25MB limit",
                     },
                 ),
                 status_code=400,
@@ -570,11 +699,23 @@ async def unify_attachment_upload(
         # Generate unique ID for the attachment
         attachment_id = str(uuid.uuid4())
 
-        # Sanitize filename
-        safe_filename = os.path.basename(filename)
+        # Look up user_id from assistant_id via Orchestra API
+        # This ensures attachments are stored under the user's path for cleanup
+        try:
+            assistant_data = get_assistant(assistant_id=assistant_id)
+            user_id = assistant_data.get("user_id")
+            if user_id and user_id != "default-user":
+                path_prefix = str(user_id)
+            else:
+                # Fallback to assistant_id if user lookup fails
+                print(f"Could not get user_id for assistant {assistant_id}, using assistant_id")
+                path_prefix = assistant_id
+        except Exception as e:
+            print(f"Error looking up user for assistant {assistant_id}: {e}")
+            path_prefix = assistant_id
 
-        # Build GCS path: unify_attachments/{assistant_id}/{uuid}_{filename}
-        blob_path = f"unify_attachments/{assistant_id}/{attachment_id}_{safe_filename}"
+        # Build GCS path: {user_id}/{uuid}_{filename}
+        blob_path = f"{path_prefix}/{attachment_id}_{safe_filename}"
 
         # Get GCP credentials and upload
         creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
@@ -592,15 +733,16 @@ async def unify_attachment_upload(
         blob = bucket.blob(blob_path)
 
         # Upload the file
-        content_type = file.content_type or "application/octet-stream"
         blob.upload_from_string(file_content, content_type=content_type)
 
-        print(f"Uploaded attachment to gs://{UNIFY_ATTACHMENTS_BUCKET}/{blob_path}")
+        # Build permanent gs:// URL
+        gs_url = f"gs://{UNIFY_ATTACHMENTS_BUCKET}/{blob_path}"
+        print(f"Uploaded attachment to {gs_url}")
 
-        # Generate signed download URL (24 hours expiry)
+        # Generate signed download URL (1 hour expiry for immediate use)
         signed_url = blob.generate_signed_url(
             version="v4",
-            expiration=timedelta(hours=24),
+            expiration=timedelta(hours=1),
             method="GET",
         )
 
@@ -611,7 +753,10 @@ async def unify_attachment_upload(
                 {
                     "id": attachment_id,
                     "filename": safe_filename,
-                    "url": signed_url,
+                    "gs_url": gs_url,
+                    "url": signed_url,  # Backwards compatibility
+                    "content_type": content_type,
+                    "size_bytes": file_size,
                 },
             ),
             status_code=200,
@@ -675,22 +820,38 @@ async def unify_message_webhook(request: Request):
         print("contact_id is required for unify_message")
         return Response(status_code=400, content="contact_id is required")
 
-    # Validate attachments format
+    # Validate attachment count limit
+    if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+        print(f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}")
+        return Response(
+            status_code=400,
+            content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
+        )
+
+    # Validate attachments format and preserve full metadata
     validated_attachments = []
     for att in attachments:
         if (
             isinstance(att, dict)
             and att.get("id")
             and att.get("filename")
-            and att.get("url")
+            and (att.get("url") or att.get("gs_url"))  # Accept either URL type
         ):
-            validated_attachments.append(
-                {
-                    "id": str(att["id"]),
-                    "filename": str(att["filename"]),
-                    "url": str(att["url"]),
-                },
-            )
+            # Build validated attachment with all available metadata
+            validated_att = {
+                "id": str(att["id"]),
+                "filename": str(att["filename"]),
+                "url": str(att.get("url", "")),
+            }
+            # Include additional metadata if provided
+            if att.get("gs_url"):
+                validated_att["gs_url"] = str(att["gs_url"])
+            if att.get("content_type"):
+                validated_att["content_type"] = str(att["content_type"])
+            if att.get("size_bytes") is not None:
+                validated_att["size_bytes"] = int(att["size_bytes"])
+            
+            validated_attachments.append(validated_att)
         else:
             print(f"Skipping invalid attachment: {att}")
 
