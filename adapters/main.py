@@ -1048,7 +1048,7 @@ async def assistant_wakeup_webhook(request: Request):
 async def assistant_update_webhook(request: Request):
     """
     Webhook that receives an assistant id and publishes assistant details
-    to the assistant_update topic if there is a job running.
+    to the assistant_update topic. If no job is running, starts one first.
     """
     print("assistant_update_webhook function started")
 
@@ -1057,39 +1057,25 @@ async def assistant_update_webhook(request: Request):
         assistant_id = form_data.get("assistant_id")
         print(f"Received assistant_id: {assistant_id}")
 
-        assistant_data = get_assistant(assistant_id=assistant_id)
-        user_id = assistant_data["user_id"]
+        # Use build_webhook_context to handle job startup if needed
+        context = build_webhook_context(
+            channel="assistant_update",
+            destination="",
+            sender="",
+            assistant_id=assistant_id,
+            validate_contact=False,
+            ensure_job=True,
+        )
+        assistant_data = context["assistant"]
+        print(f"Job running: {context['is_job_running']}, job started: {context['job_started']}")
+
+        # Prepare assistant_data for the PubSub message
         assistant_first_name = assistant_data["assistant_first_name"]
         assistant_surname = assistant_data["assistant_surname"]
         assistant_data["assistant_name"] = f"{assistant_first_name} {assistant_surname}"
         assistant_data.pop("assistant_first_name")
         assistant_data.pop("assistant_surname")
         assistant_data.pop("assistant_whatsapp_number")
-
-        # check if job is running
-        is_default_assistant = (
-            "default" in assistant_id
-            or "Default Assistant" in assistant_data["assistant_about"]
-        )
-        running = is_job_running(user_id, assistant_id)
-        print(f"Job running: {running}")
-
-        if not is_default_assistant and not running:
-            return Response(
-                content=json.dumps(
-                    {
-                        "success": False,
-                        "message": "No job currently running for this assistant",
-                        "assistant_id": assistant_id,
-                    },
-                ),
-                status_code=200,
-                media_type="application/json",
-            )
-        elif running:
-            print(f"Job running for assistant {assistant_id}: {running}")
-        else:
-            print(f"Default assistant {assistant_id} - skipping job running check")
 
         # Job is running, publish to assistant topic
         pubsub_client = pubsub_v1.PublisherClient()
