@@ -15,6 +15,7 @@
 #   github-token      - GitHub PAT for cloning private repos
 #   unify-key         - Unify API key for agent service
 #   orchestra-url     - Orchestra API base URL for agent service
+#   comms-url         - Communication service base URL for agent service
 #   staging           - Use staging branch (any value = true)
 #   ssh-public-key    - SSH public key for file sync (Ed25519)
 #                       Note: SSH uses windows-username for authentication
@@ -834,7 +835,8 @@ function Install-AgentService {
 function Setup-AgentServiceEnv {
     param(
         [string]$UnifyKey,
-        [string]$UnifyBaseUrl
+        [string]$UnifyBaseUrl,
+        [string]$CommsUrl
     )
 
     Write-Host ""
@@ -867,6 +869,11 @@ NODE_ENV=production
     if ($UnifyBaseUrl) {
         $envContent += "`nORCHESTRA_URL=$UnifyBaseUrl"
         Write-Host "  ORCHESTRA_URL: $UnifyBaseUrl" -ForegroundColor Green
+    }
+
+    if ($CommsUrl) {
+        $envContent += "`nUNITY_COMMS_URL=$CommsUrl"
+        Write-Host "  UNITY_COMMS_URL: $CommsUrl" -ForegroundColor Green
     }
 
     $envContent | Out-File -FilePath $envFile -Encoding UTF8
@@ -1988,6 +1995,7 @@ $gcpWindowsPassword = Get-GCPMetadata -Key "windows-password"
 $gcpGithubToken = Get-GCPMetadata -Key "github-token"
 $gcpUnifyKey = Get-GCPMetadata -Key "unify-key"
 $gcpUnifyBaseUrl = Get-GCPMetadata -Key "orchestra-url"
+$gcpCommsUrl = Get-GCPMetadata -Key "comms-url"
 $gcpStaging = Get-GCPMetadata -Key "staging"
 $gcpSshPublicKey = Get-GCPMetadata -Key "ssh-public-key"
 $gcpMakKey = Get-GCPMetadata -Key "office-mak-key"
@@ -2001,6 +2009,9 @@ if ($gcpWindowsUser) {
 }
 if ($gcpGithubToken) {
     Write-Host "Found github-token metadata: (set)" -ForegroundColor Cyan
+}
+if ($gcpCommsUrl) {
+    Write-Host "Found comms-url metadata: $gcpCommsUrl" -ForegroundColor Cyan
 }
 if ($gcpStaging) {
     Write-Host "Found staging metadata: enabled" -ForegroundColor Cyan
@@ -2488,7 +2499,7 @@ if (Test-Path "$novncDir\vnc.html") {
 }
 
 # Run config functions (they now skip if already configured)
-Setup-AgentServiceEnv -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl
+Setup-AgentServiceEnv -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl -CommsUrl $gcpCommsUrl
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
 Setup-Websockify
 

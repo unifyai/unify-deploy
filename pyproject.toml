@@ -43,6 +43,9 @@ dependencies = [
 
     # SSH key generation for VM file sync
     "cryptography>=42.0.0",
+
+    # UniLLM (OpenAI-compatible proxy)
+    "unillm",
 ]
 
 [project.optional-dependencies]
@@ -77,3 +80,6 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["communication", "communication.*", "adapters", "adapters.*", "common", "common.*"]
+
+[tool.uv.sources]
+unillm = { path = "../unillm", editable = true }

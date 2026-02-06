@@ -16,6 +16,7 @@
 #   github-token      - GitHub PAT for cloning private repos
 #   unify-key         - Unify API key for agent service
 #   orchestra-url     - Orchestra API base URL for agent service
+#   comms-url         - Communication service base URL for agent service
 #   staging           - Use staging branch (any value = true)
 #   ssh-username      - SSH username for file sync (e.g., JohnDoe)
 #   ssh-public-key    - SSH public key for file sync (Ed25519)
@@ -70,6 +71,7 @@ CONFIG_HOSTNAME=$(get_metadata "hostname")
 GITHUB_TOKEN=$(get_metadata "github-token")
 UNIFY_KEY=$(get_metadata "unify-key")
 ORCHESTRA_URL=$(get_metadata "orchestra-url")
+COMMS_URL=$(get_metadata "comms-url")
 STAGING=$(get_metadata "staging")
 SSH_USERNAME=$(get_metadata "ssh-username")
 SSH_PUBLIC_KEY=$(get_metadata "ssh-public-key")
@@ -84,6 +86,7 @@ echo "  Hostname:       ${CONFIG_HOSTNAME:-'(not configured - no HTTPS)'}"
 echo "  GitHub Token:   ${GITHUB_TOKEN:+(set)}"
 echo "  Unify Key:      ${UNIFY_KEY:+(set)}"
 echo "  Orchestra URL:  ${ORCHESTRA_URL:-(not configured)}"
+echo "  Comms URL:      ${COMMS_URL:-(not configured)}"
 echo "  Staging Branch: ${STAGING:-no}"
 echo "  SSH Username:   ${SSH_USERNAME:-(not configured)}"
 echo "  SSH Public Key: ${SSH_PUBLIC_KEY:+(set)}"
@@ -509,6 +512,11 @@ fi
 if [[ -n "$ORCHESTRA_URL" ]]; then
     echo "ORCHESTRA_URL=$ORCHESTRA_URL" >> /agent-service/.env
     echo "  ORCHESTRA_URL: $ORCHESTRA_URL"
+fi
+
+if [[ -n "$COMMS_URL" ]]; then
+    echo "UNITY_COMMS_URL=$COMMS_URL" >> /agent-service/.env
+    echo "  UNITY_COMMS_URL: $COMMS_URL"
 fi
 
 echo ".env file configured"

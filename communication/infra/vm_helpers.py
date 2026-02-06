@@ -32,6 +32,13 @@ _default_orchestra_url = (
 )
 ORCHESTRA_URL = os.environ.get("ORCHESTRA_URL", _default_orchestra_url)
 
+_default_comms_url = (
+    "https://unity-comms-app-000000000000.us-central1.run.app"
+    if not STAGING
+    else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+)
+COMMS_URL = os.environ.get("UNITY_COMMS_URL", _default_comms_url)
+
 from .vm_config import (
     VM_PROJECT_ID,
     DNS_PROJECT_ID,
@@ -425,6 +432,7 @@ def create_windows_vm(
     - github-token: GitHub PAT for cloning private repos
     - unify-key: Unify API key for agent service
     - orchestra-url: Orchestra API base URL
+    - comms-url: Communication service base URL
     - ssh-public-key: SSH public key for file sync (optional)
     Note: SSH uses windows-username for authentication (no separate ssh-username).
 
@@ -468,6 +476,8 @@ def create_windows_vm(
         compute_v1.Items(key="hostname", value=hostname),
         # Orchestra URL (derived from STAGING flag)
         compute_v1.Items(key="orchestra-url", value=ORCHESTRA_URL),
+        # Communication service URL (derived from STAGING flag)
+        compute_v1.Items(key="comms-url", value=COMMS_URL),
     ]
 
     # Add SSH file sync metadata if provided
@@ -587,6 +597,7 @@ def create_ubuntu_vm(
     - github-token: GitHub PAT for cloning repos
     - unify-key: Unify API key for agent service
     - orchestra-url: Orchestra API base URL
+    - comms-url: Communication service base URL
     - staging: Use staging branch
     - ssh-public-key: SSH public key for file sync (optional)
     - ssh-username: SSH username for file sync (optional)
@@ -624,6 +635,8 @@ def create_ubuntu_vm(
         compute_v1.Items(key="hostname", value=hostname),
         # Orchestra URL (derived from STAGING flag)
         compute_v1.Items(key="orchestra-url", value=ORCHESTRA_URL),
+        # Communication service URL (derived from STAGING flag)
+        compute_v1.Items(key="comms-url", value=COMMS_URL),
     ]
 
     # Add SSH file sync metadata if provided
