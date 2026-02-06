@@ -43,12 +43,13 @@ dependencies = [
 
     # SSH key generation for VM file sync
     "cryptography>=42.0.0",
-
-    # UniLLM (OpenAI-compatible proxy)
-    "unillm",
 ]
 
 [project.optional-dependencies]
+comms = [
+    # UniLLM (OpenAI-compatible proxy)
+    "unillm",
+]
 adapters = [
     # Subset for adapters service (lighter weight)
     "fastapi>=0.104.0",

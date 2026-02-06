@@ -50,8 +50,8 @@ RUN git clone -b ${BRANCH_NAME} https://github.com/unifyai/unillm.git /tmp/unill
 # Copy pyproject.toml first for better caching
 COPY pyproject.toml ./
 
-# Install dependencies
-RUN pip install --no-cache-dir .
+# Install dependencies (comms extra includes unillm)
+RUN pip install --no-cache-dir ".[comms]"
 
 # Copy application code
 COPY communication/ communication/
