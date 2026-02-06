@@ -1,4 +1,5 @@
 """UniLLM OpenAI-compatible chat completions endpoint."""
+
 import json
 import logging
 from typing import AsyncGenerator
@@ -55,7 +56,9 @@ async def chat_completions(
     """
     # Extract API key from the Authorization Bearer header
     auth_header = request.headers.get("authorization", "")
-    api_key = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else ""
+    api_key = (
+        auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else ""
+    )
 
     if not api_key:
         raise HTTPException(status_code=401, detail="Missing API key.")
