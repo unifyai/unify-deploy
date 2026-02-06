@@ -13,9 +13,8 @@
 #   windows-password  - Password for Windows user
 #   office-mak-key    - Office MAK activation key
 #   github-token      - GitHub PAT for cloning private repos
-#   anthropic-api-key - Anthropic API key for agent service
 #   unify-key         - Unify API key for agent service
-#   orchestra-url    - Unify API base URL for agent service
+#   orchestra-url     - Orchestra API base URL for agent service
 #   staging           - Use staging branch (any value = true)
 #   ssh-public-key    - SSH public key for file sync (Ed25519)
 #                       Note: SSH uses windows-username for authentication
@@ -834,7 +833,6 @@ function Install-AgentService {
 
 function Setup-AgentServiceEnv {
     param(
-        [string]$AnthropicApiKey,
         [string]$UnifyKey,
         [string]$UnifyBaseUrl
     )
@@ -858,13 +856,6 @@ function Setup-AgentServiceEnv {
 PORT=3000
 NODE_ENV=production
 "@
-
-    if ($AnthropicApiKey) {
-        $envContent += "`nANTHROPIC_API_KEY=$AnthropicApiKey"
-        Write-Host "  ANTHROPIC_API_KEY: (set)" -ForegroundColor Green
-    } else {
-        Write-Host "  ANTHROPIC_API_KEY: (not provided)" -ForegroundColor Yellow
-    }
 
     if ($UnifyKey) {
         $envContent += "`nUNIFY_KEY=$UnifyKey"
@@ -1995,7 +1986,6 @@ $gcpHostname = Get-GCPMetadata -Key "hostname"
 $gcpWindowsUser = Get-GCPMetadata -Key "windows-username"
 $gcpWindowsPassword = Get-GCPMetadata -Key "windows-password"
 $gcpGithubToken = Get-GCPMetadata -Key "github-token"
-$gcpAnthropicKey = Get-GCPMetadata -Key "anthropic-api-key"
 $gcpUnifyKey = Get-GCPMetadata -Key "unify-key"
 $gcpUnifyBaseUrl = Get-GCPMetadata -Key "orchestra-url"
 $gcpStaging = Get-GCPMetadata -Key "staging"
@@ -2498,7 +2488,7 @@ if (Test-Path "$novncDir\vnc.html") {
 }
 
 # Run config functions (they now skip if already configured)
-Setup-AgentServiceEnv -AnthropicApiKey $gcpAnthropicKey -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl
+Setup-AgentServiceEnv -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
 Setup-Websockify
 

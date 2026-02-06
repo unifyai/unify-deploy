@@ -52,7 +52,7 @@ gcloud compute instances create my-windows-vm \
   --boot-disk-type=pd-ssd \
   --enable-display-device \
   --metadata-from-file=windows-startup-script-ps1=../communication/infra/scripts/windows-vm-startup.ps1 \
-  --metadata=vnc-password=mypassword,hostname=vm.example.com,windows-username=unify,windows-password=SecurePass123,github-token=ghp_xxx,anthropic-api-key=sk-xxx,unify-key=xxx
+  --metadata=vnc-password=mypassword,hostname=vm.example.com,windows-username=unify,windows-password=SecurePass123,github-token=ghp_xxx,unify-key=xxx,orchestra-url=https://api.unify.ai
 ```
 
 ## Time Comparison

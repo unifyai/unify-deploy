@@ -21,7 +21,7 @@ This is equivalent to the Windows VM approach using `windows-vm-custom-image/`.
 - VNC password
 - Magnitude repository
 - Agent Service repository
-- API keys (Anthropic, Unify)
+- API keys (Unify)
 - Caddy hostname/HTTPS
 
 ## Building the Image
@@ -84,7 +84,7 @@ gcloud compute instances create ubuntu-vm-test \
   --address=ubuntu-vm-ip \
   --tags=http-server,https-server \
   --metadata-from-file=startup-script=../ubuntu-vm-startup.sh \
-  --metadata=^::^vnc-password=YOUR_VNC_PASSWORD::hostname=vm.example.com::github-token=ghp_xxx::anthropic-api-key=sk-ant-xxx::unify-key=xxx
+  --metadata=^::^vnc-password=YOUR_VNC_PASSWORD::hostname=vm.example.com::github-token=ghp_xxx::unify-key=xxx
 ```
 
 ### Using Python API
@@ -108,8 +108,8 @@ metadata.items = [
     {"key": "vnc-password", "value": "xxx"},
     {"key": "hostname", "value": "vm.example.com"},
     {"key": "github-token", "value": "ghp_xxx"},
-    {"key": "anthropic-api-key", "value": "sk-ant-xxx"},
     {"key": "unify-key", "value": "xxx"},
+    {"key": "orchestra-url", "value": "https://api.unify.ai"},
 ]
 ```
 
@@ -120,9 +120,8 @@ metadata.items = [
 | `vnc-password` | VNC access password | `unify123` |
 | `hostname` | DNS hostname for Caddy HTTPS | (none - no HTTPS) |
 | `github-token` | GitHub PAT for private repos | (none) |
-| `anthropic-api-key` | Anthropic API key | (none) |
 | `unify-key` | Unify API key | (none) |
-| `unify-base-url` | Unify API base URL | (none) |
+| `orchestra-url` | Orchestra API base URL | (none) |
 | `staging` | Use staging branch | (none = main) |
 
 ## Ports

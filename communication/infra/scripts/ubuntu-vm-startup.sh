@@ -14,9 +14,8 @@
 #   vnc-password      - VNC password (default: unify123)
 #   hostname          - DNS hostname for Caddy HTTPS (e.g., vm.example.com)
 #   github-token      - GitHub PAT for cloning private repos
-#   anthropic-api-key - Anthropic API key for agent service
 #   unify-key         - Unify API key for agent service
-#   orchestra-url    - Unify API base URL for agent service
+#   orchestra-url     - Orchestra API base URL for agent service
 #   staging           - Use staging branch (any value = true)
 #   ssh-username      - SSH username for file sync (e.g., JohnDoe)
 #   ssh-public-key    - SSH public key for file sync (Ed25519)
@@ -69,7 +68,6 @@ echo "Reading GCP metadata..."
 VNC_PASSWORD=$(get_metadata "vnc-password")
 CONFIG_HOSTNAME=$(get_metadata "hostname")
 GITHUB_TOKEN=$(get_metadata "github-token")
-ANTHROPIC_API_KEY=$(get_metadata "anthropic-api-key")
 UNIFY_KEY=$(get_metadata "unify-key")
 ORCHESTRA_URL=$(get_metadata "orchestra-url")
 STAGING=$(get_metadata "staging")
@@ -84,8 +82,8 @@ echo "Configuration:"
 echo "  VNC Password:   ******"
 echo "  Hostname:       ${CONFIG_HOSTNAME:-'(not configured - no HTTPS)'}"
 echo "  GitHub Token:   ${GITHUB_TOKEN:+(set)}"
-echo "  Anthropic Key:  ${ANTHROPIC_API_KEY:+(set)}"
 echo "  Unify Key:      ${UNIFY_KEY:+(set)}"
+echo "  Orchestra URL:  ${ORCHESTRA_URL:-(not configured)}"
 echo "  Staging Branch: ${STAGING:-no}"
 echo "  SSH Username:   ${SSH_USERNAME:-(not configured)}"
 echo "  SSH Public Key: ${SSH_PUBLIC_KEY:+(set)}"
@@ -435,13 +433,6 @@ cat > /agent-service/.env << EOF
 PORT=3000
 NODE_ENV=production
 EOF
-
-if [[ -n "$ANTHROPIC_API_KEY" ]]; then
-    echo "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" >> /agent-service/.env
-    echo "  ANTHROPIC_API_KEY: (set)"
-else
-    echo "  ANTHROPIC_API_KEY: (not provided)"
-fi
 
 if [[ -n "$UNIFY_KEY" ]]; then
     echo "UNIFY_KEY=$UNIFY_KEY" >> /agent-service/.env

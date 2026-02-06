@@ -423,9 +423,8 @@ def create_windows_vm(
     - hostname: DNS hostname for Caddy HTTPS
     - office-mak-key: Office MAK activation key
     - github-token: GitHub PAT for cloning private repos
-    - anthropic-api-key: Anthropic API key for agent service
     - unify-key: Unify API key for agent service
-    - unify-base-url: Unify API base URL
+    - orchestra-url: Orchestra API base URL
     - ssh-public-key: SSH public key for file sync (optional)
     Note: SSH uses windows-username for authentication (no separate ssh-username).
 
@@ -451,7 +450,6 @@ def create_windows_vm(
 
     # Fetch secrets from Secret Manager
     github_token = get_secret("DEVBOT_GITHUB_TOKEN")
-    anthropic_api_key = get_secret("ANTHROPIC_API_KEY")
 
     # Load the startup script from file (reads config from metadata)
     startup_script = load_windows_startup_script()
@@ -495,12 +493,6 @@ def create_windows_vm(
     if github_token:
         metadata_items.append(compute_v1.Items(key="github-token", value=github_token))
         logger.info("Added GitHub token to VM metadata")
-
-    if anthropic_api_key:
-        metadata_items.append(
-            compute_v1.Items(key="anthropic-api-key", value=anthropic_api_key),
-        )
-        logger.info("Added Anthropic API key to VM metadata")
 
     # Use the passed unify_apikey directly (same key used for VNC/Windows auth)
     metadata_items.append(compute_v1.Items(key="unify-key", value=unify_apikey))
@@ -593,9 +585,8 @@ def create_ubuntu_vm(
     - vnc-password: VNC password
     - hostname: DNS hostname for Caddy HTTPS
     - github-token: GitHub PAT for cloning repos
-    - anthropic-api-key: Anthropic API key for agent service
     - unify-key: Unify API key for agent service
-    - unify-base-url: Unify API base URL
+    - orchestra-url: Orchestra API base URL
     - staging: Use staging branch
     - ssh-public-key: SSH public key for file sync (optional)
     - ssh-username: SSH username for file sync (optional)
@@ -620,7 +611,6 @@ def create_ubuntu_vm(
 
     # Fetch secrets from Secret Manager
     github_token = get_secret("DEVBOT_GITHUB_TOKEN")
-    anthropic_api_key = get_secret("ANTHROPIC_API_KEY")
 
     # Load the startup script from file
     startup_script = load_ubuntu_startup_script()
@@ -653,12 +643,6 @@ def create_ubuntu_vm(
     if github_token:
         metadata_items.append(compute_v1.Items(key="github-token", value=github_token))
         logger.info("Added GitHub token to VM metadata")
-
-    if anthropic_api_key:
-        metadata_items.append(
-            compute_v1.Items(key="anthropic-api-key", value=anthropic_api_key),
-        )
-        logger.info("Added Anthropic API key to VM metadata")
 
     # Use the passed unify_apikey directly
     metadata_items.append(compute_v1.Items(key="unify-key", value=unify_apikey))
