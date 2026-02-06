@@ -515,31 +515,75 @@ UNIFY_ATTACHMENTS_BUCKET = "unify-message-attachments"
 # File type validation - allowed extensions
 ALLOWED_EXTENSIONS = {
     # Images
-    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".bmp",
+    ".ico",
     # Documents
-    ".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".txt",
+    ".rtf",
+    ".odt",
     # Spreadsheets
-    ".xls", ".xlsx", ".csv", ".ods",
+    ".xls",
+    ".xlsx",
+    ".csv",
+    ".ods",
     # Presentations
-    ".ppt", ".pptx", ".odp",
+    ".ppt",
+    ".pptx",
+    ".odp",
     # Archives (for document bundles)
     ".zip",
     # Data
-    ".json", ".xml", ".yaml", ".yml",
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
 }
 
 # Blocked extensions (executables, scripts)
 BLOCKED_EXTENSIONS = {
-    ".exe", ".bat", ".cmd", ".sh", ".ps1", ".dll", ".so", ".dylib",
-    ".app", ".msi", ".com", ".scr", ".vbs", ".js", ".jse", ".wsf",
-    ".wsh", ".psc1", ".reg", ".inf", ".lnk", ".pif",
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".sh",
+    ".ps1",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".app",
+    ".msi",
+    ".com",
+    ".scr",
+    ".vbs",
+    ".js",
+    ".jse",
+    ".wsf",
+    ".wsh",
+    ".psc1",
+    ".reg",
+    ".inf",
+    ".lnk",
+    ".pif",
 }
 
 # Allowed MIME types
 ALLOWED_MIME_TYPES = {
     # Images
-    "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml",
-    "image/bmp", "image/x-icon",
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "image/bmp",
+    "image/x-icon",
     # Documents
     "application/pdf",
     "application/msword",
@@ -596,19 +640,22 @@ def get_file_extension(filename: str) -> str:
 def validate_file_type(filename: str, content_type: str) -> tuple[bool, str]:
     """
     Validate file type against blocklist and allowlist.
-    
+
     Returns (is_valid, error_message).
     """
     ext = get_file_extension(filename)
-    
+
     # Check blocklist first (security)
     if ext in BLOCKED_EXTENSIONS:
         return False, f"File type '{ext}' is blocked for security reasons"
-    
+
     # Check extension allowlist
     if ext and ext not in ALLOWED_EXTENSIONS:
-        return False, f"File type '{ext}' is not allowed. Allowed types: images, documents, spreadsheets, presentations, zip, json, xml, yaml"
-    
+        return (
+            False,
+            f"File type '{ext}' is not allowed. Allowed types: images, documents, spreadsheets, presentations, zip, json, xml, yaml",
+        )
+
     # Check MIME type (but be lenient - some clients send wrong MIME types)
     # Only block if MIME type is clearly executable
     blocked_mimes = {
@@ -619,7 +666,7 @@ def validate_file_type(filename: str, content_type: str) -> tuple[bool, str]:
     }
     if content_type in blocked_mimes:
         return False, f"MIME type '{content_type}' is blocked for security reasons"
-    
+
     return True, ""
 
 
@@ -708,7 +755,9 @@ async def unify_attachment_upload(
                 path_prefix = str(user_id)
             else:
                 # Fallback to assistant_id if user lookup fails
-                print(f"Could not get user_id for assistant {assistant_id}, using assistant_id")
+                print(
+                    f"Could not get user_id for assistant {assistant_id}, using assistant_id"
+                )
                 path_prefix = assistant_id
         except Exception as e:
             print(f"Error looking up user for assistant {assistant_id}: {e}")
@@ -822,7 +871,9 @@ async def unify_message_webhook(request: Request):
 
     # Validate attachment count limit
     if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
-        print(f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}")
+        print(
+            f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}"
+        )
         return Response(
             status_code=400,
             content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
@@ -850,7 +901,7 @@ async def unify_message_webhook(request: Request):
                 validated_att["content_type"] = str(att["content_type"])
             if att.get("size_bytes") is not None:
                 validated_att["size_bytes"] = int(att["size_bytes"])
-            
+
             validated_attachments.append(validated_att)
         else:
             print(f"Skipping invalid attachment: {att}")
@@ -1228,7 +1279,9 @@ async def assistant_update_webhook(request: Request):
             ensure_job=True,
         )
         assistant_data = context["assistant"]
-        print(f"Job running: {context['is_job_running']}, job started: {context['job_started']}")
+        print(
+            f"Job running: {context['is_job_running']}, job started: {context['job_started']}"
+        )
 
         # Prepare assistant_data for the PubSub message
         assistant_first_name = assistant_data["assistant_first_name"]

@@ -55,7 +55,9 @@ def app_module():
 def mock_gcs():
     """Mock GCS storage client and blob operations."""
     mock_blob = MagicMock()
-    mock_blob.generate_signed_url.return_value = "https://storage.googleapis.com/test-bucket/signed-url?token=abc"
+    mock_blob.generate_signed_url.return_value = (
+        "https://storage.googleapis.com/test-bucket/signed-url?token=abc"
+    )
     mock_blob.upload_from_string = MagicMock()
     mock_blob.name = "test-path/file.txt"
 
@@ -405,7 +407,7 @@ class TestEndToEndFlow:
 
 class TestAttachmentUploadNewBehavior:
     """Tests for /unify/attachment new features.
-    
+
     These features are now implemented:
     - gs_url in response (permanent URL)
     - content_type in response
@@ -426,10 +428,12 @@ class TestAttachmentUploadNewBehavior:
 
         assert response.status_code == 200
         data = response.json()
-        
+
         # gs_url should contain user_id (12345 from mock) not assistant_id
         assert "gs_url" in data
-        assert "/12345/" in data["gs_url"], f"Expected user_id in path, got: {data['gs_url']}"
+        assert (
+            "/12345/" in data["gs_url"]
+        ), f"Expected user_id in path, got: {data['gs_url']}"
 
     def test_upload_returns_gs_url(self, client):
         """Upload response includes permanent gs:// URL."""
@@ -494,7 +498,10 @@ class TestAttachmentUploadNewBehavior:
                 data={"assistant_id": "test-assistant"},
             )
             assert response.status_code == 400, f"{filename} should be blocked"
-            assert "blocked" in response.json()["error"].lower() or "not allowed" in response.json()["error"].lower()
+            assert (
+                "blocked" in response.json()["error"].lower()
+                or "not allowed" in response.json()["error"].lower()
+            )
 
     def test_upload_blocks_unknown_file_types(self, client):
         """Unknown file types not in allowlist are blocked."""
@@ -511,7 +518,7 @@ class TestAttachmentUploadNewBehavior:
 
 class TestMessageNewBehavior:
     """Tests for /unify/message new features.
-    
+
     These features are now implemented:
     - Attachment count limit (max 10)
     - Full attachment metadata in PubSub (gs_url, content_type, size_bytes)
@@ -563,7 +570,7 @@ class TestMessageNewBehavior:
         call_args = client._mock_pubsub.publish.call_args
         published = json.loads(call_args[0][1].decode("utf-8"))
         att = published["event"]["attachments"][0]
-        
+
         # New fields should be preserved
         assert "gs_url" in att
         assert att["gs_url"] == "gs://bucket/path/doc.pdf"
@@ -631,7 +638,9 @@ class TestEdgeCases:
 
     def test_filename_with_multiple_dots(self, client):
         """Filenames with multiple dots are preserved."""
-        files = {"file": ("report.2026.01.final.pdf", io.BytesIO(b"x"), "application/pdf")}
+        files = {
+            "file": ("report.2026.01.final.pdf", io.BytesIO(b"x"), "application/pdf")
+        }
 
         response = client.post(
             "/unify/attachment",
@@ -696,7 +705,9 @@ class TestEdgeCases:
 
     def test_backslash_path_traversal(self, client):
         """Windows-style path traversal is sanitized."""
-        files = {"file": ("..\\..\\windows\\system.txt", io.BytesIO(b"x"), "text/plain")}
+        files = {
+            "file": ("..\\..\\windows\\system.txt", io.BytesIO(b"x"), "text/plain")
+        }
 
         response = client.post(
             "/unify/attachment",
