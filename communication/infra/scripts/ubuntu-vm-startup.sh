@@ -271,6 +271,25 @@ check_deps_installed() {
     return 1
 }
 
+get_remote_commit_hash() {
+    local repo_url=$1
+    local branch=$2
+    git ls-remote "$repo_url" "refs/heads/$branch" 2>/dev/null | cut -c1-12
+}
+
+get_saved_commit_hash() {
+    local dir=$1
+    cat "$dir/.commit-hash" 2>/dev/null || echo ""
+}
+
+save_commit_hash() {
+    local dir=$1
+    local hash=$2
+    if [[ -n "$hash" ]]; then
+        echo -n "$hash" > "$dir/.commit-hash"
+    fi
+}
+
 update_repo() {
     local dir=$1
     local branch=$2
@@ -386,7 +405,7 @@ if [[ ! -f "/agent-service/package.json" ]]; then
 
     # Save commit hash for tracking
     commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
-    echo "$commit" > /agent-service/.commit-hash
+    save_commit_hash /agent-service "$commit"
 
     rm -rf "$tmp_dir"
 
@@ -405,8 +424,41 @@ if [[ ! -f "/agent-service/package.json" ]]; then
     save_pkg_hash /agent-service
     echo "Agent Service installed (commit: $commit)"
 else
-    echo "Agent Service exists, checking dependencies..."
-    if ! check_deps_installed /agent-service; then
+    # Agent Service exists - check for code updates via remote commit hash
+    saved_hash=$(get_saved_commit_hash /agent-service)
+    remote_hash=$(get_remote_commit_hash "$UNITY_URL" "$UNITY_BRANCH")
+
+    needs_update=true
+    if [[ -n "$saved_hash" && -n "$remote_hash" && "$saved_hash" == "$remote_hash" ]]; then
+        echo "Agent Service up-to-date (commit: $saved_hash)"
+        needs_update=false
+    elif [[ -n "$saved_hash" && -n "$remote_hash" ]]; then
+        echo "Agent Service update available ($saved_hash -> $remote_hash)"
+    fi
+
+    if [[ "$needs_update" == "true" ]]; then
+        echo "Updating Agent Service from Unity repo..."
+
+        # Re-clone via sparse checkout
+        tmp_dir=$(mktemp -d)
+        echo "  Cloning unity repo (sparse)..."
+        git clone --depth 1 --branch "$UNITY_BRANCH" --filter=blob:none --sparse "$UNITY_URL" "$tmp_dir" 2>&1
+
+        cd "$tmp_dir"
+        git sparse-checkout set agent-service 2>&1
+
+        # Get new commit hash
+        commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
+
+        # Replace agent-service directory
+        rm -rf /agent-service
+        mv agent-service /agent-service
+
+        rm -rf "$tmp_dir"
+
+        save_commit_hash /agent-service "$commit"
+
+        # Install dependencies
         echo "  Installing dependencies..."
         cd /agent-service
         if command -v bun &>/dev/null; then
@@ -415,8 +467,21 @@ else
             npm install 2>&1
         fi
         save_pkg_hash /agent-service
+        echo "Agent Service updated (commit: $commit)"
     else
-        echo "  Dependencies up to date"
+        # Code unchanged - just check dependencies
+        if ! check_deps_installed /agent-service; then
+            echo "  Installing dependencies..."
+            cd /agent-service
+            if command -v bun &>/dev/null; then
+                bun install 2>&1 || npm install 2>&1
+            else
+                npm install 2>&1
+            fi
+            save_pkg_hash /agent-service
+        else
+            echo "  Dependencies up to date"
+        fi
     fi
 fi
 
