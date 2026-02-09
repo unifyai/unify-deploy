@@ -2421,7 +2421,6 @@ async def scheduled_teams_watches(request: Request):
 @app.post("/scheduled/jobs/create")
 async def scheduled_jobs_create(request: Request):
     """Cloud Run endpoint that creates a new idle job."""
-    return Response(content="Not implemented", status_code=200)
     if not STAGING:
         return Response(
             content="Production job creation is not enabled",
@@ -2446,7 +2445,6 @@ async def scheduled_jobs_create(request: Request):
 @app.post("/scheduled/jobs/cleanup")
 async def scheduled_jobs_cleanup(request: Request):
     """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
-    return Response(content="Not implemented", status_code=200)
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     idle_jobs = []
 
