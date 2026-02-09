@@ -78,13 +78,13 @@ steps:
   - |
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     gcloud scheduler jobs update http "jobs-create-staging" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create1" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
       --http-method POST \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "jobs-create-staging" \
       --schedule "0 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create1" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
       --http-method POST \
       --time-zone "UTC" \
       --location="${_REGION}"
@@ -99,13 +99,13 @@ steps:
   - |
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     gcloud scheduler jobs update http "jobs-cleanup-staging" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup1" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
       --http-method POST \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "jobs-cleanup-staging" \
       --schedule "10 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup1" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
       --http-method POST \
       --time-zone "UTC" \
       --location="${_REGION}"
