@@ -191,7 +191,12 @@ def create_unity_job(
             "spec": {
                 "backoffLimit": 2,  # Allow 1 retry for resource issues
                 "template": {
-                    "metadata": {"labels": {"app": "unity"}},
+                    "metadata": {
+                        "labels": {"app": "unity"},
+                        "annotations": {
+                            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+                        },
+                    },
                     "spec": {
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
