@@ -872,7 +872,7 @@ def get_vm_status(
         if creation_ts:
             # Parse creation timestamp
             creation_dt = datetime.fromisoformat(creation_ts.replace("Z", "+00:00"))
-            creation_wait_minutes = 5 if vm_type == "ubuntu" else 8
+            creation_wait_minutes = 4 if vm_type == "ubuntu" else 8
             creation_ready = creation_dt + timedelta(minutes=creation_wait_minutes)
 
             # Check if there's a last_start_timestamp
