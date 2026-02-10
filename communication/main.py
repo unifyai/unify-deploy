@@ -10,6 +10,7 @@ from communication.teams.views import router as teams_router
 from communication.infra.views import router as infra_router
 from communication.social.views import router as social_router
 from communication.sharepoint.views import router as sharepoint_router
+from communication.unillm import router as unillm_router
 from .dependencies import auth_admin_key
 import uvicorn
 from dotenv import load_dotenv
@@ -27,9 +28,7 @@ app.include_router(teams_router, prefix="/teams", dependencies=admin_auth)
 app.include_router(infra_router, prefix="/infra", dependencies=admin_auth)
 app.include_router(social_router, prefix="/social", dependencies=admin_auth)
 app.include_router(sharepoint_router, prefix="/sharepoint", dependencies=admin_auth)
-# TODO: re-enable once unillm fixes asyncio.run() at import time (shared_session.py)
-# from communication.unillm import router as unillm_router
-# app.include_router(unillm_router, prefix="/unillm")
+app.include_router(unillm_router, prefix="/unillm")
 
 
 @app.get("/")
