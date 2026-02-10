@@ -1,13 +1,16 @@
 """
 Unit tests for the adapters helper functions.
 
-These tests verify contact handling logic after the whatsapp_number field
-was removed from the contact schema.
+These tests verify:
+- Contact handling logic after the whatsapp_number field was removed
+- Demo mode flag propagation for demo assistants
 """
 
+from unittest.mock import patch, MagicMock
 from adapters.helpers import (
     get_default_contacts,
     check_contact_details,
+    start_unity_job,
 )
 
 # --- get_default_contacts tests ---
@@ -125,3 +128,139 @@ def test_check_contact_details_returns_false_for_unknown_medium():
         user_number="+1111111111",
     )
     assert result is False
+
+
+# --- start_unity_job demo mode tests ---
+
+
+def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
+    """Create mock assistant data for testing.
+
+    Args:
+        demo_id: Optional demo ID (None for regular assistants)
+        desktop_mode: Desktop mode - use "none" to skip VM start call in tests
+    """
+    return {
+        "api_key": "test-api-key",
+        "assistant_id": "12345",
+        "user_id": "user-123",
+        "user_name": "Test User",
+        "user_email": "test@example.com",
+        "assistant_first_name": "Test",
+        "assistant_surname": "Assistant",
+        "assistant_age": "25",
+        "assistant_nationality": "US",
+        "assistant_about": "Test assistant",
+        "assistant_timezone": "UTC",
+        "user_number": "+1234567890",
+        "assistant_number": "+0987654321",
+        "assistant_email": "assistant@example.com",
+        "user_whatsapp_number": "+1234567890",
+        "voice_provider": "elevenlabs",
+        "voice_id": "voice-123",
+        "voice_mode": "tts",
+        "desktop_mode": desktop_mode,  # Use "none" to skip VM start
+        "desktop_url": None,
+        "user_desktop_mode": None,
+        "user_desktop_filesys_sync": False,
+        "user_desktop_url": None,
+        "demo_id": demo_id,
+    }
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_passes_demo_mode_true_for_demo_assistant(mock_post):
+    """Verify demo_mode is 'true' when assistant has demo_id."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+
+    assistant_data = _create_mock_assistant_data(demo_id=42)
+
+    start_unity_job(assistant_data, "phone")
+
+    # Check that requests.post was called
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args
+
+    # Get the data parameter
+    data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
+
+    # Verify demo_mode is "true"
+    assert (
+        data["demo_mode"] == "true"
+    ), f"Expected demo_mode='true' for demo assistant, got '{data.get('demo_mode')}'"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_passes_demo_mode_false_for_regular_assistant(mock_post):
+    """Verify demo_mode is 'false' when assistant has no demo_id."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+
+    assistant_data = _create_mock_assistant_data(demo_id=None)
+
+    start_unity_job(assistant_data, "phone")
+
+    # Check that requests.post was called
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args
+
+    # Get the data parameter
+    data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
+
+    # Verify demo_mode is "false"
+    assert (
+        data["demo_mode"] == "false"
+    ), f"Expected demo_mode='false' for regular assistant, got '{data.get('demo_mode')}'"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_passes_demo_mode_false_when_demo_id_missing(mock_post):
+    """Verify demo_mode is 'false' when demo_id key is missing from assistant data."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+
+    # Create assistant data without demo_id key
+    assistant_data = _create_mock_assistant_data(demo_id=None)
+    del assistant_data["demo_id"]
+
+    start_unity_job(assistant_data, "phone")
+
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args
+    data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
+
+    # Verify demo_mode is "false"
+    assert (
+        data["demo_mode"] == "false"
+    ), f"Expected demo_mode='false' when demo_id missing, got '{data.get('demo_mode')}'"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_demo_mode_with_different_mediums(mock_post):
+    """Verify demo_mode is passed correctly for different communication mediums."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+
+    assistant_data = _create_mock_assistant_data(demo_id=99)
+
+    for medium in ["phone", "email", "whatsapp", "msg"]:
+        mock_post.reset_mock()
+        start_unity_job(assistant_data, medium)
+
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args
+        data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
+
+        assert (
+            data["demo_mode"] == "true"
+        ), f"Expected demo_mode='true' for medium={medium}"
+        assert data["medium"] == medium, f"Expected medium={medium}"
