@@ -471,7 +471,6 @@ def start_unity_job(assistant: dict, medium: str):
     user_desktop_url = assistant.get("user_desktop_url", None)
 
     demo_id = assistant.get("demo_id", None)
-    is_demo_mode = demo_id is not None
 
     # start job
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
@@ -505,7 +504,8 @@ def start_unity_job(assistant: dict, medium: str):
                     "true" if user_desktop_filesys_sync else "false"
                 ),
                 "user_desktop_url": user_desktop_url or "",
-                "demo_mode": "true" if is_demo_mode else "false",
+                # Pass demo_id directly; Unity derives demo_mode from demo_id presence
+                "demo_id": str(demo_id) if demo_id else "",
             },
             timeout=1,
         )

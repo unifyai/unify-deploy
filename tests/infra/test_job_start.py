@@ -2,8 +2,9 @@
 Unit tests for the /infra/job/start endpoint.
 
 These tests verify:
-- Demo mode flag is properly accepted and passed in job data
+- Demo ID is properly accepted and passed in job data
 - Job data is correctly structured for Pub/Sub message
+- Unity receives demo_id (int or None) to derive demo_mode
 """
 
 import json
@@ -24,8 +25,13 @@ def client():
     return TestClient(app)
 
 
-def _create_job_start_payload(demo_mode="false"):
-    """Create a valid payload for /job/start endpoint."""
+def _create_job_start_payload(demo_id=""):
+    """Create a valid payload for /job/start endpoint.
+
+    Args:
+        demo_id: Demo assistant metadata ID as string.
+                 Empty string for regular assistants, numeric string for demos.
+    """
     return {
         "api_key": "test-api-key",
         "medium": "phone",
@@ -50,7 +56,7 @@ def _create_job_start_payload(demo_mode="false"):
         "user_desktop_mode": "",
         "user_desktop_filesys_sync": "false",
         "user_desktop_url": "",
-        "demo_mode": demo_mode,
+        "demo_id": demo_id,
     }
 
 
@@ -65,10 +71,8 @@ class TestJobStartEndpoint:
             "GCP_SA_KEY": '{"type": "service_account", "project_id": "test", "private_key_id": "1", "private_key": "key", "client_email": "service-account@example.iam.gserviceaccount.com", "client_id": "1", "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token"}',
         },
     )
-    def test_job_start_accepts_demo_mode_true(
-        self, mock_publisher_class, mock_creds, client
-    ):
-        """Verify endpoint accepts demo_mode='true' and includes it in job data."""
+    def test_job_start_accepts_demo_id(self, mock_publisher_class, mock_creds, client):
+        """Verify endpoint accepts demo_id and includes it as int in job data."""
         # Setup mocks
         mock_creds.return_value = MagicMock()
         mock_publisher = MagicMock()
@@ -78,13 +82,13 @@ class TestJobStartEndpoint:
         mock_publisher.publish.return_value = mock_future
         mock_publisher.topic_path.return_value = "projects/test/topics/unity-startup"
 
-        # Make request
-        payload = _create_job_start_payload(demo_mode="true")
+        # Make request with demo_id
+        payload = _create_job_start_payload(demo_id="42")
         response = client.post("/infra/job/start", data=payload)
 
         assert response.status_code == 200
 
-        # Verify the published message contains demo_mode=True
+        # Verify the published message contains demo_id as int
         mock_publisher.publish.assert_called_once()
         call_args = mock_publisher.publish.call_args
         published_data = json.loads(
@@ -92,8 +96,8 @@ class TestJobStartEndpoint:
         )
 
         assert (
-            published_data["event"]["demo_mode"] is True
-        ), f"Expected demo_mode=True in job data, got {published_data['event'].get('demo_mode')}"
+            published_data["event"]["demo_id"] == 42
+        ), f"Expected demo_id=42 in job data, got {published_data['event'].get('demo_id')}"
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
@@ -103,10 +107,10 @@ class TestJobStartEndpoint:
             "GCP_SA_KEY": '{"type": "service_account", "project_id": "test", "private_key_id": "1", "private_key": "key", "client_email": "service-account@example.iam.gserviceaccount.com", "client_id": "1", "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token"}',
         },
     )
-    def test_job_start_accepts_demo_mode_false(
+    def test_job_start_demo_id_none_for_regular_assistant(
         self, mock_publisher_class, mock_creds, client
     ):
-        """Verify endpoint accepts demo_mode='false' and includes it in job data."""
+        """Verify demo_id is None when empty string is passed (regular assistant)."""
         mock_creds.return_value = MagicMock()
         mock_publisher = MagicMock()
         mock_publisher_class.return_value = mock_publisher
@@ -115,7 +119,7 @@ class TestJobStartEndpoint:
         mock_publisher.publish.return_value = mock_future
         mock_publisher.topic_path.return_value = "projects/test/topics/unity-startup"
 
-        payload = _create_job_start_payload(demo_mode="false")
+        payload = _create_job_start_payload(demo_id="")
         response = client.post("/infra/job/start", data=payload)
 
         assert response.status_code == 200
@@ -126,8 +130,8 @@ class TestJobStartEndpoint:
         )
 
         assert (
-            published_data["event"]["demo_mode"] is False
-        ), f"Expected demo_mode=False in job data, got {published_data['event'].get('demo_mode')}"
+            published_data["event"]["demo_id"] is None
+        ), f"Expected demo_id=None in job data, got {published_data['event'].get('demo_id')}"
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
@@ -137,10 +141,10 @@ class TestJobStartEndpoint:
             "GCP_SA_KEY": '{"type": "service_account", "project_id": "test", "private_key_id": "1", "private_key": "key", "client_email": "service-account@example.iam.gserviceaccount.com", "client_id": "1", "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token"}',
         },
     )
-    def test_job_start_defaults_demo_mode_to_false(
+    def test_job_start_defaults_demo_id_to_none(
         self, mock_publisher_class, mock_creds, client
     ):
-        """Verify demo_mode defaults to false when not provided."""
+        """Verify demo_id defaults to None when not provided."""
         mock_creds.return_value = MagicMock()
         mock_publisher = MagicMock()
         mock_publisher_class.return_value = mock_publisher
@@ -149,9 +153,9 @@ class TestJobStartEndpoint:
         mock_publisher.publish.return_value = mock_future
         mock_publisher.topic_path.return_value = "projects/test/topics/unity-startup"
 
-        # Create payload without demo_mode
+        # Create payload without demo_id
         payload = _create_job_start_payload()
-        del payload["demo_mode"]
+        del payload["demo_id"]
 
         response = client.post("/infra/job/start", data=payload)
 
@@ -163,8 +167,8 @@ class TestJobStartEndpoint:
         )
 
         assert (
-            published_data["event"]["demo_mode"] is False
-        ), f"Expected demo_mode=False as default, got {published_data['event'].get('demo_mode')}"
+            published_data["event"]["demo_id"] is None
+        ), f"Expected demo_id=None as default, got {published_data['event'].get('demo_id')}"
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
@@ -174,10 +178,10 @@ class TestJobStartEndpoint:
             "GCP_SA_KEY": '{"type": "service_account", "project_id": "test", "private_key_id": "1", "private_key": "key", "client_email": "service-account@example.iam.gserviceaccount.com", "client_id": "1", "auth_uri": "https://accounts.google.com/o/oauth2/auth", "token_uri": "https://oauth2.googleapis.com/token"}',
         },
     )
-    def test_job_start_normalizes_demo_mode_case(
+    def test_job_start_demo_id_with_large_id(
         self, mock_publisher_class, mock_creds, client
     ):
-        """Verify demo_mode handles case-insensitive 'TRUE' and 'True'."""
+        """Verify demo_id handles large numeric IDs correctly."""
         mock_creds.return_value = MagicMock()
         mock_publisher = MagicMock()
         mock_publisher_class.return_value = mock_publisher
@@ -186,22 +190,20 @@ class TestJobStartEndpoint:
         mock_publisher.publish.return_value = mock_future
         mock_publisher.topic_path.return_value = "projects/test/topics/unity-startup"
 
-        for demo_value in ["TRUE", "True", "TrUe"]:
-            mock_publisher.reset_mock()
+        large_demo_id = "123456789"
+        payload = _create_job_start_payload(demo_id=large_demo_id)
+        response = client.post("/infra/job/start", data=payload)
 
-            payload = _create_job_start_payload(demo_mode=demo_value)
-            response = client.post("/infra/job/start", data=payload)
+        assert response.status_code == 200
 
-            assert response.status_code == 200
+        call_args = mock_publisher.publish.call_args
+        published_data = json.loads(
+            call_args.kwargs.get("data") or call_args[1]["data"]
+        )
 
-            call_args = mock_publisher.publish.call_args
-            published_data = json.loads(
-                call_args.kwargs.get("data") or call_args[1]["data"]
-            )
-
-            assert (
-                published_data["event"]["demo_mode"] is True
-            ), f"Expected demo_mode=True for input '{demo_value}'"
+        assert (
+            published_data["event"]["demo_id"] == 123456789
+        ), f"Expected demo_id=123456789 for input '{large_demo_id}'"
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
@@ -223,7 +225,7 @@ class TestJobStartEndpoint:
         mock_publisher.publish.return_value = mock_future
         mock_publisher.topic_path.return_value = "projects/test/topics/unity-startup"
 
-        payload = _create_job_start_payload(demo_mode="true")
+        payload = _create_job_start_payload(demo_id="99")
         response = client.post("/infra/job/start", data=payload)
 
         assert response.status_code == 200
@@ -239,6 +241,6 @@ class TestJobStartEndpoint:
         assert event["assistant_id"] == "12345"
         assert event["user_id"] == "user-123"
         assert event["medium"] == "phone"
-        assert event["demo_mode"] is True
+        assert event["demo_id"] == 99
         assert "thread" in published_data
         assert published_data["thread"] == "startup"

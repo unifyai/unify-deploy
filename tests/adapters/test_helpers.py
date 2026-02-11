@@ -3,7 +3,7 @@ Unit tests for the adapters helper functions.
 
 These tests verify:
 - Contact handling logic after the whatsapp_number field was removed
-- Demo mode flag propagation for demo assistants
+- Demo ID propagation for demo assistants (passed as string to Comms)
 """
 
 from unittest.mock import patch, MagicMock
@@ -170,8 +170,8 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_unity_job_passes_demo_mode_true_for_demo_assistant(mock_post):
-    """Verify demo_mode is 'true' when assistant has demo_id."""
+def test_start_unity_job_passes_demo_id_for_demo_assistant(mock_post):
+    """Verify demo_id is passed as string when assistant has demo_id."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_post.return_value = mock_response
@@ -187,16 +187,16 @@ def test_start_unity_job_passes_demo_mode_true_for_demo_assistant(mock_post):
     # Get the data parameter
     data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
 
-    # Verify demo_mode is "true"
+    # Verify demo_id is passed as string "42"
     assert (
-        data["demo_mode"] == "true"
-    ), f"Expected demo_mode='true' for demo assistant, got '{data.get('demo_mode')}'"
+        data["demo_id"] == "42"
+    ), f"Expected demo_id='42' for demo assistant, got '{data.get('demo_id')}'"
 
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_unity_job_passes_demo_mode_false_for_regular_assistant(mock_post):
-    """Verify demo_mode is 'false' when assistant has no demo_id."""
+def test_start_unity_job_passes_empty_demo_id_for_regular_assistant(mock_post):
+    """Verify demo_id is empty string when assistant has no demo_id."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_post.return_value = mock_response
@@ -212,16 +212,16 @@ def test_start_unity_job_passes_demo_mode_false_for_regular_assistant(mock_post)
     # Get the data parameter
     data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
 
-    # Verify demo_mode is "false"
+    # Verify demo_id is empty string
     assert (
-        data["demo_mode"] == "false"
-    ), f"Expected demo_mode='false' for regular assistant, got '{data.get('demo_mode')}'"
+        data["demo_id"] == ""
+    ), f"Expected demo_id='' for regular assistant, got '{data.get('demo_id')}'"
 
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_unity_job_passes_demo_mode_false_when_demo_id_missing(mock_post):
-    """Verify demo_mode is 'false' when demo_id key is missing from assistant data."""
+def test_start_unity_job_passes_empty_demo_id_when_key_missing(mock_post):
+    """Verify demo_id is empty string when demo_id key is missing from assistant data."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_post.return_value = mock_response
@@ -236,16 +236,16 @@ def test_start_unity_job_passes_demo_mode_false_when_demo_id_missing(mock_post):
     call_kwargs = mock_post.call_args
     data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
 
-    # Verify demo_mode is "false"
+    # Verify demo_id is empty string
     assert (
-        data["demo_mode"] == "false"
-    ), f"Expected demo_mode='false' when demo_id missing, got '{data.get('demo_mode')}'"
+        data["demo_id"] == ""
+    ), f"Expected demo_id='' when key missing, got '{data.get('demo_id')}'"
 
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_start_unity_job_demo_mode_with_different_mediums(mock_post):
-    """Verify demo_mode is passed correctly for different communication mediums."""
+def test_start_unity_job_demo_id_with_different_mediums(mock_post):
+    """Verify demo_id is passed correctly for different communication mediums."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_post.return_value = mock_response
@@ -260,7 +260,5 @@ def test_start_unity_job_demo_mode_with_different_mediums(mock_post):
         call_kwargs = mock_post.call_args
         data = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data")
 
-        assert (
-            data["demo_mode"] == "true"
-        ), f"Expected demo_mode='true' for medium={medium}"
+        assert data["demo_id"] == "99", f"Expected demo_id='99' for medium={medium}"
         assert data["medium"] == medium, f"Expected medium={medium}"
