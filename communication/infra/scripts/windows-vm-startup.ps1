@@ -234,12 +234,17 @@ function Setup-SSHFileSync {
         Write-Host "  OpenSSH Server already installed" -ForegroundColor Green
     }
 
-    # 2. Create C:\root directory for file sync
-    $syncDir = "C:\root"
+    # 2. Create C:\Unity\Local directory for file sync
+    # Note: Subdirectories (Downloads, user_files, etc.) are created by sync process
+    $unityDir = "C:\Unity"
+    $syncDir = "C:\Unity\Local"
+    if (-not (Test-Path $unityDir)) {
+        New-Item -ItemType Directory -Force -Path $unityDir | Out-Null
+    }
     if (-not (Test-Path $syncDir)) {
         New-Item -ItemType Directory -Force -Path $syncDir | Out-Null
     }
-    Write-Host "  Created C:\root sync directory"
+    Write-Host "  Created C:\Unity\Local sync directory"
 
     # 3. Setup authorized_keys for the Windows user
     # For administrators on Windows, keys go in C:\ProgramData\ssh\administrators_authorized_keys
@@ -324,7 +329,7 @@ Subsystem sftp sftp-server.exe
     Write-Host "SSH file sync configured:" -ForegroundColor Green
     Write-Host "  User: $WindowsUsername"
     Write-Host "  Port: 2222"
-    Write-Host "  Sync Path: C:\root"
+    Write-Host "  Sync Path: C:\Unity\Local"
 
     return $true
 }
