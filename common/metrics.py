@@ -12,14 +12,18 @@ from prometheus_client import (
     CollectorRegistry,
     Counter,
     Histogram,
+    ProcessCollector,
     generate_latest,
     CONTENT_TYPE_LATEST,
 )
 
 # ---------------------------------------------------------------------------
-# Registry — one per process so metrics survive hot-reload in dev
+# Registry — one per process so metrics survive hot-reload in dev.
+# ProcessCollector exposes process_start_time_seconds which the GMP
+# sidecar needs to correctly timestamp cumulative metrics.
 # ---------------------------------------------------------------------------
 REGISTRY = CollectorRegistry()
+ProcessCollector(registry=REGISTRY)
 
 # ---------------------------------------------------------------------------
 # Shared HTTP metrics (used by the middleware on both services)
