@@ -12,6 +12,7 @@ from communication.social.views import router as social_router
 from communication.sharepoint.views import router as sharepoint_router
 from communication.unillm import router as unillm_router
 from .dependencies import auth_admin_key
+from common.metrics import setup_metrics
 import uvicorn
 from dotenv import load_dotenv
 
@@ -19,6 +20,7 @@ load_dotenv(override=True)
 
 admin_auth = [Depends(auth_admin_key)]
 app = FastAPI()
+setup_metrics(app, service_name="comms")
 app.include_router(phone_auth_router, prefix="/phone", dependencies=admin_auth)
 app.include_router(phone_unauth_router, prefix="/phone")
 app.include_router(whatsapp_router, prefix="/whatsapp", dependencies=admin_auth)

@@ -4,10 +4,16 @@ import httpx
 import json
 import os
 import re
+import time
 import traceback
 import requests
 from urllib.parse import quote_plus
 
+from common.metrics import (
+    ORCHESTRA_GET_ASSISTANT_DURATION,
+    MARK_JOB_RUNNING_DURATION,
+    BUILD_WEBHOOK_CONTEXT_DURATION,
+)
 
 from google.cloud import pubsub_v1
 
@@ -132,11 +138,22 @@ def get_assistant(
             "user_whatsapp_number": "+9876543210",
         }
 
-    response = requests.get(
-        f"{ORCHESTRA_URL}/admin/assistant",
-        params=params,
-        headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-    ).json()
+    _lookup_type = "id" if assistant_id else ("email" if email_address else "phone")
+    _t0 = time.perf_counter()
+    _status = "error"
+    try:
+        response = requests.get(
+            f"{ORCHESTRA_URL}/admin/assistant",
+            params=params,
+            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+        ).json()
+        _status = "error" if "detail" in response else "success"
+    except Exception:
+        raise
+    finally:
+        ORCHESTRA_GET_ASSISTANT_DURATION.labels(
+            lookup_type=_lookup_type, status=_status,
+        ).observe(time.perf_counter() - _t0)
 
     print(f"get_assistant params: {params}")
     print(f"get_assistant response: {response}")
@@ -400,6 +417,8 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
 
     timestamp = datetime.now(tz=timezone.utc).isoformat()
 
+    _t0 = time.perf_counter()
+    _status = "error"
     try:
         # First ensure the project exists
         try:
@@ -441,6 +460,7 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
         )
         if response.status_code in (200, 201):
             print(f"Marked job as running for {assistant_id}")
+            _status = "success"
             return True
         else:
             print(
@@ -452,6 +472,10 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
         print(f"Error marking job as running: {e}")
         traceback.print_exc()
         return False
+    finally:
+        MARK_JOB_RUNNING_DURATION.labels(status=_status).observe(
+            time.perf_counter() - _t0,
+        )
 
 
 def start_unity_job(assistant: dict, medium: str):
@@ -585,6 +609,8 @@ def build_webhook_context(
     Args:
         assistant_data: Optional pre-fetched assistant data to avoid duplicate Orchestra calls.
     """
+    _t0 = time.perf_counter()
+    _ctx_status = "error"
     # normalize identifiers and resolve assistant by channel
     is_email = channel in ["email", "teams"]
     normalized_sender = (
@@ -662,6 +688,10 @@ def build_webhook_context(
         is_running = True
 
     print("is_valid_contact:", is_valid_contact)
+    _ctx_status = "error" if assistant_data.get("assistant_id") is None else "success"
+    BUILD_WEBHOOK_CONTEXT_DURATION.labels(
+        channel=channel, job_started=str(job_started).lower(), status=_ctx_status,
+    ).observe(time.perf_counter() - _t0)
     return {
         "assistant": assistant_data,
         "contacts": contacts,

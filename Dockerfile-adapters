@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir ".[adapters]"
 
 # Copy application code
 COPY adapters/ adapters/
+COPY common/ common/
 
 EXPOSE 8080
 

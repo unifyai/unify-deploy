@@ -43,6 +43,9 @@ dependencies = [
 
     # SSH key generation for VM file sync
     "cryptography>=42.0.0",
+
+    # Metrics
+    "prometheus_client>=0.20.0",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +71,7 @@ adapters = [
     "livekit-api>=0.4.0",
     "azure-identity>=1.14.0",
     "msgraph-sdk>=1.0.0",
+    "prometheus_client>=0.20.0",
 ]
 
 [dependency-groups]

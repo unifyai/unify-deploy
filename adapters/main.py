@@ -21,6 +21,8 @@ from google.oauth2.service_account import Credentials
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
 
+from common.metrics import setup_metrics
+
 from .helpers import (
     add_user_to_conference,
     build_webhook_context,
@@ -51,6 +53,7 @@ app = FastAPI(
     description="Webhook adapters for Twilio, Gmail, and internal services",
     version="1.0.0",
 )
+setup_metrics(app, service_name="adapters")
 
 
 # =============================================================================
