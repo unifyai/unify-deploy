@@ -234,12 +234,17 @@ function Setup-SSHFileSync {
         Write-Host "  OpenSSH Server already installed" -ForegroundColor Green
     }
 
-    # 2. Create C:\root directory for file sync
-    $syncDir = "C:\root"
+    # 2. Create C:\Unity\Local directory for file sync
+    # Note: Subdirectories (Downloads, user_files, etc.) are created by sync process
+    $unityDir = "C:\Unity"
+    $syncDir = "C:\Unity\Local"
+    if (-not (Test-Path $unityDir)) {
+        New-Item -ItemType Directory -Force -Path $unityDir | Out-Null
+    }
     if (-not (Test-Path $syncDir)) {
         New-Item -ItemType Directory -Force -Path $syncDir | Out-Null
     }
-    Write-Host "  Created C:\root sync directory"
+    Write-Host "  Created C:\Unity\Local sync directory"
 
     # 3. Setup authorized_keys for the Windows user
     # For administrators on Windows, keys go in C:\ProgramData\ssh\administrators_authorized_keys
@@ -324,7 +329,7 @@ Subsystem sftp sftp-server.exe
     Write-Host "SSH file sync configured:" -ForegroundColor Green
     Write-Host "  User: $WindowsUsername"
     Write-Host "  Port: 2222"
-    Write-Host "  Sync Path: C:\root"
+    Write-Host "  Sync Path: C:\Unity\Local"
 
     return $true
 }
@@ -634,25 +639,9 @@ function Install-AgentService {
     # MAGNITUDE: Fast update if exists, otherwise clone fresh
     # =========================================================================
     if (Test-Path "$magnitudeDir\.git") {
-        # Existing git repo - just update it (fast path)
+        # Existing git repo - update via fetch+reset
         Write-Host "Updating Magnitude (git fetch)..." -ForegroundColor Yellow
-        $updated = Update-GitRepo -RepoPath $magnitudeDir -Branch "unity-modifications" -GithubToken $GithubToken -RepoName "magnitude"
-
-        # Only reinstall dependencies if hash changed
-        if (-not (Test-DependenciesInstalled -Dir $magnitudeDir)) {
-            Write-Host "  Dependencies changed, reinstalling..."
-            Push-Location $magnitudeDir
-            if (Get-Command bun -ErrorAction SilentlyContinue) {
-                bun install 2>&1 | Out-Null
-            } else {
-                npm install 2>&1 | Out-Null
-            }
-            Save-DependenciesHash -Dir $magnitudeDir
-            Pop-Location
-            Write-Host "  Dependencies updated" -ForegroundColor Green
-        } else {
-            Write-Host "  Dependencies unchanged, skipping install" -ForegroundColor Green
-        }
+        Update-GitRepo -RepoPath $magnitudeDir -Branch "unity-modifications" -GithubToken $GithubToken -RepoName "magnitude"
     } elseif (-not $FastMode) {
         # No git repo - clone fresh (only in non-fast mode)
         Write-Host "Cloning Magnitude repository..."
@@ -664,21 +653,27 @@ function Install-AgentService {
         git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
 
         if (Test-Path "$magnitudeDir\package.json") {
-            # Save commit hash for tracking
             Push-Location $magnitudeDir
             $commitHash = (git rev-parse --short=12 HEAD 2>&1)
             if ($commitHash) {
                 Save-CommitHash -Dir $magnitudeDir -Hash $commitHash
             }
-            Write-Host "  Magnitude cloned (commit: $commitHash), installing dependencies..." -ForegroundColor Green
-            if (Get-Command bun -ErrorAction SilentlyContinue) {
-                bun install 2>&1 | Out-Null
-            } else {
-                npm install 2>&1 | Out-Null
-            }
-            Save-DependenciesHash -Dir $magnitudeDir
+            Write-Host "  Magnitude cloned (commit: $commitHash)" -ForegroundColor Green
             Pop-Location
         }
+    }
+
+    # Always run bun install to ensure node_modules matches the current code
+    if (Test-Path "$magnitudeDir\package.json") {
+        Write-Host "  Installing Magnitude dependencies..." -ForegroundColor Yellow
+        Push-Location $magnitudeDir
+        if (Get-Command bun -ErrorAction SilentlyContinue) {
+            bun install 2>&1 | Out-Null
+        } else {
+            npm install 2>&1 | Out-Null
+        }
+        Pop-Location
+        Write-Host "  Magnitude dependencies installed" -ForegroundColor Green
     }
 
     # =========================================================================
@@ -694,26 +689,9 @@ function Install-AgentService {
 
     # Check if we have a proper git repo (created by previous runs with this optimization)
     if (Test-Path "$agentServiceDir\.git") {
-        # Fast path: update via git
+        # Update via git fetch+reset
         Write-Host "Updating Agent Service (git fetch)..." -ForegroundColor Yellow
         Update-GitRepo -RepoPath $agentServiceDir -Branch $unityBranch -GithubToken $GithubToken -RepoName "unity"
-
-        # Only reinstall if dependencies changed
-        if (-not (Test-DependenciesInstalled -Dir $agentServiceDir)) {
-            Write-Host "  Dependencies changed, reinstalling..."
-            Push-Location $agentServiceDir
-            if (Get-Command bun -ErrorAction SilentlyContinue) {
-                bun install 2>&1 | Out-Null
-            } else {
-                npm install 2>&1 | Out-Null
-                npx playwright@1.52.0 install --with-deps chromium | Out-Null
-            }
-            Save-DependenciesHash -Dir $agentServiceDir
-            Pop-Location
-            Write-Host "  Dependencies updated" -ForegroundColor Green
-        } else {
-            Write-Host "  Dependencies unchanged, skipping install" -ForegroundColor Green
-        }
     } elseif (Test-Path "$agentServiceDir\package.json") {
         # Have agent-service but no git - check remote commit to detect code changes
         $savedHash = Get-SavedCommitHash -Dir $agentServiceDir
@@ -744,7 +722,6 @@ function Install-AgentService {
             git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
 
             if (Test-Path $unityRepoDir) {
-                # Get commit hash before extracting
                 $commitHash = $null
                 Push-Location $unityRepoDir
                 $commitHash = (git rev-parse --short=12 HEAD 2>&1)
@@ -753,25 +730,10 @@ function Install-AgentService {
 
                 if (Test-Path "$unityRepoDir\agent-service") {
                     Move-Item "$unityRepoDir\agent-service" $agentServiceDir
-
-                    # Save commit hash for future update checks
                     if ($commitHash) {
                         Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
                     }
-
-                    if (Test-Path "$agentServiceDir\package.json") {
-                        Write-Host "  Installing dependencies..."
-                        Push-Location $agentServiceDir
-                        if (Get-Command bun -ErrorAction SilentlyContinue) {
-                            bun install 2>&1 | Out-Null
-                        } else {
-                            npm install 2>&1 | Out-Null
-                            npx playwright@1.52.0 install --with-deps chromium | Out-Null
-                        }
-                        Save-DependenciesHash -Dir $agentServiceDir
-                        Pop-Location
-                        Write-Host "  Agent Service ready (commit: $commitHash)" -ForegroundColor Green
-                    }
+                    Write-Host "  Agent Service cloned (commit: $commitHash)" -ForegroundColor Green
                 }
                 Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
             }
@@ -788,7 +750,6 @@ function Install-AgentService {
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
 
         if (Test-Path $unityRepoDir) {
-            # Get commit hash before extracting
             $commitHash = $null
             Push-Location $unityRepoDir
             $commitHash = (git rev-parse --short=12 HEAD 2>&1)
@@ -797,28 +758,22 @@ function Install-AgentService {
 
             if (Test-Path "$unityRepoDir\agent-service") {
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir
-
-                # Save commit hash for future update checks
                 if ($commitHash) {
                     Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
                 }
-
-                if (Test-Path "$agentServiceDir\package.json") {
-                    Write-Host "  Installing dependencies..."
-                    Push-Location $agentServiceDir
-                    if (Get-Command bun -ErrorAction SilentlyContinue) {
-                        bun install 2>&1 | Out-Null
-                    } else {
-                        npm install 2>&1 | Out-Null
-                        npx playwright@1.52.0 install --with-deps chromium | Out-Null
-                    }
-                    Save-DependenciesHash -Dir $agentServiceDir
-                    Pop-Location
-                    Write-Host "  Agent Service ready (commit: $commitHash)" -ForegroundColor Green
-                }
+                Write-Host "  Agent Service cloned (commit: $commitHash)" -ForegroundColor Green
             }
             Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
         }
+    }
+
+    # Always run npm install to ensure node_modules matches the current code
+    if (Test-Path "$agentServiceDir\package.json") {
+        Write-Host "  Installing Agent Service dependencies..." -ForegroundColor Yellow
+        Push-Location $agentServiceDir
+        npm install 2>&1 | Out-Null
+        Pop-Location
+        Write-Host "  Agent Service dependencies installed" -ForegroundColor Green
     }
 
     # Restore .env file
@@ -2351,7 +2306,6 @@ if ($fastMode) {
 
             if (Test-Path "$magnitudeDir\package.json") {
                 Push-Location $magnitudeDir
-                # Save commit hash for tracking
                 $magCommitHash = (git rev-parse --short=12 HEAD 2>&1)
                 if ($magCommitHash) {
                     $magCommitHash | Out-File -FilePath "$magnitudeDir\.commit-hash" -Encoding UTF8 -NoNewline
@@ -2395,19 +2349,15 @@ if ($fastMode) {
                 if ($commitHash) {
                     $commitHash | Out-File -FilePath "$agentServiceDir\.commit-hash" -Encoding UTF8 -NoNewline
                 }
-
-                if (Test-Path "$agentServiceDir\package.json") {
-                    Push-Location $agentServiceDir
-                    if (Get-Command bun -ErrorAction SilentlyContinue) {
-                        bun install 2>&1 | Out-Null
-                    } else {
-                        npm install 2>&1 | Out-Null
-                        npx playwright@1.52.0 install --with-deps chromium | Out-Null
-                    }
-                    Pop-Location
-                }
             }
             Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+        }
+
+        # Install agent-service dependencies
+        if (Test-Path "$agentServiceDir\package.json") {
+            Push-Location $agentServiceDir
+            npm install 2>&1 | Out-Null
+            Pop-Location
         }
 
         # Restore .env

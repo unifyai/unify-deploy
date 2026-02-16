@@ -237,6 +237,7 @@ mkdir -p /var/log/caddy
 mkdir -p /var/log/supervisor
 mkdir -p /magnitude
 mkdir -p /agent-service
+mkdir -p /Unity
 
 # =============================================================================
 # supervisord configuration
@@ -316,6 +317,25 @@ chmod +x /etc/profile.d/unity-vm.sh
 echo "Environment configured"
 
 # =============================================================================
+# Shell Configuration
+# =============================================================================
+echo ""
+echo "=== Configuring shell ==="
+
+# Configure bash to start in /Unity for interactive graphical terminal sessions
+# This ensures terminal always opens in /Unity regardless of how it's launched
+cat >> /root/.bashrc << 'BASHRC'
+
+# Unity VM: Start interactive graphical terminal sessions in /Unity
+if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
+    export UNITY_SHELL_INIT=1
+    cd /Unity
+fi
+BASHRC
+
+echo "  Configured shell to start in /Unity (graphical sessions only)"
+
+# =============================================================================
 # Summary
 # =============================================================================
 echo ""
@@ -337,6 +357,6 @@ echo "  - supervisord: $(supervisord --version)"
 echo ""
 echo "Configuration:"
 echo "  - Default browser: Chromium (Playwright)"
-echo "  - Terminal starts in: /root (HOME)"
+echo "  - Terminal starts in: /Unity"
 echo ""
 

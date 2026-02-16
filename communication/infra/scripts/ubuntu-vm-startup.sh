@@ -165,32 +165,41 @@ setup_ssh_file_sync() {
 
     echo "Setting up SSH file sync for user: $SSH_USERNAME"
 
-    # 1. Create SFTP-only user (home set to /root but not created — it already exists)
+    # 1. Create user with /Unity as home directory (if doesn't exist)
     if ! id "$SSH_USERNAME" &>/dev/null; then
-        useradd -M -d /root -s /bin/bash "$SSH_USERNAME" 2>/dev/null || true
+        # Create the user with /Unity as home, no password (SSH key only)
+        useradd -m -d /Unity -s /bin/bash "$SSH_USERNAME" 2>/dev/null || true
         echo "  Created user: $SSH_USERNAME"
     else
         echo "  User $SSH_USERNAME already exists"
-        usermod -d /root "$SSH_USERNAME" 2>/dev/null || true
+        # Ensure home directory is /Unity
+        usermod -d /Unity "$SSH_USERNAME" 2>/dev/null || true
     fi
 
-    # 2. Grant the sync user write access to /root.
-    #    Root bypasses permission checks so this doesn't affect the desktop session.
-    chmod 755 /root
-    chown -R "$SSH_USERNAME":"$SSH_USERNAME" /root
-    echo "  Granted $SSH_USERNAME ownership of /root"
+    # 2. Create /Unity/Local directory for file sync
+    # Note: Subdirectories (Downloads, user_files, etc.) are created by sync process
+    mkdir -p /Unity/Local
+    chown -R "$SSH_USERNAME:$SSH_USERNAME" /Unity
+    chmod 755 /Unity
+    chmod 755 /Unity/Local
+    echo "  Created /Unity/Local sync directory"
 
-    # 3. Setup SSH authorized_keys in a dedicated directory (avoids
-    #    clobbering root's own /root/.ssh/authorized_keys)
-    mkdir -p /etc/ssh/sync_keys
-    echo "$SSH_PUBLIC_KEY" > "/etc/ssh/sync_keys/$SSH_USERNAME"
-    chmod 644 "/etc/ssh/sync_keys/$SSH_USERNAME"
+    # 3. Setup SSH authorized_keys for the user
+    mkdir -p /Unity/.ssh
+    echo "$SSH_PUBLIC_KEY" > /Unity/.ssh/authorized_keys
+    chown -R "$SSH_USERNAME:$SSH_USERNAME" /Unity/.ssh
+    chmod 700 /Unity/.ssh
+    chmod 600 /Unity/.ssh/authorized_keys
     echo "  Configured SSH authorized_keys"
 
     # 4. Configure SSHD for file sync on port 2222
+    # Check if we already configured port 2222
     if ! grep -q "^Port 2222" /etc/ssh/sshd_config; then
+        # Backup original config
         cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
 
+        # Add port 2222 and SFTP configuration for file sync user
+        # Keep port 22 for normal SSH access, add 2222 for file sync
         cat >> /etc/ssh/sshd_config << SSHEOF
 
 # =============================================================================
@@ -204,7 +213,6 @@ Port 2222
 Match User $SSH_USERNAME
     ForceCommand internal-sftp
     ChrootDirectory /
-    AuthorizedKeysFile /etc/ssh/sync_keys/%u
     AllowTcpForwarding no
     X11Forwarding no
     PasswordAuthentication no
@@ -222,7 +230,7 @@ SSHEOF
     echo "SSH file sync configured:"
     echo "  User: $SSH_USERNAME"
     echo "  Port: 2222"
-    echo "  Sync Path: /root"
+    echo "  Sync Path: /Unity/Local"
     echo "  Mode: SFTP-only"
 }
 
@@ -305,20 +313,6 @@ update_repo() {
 
         local commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
         echo "  Updated to commit: $commit"
-
-        # Check if dependencies need reinstall
-        if ! check_deps_installed "$dir"; then
-            echo "  Dependencies changed, reinstalling..."
-            if command -v bun &>/dev/null; then
-                bun install 2>&1 || npm install 2>&1
-            else
-                npm install 2>&1
-            fi
-            save_pkg_hash "$dir"
-            echo "  Dependencies updated"
-        else
-            echo "  Dependencies unchanged, skipping install"
-        fi
     else
         echo "$name exists but no .git directory"
     fi
@@ -338,31 +332,19 @@ fi
 
 if [[ -d "/magnitude/.git" ]]; then
     update_repo /magnitude unity-modifications "$MAGNITUDE_URL" "Magnitude"
-elif [[ -f "/magnitude/package.json" ]]; then
-    echo "Magnitude exists (no .git), checking dependencies..."
-    if ! check_deps_installed /magnitude; then
-        echo "  Installing dependencies..."
-        cd /magnitude
-        if command -v bun &>/dev/null; then
-            bun install 2>&1 || npm install 2>&1
-        else
-            npm install 2>&1
-        fi
-        save_pkg_hash /magnitude
-    else
-        echo "  Dependencies up to date"
-    fi
-else
+elif [[ ! -f "/magnitude/package.json" ]]; then
     echo "Magnitude not found, cloning..."
     git clone --depth 1 --branch unity-modifications "$MAGNITUDE_URL" /magnitude 2>&1
-    cd /magnitude
-    if command -v bun &>/dev/null; then
-        bun install 2>&1 || npm install 2>&1
-    else
-        npm install 2>&1
-    fi
-    save_pkg_hash /magnitude
-    echo "Magnitude installed"
+    echo "Magnitude cloned"
+fi
+
+# Always run bun install to ensure node_modules matches the current code
+echo "  Installing Magnitude dependencies..."
+cd /magnitude
+if command -v bun &>/dev/null; then
+    bun install 2>&1
+else
+    npm install 2>&1
 fi
 
 # =============================================================================
@@ -406,17 +388,12 @@ if [[ ! -f "/agent-service/package.json" ]]; then
 
     echo "  Installing dependencies..."
     cd /agent-service
-    if command -v bun &>/dev/null; then
-        bun install 2>&1 || npm install 2>&1
-    else
-        npm install 2>&1
-    fi
+    npm install 2>&1
 
     # Install Playwright browsers
     echo "  Installing Playwright Chromium..."
     npx playwright@1.52.0 install --with-deps chromium 2>&1 || true
 
-    save_pkg_hash /agent-service
     echo "Agent Service installed (commit: $commit)"
 else
     # Agent Service exists - check for code updates via remote commit hash
@@ -452,32 +429,12 @@ else
         rm -rf "$tmp_dir"
 
         save_commit_hash /agent-service "$commit"
-
-        # Install dependencies
-        echo "  Installing dependencies..."
-        cd /agent-service
-        if command -v bun &>/dev/null; then
-            bun install 2>&1 || npm install 2>&1
-        else
-            npm install 2>&1
-        fi
-        save_pkg_hash /agent-service
-        echo "Agent Service updated (commit: $commit)"
-    else
-        # Code unchanged - just check dependencies
-        if ! check_deps_installed /agent-service; then
-            echo "  Installing dependencies..."
-            cd /agent-service
-            if command -v bun &>/dev/null; then
-                bun install 2>&1 || npm install 2>&1
-            else
-                npm install 2>&1
-            fi
-            save_pkg_hash /agent-service
-        else
-            echo "  Dependencies up to date"
-        fi
     fi
+
+    # Always run npm install to ensure node_modules matches the current code
+    echo "  Installing Agent Service dependencies..."
+    cd /agent-service
+    npm install 2>&1
 fi
 
 # =============================================================================
@@ -658,13 +615,6 @@ echo "Starting services via supervisord..."
 # Export environment variables for supervisord
 export VNC_GEOMETRY=${VNC_GEOMETRY:-1920x1080}
 export VNC_DEPTH=${VNC_DEPTH:-24}
-
-# Re-chown /root after XFCE creates its XDG directories (~Desktop, etc.)
-# The desktop session runs as root and creates dirs owned by root:root,
-# overriding the chown done earlier. This delayed pass catches them.
-if [[ -n "$SSH_USERNAME" ]]; then
-    (sleep 10 && chown -R "$SSH_USERNAME":"$SSH_USERNAME" /root) &
-fi
 
 # Start supervisord in foreground (keeps the script running)
 exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/unity-vm.conf
