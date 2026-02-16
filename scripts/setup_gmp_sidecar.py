@@ -151,6 +151,11 @@ def inject_sidecar(spec: dict) -> dict:
     meta_ann = spec.setdefault("metadata", {}).setdefault("annotations", {})
     meta_ann["run.googleapis.com/launch-stage"] = "ALPHA"
 
+    # The sidecar needs CPU between requests to perform scrapes.
+    # Without this, Cloud Run throttles CPU when idle and the
+    # collector eventually gets killed.
+    tmpl_ann["run.googleapis.com/cpu-throttling"] = "false"
+
     return spec
 
 
