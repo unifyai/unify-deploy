@@ -31,16 +31,15 @@ REGION = "us-central1"
 PROJECT = "gcp-project-runtime"
 SIDECAR_IMAGE = (
     "us-docker.pkg.dev/cloud-ops-agents-artifacts/"
-    "cloud-run-gmp-sidecar/cloud-run-gmp-sidecar:1.2.1"
+    "cloud-run-gmp-sidecar/cloud-run-gmp-sidecar:1.2.0"
 )
 
-# service_name -> prometheus job_name
-SERVICES = {
-    "unity-adapters-staging": "adapters",
-    "unity-adapters": "adapters",
-    "unity-comms-app-staging": "comms",
-    "unity-comms-app": "comms",
-}
+SERVICES = [
+    "unity-adapters-staging",
+    "unity-adapters",
+    "unity-comms-app-staging",
+    "unity-comms-app",
+]
 
 # Metadata fields that are read-only and must be stripped for replace
 STRIP_METADATA_KEYS = {
@@ -66,28 +65,6 @@ STRIP_TEMPLATE_LABELS = {
     "client.knative.dev/nonce",
     "run.googleapis.com/startupProbeType",
 }
-
-
-def collection_config(job_name: str) -> str:
-    return (
-        "receivers:\n"
-        "  prometheus:\n"
-        "    config:\n"
-        "      scrape_configs:\n"
-        f"        - job_name: '{job_name}'\n"
-        "          scrape_interval: 15s\n"
-        "          metrics_path: /metrics\n"
-        "          static_configs:\n"
-        "            - targets: ['localhost:8080']\n"
-        "exporters:\n"
-        "  googlemanagedprometheus:\n"
-        f"    project: {PROJECT}\n"
-        "service:\n"
-        "  pipelines:\n"
-        "    metrics:\n"
-        "      receivers: [prometheus]\n"
-        "      exporters: [googlemanagedprometheus]\n"
-    )
 
 
 def export_service(service: str) -> dict:
@@ -129,7 +106,7 @@ def strip_readonly(spec: dict) -> dict:
     return spec
 
 
-def inject_sidecar(spec: dict, job_name: str) -> dict:
+def inject_sidecar(spec: dict) -> dict:
     """Add or update the GMP collector sidecar container."""
     template = spec["spec"]["template"]
     tmpl_ann = template.setdefault("metadata", {}).setdefault("annotations", {})
@@ -151,15 +128,11 @@ def inject_sidecar(spec: dict, job_name: str) -> dict:
             sidecar_idx = i
             break
 
+    # The sidecar's default RunMonitoring config scrapes port 8080 at
+    # /metrics every 30s — no custom COLLECTION_CONFIG env var needed.
     sidecar_container = {
         "name": "collector",
         "image": SIDECAR_IMAGE,
-        "env": [
-            {
-                "name": "COLLECTION_CONFIG",
-                "value": collection_config(job_name),
-            }
-        ],
     }
 
     if sidecar_idx is not None:
@@ -174,9 +147,9 @@ def inject_sidecar(spec: dict, job_name: str) -> dict:
         json.dumps({"collector": [main_name]})
     )
 
-    # BETA launch stage required for multi-container
+    # ALPHA launch stage required for multi-container with sidecar
     meta_ann = spec.setdefault("metadata", {}).setdefault("annotations", {})
-    meta_ann["run.googleapis.com/launch-stage"] = "BETA"
+    meta_ann["run.googleapis.com/launch-stage"] = "ALPHA"
 
     return spec
 
@@ -218,9 +191,9 @@ def main() -> None:
             print(f"Unknown services: {', '.join(unknown)}")
             print(f"Available: {', '.join(SERVICES)}")
             sys.exit(1)
-        targets = {k: v for k, v in SERVICES.items() if k in args}
+        targets = [s for s in SERVICES if s in args]
 
-    for service, job_name in targets.items():
+    for service in targets:
         print(f"\n{'=' * 60}")
         print(f"  {service}")
         print(f"{'=' * 60}")
@@ -231,7 +204,7 @@ def main() -> None:
         print(f"  Stripping read-only fields...")
         spec = strip_readonly(spec)
 
-        spec = inject_sidecar(spec, job_name)
+        spec = inject_sidecar(spec)
 
         print(f"  {'DRY RUN — would apply:' if dry_run else 'Applying...'}")
         apply_service(spec, dry_run=dry_run)
