@@ -92,7 +92,7 @@ class TestJobStartEndpoint:
         mock_publisher.publish.assert_called_once()
         call_args = mock_publisher.publish.call_args
         published_data = json.loads(
-            call_args.kwargs.get("data") or call_args[1]["data"]
+            call_args.kwargs.get("data") or call_args[1]["data"],
         )
 
         assert (
@@ -108,7 +108,10 @@ class TestJobStartEndpoint:
         },
     )
     def test_job_start_demo_id_none_for_regular_assistant(
-        self, mock_publisher_class, mock_creds, client
+        self,
+        mock_publisher_class,
+        mock_creds,
+        client,
     ):
         """Verify demo_id is None when empty string is passed (regular assistant)."""
         mock_creds.return_value = MagicMock()
@@ -126,7 +129,7 @@ class TestJobStartEndpoint:
 
         call_args = mock_publisher.publish.call_args
         published_data = json.loads(
-            call_args.kwargs.get("data") or call_args[1]["data"]
+            call_args.kwargs.get("data") or call_args[1]["data"],
         )
 
         assert (
@@ -142,7 +145,10 @@ class TestJobStartEndpoint:
         },
     )
     def test_job_start_defaults_demo_id_to_none(
-        self, mock_publisher_class, mock_creds, client
+        self,
+        mock_publisher_class,
+        mock_creds,
+        client,
     ):
         """Verify demo_id defaults to None when not provided."""
         mock_creds.return_value = MagicMock()
@@ -163,7 +169,7 @@ class TestJobStartEndpoint:
 
         call_args = mock_publisher.publish.call_args
         published_data = json.loads(
-            call_args.kwargs.get("data") or call_args[1]["data"]
+            call_args.kwargs.get("data") or call_args[1]["data"],
         )
 
         assert (
@@ -179,7 +185,10 @@ class TestJobStartEndpoint:
         },
     )
     def test_job_start_demo_id_with_large_id(
-        self, mock_publisher_class, mock_creds, client
+        self,
+        mock_publisher_class,
+        mock_creds,
+        client,
     ):
         """Verify demo_id handles large numeric IDs correctly."""
         mock_creds.return_value = MagicMock()
@@ -198,7 +207,7 @@ class TestJobStartEndpoint:
 
         call_args = mock_publisher.publish.call_args
         published_data = json.loads(
-            call_args.kwargs.get("data") or call_args[1]["data"]
+            call_args.kwargs.get("data") or call_args[1]["data"],
         )
 
         assert (
@@ -214,7 +223,10 @@ class TestJobStartEndpoint:
         },
     )
     def test_job_start_includes_all_required_fields_in_event(
-        self, mock_publisher_class, mock_creds, client
+        self,
+        mock_publisher_class,
+        mock_creds,
+        client,
     ):
         """Verify all required fields are included in the published event."""
         mock_creds.return_value = MagicMock()
@@ -232,7 +244,7 @@ class TestJobStartEndpoint:
 
         call_args = mock_publisher.publish.call_args
         published_data = json.loads(
-            call_args.kwargs.get("data") or call_args[1]["data"]
+            call_args.kwargs.get("data") or call_args[1]["data"],
         )
 
         event = published_data["event"]

@@ -71,12 +71,20 @@ def export_service(service: str) -> dict:
     """Export the current Cloud Run service config as JSON."""
     result = subprocess.run(
         [
-            "gcloud", "run", "services", "describe", service,
-            "--region", REGION,
-            "--project", PROJECT,
+            "gcloud",
+            "run",
+            "services",
+            "describe",
+            service,
+            "--region",
+            REGION,
+            "--project",
+            PROJECT,
             "--format=json",
         ],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return json.loads(result.stdout)
 
@@ -143,8 +151,8 @@ def inject_sidecar(spec: dict) -> dict:
         containers.append(sidecar_container)
 
     # Required annotations for multi-container
-    tmpl_ann["run.googleapis.com/container-dependencies"] = (
-        json.dumps({"collector": [main_name]})
+    tmpl_ann["run.googleapis.com/container-dependencies"] = json.dumps(
+        {"collector": [main_name]},
     )
 
     # ALPHA launch stage required for multi-container with sidecar
@@ -166,7 +174,9 @@ def apply_service(spec: dict, dry_run: bool = False) -> None:
         return
 
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".json", delete=False
+        mode="w",
+        suffix=".json",
+        delete=False,
     ) as f:
         json.dump(spec, f, indent=2)
         tmp_path = f.name
@@ -174,9 +184,15 @@ def apply_service(spec: dict, dry_run: bool = False) -> None:
     try:
         subprocess.run(
             [
-                "gcloud", "run", "services", "replace", tmp_path,
-                "--region", REGION,
-                "--project", PROJECT,
+                "gcloud",
+                "run",
+                "services",
+                "replace",
+                tmp_path,
+                "--region",
+                REGION,
+                "--project",
+                PROJECT,
                 "--quiet",
             ],
             check=True,

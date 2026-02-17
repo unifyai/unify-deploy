@@ -759,7 +759,7 @@ async def unify_attachment_upload(
             else:
                 # Fallback to assistant_id if user lookup fails
                 print(
-                    f"Could not get user_id for assistant {assistant_id}, using assistant_id"
+                    f"Could not get user_id for assistant {assistant_id}, using assistant_id",
                 )
                 path_prefix = assistant_id
         except Exception as e:
@@ -875,7 +875,7 @@ async def unify_message_webhook(request: Request):
     # Validate attachment count limit
     if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
         print(
-            f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}"
+            f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}",
         )
         return Response(
             status_code=400,
@@ -1283,7 +1283,7 @@ async def assistant_update_webhook(request: Request):
         )
         assistant_data = context["assistant"]
         print(
-            f"Job running: {context['is_job_running']}, job started: {context['job_started']}"
+            f"Job running: {context['is_job_running']}, job started: {context['job_started']}",
         )
 
         # Prepare assistant_data for the PubSub message

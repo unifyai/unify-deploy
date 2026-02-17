@@ -152,7 +152,8 @@ def get_assistant(
         raise
     finally:
         ORCHESTRA_GET_ASSISTANT_DURATION.labels(
-            lookup_type=_lookup_type, status=_status,
+            lookup_type=_lookup_type,
+            status=_status,
         ).observe(time.perf_counter() - _t0)
 
     print(f"get_assistant params: {params}")
@@ -690,7 +691,9 @@ def build_webhook_context(
     print("is_valid_contact:", is_valid_contact)
     _ctx_status = "error" if assistant_data.get("assistant_id") is None else "success"
     BUILD_WEBHOOK_CONTEXT_DURATION.labels(
-        channel=channel, job_started=str(job_started).lower(), status=_ctx_status,
+        channel=channel,
+        job_started=str(job_started).lower(),
+        status=_ctx_status,
     ).observe(time.perf_counter() - _t0)
     return {
         "assistant": assistant_data,

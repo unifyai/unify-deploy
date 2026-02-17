@@ -497,7 +497,7 @@ function Install-Office-Base {
 function Disable-ServerManager-AutoStart {
     Write-Host ""
     Write-Host "=== Disabling Server Manager Auto-Start ===" -ForegroundColor Cyan
-    
+
     # Disable the Server Manager scheduled task that launches it at logon
     $task = Get-ScheduledTask -TaskName "ServerManager" -ErrorAction SilentlyContinue
     if ($task) {
@@ -506,7 +506,7 @@ function Disable-ServerManager-AutoStart {
     } else {
         Write-Host "ServerManager scheduled task not found (may not be Windows Server)" -ForegroundColor Yellow
     }
-    
+
     # Also set registry key for all users to prevent Server Manager at logon
     # This applies to any user that logs in
     $regPath = 'HKLM:\SOFTWARE\Microsoft\ServerManager'
@@ -515,12 +515,12 @@ function Disable-ServerManager-AutoStart {
     }
     Set-ItemProperty -Path $regPath -Name 'DoNotOpenServerManagerAtLogon' -Value 1 -Type DWord -Force
     Write-Host "Set DoNotOpenServerManagerAtLogon registry key (machine-wide)" -ForegroundColor Green
-    
+
     # Set for default user profile (applies to newly created users)
     $defaultUserReg = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
     # Note: The per-user setting would be at HKCU, but we can't set that for future users during Packer build
     # The machine-wide setting above and disabled scheduled task should handle it
-    
+
     Write-Host "Server Manager auto-start disabled" -ForegroundColor Green
 }
 

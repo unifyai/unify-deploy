@@ -639,7 +639,7 @@ class TestEdgeCases:
     def test_filename_with_multiple_dots(self, client):
         """Filenames with multiple dots are preserved."""
         files = {
-            "file": ("report.2026.01.final.pdf", io.BytesIO(b"x"), "application/pdf")
+            "file": ("report.2026.01.final.pdf", io.BytesIO(b"x"), "application/pdf"),
         }
 
         response = client.post(
@@ -706,7 +706,7 @@ class TestEdgeCases:
     def test_backslash_path_traversal(self, client):
         """Windows-style path traversal is sanitized."""
         files = {
-            "file": ("..\\..\\windows\\system.txt", io.BytesIO(b"x"), "text/plain")
+            "file": ("..\\..\\windows\\system.txt", io.BytesIO(b"x"), "text/plain"),
         }
 
         response = client.post(

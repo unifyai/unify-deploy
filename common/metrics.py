@@ -50,7 +50,10 @@ ORCHESTRA_GET_ASSISTANT_DURATION = Histogram(
     "orchestra_get_assistant_duration_seconds",
     "Time spent calling the Orchestra /admin/assistant endpoint. "
     "Use status='success' to filter to healthy requests only.",
-    labelnames=["lookup_type", "status"],  # lookup_type: email|phone|id, status: success|error
+    labelnames=[
+        "lookup_type",
+        "status",
+    ],  # lookup_type: email|phone|id, status: success|error
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
     registry=REGISTRY,
 )
@@ -70,7 +73,11 @@ BUILD_WEBHOOK_CONTEXT_DURATION = Histogram(
     "job_started='true' includes mark_job_running + start_unity_job + create_job; "
     "job_started='false' is just get_assistant + contact validation. "
     "Use status='success' to filter to healthy requests only.",
-    labelnames=["channel", "job_started", "status"],  # job_started: true|false, status: success|error
+    labelnames=[
+        "channel",
+        "job_started",
+        "status",
+    ],  # job_started: true|false, status: success|error
     buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
     registry=REGISTRY,
 )
@@ -142,4 +149,9 @@ def setup_metrics(app: FastAPI, service_name: str) -> None:
         service_name: 'adapters' or 'comms'.
     """
     add_metrics_middleware(app, service_name)
-    app.add_api_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
+    app.add_api_route(
+        "/metrics",
+        metrics_endpoint,
+        methods=["GET"],
+        include_in_schema=False,
+    )

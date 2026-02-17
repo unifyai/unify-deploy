@@ -359,4 +359,3 @@ echo "Configuration:"
 echo "  - Default browser: Chromium (Playwright)"
 echo "  - Terminal starts in: /Unity"
 echo ""
-
