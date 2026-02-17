@@ -1,10 +1,11 @@
 import os
 import httpx
-import base64
 import json
 from urllib.parse import quote_plus
 from fastapi import APIRouter, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
+from google.cloud import pubsub_v1, storage
+from google.oauth2.service_account import Credentials
 from livekit.api import (
     LiveKitAPI,
     SIPInboundTrunkInfo,
@@ -107,23 +108,69 @@ def add_user_to_conference(
     return call.sid
 
 
+def _get_recordings_bucket():
+    """Get a GCS bucket client for the recordings bucket."""
+    creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
+    bucket_name = os.getenv(
+        "GCS_RECORDINGS_BUCKET",
+        "assistant-call-recordings",
+    )
+    if creds_json:
+        creds = Credentials.from_service_account_info(creds_json)
+        client = storage.Client(credentials=creds)
+    else:
+        client = storage.Client()
+    return client.bucket(bucket_name), bucket_name
+
+
+def _publish_recording_ready(
+    assistant_id: str,
+    conference_name: str,
+    recording_url: str,
+):
+    """Publish a recording_ready event to the assistant's Pub/Sub topic."""
+    is_staging = bool(os.getenv("STAGING"))
+    topic_name = f"unity-{assistant_id}" + ("" if not is_staging else "-staging")
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    message = {
+        "thread": "recording_ready",
+        "event": {
+            "assistant_id": str(assistant_id),
+            "conference_name": conference_name,
+            "recording_url": recording_url,
+        },
+    }
+    publish_future = publisher.publish(
+        topic_path,
+        json.dumps(message).encode("utf-8"),
+    )
+    if "test" in str(assistant_id):
+        publish_future.result(timeout=10)
+    print(
+        f"[Recording] Published recording_ready for assistant {assistant_id}, "
+        f"conference_name={conference_name}",
+    )
+
+
 # Endpoints - Form format
 @unauth_router.post("/recording")
 async def check_recording_status(request: Request):
+    """Handle Twilio recording completion callback.
+
+    Downloads the MP3 from Twilio, uploads it directly to the GCS
+    recordings bucket, and publishes a recording_ready Pub/Sub event
+    so Unity can store the URL on the exchange.
+    """
     data = await request.form()
     conference_name = request.query_params.get("conference_name")
     print("Conference name: ", conference_name)
 
-    print("Recorded data")
-    for key, value in data.items():
-        print(key, value)
     recording_url = data.get("RecordingUrl")
-    conference_sid = data.get("ConferenceSid")
-
     if not recording_url:
         return {"success": False, "error": "RecordingUrl is required"}
 
-    # Get recording from Twilio
+    # Download MP3 from Twilio.
     recording_url = recording_url + ".mp3"
     async with httpx.AsyncClient(
         auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")),
@@ -135,31 +182,15 @@ async def check_recording_status(request: Request):
             status_code=resp.status_code,
             detail="Failed to get recording from Twilio",
         )
+    audio_bytes = resp.content
 
-    # Extract recording bytes
-    resp_bytes = resp.content
-    resp_bytes = base64.b64encode(resp_bytes).decode("utf-8")
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-
-    # Get number through Twilio RecordingSid or Conference participants
+    # Look up assistant_id from the call's phone number.
     twilio_client = get_twilio_client()
     recording_sid = data.get("RecordingSid")
-    call = None
-
-    # Get call info from recording
     recording = twilio_client.recordings(recording_sid).fetch()
-    call_sid = recording.call_sid
-    call = twilio_client.calls(call_sid).fetch()
+    call = twilio_client.calls(recording.call_sid).fetch()
 
-    print("Call: ", call)
-    print("Call from: ", call._from)
-    print("Call to: ", call.to)
-    print("Call sid: ", call.sid)
-    print("Call status: ", call.status)
-    print("Call duration: ", call.duration)
-    print("Call start time: ", call.start_time)
-
-    # assistant_id (get from unify api thorugh phone number search)
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     async with httpx.AsyncClient() as httpx_client:
         resp = await httpx_client.get(
             f"{ORCHESTRA_URL}/admin/assistant",
@@ -175,49 +206,48 @@ async def check_recording_status(request: Request):
             )
             assistants = resp.json()["info"]
     if resp.status_code >= 400:
-        print("Failed to get assistants from Unify")
         raise HTTPException(
             status_code=resp.status_code,
-            detail="Failed to get assistants from Unify",
+            detail="Failed to get assistants from Orchestra",
         )
+
+    assistant_id = None
     for assistant in assistants:
         if assistant["phone"] in [call._from, call.to]:
             assistant_id = assistant["agent_id"]
-            user_id = assistant["user_id"]
             break
 
-    payload = {
-        "recording_raw": resp_bytes,
-        "content_type": "audio/mp3",
-        "assistant_id": assistant_id,
-        "user_id": user_id,
-        "conference_name": conference_name,
-        "conference_sid": conference_sid,
-    }
-    async with httpx.AsyncClient() as httpx_client:
-        resp = await httpx_client.post(
-            f"{ORCHESTRA_URL}/admin/assistant/recordings",
-            headers=headers,
-            json=payload,
-        )
-    if resp.status_code >= 400:
-        print("Failed to upload recording to Unify")
-        print(resp.text)
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail="Failed to upload recording to Unify",
-        )
-    return {"success": True, "recording_url": recording_url}
+    if assistant_id is None:
+        print("[Recording] Could not resolve assistant_id from phone number")
+        return Response(status_code=200)
+
+    # Upload directly to GCS recordings bucket.
+    is_staging = bool(os.getenv("STAGING"))
+    prefix = "staging" if is_staging else "production"
+    filepath = f"{prefix}/{assistant_id}/{conference_name}.mp3"
+
+    bucket, bucket_name = _get_recordings_bucket()
+    blob = bucket.blob(filepath)
+    blob.upload_from_string(audio_bytes, content_type="audio/mp3")
+    gcs_public_url = blob.public_url
+    print(f"[Recording] Uploaded to gs://{bucket_name}/{filepath}")
+
+    # Publish recording_ready event via Pub/Sub.
+    _publish_recording_ready(
+        assistant_id=str(assistant_id),
+        conference_name=conference_name,
+        recording_url=gcs_public_url,
+    )
+    return {"success": True, "recording_url": gcs_public_url}
 
 
 @unauth_router.post("/egress-complete")
 async def egress_complete(request: Request):
     """Handle LiveKit Egress completion webhooks.
 
-    LiveKit signs the request with the API secret corresponding to the
-    signing_key we set on the WebhookConfig.  We verify the signature,
-    then download the recording from GCS and register it in Orchestra
-    via the existing admin endpoint (mirroring the Twilio recording flow).
+    LiveKit Egress already uploaded the recording to GCS. We just verify
+    the webhook signature, construct the public URL, and publish a
+    recording_ready Pub/Sub event so Unity stores the URL on the exchange.
     """
     api_key = os.getenv("LIVEKIT_API_KEY", "")
     api_secret = os.getenv("LIVEKIT_API_SECRET", "")
@@ -251,68 +281,25 @@ async def egress_complete(request: Request):
         "LIVEKIT_EGRESS_GCS_BUCKET",
         "assistant-call-recordings",
     )
-    gcs_uri = f"gs://{gcs_bucket}/{file_result.filename}"
+    recording_url = (
+        f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
+    )
 
-    # Extract assistant metadata from query params set when starting egress.
     assistant_id = request.query_params.get("assistant_id", "")
-    user_id = request.query_params.get("user_id", "")
     room_name = request.query_params.get("room_name", egress_info.room_name)
 
-    if not assistant_id or not user_id:
-        print(
-            f"[Egress] Missing assistant_id or user_id in webhook params, "
-            f"cannot register recording. assistant_id={assistant_id}, user_id={user_id}",
-        )
+    if not assistant_id:
+        print("[Egress] Missing assistant_id in webhook params, cannot publish event")
         return Response(status_code=200)
 
-    # Download the recording from GCS via a signed URL from Orchestra.
-    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
-    headers = {"Authorization": f"Bearer {admin_key}"}
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        # Get signed download URL from Orchestra.
-        signed_resp = await client.post(
-            f"{ORCHESTRA_URL}/storage/signed-url",
-            headers=headers,
-            json={"gcs_uri": gcs_uri},
-        )
-        if signed_resp.status_code >= 400:
-            print(f"[Egress] Failed to get signed URL: {signed_resp.text}")
-            return Response(status_code=500)
-
-        signed_url = signed_resp.json().get("signed_url", "")
-        if not signed_url:
-            print("[Egress] Empty signed URL returned")
-            return Response(status_code=500)
-
-        # Download the recording bytes.
-        dl_resp = await client.get(signed_url)
-        if dl_resp.status_code >= 400:
-            print(f"[Egress] Failed to download recording: {dl_resp.status_code}")
-            return Response(status_code=500)
-
-        recording_b64 = base64.b64encode(dl_resp.content).decode("utf-8")
-
-        # Upload to Orchestra via the existing admin endpoint.
-        payload = {
-            "recording_raw": recording_b64,
-            "content_type": "audio/mp3",
-            "assistant_id": int(assistant_id),
-            "user_id": user_id,
-            "conference_name": room_name,
-        }
-        upload_resp = await client.post(
-            f"{ORCHESTRA_URL}/admin/assistant/recordings",
-            headers=headers,
-            json=payload,
-        )
-
-    if upload_resp.status_code >= 400:
-        print(f"[Egress] Failed to register recording in Orchestra: {upload_resp.text}")
-        return Response(status_code=500)
+    _publish_recording_ready(
+        assistant_id=assistant_id,
+        conference_name=room_name,
+        recording_url=recording_url,
+    )
 
     print(
-        f"[Egress] Recording registered for assistant {assistant_id}, "
+        f"[Egress] Recording ready for assistant {assistant_id}, "
         f"room '{room_name}', size={file_result.size} bytes",
     )
     return {"success": True}
