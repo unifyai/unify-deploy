@@ -7,7 +7,6 @@ import re
 import time
 import traceback
 import requests
-from urllib.parse import quote_plus
 
 from common.metrics import (
     ORCHESTRA_GET_ASSISTANT_DURATION,
@@ -19,7 +18,6 @@ from google.cloud import pubsub_v1
 
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
-from livekit import api
 
 from azure.core.credentials import AccessToken, TokenCredential
 from msgraph import GraphServiceClient
@@ -713,51 +711,6 @@ def get_twilio_client():
     return TwilioClient(account_sid, auth_token)
 
 
-def get_livekit_api():
-    """Get LiveKit API client"""
-    url = os.getenv("LIVEKIT_URL")
-    api_key = os.getenv("LIVEKIT_API_KEY")
-    api_secret = os.getenv("LIVEKIT_API_SECRET")
-
-    if not url or not api_key or not api_secret:
-        raise RuntimeError(
-            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set",
-        )
-
-    return api.LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
-
-
-async def create_room_and_dispatch_livekit_agent(
-    room_name: str,
-    livekit_agent_name: str,
-    metadata: dict = None,
-):
-    """Create a LiveKit room and dispatch a LiveKit agent to it"""
-    livekit_api = get_livekit_api()
-
-    try:
-        # Create dispatch request - this will create the room if it doesn't exist
-        dispatch_request = api.CreateAgentDispatchRequest(
-            agent_name=livekit_agent_name,  # LiveKit API expects 'agent_name'
-            room=room_name,
-            metadata=json.dumps(metadata) if metadata else None,
-        )
-
-        # Dispatch agent to room (creates room automatically if needed)
-        dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
-        print(
-            f"Successfully created room '{room_name}' and dispatched LiveKit agent '{livekit_agent_name}'",
-        )
-        print(f"Dispatch ID: {dispatch.id}")
-
-        return dispatch
-    except Exception as e:
-        print(f"Error creating room and dispatching LiveKit agent: {str(e)}")
-        raise
-    finally:
-        await livekit_api.aclose()
-
-
 def create_conference_response(conference_name, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
@@ -780,60 +733,6 @@ def create_conference_response(conference_name, with_status=False):
         wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
     )
     return resp_user
-
-
-async def start_room_egress(room_name, assistant_id):
-    """Start an audio-only Room Composite Egress for a LiveKit room.
-
-    The recording is uploaded to GCS by LiveKit and a completion webhook
-    notifies Communication so it can publish a recording_ready Pub/Sub event.
-    """
-
-    livekit_api = get_livekit_api()
-    try:
-        gcs_credentials = os.getenv("LIVEKIT_EGRESS_GCS_CREDENTIALS", "")
-        gcs_bucket = os.getenv(
-            "LIVEKIT_EGRESS_GCS_BUCKET",
-            "assistant-call-recordings",
-        )
-        api_key = os.getenv("LIVEKIT_API_KEY", "")
-        is_staging = bool(STAGING)
-
-        prefix = "staging" if is_staging else "production"
-        filepath = f"{prefix}/{assistant_id}/{room_name}.mp3"
-
-        webhook_url = (
-            f"{COMMS_URL}/phone/egress-complete"
-            f"?assistant_id={quote_plus(str(assistant_id))}"
-            f"&room_name={quote_plus(room_name)}"
-        )
-
-        egress_request = api.RoomCompositeEgressRequest(
-            room_name=room_name,
-            audio_only=True,
-            file_outputs=[
-                api.EncodedFileOutput(
-                    file_type=3,  # MP3
-                    filepath=filepath,
-                    gcp=api.GCPUpload(
-                        credentials=gcs_credentials,
-                        bucket=gcs_bucket,
-                    ),
-                ),
-            ],
-            webhooks=[
-                api.WebhookConfig(url=webhook_url, signing_key=api_key),
-            ],
-        )
-        info = await livekit_api.egress.start_room_composite_egress(egress_request)
-        print(
-            f"[Egress] Started room composite egress {info.egress_id} "
-            f"for room '{room_name}' -> gs://{gcs_bucket}/{filepath}",
-        )
-    except Exception as e:
-        print(f"[Egress] Failed to start egress for room '{room_name}': {e}")
-    finally:
-        await livekit_api.aclose()
 
 
 def add_user_to_conference(
