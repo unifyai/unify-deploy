@@ -2,6 +2,7 @@ import os
 import httpx
 import base64
 import json
+from urllib.parse import quote_plus
 from fastapi import APIRouter, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
 from livekit.api import (
@@ -9,6 +10,12 @@ from livekit.api import (
     SIPInboundTrunkInfo,
     CreateSIPInboundTrunkRequest,
     CreateAgentDispatchRequest,
+    RoomCompositeEgressRequest,
+    EncodedFileOutput,
+    GCPUpload,
+    WebhookConfig,
+    TokenVerifier,
+    WebhookReceiver,
 )
 from livekit.protocol.sip import (
     ListSIPInboundTrunkRequest,
@@ -203,6 +210,114 @@ async def check_recording_status(request: Request):
     return {"success": True, "recording_url": recording_url}
 
 
+@unauth_router.post("/egress-complete")
+async def egress_complete(request: Request):
+    """Handle LiveKit Egress completion webhooks.
+
+    LiveKit signs the request with the API secret corresponding to the
+    signing_key we set on the WebhookConfig.  We verify the signature,
+    then download the recording from GCS and register it in Orchestra
+    via the existing admin endpoint (mirroring the Twilio recording flow).
+    """
+    api_key = os.getenv("LIVEKIT_API_KEY", "")
+    api_secret = os.getenv("LIVEKIT_API_SECRET", "")
+    auth_token = request.headers.get("Authorization", "")
+
+    body = (await request.body()).decode()
+    try:
+        receiver = WebhookReceiver(
+            TokenVerifier(api_key=api_key, api_secret=api_secret),
+        )
+        event = receiver.receive(body, auth_token)
+    except Exception as e:
+        print(f"[Egress] Webhook verification failed: {e}")
+        return Response(status_code=401)
+
+    if event.event != "egress_ended":
+        return Response(status_code=200)
+
+    egress_info = event.egress_info
+    print(
+        f"[Egress] Egress {egress_info.egress_id} ended for room "
+        f"'{egress_info.room_name}' status={egress_info.status}",
+    )
+
+    if not egress_info.file_results:
+        print("[Egress] No file results in egress info, skipping")
+        return Response(status_code=200)
+
+    file_result = egress_info.file_results[0]
+    gcs_bucket = os.getenv(
+        "LIVEKIT_EGRESS_GCS_BUCKET",
+        "assistant-call-recordings",
+    )
+    gcs_uri = f"gs://{gcs_bucket}/{file_result.filename}"
+
+    # Extract assistant metadata from query params set when starting egress.
+    assistant_id = request.query_params.get("assistant_id", "")
+    user_id = request.query_params.get("user_id", "")
+    room_name = request.query_params.get("room_name", egress_info.room_name)
+
+    if not assistant_id or not user_id:
+        print(
+            f"[Egress] Missing assistant_id or user_id in webhook params, "
+            f"cannot register recording. assistant_id={assistant_id}, user_id={user_id}",
+        )
+        return Response(status_code=200)
+
+    # Download the recording from GCS via a signed URL from Orchestra.
+    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
+    headers = {"Authorization": f"Bearer {admin_key}"}
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        # Get signed download URL from Orchestra.
+        signed_resp = await client.post(
+            f"{ORCHESTRA_URL}/storage/signed-url",
+            headers=headers,
+            json={"gcs_uri": gcs_uri},
+        )
+        if signed_resp.status_code >= 400:
+            print(f"[Egress] Failed to get signed URL: {signed_resp.text}")
+            return Response(status_code=500)
+
+        signed_url = signed_resp.json().get("signed_url", "")
+        if not signed_url:
+            print("[Egress] Empty signed URL returned")
+            return Response(status_code=500)
+
+        # Download the recording bytes.
+        dl_resp = await client.get(signed_url)
+        if dl_resp.status_code >= 400:
+            print(f"[Egress] Failed to download recording: {dl_resp.status_code}")
+            return Response(status_code=500)
+
+        recording_b64 = base64.b64encode(dl_resp.content).decode("utf-8")
+
+        # Upload to Orchestra via the existing admin endpoint.
+        payload = {
+            "recording_raw": recording_b64,
+            "content_type": "audio/mp3",
+            "assistant_id": int(assistant_id),
+            "user_id": user_id,
+            "conference_name": room_name,
+        }
+        upload_resp = await client.post(
+            f"{ORCHESTRA_URL}/admin/assistant/recordings",
+            headers=headers,
+            json=payload,
+        )
+
+    if upload_resp.status_code >= 400:
+        print(f"[Egress] Failed to register recording in Orchestra: {upload_resp.text}")
+        return Response(status_code=500)
+
+    print(
+        f"[Egress] Recording registered for assistant {assistant_id}, "
+        f"room '{room_name}', size={file_result.size} bytes",
+    )
+    return {"success": True}
+
+
 def get_livekit_api():
     """Get LiveKit API client"""
     url = os.getenv("LIVEKIT_URL")
@@ -221,14 +336,24 @@ async def create_room_and_dispatch_livekit_agent(
     room_name: str,
     livekit_agent_name: str,
     metadata: dict = None,
+    *,
+    record: bool = False,
+    assistant_id: str = "",
+    user_id: str = "",
 ):
-    """Create a LiveKit room and dispatch a LiveKit agent to it"""
+    """Create a LiveKit room and dispatch a LiveKit agent to it.
+
+    When *record* is True, a Room Composite Egress (audio-only, MP3) is
+    started for the room.  The recording is uploaded to GCS by LiveKit and a
+    completion webhook notifies this service so that it can register the
+    recording in Orchestra.
+    """
     livekit_api = get_livekit_api()
 
     try:
         # Create dispatch request - this will create the room if it doesn't exist
         dispatch_request = CreateAgentDispatchRequest(
-            agent_name=livekit_agent_name,  # LiveKit API expects 'agent_name'
+            agent_name=livekit_agent_name,
             room=room_name,
             metadata=json.dumps(metadata) if metadata else None,
         )
@@ -240,12 +365,71 @@ async def create_room_and_dispatch_livekit_agent(
         )
         print(f"Dispatch ID: {dispatch.id}")
 
+        if record:
+            await _start_room_egress(
+                livekit_api,
+                room_name,
+                assistant_id=assistant_id,
+                user_id=user_id,
+            )
+
         return dispatch
     except Exception as e:
         print(f"Error creating room and dispatching LiveKit agent: {str(e)}")
         raise
     finally:
         await livekit_api.aclose()
+
+
+async def _start_room_egress(
+    livekit_api: LiveKitAPI,
+    room_name: str,
+    *,
+    assistant_id: str,
+    user_id: str,
+):
+    """Start an audio-only Room Composite Egress that writes MP3 to GCS."""
+    gcs_credentials = os.getenv("LIVEKIT_EGRESS_GCS_CREDENTIALS", "")
+    gcs_bucket = os.getenv(
+        "LIVEKIT_EGRESS_GCS_BUCKET",
+        "assistant-call-recordings",
+    )
+    comms_url = os.getenv("UNITY_COMMS_URL", "")
+    api_key = os.getenv("LIVEKIT_API_KEY", "")
+    is_staging = bool(os.getenv("STAGING"))
+
+    prefix = "staging" if is_staging else "production"
+    filepath = f"{prefix}/{assistant_id}/{room_name}.mp3"
+
+    webhook_url = (
+        f"{comms_url}/phone/egress-complete"
+        f"?assistant_id={quote_plus(str(assistant_id))}"
+        f"&user_id={quote_plus(str(user_id))}"
+        f"&room_name={quote_plus(room_name)}"
+    )
+
+    egress_request = RoomCompositeEgressRequest(
+        room_name=room_name,
+        audio_only=True,
+        file_outputs=[
+            EncodedFileOutput(
+                file_type=3,  # MP3
+                filepath=filepath,
+                gcp=GCPUpload(
+                    credentials=gcs_credentials,
+                    bucket=gcs_bucket,
+                ),
+            ),
+        ],
+        webhooks=[
+            WebhookConfig(url=webhook_url, signing_key=api_key),
+        ],
+    )
+    info = await livekit_api.egress.start_room_composite_egress(egress_request)
+    print(
+        f"[Egress] Started room composite egress {info.egress_id} "
+        f"for room '{room_name}' -> gs://{gcs_bucket}/{filepath}",
+    )
 
 
 # Endpoints - JSON format
@@ -256,7 +440,13 @@ async def dispatch_livekit_agent(request: Request):
     room_name = data.get("room_name")
     if not room_name:
         room_name = livekit_agent_name
-    await create_room_and_dispatch_livekit_agent(room_name, livekit_agent_name)
+    await create_room_and_dispatch_livekit_agent(
+        room_name,
+        livekit_agent_name,
+        record=data.get("record", False),
+        assistant_id=data.get("assistant_id", ""),
+        user_id=data.get("user_id", ""),
+    )
     return {"success": True}
 
 
