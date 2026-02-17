@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Form, HTTPException
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
+from google.protobuf import duration_pb2
 import json
 import logging
 import os
@@ -67,6 +68,10 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             GCP_PROJECT_ID,
             f"{topic_name}-outbound-sub",
         )
+        actions_subscription_path = subscriber.subscription_path(
+            GCP_PROJECT_ID,
+            f"{topic_name}-actions-sub",
+        )
 
         # Create the topic if it doesn't already exist
         try:
@@ -75,7 +80,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             if "already exists" not in str(e).lower():
                 raise
 
-        # Create or update the subscription with no expiration
+        # Create or update the subscriptions with no expiration
         expiration_policy = pubsub_v1.types.ExpirationPolicy(ttl=None)
 
         try:
@@ -83,38 +88,73 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
                 "name": subscription_path,
                 "topic": topic_path,
                 "expiration_policy": expiration_policy,
-                "filter": 'NOT attributes.thread = "unify_message_outbound"',
+                "filter": (
+                    'NOT attributes.thread = "unify_message_outbound"'
+                    ' AND NOT attributes.thread = "action_event"'
+                ),
             }
             subscriber.create_subscription(request=request)
             request["name"] = outbound_subscription_path
             request["filter"] = 'attributes.thread = "unify_message_outbound"'
             subscriber.create_subscription(request=request)
+            request["name"] = actions_subscription_path
+            request["filter"] = 'attributes.thread = "action_event"'
+            request["message_retention_duration"] = duration_pb2.Duration(
+                seconds=1800,
+            )
+            subscriber.create_subscription(request=request)
         except Exception as e:
             if "already exists" in str(e).lower():
-                # Ensure the subscription never expires
+                # Ensure existing subscriptions never expire
                 subscription = pubsub_v1.types.Subscription(
                     name=subscription_path,
                     expiration_policy=expiration_policy,
                 )
-                request = {
+                update_request = {
                     "update_mask": {"paths": ["expiration_policy.ttl"]},
                     "subscription": subscription,
                 }
-                subscriber.update_subscription(request=request)
+                subscriber.update_subscription(request=update_request)
                 outbound_subscription = pubsub_v1.types.Subscription(
                     name=outbound_subscription_path,
                     expiration_policy=expiration_policy,
                 )
-                request["subscription"] = outbound_subscription
-                subscriber.update_subscription(request=request)
+                update_request["subscription"] = outbound_subscription
+                subscriber.update_subscription(request=update_request)
+                # Actions subscription may not exist yet on older assistants
+                # created before this feature. Try to create it; if it already
+                # exists, update its expiration policy.
+                try:
+                    subscriber.create_subscription(
+                        request={
+                            "name": actions_subscription_path,
+                            "topic": topic_path,
+                            "expiration_policy": expiration_policy,
+                            "filter": 'attributes.thread = "action_event"',
+                            "message_retention_duration": duration_pb2.Duration(
+                                seconds=1800,
+                            ),
+                        },
+                    )
+                except Exception as actions_err:
+                    if "already exists" in str(actions_err).lower():
+                        actions_subscription = pubsub_v1.types.Subscription(
+                            name=actions_subscription_path,
+                            expiration_policy=expiration_policy,
+                        )
+                        update_request["subscription"] = actions_subscription
+                        subscriber.update_subscription(request=update_request)
+                    else:
+                        raise
             else:
                 raise
 
         return {
             "success": True,
-            "message": "Topic and subscription ensured with no expiration",
+            "message": "Topic and subscriptions ensured with no expiration",
             "topic_name": topic_path,
             "subscription_name": subscription_path,
+            "actions_subscription_name": actions_subscription_path,
             "project_id": GCP_PROJECT_ID,
         }
     except Exception as e:

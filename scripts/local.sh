@@ -292,6 +292,28 @@ create_pubsub_topics() {
       log_warn "Subscription may already exist: ${topic}-sub"
     fi
   done
+
+  # Create additional filtered subscriptions for the test assistant topic
+  local assistant_topic="unity-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
+  local assistant_topic_path="projects/${GCP_PROJECT_ID}/topics/${assistant_topic}"
+
+  # Outbound subscription (chat messages)
+  local outbound_sub_path="projects/${GCP_PROJECT_ID}/subscriptions/${assistant_topic}-outbound-sub"
+  local outbound_body="{\"topic\": \"${assistant_topic_path}\", \"filter\": \"attributes.thread = \\\"unify_message_outbound\\\"\"}"
+  if curl -s -X PUT "${base_url}/${outbound_sub_path}" -H "Content-Type: application/json" -d "$outbound_body" &>/dev/null; then
+    log_success "Created subscription: ${assistant_topic}-outbound-sub"
+  else
+    log_warn "Subscription may already exist: ${assistant_topic}-outbound-sub"
+  fi
+
+  # Actions subscription (live action events for real-time streaming)
+  local actions_sub_path="projects/${GCP_PROJECT_ID}/subscriptions/${assistant_topic}-actions-sub"
+  local actions_body="{\"topic\": \"${assistant_topic_path}\", \"filter\": \"attributes.thread = \\\"action_event\\\"\", \"messageRetentionDuration\": \"1800s\"}"
+  if curl -s -X PUT "${base_url}/${actions_sub_path}" -H "Content-Type: application/json" -d "$actions_body" &>/dev/null; then
+    log_success "Created subscription: ${assistant_topic}-actions-sub"
+  else
+    log_warn "Subscription may already exist: ${assistant_topic}-actions-sub"
+  fi
 }
 
 # =============================================================================
