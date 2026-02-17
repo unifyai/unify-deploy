@@ -38,6 +38,7 @@ from .helpers import (
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
+    start_room_egress,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
     start_unity_job,
@@ -172,6 +173,12 @@ async def twilio_call_webhook(request: Request):
     except Exception as e:
         print(f"Error during conference setup: {str(e)}")
         return Response(content="Error setting up conference", status_code=500)
+
+    # Start LiveKit Egress recording on the room (fire-and-forget).
+    try:
+        await start_room_egress(room_name, assistant_id)
+    except Exception as e:
+        print(f"[Egress] Non-fatal: failed to start egress for call: {e}")
 
     print("Returning TwiML response")
     return Response(content=str(resp_user), media_type="text/xml")

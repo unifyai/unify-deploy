@@ -1,11 +1,9 @@
 import os
-import httpx
 import json
 from urllib.parse import quote_plus
 from fastapi import APIRouter, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
-from google.cloud import pubsub_v1, storage
-from google.oauth2.service_account import Credentials
+from google.cloud import pubsub_v1
 from livekit.api import (
     LiveKitAPI,
     SIPInboundTrunkInfo,
@@ -22,7 +20,7 @@ from livekit.protocol.sip import (
     ListSIPInboundTrunkRequest,
     DeleteSIPTrunkRequest,
 )
-from communication.helpers import ADAPTERS_URL, get_twilio_client, ORCHESTRA_URL
+from communication.helpers import ADAPTERS_URL, get_twilio_client
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,31 +38,6 @@ def create_conference_response(conference_name, sip_uri, with_status=False):
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/sip-status",
         status_callback_event="initiated ringing answered completed",
     )
-    # if with_status:
-    #     dial_user.conference(
-    #         conference_name,
-    #         startConferenceOnEnter=True,
-    #         endConferenceOnExit=True,
-    #         muted=False,
-    #         wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-    #         record="record-from-start",
-    #         recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-    #         recording_status_callback_event="completed",
-    #         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/conference-status",
-    #         status_callback_event=["completed"],
-    #     )
-    #     return resp_user
-
-    # dial_user.conference(
-    #     conference_name,
-    #     startConferenceOnEnter=True,
-    #     endConferenceOnExit=True,
-    #     muted=False,
-    #     wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-    #     record="record-from-start",
-    #     recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-    #     recording_status_callback_event="completed",
-    # )
     return resp_user
 
 
@@ -108,21 +81,6 @@ def add_user_to_conference(
     return call.sid
 
 
-def _get_recordings_bucket():
-    """Get a GCS bucket client for the recordings bucket."""
-    creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
-    bucket_name = os.getenv(
-        "GCS_RECORDINGS_BUCKET",
-        "assistant-call-recordings",
-    )
-    if creds_json:
-        creds = Credentials.from_service_account_info(creds_json)
-        client = storage.Client(credentials=creds)
-    else:
-        client = storage.Client()
-    return client.bucket(bucket_name), bucket_name
-
-
 def _publish_recording_ready(
     assistant_id: str,
     conference_name: str,
@@ -154,93 +112,6 @@ def _publish_recording_ready(
 
 
 # Endpoints - Form format
-@unauth_router.post("/recording")
-async def check_recording_status(request: Request):
-    """Handle Twilio recording completion callback.
-
-    Downloads the MP3 from Twilio, uploads it directly to the GCS
-    recordings bucket, and publishes a recording_ready Pub/Sub event
-    so Unity can store the URL on the exchange.
-    """
-    data = await request.form()
-    conference_name = request.query_params.get("conference_name")
-    print("Conference name: ", conference_name)
-
-    recording_url = data.get("RecordingUrl")
-    if not recording_url:
-        return {"success": False, "error": "RecordingUrl is required"}
-
-    # Download MP3 from Twilio.
-    recording_url = recording_url + ".mp3"
-    async with httpx.AsyncClient(
-        auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")),
-    ) as httpx_client:
-        resp = await httpx_client.get(recording_url)
-    if resp.status_code >= 400:
-        print("Failed to get recording from Twilio")
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail="Failed to get recording from Twilio",
-        )
-    audio_bytes = resp.content
-
-    # Look up assistant_id from the call's phone number.
-    twilio_client = get_twilio_client()
-    recording_sid = data.get("RecordingSid")
-    recording = twilio_client.recordings(recording_sid).fetch()
-    call = twilio_client.calls(recording.call_sid).fetch()
-
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    async with httpx.AsyncClient() as httpx_client:
-        resp = await httpx_client.get(
-            f"{ORCHESTRA_URL}/admin/assistant",
-            params={"phone": call._from},
-            headers=headers,
-        )
-        assistants = resp.json()["info"]
-        if len(assistants) == 0:
-            resp = await httpx_client.get(
-                f"{ORCHESTRA_URL}/admin/assistant",
-                params={"phone": call.to},
-                headers=headers,
-            )
-            assistants = resp.json()["info"]
-    if resp.status_code >= 400:
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail="Failed to get assistants from Orchestra",
-        )
-
-    assistant_id = None
-    for assistant in assistants:
-        if assistant["phone"] in [call._from, call.to]:
-            assistant_id = assistant["agent_id"]
-            break
-
-    if assistant_id is None:
-        print("[Recording] Could not resolve assistant_id from phone number")
-        return Response(status_code=200)
-
-    # Upload directly to GCS recordings bucket.
-    is_staging = bool(os.getenv("STAGING"))
-    prefix = "staging" if is_staging else "production"
-    filepath = f"{prefix}/{assistant_id}/{conference_name}.mp3"
-
-    bucket, bucket_name = _get_recordings_bucket()
-    blob = bucket.blob(filepath)
-    blob.upload_from_string(audio_bytes, content_type="audio/mp3")
-    gcs_public_url = blob.public_url
-    print(f"[Recording] Uploaded to gs://{bucket_name}/{filepath}")
-
-    # Publish recording_ready event via Pub/Sub.
-    _publish_recording_ready(
-        assistant_id=str(assistant_id),
-        conference_name=conference_name,
-        recording_url=gcs_public_url,
-    )
-    return {"success": True, "recording_url": gcs_public_url}
-
-
 @unauth_router.post("/egress-complete")
 async def egress_complete(request: Request):
     """Handle LiveKit Egress completion webhooks.

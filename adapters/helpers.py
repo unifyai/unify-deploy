@@ -761,10 +761,6 @@ async def create_room_and_dispatch_livekit_agent(
 def create_conference_response(conference_name, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
-    recording_status_callback = (
-        f"{COMMS_URL}/phone/recording?" f"conference_name={quote_plus(conference_name)}"
-    )
-    print("Recording status callback: ", recording_status_callback)
     if with_status:
         dial_user.conference(
             conference_name,
@@ -772,9 +768,6 @@ def create_conference_response(conference_name, with_status=False):
             endConferenceOnExit=True,
             muted=False,
             wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-            record="record-from-start",
-            recording_status_callback=recording_status_callback,
-            recording_status_callback_event="completed",
             status_callback=f"{COMMS_URL}/phone/conference-status",
             status_callback_event="end",
         )
@@ -785,11 +778,62 @@ def create_conference_response(conference_name, with_status=False):
         endConferenceOnExit=True,
         muted=False,
         wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-        record="record-from-start",
-        recording_status_callback=recording_status_callback,
-        recording_status_callback_event="completed",
     )
     return resp_user
+
+
+async def start_room_egress(room_name, assistant_id):
+    """Start an audio-only Room Composite Egress for a LiveKit room.
+
+    The recording is uploaded to GCS by LiveKit and a completion webhook
+    notifies Communication so it can publish a recording_ready Pub/Sub event.
+    """
+
+    livekit_api = get_livekit_api()
+    try:
+        gcs_credentials = os.getenv("LIVEKIT_EGRESS_GCS_CREDENTIALS", "")
+        gcs_bucket = os.getenv(
+            "LIVEKIT_EGRESS_GCS_BUCKET",
+            "assistant-call-recordings",
+        )
+        api_key = os.getenv("LIVEKIT_API_KEY", "")
+        is_staging = bool(STAGING)
+
+        prefix = "staging" if is_staging else "production"
+        filepath = f"{prefix}/{assistant_id}/{room_name}.mp3"
+
+        webhook_url = (
+            f"{COMMS_URL}/phone/egress-complete"
+            f"?assistant_id={quote_plus(str(assistant_id))}"
+            f"&room_name={quote_plus(room_name)}"
+        )
+
+        egress_request = api.RoomCompositeEgressRequest(
+            room_name=room_name,
+            audio_only=True,
+            file_outputs=[
+                api.EncodedFileOutput(
+                    file_type=3,  # MP3
+                    filepath=filepath,
+                    gcp=api.GCPUpload(
+                        credentials=gcs_credentials,
+                        bucket=gcs_bucket,
+                    ),
+                ),
+            ],
+            webhooks=[
+                api.WebhookConfig(url=webhook_url, signing_key=api_key),
+            ],
+        )
+        info = await livekit_api.egress.start_room_composite_egress(egress_request)
+        print(
+            f"[Egress] Started room composite egress {info.egress_id} "
+            f"for room '{room_name}' -> gs://{gcs_bucket}/{filepath}",
+        )
+    except Exception as e:
+        print(f"[Egress] Failed to start egress for room '{room_name}': {e}")
+    finally:
+        await livekit_api.aclose()
 
 
 def add_user_to_conference(
