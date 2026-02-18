@@ -23,7 +23,7 @@ from twilio.twiml.voice_response import VoiceResponse
 
 from common.metrics import setup_metrics
 
-from common.livekit import verify_livekit_webhook
+from common.livekit import start_room_egress, verify_livekit_webhook
 
 from .helpers import (
     add_user_to_conference,
@@ -40,7 +40,6 @@ from .helpers import (
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
-    start_room_egress,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
     start_unity_job,
