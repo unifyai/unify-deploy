@@ -284,6 +284,9 @@ async def livekit_recording_complete(request: Request):
     assistant_id = request.query_params.get("assistant_id", "")
     user_id = request.query_params.get("user_id", "")
     room_name = request.query_params.get("room_name", egress_info.room_name)
+    print(f"Assistant ID: {assistant_id}")
+    print(f"User ID: {user_id}")
+    print(f"Room Name: {room_name}")
 
     if not assistant_id:
         print("[Recording] Missing assistant_id, cannot route event")
