@@ -547,7 +547,7 @@ def start_unity_job(assistant: dict, medium: str):
                 f"{COMMS_URL}/infra/vm/start",
                 headers=headers,
                 json={"assistant_id": assistant_id, "vm_type": vm_type},
-                timeout=60,
+                timeout=1,
             )
             if vm_response.status_code == 200:
                 print(f"{vm_type.capitalize()} VM started for assistant {assistant_id}")
