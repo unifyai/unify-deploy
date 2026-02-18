@@ -10,7 +10,9 @@ from livekit.api import (
     GCPUpload,
     LiveKitAPI,
     RoomCompositeEgressRequest,
+    TokenVerifier,
     WebhookConfig,
+    WebhookReceiver,
 )
 
 
@@ -35,6 +37,7 @@ async def create_room_and_dispatch_agent(
     *,
     record: bool = False,
     assistant_id: str = "",
+    user_id: str = "",
 ):
     """Create a LiveKit room, dispatch an agent, and optionally start recording.
 
@@ -59,7 +62,7 @@ async def create_room_and_dispatch_agent(
         print(f"Dispatch ID: {dispatch.id}")
 
         if record:
-            await _start_room_egress(livekit_api, room_name, assistant_id)
+            await _start_room_egress(livekit_api, room_name, assistant_id, user_id)
 
         return dispatch
     except Exception as e:
@@ -69,7 +72,7 @@ async def create_room_and_dispatch_agent(
         await livekit_api.aclose()
 
 
-async def start_room_egress(room_name: str, assistant_id: str):
+async def start_room_egress(room_name: str, assistant_id: str, user_id: str = ""):
     """Start an audio-only Room Composite Egress on an existing room.
 
     Use this when the room was created externally (e.g. by a SIP trunk)
@@ -77,7 +80,7 @@ async def start_room_egress(room_name: str, assistant_id: str):
     """
     livekit_api = get_livekit_api()
     try:
-        await _start_room_egress(livekit_api, room_name, assistant_id)
+        await _start_room_egress(livekit_api, room_name, assistant_id, user_id)
     except Exception as e:
         print(f"[Egress] Failed to start egress for room '{room_name}': {e}")
     finally:
@@ -88,6 +91,7 @@ async def _start_room_egress(
     livekit_api: LiveKitAPI,
     room_name: str,
     assistant_id: str,
+    user_id: str,
 ):
     """Start an audio-only Room Composite Egress that writes MP3 to GCS."""
     gcs_credentials = os.getenv("LIVEKIT_EGRESS_GCS_CREDENTIALS", "")
@@ -95,7 +99,7 @@ async def _start_room_egress(
         "LIVEKIT_EGRESS_GCS_BUCKET",
         "assistant-call-recordings",
     )
-    comms_url = os.getenv("UNITY_COMMS_URL", "")
+    adapters_url = os.getenv("UNITY_ADAPTERS_URL", "")
     api_key = os.getenv("LIVEKIT_API_KEY", "")
     is_staging = bool(os.getenv("STAGING"))
 
@@ -103,8 +107,9 @@ async def _start_room_egress(
     filepath = f"{prefix}/{assistant_id}/{room_name}.mp3"
 
     webhook_url = (
-        f"{comms_url}/phone/egress-complete"
+        f"{adapters_url}/livekit/recording-complete"
         f"?assistant_id={quote_plus(str(assistant_id))}"
+        f"&user_id={quote_plus(user_id)}"
         f"&room_name={quote_plus(room_name)}"
     )
 
@@ -130,3 +135,16 @@ async def _start_room_egress(
         f"[Egress] Started room composite egress {info.egress_id} "
         f"for room '{room_name}' -> gs://{gcs_bucket}/{filepath}",
     )
+
+
+def verify_livekit_webhook(body: str, auth_token: str):
+    """Verify a LiveKit webhook signature and return the parsed event.
+
+    Raises on verification failure.
+    """
+    api_key = os.getenv("LIVEKIT_API_KEY", "")
+    api_secret = os.getenv("LIVEKIT_API_SECRET", "")
+    receiver = WebhookReceiver(
+        TokenVerifier(api_key=api_key, api_secret=api_secret),
+    )
+    return receiver.receive(body, auth_token)

@@ -23,6 +23,8 @@ from twilio.twiml.voice_response import VoiceResponse
 
 from common.metrics import setup_metrics
 
+from common.livekit import verify_livekit_webhook
+
 from .helpers import (
     add_user_to_conference,
     build_webhook_context,
@@ -176,7 +178,8 @@ async def twilio_call_webhook(request: Request):
 
     # Start LiveKit Egress recording on the room (fire-and-forget).
     try:
-        await start_room_egress(room_name, assistant_id)
+        user_id = context["assistant"]["user_id"]
+        await start_room_egress(room_name, assistant_id, user_id)
     except Exception as e:
         print(f"[Egress] Non-fatal: failed to start egress for call: {e}")
 
@@ -243,6 +246,108 @@ async def twilio_call_status_webhook(request: Request):
             print(f"Error publishing to Pub/Sub: {str(e)}")
 
     return Response(status_code=200)
+
+
+# =============================================================================
+# LiveKit Webhooks
+# =============================================================================
+@app.post("/livekit/recording-complete")
+async def livekit_recording_complete(request: Request):
+    """Handle LiveKit Egress completion webhooks for call/meet recordings.
+
+    LiveKit Egress uploads the recording directly to GCS. This adapter
+    verifies the webhook, ensures the assistant's Unity container is
+    running, and publishes a recording_ready Pub/Sub event so Unity can
+    link the recording URL to the transcript exchange.
+    """
+    body = (await request.body()).decode()
+    auth_token = request.headers.get("Authorization", "")
+
+    try:
+        event = verify_livekit_webhook(body, auth_token)
+    except Exception as e:
+        print(f"[Recording] Webhook verification failed: {e}")
+        return Response(status_code=401)
+
+    if event.event != "egress_ended":
+        return Response(status_code=200)
+
+    egress_info = event.egress_info
+    print(
+        f"[Recording] Egress {egress_info.egress_id} ended for room "
+        f"'{egress_info.room_name}' status={egress_info.status}",
+    )
+
+    if not egress_info.file_results:
+        print("[Recording] No file results in egress info, skipping")
+        return Response(status_code=200)
+
+    assistant_id = request.query_params.get("assistant_id", "")
+    user_id = request.query_params.get("user_id", "")
+    room_name = request.query_params.get("room_name", egress_info.room_name)
+
+    if not assistant_id:
+        print("[Recording] Missing assistant_id, cannot route event")
+        return Response(status_code=200)
+
+    # Ensure the assistant's container is running so the Pub/Sub message
+    # has a receiver. Uses validate_contact=False (this is an internal
+    # infrastructure event, not a user-initiated contact).
+    try:
+        context = build_webhook_context(
+            "recording",
+            destination="",
+            sender="",
+            assistant_id=assistant_id,
+            validate_contact=False,
+            ensure_job=True,
+        )
+        print(
+            f"[Recording] Assistant {assistant_id} job running: "
+            f"{context['is_job_running']}",
+        )
+    except Exception as e:
+        print(f"[Recording] Failed to ensure job for assistant {assistant_id}: {e}")
+
+    # Construct GCS public URL and publish.
+    file_result = egress_info.file_results[0]
+    gcs_bucket = os.getenv(
+        "LIVEKIT_EGRESS_GCS_BUCKET",
+        "assistant-call-recordings",
+    )
+    recording_url = (
+        f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
+    )
+
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    try:
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "recording_ready",
+                    "event": {
+                        "assistant_id": str(assistant_id),
+                        "user_id": str(user_id),
+                        "conference_name": room_name,
+                        "recording_url": recording_url,
+                    },
+                },
+            ).encode("utf-8"),
+        )
+        if "test" in str(assistant_id):
+            publish_future.result(timeout=10)
+        print(
+            f"[Recording] Published recording_ready for assistant {assistant_id}, "
+            f"room '{room_name}', size={file_result.size} bytes",
+        )
+    except Exception as e:
+        print(f"[Recording] Error publishing to Pub/Sub: {e}")
+        return Response(status_code=500)
+
+    return {"success": True}
 
 
 @app.post("/twilio/sms")

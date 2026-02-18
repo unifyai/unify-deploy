@@ -815,3 +815,112 @@ def test_microsoft_router_routes_teams_notification(test_client):
     print("Microsoft router teams response:", response.text)
     assert response.status_code == 200
     assert response.text == "OK"
+
+
+# =============================================================================
+# LiveKit Recording Webhook Tests
+# =============================================================================
+
+
+def _sign_livekit_webhook(body: str) -> str:
+    """Generate a valid LiveKit webhook Authorization token for a given body.
+
+    Uses the same signing mechanism that LiveKit Egress uses: SHA256 of the
+    body placed in a JWT claim, signed with LIVEKIT_API_SECRET.
+    """
+    import hashlib
+    from livekit.api import AccessToken
+
+    body_hash = hashlib.sha256(body.encode()).digest()
+    sha256_b64 = base64.b64encode(body_hash).decode()
+
+    token = (
+        AccessToken(
+            api_key=os.getenv("LIVEKIT_API_KEY"),
+            api_secret=os.getenv("LIVEKIT_API_SECRET"),
+        )
+        .with_sha256(sha256_b64)
+        .to_jwt()
+    )
+    return token
+
+
+def test_livekit_recording_webhook_rejects_invalid_signature(test_client):
+    """Test that the recording webhook rejects requests with bad signatures."""
+    endpoint = "/livekit/recording-complete"
+    response = test_client.make_request(
+        "POST",
+        endpoint,
+        data="invalid-body",
+        headers={"Authorization": "Bearer bad-token"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_livekit_recording_webhook_happy_path(test_client):
+    """Test successful recording webhook processing.
+
+    Sends a properly signed LiveKit egress_ended event and verifies that a
+    recording_ready Pub/Sub message is published with the correct fields.
+    """
+    endpoint = "/livekit/recording-complete"
+    assistant_id = "default-test-assistant"
+    room_name = "unity_test_room"
+
+    egress_body = json.dumps(
+        {
+            "event": "egress_ended",
+            "egressInfo": {
+                "egressId": "eg-test-123",
+                "roomName": room_name,
+                "status": 0,
+                "fileResults": [
+                    {
+                        "filename": f"staging/{assistant_id}/{room_name}.mp3",
+                        "size": 123456,
+                    },
+                ],
+            },
+        },
+    )
+    auth_token = _sign_livekit_webhook(egress_body)
+
+    user_id = "default-test-user"
+    response = test_client.make_request(
+        "POST",
+        f"{endpoint}?assistant_id={assistant_id}&user_id={user_id}&room_name={room_name}",
+        data=egress_body,
+        headers={
+            "Authorization": auth_token,
+            "Content-Type": "application/json",
+        },
+    )
+
+    print("Recording webhook response:", response.text)
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+    # Check that the recording_ready message was published to Pub/Sub
+    message = subscriber.pull(
+        subscription=subscription_path,
+        max_messages=1,
+    ).received_messages[0]
+    ack_id = message.ack_id
+    message = message.message
+    try:
+        data = json.loads(message.data.decode("utf-8"))
+    except json.JSONDecodeError:
+        assert False, "Failed to decode message data"
+    try:
+        assert data is not None
+        assert "thread" in data and data["thread"] == "recording_ready"
+        assert "event" in data and data["event"] is not None
+        assert data["event"]["assistant_id"] == assistant_id
+        assert data["event"]["user_id"] == user_id
+        assert data["event"]["conference_name"] == room_name
+        assert "storage.googleapis.com" in data["event"]["recording_url"]
+        assert f"{room_name}.mp3" in data["event"]["recording_url"]
+    except AssertionError as e:
+        print(e)
+    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])

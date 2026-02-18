@@ -2,13 +2,10 @@ import os
 import json
 from fastapi import APIRouter, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
-from google.cloud import pubsub_v1
 from livekit.api import (
     LiveKitAPI,
     SIPInboundTrunkInfo,
     CreateSIPInboundTrunkRequest,
-    TokenVerifier,
-    WebhookReceiver,
 )
 from livekit.protocol.sip import (
     ListSIPInboundTrunkRequest,
@@ -74,101 +71,6 @@ def add_user_to_conference(
         twiml=str(response),
     )
     return call.sid
-
-
-def _publish_recording_ready(
-    assistant_id: str,
-    conference_name: str,
-    recording_url: str,
-):
-    """Publish a recording_ready event to the assistant's Pub/Sub topic."""
-    is_staging = bool(os.getenv("STAGING"))
-    topic_name = f"unity-{assistant_id}" + ("" if not is_staging else "-staging")
-    publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    message = {
-        "thread": "recording_ready",
-        "event": {
-            "assistant_id": str(assistant_id),
-            "conference_name": conference_name,
-            "recording_url": recording_url,
-        },
-    }
-    publish_future = publisher.publish(
-        topic_path,
-        json.dumps(message).encode("utf-8"),
-    )
-    if "test" in str(assistant_id):
-        publish_future.result(timeout=10)
-    print(
-        f"[Recording] Published recording_ready for assistant {assistant_id}, "
-        f"conference_name={conference_name}",
-    )
-
-
-# Endpoints - Form format
-@unauth_router.post("/egress-complete")
-async def egress_complete(request: Request):
-    """Handle LiveKit Egress completion webhooks.
-
-    LiveKit Egress already uploaded the recording to GCS. We just verify
-    the webhook signature, construct the public URL, and publish a
-    recording_ready Pub/Sub event so Unity stores the URL on the exchange.
-    """
-    api_key = os.getenv("LIVEKIT_API_KEY", "")
-    api_secret = os.getenv("LIVEKIT_API_SECRET", "")
-    auth_token = request.headers.get("Authorization", "")
-
-    body = (await request.body()).decode()
-    try:
-        receiver = WebhookReceiver(
-            TokenVerifier(api_key=api_key, api_secret=api_secret),
-        )
-        event = receiver.receive(body, auth_token)
-    except Exception as e:
-        print(f"[Egress] Webhook verification failed: {e}")
-        return Response(status_code=401)
-
-    if event.event != "egress_ended":
-        return Response(status_code=200)
-
-    egress_info = event.egress_info
-    print(
-        f"[Egress] Egress {egress_info.egress_id} ended for room "
-        f"'{egress_info.room_name}' status={egress_info.status}",
-    )
-
-    if not egress_info.file_results:
-        print("[Egress] No file results in egress info, skipping")
-        return Response(status_code=200)
-
-    file_result = egress_info.file_results[0]
-    gcs_bucket = os.getenv(
-        "LIVEKIT_EGRESS_GCS_BUCKET",
-        "assistant-call-recordings",
-    )
-    recording_url = (
-        f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
-    )
-
-    assistant_id = request.query_params.get("assistant_id", "")
-    room_name = request.query_params.get("room_name", egress_info.room_name)
-
-    if not assistant_id:
-        print("[Egress] Missing assistant_id in webhook params, cannot publish event")
-        return Response(status_code=200)
-
-    _publish_recording_ready(
-        assistant_id=assistant_id,
-        conference_name=room_name,
-        recording_url=recording_url,
-    )
-
-    print(
-        f"[Egress] Recording ready for assistant {assistant_id}, "
-        f"room '{room_name}', size={file_result.size} bytes",
-    )
-    return {"success": True}
 
 
 # Endpoints - JSON format
