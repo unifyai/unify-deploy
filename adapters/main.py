@@ -23,7 +23,7 @@ from twilio.twiml.voice_response import VoiceResponse
 
 from common.metrics import setup_metrics
 
-from common.livekit import start_room_egress, verify_livekit_webhook
+from common.livekit import make_room_name, start_room_egress, verify_livekit_webhook
 
 from .helpers import (
     add_user_to_conference,
@@ -106,7 +106,7 @@ async def twilio_call_webhook(request: Request):
     # conference name and SIP URI
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
-    room_name = f"unity_{twilio_number}"
+    room_name = make_room_name(assistant_id, "phone")
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
     print(f"LiveKit room will be: {room_name}")
@@ -551,8 +551,7 @@ async def teams_call_webhook(request: Request):
             media_type="application/json",
         )
 
-    # Generate room name (consistent with Twilio pattern)
-    room_name = f"unity_{teams_number}"
+    room_name = make_room_name(assistant_id, "teams")
     sip_uri = f"sip:{teams_number}@{os.getenv('LIVEKIT_SIP_URI')}"
 
     # print(f"Teams call for assistant {assistant_id}, room: {room_name}")
@@ -1096,10 +1095,10 @@ async def unify_meet_webhook(request: Request):
         form_data = await request.form()
         payload = dict(form_data)
 
-    livekit_agent_name = payload.get("livekit_agent_name", "")
     room_name = payload.get("room_name", "")
-    if not livekit_agent_name or not room_name:
-        print("livekit_agent_name and room_name are required")
+    livekit_agent_name = payload.get("livekit_agent_name", "") or room_name
+    if not room_name:
+        print("room_name is required")
         return Response(status_code=400)
 
     assistant_id_input = payload.get("assistant_id", "")
@@ -1631,13 +1630,10 @@ async def outlook_notification_processor(request: Request):
         print(f"from_email: {from_email}")
 
         # Validate contact now that we have the sender
-        user_name = assistant_data["user_name"]
-        assistant_first_name = assistant_data["assistant_first_name"]
-        assistant_surname = assistant_data["assistant_surname"]
         contacts, is_valid_contact = check_valid_contact(
             email_address=from_email,
             medium="email",
-            assistant_context=f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}",
+            assistant_context=f"{user_id}/{assistant_id}",
             api_key=api_key,
             user_number=assistant_data.get("user_number", ""),
             user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),
@@ -1840,13 +1836,10 @@ async def teams_notification_processor(request: Request):
             return Response(status_code=200)
 
         # Validate contact
-        user_name = assistant_data["user_name"]
-        assistant_first_name = assistant_data["assistant_first_name"]
-        assistant_surname = assistant_data["assistant_surname"]
         contacts, is_valid = check_valid_contact(
             email_address=sender_email,
             medium="teams",
-            assistant_context=f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}",
+            assistant_context=f"{user_id}/{assistant_id}",
             api_key=api_key,
             user_number=assistant_data.get("user_number", ""),
             user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),

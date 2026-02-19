@@ -30,7 +30,7 @@ class VMCreateResponse(BaseModel):
     desktop_url: str  # https://unity-assistant-{id}.vm.unify.ai
     status: str
     # SSH file sync configuration
-    ssh_username: Optional[str] = None  # SSH username for file sync (e.g., "JohnDoe")
+    ssh_username: Optional[str] = None  # SSH username for file sync (str(agent_id))
     ssh_port: Optional[int] = None  # SSH port for file sync (2222)
 
 

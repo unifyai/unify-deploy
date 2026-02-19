@@ -931,7 +931,7 @@ def provision_vm_full(
     Args:
         assistant_id: The assistant ID (numeric string)
         unify_apikey: Unify API key (used for VNC, Windows password, and secret storage)
-        assistant_name: Assistant name (used for Windows/SSH username)
+        assistant_name: Assistant identifier, typically str(assistant_id) (used for Windows/SSH username)
         vm_type: "windows" or "ubuntu"
 
     Returns:
@@ -942,7 +942,7 @@ def provision_vm_full(
     )
 
     # Step 1: Generate SSH keypair for file sync
-    # Note: assistant_name is already formatted (e.g., "JohnDoe") by the caller
+    # Note: assistant_name is typically str(assistant_id) passed by the caller
     ssh_username = assistant_name
     private_key, public_key = generate_ssh_keypair()
     logger.info(f"Generated SSH keypair for user: {ssh_username}")

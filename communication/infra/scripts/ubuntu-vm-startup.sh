@@ -18,7 +18,7 @@
 #   orchestra-url     - Orchestra API base URL for agent service
 #   comms-url         - Communication service base URL for agent service
 #   staging           - Use staging branch (any value = true)
-#   ssh-username      - SSH username for file sync (e.g., JohnDoe)
+#   ssh-username      - SSH username for file sync (e.g., "42" — the assistant's agent_id)
 #   ssh-public-key    - SSH public key for file sync (Ed25519)
 #
 # Usage (GCP):
