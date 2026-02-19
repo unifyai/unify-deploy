@@ -313,10 +313,7 @@ async def livekit_recording_complete(request: Request):
 
     # Construct GCS public URL and publish.
     file_result = egress_info.file_results[0]
-    gcs_bucket = os.getenv(
-        "LIVEKIT_EGRESS_GCS_BUCKET",
-        "assistant-call-recordings",
-    )
+    gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
     recording_url = (
         f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
     )
