@@ -2,6 +2,7 @@
 
 import json
 import os
+from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
 from livekit.api import (
@@ -110,7 +111,8 @@ async def _start_room_egress(
     is_staging = bool(os.getenv("STAGING"))
 
     prefix = "staging" if is_staging else "production"
-    filepath = f"{prefix}/{assistant_id}/{room_name}.mp3"
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    filepath = f"{prefix}/{assistant_id}/{room_name}_{timestamp}.mp3"
 
     webhook_url = (
         f"{adapters_url}/livekit/recording-complete"
