@@ -321,16 +321,7 @@ async def livekit_recording_complete(request: Request):
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"topic_path: {topic_path}")
-    print({
-        "thread": "recording_ready",
-        "event": {
-            "assistant_id": str(assistant_id),
-            "user_id": str(user_id),
-            "conference_name": room_name,
-            "recording_url": recording_url,
-        },
-    })
+    print(f"Publishing recording_ready to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
