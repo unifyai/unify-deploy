@@ -1174,11 +1174,11 @@ def publish_outlook_thread_id(
         )
 
 
-def dispatch_livekit_agent(livekit_agent_name: str):
+def dispatch_livekit_agent(room_name: str):
     response = requests.post(
         f"{COMMS_URL}/phone/dispatch-livekit-agent",
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-        json={"livekit_agent_name": livekit_agent_name},
+        json={"room_name": room_name},
     )
     if response.status_code != 200:
         print(f"Failed to dispatch LiveKit agent. Status: {response.status_code}")

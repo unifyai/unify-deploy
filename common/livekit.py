@@ -16,6 +16,15 @@ from livekit.api import (
 )
 
 
+def make_room_name(assistant_id: str, medium: str) -> str:
+    """Canonical LiveKit room name for a given assistant and medium.
+
+    Format: unity_{assistant_id}_{medium}
+    Examples: unity_25_phone, unity_25_meet, unity_25_teams
+    """
+    return f"unity_{assistant_id}_{medium}"
+
+
 def get_livekit_api() -> LiveKitAPI:
     """Get a LiveKit API client from environment variables."""
     url = os.getenv("LIVEKIT_URL")

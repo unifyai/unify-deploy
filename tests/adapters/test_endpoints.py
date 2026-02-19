@@ -86,7 +86,7 @@ def test_twilio_call_webhook(test_client):
         assert "event" in data and data["event"] is not None
         assert f"Unity_{assistant_number[1:]}" in data["event"]["conference_name"]
         assert data["event"]["caller_number"] == user_number
-        assert data["event"]["livekit_room"] == f"unity_{assistant_number}"
+        assert data["event"]["livekit_room"] == "unity_default-test-assistant_phone"
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert (
             "call_metadata" in data["event"]
@@ -268,10 +268,9 @@ def test_log_pre_hire_chats_webhook(test_client):
 def test_unify_meet_webhook(test_client):
     """Test successful unify_meet webhook processing."""
     endpoint = "/unify/meet"
-    livekit_agent_name = "unify_meet_default-test-assistant"
+    room_name = "unity_default-test-assistant_meet"
     json_payload = {
-        "livekit_agent_name": livekit_agent_name,
-        "room_name": livekit_agent_name,
+        "room_name": room_name,
         "assistant_id": "default-test-assistant",
     }
 
@@ -301,8 +300,8 @@ def test_unify_meet_webhook(test_client):
         assert "thread" in data and data["thread"] == "unify_meet"
         assert "event" in data and data["event"] is not None
         assert data["event"]["assistant_id"] == "default-test-assistant"
-        assert data["event"]["livekit_room"] == livekit_agent_name
-        assert data["event"]["livekit_agent_name"] == livekit_agent_name
+        assert data["event"]["livekit_room"] == room_name
+        assert data["event"]["livekit_agent_name"] == room_name
     except AssertionError as e:
         print(e)
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
@@ -467,7 +466,7 @@ def test_teams_call_webhook(test_client):
 
     response_data = response.json()
     assert response_data["success"] is True
-    assert response_data["room_name"] == f"unity_{teams_number}"
+    assert response_data["room_name"] == "unity_default-test-assistant_teams"
 
 
 def test_assistant_wakeup_webhook(test_client):
@@ -617,8 +616,7 @@ def test_unify_meet_webhook_unauthorized(test_client):
     """Test that unify_meet webhook rejects unauthorized requests."""
     endpoint = "/unify/meet"
     json_payload = {
-        "livekit_agent_name": "test_agent",
-        "room_name": "test_room",
+        "room_name": "unity_default-test-assistant_meet",
         "assistant_id": "default-test-assistant",
     }
 
@@ -629,11 +627,11 @@ def test_unify_meet_webhook_unauthorized(test_client):
 
 
 def test_unify_meet_webhook_missing_required_fields(test_client):
-    """Test that unify_meet webhook requires livekit_agent_name and room_name."""
+    """Test that unify_meet webhook requires room_name."""
     endpoint = "/unify/meet"
     json_payload = {
         "assistant_id": "default-test-assistant",
-        # Missing livekit_agent_name and room_name
+        # Missing room_name
     }
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}

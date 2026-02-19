@@ -1,5 +1,4 @@
 import os
-import json
 from fastapi import APIRouter, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
 from livekit.api import (
@@ -77,13 +76,10 @@ def add_user_to_conference(
 @auth_router.post("/dispatch-livekit-agent")
 async def dispatch_livekit_agent(request: Request):
     data = await request.json()
-    livekit_agent_name = data.get("livekit_agent_name")
-    room_name = data.get("room_name")
-    if not room_name:
-        room_name = livekit_agent_name
+    room_name = data.get("room_name") or data.get("livekit_agent_name", "")
     await create_room_and_dispatch_agent(
         room_name,
-        livekit_agent_name,
+        room_name,
         record=data.get("record", False),
         assistant_id=data.get("assistant_id", ""),
         user_id=data.get("user_id", ""),

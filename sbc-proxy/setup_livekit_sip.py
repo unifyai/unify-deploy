@@ -227,7 +227,7 @@ async def list_dispatch_rules():
 async def call_teams_user(
     phone_number: str,
     room_name: str,
-    agent_name: str = "unity_+19999999999",
+    agent_name: str = "unity_test_assistant_teams",
 ):
     """
     Make an outbound call to a Teams user (or any phone number via Teams).
@@ -321,8 +321,8 @@ async def main():
 
     # Agent and room name must match what's registered in your agent worker
     # Using the same value for both ensures reliable matching
-    AGENT_NAME = "unity_+19999999999"
-    ROOM_NAME = "unity_+19999999999"  # Same as agent name for testing
+    AGENT_NAME = "unity_test_assistant_teams"
+    ROOM_NAME = "unity_test_assistant_teams"
 
     # Create inbound trunk (for receiving calls FROM Teams)
     inbound_trunk_id = await create_inbound_trunk()
