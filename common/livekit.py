@@ -94,7 +94,7 @@ async def _start_room_egress(
     user_id: str,
 ):
     """Start an audio-only Room Composite Egress that writes MP3 to GCS."""
-    gcs_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    gcs_credentials = os.getenv("GCP_SA_KEY", "")
     gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
     adapters_url = os.getenv("UNITY_ADAPTERS_URL", "")
     api_key = os.getenv("LIVEKIT_API_KEY", "")
