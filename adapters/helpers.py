@@ -301,12 +301,16 @@ def check_valid_contact(
     context = f"{assistant_context}/Contacts"
     response_json, status_code = get_contacts(context, api_key)
     default_contacts = get_default_contacts(assistant_data)
-    if status_code != 200:
+    if status_code != 200 or len(response_json) < 2:
         # if the context or project isn't created yet (first time user)
+        # len(response_json) < 2 is to deal with race conditions right on
+        # hiring a new assistant, whenever the wakeup message is sent, the contact
+        # manager gets initialized in unity so there's a stage where the context is
+        # created but the contacts haven't been added yet
         if response_json["detail"] in [
             "Project Assistants not found.",
             f"Context '{context}' not found",
-        ]:
+        ] or len(response_json) < 2:
             # check for boss user
             if check_contact_details(
                 email_address=email_address,
@@ -652,13 +656,16 @@ def build_webhook_context(
             assistant_data=assistant_data,
         )
     else:
-        print(f"context: {user_id}/{assistant_id}/Contacts")
         contacts, status_code = get_contacts(
             f"{user_id}/{assistant_id}/Contacts",
             api_key,
         )
-        print(f"contact fetching status: {status_code}")
-        if status_code != 200:
+        # additional check for len(contacts) < 2 to deal with race conditions right on
+        # hiring a new assistant, whenever the wakeup message is sent, the contact
+        # manager gets initialized in unity so there's a stage where the context is
+        # created but the contacts haven't been added yet
+        if status_code != 200 or len(contacts) < 2:
+            print("contact fetching failed, using default contacts")
             contacts = get_default_contacts(assistant_data)
         else:
             contacts = [c["entries"] for c in contacts["logs"]]
