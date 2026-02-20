@@ -624,7 +624,10 @@ class UnifyMessagePayload(BaseModel):
 # =============================================================================
 
 # Bucket for storing unify message attachments (single bucket for all environments)
-UNIFY_ATTACHMENTS_BUCKET = "unify-message-attachments"
+UNIFY_ATTACHMENTS_BUCKET = os.getenv(
+    "ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
+    "assistant-message-attachments",
+)
 
 # File type validation - allowed extensions
 ALLOWED_EXTENSIONS = {
@@ -860,25 +863,8 @@ async def unify_attachment_upload(
         # Generate unique ID for the attachment
         attachment_id = str(uuid.uuid4())
 
-        # Look up user_id from assistant_id via Orchestra API
-        # This ensures attachments are stored under the user's path for cleanup
-        try:
-            assistant_data = get_assistant(assistant_id=assistant_id)
-            user_id = assistant_data.get("user_id")
-            if user_id and user_id != "default-user":
-                path_prefix = str(user_id)
-            else:
-                # Fallback to assistant_id if user lookup fails
-                print(
-                    f"Could not get user_id for assistant {assistant_id}, using assistant_id",
-                )
-                path_prefix = assistant_id
-        except Exception as e:
-            print(f"Error looking up user for assistant {assistant_id}: {e}")
-            path_prefix = assistant_id
-
         # Build GCS path: {user_id}/{uuid}_{filename}
-        blob_path = f"{path_prefix}/{attachment_id}_{safe_filename}"
+        blob_path = f"{assistant_id}/{attachment_id}_{safe_filename}"
 
         # Get GCP credentials and upload
         creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
