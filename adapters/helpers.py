@@ -652,10 +652,12 @@ def build_webhook_context(
             assistant_data=assistant_data,
         )
     else:
+        print(f"context: {user_id}/{assistant_id}/Contacts")
         contacts, status_code = get_contacts(
             f"{user_id}/{assistant_id}/Contacts",
             api_key,
         )
+        print(f"contact fetching status: {status_code}")
         if status_code != 200:
             contacts = get_default_contacts(assistant_data)
         else:
