@@ -158,6 +158,7 @@ def create_unity_job(
             {"name": "OMP_NUM_THREADS", "value": "2"},
             {"name": "MKL_NUM_THREADS", "value": "2"},
             {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
+            {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
             {
                 "name": "UNITY_COMMS_URL",
                 "value": "https://unity-comms-app-000000000000.us-central1.run.app",
