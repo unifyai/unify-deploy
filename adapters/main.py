@@ -2515,11 +2515,6 @@ async def scheduled_teams_watches(request: Request):
 @app.post("/scheduled/jobs/create")
 async def scheduled_jobs_create(request: Request):
     """Cloud Run endpoint that creates a new idle job."""
-    if not STAGING:
-        return Response(
-            content="Production job creation is not enabled",
-            status_code=200,
-        )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
