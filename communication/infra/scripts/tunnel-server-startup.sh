@@ -291,7 +291,7 @@ CADDYEOF
 generate_caddyfile
 
 # =============================================================================
-# Generate Client Install Script (served at https://tunnel.unify.ai/install.sh)
+# Generate Client Install Script (served at https://${TUNNEL_DOMAIN}/install.sh)
 # =============================================================================
 echo ""
 echo "=== Generating client install script ==="
@@ -301,7 +301,7 @@ cat > "${STATIC_DIR}/install.sh" << 'INSTALLEOF'
 # Unity Tunnel Client Installer
 #
 # Usage:
-#   curl -sSL https://tunnel.unify.ai/install.sh | bash -s -- \
+#   curl -sSL https://__TUNNEL_DOMAIN__/install.sh | bash -s -- \
 #     --token "TOKEN" --tunnel-id "ID" --local-port 8080
 
 set -e
@@ -323,8 +323,8 @@ if [[ -z "$TOKEN" || -z "$TUNNEL_ID" || -z "$LOCAL_PORT" ]]; then
     exit 1
 fi
 
-TUNNEL_DOMAIN="tunnel.unify.ai"
-CONTROL_PORT="7000"
+TUNNEL_DOMAIN="__TUNNEL_DOMAIN__"
+CONTROL_PORT="__CONTROL_PORT__"
 
 echo "=== Unity Tunnel Client ==="
 echo "  Tunnel ID:  $TUNNEL_ID"
@@ -405,11 +405,15 @@ echo ""
 exec "$RATHOLE_BIN" "$CONFIG_FILE"
 INSTALLEOF
 
+# Substitute actual domain and port into the generated script
+sed -i "s|__TUNNEL_DOMAIN__|${TUNNEL_DOMAIN}|g" "${STATIC_DIR}/install.sh"
+sed -i "s|__CONTROL_PORT__|${CONTROL_PORT}|g" "${STATIC_DIR}/install.sh"
+
 chmod +x "${STATIC_DIR}/install.sh"
 echo "Client install script written to ${STATIC_DIR}/install.sh"
 
 # =============================================================================
-# Generate Windows Client Install Script (https://tunnel.unify.ai/install.ps1)
+# Generate Windows Client Install Script (https://${TUNNEL_DOMAIN}/install.ps1)
 # =============================================================================
 echo ""
 echo "=== Generating Windows client install script ==="
@@ -418,7 +422,7 @@ cat > "${STATIC_DIR}/install.ps1" << 'PS1EOF'
 # Unity Tunnel Client Installer (Windows)
 #
 # Usage:
-#   irm https://tunnel.unify.ai/install.ps1 -OutFile install.ps1
+#   irm https://__TUNNEL_DOMAIN__/install.ps1 -OutFile install.ps1
 #   .\install.ps1 -Token "TOKEN" -TunnelId "ID" -LocalPort 8080
 
 param(
@@ -430,8 +434,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RatholeVersion = "0.5.0"
-$TunnelDomain = "tunnel.unify.ai"
-$ControlPort = "7000"
+$TunnelDomain = "__TUNNEL_DOMAIN__"
+$ControlPort = "__CONTROL_PORT__"
 
 Write-Host "=== Unity Tunnel Client ===" -ForegroundColor Cyan
 Write-Host "  Tunnel ID:  $TunnelId"
@@ -484,6 +488,10 @@ Write-Host ""
 
 & $RatholeBin $ConfigFile
 PS1EOF
+
+# Substitute actual domain and port into the generated script
+sed -i "s|__TUNNEL_DOMAIN__|${TUNNEL_DOMAIN}|g" "${STATIC_DIR}/install.ps1"
+sed -i "s|__CONTROL_PORT__|${CONTROL_PORT}|g" "${STATIC_DIR}/install.ps1"
 
 echo "Windows install script written to ${STATIC_DIR}/install.ps1"
 
