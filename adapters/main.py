@@ -2574,11 +2574,14 @@ async def scheduled_jobs_cleanup(request: Request):
         new_idle_jobs = [sorted(new_idle_jobs)[-1]]
     idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
 
-    # delete all old idle jobs
+    # delete all old idle jobs (re-check label to guard against race conditions)
     for job_name in idle_jobs:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
-            data={"job_name": job_name},
+            data={
+                "job_name": job_name,
+                "required_labels": json.dumps({"unity-status": "idle"}),
+            },
             headers=headers,
         )
 

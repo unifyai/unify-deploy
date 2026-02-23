@@ -101,13 +101,36 @@ def setup_kubernetes_client():
         return None, None, None
 
 
-def delete_job(batch_api, job_name: str, namespace: str = "default"):
-    """Delete a Unity job"""
+def delete_job(
+    batch_api,
+    job_name: str,
+    namespace: str = "default",
+    required_labels: dict | None = None,
+):
+    """Delete a Unity job.
+
+    Args:
+        required_labels: If provided, the job's current labels must contain all
+            of these key-value pairs or the deletion is skipped (returns False).
+            Guards against TOCTOU races where a job's status changes between
+            listing and deletion.
+    """
     try:
+        if required_labels:
+            job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
+            current_labels = job.metadata.labels or {}
+            for key, value in required_labels.items():
+                if current_labels.get(key) != value:
+                    print(
+                        f"⏭️  Skipping delete for {job_name}: "
+                        f"label {key}={current_labels.get(key)!r}, expected {value!r}",
+                    )
+                    return False
+
         batch_api.delete_namespaced_job(
             name=job_name,
             namespace=namespace,
-            propagation_policy="Background",  # Delete pods as well
+            propagation_policy="Background",
         )
 
         print(f"✅ Job deleted successfully: {job_name}")

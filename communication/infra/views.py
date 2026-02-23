@@ -291,6 +291,7 @@ async def create_kubernetes_job(
 async def delete_kubernetes_job(
     job_name: str = Form(...),
     namespace: str = Form(DEFAULT_NAMESPACE),
+    required_labels: str = Form(None),
 ):
     """
     Delete a Kubernetes Job for a Unity assistant.
@@ -298,9 +299,14 @@ async def delete_kubernetes_job(
     Args:
         job_name: Name of the job (required)
         namespace: Kubernetes namespace (optional, defaults to production/staging)
+        required_labels: JSON-encoded dict of labels the job must currently have
+            for the deletion to proceed (optional, guards against race conditions)
     """
     try:
-        # Initialize Kubernetes client
+        parsed_required_labels = (
+            json.loads(required_labels) if required_labels else None
+        )
+
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
@@ -308,8 +314,7 @@ async def delete_kubernetes_job(
                 detail="Failed to connect to Kubernetes cluster",
             )
 
-        # Delete the job
-        success = delete_job(batch_api, job_name, namespace)
+        success = delete_job(batch_api, job_name, namespace, parsed_required_labels)
 
         if success:
             return {
@@ -318,12 +323,22 @@ async def delete_kubernetes_job(
                 "job_name": job_name,
                 "namespace": namespace,
             }
+        elif parsed_required_labels:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job {job_name} no longer matches required labels {parsed_required_labels}",
+            )
         else:
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to delete job: {job_name}",
             )
 
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON in required_labels parameter",
+        )
     except HTTPException:
         raise
     except Exception as e:
