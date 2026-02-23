@@ -4,39 +4,15 @@ import json
 import logging
 from typing import AsyncGenerator
 
-import httpx
 import unillm
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from communication.helpers import ORCHESTRA_URL
+from communication.dependencies import authenticate_user_api_key, extract_api_key
 from communication.unillm.schema import ChatCompletionRequest
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-async def _authenticate_api_key(api_key: str) -> dict:
-    """
-    Validate the caller's API key by calling Orchestra's /user/basic-info endpoint.
-
-    Returns the user info dict on success, raises HTTPException on failure.
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            f"{ORCHESTRA_URL}/user/basic-info",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10.0,
-        )
-
-    if response.status_code != 200:
-        logger.warning(f"API key authentication failed: {response.status_code}")
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key.",
-        )
-
-    return response.json()
 
 
 @router.post("/chat/completions")
@@ -54,17 +30,8 @@ async def chat_completions(
     The model should be specified in UniLLM format: "model@provider"
     (e.g., "claude-sonnet-4-20250514@anthropic", "gpt-4o@openai").
     """
-    # Extract API key from the Authorization Bearer header
-    auth_header = request.headers.get("authorization", "")
-    api_key = (
-        auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else ""
-    )
-
-    if not api_key:
-        raise HTTPException(status_code=401, detail="Missing API key.")
-
-    # Validate user exists via Orchestra
-    await _authenticate_api_key(api_key)
+    api_key = extract_api_key(request)
+    await authenticate_user_api_key(api_key)
 
     # Convert messages to dict format for unillm
     messages = [msg.model_dump(exclude_none=True) for msg in request_body.messages]
