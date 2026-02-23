@@ -390,9 +390,9 @@ if [[ ! -f "/agent-service/package.json" ]]; then
     cd /agent-service
     npm install 2>&1
 
-    # Install Playwright browsers
-    echo "  Installing Playwright Chromium..."
-    npx playwright@1.52.0 install --with-deps chromium 2>&1 || true
+    # Install Patchright browsers (from magnitude-core's node_modules)
+    echo "  Installing Patchright Chromium..."
+    cd /magnitude/packages/magnitude-core && npx patchright install --with-deps chromium 2>&1 || true
 
     echo "Agent Service installed (commit: $commit)"
 else
