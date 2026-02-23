@@ -332,13 +332,27 @@ echo "  Local Port: $LOCAL_PORT"
 echo "  URL:        https://${TUNNEL_ID}.${TUNNEL_DOMAIN}"
 echo ""
 
-# Detect OS and architecture
+# Detect OS and architecture, map to exact GitHub release asset names.
+# Available v0.5.0 assets:
+#   rathole-x86_64-unknown-linux-gnu.zip
+#   rathole-aarch64-unknown-linux-musl.zip
+#   rathole-x86_64-apple-darwin.zip
+#   rathole-x86_64-pc-windows-msvc.zip
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
 case "$OS" in
-    linux)  RATHOLE_OS="unknown-linux-gnu" ;;
-    darwin) RATHOLE_OS="apple-darwin" ;;
+    linux)
+        case "$ARCH" in
+            x86_64|amd64)  RATHOLE_TARGET="x86_64-unknown-linux-gnu" ;;
+            aarch64|arm64) RATHOLE_TARGET="aarch64-unknown-linux-musl" ;;
+            *)             echo "Unsupported architecture: $ARCH"; exit 1 ;;
+        esac
+        ;;
+    darwin)
+        # Only x86_64 binary published; runs on Apple Silicon via Rosetta 2
+        RATHOLE_TARGET="x86_64-apple-darwin"
+        ;;
     mingw*|msys*|cygwin*)
         echo "Windows detected (Git Bash / MSYS2)."
         echo "Use the PowerShell installer instead:"
@@ -348,13 +362,9 @@ case "$OS" in
         echo ""
         exit 1
         ;;
-    *)      echo "Unsupported OS: $OS"; exit 1 ;;
-esac
-
-case "$ARCH" in
-    x86_64|amd64)  RATHOLE_ARCH="x86_64" ;;
-    aarch64|arm64) RATHOLE_ARCH="aarch64" ;;
-    *)             echo "Unsupported architecture: $ARCH"; exit 1 ;;
+    *)
+        echo "Unsupported OS: $OS"; exit 1
+        ;;
 esac
 
 INSTALL_DIR="${HOME}/.unity-tunnel"
@@ -364,7 +374,7 @@ mkdir -p "$INSTALL_DIR"
 RATHOLE_BIN="${INSTALL_DIR}/rathole"
 if [[ ! -f "$RATHOLE_BIN" ]]; then
     echo "Downloading rathole v${RATHOLE_VERSION}..."
-    DOWNLOAD_URL="https://github.com/rapiz1/rathole/releases/download/v${RATHOLE_VERSION}/rathole-${RATHOLE_ARCH}-${RATHOLE_OS}.zip"
+    DOWNLOAD_URL="https://github.com/rapiz1/rathole/releases/download/v${RATHOLE_VERSION}/rathole-${RATHOLE_TARGET}.zip"
     TMP_DIR=$(mktemp -d)
     curl -fsSL -o "${TMP_DIR}/rathole.zip" "$DOWNLOAD_URL"
     unzip -o "${TMP_DIR}/rathole.zip" -d "$TMP_DIR"
