@@ -205,7 +205,7 @@ pull_config() {
             # Create empty defaults so services can start
             if [[ ! -f "$local_path" ]]; then
                 if [[ "$blob" == "server.toml" ]]; then
-                    echo -e "[server]\nbind_addr = \"0.0.0.0:${CONTROL_PORT}\"" > "$local_path"
+                    echo -e "[server]\nbind_addr = \"0.0.0.0:${CONTROL_PORT}\"\n\n[server.services]" > "$local_path"
                 else
                     echo "{}" > "$local_path"
                 fi
