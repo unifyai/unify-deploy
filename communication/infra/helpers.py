@@ -122,6 +122,31 @@ def delete_job(batch_api, job_name: str, namespace: str = "default"):
             return False
 
 
+def patch_job_labels(
+    batch_api,
+    job_name: str,
+    labels: dict,
+    namespace: str = "default",
+):
+    """Patch labels on an existing Unity job."""
+    try:
+        body = {"metadata": {"labels": labels}}
+        batch_api.patch_namespaced_job(
+            name=job_name,
+            namespace=namespace,
+            body=body,
+        )
+        print(f"✅ Job labels patched: {job_name} -> {labels}")
+        return True
+    except ApiException as e:
+        if e.status == 404:
+            print(f"⚠️  Job not found: {job_name}")
+            return False
+        else:
+            print(f"❌ Error patching job labels: {e}")
+            return False
+
+
 def create_unity_job(
     batch_api,
     job_name: str,
@@ -186,6 +211,7 @@ def create_unity_job(
                 "labels": {
                     "app": "unity",
                     "created-by": "create_job_script",
+                    "unity-status": "idle",
                 },
             },
             "spec": {

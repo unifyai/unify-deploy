@@ -307,10 +307,14 @@ def check_valid_contact(
         # hiring a new assistant, whenever the wakeup message is sent, the contact
         # manager gets initialized in unity so there's a stage where the context is
         # created but the contacts haven't been added yet
-        if response_json["detail"] in [
-            "Project Assistants not found.",
-            f"Context '{context}' not found",
-        ] or len(response_json) < 2:
+        if (
+            response_json["detail"]
+            in [
+                "Project Assistants not found.",
+                f"Context '{context}' not found",
+            ]
+            or len(response_json) < 2
+        ):
             # check for boss user
             if check_contact_details(
                 email_address=email_address,

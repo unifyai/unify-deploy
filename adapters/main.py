@@ -2540,44 +2540,24 @@ async def scheduled_jobs_create(request: Request):
 async def scheduled_jobs_cleanup(request: Request):
     """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    idle_jobs = []
 
-    # get all jobs
-    jobs = requests.get(f"{COMMS_URL}/infra/jobs", headers=headers).json()
-    job_names = [job["job_name"] for job in jobs["jobs"]]
-    job_names = [
-        job_name
-        for job_name in job_names
-        if (STAGING and "staging" in job_name)
-        or (not STAGING and "staging" not in job_name)
+    # get all idle jobs via K8s label selector
+    resp = requests.get(
+        f"{COMMS_URL}/infra/jobs",
+        params={"label_selector": "app=unity,unity-status=idle"},
+        headers=headers,
+    )
+    jobs = resp.json()
+    idle_jobs = [
+        job["job_name"]
+        for job in jobs["jobs"]
+        if (STAGING and "staging" in job["job_name"])
+        or (not STAGING and "staging" not in job["job_name"])
     ]
-    print(f"Job names: {job_names}")
 
-    for job_name in job_names:
-        # get logs
-        logs = (
-            requests.get(
-                f"{COMMS_URL}/infra/job/logs",
-                params={"job_name": job_name},
-                headers=headers,
-            )
-            .json()
-            .get("logs", [])
-        )
-        print(f"Logs: {logs}")
-
-        # check if job is idle
-        if (
-            "Ping received - keeping conversation manager alive" in logs
-            and "Inactivity timeout reached (360s), requesting shutdown..." not in logs
-            and "Graceful shutdown completed" not in logs
-            and "Shutting down convo manager..." not in logs
-        ):
-            idle_jobs.append(job_name)
-
+    # separate recently-created idle jobs (< 11 min old) to retain one
     new_idle_jobs = []
     for job_name in idle_jobs:
-        # check if job is older than 10 minutes
         job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
@@ -2585,7 +2565,7 @@ async def scheduled_jobs_cleanup(request: Request):
         if delta < timedelta(minutes=11):
             new_idle_jobs.append(job_name)
 
-    print(f"Idle jobs: {idle_jobs}")
+    print(f"All Idle jobs: {idle_jobs}")
     print(f"New idle jobs: {new_idle_jobs}")
     if len(new_idle_jobs) == 0:
         if len(idle_jobs) != 0:

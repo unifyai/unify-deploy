@@ -11,6 +11,7 @@ from .helpers import (
     create_unity_job,
     delete_job,
     get_job_logs,
+    patch_job_labels,
     suspend_job,
 )
 from .vm_helpers import (
@@ -329,6 +330,60 @@ async def delete_kubernetes_job(
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 
+@router.patch("/job/labels")
+async def patch_kubernetes_job_labels(
+    job_name: str = Form(...),
+    labels: str = Form(...),
+    namespace: str = Form(DEFAULT_NAMESPACE),
+):
+    """
+    Patch labels on an existing Kubernetes Job.
+
+    Args:
+        job_name: Name of the job (required)
+        labels: JSON-encoded dict of labels to set (required)
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
+    """
+    try:
+        parsed_labels = json.loads(labels)
+
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
+            )
+
+        success = patch_job_labels(batch_api, job_name, parsed_labels, namespace)
+
+        if success:
+            return {
+                "success": True,
+                "message": f"Job labels patched: {job_name}",
+                "job_name": job_name,
+                "labels": parsed_labels,
+                "namespace": namespace,
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Job not found: {job_name}",
+            )
+
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON in labels parameter",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to patch job labels: {str(e)}",
+        )
+
+
 # start job via pubsub
 @router.post("/job/start")
 async def start_job(
@@ -491,13 +546,18 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
 
 # list kubernetes jobs
 @router.get("/jobs")
-async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 3):
+async def list_kubernetes_jobs(
+    namespace: str = DEFAULT_NAMESPACE,
+    hours: int = 8,
+    label_selector: str = "app=unity",
+):
     """
     List all Unity Kubernetes jobs in the namespace.
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to "default")
         hours: Number of hours to filter jobs (optional, defaults to 3)
+        label_selector: K8s label selector (optional, defaults to "app=unity")
     """
     try:
         # Initialize Kubernetes client
@@ -511,7 +571,7 @@ async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 
         # List jobs
         jobs = batch_api.list_namespaced_job(
             namespace=namespace,
-            label_selector="app=unity",
+            label_selector=label_selector,
         )
         job_items = list(
             filter(
