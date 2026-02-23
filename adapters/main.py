@@ -2565,14 +2565,14 @@ async def scheduled_jobs_cleanup(request: Request):
         if delta < timedelta(minutes=11):
             new_idle_jobs.append(job_name)
 
-    print(f"All Idle jobs: {idle_jobs}")
-    print(f"New idle jobs: {new_idle_jobs}")
     if len(new_idle_jobs) == 0:
         if len(idle_jobs) != 0:
             idle_jobs = sorted(idle_jobs)[:-1]
     else:
         new_idle_jobs = [sorted(new_idle_jobs)[-1]]
     idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
+    print(f"Idle jobs up to deletion: {idle_jobs}")
+    print(f"Idle jobs to retain: {new_idle_jobs}")
 
     # delete all old idle jobs (re-check label to guard against race conditions)
     for job_name in idle_jobs:
