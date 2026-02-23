@@ -15,10 +15,12 @@ router = APIRouter()
 # --- Schema ---
 class VerificationRequest(BaseModel):
     platform: str = Field(
-        ..., description="The platform to verify (e.g., 'whatsapp', 'phone')."
+        ...,
+        description="The platform to verify (e.g., 'whatsapp', 'phone').",
     )
     account_identifier: str = Field(
-        ..., description="The user's account identifier (e.g., phone number)."
+        ...,
+        description="The user's account identifier (e.g., phone number).",
     )
 
 
@@ -72,7 +74,8 @@ async def send_verification_message(request: VerificationRequest):
             # Log the full error for debugging but return a generic message to the user
             print(f"ERROR sending WhatsApp verification: {e}")
             raise HTTPException(
-                status_code=500, detail="Failed to send WhatsApp verification message."
+                status_code=500,
+                detail="Failed to send WhatsApp verification message.",
             )
 
     elif platform == "phone":
@@ -95,7 +98,8 @@ async def send_verification_message(request: VerificationRequest):
         except Exception as e:
             print(f"ERROR sending phone verification: {e}")
             raise HTTPException(
-                status_code=500, detail=f"Failed to send phone verification sms."
+                status_code=500,
+                detail=f"Failed to send phone verification sms.",
             )
 
     else:

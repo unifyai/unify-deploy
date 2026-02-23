@@ -1,22 +1,23 @@
-import asyncio
 import base64
 from datetime import datetime, timedelta, timezone
 import httpx
 import json
 import os
 import re
+import time
 import traceback
 import requests
-from functools import wraps
-from urllib.parse import quote_plus
 
-from fastapi import Request, Response
+from common.metrics import (
+    ORCHESTRA_GET_ASSISTANT_DURATION,
+    MARK_JOB_RUNNING_DURATION,
+    BUILD_WEBHOOK_CONTEXT_DURATION,
+)
 
 from google.cloud import pubsub_v1
 
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import VoiceResponse
-from livekit import api
 
 from azure.core.credentials import AccessToken, TokenCredential
 from msgraph import GraphServiceClient
@@ -25,11 +26,14 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
 )
 
 STAGING = os.getenv("STAGING")
-ORCHESTRA_URL = (
+
+_default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
     else "https://service.a.run.app/v0"
 )
+ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
+
 COMMS_URL = os.getenv("UNITY_COMMS_URL")
 ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
 
@@ -106,6 +110,11 @@ def get_assistant(
         "assistant_number": "",
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
+        "desktop_mode": "ubuntu",
+        "desktop_url": None,
+        "user_desktop_mode": None,
+        "user_desktop_filesys_sync": False,
+        "user_desktop_url": None,
     }
     if "+15550100002" in phone_check or assistant_id == "default-assistant":
         return default_assistant_data
@@ -127,11 +136,23 @@ def get_assistant(
             "user_whatsapp_number": "+9876543210",
         }
 
-    response = requests.get(
-        f"{ORCHESTRA_URL}/admin/assistant",
-        params=params,
-        headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-    ).json()
+    _lookup_type = "id" if assistant_id else ("email" if email_address else "phone")
+    _t0 = time.perf_counter()
+    _status = "error"
+    try:
+        response = requests.get(
+            f"{ORCHESTRA_URL}/admin/assistant",
+            params=params,
+            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+        ).json()
+        _status = "error" if "detail" in response else "success"
+    except Exception:
+        raise
+    finally:
+        ORCHESTRA_GET_ASSISTANT_DURATION.labels(
+            lookup_type=_lookup_type,
+            status=_status,
+        ).observe(time.perf_counter() - _t0)
 
     print(f"get_assistant params: {params}")
     print(f"get_assistant response: {response}")
@@ -149,27 +170,37 @@ def get_assistant(
         "user_name": f"{assistants[0]['user_first_name']} {assistants[0]['user_last_name']}",
         "assistant_first_name": assistants[0]["first_name"],
         "assistant_surname": assistants[0]["surname"],
-        "assistant_age": assistants[0]["age"],
+        "assistant_age": str(assistants[0].get("age", "")),
         "assistant_nationality": assistants[0]["nationality"],
         "assistant_about": assistants[0]["about"],
         "assistant_timezone": assistants[0].get("timezone", "UTC"),
         "assistant_number": assistants[0]["phone"] or "",
-        "assistant_whatsapp_number": assistants[0]["assistant_whatsapp_number"] or "",
+        "assistant_whatsapp_number": assistants[0].get("assistant_whatsapp_number")
+        or "",
         "assistant_email": assistants[0]["email"] or "",
         "user_number": assistants[0]["user_phone"] or "",
-        "user_whatsapp_number": assistants[0]["user_whatsapp_number"] or "",
+        "user_whatsapp_number": assistants[0].get("user_whatsapp_number") or "",
         "user_email": assistants[0]["user_email"] or "",
         "voice_provider": assistants[0]["voice_provider"],
         "voice_id": assistants[0]["voice_id"],
         "voice_mode": assistants[0]["voice_mode"],
         "secrets": assistants[0].get("secrets", {}),
+        "desktop_mode": assistants[0].get("desktop_mode", "ubuntu"),
+        "desktop_url": assistants[0].get("desktop_url", None),
+        "user_desktop_mode": assistants[0].get("user_desktop_mode", None),
+        "user_desktop_filesys_sync": assistants[0].get(
+            "user_desktop_filesys_sync",
+            False,
+        ),
+        "user_desktop_url": assistants[0].get("user_desktop_url", None),
+        "demo_id": assistants[0].get("demo_id", None),
     }
 
 
 def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]:
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
-        params={"project": "Assistants", "context": context},
+        params={"project_name": "Assistants", "context": context},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     return response.json(), response.status_code
@@ -183,10 +214,9 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "surname": assistant_data["assistant_surname"],
             "email_address": assistant_data["assistant_email"],
             "phone_number": assistant_data["assistant_number"],
-            "whatsapp_number": assistant_data["assistant_whatsapp_number"],
             "bio": "",
             "rolling_summary": "",
-            "respond_to": False,
+            "should_respond": False,
             "response_policy": "",
         },
         {
@@ -195,10 +225,9 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "surname": "",
             "email_address": assistant_data["user_email"],
             "phone_number": assistant_data["user_number"],
-            "whatsapp_number": assistant_data["user_whatsapp_number"],
             "bio": "",
             "rolling_summary": "",
-            "respond_to": False,
+            "should_respond": False,
             "response_policy": "",
         },
     ]
@@ -225,7 +254,7 @@ def check_contact_details(
     """
     print(
         f"Checking contact details: {email_address}, {phone_number}, {medium}, "
-        f"{user_number}, {user_whatsapp_number}, {user_email}"
+        f"{user_number}, {user_whatsapp_number}, {user_email}",
     )
     if medium == "email" and user_email == email_address:
         return True
@@ -263,7 +292,7 @@ def check_valid_contact(
     """
     print(
         f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
-        f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}"
+        f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}",
     )
     if assistant_data["assistant_id"] in [4, 5, 6, 7, 8]:
         return [], True
@@ -272,12 +301,20 @@ def check_valid_contact(
     context = f"{assistant_context}/Contacts"
     response_json, status_code = get_contacts(context, api_key)
     default_contacts = get_default_contacts(assistant_data)
-    if status_code != 200:
+    if status_code != 200 or len(response_json) < 2:
         # if the context or project isn't created yet (first time user)
-        if response_json["detail"] in [
-            "Project Assistants not found.",
-            f"Context '{context}' not found",
-        ]:
+        # len(response_json) < 2 is to deal with race conditions right on
+        # hiring a new assistant, whenever the wakeup message is sent, the contact
+        # manager gets initialized in unity so there's a stage where the context is
+        # created but the contacts haven't been added yet
+        if (
+            response_json["detail"]
+            in [
+                "Project Assistants not found.",
+                f"Context '{context}' not found",
+            ]
+            or len(response_json) < 2
+        ):
             # check for boss user
             if check_contact_details(
                 email_address=email_address,
@@ -289,7 +326,7 @@ def check_valid_contact(
             ):
                 print(
                     f"Boss user found: {email_address}, {phone_number}, {medium}, "
-                    f"{user_number}, {user_whatsapp_number}, {user_email}"
+                    f"{user_number}, {user_whatsapp_number}, {user_email}",
                 )
                 return default_contacts, True
 
@@ -308,20 +345,19 @@ def check_valid_contact(
     print(f"Boss contact: {boss_contact}")
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
-        user_number = boss_contact["phone_number"]
-        user_email = boss_contact["email_address"]
-        user_whatsapp_number = boss_contact["whatsapp_number"]
+        boss_user_number = boss_contact.get("phone_number", "")
+        boss_user_email = boss_contact.get("email_address", "")
         if check_contact_details(
             email_address=email_address,
             phone_number=phone_number,
             medium=medium,
-            user_number=user_number,
+            user_number=boss_user_number,
             user_whatsapp_number=user_whatsapp_number,
-            user_email=user_email,
+            user_email=boss_user_email,
         ):
             print(
                 f"Boss user found: {email_address}, {phone_number}, {medium}, "
-                f"{user_number}, {user_whatsapp_number}, {user_email}"
+                f"{boss_user_number}, {user_whatsapp_number}, {boss_user_email}",
             )
             return contacts, True
     else:
@@ -334,9 +370,9 @@ def check_valid_contact(
             email_address=email_address,
             phone_number=phone_number,
             medium=medium,
-            user_number=contact["phone_number"],
-            user_whatsapp_number=contact["whatsapp_number"],
-            user_email=contact["email_address"],
+            user_number=contact.get("phone_number", ""),
+            user_whatsapp_number=assistant_data["user_whatsapp_number"],
+            user_email=contact.get("email_address", ""),
         ):
             print(f"Contact found: {contact}")
             return contacts, True
@@ -344,11 +380,12 @@ def check_valid_contact(
 
 
 def is_job_running(user_id: str, assistant_id: str):
+    """Check if a job is running for this assistant."""
     print(f"Checking if job is running for {user_id} --> {assistant_id}")
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
         params={
-            "project": "AssistantJobs",
+            "project_name": "AssistantJobs",
             "context": "startup_events",
             "filter_expr": (
                 f"user_id == '{user_id}' and "
@@ -362,7 +399,90 @@ def is_job_running(user_id: str, assistant_id: str):
     if response.status_code != 200:
         return False
     logs = response.json()["logs"]
+    print(f"Logs: {logs}")
     return bool(logs)
+
+
+def mark_job_running(assistant_data: dict, medium: str) -> bool:
+    """Mark a job as running immediately to prevent duplicate startups.
+
+    This creates a record in AssistantJobs with running=True right away,
+    preventing race conditions when multiple adapter requests come in quickly.
+    The Unity container that picks up the startup message will later update this
+    record to add job_name and liveview_url.
+
+    Returns True if successful, False otherwise.
+    """
+    user_id = assistant_data["user_id"]
+    assistant_id = assistant_data["assistant_id"]
+    print(f"Marking job as running for {user_id} --> {assistant_id}")
+
+    shared_key = os.getenv("SHARED_UNIFY_KEY")
+    if not shared_key:
+        print("[mark_job_running] No SHARED_UNIFY_KEY available")
+        return False
+
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+
+    _t0 = time.perf_counter()
+    _status = "error"
+    try:
+        # First ensure the project exists
+        try:
+            requests.post(
+                f"{ORCHESTRA_URL}/project",
+                json={"name": "AssistantJobs"},
+                headers={"Authorization": f"Bearer {shared_key}"},
+            )
+        except Exception:
+            pass  # Project may already exist
+
+        # Create the running record with all available info
+        # job_name and liveview_url will be added later by the Unity container
+        response = requests.post(
+            f"{ORCHESTRA_URL}/logs",
+            json={
+                "project_name": "AssistantJobs",
+                "context": "startup_events",
+                "entries": [
+                    {
+                        "user_id": user_id,
+                        "assistant_id": assistant_id,
+                        "timestamp": timestamp,
+                        "medium": medium,
+                        "user_name": assistant_data["user_name"],
+                        "assistant_name": (
+                            f"{assistant_data['assistant_first_name']} "
+                            f"{assistant_data['assistant_surname']}"
+                        ),
+                        "user_number": assistant_data["user_number"],
+                        "assistant_number": assistant_data["assistant_number"],
+                        "user_email": assistant_data["user_email"],
+                        "assistant_email": assistant_data["assistant_email"],
+                        "running": True,
+                    },
+                ],
+            },
+            headers={"Authorization": f"Bearer {shared_key}"},
+        )
+        if response.status_code in (200, 201):
+            print(f"Marked job as running for {assistant_id}")
+            _status = "success"
+            return True
+        else:
+            print(
+                f"Failed to mark job as running: {response.status_code} "
+                f"{response.text}",
+            )
+            return False
+    except Exception as e:
+        print(f"Error marking job as running: {e}")
+        traceback.print_exc()
+        return False
+    finally:
+        MARK_JOB_RUNNING_DURATION.labels(status=_status).observe(
+            time.perf_counter() - _t0,
+        )
 
 
 def start_unity_job(assistant: dict, medium: str):
@@ -373,6 +493,15 @@ def start_unity_job(assistant: dict, medium: str):
     if api_key == "":
         print(f"No user name for assistant {assistant_id}")
         return
+
+    # Extract desktop fields
+    desktop_mode = assistant.get("desktop_mode", "ubuntu")
+    desktop_url = assistant.get("desktop_url", None)
+    user_desktop_mode = assistant.get("user_desktop_mode", None)
+    user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
+    user_desktop_url = assistant.get("user_desktop_url", None)
+
+    demo_id = assistant.get("demo_id", None)
 
     # start job
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
@@ -399,6 +528,15 @@ def start_unity_job(assistant: dict, medium: str):
                 "voice_provider": assistant["voice_provider"],
                 "voice_id": assistant["voice_id"],
                 "voice_mode": assistant["voice_mode"],
+                "desktop_mode": desktop_mode,
+                "desktop_url": desktop_url or "",
+                "user_desktop_mode": user_desktop_mode or "",
+                "user_desktop_filesys_sync": (
+                    "true" if user_desktop_filesys_sync else "false"
+                ),
+                "user_desktop_url": user_desktop_url or "",
+                # Pass demo_id directly; Unity derives demo_mode from demo_id presence
+                "demo_id": str(demo_id) if demo_id else "",
             },
             timeout=1,
         )
@@ -408,6 +546,35 @@ def start_unity_job(assistant: dict, medium: str):
             print(f"Job started for assistant {assistant_id}")
     except requests.exceptions.Timeout:
         print(f"Job started for assistant {assistant_id} (timeout)")
+
+    # Start VM if desktop_mode requires it
+    if desktop_mode in ("windows", "ubuntu"):
+        vm_type = desktop_mode  # "windows" or "ubuntu"
+        try:
+            vm_response = requests.post(
+                f"{COMMS_URL}/infra/vm/start",
+                headers=headers,
+                json={"assistant_id": assistant_id, "vm_type": vm_type},
+                timeout=1,
+            )
+            if vm_response.status_code == 200:
+                print(f"{vm_type.capitalize()} VM started for assistant {assistant_id}")
+            elif vm_response.status_code == 404:
+                print(
+                    f"{vm_type.capitalize()} VM not found for assistant {assistant_id} - "
+                    "VM should be created at hire time",
+                )
+            else:
+                print(
+                    f"Failed to start {vm_type} VM for {assistant_id}: "
+                    f"{vm_response.status_code} - {vm_response.text}",
+                )
+        except requests.exceptions.Timeout:
+            print(
+                f"{vm_type.capitalize()} VM start request sent for assistant {assistant_id} (timeout)",
+            )
+        except Exception as e:
+            print(f"Error starting {vm_type} VM for assistant {assistant_id}: {e}")
 
 
 def create_job(assistant_id: str):
@@ -429,7 +596,7 @@ def create_job(assistant_id: str):
         return True
     except Exception as e:
         print(
-            f"Error sending idle job creation request for assistant {assistant_id}: {e}"
+            f"Error sending idle job creation request for assistant {assistant_id}: {e}",
         )
         return False
 
@@ -449,6 +616,8 @@ def build_webhook_context(
     Args:
         assistant_data: Optional pre-fetched assistant data to avoid duplicate Orchestra calls.
     """
+    _t0 = time.perf_counter()
+    _ctx_status = "error"
     # normalize identifiers and resolve assistant by channel
     is_email = channel in ["email", "teams"]
     normalized_sender = (
@@ -469,9 +638,6 @@ def build_webhook_context(
     api_key = assistant_data["api_key"]
     assistant_id = assistant_data["assistant_id"]
     user_id = assistant_data["user_id"]
-    user_name = assistant_data["user_name"]
-    assistant_first_name = assistant_data["assistant_first_name"]
-    assistant_surname = assistant_data["assistant_surname"]
     user_number = assistant_data["user_number"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
@@ -486,7 +652,7 @@ def build_webhook_context(
             email_address=(sender if is_email else ""),
             phone_number=("" if is_email else normalized_sender),
             medium=channel,
-            assistant_context=f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}",
+            assistant_context=f"{user_id}/{assistant_id}",
             api_key=api_key,
             user_number=user_number,
             user_whatsapp_number=user_whatsapp_number,
@@ -495,10 +661,15 @@ def build_webhook_context(
         )
     else:
         contacts, status_code = get_contacts(
-            f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}/Contacts",
+            f"{user_id}/{assistant_id}/Contacts",
             api_key,
         )
-        if status_code != 200:
+        # additional check for len(contacts) < 2 to deal with race conditions right on
+        # hiring a new assistant, whenever the wakeup message is sent, the contact
+        # manager gets initialized in unity so there's a stage where the context is
+        # created but the contacts haven't been added yet
+        if status_code != 200 or len(contacts) < 2:
+            print("contact fetching failed, using default contacts")
             contacts = get_default_contacts(assistant_data)
         else:
             contacts = [c["entries"] for c in contacts["logs"]]
@@ -517,12 +688,21 @@ def build_webhook_context(
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )
     if should_start_job:
+        # Mark as running BEFORE sending the startup message to prevent
+        # race conditions when multiple requests come in quickly
+        mark_job_running(assistant_data, channel)
         start_unity_job(assistant_data, channel)
         create_job(assistant_id)
         job_started = True
         is_running = True
 
     print("is_valid_contact:", is_valid_contact)
+    _ctx_status = "error" if assistant_data.get("assistant_id") is None else "success"
+    BUILD_WEBHOOK_CONTEXT_DURATION.labels(
+        channel=channel,
+        job_started=str(job_started).lower(),
+        status=_ctx_status,
+    ).observe(time.perf_counter() - _t0)
     return {
         "assistant": assistant_data,
         "contacts": contacts,
@@ -541,56 +721,9 @@ def get_twilio_client():
     return TwilioClient(account_sid, auth_token)
 
 
-def get_livekit_api():
-    """Get LiveKit API client"""
-    url = os.getenv("LIVEKIT_URL")
-    api_key = os.getenv("LIVEKIT_API_KEY")
-    api_secret = os.getenv("LIVEKIT_API_SECRET")
-
-    if not url or not api_key or not api_secret:
-        raise RuntimeError(
-            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set"
-        )
-
-    return api.LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
-
-
-async def create_room_and_dispatch_agent(
-    room_name: str, agent_name: str, metadata: dict = None
-):
-    """Create a LiveKit room and dispatch an agent to it"""
-    livekit_api = get_livekit_api()
-
-    try:
-        # Create dispatch request - this will create the room if it doesn't exist
-        dispatch_request = api.CreateAgentDispatchRequest(
-            agent_name=agent_name,
-            room=room_name,
-            metadata=json.dumps(metadata) if metadata else None,
-        )
-
-        # Dispatch agent to room (creates room automatically if needed)
-        dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
-        print(
-            f"Successfully created room '{room_name}' and dispatched agent '{agent_name}'"
-        )
-        print(f"Dispatch ID: {dispatch.id}")
-
-        return dispatch
-    except Exception as e:
-        print(f"Error creating room and dispatching agent: {str(e)}")
-        raise
-    finally:
-        await livekit_api.aclose()
-
-
 def create_conference_response(conference_name, with_status=False):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
-    recording_status_callback = (
-        f"{COMMS_URL}/phone/recording?" f"conference_name={quote_plus(conference_name)}"
-    )
-    print("Recording status callback: ", recording_status_callback)
     if with_status:
         dial_user.conference(
             conference_name,
@@ -598,9 +731,6 @@ def create_conference_response(conference_name, with_status=False):
             endConferenceOnExit=True,
             muted=False,
             wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-            record="record-from-start",
-            recording_status_callback=recording_status_callback,
-            recording_status_callback_event="completed",
             status_callback=f"{COMMS_URL}/phone/conference-status",
             status_callback_event="end",
         )
@@ -611,21 +741,22 @@ def create_conference_response(conference_name, with_status=False):
         endConferenceOnExit=True,
         muted=False,
         wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-        record="record-from-start",
-        recording_status_callback=recording_status_callback,
-        recording_status_callback_event="completed",
     )
     return resp_user
 
 
 def add_user_to_conference(
-    conference_name, from_number, to_number_uri, connect_third_party=False
+    conference_name,
+    from_number,
+    to_number_uri,
+    connect_third_party=False,
 ):
     twilio_client = get_twilio_client()
 
     if connect_third_party:
         conferences = twilio_client.conferences.list(
-            friendly_name=conference_name, status="in-progress"
+            friendly_name=conference_name,
+            status="in-progress",
         )
         participants = twilio_client.conferences(conferences[0].sid).participants.list()
         for participant in participants:
@@ -633,7 +764,7 @@ def add_user_to_conference(
             # Identify Livekit Agent and mute
             if "livekit.cloud" in call.to:
                 twilio_client.conferences(conferences[0].sid).participants(
-                    participant.sid
+                    participant.sid,
                 ).update(muted=True)
                 break
         response = create_conference_response(conference_name, with_status=True)
@@ -658,7 +789,7 @@ def _strip_quoted_text(text: str) -> str:
         if stripped.startswith(">"):
             continue
         if re.match(r"On .+wrote:", stripped) or stripped.startswith(
-            "-----Original Message-----"
+            "-----Original Message-----",
         ):
             break
         cleaned.append(line)
@@ -679,7 +810,8 @@ class TokenCredentialFromSecret(TokenCredential):
     def get_token(self, *scopes, **kwargs) -> AccessToken:
         # Expiry doesn't matter - scheduled job keeps token fresh
         return AccessToken(
-            self._token, int(datetime.now(tz=timezone.utc).timestamp()) + 3600
+            self._token,
+            int(datetime.now(tz=timezone.utc).timestamp()) + 3600,
         )
 
 
@@ -732,13 +864,13 @@ async def get_outlook_thread_id(email_id: str, graph_client):
                     "bccRecipients",
                     "receivedDateTime",
                     "hasAttachments",
-                ]
+                ],
             )
         )
 
         # Use /me endpoint for delegated permissions
         message = await graph_client.me.messages.by_message_id(email_id).get(
-            request_configuration=request_config
+            request_configuration=request_config,
         )
 
         if not message:
@@ -768,7 +900,7 @@ async def get_outlook_thread_id(email_id: str, graph_client):
 
         conversation_id = message.conversation_id
         print(
-            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}"
+            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}",
         )
 
         return conversation_id, email_id, last_message
@@ -824,7 +956,7 @@ def _collect_attachments(payload):
                 "filename": filename or "",
                 "mimeType": mime_type,
                 "size": size,
-            }
+            },
         )
     for part in payload.get("parts", []):
         attachments.extend(_collect_attachments(part))
@@ -857,7 +989,7 @@ def _gmail_thread_to_conversation(thread):
                 ),
                 "subject": _header(headers, "Subject").replace("Re: ", ""),
                 "content": _payload_text(payload),
-            }
+            },
         )
     return convo
 
@@ -888,7 +1020,7 @@ def get_thread_id(user_id, history_id, gmail_service):
                         q="is:unread newer_than:1d",
                     )
                     .execute()
-                )
+                ),
             ]
 
         # Process each history entry
@@ -930,7 +1062,9 @@ def get_thread_id(user_id, history_id, gmail_service):
                 continue
 
             gmail_service.users().messages().modify(
-                userId=user_id, id=msg_id, body={"removeLabelIds": ["UNREAD"]}
+                userId=user_id,
+                id=msg_id,
+                body={"removeLabelIds": ["UNREAD"]},
             ).execute()
 
             # Get the thread for this message
@@ -979,7 +1113,7 @@ def publish_gmail_thread_id(
     try:
         publisher = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
             "thread": "email",
@@ -1021,7 +1155,7 @@ def publish_outlook_thread_id(
     try:
         publisher = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = publisher.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
             "thread": "email",
@@ -1045,22 +1179,22 @@ def publish_outlook_thread_id(
             msg_id = publish_future.result(timeout=10)
             print(f"Message ID: {msg_id}")
         print(
-            f"Published conversation_id {conversation_id} for user {user_id} to {topic_path}"
+            f"Published conversation_id {conversation_id} for user {user_id} to {topic_path}",
         )
     except Exception as e:
         print(
-            f"Failed to publish conversation_id {conversation_id} for user {user_id}: {e}"
+            f"Failed to publish conversation_id {conversation_id} for user {user_id}: {e}",
         )
 
 
-def dispatch_agent(agent_name: str):
+def dispatch_livekit_agent(room_name: str):
     response = requests.post(
-        f"{COMMS_URL}/phone/dispatch-agent",
+        f"{COMMS_URL}/phone/dispatch-livekit-agent",
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-        json={"agent_name": agent_name},
+        json={"room_name": room_name},
     )
     if response.status_code != 200:
-        print(f"Failed to dispatch agent. Status: {response.status_code}")
+        print(f"Failed to dispatch LiveKit agent. Status: {response.status_code}")
         return False
     return True
 
@@ -1116,7 +1250,10 @@ async def get_microsoft_user_info(access_token: str) -> dict:
 
 
 async def store_microsoft_tokens(
-    assistant_id: str, old_secrets: dict, new_secrets: dict, api_key: str
+    assistant_id: str,
+    old_secrets: dict,
+    new_secrets: dict,
+    api_key: str,
 ) -> bool:
     """
     Store Microsoft OAuth tokens as assistant secrets.
@@ -1162,7 +1299,7 @@ async def store_microsoft_tokens(
                     print(f"Stored {secret_name} for assistant {assistant_id}")
                 else:
                     print(
-                        f"Failed to store {secret_name}: {response.status_code} - {response.text}"
+                        f"Failed to store {secret_name}: {response.status_code} - {response.text}",
                     )
                     success = False
             except Exception as e:

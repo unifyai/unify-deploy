@@ -3,20 +3,20 @@ services:
     build: .
     container_name: kamailio-sbc
     ports:
-      - "5060:5060/udp"
-      - "5060:5060/tcp"
-      - "5061:5061/tcp"
+    - "5060:5060/udp"
+    - "5060:5060/tcp"
+    - "5061:5061/tcp"
     volumes:
       # Mount config for live editing
-      - ./kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+    - ./kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
       # Mount TLS config file
-      - ./tls.cfg:/etc/kamailio/tls.cfg:ro
+    - ./tls.cfg:/etc/kamailio/tls.cfg:ro
       # Mount TLS certificates (create these first)
-      - ./tls:/etc/kamailio/tls:ro
+    - ./tls:/etc/kamailio/tls:ro
       # Mount system CA certificates for verifying Microsoft's cert
-      - /etc/ssl/certs:/etc/ssl/certs:ro
+    - /etc/ssl/certs:/etc/ssl/certs:ro
     env_file:
-      - .env
+    - .env
     restart: unless-stopped
     # Enable for debugging
     # command: ["kamailio", "-DD", "-E", "-m", "64", "-M", "8", "-d", "4"]

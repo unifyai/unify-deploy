@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "communication"
+version = "0.1.0"
+description = "External communication gateway for Unity - handles Gmail, Outlook, Teams, WhatsApp, and phone integrations"
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    # Core web framework
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.6",
+
+    # HTTP clients
+    "httpx>=0.25.0",
+    "requests>=2.31.0",
+
+    # Google APIs
+    "google-auth>=2.17.0",
+    "google-api-python-client>=2.70.0",
+    "google-cloud-pubsub>=2.18.0",
+    "google-cloud-storage>=2.10.0",
+    "google-cloud-secret-manager>=2.16.0",
+    "google-cloud-compute>=1.14.0",
+    "google-cloud-dns>=0.35.0",
+
+    # Microsoft APIs
+    "azure-identity>=1.14.0",
+    "msgraph-sdk>=1.0.0",
+
+    # Communication providers
+    "twilio>=8.0.0",
+    "livekit>=0.11.0",
+    "livekit-api>=0.4.0",
+
+    # Infrastructure
+    "kubernetes>=28.1.0",
+
+    # SSH key generation for VM file sync
+    "cryptography>=42.0.0",
+
+    # Metrics
+    "prometheus_client>=0.20.0",
+]
+
+[project.optional-dependencies]
+comms = [
+    # UniLLM (OpenAI-compatible proxy)
+    "unillm",
+]
+adapters = [
+    # Subset for adapters service (lighter weight)
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.6",
+    "httpx>=0.25.0",
+    "requests>=2.31.0",
+    "google-auth>=2.17.0",
+    "google-api-python-client>=2.70.0",
+    "google-cloud-pubsub>=2.18.0",
+    "google-cloud-storage>=2.10.0",
+    "google-cloud-secret-manager>=2.16.0",
+    "twilio>=8.0.0",
+    "livekit-api>=0.4.0",
+    "azure-identity>=1.14.0",
+    "msgraph-sdk>=1.0.0",
+    "prometheus_client>=0.20.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "autoflake>=2.3.1",
+    "black==26.1.0",
+    "pre-commit>=3.6.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["communication", "communication.*", "adapters", "adapters.*", "common", "common.*"]
+
+[tool.uv.sources]
+unillm = { path = "../unillm", editable = true }

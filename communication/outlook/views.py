@@ -49,7 +49,8 @@ async def send_outlook_email(request: Request):
 
     if not sender or not to or body is None:
         raise HTTPException(
-            status_code=400, detail="Missing required fields: from, to, body"
+            status_code=400,
+            detail="Missing required fields: from, to, body",
         )
 
     to_list = [to] if isinstance(to, str) else to
@@ -80,11 +81,12 @@ async def send_outlook_email(request: Request):
         # Use /me endpoint for delegated permissions (token is for this user)
         if in_reply_to:
             await graph.me.messages.by_message_id(in_reply_to).reply.post(
-                ReplyPostRequestBody(message=message)
+                ReplyPostRequestBody(message=message),
             )
         else:
             request_body = SendMailPostRequestBody(
-                message=message, save_to_sent_items=True
+                message=message,
+                save_to_sent_items=True,
             )
             await graph.me.send_mail.post(request_body)
 
@@ -146,7 +148,7 @@ async def watch_outlook_email(request: Request):
                         expiration_date_time=datetime.now(timezone.utc)
                         + timedelta(days=3),
                         client_state=client_state,
-                    )
+                    ),
                 )
                 logging.info(f"Outlook watch created for {user_email}: {result.id}")
                 return {
@@ -161,7 +163,7 @@ async def watch_outlook_email(request: Request):
                 )
                 if is_validation_timeout and attempt < MAX_RETRIES:
                     logging.warning(
-                        f"Outlook watch validation timeout for {user_email}, retrying..."
+                        f"Outlook watch validation timeout for {user_email}, retrying...",
                     )
                     continue
                 raise
@@ -198,7 +200,8 @@ async def delete_outlook_watch(request: Request):
                 return {"success": True, "primary_email": primary_email}
 
         raise HTTPException(
-            status_code=404, detail=f"No subscription found for {primary_email}"
+            status_code=404,
+            detail=f"No subscription found for {primary_email}",
         )
 
     except HTTPException:
@@ -235,7 +238,7 @@ async def get_outlook_attachment(
             content=content,
             media_type=attachment.content_type or "application/octet-stream",
             headers={
-                "Content-Disposition": f"attachment; filename={filename or attachment.name or 'attachment'}"
+                "Content-Disposition": f"attachment; filename={filename or attachment.name or 'attachment'}",
             },
         )
 

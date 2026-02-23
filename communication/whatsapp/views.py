@@ -66,7 +66,7 @@ async def send_greeting(request: Request):
                 "user_name": user_name,
                 "agent_name": agent_name,
                 "message": body,
-            }
+            },
         ),
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/status",
     )
@@ -161,7 +161,8 @@ async def assign_whatsapp_sender(request: Request):
 
     if not available_whatsapp_number:
         raise HTTPException(
-            status_code=400, detail="No available WhatsApp number found"
+            status_code=400,
+            detail="No available WhatsApp number found",
         )
 
     return {"whatsapp_number": available_whatsapp_number}
@@ -212,7 +213,7 @@ async def get_conflict_whatsapp_number(request: Request):
                 resp = await client.get(
                     f"{ORCHESTRA_URL}/admin/assistant/user/{uid}&assistant_whatsapp_number={assistant_whatsapp_number}",
                     headers={
-                        "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"
+                        "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}",
                     },
                 )
             if resp.status_code >= 400:

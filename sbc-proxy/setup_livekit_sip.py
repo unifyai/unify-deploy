@@ -38,7 +38,7 @@ from livekit.api import (
     RoomConfiguration,
     RoomAgentDispatch,
 )
-from livekit.protocol.sip import DeleteSIPDispatchRuleRequest, DeleteSIPTrunkRequest
+from livekit.protocol.sip import DeleteSIPDispatchRuleRequest
 
 # Your Kamailio SBC configuration
 SBC_IP = "34.121.162.2"
@@ -67,7 +67,7 @@ async def create_inbound_trunk():
     for trunk in existing.items:
         if trunk.name == INBOUND_TRUNK_NAME:
             print(
-                f"✅ Inbound trunk '{INBOUND_TRUNK_NAME}' already exists: {trunk.sip_trunk_id}"
+                f"✅ Inbound trunk '{INBOUND_TRUNK_NAME}' already exists: {trunk.sip_trunk_id}",
             )
             await lkapi.aclose()
             return trunk.sip_trunk_id
@@ -103,7 +103,7 @@ async def create_outbound_trunk():
     for trunk in existing.items:
         if trunk.name == OUTBOUND_TRUNK_NAME:
             print(
-                f"✅ Outbound trunk '{OUTBOUND_TRUNK_NAME}' already exists: {trunk.sip_trunk_id}"
+                f"✅ Outbound trunk '{OUTBOUND_TRUNK_NAME}' already exists: {trunk.sip_trunk_id}",
             )
             await lkapi.aclose()
             return trunk.sip_trunk_id
@@ -148,8 +148,8 @@ async def create_teams_dispatch_rule(trunk_id: str, agent_name: str, room_name: 
             print(f"🗑️  Deleting existing dispatch rule: {rule.sip_dispatch_rule_id}")
             await lkapi.sip.delete_dispatch_rule(
                 DeleteSIPDispatchRuleRequest(
-                    sip_dispatch_rule_id=rule.sip_dispatch_rule_id
-                )
+                    sip_dispatch_rule_id=rule.sip_dispatch_rule_id,
+                ),
             )
 
     # Create dispatch rule with agent auto-dispatch
@@ -168,8 +168,8 @@ async def create_teams_dispatch_rule(trunk_id: str, agent_name: str, room_name: 
             agents=[
                 RoomAgentDispatch(
                     agent_name=agent_name,
-                )
-            ]
+                ),
+            ],
         ),
     )
 
@@ -225,7 +225,9 @@ async def list_dispatch_rules():
 
 
 async def call_teams_user(
-    phone_number: str, room_name: str, agent_name: str = "unity_+19999999999"
+    phone_number: str,
+    room_name: str,
+    agent_name: str = "unity_test_assistant_teams",
 ):
     """
     Make an outbound call to a Teams user (or any phone number via Teams).
@@ -253,7 +255,7 @@ async def call_teams_user(
 
     if not outbound_trunk_id:
         raise ValueError(
-            f"Outbound trunk '{OUTBOUND_TRUNK_NAME}' not found. Run setup first."
+            f"Outbound trunk '{OUTBOUND_TRUNK_NAME}' not found. Run setup first.",
         )
 
     # Create a SIP participant that dials out
@@ -270,7 +272,7 @@ async def call_teams_user(
             room_name=room_name,
             participant_identity=f"sip-{phone_number}",
             participant_name=f"Call to {phone_number}",
-        )
+        ),
     )
 
     print(f"✅ Outbound call initiated:")
@@ -300,8 +302,8 @@ async def create_outbound_dispatch_rule(agent_name: str):
             agents=[
                 RoomAgentDispatch(
                     agent_name=agent_name,
-                )
-            ]
+                ),
+            ],
         ),
     )
 
@@ -319,8 +321,8 @@ async def main():
 
     # Agent and room name must match what's registered in your agent worker
     # Using the same value for both ensures reliable matching
-    AGENT_NAME = "unity_+19999999999"
-    ROOM_NAME = "unity_+19999999999"  # Same as agent name for testing
+    AGENT_NAME = "unity_test_assistant_teams"
+    ROOM_NAME = "unity_test_assistant_teams"
 
     # Create inbound trunk (for receiving calls FROM Teams)
     inbound_trunk_id = await create_inbound_trunk()

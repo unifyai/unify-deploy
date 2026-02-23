@@ -1,161 +1,161 @@
 steps:
   # Build Docker Image
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'build-image'
-    args:
-      - 'build'
-      - '-f'
-      - 'Dockerfile-adapters'
-      - '-t'
-      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
-      - '-t'
-      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'
-      - '.'
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-image'
+  args:
+  - 'build'
+  - '-f'
+  - 'Dockerfile-adapters'
+  - '-t'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
+  - '-t'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'
+  - '.'
 
   # Push Docker Image (SHA Tag)
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'push-sha-tag'
-    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}']
-    waitFor: ['build-image']
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-sha-tag'
+  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}']
+  waitFor: ['build-image']
 
   # Push Docker Image (Latest Tag)
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'push-latest-tag'
-    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest']
-    waitFor: ['build-image']
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-latest-tag'
+  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest']
+  waitFor: ['build-image']
 
   # Deploy to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'deploy'
-    entrypoint: gcloud
-    args:
-      - 'run'
-      - 'deploy'
-      - '${_SERVICE_NAME}'
-      - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
-      - '--region=${_REGION}'
-      - '--platform=managed'
-      - '--allow-unauthenticated'
-      - '--min-instances=1'
-      - '--max-instances=100'
-      - '--concurrency=80'
-      - '--memory=512Mi'
-      - '--cpu=1'
-      - '--timeout=300'
-      - '--cpu-boost'
-      - '--set-env-vars=PROJECT_ID=${PROJECT_ID}'
-    waitFor: ['push-sha-tag']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'deploy'
+  entrypoint: gcloud
+  args:
+  - 'run'
+  - 'deploy'
+  - '${_SERVICE_NAME}'
+  - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
+  - '--region=${_REGION}'
+  - '--platform=managed'
+  - '--allow-unauthenticated'
+  - '--min-instances=1'
+  - '--max-instances=100'
+  - '--concurrency=80'
+  - '--memory=512Mi'
+  - '--cpu=1'
+  - '--timeout=300'
+  - '--cpu-boost'
+  - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID}'
+  waitFor: ['push-sha-tag']
 
   # Update Cloud Scheduler: Email Watches
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-email-watches'
-    entrypoint: bash
-    args:
-      - '-c'
-      - |
-        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "email-watches" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
-          --http-method POST \
-          --message-body '{}' \
-          --location="${_REGION}" \
-        || \
-        gcloud scheduler jobs create http "email-watches" \
-          --schedule "0 0 * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
-          --http-method POST \
-          --message-body '{}' \
-          --time-zone "UTC" \
-          --location="${_REGION}"
-    waitFor: ['deploy']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-email-watches'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    gcloud scheduler jobs update http "email-watches" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
+      --http-method POST \
+      --message-body '{}' \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "email-watches" \
+      --schedule "0 0 * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
+      --http-method POST \
+      --message-body '{}' \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+  waitFor: ['deploy']
 
   # Update Cloud Scheduler: Jobs Create
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-jobs-create'
-    entrypoint: bash
-    args:
-      - '-c'
-      - |
-        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "jobs-create" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
-          --http-method POST \
-          --location="${_REGION}" \
-        || \
-        gcloud scheduler jobs create http "jobs-create" \
-          --schedule "0 * * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
-          --http-method POST \
-          --time-zone "UTC" \
-          --location="${_REGION}"
-    waitFor: ['deploy']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-jobs-create'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    gcloud scheduler jobs update http "jobs-create" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
+      --http-method POST \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "jobs-create" \
+      --schedule "0 * * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
+      --http-method POST \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+  waitFor: ['deploy']
 
   # Update Cloud Scheduler: Jobs Cleanup
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-jobs-cleanup'
-    entrypoint: bash
-    args:
-      - '-c'
-      - |
-        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "jobs-cleanup" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
-          --http-method POST \
-          --location="${_REGION}" \
-        || \
-        gcloud scheduler jobs create http "jobs-cleanup" \
-          --schedule "10 * * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
-          --http-method POST \
-          --time-zone "UTC" \
-          --location="${_REGION}"
-    waitFor: ['deploy']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-jobs-cleanup'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    gcloud scheduler jobs update http "jobs-cleanup" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
+      --http-method POST \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "jobs-cleanup" \
+      --schedule "10 * * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
+      --http-method POST \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+  waitFor: ['deploy']
 
   # Update Cloud Scheduler: Microsoft Token Refresh
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-microsoft-tokens'
-    entrypoint: bash
-    args:
-      - '-c'
-      - |
-        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "microsoft-tokens" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
-          --http-method POST \
-          --message-body '{}' \
-          --location="${_REGION}" \
-        || \
-        gcloud scheduler jobs create http "microsoft-tokens" \
-          --schedule "*/30 * * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
-          --http-method POST \
-          --message-body '{}' \
-          --time-zone "UTC" \
-          --location="${_REGION}"
-    waitFor: ['deploy']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-microsoft-tokens'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    gcloud scheduler jobs update http "microsoft-tokens" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
+      --http-method POST \
+      --message-body '{}' \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "microsoft-tokens" \
+      --schedule "*/30 * * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
+      --http-method POST \
+      --message-body '{}' \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+  waitFor: ['deploy']
 
   # Update Cloud Scheduler: Teams Chat Watches (runs every 30 mins - subscriptions expire in 60 mins)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-    id: 'update-scheduler-teams-watches'
-    entrypoint: bash
-    args:
-      - '-c'
-      - |
-        CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-        gcloud scheduler jobs update http "teams-watches" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
-          --http-method POST \
-          --message-body '{}' \
-          --location="${_REGION}" \
-        || \
-        gcloud scheduler jobs create http "teams-watches" \
-          --schedule "*/30 * * * *" \
-          --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
-          --http-method POST \
-          --message-body '{}' \
-          --time-zone "UTC" \
-          --location="${_REGION}"
-    waitFor: ['deploy']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-teams-watches'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    gcloud scheduler jobs update http "teams-watches" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
+      --http-method POST \
+      --message-body '{}' \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "teams-watches" \
+      --schedule "*/30 * * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
+      --http-method POST \
+      --message-body '{}' \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+  waitFor: ['deploy']
 
 # Options
 options:
@@ -173,5 +173,5 @@ timeout: '1200s'
 
 # Images to be pushed
 images:
-  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
-  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'

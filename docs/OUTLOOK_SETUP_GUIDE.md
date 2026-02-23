@@ -278,15 +278,15 @@ async def outlook_auth_callback(request: Request, code: str):
                 "grant_type": "authorization_code",
             },
         )
-        
+
         if response.status_code == 200:
             tokens = response.json()
             access_token = tokens["access_token"]
             refresh_token = tokens["refresh_token"]
-            
+
             # Store refresh_token securely for later use
             await save_refresh_token(user_email, refresh_token)
-            
+
             return {"status": "authorized", "message": "Outlook access granted"}
         else:
             return {"error": response.text}
@@ -308,7 +308,7 @@ async def refresh_outlook_token(refresh_token: str) -> dict:
                 "scope": "offline_access Mail.Read Mail.Send Mail.ReadWrite User.Read",
             },
         )
-        
+
         if response.status_code == 200:
             tokens = response.json()
             return {
@@ -340,9 +340,9 @@ With delegated permissions, you create a subscription using the user's access to
 async def create_mail_subscription(user_access_token: str, webhook_url: str):
     """Create a subscription for the user's inbox notifications."""
     from datetime import datetime, timedelta
-    
+
     expiration = datetime.utcnow() + timedelta(days=3)  # Max 3 days for mail
-    
+
     subscription_data = {
         "changeType": "created",
         "notificationUrl": webhook_url,
@@ -350,7 +350,7 @@ async def create_mail_subscription(user_access_token: str, webhook_url: str):
         "expirationDateTime": expiration.isoformat() + "Z",
         "clientState": "your-secret-state",
     }
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://graph.microsoft.com/v1.0/subscriptions",
@@ -360,7 +360,7 @@ async def create_mail_subscription(user_access_token: str, webhook_url: str):
             },
             json=subscription_data,
         )
-        
+
         if response.status_code == 201:
             return response.json()
         else:
@@ -379,9 +379,9 @@ Set up a background task to renew subscriptions every 2 days:
 async def renew_mail_subscription(user_access_token: str, subscription_id: str):
     """Renew a mail subscription before it expires."""
     from datetime import datetime, timedelta
-    
+
     new_expiration = datetime.utcnow() + timedelta(days=3)
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.patch(
             f"https://graph.microsoft.com/v1.0/subscriptions/{subscription_id}",
@@ -393,7 +393,7 @@ async def renew_mail_subscription(user_access_token: str, subscription_id: str):
                 "expirationDateTime": new_expiration.isoformat() + "Z"
             },
         )
-        
+
         if response.status_code == 200:
             print(f"Subscription renewed until {new_expiration}")
             return response.json()

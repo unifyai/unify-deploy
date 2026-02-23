@@ -1,5 +1,7 @@
 """
-Tests for the FastAPI adapters endpoints.
+Integration tests for the FastAPI adapters endpoints.
+
+These tests require a running server and Pub/Sub access.
 """
 
 import time
@@ -11,10 +13,10 @@ import base64
 from google.cloud import pubsub_v1
 import json
 
-
 subscriber = pubsub_v1.SubscriberClient()
 subscription_path = subscriber.subscription_path(
-    os.getenv("PROJECT_ID"), "unity-default-test-assistant-staging-sub"
+    os.getenv("GCP_PROJECT_ID"),
+    "unity-default-test-assistant-staging-sub",
 )
 
 
@@ -32,7 +34,8 @@ def test_twilio_call_status_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -68,7 +71,8 @@ def test_twilio_call_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -82,7 +86,7 @@ def test_twilio_call_webhook(test_client):
         assert "event" in data and data["event"] is not None
         assert f"Unity_{assistant_number[1:]}" in data["event"]["conference_name"]
         assert data["event"]["caller_number"] == user_number
-        assert data["event"]["livekit_room"] == f"unity_{assistant_number}"
+        assert data["event"]["livekit_room"] == "unity_default-test-assistant_phone"
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert (
             "call_metadata" in data["event"]
@@ -113,7 +117,8 @@ def test_twilio_sms_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -152,7 +157,8 @@ def test_twilio_whatsapp_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -183,14 +189,18 @@ def test_unify_message_webhook(test_client):
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -224,14 +234,18 @@ def test_log_pre_hire_chats_webhook(test_client):
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -254,23 +268,26 @@ def test_log_pre_hire_chats_webhook(test_client):
 def test_unify_meet_webhook(test_client):
     """Test successful unify_meet webhook processing."""
     endpoint = "/unify/meet"
-    agent_name = "unify_meet_default-test-assistant"
+    room_name = "unity_default-test-assistant_meet"
     json_payload = {
-        "agent_name": agent_name,
-        "room_name": agent_name,
+        "room_name": room_name,
         "assistant_id": "default-test-assistant",
     }
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -283,8 +300,8 @@ def test_unify_meet_webhook(test_client):
         assert "thread" in data and data["thread"] == "unify_meet"
         assert "event" in data and data["event"] is not None
         assert data["event"]["assistant_id"] == "default-test-assistant"
-        assert data["event"]["livekit_room"] == agent_name
-        assert data["event"]["agent_name"] == agent_name
+        assert data["event"]["livekit_room"] == room_name
+        assert data["event"]["livekit_agent_name"] == room_name
     except AssertionError as e:
         print(e)
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
@@ -302,13 +319,17 @@ def test_unity_system_event_webhook(test_client):
     }
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=form_payload, headers=headers
+        "POST",
+        endpoint,
+        json=form_payload,
+        headers=headers,
     )
     assert response.status_code == 200
 
     # Check that the message was published to Pub/Sub
     pubsub_msg = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = pubsub_msg.ack_id
     pubsub_msg = pubsub_msg.message
@@ -339,10 +360,10 @@ def test_email_notification_processor(test_client):
                     {
                         "emailAddress": "default-test-assistant@unify.ai",
                         "historyId": "12345",
-                    }
-                ).encode()
-            ).decode()
-        }
+                    },
+                ).encode(),
+            ).decode(),
+        },
     }
     response = test_client.make_request("POST", endpoint, json=data)
 
@@ -389,7 +410,8 @@ def test_assistant_update_webhook(test_client):
 
     # Check that the message was published to Pub/Sub
     message = subscriber.pull(
-        subscription=subscription_path, max_messages=1
+        subscription=subscription_path,
+        max_messages=1,
     ).received_messages[0]
     ack_id = message.ack_id
     message = message.message
@@ -444,7 +466,7 @@ def test_teams_call_webhook(test_client):
 
     response_data = response.json()
     assert response_data["success"] is True
-    assert response_data["room_name"] == f"unity_{teams_number}"
+    assert response_data["room_name"] == "unity_default-test-assistant_teams"
 
 
 def test_assistant_wakeup_webhook(test_client):
@@ -465,7 +487,9 @@ def test_microsoft_router_validation_token(test_client):
     validation_token = "test-validation-token-12345"
 
     response = test_client.make_request(
-        "POST", endpoint, params={"validationToken": validation_token}
+        "POST",
+        endpoint,
+        params={"validationToken": validation_token},
     )
 
     assert response.status_code == 200
@@ -579,7 +603,10 @@ def test_unify_message_webhook_missing_assistant_id(test_client):
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 400
@@ -589,8 +616,7 @@ def test_unify_meet_webhook_unauthorized(test_client):
     """Test that unify_meet webhook rejects unauthorized requests."""
     endpoint = "/unify/meet"
     json_payload = {
-        "agent_name": "test_agent",
-        "room_name": "test_room",
+        "room_name": "unity_default-test-assistant_meet",
         "assistant_id": "default-test-assistant",
     }
 
@@ -601,16 +627,19 @@ def test_unify_meet_webhook_unauthorized(test_client):
 
 
 def test_unify_meet_webhook_missing_required_fields(test_client):
-    """Test that unify_meet webhook requires agent_name and room_name."""
+    """Test that unify_meet webhook requires room_name."""
     endpoint = "/unify/meet"
     json_payload = {
         "assistant_id": "default-test-assistant",
-        # Missing agent_name and room_name
+        # Missing room_name
     }
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
-        "POST", endpoint, json=json_payload, headers=headers
+        "POST",
+        endpoint,
+        json=json_payload,
+        headers=headers,
     )
 
     assert response.status_code == 400
@@ -756,8 +785,8 @@ def test_microsoft_router_routes_outlook_notification(test_client):
             {
                 "resource": "/users/test/mailFolders/inbox/Messages/123",
                 "clientState": "unify-outlook-webhook::test@test.com",
-            }
-        ]
+            },
+        ],
     }
 
     response = test_client.make_request("POST", endpoint, json=notification_payload)
@@ -775,8 +804,8 @@ def test_microsoft_router_routes_teams_notification(test_client):
             {
                 "resource": "/chats/19:meeting_abc@thread.v2/messages/123",
                 "clientState": "unify-teams-webhook::test@test.com",
-            }
-        ]
+            },
+        ],
     }
 
     response = test_client.make_request("POST", endpoint, json=notification_payload)
@@ -784,3 +813,112 @@ def test_microsoft_router_routes_teams_notification(test_client):
     print("Microsoft router teams response:", response.text)
     assert response.status_code == 200
     assert response.text == "OK"
+
+
+# =============================================================================
+# LiveKit Recording Webhook Tests
+# =============================================================================
+
+
+def _sign_livekit_webhook(body: str) -> str:
+    """Generate a valid LiveKit webhook Authorization token for a given body.
+
+    Uses the same signing mechanism that LiveKit Egress uses: SHA256 of the
+    body placed in a JWT claim, signed with LIVEKIT_API_SECRET.
+    """
+    import hashlib
+    from livekit.api import AccessToken
+
+    body_hash = hashlib.sha256(body.encode()).digest()
+    sha256_b64 = base64.b64encode(body_hash).decode()
+
+    token = (
+        AccessToken(
+            api_key=os.getenv("LIVEKIT_API_KEY"),
+            api_secret=os.getenv("LIVEKIT_API_SECRET"),
+        )
+        .with_sha256(sha256_b64)
+        .to_jwt()
+    )
+    return token
+
+
+def test_livekit_recording_webhook_rejects_invalid_signature(test_client):
+    """Test that the recording webhook rejects requests with bad signatures."""
+    endpoint = "/livekit/recording-complete"
+    response = test_client.make_request(
+        "POST",
+        endpoint,
+        data="invalid-body",
+        headers={"Authorization": "Bearer bad-token"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_livekit_recording_webhook_happy_path(test_client):
+    """Test successful recording webhook processing.
+
+    Sends a properly signed LiveKit egress_ended event and verifies that a
+    recording_ready Pub/Sub message is published with the correct fields.
+    """
+    endpoint = "/livekit/recording-complete"
+    assistant_id = "default-test-assistant"
+    room_name = "unity_test_room"
+
+    egress_body = json.dumps(
+        {
+            "event": "egress_ended",
+            "egressInfo": {
+                "egressId": "eg-test-123",
+                "roomName": room_name,
+                "status": 0,
+                "fileResults": [
+                    {
+                        "filename": f"staging/{assistant_id}/{room_name}.mp3",
+                        "size": 123456,
+                    },
+                ],
+            },
+        },
+    )
+    auth_token = _sign_livekit_webhook(egress_body)
+
+    user_id = "default-test-user"
+    response = test_client.make_request(
+        "POST",
+        f"{endpoint}?assistant_id={assistant_id}&user_id={user_id}&room_name={room_name}",
+        data=egress_body,
+        headers={
+            "Authorization": auth_token,
+            "Content-Type": "application/json",
+        },
+    )
+
+    print("Recording webhook response:", response.text)
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+    # Check that the recording_ready message was published to Pub/Sub
+    message = subscriber.pull(
+        subscription=subscription_path,
+        max_messages=1,
+    ).received_messages[0]
+    ack_id = message.ack_id
+    message = message.message
+    try:
+        data = json.loads(message.data.decode("utf-8"))
+    except json.JSONDecodeError:
+        assert False, "Failed to decode message data"
+    try:
+        assert data is not None
+        assert "thread" in data and data["thread"] == "recording_ready"
+        assert "event" in data and data["event"] is not None
+        assert data["event"]["assistant_id"] == assistant_id
+        assert data["event"]["user_id"] == user_id
+        assert data["event"]["conference_name"] == room_name
+        assert "storage.googleapis.com" in data["event"]["recording_url"]
+        assert f"{room_name}.mp3" in data["event"]["recording_url"]
+    except AssertionError as e:
+        print(e)
+    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])

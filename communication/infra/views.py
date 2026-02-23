@@ -2,26 +2,41 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Form, HTTPException
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
+from google.protobuf import duration_pb2
 import json
+import logging
 import os
 from .helpers import (
     setup_kubernetes_client,
     create_unity_job,
     delete_job,
     get_job_logs,
+    patch_job_labels,
     suspend_job,
-    create_external_service_for_job,
-    delete_service,
-    add_ingress_rule_for_job,
-    remove_ingress_rule_for_job,
-    get_job_readiness_status,
+)
+from .vm_helpers import (
+    provision_vm_full,
+    deprovision_vm_full,
+    start_vm,
+    stop_vm,
+    get_vm_status,
+)
+from .models import (
+    VMCreateRequest,
+    VMActionRequest,
+    VMCreateResponse,
+    VMStatusResponse,
+    VMActionResponse,
+    VMDeleteResponse,
 )
 from communication.helpers import STAGING
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 # Project ID from the existing codebase
-PROJECT_ID = "gcp-project-runtime"
+GCP_PROJECT_ID = "gcp-project-runtime"
 # Default region for Cloud Run jobs
 DEFAULT_REGION = "us-central1"
 # Namespace based on environment
@@ -45,12 +60,18 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
         subscriber = pubsub_v1.SubscriberClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_path = publisher.topic_path(PROJECT_ID, topic_name)
+        topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
         subscription_path = subscriber.subscription_path(
-            PROJECT_ID, f"{topic_name}-sub"
+            GCP_PROJECT_ID,
+            f"{topic_name}-sub",
         )
         outbound_subscription_path = subscriber.subscription_path(
-            PROJECT_ID, f"{topic_name}-outbound-sub"
+            GCP_PROJECT_ID,
+            f"{topic_name}-outbound-sub",
+        )
+        actions_subscription_path = subscriber.subscription_path(
+            GCP_PROJECT_ID,
+            f"{topic_name}-actions-sub",
         )
 
         # Create the topic if it doesn't already exist
@@ -60,7 +81,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             if "already exists" not in str(e).lower():
                 raise
 
-        # Create or update the subscription with no expiration
+        # Create or update the subscriptions with no expiration
         expiration_policy = pubsub_v1.types.ExpirationPolicy(ttl=None)
 
         try:
@@ -68,43 +89,79 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
                 "name": subscription_path,
                 "topic": topic_path,
                 "expiration_policy": expiration_policy,
-                "filter": 'NOT attributes.thread = "unify_message_outbound"',
+                "filter": (
+                    'NOT attributes.thread = "unify_message_outbound"'
+                    ' AND NOT attributes.thread = "action_event"'
+                ),
             }
             subscriber.create_subscription(request=request)
             request["name"] = outbound_subscription_path
             request["filter"] = 'attributes.thread = "unify_message_outbound"'
             subscriber.create_subscription(request=request)
+            request["name"] = actions_subscription_path
+            request["filter"] = 'attributes.thread = "action_event"'
+            request["message_retention_duration"] = duration_pb2.Duration(
+                seconds=1800,
+            )
+            subscriber.create_subscription(request=request)
         except Exception as e:
             if "already exists" in str(e).lower():
-                # Ensure the subscription never expires
+                # Ensure existing subscriptions never expire
                 subscription = pubsub_v1.types.Subscription(
                     name=subscription_path,
                     expiration_policy=expiration_policy,
                 )
-                request = {
+                update_request = {
                     "update_mask": {"paths": ["expiration_policy.ttl"]},
                     "subscription": subscription,
                 }
-                subscriber.update_subscription(request=request)
+                subscriber.update_subscription(request=update_request)
                 outbound_subscription = pubsub_v1.types.Subscription(
                     name=outbound_subscription_path,
                     expiration_policy=expiration_policy,
                 )
-                request["subscription"] = outbound_subscription
-                subscriber.update_subscription(request=request)
+                update_request["subscription"] = outbound_subscription
+                subscriber.update_subscription(request=update_request)
+                # Actions subscription may not exist yet on older assistants
+                # created before this feature. Try to create it; if it already
+                # exists, update its expiration policy.
+                try:
+                    subscriber.create_subscription(
+                        request={
+                            "name": actions_subscription_path,
+                            "topic": topic_path,
+                            "expiration_policy": expiration_policy,
+                            "filter": 'attributes.thread = "action_event"',
+                            "message_retention_duration": duration_pb2.Duration(
+                                seconds=1800,
+                            ),
+                        },
+                    )
+                except Exception as actions_err:
+                    if "already exists" in str(actions_err).lower():
+                        actions_subscription = pubsub_v1.types.Subscription(
+                            name=actions_subscription_path,
+                            expiration_policy=expiration_policy,
+                        )
+                        update_request["subscription"] = actions_subscription
+                        subscriber.update_subscription(request=update_request)
+                    else:
+                        raise
             else:
                 raise
 
         return {
             "success": True,
-            "message": "Topic and subscription ensured with no expiration",
+            "message": "Topic and subscriptions ensured with no expiration",
             "topic_name": topic_path,
             "subscription_name": subscription_path,
-            "project_id": PROJECT_ID,
+            "actions_subscription_name": actions_subscription_path,
+            "project_id": GCP_PROJECT_ID,
         }
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to create topic and subscription: {str(e)}"
+            status_code=500,
+            detail=f"Failed to create topic and subscription: {str(e)}",
         )
 
 
@@ -125,16 +182,16 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
         subscriber = pubsub_v1.SubscriberClient(credentials=creds)
 
         # Create the topic path using the project ID and assistant ID
-        topic_path = publisher.topic_path(PROJECT_ID, topic_name)
+        topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
 
         # Delete all subscriptions attached to the topic (if any)
         try:
             for subscription_name in publisher.list_topic_subscriptions(
-                request={"topic": topic_path}
+                request={"topic": topic_path},
             ):
                 try:
                     subscriber.delete_subscription(
-                        request={"subscription": subscription_name}
+                        request={"subscription": subscription_name},
                     )
                 except Exception as sub_err:
                     # If the subscription was already deleted, continue
@@ -152,171 +209,11 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
             "success": True,
             "message": f"Topic deleted successfully",
             "topic_name": topic_path,
-            "project_id": PROJECT_ID,
+            "project_id": GCP_PROJECT_ID,
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete topic: {str(e)}")
-
-
-# create external service for a job
-@router.post("/job/expose")
-async def expose_job_service(
-    job_name: str = Form(...),
-    namespace: str = Form(DEFAULT_NAMESPACE),
-    port: int = Form(6080),
-    service_name: str = Form(""),
-    attach_owner: bool = Form(True),
-):
-    """
-    Create a ClusterIP Service and add an Ingress rule to expose the Job via HTTPS.
-    Returns the service name and HTTPS URL.
-    """
-    try:
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
-            )
-
-        name = service_name or f"unity-svc-{job_name}"
-        # If attaching owner, look up job UID to set ownerReferences
-        job_uid = None
-        if attach_owner:
-            try:
-                job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
-                job_uid = job.metadata.uid
-            except Exception:
-                job_uid = None
-
-        # Create ClusterIP service
-        svc = create_external_service_for_job(
-            core_api=core_api,
-            job_name=job_name,
-            namespace=namespace,
-            port=port,
-            service_name=name,
-            job_uid=job_uid,
-        )
-        if not svc:
-            raise HTTPException(status_code=500, detail="Failed to create Service")
-
-        # Add Ingress rule
-        ingress_result = add_ingress_rule_for_job(
-            networking_api=networking_api,
-            job_name=job_name,
-            service_name=name,
-            namespace=namespace,
-            port=port,
-        )
-
-        return {
-            "success": True,
-            "service_name": name,
-            "namespace": namespace,
-            "port": port,
-            "external": {
-                "ready": ingress_result["success"],
-                "url": ingress_result.get("url"),
-                "hostname": ingress_result.get("hostname"),
-                "type": "ingress",
-            },
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to expose service: {str(e)}"
-        )
-
-
-# get external url for a service with readiness check
-@router.get("/job/service/ip")
-async def get_job_service_ip(
-    service_name: str,
-    namespace: str = DEFAULT_NAMESPACE,
-):
-    """Get the HTTPS URL for a job service with readiness status.
-
-    Ready = K8s checks pass AND 5 minutes have elapsed since job creation
-    (to allow for GCE LB propagation).
-
-    Args:
-        service_name: Name of the service (e.g., unity-svc-unity-2024-12-08-10-00-00)
-        namespace: Kubernetes namespace (default: "default")
-    """
-    try:
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
-            )
-
-        # Extract job_name from service_name (unity-svc-{job_name})
-        job_name = service_name.replace("unity-svc-", "")
-
-        # Get comprehensive readiness status
-        readiness_info = get_job_readiness_status(
-            core_api=core_api,
-            networking_api=networking_api,
-            job_name=job_name,
-            service_name=service_name,
-            namespace=namespace,
-        )
-
-        return {
-            "success": True,
-            "service_name": service_name,
-            "namespace": namespace,
-            "external": readiness_info,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to get service URL: {str(e)}"
-        )
-
-
-# delete external service
-@router.delete("/job/service")
-async def delete_job_service(
-    service_name: str = Form(...), namespace: str = Form(DEFAULT_NAMESPACE)
-):
-    """Delete a Service and its associated Ingress rule."""
-    try:
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
-            )
-
-        # Extract job_name from service_name
-        job_name = service_name.replace("unity-svc-", "")
-
-        # Remove Ingress rule first
-        remove_ingress_rule_for_job(
-            networking_api=networking_api,
-            job_name=job_name,
-        )
-
-        # Delete the service
-        ok = delete_service(core_api, service_name, namespace)
-        if ok:
-            return {
-                "success": True,
-                "message": f"Service and Ingress rule deleted: {service_name}",
-                "service_name": service_name,
-            }
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete service: {service_name}"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to delete service: {str(e)}"
-        )
 
 
 # create kubernetes job
@@ -324,16 +221,14 @@ async def delete_job_service(
 async def create_kubernetes_job(
     namespace: str = Form(DEFAULT_NAMESPACE),
     image: str = Form(
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest"
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
     ),
-    expose_service: bool = Form(True),
-    expose_port: int = Form(6080),
-    service_name: str = Form(""),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
 
     Args:
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
         image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
@@ -363,7 +258,7 @@ async def create_kubernetes_job(
         )
 
         if job:
-            response = {
+            return {
                 "success": True,
                 "message": "Kubernetes job created successfully",
                 "job_name": job.metadata.name,
@@ -376,39 +271,6 @@ async def create_kubernetes_job(
                     else None
                 ),
             }
-
-            # Optionally expose the job via Ingress
-            if expose_service:
-                name = service_name or f"unity-svc-{job.metadata.name}"
-                svc = create_external_service_for_job(
-                    core_api=core_api,
-                    job_name=job.metadata.name,
-                    namespace=namespace,
-                    port=expose_port,
-                    service_name=name,
-                    job_uid=job.metadata.uid,
-                )
-                if svc:
-                    # Add Ingress rule for HTTPS access
-                    ingress_result = add_ingress_rule_for_job(
-                        networking_api=networking_api,
-                        job_name=job.metadata.name,
-                        service_name=name,
-                        namespace=namespace,
-                        port=expose_port,
-                    )
-                    response["service"] = {
-                        "service_name": name,
-                        "port": expose_port,
-                        "external": {
-                            "ready": ingress_result["success"],
-                            "url": ingress_result.get("url"),
-                            "hostname": ingress_result.get("hostname"),
-                            "type": "ingress",
-                        },
-                    }
-
-            return response
         else:
             raise HTTPException(
                 status_code=500,
@@ -419,7 +281,8 @@ async def create_kubernetes_job(
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to create Kubernetes job: {str(e)}"
+            status_code=500,
+            detail=f"Failed to create Kubernetes job: {str(e)}",
         )
 
 
@@ -428,78 +291,112 @@ async def create_kubernetes_job(
 async def delete_kubernetes_job(
     job_name: str = Form(...),
     namespace: str = Form(DEFAULT_NAMESPACE),
-    delete_services: bool = Form(False),
-    delete_ingress: bool = Form(True),
+    required_labels: str = Form(None),
 ):
     """
     Delete a Kubernetes Job for a Unity assistant.
 
     Args:
         job_name: Name of the job (required)
-        namespace: Kubernetes namespace (optional, defaults to "default")
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
+        required_labels: JSON-encoded dict of labels the job must currently have
+            for the deletion to proceed (optional, guards against race conditions)
     """
     try:
-        # Initialize Kubernetes client
+        parsed_required_labels = (
+            json.loads(required_labels) if required_labels else None
+        )
+
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
             )
 
-        deleted_services = []
-        failed_services = []
-
-        # Optionally delete any services associated with this job
-        if delete_services:
-            try:
-                svcs = core_api.list_namespaced_service(
-                    namespace=namespace, label_selector=f"job-name={job_name}"
-                )
-                for svc in svcs.items:
-                    svc_name = svc.metadata.name
-                    # Remove Ingress rule first
-                    remove_ingress_rule_for_job(
-                        networking_api=networking_api,
-                        job_name=job_name,
-                    )
-                    ok = delete_service(core_api, svc_name, namespace)
-                    if ok:
-                        deleted_services.append(svc_name)
-                    else:
-                        failed_services.append(svc_name)
-            except Exception:
-                # Continue even if listing services fails
-                pass
-
-        # Delete the job
-        success = delete_job(batch_api, job_name, namespace)
+        success = delete_job(batch_api, job_name, namespace, parsed_required_labels)
 
         if success:
-
-            # Optionally delete the ingress rule only when job delete is successful
-            if delete_ingress:
-                remove_ingress_rule_for_job(
-                    networking_api=networking_api,
-                    job_name=job_name,
-                )
-
             return {
                 "success": True,
                 "message": f"Job deleted successfully: {job_name}",
                 "job_name": job_name,
                 "namespace": namespace,
-                "deleted_services": deleted_services,
-                "failed_services": failed_services,
             }
+        elif parsed_required_labels:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job {job_name} no longer matches required labels {parsed_required_labels}",
+            )
         else:
             raise HTTPException(
-                status_code=500, detail=f"Failed to delete job: {job_name}"
+                status_code=500,
+                detail=f"Failed to delete job: {job_name}",
             )
 
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON in required_labels parameter",
+        )
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
+
+
+@router.patch("/job/labels")
+async def patch_kubernetes_job_labels(
+    job_name: str = Form(...),
+    labels: str = Form(...),
+    namespace: str = Form(DEFAULT_NAMESPACE),
+):
+    """
+    Patch labels on an existing Kubernetes Job.
+
+    Args:
+        job_name: Name of the job (required)
+        labels: JSON-encoded dict of labels to set (required)
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
+    """
+    try:
+        parsed_labels = json.loads(labels)
+
+        batch_api, core_api, networking_api = setup_kubernetes_client()
+        if not batch_api or not core_api or not networking_api:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
+            )
+
+        success = patch_job_labels(batch_api, job_name, parsed_labels, namespace)
+
+        if success:
+            return {
+                "success": True,
+                "message": f"Job labels patched: {job_name}",
+                "job_name": job_name,
+                "labels": parsed_labels,
+                "namespace": namespace,
+            }
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Job not found: {job_name}",
+            )
+
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON in labels parameter",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to patch job labels: {str(e)}",
+        )
 
 
 # start job via pubsub
@@ -523,6 +420,12 @@ async def start_job(
     voice_provider: str = Form(""),
     voice_id: str = Form(""),
     voice_mode: str = Form(""),
+    desktop_mode: str = Form("ubuntu"),
+    desktop_url: str = Form(""),
+    user_desktop_mode: str = Form(""),
+    user_desktop_filesys_sync: str = Form("false"),
+    user_desktop_url: str = Form(""),
+    demo_id: str = Form(""),
 ):
     """
     Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
@@ -546,6 +449,12 @@ async def start_job(
         voice_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
         voice_mode: Voice mode (optional, defaults to empty string)
+        desktop_mode: Desktop mode - ubuntu/windows/macos (optional, defaults to "ubuntu")
+        desktop_url: URL to access the VM desktop (optional, defaults to empty string)
+        user_desktop_mode: User's own desktop mode - ubuntu/windows/macos (optional)
+        user_desktop_filesys_sync: Whether to sync user desktop filesystem (optional, defaults to "false")
+        user_desktop_url: URL to user's own desktop (optional)
+        demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
     """
     try:
         # Get credentials from environment variable
@@ -557,7 +466,7 @@ async def start_job(
 
         # Create the topic path
         topic_path = publisher.topic_path(
-            PROJECT_ID,
+            GCP_PROJECT_ID,
             "unity-startup" if not STAGING else "unity-startup-staging",
         )
 
@@ -583,6 +492,14 @@ async def start_job(
                 "voice_provider": voice_provider,
                 "voice_id": voice_id,
                 "voice_mode": voice_mode,
+                "desktop_mode": desktop_mode,
+                "desktop_url": desktop_url if desktop_url else None,
+                "user_desktop_mode": user_desktop_mode if user_desktop_mode else None,
+                "user_desktop_filesys_sync": user_desktop_filesys_sync.lower()
+                == "true",
+                "user_desktop_url": user_desktop_url if user_desktop_url else None,
+                # Pass demo_id as int or None; Unity derives demo_mode from presence
+                "demo_id": int(demo_id) if demo_id else None,
             },
         }
 
@@ -600,12 +517,13 @@ async def start_job(
             "topic_path": topic_path,
             "assistant_id": assistant_id,
             "is_staging": bool(STAGING),
-            "project_id": PROJECT_ID,
+            "project_id": GCP_PROJECT_ID,
         }
 
     except Exception as e:
         raise HTTPException(
-            status_code=500, detail=f"Failed to publish job start request: {str(e)}"
+            status_code=500,
+            detail=f"Failed to publish job start request: {str(e)}",
         )
 
 
@@ -620,7 +538,8 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
             )
         # Suspend the job
         success = suspend_job(batch_api, job_name, namespace)
@@ -631,7 +550,8 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
             }
         else:
             raise HTTPException(
-                status_code=500, detail=f"Failed to suspend job: {job_name}"
+                status_code=500,
+                detail=f"Failed to suspend job: {job_name}",
             )
     except HTTPException:
         raise
@@ -641,25 +561,32 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
 
 # list kubernetes jobs
 @router.get("/jobs")
-async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 3):
+async def list_kubernetes_jobs(
+    namespace: str = DEFAULT_NAMESPACE,
+    hours: int = 8,
+    label_selector: str = "app=unity",
+):
     """
     List all Unity Kubernetes jobs in the namespace.
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to "default")
         hours: Number of hours to filter jobs (optional, defaults to 3)
+        label_selector: K8s label selector (optional, defaults to "app=unity")
     """
     try:
         # Initialize Kubernetes client
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
             )
 
         # List jobs
         jobs = batch_api.list_namespaced_job(
-            namespace=namespace, label_selector="app=unity"
+            namespace=namespace,
+            label_selector=label_selector,
         )
         job_items = list(
             filter(
@@ -672,9 +599,9 @@ async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 
                 )
                 < timedelta(hours=hours),
                 jobs.items,
-            )
+            ),
         )
-        print(f"Job items: {map(lambda job: job.metadata.name, job_items)}")
+        print(f"Job items: {list(map(lambda job: job.metadata.name, job_items))}")
 
         job_list = []
         for job in job_items:
@@ -719,7 +646,9 @@ async def list_kubernetes_jobs(namespace: str = DEFAULT_NAMESPACE, hours: int = 
 # get job logs
 @router.get("/job/logs")
 async def get_job_logs_endpoint(
-    job_name: str, namespace: str = DEFAULT_NAMESPACE, tail_lines: int = 10
+    job_name: str,
+    namespace: str = DEFAULT_NAMESPACE,
+    tail_lines: int = 10,
 ):
     """
     Get logs from a Kubernetes Job.
@@ -734,7 +663,8 @@ async def get_job_logs_endpoint(
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
-                status_code=500, detail="Failed to connect to Kubernetes cluster"
+                status_code=500,
+                detail="Failed to connect to Kubernetes cluster",
             )
 
         # Get logs
@@ -816,5 +746,122 @@ async def get_latest_unity_image_commit():
 
         traceback.print_exc()
         raise HTTPException(
-            status_code=500, detail=f"Failed to get latest Unity image commit: {str(e)}"
+            status_code=500,
+            detail=f"Failed to get latest Unity image commit: {str(e)}",
         )
+
+
+# =============================================================================
+# VM Management Endpoints (Windows and Ubuntu)
+# =============================================================================
+
+
+@router.post("/vm/create", response_model=VMCreateResponse)
+async def create_vm_endpoint(request: VMCreateRequest):
+    """
+    Create a new VM (Windows or Ubuntu) with full provisioning:
+    - Reserve static IP
+    - Create DNS A record (unity-assistant-{id}.vm.unify.ai)
+    - Create and start VM with init script
+
+    Called by external hire webhook when assistant has desktop_mode set.
+
+    Args:
+        assistant_id: The assistant ID (numeric string)
+        unify_apikey: Unify API key (used for VNC password and Windows password)
+        assistant_name: Assistant name (used for Windows username, ignored for Ubuntu)
+        vm_type: "windows" or "ubuntu" (defaults to "windows")
+    """
+    try:
+        result = provision_vm_full(
+            assistant_id=request.assistant_id,
+            unify_apikey=request.unify_apikey,
+            assistant_name=request.assistant_name,
+            vm_type=request.vm_type,
+        )
+        return VMCreateResponse(**result)
+    except Exception as e:
+        logger.error(f"Failed to create VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/vm/start", response_model=VMActionResponse)
+async def start_vm_endpoint(request: VMActionRequest):
+    """
+    Start a stopped VM (Windows or Ubuntu).
+
+    Called by external wakeup webhook when assistant needs to be activated.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu" (defaults to "windows")
+    """
+    try:
+        result = start_vm(request.assistant_id, request.vm_type)
+        return VMActionResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to start VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/vm/stop", response_model=VMActionResponse)
+async def stop_vm_endpoint(request: VMActionRequest):
+    """
+    Stop a running VM (Windows or Ubuntu). Preserves data.
+
+    Called when assistant job/session ends.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu" (defaults to "windows")
+    """
+    try:
+        result = stop_vm(request.assistant_id, request.vm_type)
+        return VMActionResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to stop VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/vm/delete", response_model=VMDeleteResponse)
+async def delete_vm_endpoint(request: VMActionRequest):
+    """
+    Delete a VM (Windows or Ubuntu) with full deprovisioning:
+    - Delete VM
+    - Delete DNS record
+    - Release static IP
+
+    Called by external unhire webhook when assistant is removed.
+
+    Args:
+        assistant_id: The assistant ID
+        vm_type: "windows" or "ubuntu" (defaults to "windows")
+    """
+    try:
+        result = deprovision_vm_full(request.assistant_id, request.vm_type)
+        return VMDeleteResponse(**result)
+    except Exception as e:
+        logger.error(f"Failed to delete VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/vm/status/{assistant_id}", response_model=VMStatusResponse)
+async def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
+    """
+    Get the current status of a VM (Windows or Ubuntu).
+
+    Args:
+        assistant_id: The assistant ID (path parameter)
+        vm_type: "windows" or "ubuntu" (query parameter, defaults to "windows")
+    """
+    result = get_vm_status(assistant_id, vm_type)
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"VM not found for assistant {assistant_id}",
+        )
+    return VMStatusResponse(**result)

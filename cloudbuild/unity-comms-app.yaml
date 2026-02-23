@@ -6,7 +6,7 @@ steps:
   args:
   - '-c'
   - |
-    docker build -f Dockerfile-comms --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
+    docker build -f Dockerfile-comms --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN --build-arg BRANCH_NAME=main \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
   secretEnv: ['GITHUB_TOKEN']

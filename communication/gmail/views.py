@@ -10,6 +10,8 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 import base64
 
 load_dotenv()
@@ -39,7 +41,9 @@ def get_gmail_service(sender_email: str):
         "https://www.googleapis.com/auth/gmail.modify",
     ]
     creds = Credentials.from_service_account_info(
-        creds_json, scopes=scopes, subject=sender_email
+        creds_json,
+        scopes=scopes,
+        subject=sender_email,
     )
     return build("gmail", "v1", credentials=creds)
 
@@ -73,8 +77,8 @@ async def create_email_user(request: Request):
         # optional watch call
         async with httpx.AsyncClient() as client_http:
             watch_res = await client_http.post(
-                f"{os.getenv('UNITY_COMMS_URL')}/api/gmail/watch",
-                json={"userEmail": primary_email},
+                f"{os.getenv('UNITY_COMMS_URL')}/gmail/watch",
+                json={"primary_email": primary_email},
             )
         return {"success": True, "user": res}
     except Exception as e:
@@ -107,10 +111,14 @@ async def send_email(request: Request):
     subject = data.get("subject", "")
     body = data.get("body")
     in_reply_to = data.get("in_reply_to")  # email_id to reply to (threading id)
+    attachment = data.get(
+        "attachment",
+    )  # Optional: {"filename": str, "content_base64": str}
 
     if not sender or not to or body is None:
         raise HTTPException(
-            status_code=400, detail="Missing required fields: 'from', 'to', 'body'"
+            status_code=400,
+            detail="Missing required fields: 'from', 'to', 'body'",
         )
 
     # initialize message
@@ -123,6 +131,26 @@ async def send_email(request: Request):
         msg["bcc"] = bcc if isinstance(bcc, str) else ",".join(bcc)
     msg["subject"] = subject
     msg.attach(MIMEText(body, "plain"))
+
+    # add attachment if provided
+    if attachment:
+        try:
+            filename = attachment.get("filename", "attachment")
+            content_base64 = attachment.get("content_base64", "")
+            file_data = base64.b64decode(content_base64)
+
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(file_data)
+            encoders.encode_base64(part)
+            part.add_header(
+                "Content-Disposition",
+                f'attachment; filename="{filename}"',
+            )
+            msg.attach(part)
+            print(f"Attached file: {filename} ({len(file_data)} bytes)")
+        except Exception as e:
+            logging.error(f"Failed to attach file: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to attach file: {e}")
 
     # add threading headers if provided
     if in_reply_to:
@@ -156,7 +184,8 @@ async def watch_email(request: Request):
     )
     gmail_service = build("gmail", "v1", credentials=creds)
     topic_name = "projects/gcp-project-runtime/topics/" + data.get(
-        "topic_name", "gmail-notifications"
+        "topic_name",
+        "gmail-notifications",
     )
     watch_request = {"labelIds": ["INBOX"], "topicName": topic_name}
     watch_resp = (
@@ -194,7 +223,7 @@ async def get_attachment(
             content=file_bytes,
             media_type="application/octet-stream",
             headers={
-                "Content-Disposition": f"attachment; filename={filename or 'attachment'}"
+                "Content-Disposition": f"attachment; filename={filename or 'attachment'}",
             },
         )
     except HTTPException:

@@ -1,21 +1,17 @@
 import os
-import httpx
-import base64
-import json
-import time
 from fastapi import APIRouter, Response, Request, HTTPException
 from twilio.twiml.voice_response import VoiceResponse
 from livekit.api import (
     LiveKitAPI,
     SIPInboundTrunkInfo,
     CreateSIPInboundTrunkRequest,
-    CreateAgentDispatchRequest,
 )
 from livekit.protocol.sip import (
     ListSIPInboundTrunkRequest,
     DeleteSIPTrunkRequest,
 )
-from communication.helpers import ADAPTERS_URL, get_twilio_client, ORCHESTRA_URL
+from common.livekit import create_room_and_dispatch_agent
+from communication.helpers import ADAPTERS_URL, get_twilio_client
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,42 +29,22 @@ def create_conference_response(conference_name, sip_uri, with_status=False):
         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/sip-status",
         status_callback_event="initiated ringing answered completed",
     )
-    # if with_status:
-    #     dial_user.conference(
-    #         conference_name,
-    #         startConferenceOnEnter=True,
-    #         endConferenceOnExit=True,
-    #         muted=False,
-    #         wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-    #         record="record-from-start",
-    #         recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-    #         recording_status_callback_event="completed",
-    #         status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/conference-status",
-    #         status_callback_event=["completed"],
-    #     )
-    #     return resp_user
-
-    # dial_user.conference(
-    #     conference_name,
-    #     startConferenceOnEnter=True,
-    #     endConferenceOnExit=True,
-    #     muted=False,
-    #     wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-    #     record="record-from-start",
-    #     recording_status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/recording",
-    #     recording_status_callback_event="completed",
-    # )
     return resp_user
 
 
 def add_user_to_conference(
-    conference_name, from_number, to_number, sip_uri, connect_third_party=False
+    conference_name,
+    from_number,
+    to_number,
+    sip_uri,
+    connect_third_party=False,
 ):
     twilio_client = get_twilio_client()
 
     if connect_third_party:
         conferences = twilio_client.conferences.list(
-            friendly_name=conference_name, status="in-progress"
+            friendly_name=conference_name,
+            status="in-progress",
         )
         participants = twilio_client.conferences(conferences[0].sid).participants.list()
         for participant in participants:
@@ -76,11 +52,13 @@ def add_user_to_conference(
             # Identify Livekit Agent and mute
             if "livekit.cloud" in call.to:
                 twilio_client.conferences(conferences[0].sid).participants(
-                    participant.sid
+                    participant.sid,
                 ).update(muted=True)
                 break
         response = create_conference_response(
-            conference_name, sip_uri, with_status=True
+            conference_name,
+            sip_uri,
+            with_status=True,
         )
     else:
         response = create_conference_response(conference_name, sip_uri)
@@ -94,158 +72,18 @@ def add_user_to_conference(
     return call.sid
 
 
-# Endpoints - Form format
-@unauth_router.post("/recording")
-async def check_recording_status(request: Request):
-    data = await request.form()
-    conference_name = request.query_params.get("conference_name")
-    print("Conference name: ", conference_name)
-
-    print("Recorded data")
-    for key, value in data.items():
-        print(key, value)
-    recording_url = data.get("RecordingUrl")
-    conference_sid = data.get("ConferenceSid")
-
-    if not recording_url:
-        return {"success": False, "error": "RecordingUrl is required"}
-
-    # Get recording from Twilio
-    recording_url = recording_url + ".mp3"
-    async with httpx.AsyncClient(
-        auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-    ) as httpx_client:
-        resp = await httpx_client.get(recording_url)
-    if resp.status_code >= 400:
-        print("Failed to get recording from Twilio")
-        raise HTTPException(
-            status_code=resp.status_code, detail="Failed to get recording from Twilio"
-        )
-
-    # Extract recording bytes
-    resp_bytes = resp.content
-    resp_bytes = base64.b64encode(resp_bytes).decode("utf-8")
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-
-    # Get number through Twilio RecordingSid or Conference participants
-    twilio_client = get_twilio_client()
-    recording_sid = data.get("RecordingSid")
-    call = None
-
-    # Get call info from recording
-    recording = twilio_client.recordings(recording_sid).fetch()
-    call_sid = recording.call_sid
-    call = twilio_client.calls(call_sid).fetch()
-
-    print("Call: ", call)
-    print("Call from: ", call._from)
-    print("Call to: ", call.to)
-    print("Call sid: ", call.sid)
-    print("Call status: ", call.status)
-    print("Call duration: ", call.duration)
-    print("Call start time: ", call.start_time)
-
-    # assistant_id (get from unify api thorugh phone number search)
-    async with httpx.AsyncClient() as httpx_client:
-        resp = await httpx_client.get(
-            f"{ORCHESTRA_URL}/admin/assistant",
-            params={"phone": call._from},
-            headers=headers,
-        )
-        assistants = resp.json()["info"]
-        if len(assistants) == 0:
-            resp = await httpx_client.get(
-                f"{ORCHESTRA_URL}/admin/assistant",
-                params={"phone": call.to},
-                headers=headers,
-            )
-            assistants = resp.json()["info"]
-    if resp.status_code >= 400:
-        print("Failed to get assistants from Unify")
-        raise HTTPException(
-            status_code=resp.status_code, detail="Failed to get assistants from Unify"
-        )
-    for assistant in assistants:
-        if assistant["phone"] in [call._from, call.to]:
-            assistant_id = assistant["agent_id"]
-            user_id = assistant["user_id"]
-            break
-
-    payload = {
-        "recording_raw": resp_bytes,
-        "content_type": "audio/mp3",
-        "assistant_id": assistant_id,
-        "user_id": user_id,
-        "conference_name": conference_name,
-        "conference_sid": conference_sid,
-    }
-    async with httpx.AsyncClient() as httpx_client:
-        resp = await httpx_client.post(
-            f"{ORCHESTRA_URL}/admin/assistant/recordings",
-            headers=headers,
-            json=payload,
-        )
-    if resp.status_code >= 400:
-        print("Failed to upload recording to Unify")
-        print(resp.text)
-        raise HTTPException(
-            status_code=resp.status_code, detail="Failed to upload recording to Unify"
-        )
-    return {"success": True, "recording_url": recording_url}
-
-
-def get_livekit_api():
-    """Get LiveKit API client"""
-    url = os.getenv("LIVEKIT_URL")
-    api_key = os.getenv("LIVEKIT_API_KEY")
-    api_secret = os.getenv("LIVEKIT_API_SECRET")
-
-    if not url or not api_key or not api_secret:
-        raise RuntimeError(
-            "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be set"
-        )
-
-    return LiveKitAPI(url=url, api_key=api_key, api_secret=api_secret)
-
-
-async def create_room_and_dispatch_agent(
-    room_name: str, agent_name: str, metadata: dict = None
-):
-    """Create a LiveKit room and dispatch an agent to it"""
-    livekit_api = get_livekit_api()
-
-    try:
-        # Create dispatch request - this will create the room if it doesn't exist
-        dispatch_request = CreateAgentDispatchRequest(
-            agent_name=agent_name,
-            room=room_name,
-            metadata=json.dumps(metadata) if metadata else None,
-        )
-
-        # Dispatch agent to room (creates room automatically if needed)
-        dispatch = await livekit_api.agent_dispatch.create_dispatch(dispatch_request)
-        print(
-            f"Successfully created room '{room_name}' and dispatched agent '{agent_name}'"
-        )
-        print(f"Dispatch ID: {dispatch.id}")
-
-        return dispatch
-    except Exception as e:
-        print(f"Error creating room and dispatching agent: {str(e)}")
-        raise
-    finally:
-        await livekit_api.aclose()
-
-
 # Endpoints - JSON format
-@auth_router.post("/dispatch-agent")
-async def dispatch_agent(request: Request):
+@auth_router.post("/dispatch-livekit-agent")
+async def dispatch_livekit_agent(request: Request):
     data = await request.json()
-    agent_name = data.get("agent_name")
-    room_name = data.get("room_name")
-    if not room_name:
-        room_name = agent_name
-    await create_room_and_dispatch_agent(room_name, agent_name)
+    room_name = data.get("room_name") or data.get("livekit_agent_name", "")
+    await create_room_and_dispatch_agent(
+        room_name,
+        room_name,
+        record=data.get("record", False),
+        assistant_id=data.get("assistant_id", ""),
+        user_id=data.get("user_id", ""),
+    )
     return {"success": True}
 
 
@@ -314,14 +152,20 @@ async def create_phone_number(request: Request):
     numbers = []
     try:
         numbers += twilio_client.available_phone_numbers(phone_country).local.list(
-            limit=1, sms_enabled=True, voice_enabled=True, beta=False
+            limit=1,
+            sms_enabled=True,
+            voice_enabled=True,
+            beta=False,
         )
     except Exception as e:
         pass
 
     try:
         numbers += twilio_client.available_phone_numbers(phone_country).mobile.list(
-            limit=1, sms_enabled=True, voice_enabled=True, beta=False
+            limit=1,
+            sms_enabled=True,
+            voice_enabled=True,
+            beta=False,
         )
     except Exception as e:
         pass
@@ -377,7 +221,8 @@ async def delete_phone_number(request: Request):
 
     # Find the purchased number by E.164
     incoming_list = twilio_client.incoming_phone_numbers.list(
-        phone_number=phone_number, limit=1
+        phone_number=phone_number,
+        limit=1,
     )
     if not incoming_list:
         raise HTTPException(status_code=404, detail="Phone number not found")
@@ -396,7 +241,7 @@ async def delete_phone_number(request: Request):
     for item in sip_its.items:
         if phone_number[1:] in item.name:
             await lkapi.sip.delete_sip_trunk(
-                DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id)
+                DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id),
             )
             break
 
@@ -425,7 +270,8 @@ async def hang_up(request: Request):
 
     twilio_client = get_twilio_client()
     conferences = twilio_client.conferences.list(
-        friendly_name=conference_name, status="in-progress"
+        friendly_name=conference_name,
+        status="in-progress",
     )
     conference = (
         twilio_client.conferences(conferences[0].sid).participants(call_sid).delete()
@@ -440,10 +286,11 @@ async def end_conference(request: Request):
 
     twilio_client = get_twilio_client()
     conferences = twilio_client.conferences.list(
-        friendly_name=conference_name, status="in-progress"
+        friendly_name=conference_name,
+        status="in-progress",
     )
     conference = twilio_client.conferences(conferences[0].sid).update(
-        status="completed"
+        status="completed",
     )
     return {"success": True, "status": conference.status}
 
@@ -460,7 +307,7 @@ async def conference_status(request: Request):
         participants = twilio_client.conferences(conference_sid).participants.list()
         for participant in participants:
             twilio_client.conferences(conference_sid).participants(
-                participant.sid
+                participant.sid,
             ).update(muted=False)
     return Response(status_code=200)
 

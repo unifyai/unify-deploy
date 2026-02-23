@@ -276,16 +276,16 @@ async def auth_callback(request: Request, code: str):
                 "grant_type": "authorization_code",
             },
         )
-        
+
         if response.status_code == 200:
             tokens = response.json()
             # Store these securely!
             access_token = tokens["access_token"]
             refresh_token = tokens["refresh_token"]
-            
+
             # Save refresh_token to database for later use
             await save_refresh_token(user_email, refresh_token)
-            
+
             return {"status": "authorized", "message": "Teams chat access granted"}
         else:
             return {"error": response.text}
@@ -309,7 +309,7 @@ async def refresh_access_token(refresh_token: str) -> dict:
                 "scope": "offline_access Chat.Read Chat.ReadWrite User.Read",
             },
         )
-        
+
         if response.status_code == 200:
             tokens = response.json()
             # Update stored refresh token (it may have been rotated)
@@ -371,24 +371,24 @@ async def teams_webhook(request: Request):
             media_type="text/plain",
             status_code=200
         )
-    
+
     # Parse notification payload
     try:
         body = await request.json()
         notifications = body.get("value", [])
-        
+
         for notification in notifications:
             # Verify client state if you set one
             if notification.get("clientState") != "your-secret-state":
                 print("Warning: Client state mismatch")
                 continue
-            
+
             # Process the notification
             await process_teams_notification(notification)
-        
+
         # Must respond with 202 Accepted quickly
         return Response(status_code=202)
-        
+
     except Exception as e:
         print(f"Error processing notification: {e}")
         # Still return 202 to acknowledge receipt
@@ -401,14 +401,14 @@ async def process_teams_notification(notification: dict):
     change_type = notification.get("changeType")
     resource = notification.get("resource")
     resource_data = notification.get("resourceData", {})
-    
+
     print(f"Received {change_type} notification for {resource}")
-    
+
     if change_type == "created":
         # New message created
         message_id = resource_data.get("id")
         chat_id = resource_data.get("chatId")
-        
+
         # Fetch full message content using Graph API
         # (notification may not include full content)
         await fetch_and_process_message(chat_id, message_id)
@@ -462,7 +462,7 @@ async def create_chat_subscription(user_access_token: str, webhook_url: str):
     """
     # Subscription expires in 60 minutes (max for chat messages)
     expiration = datetime.utcnow() + timedelta(minutes=60)
-    
+
     subscription_data = {
         "changeType": "created",  # Watch for new messages
         "notificationUrl": webhook_url,
@@ -470,7 +470,7 @@ async def create_chat_subscription(user_access_token: str, webhook_url: str):
         "expirationDateTime": expiration.isoformat() + "Z",
         "clientState": "your-secret-state",  # Optional: verify notifications
     }
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://graph.microsoft.com/v1.0/subscriptions",
@@ -480,7 +480,7 @@ async def create_chat_subscription(user_access_token: str, webhook_url: str):
             },
             json=subscription_data,
         )
-        
+
         if response.status_code == 201:
             subscription = response.json()
             print(f"Subscription created: {subscription['id']}")
@@ -554,7 +554,7 @@ async def fetch_message(access_token: str, chat_id: str, message_id: str):
                 "Authorization": f"Bearer {access_token}",
             },
         )
-        
+
         if response.status_code == 200:
             message = response.json()
             return {
@@ -580,28 +580,28 @@ async def process_teams_notification(notification: dict, access_token: str):
     """
     change_type = notification.get("changeType")
     resource = notification.get("resource")
-    
+
     if change_type != "created":
         return  # Only process new messages
-    
+
     # Extract IDs from resource path
     # Format: "chats/{chat-id}/messages/{message-id}"
     parts = resource.split("/")
     chat_id = parts[1]
     message_id = parts[3]
-    
+
     # Fetch full message
     message = await fetch_message(access_token, chat_id, message_id)
-    
+
     if not message:
         return
-    
+
     # Skip messages from bots or your own app
     if message["sender_id"] == "your-app-user-id":
         return
-    
+
     print(f"New message from {message['sender']}: {message['content']}")
-    
+
     # Process the message (e.g., send to AI agent)
     await handle_chat_message(message)
 ```
@@ -622,14 +622,14 @@ class SubscriptionManager:
     def __init__(self, access_token_provider):
         self.subscriptions = {}
         self.access_token_provider = access_token_provider
-    
+
     async def renew_subscription(self, subscription_id: str):
         """
         Renew a subscription before it expires.
         """
         access_token = await self.access_token_provider()
         new_expiration = datetime.utcnow() + timedelta(minutes=60)
-        
+
         async with httpx.AsyncClient() as client:
             response = await client.patch(
                 f"https://graph.microsoft.com/v1.0/subscriptions/{subscription_id}",
@@ -641,14 +641,14 @@ class SubscriptionManager:
                     "expirationDateTime": new_expiration.isoformat() + "Z"
                 },
             )
-            
+
             if response.status_code == 200:
                 print(f"Subscription {subscription_id} renewed until {new_expiration}")
                 return response.json()
             else:
                 print(f"Failed to renew subscription: {response.text}")
                 raise Exception(f"Renewal failed: {response.text}")
-    
+
     async def start_renewal_loop(self, subscription_id: str):
         """
         Background task to renew subscription every 50 minutes.
@@ -671,7 +671,7 @@ Microsoft sends lifecycle notifications when subscriptions are about to expire:
 @app.post("/webhooks/teams")
 async def teams_webhook(request: Request):
     body = await request.json()
-    
+
     # Check for lifecycle notifications
     lifecycle_notifications = body.get("lifecycleNotifications", [])
     for lifecycle in lifecycle_notifications:
@@ -681,7 +681,7 @@ async def teams_webhook(request: Request):
         elif lifecycle.get("lifecycleEvent") == "subscriptionRemoved":
             # Subscription was removed, recreate it
             await recreate_subscription()
-    
+
     # Handle regular notifications
     notifications = body.get("value", [])
     # ... process notifications
@@ -712,7 +712,7 @@ async def send_chat_reply(access_token: str, chat_id: str, message: str):
                 }
             },
         )
-        
+
         if response.status_code == 201:
             print("Message sent successfully")
             return response.json()
@@ -810,10 +810,10 @@ token_expires_at = None
 async def get_access_token():
     """Get or refresh Microsoft Graph access token."""
     global access_token, token_expires_at
-    
+
     if access_token and token_expires_at and datetime.utcnow() < token_expires_at:
         return access_token
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token",
@@ -824,7 +824,7 @@ async def get_access_token():
                 "grant_type": "client_credentials",
             },
         )
-        
+
         if response.status_code == 200:
             data = response.json()
             access_token = data["access_token"]
@@ -837,10 +837,10 @@ async def get_access_token():
 async def create_subscription():
     """Create a new subscription for chat messages."""
     global subscription_id
-    
+
     token = await get_access_token()
     expiration = datetime.utcnow() + timedelta(minutes=60)
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://graph.microsoft.com/v1.0/subscriptions",
@@ -856,7 +856,7 @@ async def create_subscription():
                 "clientState": CLIENT_STATE,
             },
         )
-        
+
         if response.status_code == 201:
             data = response.json()
             subscription_id = data["id"]
@@ -870,13 +870,13 @@ async def create_subscription():
 async def renew_subscription():
     """Renew the current subscription."""
     global subscription_id
-    
+
     if not subscription_id:
         return await create_subscription()
-    
+
     token = await get_access_token()
     expiration = datetime.utcnow() + timedelta(minutes=60)
-    
+
     async with httpx.AsyncClient() as client:
         response = await client.patch(
             f"https://graph.microsoft.com/v1.0/subscriptions/{subscription_id}",
@@ -888,7 +888,7 @@ async def renew_subscription():
                 "expirationDateTime": expiration.isoformat() + "Z"
             },
         )
-        
+
         if response.status_code == 200:
             print(f"Subscription renewed: {subscription_id}")
             return response.json()
@@ -924,27 +924,27 @@ app = FastAPI(lifespan=lifespan)
 @app.post("/webhooks/teams")
 async def teams_webhook(request: Request):
     """Handle Teams webhook notifications."""
-    
+
     # Validation request
     validation_token = request.query_params.get("validationToken")
     if validation_token:
         return Response(content=validation_token, media_type="text/plain")
-    
+
     # Process notifications
     try:
         body = await request.json()
         notifications = body.get("value", [])
-        
+
         for notification in notifications:
             # Verify client state
             if notification.get("clientState") != CLIENT_STATE:
                 continue
-            
+
             # Process in background to respond quickly
             asyncio.create_task(process_notification(notification))
-        
+
         return Response(status_code=202)
-    
+
     except Exception as e:
         print(f"Error: {e}")
         return Response(status_code=202)
@@ -955,24 +955,24 @@ async def process_notification(notification: dict):
     try:
         change_type = notification.get("changeType")
         resource = notification.get("resource")
-        
+
         if change_type != "created":
             return
-        
+
         # Parse resource path: chats/{chatId}/messages/{messageId}
         parts = resource.split("/")
         if len(parts) >= 4:
             chat_id = parts[1]
             message_id = parts[3]
-            
+
             # Fetch full message
             token = await get_access_token()
             message = await fetch_message(token, chat_id, message_id)
-            
+
             if message:
                 print(f"New message from {message['sender']}: {message['content'][:100]}")
                 # TODO: Process message (send to AI, log, etc.)
-    
+
     except Exception as e:
         print(f"Error processing notification: {e}")
 
@@ -984,7 +984,7 @@ async def fetch_message(token: str, chat_id: str, message_id: str) -> dict:
             f"https://graph.microsoft.com/v1.0/chats/{chat_id}/messages/{message_id}",
             headers={"Authorization": f"Bearer {token}"},
         )
-        
+
         if response.status_code == 200:
             data = response.json()
             return {

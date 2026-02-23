@@ -2,6 +2,7 @@ import json
 import base64
 import traceback
 import time
+import uuid
 from dotenv import load_dotenv
 import os
 import requests
@@ -9,16 +10,20 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from typing import Optional
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, File, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 import traceback
 
-from google.cloud import pubsub_v1
+from google.cloud import pubsub_v1, storage
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
+
+from common.metrics import setup_metrics
+
+from common.livekit import make_room_name, start_room_egress, verify_livekit_webhook
 
 from .helpers import (
     add_user_to_conference,
@@ -26,7 +31,7 @@ from .helpers import (
     check_valid_contact,
     create_conference_response,
     create_job,
-    dispatch_agent,
+    dispatch_livekit_agent,
     get_assistant,
     get_graph_client_from_token,
     get_outlook_thread_id,
@@ -50,6 +55,7 @@ app = FastAPI(
     description="Webhook adapters for Twilio, Gmail, and internal services",
     version="1.0.0",
 )
+setup_metrics(app, service_name="adapters")
 
 
 # =============================================================================
@@ -90,7 +96,7 @@ async def twilio_call_webhook(request: Request):
         resp_user = VoiceResponse()
         resp_user.say(
             "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
+            "console.unify.ai to view your assistant details.",
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
@@ -100,7 +106,7 @@ async def twilio_call_webhook(request: Request):
     # conference name and SIP URI
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
-    room_name = f"unity_{twilio_number}"
+    room_name = make_room_name(assistant_id, "phone")
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
     print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
     print(f"LiveKit room will be: {room_name}")
@@ -108,7 +114,7 @@ async def twilio_call_webhook(request: Request):
     # publish to Pub/Sub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
         pubsub_message = {
@@ -161,13 +167,20 @@ async def twilio_call_webhook(request: Request):
 
         print(f"Assistant ID: {assistant_id}")
         if assistant_id == "default-assistant":
-            print(f"Dispatching agent {room_name}")
-            dispatch_agent(room_name)
+            print(f"Dispatching LiveKit agent {room_name}")
+            dispatch_livekit_agent(room_name)
 
         print("Conference setup completed")
     except Exception as e:
         print(f"Error during conference setup: {str(e)}")
         return Response(content="Error setting up conference", status_code=500)
+
+    # Start LiveKit Egress recording on the room (fire-and-forget).
+    try:
+        user_id = context["assistant"]["user_id"]
+        await start_room_egress(room_name, assistant_id, user_id)
+    except Exception as e:
+        print(f"[Egress] Non-fatal: failed to start egress for call: {e}")
 
     print("Returning TwiML response")
     return Response(content=str(resp_user), media_type="text/xml")
@@ -183,43 +196,158 @@ async def twilio_call_status_webhook(request: Request):
     print(f"twilio_call_status_webhook function started: {call_status}")
     print(f"User {user_number} called by {assistant_number}")
 
-    if call_status == "in-progress":
+    # Handle call answered (in-progress) or not answered (no-answer, busy, canceled, failed)
+    if call_status in ("in-progress", "no-answer", "busy", "canceled", "failed"):
         # get assistant data
         context = build_webhook_context(
-            "phone", assistant_number, user_number, validate_contact=False
+            "phone",
+            assistant_number,
+            user_number,
+            validate_contact=False,
         )
         assistant_id = context["assistant"]["assistant_id"]
         contacts = context["contacts"]
 
+        # Determine thread type based on call status
+        if call_status == "in-progress":
+            thread = "call_answered"
+        else:
+            # no-answer, busy, canceled, failed are all "not answered" scenarios
+            thread = "call_not_answered"
+
         # publish to pubsub
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
-        print(f"Publishing call to Pub/Sub at path: {topic_path}")
+        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+        print(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
         try:
             publish_future = pubsub_client.publish(
                 topic_path,
                 json.dumps(
                     {
-                        "thread": "call_answered",
+                        "thread": thread,
                         "event": {
                             "contacts": contacts,
                             "assistant_id": assistant_id,
                             "user_number": user_number,
                             "assistant_number": assistant_number,
+                            "call_status": call_status,
                             "timestamp": int(time.time() * 1000),
                         },
-                    }
+                    },
                 ).encode("utf-8"),
             )
             if "test" in assistant_id:
                 status_id = publish_future.result(timeout=10)
                 print(f"Message ID: {status_id}")
-            print("Call published to Pub/Sub successfully")
+            print(f"{thread} published to Pub/Sub successfully")
         except Exception as e:
             print(f"Error publishing to Pub/Sub: {str(e)}")
 
     return Response(status_code=200)
+
+
+# =============================================================================
+# LiveKit Webhooks
+# =============================================================================
+@app.post("/livekit/recording-complete")
+async def livekit_recording_complete(request: Request):
+    """Handle LiveKit Egress completion webhooks for call/meet recordings.
+
+    LiveKit Egress uploads the recording directly to GCS. This adapter
+    verifies the webhook, ensures the assistant's Unity container is
+    running, and publishes a recording_ready Pub/Sub event so Unity can
+    link the recording URL to the transcript exchange.
+    """
+    body = (await request.body()).decode()
+    auth_token = request.headers.get("Authorization", "")
+
+    try:
+        event = verify_livekit_webhook(body, auth_token)
+    except Exception as e:
+        print(f"[Recording] Webhook verification failed: {e}")
+        return Response(status_code=401)
+
+    if event.event != "egress_ended":
+        return Response(status_code=200)
+
+    egress_info = event.egress_info
+    print(
+        f"[Recording] Egress {egress_info.egress_id} ended for room "
+        f"'{egress_info.room_name}' status={egress_info.status}",
+    )
+
+    if not egress_info.file_results:
+        print("[Recording] No file results in egress info, skipping")
+        return Response(status_code=200)
+
+    assistant_id = request.query_params.get("assistant_id", "")
+    user_id = request.query_params.get("user_id", "")
+    room_name = request.query_params.get("room_name", egress_info.room_name)
+    print(f"Assistant ID: {assistant_id}")
+    print(f"User ID: {user_id}")
+    print(f"Room Name: {room_name}")
+
+    if not assistant_id:
+        print("[Recording] Missing assistant_id, cannot route event")
+        return Response(status_code=200)
+
+    # Ensure the assistant's container is running so the Pub/Sub message
+    # has a receiver. Uses validate_contact=False (this is an internal
+    # infrastructure event, not a user-initiated contact).
+    try:
+        context = build_webhook_context(
+            "recording",
+            destination="",
+            sender="",
+            assistant_id=assistant_id,
+            validate_contact=False,
+            ensure_job=True,
+        )
+        print(
+            f"[Recording] Assistant {assistant_id} job running: "
+            f"{context['is_job_running']}",
+        )
+    except Exception as e:
+        print(f"[Recording] Failed to ensure job for assistant {assistant_id}: {e}")
+
+    # Construct GCS public URL and publish.
+    file_result = egress_info.file_results[0]
+    gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
+    recording_url = (
+        f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
+    )
+
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    print(f"Publishing recording_ready to Pub/Sub at path: {topic_path}")
+    try:
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "recording_ready",
+                    "event": {
+                        "assistant_id": str(assistant_id),
+                        "user_id": str(user_id),
+                        "conference_name": room_name,
+                        "recording_url": recording_url,
+                    },
+                },
+            ).encode("utf-8"),
+        )
+        if "test" in str(assistant_id):
+            publish_future.result(timeout=10)
+        print(
+            f"[Recording] Published recording_ready for assistant {assistant_id}, "
+            f"room '{room_name}', size={file_result.size} bytes",
+        )
+    except Exception as e:
+        print(f"[Recording] Error publishing to Pub/Sub: {e}")
+        return Response(status_code=500)
+
+    return {"success": True}
 
 
 @app.post("/twilio/sms")
@@ -244,7 +372,7 @@ async def twilio_sms_webhook(request: Request):
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
+            "console.unify.ai to view your assistant details.",
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
@@ -257,7 +385,7 @@ async def twilio_sms_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -271,7 +399,7 @@ async def twilio_sms_webhook(request: Request):
                         "from_number": from_number,
                         "body": body,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -308,7 +436,7 @@ async def twilio_whatsapp_webhook(request: Request):
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
-            "console.unify.ai to view your assistant details."
+            "console.unify.ai to view your assistant details.",
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
@@ -321,7 +449,7 @@ async def twilio_whatsapp_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -335,7 +463,7 @@ async def twilio_whatsapp_webhook(request: Request):
                         "from_number": from_number,
                         "body": body,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -407,7 +535,10 @@ async def teams_call_webhook(request: Request):
     # This uses the same flow as Twilio - the number maps to an assistant
     try:
         context = build_webhook_context(
-            "meet", teams_number, from_uri, validate_contact=False
+            "meet",
+            teams_number,
+            from_uri,
+            validate_contact=False,
         )
         assistant_id = context["assistant"]["assistant_id"]
         contacts = context["contacts"]
@@ -420,8 +551,7 @@ async def teams_call_webhook(request: Request):
             media_type="application/json",
         )
 
-    # Generate room name (consistent with Twilio pattern)
-    room_name = f"unity_{teams_number}"
+    room_name = make_room_name(assistant_id, "teams")
     sip_uri = f"sip:{teams_number}@{os.getenv('LIVEKIT_SIP_URI')}"
 
     # print(f"Teams call for assistant {assistant_id}, room: {room_name}")
@@ -430,7 +560,7 @@ async def teams_call_webhook(request: Request):
     pubsub_client = pubsub_v1.PublisherClient()
     # topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_name = "test"
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing Teams call to Pub/Sub at path: {topic_path}")
 
     try:
@@ -471,7 +601,7 @@ async def teams_call_webhook(request: Request):
                 "success": True,
                 "room_name": room_name,
                 # "assistant_id": assistant_id,
-            }
+            },
         ),
         status_code=200,
         media_type="application/json",
@@ -485,13 +615,327 @@ async def teams_call_webhook(request: Request):
 
 class UnifyMessagePayload(BaseModel):
     assistant_id: str
-    contact_id: Optional[int] = 1
+    contact_id: int  # Required - no default to prevent silent privilege escalation
     body: Optional[str] = ""
+
+
+# =============================================================================
+# Unify Attachment Upload
+# =============================================================================
+
+# Bucket for storing unify message attachments (single bucket for all environments)
+UNIFY_ATTACHMENTS_BUCKET = os.getenv(
+    "ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
+    "assistant-message-attachments",
+)
+
+# File type validation - allowed extensions
+ALLOWED_EXTENSIONS = {
+    # Images
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".bmp",
+    ".ico",
+    # Documents
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".txt",
+    ".rtf",
+    ".odt",
+    # Spreadsheets
+    ".xls",
+    ".xlsx",
+    ".csv",
+    ".ods",
+    # Presentations
+    ".ppt",
+    ".pptx",
+    ".odp",
+    # Archives (for document bundles)
+    ".zip",
+    # Data
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+
+# Blocked extensions (executables, scripts)
+BLOCKED_EXTENSIONS = {
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".sh",
+    ".ps1",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".app",
+    ".msi",
+    ".com",
+    ".scr",
+    ".vbs",
+    ".js",
+    ".jse",
+    ".wsf",
+    ".wsh",
+    ".psc1",
+    ".reg",
+    ".inf",
+    ".lnk",
+    ".pif",
+}
+
+# Allowed MIME types
+ALLOWED_MIME_TYPES = {
+    # Images
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "image/bmp",
+    "image/x-icon",
+    # Documents
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+    "application/rtf",
+    "application/vnd.oasis.opendocument.text",
+    # Spreadsheets
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+    "application/vnd.oasis.opendocument.spreadsheet",
+    # Presentations
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.presentation",
+    # Archives
+    "application/zip",
+    # Data
+    "application/json",
+    "application/xml",
+    "text/xml",
+    "application/x-yaml",
+    "text/yaml",
+    # Generic (for unknown but allowed extensions)
+    "application/octet-stream",
+}
+
+# Maximum attachments per message
+MAX_ATTACHMENTS_PER_MESSAGE = 10
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize filename to prevent path traversal attacks.
+    Handles both Unix (/) and Windows (\\) path separators.
+    """
+    # Replace backslashes with forward slashes for consistent handling
+    normalized = filename.replace("\\", "/")
+    # Extract just the filename (basename)
+    basename = os.path.basename(normalized)
+    # Remove any remaining path traversal attempts
+    basename = basename.replace("..", "")
+    # If empty after sanitization, use default
+    return basename if basename else "attachment"
+
+
+def get_file_extension(filename: str) -> str:
+    """Get lowercase file extension including the dot."""
+    _, ext = os.path.splitext(filename)
+    return ext.lower()
+
+
+def validate_file_type(filename: str, content_type: str) -> tuple[bool, str]:
+    """
+    Validate file type against blocklist and allowlist.
+
+    Returns (is_valid, error_message).
+    """
+    ext = get_file_extension(filename)
+
+    # Check blocklist first (security)
+    if ext in BLOCKED_EXTENSIONS:
+        return False, f"File type '{ext}' is blocked for security reasons"
+
+    # Check extension allowlist
+    if ext and ext not in ALLOWED_EXTENSIONS:
+        return (
+            False,
+            f"File type '{ext}' is not allowed. Allowed types: images, documents, spreadsheets, presentations, zip, json, xml, yaml",
+        )
+
+    # Check MIME type (but be lenient - some clients send wrong MIME types)
+    # Only block if MIME type is clearly executable
+    blocked_mimes = {
+        "application/x-msdownload",
+        "application/x-msdos-program",
+        "application/x-sh",
+        "application/x-shellscript",
+    }
+    if content_type in blocked_mimes:
+        return False, f"MIME type '{content_type}' is blocked for security reasons"
+
+    return True, ""
+
+
+@app.post("/unify/attachment")
+async def unify_attachment_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    assistant_id: str = None,
+):
+    """
+    Upload a file attachment for use in Unify messages.
+
+    The file is stored in GCS and both permanent (gs://) and signed URLs are returned.
+    The returned attachment object can be included in /unify/message requests.
+
+    Args:
+        file: The file to upload (multipart/form-data)
+        assistant_id: Optional assistant ID for organizing storage
+
+    Returns:
+        JSON with attachment details including:
+        - id: Unique attachment ID
+        - filename: Sanitized filename
+        - gs_url: Permanent GCS URL (gs://bucket/path)
+        - url: Signed download URL (temporary, for backwards compatibility)
+        - content_type: MIME type
+        - size_bytes: File size in bytes
+    """
+    print("unify_attachment_upload function started")
+
+    # Optional auth via admin key
+    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    auth_header = request.headers.get("Authorization", "")
+    if shared_key and auth_header != f"Bearer {shared_key}":
+        print("Unauthorized unify_attachment request")
+        return Response(status_code=401)
+
+    # Get assistant_id from form data if not provided as query param
+    if not assistant_id:
+        form_data = await request.form()
+        assistant_id = form_data.get("assistant_id", "unknown")
+
+    try:
+        # Read file content
+        file_content = await file.read()
+        filename = file.filename or "attachment"
+        content_type = file.content_type or "application/octet-stream"
+        file_size = len(file_content)
+
+        # Sanitize filename (handles both Unix and Windows path separators)
+        safe_filename = sanitize_filename(filename)
+
+        # Validate file type
+        is_valid, error_msg = validate_file_type(safe_filename, content_type)
+        if not is_valid:
+            print(f"File type validation failed: {error_msg}")
+            return Response(
+                content=json.dumps({"error": error_msg}),
+                status_code=400,
+                media_type="application/json",
+            )
+
+        # Validate file size (max 25MB to match Gmail limit)
+        max_size_bytes = 25 * 1024 * 1024
+        if file_size > max_size_bytes:
+            file_size_mb = file_size / (1024 * 1024)
+            return Response(
+                content=json.dumps(
+                    {
+                        "error": f"File too large: {file_size_mb:.1f}MB exceeds 25MB limit",
+                    },
+                ),
+                status_code=400,
+                media_type="application/json",
+            )
+
+        # Generate unique ID for the attachment
+        attachment_id = str(uuid.uuid4())
+
+        # Build GCS path: {user_id}/{uuid}_{filename}
+        blob_path = f"{assistant_id}/{attachment_id}_{safe_filename}"
+
+        # Get GCP credentials and upload
+        creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
+        if not creds_json:
+            print("GCP_SA_KEY not configured")
+            return Response(
+                content=json.dumps({"error": "Storage not configured"}),
+                status_code=500,
+                media_type="application/json",
+            )
+
+        creds = Credentials.from_service_account_info(creds_json)
+        storage_client = storage.Client(credentials=creds)
+        bucket = storage_client.bucket(UNIFY_ATTACHMENTS_BUCKET)
+        blob = bucket.blob(blob_path)
+
+        # Upload the file
+        blob.upload_from_string(file_content, content_type=content_type)
+
+        # Build permanent gs:// URL
+        gs_url = f"gs://{UNIFY_ATTACHMENTS_BUCKET}/{blob_path}"
+        print(f"Uploaded attachment to {gs_url}")
+
+        # Generate signed download URL (1 hour expiry for immediate use)
+        signed_url = blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(hours=1),
+            method="GET",
+        )
+
+        print(f"Generated signed URL for attachment {attachment_id}")
+
+        return Response(
+            content=json.dumps(
+                {
+                    "id": attachment_id,
+                    "filename": safe_filename,
+                    "gs_url": gs_url,
+                    "url": signed_url,  # Backwards compatibility
+                    "content_type": content_type,
+                    "size_bytes": file_size,
+                },
+            ),
+            status_code=200,
+            media_type="application/json",
+        )
+
+    except Exception as e:
+        print(f"Error uploading attachment: {str(e)}")
+        traceback.print_exc()
+        return Response(
+            content=json.dumps({"error": f"Failed to upload attachment: {str(e)}"}),
+            status_code=500,
+            media_type="application/json",
+        )
+
+
+# =============================================================================
+# Unify Message
+# =============================================================================
 
 
 @app.post("/unify/message")
 async def unify_message_webhook(request: Request):
-    """Unify message webhook - handles internal message events."""
+    """
+    Unify message webhook - handles internal message events.
+
+    Accepts an optional 'attachments' array in the request body. Each attachment
+    should be an object with: {"id": str, "filename": str, "url": str}
+    (as returned by /unify/attachment).
+    """
     print("unify_message_webhook function started")
 
     # optional auth via admin key
@@ -506,20 +950,69 @@ async def unify_message_webhook(request: Request):
     if "application/json" in content_type:
         payload = await request.json()
         assistant_id_input = payload.get("assistant_id", "")
-        contact_id = payload.get("contact_id", 1)
+        contact_id = payload.get("contact_id")
         body = payload.get("body", "") or ""
+        attachments = payload.get("attachments") or []
     else:
         form_data = await request.form()
         assistant_id_input = form_data.get("assistant_id", "")
-        contact_id = form_data.get("contact_id", 1)
+        contact_id = form_data.get("contact_id")
         body = form_data.get("Body", "") or ""
+        # Form data doesn't support attachments well, default to empty
+        attachments = []
 
     if not assistant_id_input:
         print("Assistant ID is required")
         return Response(status_code=400)
 
+    if contact_id is None:
+        print("contact_id is required for unify_message")
+        return Response(status_code=400, content="contact_id is required")
+
+    # Validate attachment count limit
+    if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+        print(
+            f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}",
+        )
+        return Response(
+            status_code=400,
+            content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
+        )
+
+    # Validate attachments format and preserve full metadata
+    validated_attachments = []
+    for att in attachments:
+        if (
+            isinstance(att, dict)
+            and att.get("id")
+            and att.get("filename")
+            and (att.get("url") or att.get("gs_url"))  # Accept either URL type
+        ):
+            # Build validated attachment with all available metadata
+            validated_att = {
+                "id": str(att["id"]),
+                "filename": str(att["filename"]),
+                "url": str(att.get("url", "")),
+            }
+            # Include additional metadata if provided
+            if att.get("gs_url"):
+                validated_att["gs_url"] = str(att["gs_url"])
+            if att.get("content_type"):
+                validated_att["content_type"] = str(att["content_type"])
+            if att.get("size_bytes") is not None:
+                validated_att["size_bytes"] = int(att["size_bytes"])
+
+            validated_attachments.append(validated_att)
+        else:
+            print(f"Skipping invalid attachment: {att}")
+
+    attachment_info = (
+        f" with {len(validated_attachments)} attachment(s)"
+        if validated_attachments
+        else ""
+    )
     print(
-        f"Received unify_message message for assistant_id={assistant_id_input} with body: {body}"
+        f"Received unify_message message for assistant_id={assistant_id_input}{attachment_info} with body: {body}",
     )
 
     # shared context
@@ -539,7 +1032,7 @@ async def unify_message_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -552,8 +1045,9 @@ async def unify_message_webhook(request: Request):
                         "contacts": contacts,
                         "assistant_id": assistant_id,
                         "body": body,
+                        "attachments": validated_attachments,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -587,10 +1081,10 @@ async def unify_meet_webhook(request: Request):
         form_data = await request.form()
         payload = dict(form_data)
 
-    agent_name = payload.get("agent_name", "")
     room_name = payload.get("room_name", "")
-    if not agent_name or not room_name:
-        print("agent_name and room_name are required")
+    livekit_agent_name = payload.get("livekit_agent_name", "") or room_name
+    if not room_name:
+        print("room_name is required")
         return Response(status_code=400)
 
     assistant_id_input = payload.get("assistant_id", "")
@@ -599,7 +1093,7 @@ async def unify_meet_webhook(request: Request):
         return Response(status_code=400)
 
     print(
-        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} agent_name={agent_name}"
+        f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} livekit_agent_name={livekit_agent_name}",
     )
 
     # shared context
@@ -619,7 +1113,7 @@ async def unify_meet_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -631,10 +1125,10 @@ async def unify_meet_webhook(request: Request):
                         "contacts": contacts,
                         "assistant_id": assistant_id,
                         "livekit_room": room_name,
-                        "agent_name": agent_name,
+                        "livekit_agent_name": livekit_agent_name,
                         "timestamp": int(time.time() * 1000),
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -689,7 +1183,7 @@ async def unity_system_event_webhook(request: Request):
         return Response(status_code=400)
 
     print(
-        f"Received unity_system_event for event_type={event_type} with message={message}"
+        f"Received unity_system_event for event_type={event_type} with message={message}",
     )
 
     # shared context
@@ -709,7 +1203,7 @@ async def unity_system_event_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -723,7 +1217,7 @@ async def unity_system_event_webhook(request: Request):
                         "event_type": event_type,
                         "message": message,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -788,7 +1282,7 @@ async def unity_pre_hire_webhook(request: Request):
         )
 
     print(
-        f"Received log_pre_hire_chats for assistant_id={assistant_id_input} with {len(body)} messages"
+        f"Received log_pre_hire_chats for assistant_id={assistant_id_input} with {len(body)} messages",
     )
 
     # shared context
@@ -808,7 +1302,7 @@ async def unity_pre_hire_webhook(request: Request):
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-    topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     print(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -821,7 +1315,7 @@ async def unity_pre_hire_webhook(request: Request):
                         "assistant_id": assistant_id,
                         "body": body,
                     },
-                }
+                },
             ).encode("utf-8"),
         )
         if "test" in assistant_id:
@@ -866,7 +1360,7 @@ async def assistant_wakeup_webhook(request: Request):
 async def assistant_update_webhook(request: Request):
     """
     Webhook that receives an assistant id and publishes assistant details
-    to the assistant_update topic if there is a job running.
+    to the assistant_update topic. If no job is running, starts one first.
     """
     print("assistant_update_webhook function started")
 
@@ -875,8 +1369,21 @@ async def assistant_update_webhook(request: Request):
         assistant_id = form_data.get("assistant_id")
         print(f"Received assistant_id: {assistant_id}")
 
-        assistant_data = get_assistant(assistant_id=assistant_id)
-        user_id = assistant_data["user_id"]
+        # Use build_webhook_context to handle job startup if needed
+        context = build_webhook_context(
+            channel="assistant_update",
+            destination="",
+            sender="",
+            assistant_id=assistant_id,
+            validate_contact=False,
+            ensure_job=True,
+        )
+        assistant_data = context["assistant"]
+        print(
+            f"Job running: {context['is_job_running']}, job started: {context['job_started']}",
+        )
+
+        # Prepare assistant_data for the PubSub message
         assistant_first_name = assistant_data["assistant_first_name"]
         assistant_surname = assistant_data["assistant_surname"]
         assistant_data["assistant_name"] = f"{assistant_first_name} {assistant_surname}"
@@ -884,35 +1391,10 @@ async def assistant_update_webhook(request: Request):
         assistant_data.pop("assistant_surname")
         assistant_data.pop("assistant_whatsapp_number")
 
-        # check if job is running
-        is_default_assistant = (
-            "default" in assistant_id
-            or "Default Assistant" in assistant_data["assistant_about"]
-        )
-        running = is_job_running(user_id, assistant_id)
-        print(f"Job running: {running}")
-
-        if not is_default_assistant and not running:
-            return Response(
-                content=json.dumps(
-                    {
-                        "success": False,
-                        "message": "No job currently running for this assistant",
-                        "assistant_id": assistant_id,
-                    }
-                ),
-                status_code=200,
-                media_type="application/json",
-            )
-        elif running:
-            print(f"Job running for assistant {assistant_id}: {running}")
-        else:
-            print(f"Default assistant {assistant_id} - skipping job running check")
-
         # Job is running, publish to assistant topic
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         # Prepare message in the same format as startup event
         message_data = {"thread": "assistant_update", "event": assistant_data}
@@ -936,7 +1418,7 @@ async def assistant_update_webhook(request: Request):
                     "message": "Assistant update published successfully",
                     "assistant_id": assistant_id,
                     "topic_path": topic_path,
-                }
+                },
             ),
             status_code=200,
             media_type="application/json",
@@ -995,13 +1477,15 @@ async def gmail_notification_processor(request: Request):
 
         # process the history and thread
         print(
-            f"assistant_email_address: {assistant_email_address}, history_id: {history_id}"
+            f"assistant_email_address: {assistant_email_address}, history_id: {history_id}",
         )
         thread_id, email_id, last_message, gmail_message_id = get_thread_id(
-            assistant_email_address, history_id, gmail_service
+            assistant_email_address,
+            history_id,
+            gmail_service,
         )
         print(
-            f"thread_id: {thread_id}, email_id: {email_id}, last_message: {last_message}"
+            f"thread_id: {thread_id}, email_id: {email_id}, last_message: {last_message}",
         )
         if not thread_id:
             print(f"No new conversations found for user {assistant_email_address}")
@@ -1085,7 +1569,7 @@ async def outlook_notification_processor(request: Request):
             return Response(status_code=200)
 
         print(
-            f"assistant_email_address: {assistant_email_address}, email_id: {email_id}"
+            f"assistant_email_address: {assistant_email_address}, email_id: {email_id}",
         )
 
         # Get assistant data, secrets, and contacts in one call
@@ -1117,10 +1601,11 @@ async def outlook_notification_processor(request: Request):
 
         # Fetch message details to get the actual sender
         conversation_id, email_id, last_message = await get_outlook_thread_id(
-            email_id, graph_client
+            email_id,
+            graph_client,
         )
         print(
-            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}"
+            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}",
         )
 
         if not conversation_id:
@@ -1131,13 +1616,10 @@ async def outlook_notification_processor(request: Request):
         print(f"from_email: {from_email}")
 
         # Validate contact now that we have the sender
-        user_name = assistant_data["user_name"]
-        assistant_first_name = assistant_data["assistant_first_name"]
-        assistant_surname = assistant_data["assistant_surname"]
         contacts, is_valid_contact = check_valid_contact(
             email_address=from_email,
             medium="email",
-            assistant_context=f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}",
+            assistant_context=f"{user_id}/{assistant_id}",
             api_key=api_key,
             user_number=assistant_data.get("user_number", ""),
             user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),
@@ -1217,12 +1699,14 @@ async def teams_notification_processor(request: Request):
         # Extract IDs
         if is_reply:
             message_id = resource_data.get("id") or parse_teams_resource_id(
-                resource, "replies"
+                resource,
+                "replies",
             )
             parent_message_id = parse_teams_resource_id(resource, "messages")
         else:
             message_id = resource_data.get("id") or parse_teams_resource_id(
-                resource, "messages"
+                resource,
+                "messages",
             )
             parent_message_id = None
 
@@ -1232,24 +1716,25 @@ async def teams_notification_processor(request: Request):
             chat_id = None
             if not team_id or not channel_id or not message_id:
                 print(
-                    f"Missing IDs for channel message: team={team_id}, channel={channel_id}, message={message_id}"
+                    f"Missing IDs for channel message: team={team_id}, channel={channel_id}, message={message_id}",
                 )
                 return Response(status_code=200)
             print(
-                f"assistant_email: {assistant_email}, team_id: {team_id}, channel_id: {channel_id}, message_id: {message_id}"
+                f"assistant_email: {assistant_email}, team_id: {team_id}, channel_id: {channel_id}, message_id: {message_id}",
             )
         else:
             chat_id = resource_data.get("chatId") or parse_teams_resource_id(
-                resource, "chats"
+                resource,
+                "chats",
             )
             team_id = channel_id = None
             if not chat_id or not message_id:
                 print(
-                    f"Missing IDs for chat message: chat={chat_id}, message={message_id}"
+                    f"Missing IDs for chat message: chat={chat_id}, message={message_id}",
                 )
                 return Response(status_code=200)
             print(
-                f"assistant_email: {assistant_email}, chat_id: {chat_id}, message_id: {message_id}"
+                f"assistant_email: {assistant_email}, chat_id: {chat_id}, message_id: {message_id}",
             )
 
         # Get assistant data
@@ -1320,11 +1805,11 @@ async def teams_notification_processor(request: Request):
         # Fetch email from user profile if not in message
         if not sender_email and sender_id:
             user_data, _ = await graph_get(
-                f"https://graph.microsoft.com/v1.0/users/{sender_id}?$select=mail,userPrincipalName"
+                f"https://graph.microsoft.com/v1.0/users/{sender_id}?$select=mail,userPrincipalName",
             )
             if user_data:
                 sender_email = user_data.get("mail") or user_data.get(
-                    "userPrincipalName"
+                    "userPrincipalName",
                 )
             if not sender_email:
                 sender_email = f"{sender_id}@teams"
@@ -1337,13 +1822,10 @@ async def teams_notification_processor(request: Request):
             return Response(status_code=200)
 
         # Validate contact
-        user_name = assistant_data["user_name"]
-        assistant_first_name = assistant_data["assistant_first_name"]
-        assistant_surname = assistant_data["assistant_surname"]
         contacts, is_valid = check_valid_contact(
             email_address=sender_email,
             medium="teams",
-            assistant_context=f"{user_name.replace(' ', '')}/{assistant_first_name}{assistant_surname}",
+            assistant_context=f"{user_id}/{assistant_id}",
             api_key=api_key,
             user_number=assistant_data.get("user_number", ""),
             user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),
@@ -1392,7 +1874,7 @@ async def teams_notification_processor(request: Request):
                     "thread_id": parent_message_id if is_reply else message_id,
                     "post_subject": None if is_reply else subject,
                     "action": "new_channel_message",
-                }
+                },
             )
         else:
             event_data.update({"chat_id": chat_id, "action": "new_message"})
@@ -1400,7 +1882,7 @@ async def teams_notification_processor(request: Request):
         # Publish to Pub/Sub
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
-        topic_path = pubsub_client.topic_path(os.getenv("PROJECT_ID"), topic_name)
+        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         pubsub_message = {
             "thread": "teams_channel" if is_channel_message else "teams_chat",
@@ -1410,7 +1892,8 @@ async def teams_notification_processor(request: Request):
 
         try:
             publish_future = pubsub_client.publish(
-                topic_path, json.dumps(pubsub_message).encode("utf-8")
+                topic_path,
+                json.dumps(pubsub_message).encode("utf-8"),
             )
             publish_future.result(timeout=5)
         except Exception as e:
@@ -1503,7 +1986,8 @@ async def microsoft_oauth_callback(request: Request):
     if error:
         print(f"OAuth error: {error} - {error_description}")
         return Response(
-            content=f"OAuth error: {error}: {error_description}", status_code=400
+            content=f"OAuth error: {error}: {error_description}",
+            status_code=400,
         )
 
     if not code:
@@ -1527,7 +2011,8 @@ async def microsoft_oauth_callback(request: Request):
 
     if not tenant_id or not client_id:
         return Response(
-            content="Missing tenant_id or client_id in state", status_code=400
+            content="Missing tenant_id or client_id in state",
+            status_code=400,
         )
 
     if not assistant_email:
@@ -1576,7 +2061,8 @@ async def microsoft_oauth_callback(request: Request):
 
     if not user_email:
         return Response(
-            content="Could not determine user email from token", status_code=400
+            content="Could not determine user email from token",
+            status_code=400,
         )
 
     # Store tokens as assistant secrets
@@ -1590,19 +2076,19 @@ async def microsoft_oauth_callback(request: Request):
     )
 
     print(
-        f"OAuth complete for {user_email} (assistant: {assistant_email}, id: {assistant_id}), stored={stored}"
+        f"OAuth complete for {user_email} (assistant: {assistant_email}, id: {assistant_id}), stored={stored}",
     )
 
     # Redirect to success page or return JSON
     if redirect_after:
         sep = "&" if "?" in redirect_after else "?"
         return RedirectResponse(
-            f"{redirect_after}{sep}success=true&user_email={user_email}"
+            f"{redirect_after}{sep}success=true&user_email={user_email}",
         )
 
     return Response(
         content=json.dumps(
-            {"success": True, "user_email": user_email, "stored": stored}
+            {"success": True, "user_email": user_email, "stored": stored},
         ),
         media_type="application/json",
     )
@@ -1709,7 +2195,7 @@ async def scheduled_email_watches(request: Request):
             print(error_msg)
             provider = "outlook" if has_ms_token else "gmail"
             results[provider].append(
-                {"email": email, "success": False, "error": error_msg}
+                {"email": email, "success": False, "error": error_msg},
             )
 
     # Renew policy assistant (Gmail-based, staging only)
@@ -1730,7 +2216,7 @@ async def scheduled_email_watches(request: Request):
             print(f"Error renewing policy assistant: {e}")
 
     print(
-        f"Email watch renewal complete: {len(results['gmail'])} Gmail, {len(results['outlook'])} Outlook"
+        f"Email watch renewal complete: {len(results['gmail'])} Gmail, {len(results['outlook'])} Outlook",
     )
     return results
 
@@ -1793,7 +2279,7 @@ async def scheduled_microsoft_tokens(request: Request):
         client_secret = secrets.get("AZURE_CLIENT_SECRET")
         if not all([tenant_id, client_id, client_secret]):
             results["failed"].append(
-                {"email": email, "error": "Missing Azure credentials"}
+                {"email": email, "error": "Missing Azure credentials"},
             )
             continue
 
@@ -1815,7 +2301,7 @@ async def scheduled_microsoft_tokens(request: Request):
                     {
                         "email": email,
                         "error": f"Token refresh failed: {token_resp.text}",
-                    }
+                    },
                 )
                 continue
 
@@ -1849,7 +2335,7 @@ async def scheduled_microsoft_tokens(request: Request):
                         {
                             "email": email,
                             "error": f"Failed to store secret: {response.text}",
-                        }
+                        },
                     )
                     continue
 
@@ -1862,7 +2348,7 @@ async def scheduled_microsoft_tokens(request: Request):
 
     print(
         f"Microsoft token refresh complete: "
-        f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed"
+        f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed",
     )
 
     return results
@@ -1906,7 +2392,7 @@ async def scheduled_teams_watches(request: Request):
             {
                 "email": "default-test-assistant@unify.ai",
                 "secrets": {"MICROSOFT_ACCESS_TOKEN": "test"},
-            }
+            },
         ]
 
     print(f"Processing {len(all_assistants)} assistants for Teams watch renewal")
@@ -1992,15 +2478,15 @@ async def scheduled_teams_watches(request: Request):
                             )
                             if ch_result.get("success"):
                                 results["channels_renewed"].append(
-                                    {"email": email, **ch_result}
+                                    {"email": email, **ch_result},
                                 )
                             else:
                                 results["failed"].append(
-                                    {"email": email, "type": "channel", **ch_result}
+                                    {"email": email, "type": "channel", **ch_result},
                                 )
                             print(
                                 f"Teams channel watch for {email} ({team_id}/{channel_id}): "
-                                f"{ch_result.get('success', False)}"
+                                f"{ch_result.get('success', False)}",
                             )
                         except (ValueError, IndexError) as e:
                             print(f"Could not parse channel subscription: {resource}")
@@ -2014,14 +2500,14 @@ async def scheduled_teams_watches(request: Request):
             print(error_msg)
             traceback.print_exc()
             results["failed"].append(
-                {"email": email, "success": False, "error": error_msg}
+                {"email": email, "success": False, "error": error_msg},
             )
 
     print(
         f"Teams watch renewal complete: "
         f"{len(results['chats_renewed'])} chats, "
         f"{len(results['channels_renewed'])} channels, "
-        f"{len(results['failed'])} failed"
+        f"{len(results['failed'])} failed",
     )
     return results
 
@@ -2031,7 +2517,8 @@ async def scheduled_jobs_create(request: Request):
     """Cloud Run endpoint that creates a new idle job."""
     if not STAGING:
         return Response(
-            content="Production job creation is not enabled", status_code=200
+            content="Production job creation is not enabled",
+            status_code=200,
         )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
@@ -2042,7 +2529,9 @@ async def scheduled_jobs_create(request: Request):
         + commit_hash
     )
     response = requests.post(
-        f"{COMMS_URL}/infra/job/create", data={"image": image}, headers=headers
+        f"{COMMS_URL}/infra/job/create",
+        data={"image": image},
+        headers=headers,
     )
     return response.json()
 
@@ -2051,44 +2540,24 @@ async def scheduled_jobs_create(request: Request):
 async def scheduled_jobs_cleanup(request: Request):
     """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    idle_jobs = []
 
-    # get all jobs
-    jobs = requests.get(f"{COMMS_URL}/infra/jobs", headers=headers).json()
-    job_names = [job["job_name"] for job in jobs["jobs"]]
-    job_names = [
-        job_name
-        for job_name in job_names
-        if (STAGING and "staging" in job_name)
-        or (not STAGING and "staging" not in job_name)
+    # get all idle jobs via K8s label selector
+    resp = requests.get(
+        f"{COMMS_URL}/infra/jobs",
+        params={"label_selector": "app=unity,unity-status=idle"},
+        headers=headers,
+    )
+    jobs = resp.json()
+    idle_jobs = [
+        job["job_name"]
+        for job in jobs["jobs"]
+        if (STAGING and "staging" in job["job_name"])
+        or (not STAGING and "staging" not in job["job_name"])
     ]
-    print(f"Job names: {job_names}")
 
-    for job_name in job_names:
-        # get logs
-        logs = (
-            requests.get(
-                f"{COMMS_URL}/infra/job/logs",
-                params={"job_name": job_name},
-                headers=headers,
-            )
-            .json()
-            .get("logs", [])
-        )
-        print(f"Logs: {logs}")
-
-        # check if job is idle
-        if (
-            "ping received - keeping conversation manager alive" in logs
-            and "Inactivity timeout reached (360s), requesting shutdown..." not in logs
-            and "Graceful shutdown completed" not in logs
-            and "Shutting down convo manager..." not in logs
-        ):
-            idle_jobs.append(job_name)
-
+    # separate recently-created idle jobs (< 11 min old) to retain one
     new_idle_jobs = []
     for job_name in idle_jobs:
-        # check if job is older than 10 minutes
         job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
@@ -2096,20 +2565,23 @@ async def scheduled_jobs_cleanup(request: Request):
         if delta < timedelta(minutes=11):
             new_idle_jobs.append(job_name)
 
-    print(f"Idle jobs: {idle_jobs}")
-    print(f"New idle jobs: {new_idle_jobs}")
     if len(new_idle_jobs) == 0:
         if len(idle_jobs) != 0:
             idle_jobs = sorted(idle_jobs)[:-1]
     else:
         new_idle_jobs = [sorted(new_idle_jobs)[-1]]
     idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
+    print(f"Idle jobs up to deletion: {idle_jobs}")
+    print(f"Idle jobs to retain: {new_idle_jobs}")
 
-    # delete all old idle jobs
+    # delete all old idle jobs (re-check label to guard against race conditions)
     for job_name in idle_jobs:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
-            data={"job_name": job_name},
+            data={
+                "job_name": job_name,
+                "required_labels": json.dumps({"unity-status": "idle"}),
+            },
             headers=headers,
         )
 

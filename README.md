@@ -1,5 +1,39 @@
 # Unity Communication Platform
 
+## System Architecture
+
+This repository is the external communication gateway in a multi-repository system:
+
+```
+         User (Console/Phone/SMS/Email)
+                      │
+    ┌─────────────────┴──────────────────┐
+    │           Communication            │
+    │    (Webhooks, Voice, SMS, Email)   │
+    └────┬───────────────────────────────┘
+         │
+    ┌────┴────┐    ┌─────────┐    ┌─────────┐
+    │  Unity  │    │  Unify  │    │Orchestra│
+    │ (Brain) │───▶│  (SDK)  │───▶│  (API)  │
+    │         │    │         │    │  (DB)   │
+    └────┬────┘    └────┬────┘    └────┬────┘
+         │              ▲              ▲
+         │              │              │
+         │    ┌─────────┴─┐       ┌────┴───────┐
+         └───▶│  UniLLM   │       │  Console   │
+              │ (LLM API) │       │(Interfaces)│
+              └───────────┘       └────────────┘
+```
+
+**This repo (Communication)** receives external events (Twilio webhooks, Gmail notifications) and routes them to Unity for processing. Unity calls back to Communication when it needs to send messages, make calls, or dispatch voice agents.
+
+Related repositories:
+- [Unity](https://github.com/unifyai/unity) — AI assistant brain
+- [Orchestra](https://github.com/unifyai/orchestra) — Backend API and database
+- [Console](https://github.com/unifyai/console) — Web UI and observability dashboard
+
+---
+
 This repository provides a unified communication service with two primary components:
 
 1. **Adapters** – HTTP Cloud Functions (Flask + Functions Framework) that handle unauthenticated, form-encoded webhooks from Twilio (voice, SMS, WhatsApp) and Gmail.  They reside in the `adapters/` directory and are deployed as Google Cloud Functions.
@@ -55,6 +89,86 @@ functions-framework --target=twilio_call_webhook --port=8081
 # Repeat for other entry points (twilio_msg_webhook, twilio_whatsapp_webhook, etc.)
 ```
 
+### Local Development with `local.sh`
+
+For integration testing with the Unity repository, use the `scripts/local.sh` script which provides:
+
+1. **Pub/Sub Emulator** — Local Google Cloud Pub/Sub emulator (no cloud credentials needed)
+2. **Adapters Service** — FastAPI server for webhook handling
+3. **Automatic Topic Creation** — Creates test topics/subscriptions for test assistants
+
+**Quick Start:**
+```bash
+# Start with Pub/Sub emulator (recommended for local testing)
+./scripts/local.sh start
+
+# Or set environment variables automatically
+eval "$(./scripts/local.sh start)"
+
+# Check status
+./scripts/local.sh status
+
+# Stop all services
+./scripts/local.sh stop
+```
+
+**Options:**
+```bash
+# Start without Pub/Sub emulator (use real GCP Pub/Sub)
+./scripts/local.sh start --no-emulator
+
+# Also start the Communication service (for outbound APIs)
+./scripts/local.sh start --with-comms
+```
+
+**Integration with Local Orchestra:**
+
+When running local orchestra (via Unity's `parallel_run.sh`), set `ORCHESTRA_URL` to point communication services to the local orchestra instance:
+
+```bash
+# Unity repo starts local orchestra at http://127.0.0.1:8000/v0
+export ORCHESTRA_URL="http://127.0.0.1:8000/v0"
+
+# Communication services will now use local orchestra
+./scripts/local.sh start
+```
+
+**Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADAPTERS_PORT` | 8081 | Port for Adapters service |
+| `COMMS_PORT` | 8082 | Port for Communication service |
+| `PUBSUB_EMULATOR_PORT` | 8085 | Port for Pub/Sub emulator |
+| `GCP_PROJECT_ID` | local-test-project | GCP project ID for Pub/Sub topics |
+| `GCP_SA_KEY` | — | GCP service account credentials (see note below) |
+| `TEST_ASSISTANT_ID` | default-test-assistant | Assistant ID for test topics |
+| `ORCHESTRA_URL` | (staging/prod URL) | Orchestra URL (for local orchestra) |
+| `ORCHESTRA_ADMIN_KEY` | — | Admin key for Orchestra auth |
+| `STAGING` | true | Set topic suffix (-staging) |
+
+> **Important: `GCP_SA_KEY` vs `GOOGLE_APPLICATION_CREDENTIALS`**
+>
+> This repo uses `GCP_SA_KEY` which contains the **JSON content** of the service account credentials directly (not a file path). This differs from the standard `GOOGLE_APPLICATION_CREDENTIALS` which expects a **file path**.
+>
+> - `GCP_SA_KEY` = JSON string content → parsed with `json.loads()` → used with `Credentials.from_service_account_info()`
+> - `GOOGLE_APPLICATION_CREDENTIALS` = file path → used with `Credentials.from_service_account_file()`
+>
+> The JSON-content approach simplifies containerized deployments by avoiding file mounting.
+
+**Prerequisites:**
+- Python 3.11+
+- Google Cloud SDK (`gcloud`) for Pub/Sub emulator
+- **Java 7+** (required by Pub/Sub emulator)
+  - macOS: `brew install openjdk`
+  - Ubuntu: `sudo apt install default-jdk`
+- Install emulator components:
+  ```bash
+  gcloud components install pubsub-emulator beta
+  ```
+
+> **Note:** If Java is not installed, `local.sh` will display an error with installation instructions. You can still run `./scripts/local.sh start --no-emulator` to use real GCP Pub/Sub instead.
+
 ---
 
 ## Adapters (Webhooks)
@@ -87,7 +201,7 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
 
 **Authenticated JSON Endpoints**:
 
-- `POST /phone/dispatch-agent`
+- `POST /phone/dispatch-livekit-agent`
 - `POST /phone/send-call`
 - `POST /phone/send-text`
 - `GET  /phone/available-countries`
@@ -134,10 +248,30 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
 
 ---
 
+## Running Tests in CI
+
+**Tests are opt-in to reduce GitHub Actions costs.** Tests only run when explicitly requested:
+
+- **Commit message**: Include `[run-tests]` in your commit message
+- **PR title**: Include `[run-tests]` in your pull request title
+- **Manual trigger**: Use the "Run workflow" button in GitHub Actions
+
+Examples:
+```bash
+# Run tests on this commit
+git commit -m "Fix webhook handler [run-tests]"
+
+# No tests (default)
+git commit -m "Update README"
+```
+
+Note: The `black` formatting check always runs on every push.
+
+---
+
 ## Deployment
 
 - **Adapters**: Deploy individual entry points in `adapters/` as Cloud Functions with the `functions-framework` HTTP trigger.
 - **Communication API**: Build and deploy via Cloud Run (or any container platform), ensuring the `PORT` environment variable is respected.
 
 See `.github/workflows` and `cloudbuild/` for CI/CD examples.
-

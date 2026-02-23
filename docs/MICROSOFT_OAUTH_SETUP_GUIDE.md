@@ -67,7 +67,7 @@ Each customer creates their own Azure AD app in their Microsoft 365 tenant:
 2. Configure:
    - **Name:** `Unify Integration`
    - **Supported account types:** "Accounts in this organizational directory only"
-   - **Redirect URI:** 
+   - **Redirect URI:**
      - Platform: `Web`
      - URL: `https://adapters.unify.ai/microsoft/auth/callback` (or your callback URL)
 
@@ -432,4 +432,3 @@ The access token doesn't have the required Teams Chat permissions.
 4. **Have the user re-authorize** by visiting the OAuth URL again
 
 > Tokens only contain permissions that existed and were consented at authorization time. Adding permissions later requires a fresh OAuth flow.
-

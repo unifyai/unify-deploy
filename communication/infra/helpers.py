@@ -3,12 +3,6 @@ import os
 import subprocess
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
-from communication.helpers import STAGING
-
-# Ingress configuration for HTTPS
-INGRESS_NAME = "desktop-unity-ingress"
-INGRESS_NAMESPACE = "staging" if STAGING else "production"
-DESKTOP_DOMAIN = "staging.desktop.unify.ai" if STAGING else "desktop.unify.ai"
 
 
 def setup_kubernetes_client():
@@ -107,13 +101,36 @@ def setup_kubernetes_client():
         return None, None, None
 
 
-def delete_job(batch_api, job_name: str, namespace: str = "default"):
-    """Delete a Unity job"""
+def delete_job(
+    batch_api,
+    job_name: str,
+    namespace: str = "default",
+    required_labels: dict | None = None,
+):
+    """Delete a Unity job.
+
+    Args:
+        required_labels: If provided, the job's current labels must contain all
+            of these key-value pairs or the deletion is skipped (returns False).
+            Guards against TOCTOU races where a job's status changes between
+            listing and deletion.
+    """
     try:
+        if required_labels:
+            job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
+            current_labels = job.metadata.labels or {}
+            for key, value in required_labels.items():
+                if current_labels.get(key) != value:
+                    print(
+                        f"⏭️  Skipping delete for {job_name}: "
+                        f"label {key}={current_labels.get(key)!r}, expected {value!r}",
+                    )
+                    return False
+
         batch_api.delete_namespaced_job(
             name=job_name,
             namespace=namespace,
-            propagation_policy="Background",  # Delete pods as well
+            propagation_policy="Background",
         )
 
         print(f"✅ Job deleted successfully: {job_name}")
@@ -125,6 +142,31 @@ def delete_job(batch_api, job_name: str, namespace: str = "default"):
             return True
         else:
             print(f"❌ Error deleting job: {e}")
+            return False
+
+
+def patch_job_labels(
+    batch_api,
+    job_name: str,
+    labels: dict,
+    namespace: str = "default",
+):
+    """Patch labels on an existing Unity job."""
+    try:
+        body = {"metadata": {"labels": labels}}
+        batch_api.patch_namespaced_job(
+            name=job_name,
+            namespace=namespace,
+            body=body,
+        )
+        print(f"✅ Job labels patched: {job_name} -> {labels}")
+        return True
+    except ApiException as e:
+        if e.status == 404:
+            print(f"⚠️  Job not found: {job_name}")
+            return False
+        else:
+            print(f"❌ Error patching job labels: {e}")
             return False
 
 
@@ -163,8 +205,10 @@ def create_unity_job(
             },
             {"name": "OMP_NUM_THREADS", "value": "2"},
             {"name": "MKL_NUM_THREADS", "value": "2"},
+            {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
+            {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
             {
-                "name": "UNITY_CONVERSATION_COMMS_URL",
+                "name": "UNITY_COMMS_URL",
                 "value": "https://unity-comms-app-000000000000.us-central1.run.app",
             },
         ]
@@ -172,11 +216,11 @@ def create_unity_job(
             env_vars = [
                 {"name": "STAGING", "value": "true"},
                 {
-                    "name": "UNIFY_BASE_URL",
+                    "name": "ORCHESTRA_URL",
                     "value": "https://service.a.run.app/v0",
                 },
                 {
-                    "name": "UNITY_CONVERSATION_COMMS_URL",
+                    "name": "UNITY_COMMS_URL",
                     "value": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
                 },
             ] + env_vars[:-1]
@@ -191,12 +235,18 @@ def create_unity_job(
                 "labels": {
                     "app": "unity",
                     "created-by": "create_job_script",
+                    "unity-status": "idle",
                 },
             },
             "spec": {
                 "backoffLimit": 2,  # Allow 1 retry for resource issues
                 "template": {
-                    "metadata": {"labels": {"app": "unity"}},
+                    "metadata": {
+                        "labels": {"app": "unity"},
+                        "annotations": {
+                            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+                        },
+                    },
                     "spec": {
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
@@ -210,7 +260,6 @@ def create_unity_job(
                                 "ports": [
                                     {"containerPort": 8000},
                                     {"containerPort": 6379},
-                                    {"containerPort": 6080},
                                 ],
                                 "envFrom": [
                                     {"configMapRef": {"name": "unity-config"}},
@@ -226,12 +275,12 @@ def create_unity_job(
                                         "name": "sa-key",
                                         "mountPath": "/secrets",
                                         "readOnly": True,
-                                    }
+                                    },
                                 ],
-                            }
+                            },
                         ],
                         "volumes": [
-                            {"name": "sa-key", "secret": {"secretName": "comm-sa-key"}}
+                            {"name": "sa-key", "secret": {"secretName": "comm-sa-key"}},
                         ],
                     },
                 },
@@ -245,7 +294,8 @@ def create_unity_job(
         # Create the job
         try:
             api_response = batch_api.create_namespaced_job(
-                namespace=namespace, body=job_manifest
+                namespace=namespace,
+                body=job_manifest,
             )
 
             print(f"✅ Job created successfully!")
@@ -269,7 +319,10 @@ def create_unity_job(
 
 
 def get_job_logs(
-    core_api, job_name: str, namespace: str = "default", tail_lines: int = 10
+    core_api,
+    job_name: str,
+    namespace: str = "default",
+    tail_lines: int = 10,
 ):
     """
     Get logs from pods associated with a Kubernetes job.
@@ -361,433 +414,3 @@ def suspend_job(batch_api, job_name: str, namespace: str = "default"):
     except Exception as e:
         print(f"❌ Error stopping job: {e}")
         return False
-
-
-def create_external_service_for_job(
-    core_api,
-    job_name: str,
-    namespace: str = "default",
-    port: int = 6080,
-    service_name: str = None,
-    job_uid: str = None,
-):
-    """Create a ClusterIP Service for a Job (to be exposed via Ingress).
-
-    The Service selects Pods with label `job-name=<job_name>` and exposes `port`.
-    """
-    try:
-        name = service_name or f"unity-svc-{job_name}"
-        service_manifest = {
-            "apiVersion": "v1",
-            "kind": "Service",
-            "metadata": {
-                "name": name,
-                "namespace": namespace,
-                "labels": {
-                    "app": "unity",
-                    "job-name": job_name,
-                },
-            },
-            "spec": {
-                "type": "ClusterIP",
-                "selector": {
-                    "job-name": job_name,
-                },
-                "ports": [
-                    {
-                        "name": f"http-{port}",
-                        "port": port,
-                        "targetPort": port,
-                        "protocol": "TCP",
-                    }
-                ],
-            },
-        }
-
-        # Attach ownerReferences so GC deletes Service when Job is deleted
-        if job_uid:
-            service_manifest["metadata"]["ownerReferences"] = [
-                {
-                    "apiVersion": "batch/v1",
-                    "kind": "Job",
-                    "name": job_name,
-                    "uid": job_uid,
-                    # Not a controller of the Service; just ownership for GC
-                    "controller": False,
-                }
-            ]
-
-        # Try create; if exists, return existing
-        try:
-            svc = core_api.create_namespaced_service(
-                namespace=namespace, body=service_manifest
-            )
-            print(f"✅ Service created: {name}")
-            return svc
-        except ApiException as e:
-            if e.status == 409:
-                print(f"⚠️  Service already exists: {name}")
-                return core_api.read_namespaced_service(name=name, namespace=namespace)
-            raise
-    except Exception as e:
-        print(f"❌ Error creating service: {e}")
-        return None
-
-
-def delete_service(core_api, service_name: str, namespace: str = "default"):
-    """Delete a Kubernetes Service by name."""
-    try:
-        core_api.delete_namespaced_service(name=service_name, namespace=namespace)
-        print(f"✅ Service deleted: {service_name}")
-        return True
-    except ApiException as e:
-        if e.status == 404:
-            print(f"⚠️  Service not found (already deleted): {service_name}")
-            return True
-        print(f"❌ Error deleting service: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ Error deleting service: {e}")
-        return False
-
-
-def add_ingress_rule_for_job(
-    networking_api,
-    job_name: str,
-    service_name: str,
-    namespace: str = "default",
-    port: int = 6080,
-    ingress_name: str = INGRESS_NAME,
-    ingress_namespace: str = INGRESS_NAMESPACE,
-):
-    """Add a host-based rule to the shared Ingress for a job.
-
-    Returns:
-        dict: {"success": bool, "hostname": str, "url": str}
-    """
-    try:
-        hostname = f"{job_name}.{DESKTOP_DOMAIN}"
-
-        # Get current Ingress
-        ingress = networking_api.read_namespaced_ingress(
-            name=ingress_name,
-            namespace=ingress_namespace,
-        )
-
-        # Build new rule
-        new_rule = k8s_client.V1IngressRule(
-            host=hostname,
-            http=k8s_client.V1HTTPIngressRuleValue(
-                paths=[
-                    k8s_client.V1HTTPIngressPath(
-                        path="/",
-                        path_type="Prefix",
-                        backend=k8s_client.V1IngressBackend(
-                            service=k8s_client.V1IngressServiceBackend(
-                                name=service_name,
-                                port=k8s_client.V1ServiceBackendPort(number=port),
-                            )
-                        ),
-                    )
-                ]
-            ),
-        )
-
-        # Check if rule already exists
-        existing_rules = ingress.spec.rules or []
-        for rule in existing_rules:
-            if rule.host == hostname:
-                print(f"⚠️  Ingress rule already exists for {hostname}")
-                return {
-                    "success": True,
-                    "hostname": hostname,
-                    "url": f"https://{hostname}",
-                }
-
-        # Add new rule
-        existing_rules.append(new_rule)
-        ingress.spec.rules = existing_rules
-
-        # Patch the Ingress
-        networking_api.patch_namespaced_ingress(
-            name=ingress_name,
-            namespace=ingress_namespace,
-            body=ingress,
-        )
-
-        print(f"✅ Added Ingress rule for {hostname}")
-        return {
-            "success": True,
-            "hostname": hostname,
-            "url": f"https://{hostname}",
-        }
-
-    except ApiException as e:
-        print(f"❌ Error adding Ingress rule: {e}")
-        return {"success": False, "hostname": None, "url": None}
-    except Exception as e:
-        print(f"❌ Error adding Ingress rule: {e}")
-        return {"success": False, "hostname": None, "url": None}
-
-
-def remove_ingress_rule_for_job(
-    networking_api,
-    job_name: str,
-    ingress_name: str = INGRESS_NAME,
-    ingress_namespace: str = INGRESS_NAMESPACE,
-):
-    """Remove a host-based rule from the shared Ingress.
-
-    Returns:
-        bool: True if successful or rule didn't exist
-    """
-    try:
-        hostname = f"{job_name}.{DESKTOP_DOMAIN}"
-
-        # Get current Ingress
-        ingress = networking_api.read_namespaced_ingress(
-            name=ingress_name,
-            namespace=ingress_namespace,
-        )
-
-        # Filter out the rule for this hostname
-        existing_rules = ingress.spec.rules or []
-        new_rules = [rule for rule in existing_rules if rule.host != hostname]
-
-        if len(new_rules) == len(existing_rules):
-            print(f"⚠️  No Ingress rule found for {hostname}")
-            return True
-
-        ingress.spec.rules = new_rules
-
-        # Patch the Ingress
-        networking_api.patch_namespaced_ingress(
-            name=ingress_name,
-            namespace=ingress_namespace,
-            body=ingress,
-        )
-
-        print(f"✅ Removed Ingress rule for {hostname}")
-        return True
-
-    except ApiException as e:
-        if e.status == 404:
-            print(f"⚠️  Ingress not found: {ingress_name}")
-            return True
-        print(f"❌ Error removing Ingress rule: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ Error removing Ingress rule: {e}")
-        return False
-
-
-def check_service_has_endpoints(
-    core_api,
-    service_name: str,
-    namespace: str = "default",
-) -> dict:
-    """Check if a Service has ready endpoints (pods backing it).
-
-    Returns:
-        dict: {"ready": bool, "ready_count": int, "message": str}
-    """
-    try:
-        endpoints = core_api.read_namespaced_endpoints(
-            name=service_name,
-            namespace=namespace,
-        )
-
-        ready_count = 0
-        if endpoints.subsets:
-            for subset in endpoints.subsets:
-                if subset.addresses:
-                    ready_count += len(subset.addresses)
-
-        if ready_count > 0:
-            return {
-                "ready": True,
-                "ready_count": ready_count,
-                "message": f"{ready_count} endpoint(s) ready",
-            }
-        else:
-            return {
-                "ready": False,
-                "ready_count": 0,
-                "message": "No ready endpoints (pod may still be starting)",
-            }
-
-    except ApiException as e:
-        if e.status == 404:
-            return {
-                "ready": False,
-                "ready_count": 0,
-                "message": "Endpoints resource not found",
-            }
-        return {
-            "ready": False,
-            "ready_count": 0,
-            "message": f"Error checking endpoints: {e.reason}",
-        }
-    except Exception as e:
-        return {
-            "ready": False,
-            "ready_count": 0,
-            "message": f"Error checking endpoints: {str(e)}",
-        }
-
-
-def check_ingress_rule_exists(
-    networking_api,
-    job_name: str,
-    ingress_name: str = INGRESS_NAME,
-    ingress_namespace: str = INGRESS_NAMESPACE,
-) -> dict:
-    """Check if an Ingress rule exists for this job's hostname.
-
-    Returns:
-        dict: {"exists": bool, "hostname": str, "message": str}
-    """
-    try:
-        hostname = f"{job_name}.{DESKTOP_DOMAIN}"
-
-        ingress = networking_api.read_namespaced_ingress(
-            name=ingress_name,
-            namespace=ingress_namespace,
-        )
-
-        rules = ingress.spec.rules or []
-        for rule in rules:
-            if rule.host == hostname:
-                return {
-                    "exists": True,
-                    "hostname": hostname,
-                    "message": "Ingress rule exists",
-                }
-
-        return {
-            "exists": False,
-            "hostname": hostname,
-            "message": "Ingress rule not found",
-        }
-
-    except ApiException as e:
-        if e.status == 404:
-            return {
-                "exists": False,
-                "hostname": f"{job_name}.{DESKTOP_DOMAIN}",
-                "message": "Ingress not found",
-            }
-        return {
-            "exists": False,
-            "hostname": f"{job_name}.{DESKTOP_DOMAIN}",
-            "message": f"Error checking Ingress: {e.reason}",
-        }
-    except Exception as e:
-        return {
-            "exists": False,
-            "hostname": f"{job_name}.{DESKTOP_DOMAIN}",
-            "message": f"Error checking Ingress: {str(e)}",
-        }
-
-
-def get_job_readiness_status(
-    core_api,
-    networking_api,
-    job_name: str,
-    service_name: str,
-    namespace: str = "default",
-    gce_lb_wait_minutes: int = 5,
-) -> dict:
-    """Get comprehensive readiness status for a job.
-
-    Ready = K8s checks pass AND 5 minutes have elapsed since job creation
-    (to allow for GCE LB propagation).
-
-    Returns:
-        dict: {
-            "ready": bool,
-            "url": str,
-            "hostname": str,
-            "type": "ingress",
-            "checks": {
-                "service_exists": bool,
-                "endpoints_ready": bool,
-                "endpoints_count": int,
-                "ingress_rule_exists": bool,
-                "gce_lb_wait_passed": bool,
-                "seconds_until_ready": int,
-            }
-        }
-    """
-    from datetime import datetime, timedelta
-
-    hostname = f"{job_name}.{DESKTOP_DOMAIN}"
-    url = f"https://{hostname}"
-
-    checks = {
-        "service_exists": False,
-        "endpoints_ready": False,
-        "endpoints_count": 0,
-        "ingress_rule_exists": False,
-        "gce_lb_wait_passed": False,
-        "seconds_until_ready": 0,
-    }
-
-    # Check 1: Service exists
-    try:
-        core_api.read_namespaced_service(name=service_name, namespace=namespace)
-        checks["service_exists"] = True
-    except ApiException as e:
-        if e.status == 404:
-            checks["service_exists"] = False
-        else:
-            checks["service_exists"] = False
-    except Exception:
-        checks["service_exists"] = False
-
-    # Check 2: Endpoints ready
-    endpoints_result = check_service_has_endpoints(core_api, service_name, namespace)
-    checks["endpoints_ready"] = endpoints_result["ready"]
-    checks["endpoints_count"] = endpoints_result["ready_count"]
-
-    # Check 3: Ingress rule exists
-    ingress_result = check_ingress_rule_exists(networking_api, job_name)
-    checks["ingress_rule_exists"] = ingress_result["exists"]
-
-    # Check 4: GCE LB wait time (5 minutes since job creation)
-    # Parse timestamp from job name: unity-2024-12-08-10-00-00 or unity-2024-12-08-10-00-00-staging
-    try:
-        # Remove prefix and suffix
-        timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
-        job_created = datetime.strptime(timestamp_str, "%Y-%m-%d-%H-%M-%S")
-        ready_at = job_created + timedelta(minutes=gce_lb_wait_minutes)
-        now = datetime.now()
-
-        if now >= ready_at:
-            checks["gce_lb_wait_passed"] = True
-            checks["seconds_until_ready"] = 0
-        else:
-            checks["gce_lb_wait_passed"] = False
-            checks["seconds_until_ready"] = int((ready_at - now).total_seconds())
-    except ValueError:
-        # If we can't parse the timestamp, assume wait has passed
-        checks["gce_lb_wait_passed"] = True
-        checks["seconds_until_ready"] = 0
-
-    # Overall ready = K8s checks pass AND GCE LB wait time has passed
-    ready = all(
-        [
-            checks["service_exists"],
-            checks["endpoints_ready"],
-            checks["ingress_rule_exists"],
-            checks["gce_lb_wait_passed"],
-        ]
-    )
-
-    return {
-        "ready": ready,
-        "url": url,
-        "hostname": hostname,
-        "type": "ingress",
-        "checks": checks,
-    }

@@ -1,0 +1,8 @@
+{
+  "setup-worktree": [
+    "git submodule update --init --recursive",
+    "ln -sf \"$ROOT_WORKTREE_PATH/.venv\" .venv",
+    "[ -d \"$ROOT_WORKTREE_PATH/../unillm\" ] && [ ! -e ../unillm ] && ln -s \"$ROOT_WORKTREE_PATH/../unillm\" ../unillm || true",
+    "[ -d \"$ROOT_WORKTREE_PATH/../unify\" ] && [ ! -e ../unify ] && ln -s \"$ROOT_WORKTREE_PATH/../unify\" ../unify || true"
+  ]
+}
