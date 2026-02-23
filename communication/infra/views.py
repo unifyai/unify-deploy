@@ -586,7 +586,7 @@ async def list_kubernetes_jobs(
                 jobs.items,
             ),
         )
-        print(f"Job items: {map(lambda job: job.metadata.name, job_items)}")
+        print(f"Job items: {list(map(lambda job: job.metadata.name, job_items))}")
 
         job_list = []
         for job in job_items:
