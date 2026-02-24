@@ -234,7 +234,7 @@ for vm_name in "${TARGET_VMS[@]}"; do
             echo "  Startup script updated."
         else
             echo "  FAILED to update startup script." >&2
-            ((fail_count++))
+            ((fail_count++)) || true
             continue
         fi
     fi
@@ -261,7 +261,7 @@ for vm_name in "${TARGET_VMS[@]}"; do
             echo "  Metadata updated."
         else
             echo "  FAILED to update metadata." >&2
-            ((fail_count++))
+            ((fail_count++)) || true
             continue
         fi
     fi
@@ -278,7 +278,7 @@ for vm_name in "${TARGET_VMS[@]}"; do
         echo "  Skipping restart ($vm_status)"
     fi
 
-    ((success_count++))
+    ((success_count++)) || true
     echo ""
 done
 
