@@ -1179,7 +1179,10 @@ function Start-Caddy {
 }
 
 function Setup-Websockify {
-    param([switch]$Force)
+    param(
+        [switch]$Force,
+        [string]$TargetUser
+    )
 
     Write-Host ""
     Write-Host "=== Setting up websockify ===" -ForegroundColor Cyan
@@ -1216,8 +1219,13 @@ cd /d C:\novnc
     # Create scheduled task only if doesn't exist
     if (-not $existingTask) {
         $action = New-ScheduledTaskAction -Execute $batFile -WorkingDirectory $novncDir
-        $trigger = New-ScheduledTaskTrigger -AtLogOn
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+        if ($TargetUser) {
+            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
+            $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
+        } else {
+            $trigger = New-ScheduledTaskTrigger -AtLogOn
+            $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+        }
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
     }
@@ -1599,7 +1607,10 @@ function Test-PortListening {
 }
 
 function Start-AllServices {
-    param([switch]$FastMode)
+    param(
+        [switch]$FastMode,
+        [string]$TargetUser
+    )
 
     Write-Host ""
     Write-Host "=== Starting Services ===" -ForegroundColor Cyan
@@ -1642,13 +1653,23 @@ npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
             $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
             if (-not $existingTask) {
                 $action = New-ScheduledTaskAction -Execute "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir
-                $trigger = New-ScheduledTaskTrigger -AtLogOn
-                $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+                if ($TargetUser) {
+                    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
+                    $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
+                } else {
+                    $trigger = New-ScheduledTaskTrigger -AtLogOn
+                    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+                }
                 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
                 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
             }
 
-            Start-Process -FilePath "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
+            # Start via scheduled task to run in user's session, or direct Start-Process for manual runs
+            if ($TargetUser) {
+                Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            } else {
+                Start-Process -FilePath "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
+            }
         }
     }
 
@@ -2446,7 +2467,7 @@ if (Test-Path "$novncDir\vnc.html") {
 # Run config functions (they now skip if already configured)
 Setup-AgentServiceEnv -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl -CommsUrl $gcpCommsUrl
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
-Setup-Websockify
+Setup-Websockify -TargetUser $windowsUser
 
 # Display resolution and cursor only need setup if not already done
 if (-not $fastMode) {
@@ -2476,7 +2497,7 @@ if ($gcpWindowsUser -and $gcpSshPublicKey) {
 # FINAL: Start all services (must be sequential, after all installs)
 # -----------------------------------------------------------------------------
 
-Start-AllServices -FastMode:$fastMode
+Start-AllServices -FastMode:$fastMode -TargetUser $windowsUser
 
 # Start Caddy if configured
 if ($caddyConfigured) {
