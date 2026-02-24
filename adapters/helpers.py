@@ -294,27 +294,26 @@ def check_valid_contact(
         f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
         f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}",
     )
-    if assistant_data["assistant_id"] in [4, 5, 6, 7, 8]:
-        return [], True
 
     # check for contact in assistant contacts
     context = f"{assistant_context}/Contacts"
     response_json, status_code = get_contacts(context, api_key)
     default_contacts = get_default_contacts(assistant_data)
-    if status_code != 200 or len(response_json) < 2:
+    resp_contacts = response_json["logs"] if status_code == 200 else []
+    if len(resp_contacts) < 2:
         # if the context or project isn't created yet (first time user)
-        # len(response_json) < 2 is to deal with race conditions right on
+        # len(resp_contacts) < 2 is to deal with race conditions right on
         # hiring a new assistant, whenever the wakeup message is sent, the contact
         # manager gets initialized in unity so there's a stage where the context is
         # created but the contacts haven't been added yet
         if (
-            response_json["detail"]
+            status_code != 200
+            and response_json.get("detail")
             in [
                 "Project Assistants not found.",
                 f"Context '{context}' not found",
             ]
-            or len(response_json) < 2
-        ):
+        ) or len(resp_contacts) < 2:
             # check for boss user
             if check_contact_details(
                 email_address=email_address,
@@ -334,8 +333,7 @@ def check_valid_contact(
         print(f"Failed to get contacts for assistant {assistant_context}")
         print(response_json)
         return default_contacts, False
-    contact_logs = response_json["logs"]
-    contacts = [c["entries"] for c in contact_logs]
+    contacts = [c["entries"] for c in resp_contacts]
     print(f"Contacts: {contacts}")
     if len(contacts) == 0:
         return default_contacts, False
@@ -660,20 +658,21 @@ def build_webhook_context(
             assistant_data=assistant_data,
         )
     else:
-        contacts, status_code = get_contacts(
+        response, status_code = get_contacts(
             f"{user_id}/{assistant_id}/Contacts",
             api_key,
         )
-        # additional check for len(contacts) < 2 to deal with race conditions right on
+        # additional check for len(resp_contacts) < 2 to deal with race conditions right on
         # hiring a new assistant, whenever the wakeup message is sent, the contact
         # manager gets initialized in unity so there's a stage where the context is
         # created but the contacts haven't been added yet
-        print(f"response status_code: {status_code}, contacts: {contacts}")
-        if status_code != 200 or len(contacts) < 2:
+        print(f"response status_code: {status_code}, contacts: {response}")
+        resp_contacts = response["logs"] if status_code == 200 else []
+        if len(resp_contacts) < 2:
             print("contact fetching failed, using default contacts")
             contacts = get_default_contacts(assistant_data)
         else:
-            contacts = [c["entries"] for c in contacts["logs"]]
+            contacts = [c["entries"] for c in resp_contacts]
     print("contacts:", contacts)
 
     # check contact validity

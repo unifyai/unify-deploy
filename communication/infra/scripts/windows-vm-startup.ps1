@@ -776,6 +776,17 @@ function Install-AgentService {
         Write-Host "  Agent Service dependencies installed" -ForegroundColor Green
     }
 
+    # Install Patchright Chromium to shared location (matches Ubuntu pattern)
+    if (Test-Path "$magnitudeDir\packages\magnitude-core\package.json") {
+        Write-Host "  Installing Patchright Chromium..." -ForegroundColor Yellow
+        [System.Environment]::SetEnvironmentVariable('PLAYWRIGHT_BROWSERS_PATH', 'C:\ms-playwright', 'Machine')
+        $env:PLAYWRIGHT_BROWSERS_PATH = 'C:\ms-playwright'
+        Push-Location "$magnitudeDir\packages\magnitude-core"
+        npx patchright install chromium 2>&1 | Out-Null
+        Pop-Location
+        Write-Host "  Patchright Chromium installed" -ForegroundColor Green
+    }
+
     # Restore .env file
     if ($envBackup -and (Test-Path $agentServiceDir)) {
         $envBackup | Out-File -FilePath $envFile -Encoding UTF8 -NoNewline
@@ -825,6 +836,10 @@ NODE_ENV=production
         $envContent += "`nUNITY_COMMS_URL=$CommsUrl"
         Write-Host "  UNITY_COMMS_URL: $CommsUrl" -ForegroundColor Green
     }
+
+    # Patchright/Playwright browsers are installed to a shared location
+    $envContent += "`nPLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright"
+    Write-Host "  PLAYWRIGHT_BROWSERS_PATH: C:\ms-playwright" -ForegroundColor Green
 
     $envContent | Out-File -FilePath $envFile -Encoding UTF8
     Write-Host ".env file created at: $envFile" -ForegroundColor Green
@@ -1179,7 +1194,10 @@ function Start-Caddy {
 }
 
 function Setup-Websockify {
-    param([switch]$Force)
+    param(
+        [switch]$Force,
+        [string]$TargetUser
+    )
 
     Write-Host ""
     Write-Host "=== Setting up websockify ===" -ForegroundColor Cyan
@@ -1188,8 +1206,12 @@ function Setup-Websockify {
     $batFile = "$novncDir\start-websockify.bat"
     $taskName = "StartWebsockify"
 
-    # Check if already configured
+    # Check if already configured (but always recreate if TargetUser set, to fix principal)
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask -and $TargetUser) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        $existingTask = $null
+    }
     if ($existingTask -and (Test-Path $batFile) -and -not $Force) {
         Write-Host "  Websockify already configured" -ForegroundColor Green
         return
@@ -1213,11 +1235,16 @@ cd /d C:\novnc
 "@
     $websockifyScript | Out-File -FilePath $batFile -Encoding ASCII
 
-    # Create scheduled task only if doesn't exist
+    # Create scheduled task (launch via PowerShell hidden to avoid visible cmd window)
     if (-not $existingTask) {
-        $action = New-ScheduledTaskAction -Execute $batFile -WorkingDirectory $novncDir
-        $trigger = New-ScheduledTaskTrigger -AtLogOn
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$batFile'`"" -WorkingDirectory $novncDir
+        if ($TargetUser) {
+            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
+            $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
+        } else {
+            $trigger = New-ScheduledTaskTrigger -AtLogOn
+            $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+        }
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
     }
@@ -1599,7 +1626,10 @@ function Test-PortListening {
 }
 
 function Start-AllServices {
-    param([switch]$FastMode)
+    param(
+        [switch]$FastMode,
+        [string]$TargetUser
+    )
 
     Write-Host ""
     Write-Host "=== Starting Services ===" -ForegroundColor Cyan
@@ -1618,7 +1648,7 @@ function Start-AllServices {
 
     if (-not $port6080 -and (Test-Path $websockifyBat)) {
         Write-Host "Starting websockify..." -ForegroundColor Gray
-        Start-Process -FilePath $websockifyBat -WorkingDirectory $novncDir -WindowStyle Hidden
+        Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$websockifyBat'`"" -WorkingDirectory $novncDir -WindowStyle Hidden
     }
 
     # Start Agent Service in background
@@ -1632,23 +1662,38 @@ function Start-AllServices {
             # Ensure startup script exists
             $agentStartScript = @"
 @echo off
+set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 cd /d C:\agent-service
 npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 "@
             $agentStartScript | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
 
-            # Create scheduled task only if it doesn't exist
+            # Ensure scheduled task exists with correct user
             $taskName = "StartAgentService"
             $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existingTask -and $TargetUser) {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                $existingTask = $null
+            }
             if (-not $existingTask) {
-                $action = New-ScheduledTaskAction -Execute "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir
-                $trigger = New-ScheduledTaskTrigger -AtLogOn
-                $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+                $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$agentServiceDir\start-agent.bat'`"" -WorkingDirectory $agentServiceDir
+                if ($TargetUser) {
+                    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
+                    $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
+                } else {
+                    $trigger = New-ScheduledTaskTrigger -AtLogOn
+                    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
+                }
                 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
                 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
             }
 
-            Start-Process -FilePath "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
+            # Start via scheduled task to run in user's session, or direct Start-Process for manual runs
+            if ($TargetUser) {
+                Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            } else {
+                Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$agentServiceDir\start-agent.bat'`"" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
+            }
         }
     }
 
@@ -2360,6 +2405,15 @@ if ($fastMode) {
             Pop-Location
         }
 
+        # Install Patchright Chromium to shared location
+        if (Test-Path "$magnitudeDir\packages\magnitude-core\package.json") {
+            [System.Environment]::SetEnvironmentVariable('PLAYWRIGHT_BROWSERS_PATH', 'C:\ms-playwright', 'Machine')
+            $env:PLAYWRIGHT_BROWSERS_PATH = 'C:\ms-playwright'
+            Push-Location "$magnitudeDir\packages\magnitude-core"
+            npx patchright install chromium 2>&1 | Out-Null
+            Pop-Location
+        }
+
         # Restore .env
         if ($envBackup -and (Test-Path $agentServiceDir)) {
             $envBackup | Out-File -FilePath "$agentServiceDir\.env" -Encoding UTF8 -NoNewline
@@ -2446,7 +2500,7 @@ if (Test-Path "$novncDir\vnc.html") {
 # Run config functions (they now skip if already configured)
 Setup-AgentServiceEnv -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl -CommsUrl $gcpCommsUrl
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
-Setup-Websockify
+Setup-Websockify -TargetUser $windowsUser
 
 # Display resolution and cursor only need setup if not already done
 if (-not $fastMode) {
@@ -2476,7 +2530,7 @@ if ($gcpWindowsUser -and $gcpSshPublicKey) {
 # FINAL: Start all services (must be sequential, after all installs)
 # -----------------------------------------------------------------------------
 
-Start-AllServices -FastMode:$fastMode
+Start-AllServices -FastMode:$fastMode -TargetUser $windowsUser
 
 # Start Caddy if configured
 if ($caddyConfigured) {
