@@ -668,6 +668,7 @@ def build_webhook_context(
         # hiring a new assistant, whenever the wakeup message is sent, the contact
         # manager gets initialized in unity so there's a stage where the context is
         # created but the contacts haven't been added yet
+        print(f"response status_code: {status_code}, contacts: {contacts}")
         if status_code != 200 or len(contacts) < 2:
             print("contact fetching failed, using default contacts")
             contacts = get_default_contacts(assistant_data)
