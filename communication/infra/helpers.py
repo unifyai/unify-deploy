@@ -270,12 +270,12 @@ def create_unity_job(
                                     "requests": {
                                         "cpu": "2",
                                         "memory": "8Gi",
-                                        "ephemeral-storage": "10Gi",
+                                        "ephemeral-storage": "100Gi",
                                     },
                                     "limits": {
                                         "cpu": "2",
                                         "memory": "8Gi",
-                                        "ephemeral-storage": "10Gi",
+                                        "ephemeral-storage": "100Gi",
                                     },
                                 },
                                 "volumeMounts": [
