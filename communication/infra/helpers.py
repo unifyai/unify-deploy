@@ -213,6 +213,10 @@ def create_unity_job(
                 "name": "UNITY_COMMS_URL",
                 "value": "https://unity-comms-app-000000000000.us-central1.run.app",
             },
+            {
+                "name": "UNITY_ADAPTERS_URL",
+                "value": "https://service.a.run.app",
+            },
         ]
         if is_staging:
             env_vars = [
@@ -224,6 +228,10 @@ def create_unity_job(
                 {
                     "name": "UNITY_COMMS_URL",
                     "value": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
+                },
+                {
+                    "name": "UNITY_ADAPTERS_URL",
+                    "value": "https://service.a.run.app",
                 },
             ] + env_vars[:-1]
 
