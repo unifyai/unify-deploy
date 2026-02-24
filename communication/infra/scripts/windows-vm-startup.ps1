@@ -1191,8 +1191,12 @@ function Setup-Websockify {
     $batFile = "$novncDir\start-websockify.bat"
     $taskName = "StartWebsockify"
 
-    # Check if already configured
+    # Check if already configured (but always recreate if TargetUser set, to fix principal)
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($existingTask -and $TargetUser) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        $existingTask = $null
+    }
     if ($existingTask -and (Test-Path $batFile) -and -not $Force) {
         Write-Host "  Websockify already configured" -ForegroundColor Green
         return
@@ -1216,7 +1220,7 @@ cd /d C:\novnc
 "@
     $websockifyScript | Out-File -FilePath $batFile -Encoding ASCII
 
-    # Create scheduled task only if doesn't exist
+    # Create scheduled task
     if (-not $existingTask) {
         $action = New-ScheduledTaskAction -Execute $batFile -WorkingDirectory $novncDir
         if ($TargetUser) {
@@ -1648,9 +1652,13 @@ npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 "@
             $agentStartScript | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
 
-            # Create scheduled task only if it doesn't exist
+            # Ensure scheduled task exists with correct user
             $taskName = "StartAgentService"
             $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existingTask -and $TargetUser) {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                $existingTask = $null
+            }
             if (-not $existingTask) {
                 $action = New-ScheduledTaskAction -Execute "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir
                 if ($TargetUser) {
