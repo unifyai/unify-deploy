@@ -205,6 +205,8 @@ def create_unity_job(
             },
             {"name": "OMP_NUM_THREADS", "value": "2"},
             {"name": "MKL_NUM_THREADS", "value": "2"},
+            {"name": "HF_HOME", "value": "/tmp/huggingface"},
+            {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
             {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
             {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
             {
@@ -223,8 +225,6 @@ def create_unity_job(
                     "name": "UNITY_COMMS_URL",
                     "value": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
                 },
-                {"name": "HF_HOME", "value": "/tmp/huggingface"},
-                {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
             ] + env_vars[:-1]
 
         # Define the job manifest
