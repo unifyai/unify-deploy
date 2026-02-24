@@ -776,6 +776,17 @@ function Install-AgentService {
         Write-Host "  Agent Service dependencies installed" -ForegroundColor Green
     }
 
+    # Install Patchright Chromium to shared location (matches Ubuntu pattern)
+    if (Test-Path "$magnitudeDir\packages\magnitude-core\package.json") {
+        Write-Host "  Installing Patchright Chromium..." -ForegroundColor Yellow
+        [System.Environment]::SetEnvironmentVariable('PLAYWRIGHT_BROWSERS_PATH', 'C:\ms-playwright', 'Machine')
+        $env:PLAYWRIGHT_BROWSERS_PATH = 'C:\ms-playwright'
+        Push-Location "$magnitudeDir\packages\magnitude-core"
+        npx patchright install chromium 2>&1 | Out-Null
+        Pop-Location
+        Write-Host "  Patchright Chromium installed" -ForegroundColor Green
+    }
+
     # Restore .env file
     if ($envBackup -and (Test-Path $agentServiceDir)) {
         $envBackup | Out-File -FilePath $envFile -Encoding UTF8 -NoNewline
@@ -825,6 +836,10 @@ NODE_ENV=production
         $envContent += "`nUNITY_COMMS_URL=$CommsUrl"
         Write-Host "  UNITY_COMMS_URL: $CommsUrl" -ForegroundColor Green
     }
+
+    # Patchright/Playwright browsers are installed to a shared location
+    $envContent += "`nPLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright"
+    Write-Host "  PLAYWRIGHT_BROWSERS_PATH: C:\ms-playwright" -ForegroundColor Green
 
     $envContent | Out-File -FilePath $envFile -Encoding UTF8
     Write-Host ".env file created at: $envFile" -ForegroundColor Green
@@ -1220,9 +1235,9 @@ cd /d C:\novnc
 "@
     $websockifyScript | Out-File -FilePath $batFile -Encoding ASCII
 
-    # Create scheduled task
+    # Create scheduled task (launch via PowerShell hidden to avoid visible cmd window)
     if (-not $existingTask) {
-        $action = New-ScheduledTaskAction -Execute $batFile -WorkingDirectory $novncDir
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$batFile'`"" -WorkingDirectory $novncDir
         if ($TargetUser) {
             $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
             $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
@@ -1633,7 +1648,7 @@ function Start-AllServices {
 
     if (-not $port6080 -and (Test-Path $websockifyBat)) {
         Write-Host "Starting websockify..." -ForegroundColor Gray
-        Start-Process -FilePath $websockifyBat -WorkingDirectory $novncDir -WindowStyle Hidden
+        Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$websockifyBat'`"" -WorkingDirectory $novncDir -WindowStyle Hidden
     }
 
     # Start Agent Service in background
@@ -1647,6 +1662,7 @@ function Start-AllServices {
             # Ensure startup script exists
             $agentStartScript = @"
 @echo off
+set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 cd /d C:\agent-service
 npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 "@
@@ -1660,7 +1676,7 @@ npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
                 $existingTask = $null
             }
             if (-not $existingTask) {
-                $action = New-ScheduledTaskAction -Execute "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir
+                $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$agentServiceDir\start-agent.bat'`"" -WorkingDirectory $agentServiceDir
                 if ($TargetUser) {
                     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TargetUser
                     $principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Highest
@@ -1676,7 +1692,7 @@ npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
             if ($TargetUser) {
                 Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
             } else {
-                Start-Process -FilePath "$agentServiceDir\start-agent.bat" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
+                Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$agentServiceDir\start-agent.bat'`"" -WorkingDirectory $agentServiceDir -WindowStyle Hidden
             }
         }
     }
@@ -2386,6 +2402,15 @@ if ($fastMode) {
         if (Test-Path "$agentServiceDir\package.json") {
             Push-Location $agentServiceDir
             npm install 2>&1 | Out-Null
+            Pop-Location
+        }
+
+        # Install Patchright Chromium to shared location
+        if (Test-Path "$magnitudeDir\packages\magnitude-core\package.json") {
+            [System.Environment]::SetEnvironmentVariable('PLAYWRIGHT_BROWSERS_PATH', 'C:\ms-playwright', 'Machine')
+            $env:PLAYWRIGHT_BROWSERS_PATH = 'C:\ms-playwright'
+            Push-Location "$magnitudeDir\packages\magnitude-core"
+            npx patchright install chromium 2>&1 | Out-Null
             Pop-Location
         }
 
