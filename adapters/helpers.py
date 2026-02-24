@@ -294,8 +294,6 @@ def check_valid_contact(
         f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
         f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}",
     )
-    if assistant_data["assistant_id"] in [4, 5, 6, 7, 8]:
-        return [], True
 
     # check for contact in assistant contacts
     context = f"{assistant_context}/Contacts"
