@@ -205,6 +205,8 @@ def create_unity_job(
             },
             {"name": "OMP_NUM_THREADS", "value": "2"},
             {"name": "MKL_NUM_THREADS", "value": "2"},
+            {"name": "HF_HOME", "value": "/tmp/huggingface"},
+            {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
             {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
             {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
             {
@@ -284,11 +286,16 @@ def create_unity_job(
                                         "mountPath": "/secrets",
                                         "readOnly": True,
                                     },
+                                    {
+                                        "name": "tmp-vol",
+                                        "mountPath": "/tmp",
+                                    },
                                 ],
                             },
                         ],
                         "volumes": [
                             {"name": "sa-key", "secret": {"secretName": "comm-sa-key"}},
+                            {"name": "tmp-vol", "emptyDir": {}},
                         ],
                     },
                 },
