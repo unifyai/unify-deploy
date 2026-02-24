@@ -267,8 +267,16 @@ def create_unity_job(
                                 ],
                                 "env": env_vars,
                                 "resources": {
-                                    "requests": {"cpu": "2", "memory": "8Gi"},
-                                    "limits": {"cpu": "2", "memory": "8Gi"},
+                                    "requests": {
+                                        "cpu": "2",
+                                        "memory": "8Gi",
+                                        "ephemeral-storage": "10Gi",
+                                    },
+                                    "limits": {
+                                        "cpu": "2",
+                                        "memory": "8Gi",
+                                        "ephemeral-storage": "10Gi",
+                                    },
                                 },
                                 "volumeMounts": [
                                     {
