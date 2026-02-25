@@ -66,7 +66,7 @@ jobs:
   black:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Auth into Google Cloud
       uses: 'google-github-actions/auth@v2'
@@ -74,7 +74,7 @@ jobs:
         credentials_json: '${{ secrets.GCP_SA_KEY }}'
 
     - name: Set up Python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
@@ -89,7 +89,7 @@ jobs:
     needs: should-run-tests
     if: needs.should-run-tests.outputs.run_tests == 'true'
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Auth into Google Cloud
       uses: 'google-github-actions/auth@v2'
@@ -97,7 +97,7 @@ jobs:
         credentials_json: '${{ secrets.GCP_SA_KEY }}'
 
     - name: Set up Python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: '3.12'
 
