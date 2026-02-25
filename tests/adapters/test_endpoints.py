@@ -426,7 +426,8 @@ def test_assistant_update_webhook(test_client):
         event = data["event"]
         assert event["assistant_id"] == assistant_id
         assert event["user_id"] == "default-user"
-        assert event["assistant_name"] == "Test Assistant"
+        assert event["assistant_first_name"] == "Test"
+        assert event["assistant_surname"] == "Assistant"
         assert event["assistant_timezone"] == "UTC"
     except AssertionError as e:
         print(e)

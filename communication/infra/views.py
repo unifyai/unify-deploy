@@ -406,9 +406,11 @@ async def start_job(
     medium: str = Form(...),
     assistant_id: str = Form(...),
     user_id: str = Form(...),
-    user_name: str = Form(...),
+    user_first_name: str = Form(...),
+    user_surname: str = Form(""),
     user_email: str = Form(...),
-    assistant_name: str = Form(...),
+    assistant_first_name: str = Form(...),
+    assistant_surname: str = Form(""),
     assistant_age: str = Form(...),
     assistant_nationality: str = Form(...),
     assistant_about: str = Form(...),
@@ -435,9 +437,11 @@ async def start_job(
         medium: The type of medium (required)
         assistant_id: Unique assistant identifier (required)
         user_id: Unique user identifier (required)
-        user_name: User's name (required)
+        user_first_name: User's first name (required)
+        user_surname: User's surname (optional, defaults to empty)
         user_email: User's email (required)
-        assistant_name: Assistant's name (required)
+        assistant_first_name: Assistant's first name (required)
+        assistant_surname: Assistant's surname (optional, defaults to empty)
         assistant_age: Assistant's age (required)
         assistant_nationality: Assistant's nationality (required)
         assistant_about: Assistant's about (required)
@@ -478,9 +482,11 @@ async def start_job(
                 "medium": medium,
                 "assistant_id": assistant_id,
                 "user_id": user_id,
-                "user_name": user_name,
+                "user_first_name": user_first_name,
+                "user_surname": user_surname,
                 "user_email": user_email,
-                "assistant_name": assistant_name,
+                "assistant_first_name": assistant_first_name,
+                "assistant_surname": assistant_surname,
                 "assistant_age": assistant_age,
                 "assistant_nationality": assistant_nationality,
                 "assistant_about": assistant_about,

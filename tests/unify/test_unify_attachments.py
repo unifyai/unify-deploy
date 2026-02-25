@@ -100,7 +100,8 @@ def mock_get_assistant():
         "assistant_id": "test-assistant",
         "user_id": 12345,
         "api_key": "test-api-key",
-        "user_name": "Test User",
+        "user_first_name": "Test",
+        "user_surname": "User",
         "assistant_first_name": "Test",
         "assistant_surname": "Assistant",
     }

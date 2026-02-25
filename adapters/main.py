@@ -1384,11 +1384,6 @@ async def assistant_update_webhook(request: Request):
         )
 
         # Prepare assistant_data for the PubSub message
-        assistant_first_name = assistant_data["assistant_first_name"]
-        assistant_surname = assistant_data["assistant_surname"]
-        assistant_data["assistant_name"] = f"{assistant_first_name} {assistant_surname}"
-        assistant_data.pop("assistant_first_name")
-        assistant_data.pop("assistant_surname")
         assistant_data.pop("assistant_whatsapp_number")
 
         # Job is running, publish to assistant topic
