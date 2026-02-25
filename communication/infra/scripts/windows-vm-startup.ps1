@@ -642,12 +642,12 @@ function Install-AgentService {
         # Existing git repo - update via fetch+reset
         Write-Host "Updating Magnitude (git fetch)..." -ForegroundColor Yellow
         Update-GitRepo -RepoPath $magnitudeDir -Branch "unity-modifications" -GithubToken $GithubToken -RepoName "magnitude"
-    } elseif (-not $FastMode) {
-        # No git repo - clone fresh (only in non-fast mode)
+    } else {
+        # No git repo - clone fresh
         Write-Host "Cloning Magnitude repository..."
 
         if (Test-Path $magnitudeDir) {
-            Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue
+            cmd /c "rmdir /s /q `"$magnitudeDir`"" 2>&1 | Out-Null
         }
 
         git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
@@ -709,13 +709,19 @@ function Install-AgentService {
             # Re-clone to get updates
             Write-Host "Cloning Agent Service from Unity repo..." -ForegroundColor Yellow
 
+            # Stop running agent-service to release file locks before deletion
+            Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+            Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+
+            # cmd /c rmdir handles long node_modules paths that Remove-Item chokes on
             if (Test-Path $agentServiceDir) {
-                Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
+                cmd /c "rmdir /s /q `"$agentServiceDir`"" 2>&1 | Out-Null
             }
 
             New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
             if (Test-Path $unityRepoDir) {
-                Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+                cmd /c "rmdir /s /q `"$unityRepoDir`"" 2>&1 | Out-Null
             }
 
             # Sparse checkout to get only agent-service
@@ -729,22 +735,26 @@ function Install-AgentService {
                 Pop-Location
 
                 if (Test-Path "$unityRepoDir\agent-service") {
+                    # Move-Item nests into existing dirs, so ensure destination is gone
+                    if (Test-Path $agentServiceDir) {
+                        cmd /c "rmdir /s /q `"$agentServiceDir`"" 2>&1 | Out-Null
+                    }
                     Move-Item "$unityRepoDir\agent-service" $agentServiceDir
                     if ($commitHash) {
                         Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
                     }
                     Write-Host "  Agent Service cloned (commit: $commitHash)" -ForegroundColor Green
                 }
-                Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+                cmd /c "rmdir /s /q `"$unityRepoDir`"" 2>&1 | Out-Null
             }
         }
-    } elseif (-not $FastMode) {
+    } else {
         # Fresh install
         Write-Host "Installing Agent Service..." -ForegroundColor Cyan
 
         New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
         if (Test-Path $unityRepoDir) {
-            Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+            cmd /c "rmdir /s /q `"$unityRepoDir`"" 2>&1 | Out-Null
         }
 
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
@@ -757,13 +767,17 @@ function Install-AgentService {
             Pop-Location
 
             if (Test-Path "$unityRepoDir\agent-service") {
+                # Move-Item nests into existing dirs, so ensure destination is gone
+                if (Test-Path $agentServiceDir) {
+                    cmd /c "rmdir /s /q `"$agentServiceDir`"" 2>&1 | Out-Null
+                }
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir
                 if ($commitHash) {
                     Save-CommitHash -Dir $agentServiceDir -Hash $commitHash
                 }
                 Write-Host "  Agent Service cloned (commit: $commitHash)" -ForegroundColor Green
             }
-            Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+            cmd /c "rmdir /s /q `"$unityRepoDir`"" 2>&1 | Out-Null
         }
     }
 
@@ -782,7 +796,7 @@ function Install-AgentService {
         [System.Environment]::SetEnvironmentVariable('PLAYWRIGHT_BROWSERS_PATH', 'C:\ms-playwright', 'Machine')
         $env:PLAYWRIGHT_BROWSERS_PATH = 'C:\ms-playwright'
         Push-Location "$magnitudeDir\packages\magnitude-core"
-        npx patchright install chromium 2>&1 | Out-Null
+        npx --yes patchright install chromium 2>&1 | Out-Null
         Pop-Location
         Write-Host "  Patchright Chromium installed" -ForegroundColor Green
     }
@@ -1664,7 +1678,7 @@ function Start-AllServices {
 @echo off
 set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 cd /d C:\agent-service
-npx ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
+npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 "@
             $agentStartScript | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
 
@@ -2346,7 +2360,7 @@ if ($fastMode) {
 
         # Clone Magnitude
         if (-not (Test-Path "$magnitudeDir\.git")) {
-            if (Test-Path $magnitudeDir) { Remove-Item -Recurse -Force $magnitudeDir -ErrorAction SilentlyContinue }
+            if (Test-Path $magnitudeDir) { cmd /c "rmdir /s /q `"$magnitudeDir`"" 2>&1 | Out-Null }
             git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1 | Out-Null
 
             if (Test-Path "$magnitudeDir\package.json") {
@@ -2370,12 +2384,13 @@ if ($fastMode) {
             $envBackup = Get-Content "$agentServiceDir\.env" -Raw
         }
 
+        # cmd /c rmdir handles long node_modules paths that Remove-Item chokes on
         if (Test-Path "$agentServiceDir\package.json") {
-            Remove-Item -Recurse -Force $agentServiceDir -ErrorAction SilentlyContinue
+            cmd /c "rmdir /s /q `"$agentServiceDir`"" 2>&1 | Out-Null
         }
 
         New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
-        if (Test-Path $unityRepoDir) { Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue }
+        if (Test-Path $unityRepoDir) { cmd /c "rmdir /s /q `"$unityRepoDir`"" 2>&1 | Out-Null }
 
         git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1 | Out-Null
 
@@ -2388,6 +2403,10 @@ if ($fastMode) {
             Pop-Location
 
             if (Test-Path "$unityRepoDir\agent-service") {
+                # Move-Item nests into existing dirs, so ensure destination is gone
+                if (Test-Path $agentServiceDir) {
+                    cmd /c "rmdir /s /q `"$agentServiceDir`"" 2>&1 | Out-Null
+                }
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir -Force
 
                 # Save commit hash for future update checks
@@ -2395,7 +2414,7 @@ if ($fastMode) {
                     $commitHash | Out-File -FilePath "$agentServiceDir\.commit-hash" -Encoding UTF8 -NoNewline
                 }
             }
-            Remove-Item -Recurse -Force $unityRepoDir -ErrorAction SilentlyContinue
+            cmd /c "rmdir /s /q `"$unityRepoDir`"" 2>&1 | Out-Null
         }
 
         # Install agent-service dependencies
@@ -2410,7 +2429,7 @@ if ($fastMode) {
             [System.Environment]::SetEnvironmentVariable('PLAYWRIGHT_BROWSERS_PATH', 'C:\ms-playwright', 'Machine')
             $env:PLAYWRIGHT_BROWSERS_PATH = 'C:\ms-playwright'
             Push-Location "$magnitudeDir\packages\magnitude-core"
-            npx patchright install chromium 2>&1 | Out-Null
+            npx --yes patchright install chromium 2>&1 | Out-Null
             Pop-Location
         }
 
@@ -2571,4 +2590,5 @@ if ($newUserCreated -eq $true) {
     Restart-Computer -Force
 } else {
     Write-Host "Existing user detected, continuing with installations..." -ForegroundColor Green
+t "Existing user detected, continuing with installations..." -ForegroundColor Green
 }
