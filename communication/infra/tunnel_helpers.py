@@ -17,7 +17,7 @@ import os
 import secrets
 import string
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from google.cloud import storage
 from google.oauth2.service_account import Credentials
@@ -294,7 +294,7 @@ def register_tunnel(
 
     logger.info(
         f"Registered tunnel {tunnel_id} for user {user_id} "
-        f"(internal port {internal_port})"
+        f"(internal port {internal_port})",
     )
 
     return {
@@ -406,7 +406,7 @@ def list_user_tunnels(user_id: str) -> Dict[str, Any]:
                     "name": tunnel.get("name"),
                     "local_port": tunnel["local_port"],
                     "created_at": tunnel.get("created_at"),
-                }
+                },
             )
 
     return {
