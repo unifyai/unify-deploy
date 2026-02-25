@@ -15,8 +15,12 @@ _default_orchestra_url = (
     else "https://service.a.run.app/v0"
 )
 ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
-
 ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
+COMMS_URL = (
+    "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+    if STAGING
+    else "https://unity-comms-app-000000000000.us-central1.run.app"
+)
 
 
 class TokenCredentialFromSecret(TokenCredential):

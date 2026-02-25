@@ -4,6 +4,8 @@ import subprocess
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
 
+from communication.helpers import ADAPTERS_URL, COMMS_URL, ORCHESTRA_URL
+
 
 def setup_kubernetes_client():
     """Initialize Kubernetes client using GKE authentication
@@ -209,31 +211,12 @@ def create_unity_job(
             {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
             {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
             {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
-            {
-                "name": "UNITY_COMMS_URL",
-                "value": "https://unity-comms-app-000000000000.us-central1.run.app",
-            },
-            {
-                "name": "UNITY_ADAPTERS_URL",
-                "value": "https://service.a.run.app",
-            },
+            {"name": "UNITY_COMMS_URL", "value": COMMS_URL},
+            {"name": "UNITY_ADAPTERS_URL", "value": ADAPTERS_URL},
+            {"name": "ORCHESTRA_URL", "value": ORCHESTRA_URL},
         ]
         if is_staging:
-            env_vars = [
-                {"name": "STAGING", "value": "true"},
-                {
-                    "name": "ORCHESTRA_URL",
-                    "value": "https://service.a.run.app/v0",
-                },
-                {
-                    "name": "UNITY_COMMS_URL",
-                    "value": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
-                },
-                {
-                    "name": "UNITY_ADAPTERS_URL",
-                    "value": "https://service.a.run.app",
-                },
-            ] + env_vars[:-1]
+            env_vars += [{"name": "STAGING", "value": "true"}]
 
         # Define the job manifest
         job_manifest = {
@@ -249,7 +232,7 @@ def create_unity_job(
                 },
             },
             "spec": {
-                "backoffLimit": 2,  # Allow 1 retry for resource issues
+                "backoffLimit": 0,
                 "template": {
                     "metadata": {
                         "labels": {"app": "unity"},
