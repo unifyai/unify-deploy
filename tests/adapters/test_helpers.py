@@ -162,7 +162,6 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "user_whatsapp_number": "+1234567890",
         "voice_provider": "elevenlabs",
         "voice_id": "voice-123",
-        "voice_mode": "tts",
         "desktop_mode": desktop_mode,  # Use "none" to skip VM start
         "desktop_url": None,
         "user_desktop_mode": None,
