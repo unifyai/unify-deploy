@@ -2,11 +2,12 @@
 
 from typing import List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class ContentPart(BaseModel):
     """Content part for multimodal messages (text or image)."""
+    model_config = ConfigDict(extra="allow")
 
     type: Literal["text", "image_url"]
     text: Optional[str] = None
@@ -15,6 +16,7 @@ class ContentPart(BaseModel):
 
 class ChatMessage(BaseModel):
     """OpenAI-compatible chat message."""
+    model_config = ConfigDict(extra="allow")
 
     role: Literal["system", "user", "assistant", "tool"]
     content: Union[str, List[ContentPart], None] = None
