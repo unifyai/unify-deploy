@@ -92,7 +92,16 @@ The SBC proxy at `sbc.unify.ai` uses TLS 1.2 with certificate verification enabl
 
 ### GCP Infrastructure (not tracked in code)
 
-Cloud Scheduler jobs in `gcp-project-runtime` (both staging and production) include `Authorization: Bearer {admin_key}` headers for all 10 adapter scheduled endpoints.
+The following infrastructure settings are configured directly in GCP (`gcp-project-runtime`):
+
+- **Cloud Scheduler**: All scheduler jobs (both staging and production) include `Authorization: Bearer {admin_key}` headers for all 10 adapter scheduled endpoints.
+- **Firewall rules**: All remote-access rules (`default-allow-ssh`, `default-allow-rdp`, `allow-winrm`, `allow-2222`, `allow-6080`, `allow-8080`) are restricted to the IAP tunnel range (`35.235.240.0/20`). Direct SSH/RDP from the internet is blocked; use `gcloud compute ssh --tunnel-through-iap` instead.
+- **VMs**: Terminated VMs are deleted promptly to release external IPs and reduce attack surface. No idle VMs with external IPs should remain in the project.
+
+### GitHub Repository Settings (not tracked in code)
+
+- **Branch protection** on `main`: Requires 1 approving pull request review. Force pushes and branch deletions are blocked.
+- **Dependabot**: Vulnerability alerts and automated security fixes are enabled.
 
 ---
 
