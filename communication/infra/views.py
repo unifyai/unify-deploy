@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Form, HTTPException
+from fastapi import APIRouter, Form, HTTPException, Request
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
 from google.protobuf import duration_pb2
@@ -21,6 +21,12 @@ from .vm_helpers import (
     stop_vm,
     get_vm_status,
 )
+from .tunnel_helpers import (
+    register_tunnel,
+    unregister_tunnel,
+    get_tunnel_status,
+    list_user_tunnels,
+)
 from .models import (
     VMCreateRequest,
     VMActionRequest,
@@ -28,8 +34,14 @@ from .models import (
     VMStatusResponse,
     VMActionResponse,
     VMDeleteResponse,
+    TunnelRegisterRequest,
+    TunnelRegisterResponse,
+    TunnelStatusResponse,
+    TunnelListResponse,
+    TunnelDeleteResponse,
 )
 from communication.helpers import STAGING
+from communication.dependencies import authenticate_user_api_key, extract_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -871,3 +883,92 @@ async def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
             detail=f"VM not found for assistant {assistant_id}",
         )
     return VMStatusResponse(**result)
+
+
+# =============================================================================
+# Tunnel Management Endpoints (user API key auth, not admin key)
+# =============================================================================
+
+tunnel_router = APIRouter()
+
+
+@tunnel_router.post("/tunnel/register", response_model=TunnelRegisterResponse)
+async def register_tunnel_endpoint(
+    request_body: TunnelRegisterRequest,
+    request: Request,
+):
+    """
+    Register a new tunnel to expose a user's local application via a public URL.
+
+    Authenticated via user API key (Authorization: Bearer <key>).
+    The user_id is derived from the API key via Orchestra.
+
+    Args:
+        local_port: The port on the user's machine to expose (default 8080).
+        name: Optional friendly name for the tunnel.
+    """
+    api_key = extract_api_key(request)
+    user_info = await authenticate_user_api_key(api_key)
+    user_id = str(user_info["user_id"])
+
+    result = register_tunnel(
+        user_id=user_id,
+        local_port=request_body.local_port,
+        name=request_body.name,
+    )
+    return TunnelRegisterResponse(**result)
+
+
+@tunnel_router.get("/tunnel/{tunnel_id}", response_model=TunnelStatusResponse)
+async def get_tunnel_status_endpoint(tunnel_id: str, request: Request):
+    """
+    Get the current status of a tunnel.
+
+    Authenticated via user API key. Only the tunnel owner can query status.
+    """
+    api_key = extract_api_key(request)
+    user_info = await authenticate_user_api_key(api_key)
+    user_id = str(user_info["user_id"])
+
+    result = get_tunnel_status(tunnel_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Tunnel not found: {tunnel_id}")
+
+    if result.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail=f"Tunnel not found: {tunnel_id}")
+
+    return TunnelStatusResponse(**result)
+
+
+@tunnel_router.delete("/tunnel/{tunnel_id}", response_model=TunnelDeleteResponse)
+async def delete_tunnel_endpoint(tunnel_id: str, request: Request):
+    """
+    Delete a tunnel and disconnect the client.
+
+    Authenticated via user API key. The user_id for ownership check is
+    derived from the API key.
+    """
+    api_key = extract_api_key(request)
+    user_info = await authenticate_user_api_key(api_key)
+    user_id = str(user_info["user_id"])
+
+    result = unregister_tunnel(tunnel_id=tunnel_id, user_id=user_id)
+    if not result["deleted"]:
+        status_code = 404 if "not found" in result["message"].lower() else 403
+        raise HTTPException(status_code=status_code, detail=result["message"])
+    return TunnelDeleteResponse(**result)
+
+
+@tunnel_router.get("/tunnels", response_model=TunnelListResponse)
+async def list_tunnels_endpoint(request: Request):
+    """
+    List all tunnels owned by the authenticated user.
+
+    Authenticated via user API key. The user_id is derived from the API key.
+    """
+    api_key = extract_api_key(request)
+    user_info = await authenticate_user_api_key(api_key)
+    user_id = str(user_info["user_id"])
+
+    result = list_user_tunnels(user_id)
+    return TunnelListResponse(**result)

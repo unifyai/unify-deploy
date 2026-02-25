@@ -63,3 +63,54 @@ class VMDeleteResponse(BaseModel):
     vm_deleted: bool
     dns_deleted: bool
     ip_released: bool
+
+
+# =============================================================================
+# Tunnel Management Models
+# =============================================================================
+
+
+class TunnelRegisterRequest(BaseModel):
+    """Request to register a new tunnel for a user's local application."""
+
+    local_port: int = 8080  # Client's local application port
+    name: Optional[str] = None  # Optional friendly name for the tunnel
+
+
+class TunnelRegisterResponse(BaseModel):
+    """Response with tunnel details and client setup instructions."""
+
+    tunnel_id: str  # Short unique ID (e.g., "x7k9m2p4")
+    hostname: str  # e.g., x7k9m2p4.tunnel.unify.ai
+    url: str  # https://x7k9m2p4.tunnel.unify.ai
+    status: str  # "pending" — becomes "connected" when client connects
+    client_token: str  # Secret token for tunnel authentication
+    client_config: str  # rathole client TOML config content
+    setup_commands: dict[str, str]  # Per-OS commands (keys: "bash", "powershell")
+
+
+class TunnelStatusResponse(BaseModel):
+    """Tunnel status information."""
+
+    tunnel_id: str
+    hostname: str
+    url: str
+    status: str  # "pending" | "connected" | "disconnected"
+    name: Optional[str] = None
+    local_port: int
+    created_at: Optional[str] = None  # ISO timestamp
+
+
+class TunnelListResponse(BaseModel):
+    """List of tunnels for a user."""
+
+    tunnels: list[TunnelStatusResponse]
+    total: int
+
+
+class TunnelDeleteResponse(BaseModel):
+    """Response after deleting a tunnel."""
+
+    tunnel_id: str
+    deleted: bool
+    message: str

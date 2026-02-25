@@ -7,7 +7,7 @@ from communication.whatsapp.views import router as whatsapp_router
 from communication.gmail.views import router as gmail_router
 from communication.outlook.views import router as outlook_router
 from communication.teams.views import router as teams_router
-from communication.infra.views import router as infra_router
+from communication.infra.views import router as infra_router, tunnel_router
 from communication.social.views import router as social_router
 from communication.sharepoint.views import router as sharepoint_router
 from communication.unillm import router as unillm_router
@@ -28,6 +28,7 @@ app.include_router(gmail_router, prefix="/gmail", dependencies=admin_auth)
 app.include_router(outlook_router, prefix="/outlook", dependencies=admin_auth)
 app.include_router(teams_router, prefix="/teams", dependencies=admin_auth)
 app.include_router(infra_router, prefix="/infra", dependencies=admin_auth)
+app.include_router(tunnel_router, prefix="/infra")
 app.include_router(social_router, prefix="/social", dependencies=admin_auth)
 app.include_router(sharepoint_router, prefix="/sharepoint", dependencies=admin_auth)
 app.include_router(unillm_router, prefix="/unillm")
