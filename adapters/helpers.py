@@ -90,20 +90,20 @@ def get_assistant(
     email_check = email_address or ""
     phone_check = phone_number or ""
 
-    default_assistant_data = {
-        "assistant_id": "default-assistant",
-        "user_id": "default-user",
+    local_assistant_data = {
+        "assistant_id": "local-assistant",
+        "user_id": "local-user",
         "voice_provider": "cartesia",
         "voice_id": None,
         "voice_mode": "tts",
         "api_key": "",
         "user_first_name": "",
         "user_surname": "",
-        "assistant_first_name": "Default",
+        "assistant_first_name": "Local",
         "assistant_surname": "Assistant",
         "assistant_age": "20",
         "assistant_nationality": "United States",
-        "assistant_about": "Default Assistant",
+        "assistant_about": "Local Assistant",
         "assistant_timezone": "UTC",
         "assistant_email": "unity.agent@unify.ai",
         "user_email": "unity.agent@unify.ai",
@@ -116,17 +116,18 @@ def get_assistant(
         "user_desktop_mode": None,
         "user_desktop_filesys_sync": False,
         "user_desktop_url": None,
+        "is_local": True,
     }
-    if "+15550100002" in phone_check or assistant_id == "default-assistant":
-        return default_assistant_data
+    if "+15550100002" in phone_check or assistant_id == "local-assistant":
+        return local_assistant_data
     if (
         "+0123456789" in phone_check
-        or "default-test-assistant@unify.ai" in email_check
-        or assistant_id == "default-test-assistant"
+        or "local-test-assistant@unify.ai" in email_check
+        or assistant_id == "local-test-assistant"
     ):
         return {
-            **default_assistant_data,
-            "assistant_id": "default-test-assistant",
+            **local_assistant_data,
+            "assistant_id": "local-test-assistant",
             "user_first_name": "Test",
             "user_surname": "User",
             "user_number": "+9876543210",
@@ -134,7 +135,7 @@ def get_assistant(
             "assistant_first_name": "Test",
             "assistant_surname": "Assistant",
             "assistant_number": "+0123456789",
-            "assistant_email": "default-test-assistant@unify.ai",
+            "assistant_email": "local-test-assistant@unify.ai",
             "user_whatsapp_number": "+9876543210",
         }
 
@@ -160,10 +161,10 @@ def get_assistant(
     print(f"get_assistant response: {response}")
 
     if "detail" in response:
-        return {**default_assistant_data, "assistant_id": None}
+        return {**local_assistant_data, "assistant_id": None}
     assistants = response["info"]
     if len(assistants) == 0:
-        return {**default_assistant_data, "assistant_id": None}
+        return {**local_assistant_data, "assistant_id": None}
 
     return {
         "assistant_id": assistants[0]["agent_id"],
@@ -197,6 +198,7 @@ def get_assistant(
         ),
         "user_desktop_url": assistants[0].get("user_desktop_url", None),
         "demo_id": assistants[0].get("demo_id", None),
+        "is_local": assistants[0].get("is_local", False),
     }
 
 
@@ -681,14 +683,14 @@ def build_webhook_context(
     print("contacts:", contacts)
 
     # check contact validity
-    is_default_assistant = "default" in assistant_id or int(assistant_id) < 10
+    is_local_assistant = bool(assistant_data.get("is_local", False))
     is_test_assistant = "test" in assistant_id
-    is_valid_contact = is_valid_contact or is_default_assistant
+    is_valid_contact = is_valid_contact or is_local_assistant
 
-    # ensure job is running (skip for tests/default)
+    # ensure job is running (skip for local/test assistants)
     job_started = False
     is_running = is_job_running(user_id, assistant_id)
-    skip_auto_start = is_test_assistant or is_default_assistant or is_running
+    skip_auto_start = is_test_assistant or is_local_assistant or is_running
     should_start_job = (
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )

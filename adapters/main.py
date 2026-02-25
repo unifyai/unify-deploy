@@ -166,9 +166,6 @@ async def twilio_call_webhook(request: Request):
             return Response(content="Error adding user to conference", status_code=500)
 
         print(f"Assistant ID: {assistant_id}")
-        if assistant_id == "default-assistant":
-            print(f"Dispatching LiveKit agent {room_name}")
-            dispatch_livekit_agent(room_name)
 
         print("Conference setup completed")
     except Exception as e:
@@ -1629,10 +1626,9 @@ async def outlook_notification_processor(request: Request):
             )
             return Response(content=error_message, status_code=500)
 
-        # Start job if not already running
+        # Start job if not already running (skip for local assistants)
         is_running = is_job_running(user_id, assistant_id)
-        is_default = "default" in assistant_id
-        if not is_running and not is_default:
+        if not is_running and not assistant_data["is_local"]:
             start_unity_job(assistant_data, "email")
             create_job(assistant_id)
             is_running = True
@@ -1831,10 +1827,9 @@ async def teams_notification_processor(request: Request):
             print(f"Invalid contact: {sender_email}")
             return Response(status_code=200)
 
-        # Start job if needed
+        # Start job if needed (skip for local assistants)
         is_running = is_job_running(user_id, assistant_id)
-        is_default = assistant_id and "default" in assistant_id
-        if not is_running and not is_default:
+        if not is_running and not assistant_data["is_local"]:
             start_unity_job(assistant_data, "teams")
             create_job(assistant_id)
             is_running = True

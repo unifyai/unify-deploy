@@ -8,6 +8,7 @@ These tests verify:
 
 from unittest.mock import patch, MagicMock
 from adapters.helpers import (
+    build_webhook_context,
     get_default_contacts,
     check_contact_details,
     start_unity_job,
@@ -168,6 +169,7 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "user_desktop_filesys_sync": False,
         "user_desktop_url": None,
         "demo_id": demo_id,
+        "is_local": False,
     }
 
 
@@ -265,3 +267,61 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 
         assert data["demo_id"] == "99", f"Expected demo_id='99' for medium={medium}"
         assert data["medium"] == medium, f"Expected medium={medium}"
+
+
+# --- build_webhook_context local assistant tests ---
+
+
+@patch("adapters.helpers.create_job")
+@patch("adapters.helpers.start_unity_job")
+@patch("adapters.helpers.mark_job_running")
+@patch("adapters.helpers.is_job_running", return_value=False)
+@patch("adapters.helpers.check_valid_contact", return_value=([], True))
+def test_build_webhook_context_skips_job_start_for_local_assistant(
+    _mock_check,
+    _mock_running,
+    mock_mark,
+    mock_start,
+    mock_create,
+):
+    """When is_local=True in assistant data, job start should be skipped
+    even though the job is not running and the contact is valid."""
+    assistant_data = {
+        **_create_mock_assistant_data(),
+        "is_local": True,
+    }
+    ctx = build_webhook_context(
+        channel="whatsapp",
+        destination="+0987654321",
+        sender="whatsapp:+1234567890",
+        assistant_data=assistant_data,
+    )
+    mock_mark.assert_not_called()
+    mock_start.assert_not_called()
+    mock_create.assert_not_called()
+    assert ctx["is_valid_contact"] is True
+
+
+@patch("adapters.helpers.create_job")
+@patch("adapters.helpers.start_unity_job")
+@patch("adapters.helpers.mark_job_running")
+@patch("adapters.helpers.is_job_running", return_value=False)
+@patch("adapters.helpers.check_valid_contact", return_value=([], True))
+def test_build_webhook_context_starts_job_for_non_local_assistant(
+    _mock_check,
+    _mock_running,
+    mock_mark,
+    mock_start,
+    mock_create,
+):
+    """When is_local=False, job start should proceed normally."""
+    assistant_data = _create_mock_assistant_data()
+    ctx = build_webhook_context(
+        channel="whatsapp",
+        destination="+0987654321",
+        sender="whatsapp:+1234567890",
+        assistant_data=assistant_data,
+    )
+    mock_mark.assert_called_once()
+    mock_start.assert_called_once()
+    mock_create.assert_called_once()
