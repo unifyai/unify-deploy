@@ -80,15 +80,12 @@ setup_metrics(app, service_name="adapters")
 _twilio_validator = None
 
 
-def _get_twilio_validator() -> RequestValidator | None:
+def _get_twilio_validator() -> RequestValidator:
     global _twilio_validator
     if _twilio_validator is None:
         auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
         if not auth_token:
-            logger.warning(
-                "TWILIO_AUTH_TOKEN not set - Twilio signature validation disabled",
-            )
-            return None
+            raise RuntimeError("TWILIO_AUTH_TOKEN is required but not set")
         _twilio_validator = RequestValidator(auth_token)
     return _twilio_validator
 
@@ -96,8 +93,6 @@ def _get_twilio_validator() -> RequestValidator | None:
 async def validate_twilio_signature(request: Request):
     """FastAPI dependency that validates the X-Twilio-Signature header."""
     validator = _get_twilio_validator()
-    if validator is None:
-        return
     signature = request.headers.get("X-Twilio-Signature", "")
     url = str(request.url)
     form_data = await request.form()
@@ -603,19 +598,29 @@ async def teams_call_webhook(request: Request):
     Webhook called by Kamailio SBC when a Teams call arrives.
     Publishes to Pub/Sub to trigger agent dispatch, then returns
     so Kamailio can forward the call to LiveKit.
+
+    Authenticated via admin_key in the JSON body (Kamailio's http_client
+    cannot send Authorization headers, so the key is passed in the payload).
     """
     logger.info("teams_call_webhook function started")
 
-    # Accept JSON from Kamailio
     try:
         data = await request.json()
     except Exception:
-        # Fallback to form data if JSON parsing fails
         form_data = await request.form()
         data = dict(form_data)
 
-    # Extract call details from Kamailio
-    # Kamailio sends: from_uri, to_uri, call_id
+    import secrets as _secrets
+
+    body_key = data.pop("admin_key", "")
+    expected_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    if (
+        not expected_key
+        or not body_key
+        or not _secrets.compare_digest(str(body_key), expected_key)
+    ):
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
     from_uri = data.get("from_uri", "")
     to_uri = data.get("to_uri", "")
     call_id = data.get("call_id", "")
@@ -1718,9 +1723,10 @@ async def outlook_notification_processor(request: Request):
             )
             return Response(content=error_message, status_code=500)
 
-        # Start job if not already running (skip for local assistants)
+        # Start job if not already running
         is_running = is_job_running(user_id, assistant_id)
-        if not is_running and not assistant_data["is_local"]:
+        is_default = "default" in assistant_id
+        if not is_running and not is_default:
             start_unity_job(assistant_data, "email")
             create_job(assistant_id)
             is_running = True
@@ -1927,9 +1933,10 @@ async def teams_notification_processor(request: Request):
             logger.info(f"Invalid contact: {_redact_email(sender_email)}")
             return Response(status_code=200)
 
-        # Start job if needed (skip for local assistants)
+        # Start job if needed
         is_running = is_job_running(user_id, assistant_id)
-        if not is_running and not assistant_data["is_local"]:
+        is_default = assistant_id and "default" in assistant_id
+        if not is_running and not is_default:
             start_unity_job(assistant_data, "teams")
             create_job(assistant_id)
             is_running = True
@@ -2095,7 +2102,6 @@ async def microsoft_oauth_callback(request: Request):
             state_bytes = base64.b64decode(state)
             state_data = json.loads(state_bytes.decode())
 
-            # Verify HMAC signature if signing key is configured
             import hmac as _hmac
             import hashlib as _hashlib
 
@@ -2110,6 +2116,10 @@ async def microsoft_oauth_callback(request: Request):
                 ).hexdigest()
                 if not _hmac.compare_digest(provided_sig, expected_sig):
                     return Response(content="Invalid state signature", status_code=400)
+            else:
+                logger.warning(
+                    "OAUTH_STATE_SIGNING_KEY not set - state signature validation skipped",
+                )
 
             tenant_id = state_data.get("tenant_id")
             client_id = state_data.get("client_id")
