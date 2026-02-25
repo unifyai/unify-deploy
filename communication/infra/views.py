@@ -433,7 +433,6 @@ async def start_job(
     user_whatsapp_number: str = Form(""),
     voice_provider: str = Form(""),
     voice_id: str = Form(""),
-    voice_mode: str = Form(""),
     desktop_mode: str = Form("ubuntu"),
     desktop_url: str = Form(""),
     user_desktop_mode: str = Form(""),
@@ -464,7 +463,6 @@ async def start_job(
         user_whatsapp_number: User's whatsapp number (optional, defaults to empty string)
         voice_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
-        voice_mode: Voice mode (optional, defaults to empty string)
         desktop_mode: Desktop mode - ubuntu/windows/macos (optional, defaults to "ubuntu")
         desktop_url: URL to access the VM desktop (optional, defaults to empty string)
         user_desktop_mode: User's own desktop mode - ubuntu/windows/macos (optional)
@@ -509,7 +507,6 @@ async def start_job(
                 "user_whatsapp_number": user_whatsapp_number,
                 "voice_provider": voice_provider,
                 "voice_id": voice_id,
-                "voice_mode": voice_mode,
                 "desktop_mode": desktop_mode,
                 "desktop_url": desktop_url if desktop_url else None,
                 "user_desktop_mode": user_desktop_mode if user_desktop_mode else None,

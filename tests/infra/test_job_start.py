@@ -52,7 +52,6 @@ def _create_job_start_payload(demo_id=""):
         "user_whatsapp_number": "+1234567890",
         "voice_provider": "elevenlabs",
         "voice_id": "voice-123",
-        "voice_mode": "tts",
         "desktop_mode": "ubuntu",
         "desktop_url": "",
         "user_desktop_mode": "",
