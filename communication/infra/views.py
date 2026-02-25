@@ -763,7 +763,7 @@ async def get_latest_unity_image_commit():
 
 
 @router.post("/vm/create", response_model=VMCreateResponse)
-async def create_vm_endpoint(request: VMCreateRequest):
+def create_vm_endpoint(request: VMCreateRequest):
     """
     Create a new VM (Windows or Ubuntu) with full provisioning:
     - Reserve static IP
@@ -792,7 +792,7 @@ async def create_vm_endpoint(request: VMCreateRequest):
 
 
 @router.post("/vm/start", response_model=VMActionResponse)
-async def start_vm_endpoint(request: VMActionRequest):
+def start_vm_endpoint(request: VMActionRequest):
     """
     Start a stopped VM (Windows or Ubuntu).
 
@@ -813,7 +813,7 @@ async def start_vm_endpoint(request: VMActionRequest):
 
 
 @router.post("/vm/stop", response_model=VMActionResponse)
-async def stop_vm_endpoint(request: VMActionRequest):
+def stop_vm_endpoint(request: VMActionRequest):
     """
     Stop a running VM (Windows or Ubuntu). Preserves data.
 
@@ -834,7 +834,7 @@ async def stop_vm_endpoint(request: VMActionRequest):
 
 
 @router.delete("/vm/delete", response_model=VMDeleteResponse)
-async def delete_vm_endpoint(request: VMActionRequest):
+def delete_vm_endpoint(request: VMActionRequest):
     """
     Delete a VM (Windows or Ubuntu) with full deprovisioning:
     - Delete VM
@@ -856,7 +856,7 @@ async def delete_vm_endpoint(request: VMActionRequest):
 
 
 @router.get("/vm/status/{assistant_id}", response_model=VMStatusResponse)
-async def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
+def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
     """
     Get the current status of a VM (Windows or Ubuntu).
 
