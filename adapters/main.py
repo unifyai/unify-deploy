@@ -1,6 +1,6 @@
 import json
 import base64
-import traceback
+import logging
 import time
 import uuid
 from dotenv import load_dotenv
@@ -10,16 +10,31 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from typing import Optional
-from fastapi import FastAPI, File, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-import traceback
 
 from google.cloud import pubsub_v1, storage
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
+from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
+
+logger = logging.getLogger(__name__)
+
+
+def _redact_phone(number: str) -> str:
+    if len(number) < 4:
+        return "***"
+    return f"***{number[-4:]}"
+
+
+def _redact_email(email: str) -> str:
+    if "@" in email:
+        return f"***@{email.split('@', 1)[1]}"
+    return "***"
+
 
 from common.metrics import setup_metrics
 
@@ -59,6 +74,95 @@ setup_metrics(app, service_name="adapters")
 
 
 # =============================================================================
+# Twilio Signature Validation
+# =============================================================================
+
+_twilio_validator = None
+
+
+def _get_twilio_validator() -> RequestValidator | None:
+    global _twilio_validator
+    if _twilio_validator is None:
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+        if not auth_token:
+            logger.warning(
+                "TWILIO_AUTH_TOKEN not set - Twilio signature validation disabled",
+            )
+            return None
+        _twilio_validator = RequestValidator(auth_token)
+    return _twilio_validator
+
+
+async def validate_twilio_signature(request: Request):
+    """FastAPI dependency that validates the X-Twilio-Signature header."""
+    validator = _get_twilio_validator()
+    if validator is None:
+        return
+    signature = request.headers.get("X-Twilio-Signature", "")
+    url = str(request.url)
+    form_data = await request.form()
+    params = {k: v for k, v in form_data.items()}
+    if not validator.validate(url, params, signature):
+        raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+
+
+# =============================================================================
+# Admin Key Auth for Adapters
+# =============================================================================
+
+
+async def require_admin_key(request: Request):
+    """FastAPI dependency that requires a valid admin key."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing admin key")
+    import secrets as _secrets
+
+    token = auth_header[len("Bearer ") :]
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
+    if not admin_key or not _secrets.compare_digest(token, admin_key):
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+
+# =============================================================================
+# Rate Limiting Middleware
+# =============================================================================
+
+import time as _time
+from collections import defaultdict
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Limits requests per IP to prevent abuse of webhook endpoints."""
+
+    def __init__(self, app_instance, max_requests: int = 120, window_seconds: int = 60):
+        super().__init__(app_instance)
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._requests: dict[str, list[float]] = defaultdict(list)
+
+    async def dispatch(self, request, call_next):
+        client_ip = request.client.host if request.client else "unknown"
+        now = _time.monotonic()
+        window_start = now - self.window_seconds
+        timestamps = self._requests[client_ip]
+        self._requests[client_ip] = [t for t in timestamps if t > window_start]
+        if len(self._requests[client_ip]) >= self.max_requests:
+            return Response(
+                content=json.dumps({"detail": "Rate limit exceeded"}),
+                status_code=429,
+                media_type="application/json",
+                headers={"Retry-After": str(self.window_seconds)},
+            )
+        self._requests[client_ip].append(now)
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware, max_requests=120, window_seconds=60)
+
+
+# =============================================================================
 # Health Check
 # =============================================================================
 
@@ -74,10 +178,10 @@ async def health_check():
 # =============================================================================
 
 
-@app.post("/twilio/call")
+@app.post("/twilio/call", dependencies=[Depends(validate_twilio_signature)])
 async def twilio_call_webhook(request: Request):
     """Phone call webhook endpoint - handles incoming Twilio voice calls."""
-    print("twilio_call_webhook function started")
+    logger.info("twilio_call_webhook function started")
     form_data = await request.form()
 
     # get twilio number and caller number
@@ -85,7 +189,9 @@ async def twilio_call_webhook(request: Request):
     from_number = form_data.get("From", "")
     twilio_number = to_number or ""
     caller_number = from_number or ""
-    print(f"Received call from {caller_number} to {twilio_number}")
+    logger.info(
+        f"Received call from {_redact_phone(caller_number)} to {_redact_phone(twilio_number)}",
+    )
 
     # shared context
     context = build_webhook_context("phone", to_number, from_number)
@@ -101,21 +207,21 @@ async def twilio_call_webhook(request: Request):
         return Response(content=str(resp_user), media_type="text/xml")
 
     running = context["is_job_running"]
-    print(f"Job running: {running}")
+    logger.info(f"Job running: {running}")
 
     # conference name and SIP URI
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     room_name = make_room_name(assistant_id, "phone")
     sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
-    print(f"Setting up conference {conference_name} with SIP URI {sip_uri}")
-    print(f"LiveKit room will be: {room_name}")
+    logger.info(f"Setting up conference {conference_name}")
+    logger.info(f"LiveKit room will be: {room_name}")
 
     # publish to Pub/Sub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing call to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
         pubsub_message = {
             "thread": "call",
@@ -142,34 +248,37 @@ async def twilio_call_webhook(request: Request):
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("Call published to Pub/Sub successfully")
+            logger.info(f"Message ID: {message_id}")
+        logger.info("Call published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
+        logger.error(f"Error publishing to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     # Conference setup
     try:
         resp_user = create_conference_response(conference_name)
-        print(f"Conference response: {resp_user.to_xml()}")
+        logger.info(f"Conference response: {resp_user.to_xml()}")
         if resp_user:
-            print("Conference response created successfully")
+            logger.info("Conference response created successfully")
         else:
-            print("Error: Failed to create conference response")
+            logger.error("Failed to create conference response")
             return Response(content="Error creating conference", status_code=500)
 
         call_sid = add_user_to_conference(conference_name, caller_number, sip_uri)
         if call_sid:
-            print(f"User added to conference successfully. Call SID: {call_sid}")
+            logger.info(f"User added to conference successfully. Call SID: {call_sid}")
         else:
-            print("Error: Failed to add user to conference")
+            logger.error("Failed to add user to conference")
             return Response(content="Error adding user to conference", status_code=500)
 
-        print(f"Assistant ID: {assistant_id}")
+        logger.info(f"Assistant ID: {assistant_id}")
+        if assistant_id == "default-assistant":
+            logger.info(f"Dispatching LiveKit agent {room_name}")
+            dispatch_livekit_agent(room_name)
 
-        print("Conference setup completed")
+        logger.info("Conference setup completed")
     except Exception as e:
-        print(f"Error during conference setup: {str(e)}")
+        logger.error(f"Error during conference setup: {e}")
         return Response(content="Error setting up conference", status_code=500)
 
     # Start LiveKit Egress recording on the room (fire-and-forget).
@@ -177,21 +286,23 @@ async def twilio_call_webhook(request: Request):
         user_id = context["assistant"]["user_id"]
         await start_room_egress(room_name, assistant_id, user_id)
     except Exception as e:
-        print(f"[Egress] Non-fatal: failed to start egress for call: {e}")
+        logger.error(f"[Egress] Non-fatal: failed to start egress for call: {e}")
 
-    print("Returning TwiML response")
+    logger.info("Returning TwiML response")
     return Response(content=str(resp_user), media_type="text/xml")
 
 
-@app.post("/twilio/call-status")
+@app.post("/twilio/call-status", dependencies=[Depends(validate_twilio_signature)])
 async def twilio_call_status_webhook(request: Request):
     """Phone call status webhook - handles Twilio call status updates."""
     form_data = await request.form()
     call_status = form_data.get("CallStatus")
     assistant_number = form_data.get("From")
     user_number = form_data.get("To")
-    print(f"twilio_call_status_webhook function started: {call_status}")
-    print(f"User {user_number} called by {assistant_number}")
+    logger.info(f"twilio_call_status_webhook function started: {call_status}")
+    logger.info(
+        f"User {_redact_phone(user_number)} called by {_redact_phone(assistant_number)}",
+    )
 
     # Handle call answered (in-progress) or not answered (no-answer, busy, canceled, failed)
     if call_status in ("in-progress", "no-answer", "busy", "canceled", "failed"):
@@ -216,7 +327,7 @@ async def twilio_call_status_webhook(request: Request):
         pubsub_client = pubsub_v1.PublisherClient()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-        print(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
+        logger.info(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
         try:
             publish_future = pubsub_client.publish(
                 topic_path,
@@ -236,10 +347,10 @@ async def twilio_call_status_webhook(request: Request):
             )
             if "test" in assistant_id:
                 status_id = publish_future.result(timeout=10)
-                print(f"Message ID: {status_id}")
-            print(f"{thread} published to Pub/Sub successfully")
+                logger.info(f"Message ID: {status_id}")
+            logger.info(f"{thread} published to Pub/Sub successfully")
         except Exception as e:
-            print(f"Error publishing to Pub/Sub: {str(e)}")
+            logger.error(f"Error publishing to Pub/Sub: {e}")
 
     return Response(status_code=200)
 
@@ -262,31 +373,31 @@ async def livekit_recording_complete(request: Request):
     try:
         event = verify_livekit_webhook(body, auth_token)
     except Exception as e:
-        print(f"[Recording] Webhook verification failed: {e}")
+        logger.error(f"[Recording] Webhook verification failed: {e}")
         return Response(status_code=401)
 
     if event.event != "egress_ended":
         return Response(status_code=200)
 
     egress_info = event.egress_info
-    print(
+    logger.info(
         f"[Recording] Egress {egress_info.egress_id} ended for room "
         f"'{egress_info.room_name}' status={egress_info.status}",
     )
 
     if not egress_info.file_results:
-        print("[Recording] No file results in egress info, skipping")
+        logger.info("[Recording] No file results in egress info, skipping")
         return Response(status_code=200)
 
     assistant_id = request.query_params.get("assistant_id", "")
     user_id = request.query_params.get("user_id", "")
     room_name = request.query_params.get("room_name", egress_info.room_name)
-    print(f"Assistant ID: {assistant_id}")
-    print(f"User ID: {user_id}")
-    print(f"Room Name: {room_name}")
+    logger.info(f"Assistant ID: {assistant_id}")
+    logger.info(f"User ID: {user_id}")
+    logger.info(f"Room Name: {room_name}")
 
     if not assistant_id:
-        print("[Recording] Missing assistant_id, cannot route event")
+        logger.info("[Recording] Missing assistant_id, cannot route event")
         return Response(status_code=200)
 
     # Ensure the assistant's container is running so the Pub/Sub message
@@ -301,12 +412,14 @@ async def livekit_recording_complete(request: Request):
             validate_contact=False,
             ensure_job=True,
         )
-        print(
+        logger.info(
             f"[Recording] Assistant {assistant_id} job running: "
             f"{context['is_job_running']}",
         )
     except Exception as e:
-        print(f"[Recording] Failed to ensure job for assistant {assistant_id}: {e}")
+        logger.error(
+            f"[Recording] Failed to ensure job for assistant {assistant_id}: {e}",
+        )
 
     # Construct GCS public URL and publish.
     file_result = egress_info.file_results[0]
@@ -318,7 +431,7 @@ async def livekit_recording_complete(request: Request):
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing recording_ready to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing recording_ready to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
@@ -336,28 +449,30 @@ async def livekit_recording_complete(request: Request):
         )
         if "test" in str(assistant_id):
             publish_future.result(timeout=10)
-        print(
+        logger.info(
             f"[Recording] Published recording_ready for assistant {assistant_id}, "
             f"room '{room_name}', size={file_result.size} bytes",
         )
     except Exception as e:
-        print(f"[Recording] Error publishing to Pub/Sub: {e}")
+        logger.error(f"[Recording] Error publishing to Pub/Sub: {e}")
         return Response(status_code=500)
 
     return {"success": True}
 
 
-@app.post("/twilio/sms")
+@app.post("/twilio/sms", dependencies=[Depends(validate_twilio_signature)])
 async def twilio_sms_webhook(request: Request):
     """SMS webhook endpoint - handles incoming Twilio SMS messages."""
-    print("twilio_sms_webhook function started")
+    logger.info("twilio_sms_webhook function started")
     form_data = await request.form()
 
     # get twilio number and caller number
     to_number = form_data.get("To", "") or ""
     from_number = form_data.get("From", "") or ""
     body = form_data.get("Body", "") or ""
-    print(f"Received message from {from_number} to {to_number} with body: {body}")
+    logger.info(
+        f"Received SMS from {_redact_phone(from_number)} to {_redact_phone(to_number)}",
+    )
 
     # shared context
     context = build_webhook_context("msg", to_number, from_number)
@@ -374,7 +489,7 @@ async def twilio_sms_webhook(request: Request):
         return Response(content=str(resp_user), media_type="text/xml")
 
     running = context["is_job_running"]
-    print(f"Job running: {running}")
+    logger.info(f"Job running: {running}")
 
     # set up response
     resp_user = MessagingResponse()
@@ -383,7 +498,7 @@ async def twilio_sms_webhook(request: Request):
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing message to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
@@ -401,27 +516,29 @@ async def twilio_sms_webhook(request: Request):
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("Message published to Pub/Sub successfully")
+            logger.info(f"Message ID: {message_id}")
+        logger.info("Message published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
+        logger.error(f"Error publishing to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
-    print("Returning TwiML response")
+    logger.info("Returning TwiML response")
     return Response(content=str(resp_user), media_type="text/xml")
 
 
-@app.post("/twilio/whatsapp")
+@app.post("/twilio/whatsapp", dependencies=[Depends(validate_twilio_signature)])
 async def twilio_whatsapp_webhook(request: Request):
     """WhatsApp webhook endpoint - handles incoming Twilio WhatsApp messages."""
-    print("twilio_whatsapp_webhook function started")
+    logger.info("twilio_whatsapp_webhook function started")
     form_data = await request.form()
 
     # get twilio number and caller number
     to_number = form_data.get("To", "") or ""
     from_number = form_data.get("From", "") or ""
     body = form_data.get("Body", "") or ""
-    print(f"Received message from {from_number} to {to_number} with body: {body}")
+    logger.info(
+        f"Received WhatsApp message from {_redact_phone(from_number)} to {_redact_phone(to_number)}",
+    )
 
     # shared context
     context = build_webhook_context("whatsapp", to_number, from_number)
@@ -438,7 +555,7 @@ async def twilio_whatsapp_webhook(request: Request):
         return Response(content=str(resp_user), media_type="text/xml")
 
     running = context["is_job_running"]
-    print(f"Job running: {running}")
+    logger.info(f"Job running: {running}")
 
     # set up response
     resp_user = MessagingResponse()
@@ -447,7 +564,7 @@ async def twilio_whatsapp_webhook(request: Request):
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing message to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
@@ -465,13 +582,13 @@ async def twilio_whatsapp_webhook(request: Request):
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("Message published to Pub/Sub successfully")
+            logger.info(f"Message ID: {message_id}")
+        logger.info("Message published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing to Pub/Sub: {str(e)}")
+        logger.error(f"Error publishing to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
-    print("Returning TwiML response")
+    logger.info("Returning TwiML response")
     return Response(content=str(resp_user), media_type="text/xml")
 
 
@@ -487,7 +604,7 @@ async def teams_call_webhook(request: Request):
     Publishes to Pub/Sub to trigger agent dispatch, then returns
     so Kamailio can forward the call to LiveKit.
     """
-    print("teams_call_webhook function started")
+    logger.info("teams_call_webhook function started")
 
     # Accept JSON from Kamailio
     try:
@@ -504,7 +621,7 @@ async def teams_call_webhook(request: Request):
     call_id = data.get("call_id", "")
     source_ip = data.get("source_ip", "")
 
-    print(f"Teams call: from={from_uri} to={to_uri} call_id={call_id}")
+    logger.info(f"Teams call: call_id={call_id}")
 
     # Extract phone number from to_uri
     # Format: sip:+19999999999@sbc.unify.ai:5061;user=phone;transport=tls
@@ -518,10 +635,10 @@ async def teams_call_webhook(request: Request):
         if not teams_number.startswith("+"):
             teams_number = "+" + teams_number
 
-    print(f"Extracted Teams number: {teams_number}")
+    logger.info(f"Extracted Teams number: {_redact_phone(teams_number)}")
 
     if not teams_number:
-        print("ERROR: Could not extract phone number from to_uri")
+        logger.error("Could not extract phone number from to_uri")
         return Response(
             content=json.dumps({"error": "Invalid to_uri"}),
             status_code=400,
@@ -540,7 +657,7 @@ async def teams_call_webhook(request: Request):
         assistant_id = context["assistant"]["assistant_id"]
         contacts = context["contacts"]
     except Exception as e:
-        print(f"ERROR: Could not find assistant for {teams_number}: {e}")
+        logger.error(f"Could not find assistant for {_redact_phone(teams_number)}: {e}")
         # Return success anyway - let the call proceed, it just won't have an agent
         return Response(
             content=json.dumps({"success": True, "warning": "No assistant found"}),
@@ -558,7 +675,7 @@ async def teams_call_webhook(request: Request):
     # topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_name = "test"
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing Teams call to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing Teams call to Pub/Sub at path: {topic_path}")
 
     try:
         pubsub_message = {
@@ -586,9 +703,9 @@ async def teams_call_webhook(request: Request):
             json.dumps(pubsub_message).encode("utf-8"),
         )
         # Don't wait for result - fire and forget for speed
-        print("Teams call published to Pub/Sub successfully")
+        logger.info("Teams call published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing Teams call to Pub/Sub: {str(e)}")
+        logger.error(f"Error publishing Teams call to Pub/Sub: {e}")
         # Still return success - don't block the call
 
     # Return success so Kamailio can proceed to forward to LiveKit
@@ -784,7 +901,7 @@ def validate_file_type(filename: str, content_type: str) -> tuple[bool, str]:
     return True, ""
 
 
-@app.post("/unify/attachment")
+@app.post("/unify/attachment", dependencies=[Depends(require_admin_key)])
 async def unify_attachment_upload(
     request: Request,
     file: UploadFile = File(...),
@@ -809,14 +926,7 @@ async def unify_attachment_upload(
         - content_type: MIME type
         - size_bytes: File size in bytes
     """
-    print("unify_attachment_upload function started")
-
-    # Optional auth via admin key
-    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-    auth_header = request.headers.get("Authorization", "")
-    if shared_key and auth_header != f"Bearer {shared_key}":
-        print("Unauthorized unify_attachment request")
-        return Response(status_code=401)
+    logger.info("unify_attachment_upload function started")
 
     # Get assistant_id from form data if not provided as query param
     if not assistant_id:
@@ -836,7 +946,7 @@ async def unify_attachment_upload(
         # Validate file type
         is_valid, error_msg = validate_file_type(safe_filename, content_type)
         if not is_valid:
-            print(f"File type validation failed: {error_msg}")
+            logger.info(f"File type validation failed: {error_msg}")
             return Response(
                 content=json.dumps({"error": error_msg}),
                 status_code=400,
@@ -866,7 +976,7 @@ async def unify_attachment_upload(
         # Get GCP credentials and upload
         creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
         if not creds_json:
-            print("GCP_SA_KEY not configured")
+            logger.error("GCP_SA_KEY not configured")
             return Response(
                 content=json.dumps({"error": "Storage not configured"}),
                 status_code=500,
@@ -883,7 +993,7 @@ async def unify_attachment_upload(
 
         # Build permanent gs:// URL
         gs_url = f"gs://{UNIFY_ATTACHMENTS_BUCKET}/{blob_path}"
-        print(f"Uploaded attachment to {gs_url}")
+        logger.info(f"Uploaded attachment to {gs_url}")
 
         # Generate signed download URL (1 hour expiry for immediate use)
         signed_url = blob.generate_signed_url(
@@ -892,7 +1002,7 @@ async def unify_attachment_upload(
             method="GET",
         )
 
-        print(f"Generated signed URL for attachment {attachment_id}")
+        logger.info(f"Generated signed URL for attachment {attachment_id}")
 
         return Response(
             content=json.dumps(
@@ -910,8 +1020,7 @@ async def unify_attachment_upload(
         )
 
     except Exception as e:
-        print(f"Error uploading attachment: {str(e)}")
-        traceback.print_exc()
+        logger.error(f"Error uploading attachment: {e}", exc_info=True)
         return Response(
             content=json.dumps({"error": f"Failed to upload attachment: {str(e)}"}),
             status_code=500,
@@ -924,7 +1033,7 @@ async def unify_attachment_upload(
 # =============================================================================
 
 
-@app.post("/unify/message")
+@app.post("/unify/message", dependencies=[Depends(require_admin_key)])
 async def unify_message_webhook(request: Request):
     """
     Unify message webhook - handles internal message events.
@@ -933,14 +1042,7 @@ async def unify_message_webhook(request: Request):
     should be an object with: {"id": str, "filename": str, "url": str}
     (as returned by /unify/attachment).
     """
-    print("unify_message_webhook function started")
-
-    # optional auth via admin key
-    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-    auth_header = request.headers.get("Authorization", "")
-    if shared_key and auth_header != f"Bearer {shared_key}":
-        print("Unauthorized unify_message request")
-        return Response(status_code=401)
+    logger.info("unify_message_webhook function started")
 
     # accept JSON or form payloads
     content_type = request.headers.get("Content-Type", "")
@@ -959,16 +1061,16 @@ async def unify_message_webhook(request: Request):
         attachments = []
 
     if not assistant_id_input:
-        print("Assistant ID is required")
+        logger.info("Assistant ID is required")
         return Response(status_code=400)
 
     if contact_id is None:
-        print("contact_id is required for unify_message")
+        logger.info("contact_id is required for unify_message")
         return Response(status_code=400, content="contact_id is required")
 
     # Validate attachment count limit
     if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
-        print(
+        logger.info(
             f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}",
         )
         return Response(
@@ -1001,15 +1103,15 @@ async def unify_message_webhook(request: Request):
 
             validated_attachments.append(validated_att)
         else:
-            print(f"Skipping invalid attachment: {att}")
+            logger.info(f"Skipping invalid attachment: {att}")
 
     attachment_info = (
         f" with {len(validated_attachments)} attachment(s)"
         if validated_attachments
         else ""
     )
-    print(
-        f"Received unify_message message for assistant_id={assistant_id_input}{attachment_info} with body: {body}",
+    logger.info(
+        f"Received unify_message for assistant_id={assistant_id_input}{attachment_info}",
     )
 
     # shared context
@@ -1024,13 +1126,13 @@ async def unify_message_webhook(request: Request):
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
     running = context["is_job_running"]
-    print(f"Job running: {running}")
+    logger.info(f"Job running: {running}")
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
@@ -1049,26 +1151,19 @@ async def unify_message_webhook(request: Request):
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("unify_message message published to Pub/Sub successfully")
+            logger.info(f"Message ID: {message_id}")
+        logger.info("unify_message message published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing unify_message to Pub/Sub: {str(e)}")
+        logger.error(f"Error publishing unify_message to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
 
 
-@app.post("/unify/meet")
+@app.post("/unify/meet", dependencies=[Depends(require_admin_key)])
 async def unify_meet_webhook(request: Request):
     """Unify meet webhook - handles internal meet events."""
-    print("unify_meet_webhook function started")
-
-    # optional auth via admin key
-    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-    auth_header = request.headers.get("Authorization", "")
-    if shared_key and auth_header != f"Bearer {shared_key}":
-        print("Unauthorized unify_meet request")
-        return Response(status_code=401)
+    logger.info("unify_meet_webhook function started")
 
     # accept JSON or form payloads
     content_type = request.headers.get("Content-Type", "")
@@ -1081,15 +1176,15 @@ async def unify_meet_webhook(request: Request):
     room_name = payload.get("room_name", "")
     livekit_agent_name = payload.get("livekit_agent_name", "") or room_name
     if not room_name:
-        print("room_name is required")
+        logger.info("room_name is required")
         return Response(status_code=400)
 
     assistant_id_input = payload.get("assistant_id", "")
     if not assistant_id_input:
-        print("assistant_id is required")
+        logger.info("assistant_id is required")
         return Response(status_code=400)
 
-    print(
+    logger.info(
         f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} livekit_agent_name={livekit_agent_name}",
     )
 
@@ -1105,13 +1200,13 @@ async def unify_meet_webhook(request: Request):
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
     running = context["is_job_running"]
-    print(f"Job running: {running}")
+    logger.info(f"Job running: {running}")
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
@@ -1130,10 +1225,10 @@ async def unify_meet_webhook(request: Request):
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("unify_meet message published to Pub/Sub successfully")
+            logger.info(f"Message ID: {message_id}")
+        logger.info("unify_meet message published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing unify_meet to Pub/Sub: {str(e)}")
+        logger.error(f"Error publishing unify_meet to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
@@ -1144,17 +1239,10 @@ async def unify_meet_webhook(request: Request):
 # =============================================================================
 
 
-@app.post("/unity/system-event")
+@app.post("/unity/system-event", dependencies=[Depends(require_admin_key)])
 async def unity_system_event_webhook(request: Request):
     """Unity system event webhook - handles system-level events."""
-    print("unity_system_event_webhook function started")
-
-    # optional auth via admin key
-    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-    auth_header = request.headers.get("Authorization", "")
-    if shared_key and auth_header != f"Bearer {shared_key}":
-        print("Unauthorized unity_system_event request")
-        return Response(status_code=401)
+    logger.info("unity_system_event_webhook function started")
 
     # accept JSON or form payloads
     content_type = request.headers.get("Content-Type", "")
@@ -1166,21 +1254,21 @@ async def unity_system_event_webhook(request: Request):
 
     assistant_id = payload.get("assistant_id", "")
     if not assistant_id:
-        print("assistant_id is required")
+        logger.info("assistant_id is required")
         return Response(status_code=400)
 
     event_type = payload.get("event_type", "")
     if not event_type:
-        print("event_type is required")
+        logger.info("event_type is required")
         return Response(status_code=400)
 
     message = payload.get("message", "")
     if not message:
-        print("message is required")
+        logger.info("message is required")
         return Response(status_code=400)
 
-    print(
-        f"Received unity_system_event for event_type={event_type} with message={message}",
+    logger.info(
+        f"Received unity_system_event for event_type={event_type}",
     )
 
     # shared context
@@ -1195,13 +1283,13 @@ async def unity_system_event_webhook(request: Request):
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
     running = context["is_job_running"]
-    print(f"Job running: {running}")
+    logger.info(f"Job running: {running}")
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
@@ -1219,26 +1307,19 @@ async def unity_system_event_webhook(request: Request):
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("unity_system_event message published to Pub/Sub successfully")
+            logger.info(f"Message ID: {message_id}")
+        logger.info("unity_system_event message published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing unity_system_event to Pub/Sub: {str(e)}")
+        logger.error(f"Error publishing unity_system_event to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
 
 
-@app.post("/unity/pre-hire")
+@app.post("/unity/pre-hire", dependencies=[Depends(require_admin_key)])
 async def unity_pre_hire_webhook(request: Request):
     """Unity pre-hire webhook - logs chat history before hiring."""
-    print("unity_pre_hire_webhook function started")
-
-    # optional auth via admin key
-    shared_key = os.getenv("ORCHESTRA_ADMIN_KEY")
-    auth_header = request.headers.get("Authorization", "")
-    if shared_key and auth_header != f"Bearer {shared_key}":
-        print("Unauthorized log_pre_hire_chats request")
-        return Response(status_code=401)
+    logger.info("unity_pre_hire_webhook function started")
 
     # accept JSON or form payloads
     content_type = request.headers.get("Content-Type", "")
@@ -1250,7 +1331,7 @@ async def unity_pre_hire_webhook(request: Request):
 
     assistant_id_input = payload.get("assistant_id", "")
     if not assistant_id_input:
-        print("Assistant ID is required")
+        logger.info("Assistant ID is required")
         return Response(status_code=400)
 
     # accept list of role/msg pairs under `body`
@@ -1271,14 +1352,14 @@ async def unity_pre_hire_webhook(request: Request):
         and isinstance(item.get("msg"), str)
         for item in body
     ):
-        print("Invalid body format; expected list of {role, msg} objects")
+        logger.info("Invalid body format; expected list of {role, msg} objects")
         return Response(
             content=json.dumps({"error": "body must be a list of {role, msg}"}),
             status_code=400,
             media_type="application/json",
         )
 
-    print(
+    logger.info(
         f"Received log_pre_hire_chats for assistant_id={assistant_id_input} with {len(body)} messages",
     )
 
@@ -1294,13 +1375,13 @@ async def unity_pre_hire_webhook(request: Request):
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
     running = context["is_job_running"]
-    print(f"Job running: {running}")
+    logger.info(f"Job running: {running}")
 
     # publish to pubsub
     pubsub_client = pubsub_v1.PublisherClient()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
-    print(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
+    logger.info(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
             topic_path,
@@ -1317,10 +1398,10 @@ async def unity_pre_hire_webhook(request: Request):
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
-        print("log_pre_hire_chats message published to Pub/Sub successfully")
+            logger.info(f"Message ID: {message_id}")
+        logger.info("log_pre_hire_chats message published to Pub/Sub successfully")
     except Exception as e:
-        print(f"Error publishing log_pre_hire_chats to Pub/Sub: {str(e)}")
+        logger.error(f"Error publishing log_pre_hire_chats to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
@@ -1331,13 +1412,13 @@ async def unity_pre_hire_webhook(request: Request):
 # =============================================================================
 
 
-@app.post("/assistant/wakeup")
+@app.post("/assistant/wakeup", dependencies=[Depends(require_admin_key)])
 async def assistant_wakeup_webhook(request: Request):
     """Assistant wakeup webhook - wakes up an assistant."""
-    print("assistant_wakeup_webhook function started")
+    logger.info("assistant_wakeup_webhook function started")
     form_data = await request.form()
     assistant_id = form_data.get("assistant_id")
-    print(f"Assistant {assistant_id} woke up")
+    logger.info(f"Assistant {assistant_id} woke up")
 
     # shared context
     build_webhook_context(
@@ -1353,18 +1434,18 @@ async def assistant_wakeup_webhook(request: Request):
     return Response(status_code=200)
 
 
-@app.post("/assistant/update")
+@app.post("/assistant/update", dependencies=[Depends(require_admin_key)])
 async def assistant_update_webhook(request: Request):
     """
     Webhook that receives an assistant id and publishes assistant details
     to the assistant_update topic. If no job is running, starts one first.
     """
-    print("assistant_update_webhook function started")
+    logger.info("assistant_update_webhook function started")
 
     try:
         form_data = await request.form()
         assistant_id = form_data.get("assistant_id")
-        print(f"Received assistant_id: {assistant_id}")
+        logger.info(f"Received assistant_id: {assistant_id}")
 
         # Use build_webhook_context to handle job startup if needed
         context = build_webhook_context(
@@ -1376,7 +1457,7 @@ async def assistant_update_webhook(request: Request):
             ensure_job=True,
         )
         assistant_data = context["assistant"]
-        print(
+        logger.info(
             f"Job running: {context['is_job_running']}, job started: {context['job_started']}",
         )
 
@@ -1391,7 +1472,7 @@ async def assistant_update_webhook(request: Request):
         # Prepare message in the same format as startup event
         message_data = {"thread": "assistant_update", "event": assistant_data}
 
-        print(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
+        logger.info(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
         publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(message_data).encode("utf-8"),
@@ -1399,9 +1480,9 @@ async def assistant_update_webhook(request: Request):
 
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
-            print(f"Message ID: {message_id}")
+            logger.info(f"Message ID: {message_id}")
 
-        print("Assistant update published to Pub/Sub successfully")
+        logger.info("Assistant update published to Pub/Sub successfully")
 
         return Response(
             content=json.dumps(
@@ -1417,8 +1498,7 @@ async def assistant_update_webhook(request: Request):
         )
 
     except Exception as e:
-        print(f"Error in assistant_update_webhook: {str(e)}")
-        traceback.print_exc()
+        logger.error(f"Error in assistant_update_webhook: {e}", exc_info=True)
         return Response(
             content=json.dumps({"error": str(e)}),
             status_code=500,
@@ -1441,13 +1521,13 @@ async def gmail_notification_processor(request: Request):
         # Parse the Pub/Sub push message envelope
         envelope = await request.json()
         if not envelope or "message" not in envelope:
-            print("Bad Request: no Pub/Sub message")
+            logger.info("Bad Request: no Pub/Sub message")
             return Response(content="Bad Request: no Pub/Sub message", status_code=400)
 
         pubsub_message = envelope.get("message", {})
         data = base64.b64decode(pubsub_message.get("data", "")).decode("utf-8")
         notification = json.loads(data)
-        print(f"Received notification: {notification}")
+        logger.info("Received Gmail notification")
 
         # extract Gmail notification details (mailbox address being watched)
         assistant_email_address = notification["emailAddress"]
@@ -1468,23 +1548,25 @@ async def gmail_notification_processor(request: Request):
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # process the history and thread
-        print(
-            f"assistant_email_address: {assistant_email_address}, history_id: {history_id}",
+        logger.info(
+            f"assistant_email_address: {_redact_email(assistant_email_address)}, history_id: {history_id}",
         )
         thread_id, email_id, last_message, gmail_message_id = get_thread_id(
             assistant_email_address,
             history_id,
             gmail_service,
         )
-        print(
-            f"thread_id: {thread_id}, email_id: {email_id}, last_message: {last_message}",
+        logger.info(
+            f"thread_id: {thread_id}, email_id: {email_id}",
         )
         if not thread_id:
-            print(f"No new conversations found for user {assistant_email_address}")
+            logger.info(
+                f"No new conversations found for user {_redact_email(assistant_email_address)}",
+            )
             return Response(content="No new conversations", status_code=200)
 
         from_email = last_message["sender"].split("<")[1].split(">")[0]
-        print(f"from_email: {from_email}")
+        logger.info(f"from_email: {_redact_email(from_email)}")
 
         # shared context
         context = build_webhook_context("email", assistant_email_address, from_email)
@@ -1501,9 +1583,11 @@ async def gmail_notification_processor(request: Request):
             return Response(content=error_message, status_code=500)
 
         running = context["is_job_running"]
-        print(f"Job running: {running}")
+        logger.info(f"Job running: {running}")
 
-        print(f"Successfully processed conversation for user {assistant_email_address}")
+        logger.info(
+            f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
+        )
         publish_gmail_thread_id(
             assistant_id,
             user_id,
@@ -1517,8 +1601,7 @@ async def gmail_notification_processor(request: Request):
 
     except Exception as e:
         error_message = f"Error processing notification: {str(e)}"
-        traceback.print_exc()
-        print(error_message)
+        logger.error(error_message, exc_info=True)
         return Response(content=error_message, status_code=500)
 
 
@@ -1534,17 +1617,20 @@ async def outlook_notification_processor(request: Request):
         # Parse clientState - format is "{secret}::{email}"
         # This contains the assistant email encoded when the subscription was created
         client_state = notification.get("clientState", "")
-        expected_secret = os.getenv("OUTLOOK_WEBHOOK_SECRET", "unify-outlook-webhook")
+        expected_secret = os.environ.get("OUTLOOK_WEBHOOK_SECRET", "")
+        if not expected_secret:
+            logger.error("OUTLOOK_WEBHOOK_SECRET not configured")
+            return Response(status_code=500)
 
         # Validate and extract email from clientState
         if "::" in client_state:
             secret_part, assistant_email_address = client_state.split("::", 1)
             if secret_part != expected_secret:
-                print(f"Invalid clientState secret: {secret_part}")
+                logger.error("Invalid clientState secret")
                 return Response(status_code=200)
         else:
             # Legacy format - just the secret, no email encoded
-            print(f"Legacy clientState format (no email encoded): {client_state}")
+            logger.info("Legacy clientState format (no email encoded)")
             return Response(status_code=200)
 
         # Parse resource path to get message ID
@@ -1557,11 +1643,11 @@ async def outlook_notification_processor(request: Request):
             messages_index = parts.index("Messages") + 1
             email_id = parts[messages_index]
         except (ValueError, IndexError) as e:
-            print(f"Could not parse message ID from resource path '{resource}': {e}")
+            logger.error(f"Could not parse message ID from resource path: {e}")
             return Response(status_code=200)
 
-        print(
-            f"assistant_email_address: {assistant_email_address}, email_id: {email_id}",
+        logger.info(
+            f"assistant_email_address: {_redact_email(assistant_email_address)}, email_id: {email_id}",
         )
 
         # Get assistant data, secrets, and contacts in one call
@@ -1574,7 +1660,9 @@ async def outlook_notification_processor(request: Request):
         )
         assistant_data = context["assistant"]
         if not assistant_data or not assistant_data.get("assistant_id"):
-            print(f"Assistant not found for {assistant_email_address}")
+            logger.info(
+                f"Assistant not found for {_redact_email(assistant_email_address)}",
+            )
             return Response(status_code=200)
 
         assistant_id = assistant_data["assistant_id"]
@@ -1585,7 +1673,9 @@ async def outlook_notification_processor(request: Request):
         secrets = assistant_data.get("secrets", {})
         access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
         if not access_token:
-            print(f"No Microsoft access token for {assistant_email_address}")
+            logger.info(
+                f"No Microsoft access token for {_redact_email(assistant_email_address)}",
+            )
             return Response(status_code=200)
 
         # Create Graph client from token
@@ -1596,16 +1686,18 @@ async def outlook_notification_processor(request: Request):
             email_id,
             graph_client,
         )
-        print(
-            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}",
+        logger.info(
+            f"conversation_id: {conversation_id}, email_id: {email_id}",
         )
 
         if not conversation_id:
-            print(f"No new conversations found for user {assistant_email_address}")
+            logger.info(
+                f"No new conversations found for user {_redact_email(assistant_email_address)}",
+            )
             return Response(status_code=200)
 
         from_email = last_message["sender"]
-        print(f"from_email: {from_email}")
+        logger.info(f"from_email: {_redact_email(from_email)}")
 
         # Validate contact now that we have the sender
         contacts, is_valid_contact = check_valid_contact(
@@ -1633,9 +1725,11 @@ async def outlook_notification_processor(request: Request):
             create_job(assistant_id)
             is_running = True
 
-        print(f"Job running: {is_running}")
+        logger.info(f"Job running: {is_running}")
 
-        print(f"Successfully processed conversation for user {assistant_email_address}")
+        logger.info(
+            f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
+        )
         publish_outlook_thread_id(
             assistant_id,
             user_id,
@@ -1648,8 +1742,7 @@ async def outlook_notification_processor(request: Request):
 
     except Exception as e:
         error_message = f"Error processing notification: {str(e)}"
-        traceback.print_exc()
-        print(error_message)
+        logger.error(error_message, exc_info=True)
         return Response(content=error_message, status_code=500)
 
 
@@ -1666,14 +1759,17 @@ async def teams_notification_processor(request: Request):
     """
     try:
         notification = await request.json()
-        print(f"Received Teams notification: {notification.get('resource', '')}")
+        logger.info(f"Received Teams notification: {notification.get('resource', '')}")
 
         # Validate client state and extract assistant email
         client_state = notification.get("clientState", "")
-        expected_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
+        expected_secret = os.environ.get("TEAMS_WEBHOOK_SECRET", "")
+        if not expected_secret:
+            logger.error("TEAMS_WEBHOOK_SECRET not configured")
+            return Response(status_code=500)
         parts = client_state.split("::")
         if len(parts) < 2 or parts[0] != expected_secret:
-            print(f"Invalid clientState format")
+            logger.error("Invalid clientState format")
             return Response(status_code=200)
 
         assistant_email = parts[1]
@@ -1706,12 +1802,12 @@ async def teams_notification_processor(request: Request):
             channel_id = parse_teams_resource_id(resource, "channels")
             chat_id = None
             if not team_id or not channel_id or not message_id:
-                print(
+                logger.info(
                     f"Missing IDs for channel message: team={team_id}, channel={channel_id}, message={message_id}",
                 )
                 return Response(status_code=200)
-            print(
-                f"assistant_email: {assistant_email}, team_id: {team_id}, channel_id: {channel_id}, message_id: {message_id}",
+            logger.info(
+                f"assistant_email: {_redact_email(assistant_email)}, team_id: {team_id}, channel_id: {channel_id}, message_id: {message_id}",
             )
         else:
             chat_id = resource_data.get("chatId") or parse_teams_resource_id(
@@ -1720,12 +1816,12 @@ async def teams_notification_processor(request: Request):
             )
             team_id = channel_id = None
             if not chat_id or not message_id:
-                print(
+                logger.info(
                     f"Missing IDs for chat message: chat={chat_id}, message={message_id}",
                 )
                 return Response(status_code=200)
-            print(
-                f"assistant_email: {assistant_email}, chat_id: {chat_id}, message_id: {message_id}",
+            logger.info(
+                f"assistant_email: {_redact_email(assistant_email)}, chat_id: {chat_id}, message_id: {message_id}",
             )
 
         # Get assistant data
@@ -1738,7 +1834,7 @@ async def teams_notification_processor(request: Request):
         )
         assistant_data = context["assistant"]
         if not assistant_data or not assistant_data.get("assistant_id"):
-            print(f"Assistant not found for {assistant_email}")
+            logger.info(f"Assistant not found for {_redact_email(assistant_email)}")
             return Response(status_code=200)
 
         assistant_id = assistant_data["assistant_id"]
@@ -1746,7 +1842,9 @@ async def teams_notification_processor(request: Request):
         api_key = assistant_data["api_key"]
         access_token = assistant_data.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN")
         if not access_token:
-            print(f"No Microsoft access token for {assistant_email}")
+            logger.info(
+                f"No Microsoft access token for {_redact_email(assistant_email)}",
+            )
             return Response(status_code=200)
 
         # Fetch message from Graph API
@@ -1769,7 +1867,7 @@ async def teams_notification_processor(request: Request):
 
             data, status = await graph_get(url)
             if not data:
-                print(f"Failed to fetch {msg_type} messages (status={status})")
+                logger.error(f"Failed to fetch {msg_type} messages (status={status})")
                 return Response(status_code=200)
 
             # Find matching message in list
@@ -1778,13 +1876,13 @@ async def teams_notification_processor(request: Request):
                     message_data = msg
                     break
             if not message_data:
-                print(f"Message {message_id} not found in list")
+                logger.info(f"Message {message_id} not found in list")
                 return Response(status_code=200)
         else:
             url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
             message_data, status = await graph_get(url)
             if not message_data:
-                print(f"Failed to fetch chat message (status={status})")
+                logger.error(f"Failed to fetch chat message (status={status})")
                 return Response(status_code=200)
 
         # Extract sender info
@@ -1805,11 +1903,13 @@ async def teams_notification_processor(request: Request):
             if not sender_email:
                 sender_email = f"{sender_id}@teams"
 
-        print(f"from_email: {sender_email}, sender_name: {sender_name}")
+        logger.info(
+            f"from_email: {_redact_email(sender_email) if sender_email else 'None'}, sender_name: {sender_name}",
+        )
 
         # Skip self-messages
         if sender_email and sender_email.lower() == assistant_email.lower():
-            print(f"Skipping self-message from {sender_email}")
+            logger.info(f"Skipping self-message from {_redact_email(sender_email)}")
             return Response(status_code=200)
 
         # Validate contact
@@ -1824,7 +1924,7 @@ async def teams_notification_processor(request: Request):
             assistant_data=assistant_data,
         )
         if not is_valid:
-            print(f"Invalid contact: {sender_email}")
+            logger.info(f"Invalid contact: {_redact_email(sender_email)}")
             return Response(status_code=200)
 
         # Start job if needed (skip for local assistants)
@@ -1833,7 +1933,7 @@ async def teams_notification_processor(request: Request):
             start_unity_job(assistant_data, "teams")
             create_job(assistant_id)
             is_running = True
-        print(f"Job running: {is_running}")
+        logger.info(f"Job running: {is_running}")
 
         # Build event payload
         message_content = message_data.get("body", {}).get("content", "")
@@ -1878,7 +1978,7 @@ async def teams_notification_processor(request: Request):
             "thread": "teams_channel" if is_channel_message else "teams_chat",
             "event": event_data,
         }
-        print(f"event_data: {event_data}")
+        logger.info("Publishing Teams event to Pub/Sub")
 
         try:
             publish_future = pubsub_client.publish(
@@ -1887,16 +1987,17 @@ async def teams_notification_processor(request: Request):
             )
             publish_future.result(timeout=5)
         except Exception as e:
-            print(f"Pub/Sub publish error: {e}")
+            logger.error(f"Pub/Sub publish error: {e}")
             return Response(content=str(e), status_code=500)
 
-        print(f"Successfully processed Teams {msg_type} message for {assistant_email}")
+        logger.info(
+            f"Successfully processed Teams {msg_type} message for {_redact_email(assistant_email)}",
+        )
         return Response(content="OK", status_code=200)
 
     except Exception as e:
         error_message = f"Error processing Teams notification: {str(e)}"
-        traceback.print_exc()
-        print(error_message)
+        logger.error(error_message, exc_info=True)
         return Response(content=error_message, status_code=500)
 
 
@@ -1907,19 +2008,19 @@ async def microsoft_router(request: Request):
     Returns 200 immediately to satisfy Microsoft's 3-second timeout,
     then routes notifications to appropriate processors via HTTP.
     """
-    print("microsoft_router function started")
+    logger.info("microsoft_router function started")
 
     # Handle validation token (required for subscription setup)
     validation_token = request.query_params.get("validationToken")
     if validation_token:
-        print("returning validation token")
+        logger.info("returning validation token")
         return Response(content=validation_token, media_type="text/plain")
 
     # Parse notifications
     body = await request.body()
     json_body = json.loads(body)
     notifications = json_body.get("value", [])
-    print(f"routing {len(notifications)} notification(s)")
+    logger.info(f"routing {len(notifications)} notification(s)")
 
     # Route each notification to appropriate processor
     adapters_url = os.getenv("UNITY_ADAPTERS_URL", "http://localhost:8001")
@@ -1941,17 +2042,17 @@ async def microsoft_router(request: Request):
                 # Channel notifications come as: teams('id')/channels('id')/messages('id')
                 target = f"{adapters_url}/chat/teams"
             else:
-                print(f"unknown resource type: {resource}")
+                logger.info(f"unknown resource type: {resource}")
                 continue
 
-            print(f"routing to {target}")
+            logger.info(f"routing to {target}")
             try:
                 await client.post(target, json=notification, timeout=1.0)
             except Exception as e:
                 # Log but don't fail - the request was sent
-                print(f"request sent (may have timed out on response): {e}")
+                logger.info(f"request sent (may have timed out on response): {e}")
 
-    print("returning 200 OK")
+    logger.info("returning 200 OK")
     return Response(content="OK", status_code=200)
 
 
@@ -1974,7 +2075,7 @@ async def microsoft_oauth_callback(request: Request):
     error_description = request.query_params.get("error_description")
 
     if error:
-        print(f"OAuth error: {error} - {error_description}")
+        logger.error(f"OAuth error: {error} - {error_description}")
         return Response(
             content=f"OAuth error: {error}: {error_description}",
             status_code=400,
@@ -1991,7 +2092,25 @@ async def microsoft_oauth_callback(request: Request):
 
     if state:
         try:
-            state_data = json.loads(base64.b64decode(state).decode())
+            state_bytes = base64.b64decode(state)
+            state_data = json.loads(state_bytes.decode())
+
+            # Verify HMAC signature if signing key is configured
+            import hmac as _hmac
+            import hashlib as _hashlib
+
+            signing_key = os.environ.get("OAUTH_STATE_SIGNING_KEY")
+            if signing_key:
+                provided_sig = state_data.pop("_sig", "")
+                canonical = json.dumps(state_data, sort_keys=True)
+                expected_sig = _hmac.new(
+                    signing_key.encode(),
+                    canonical.encode(),
+                    _hashlib.sha256,
+                ).hexdigest()
+                if not _hmac.compare_digest(provided_sig, expected_sig):
+                    return Response(content="Invalid state signature", status_code=400)
+
             tenant_id = state_data.get("tenant_id")
             client_id = state_data.get("client_id")
             redirect_after = state_data.get("redirect_after")
@@ -2037,16 +2156,16 @@ async def microsoft_oauth_callback(request: Request):
             redirect_uri=redirect_uri,
         )
     except Exception as e:
-        print(f"Token exchange failed: {e}")
+        logger.error(f"Token exchange failed: {e}")
         return Response(content=f"Token exchange failed: {e}", status_code=400)
 
     # Get user email from token (should match assistant_email)
     try:
-        print(f"tokens: {tokens}")
+        logger.info("Token exchange successful")
         user_info = await get_microsoft_user_info(tokens["access_token"])
         user_email = user_info.get("mail") or user_info.get("userPrincipalName")
     except Exception as e:
-        print(f"Failed to get user info: {e}")
+        logger.error(f"Failed to get user info: {e}")
         return Response(content=f"Failed to get user info: {e}", status_code=400)
 
     if not user_email:
@@ -2065,8 +2184,8 @@ async def microsoft_oauth_callback(request: Request):
         api_key=api_key,
     )
 
-    print(
-        f"OAuth complete for {user_email} (assistant: {assistant_email}, id: {assistant_id}), stored={stored}",
+    logger.info(
+        f"OAuth complete for {_redact_email(user_email)} (assistant: {_redact_email(assistant_email)}, id: {assistant_id}), stored={stored}",
     )
 
     # Redirect to success page or return JSON
@@ -2089,7 +2208,7 @@ async def microsoft_oauth_callback(request: Request):
 # =============================================================================
 
 
-@app.post("/scheduled/email-watches")
+@app.post("/scheduled/email-watches", dependencies=[Depends(require_admin_key)])
 async def scheduled_email_watches(request: Request):
     """
     Cloud Run endpoint that renews email watches for all assistants.
@@ -2118,12 +2237,12 @@ async def scheduled_email_watches(request: Request):
                 )
             all_assistants = response.json().get("info", [])
         except Exception as e:
-            print(f"Failed to get assistants: {e}")
+            logger.error(f"Failed to get assistants: {e}")
             return Response(content=f"Failed to get assistants: {e}", status_code=500)
     else:
         all_assistants = [{"email": "default-test-assistant@unify.ai", "secrets": {}}]
 
-    print(f"Processing {len(all_assistants)} assistants for email watch renewal")
+    logger.info(f"Processing {len(all_assistants)} assistants for email watch renewal")
 
     results = {"gmail": [], "outlook": []}
 
@@ -2153,7 +2272,9 @@ async def scheduled_email_watches(request: Request):
                     }
                 )
                 results["outlook"].append({"email": email, **result})
-                print(f"Outlook watch for {email}: {result.get('success', False)}")
+                logger.info(
+                    f"Outlook watch for {_redact_email(email)}: {result.get('success', False)}",
+                )
             else:
                 # Use Gmail watch
                 watch_response = requests.post(
@@ -2178,11 +2299,13 @@ async def scheduled_email_watches(request: Request):
                     }
                 )
                 results["gmail"].append({"email": email, **result})
-                print(f"Gmail watch for {email}: {result.get('success', False)}")
+                logger.info(
+                    f"Gmail watch for {_redact_email(email)}: {result.get('success', False)}",
+                )
 
         except Exception as e:
-            error_msg = f"Error renewing watch for {email}: {str(e)}"
-            print(error_msg)
+            error_msg = f"Error renewing watch for {_redact_email(email)}: {e}"
+            logger.error(error_msg)
             provider = "outlook" if has_ms_token else "gmail"
             results[provider].append(
                 {"email": email, "success": False, "error": error_msg},
@@ -2201,17 +2324,17 @@ async def scheduled_email_watches(request: Request):
                 timeout=30,
             ).json()
             results["gmail"].append({"email": "mh-policies@unify.ai", **response})
-            print(f"Renewed policy assistant: {response}")
+            logger.info(f"Renewed policy assistant: {response}")
         except Exception as e:
-            print(f"Error renewing policy assistant: {e}")
+            logger.error(f"Error renewing policy assistant: {e}")
 
-    print(
+    logger.info(
         f"Email watch renewal complete: {len(results['gmail'])} Gmail, {len(results['outlook'])} Outlook",
     )
     return results
 
 
-@app.post("/scheduled/microsoft-tokens")
+@app.post("/scheduled/microsoft-tokens", dependencies=[Depends(require_admin_key)])
 async def scheduled_microsoft_tokens(request: Request):
     """
     Cloud Run endpoint that refreshes Microsoft OAuth tokens for all assistants.
@@ -2240,10 +2363,10 @@ async def scheduled_microsoft_tokens(request: Request):
             )
         all_assistants = response.json().get("info", [])
     except Exception as e:
-        print(f"Failed to get assistants: {e}")
+        logger.error(f"Failed to get assistants: {e}")
         return Response(content=f"Failed to get assistants: {e}", status_code=500)
 
-    print(f"Fetched {len(all_assistants)} assistants")
+    logger.info(f"Fetched {len(all_assistants)} assistants")
     results = {"refreshed": [], "failed": []}
 
     for assistant in all_assistants:
@@ -2330,13 +2453,13 @@ async def scheduled_microsoft_tokens(request: Request):
                     continue
 
             results["refreshed"].append(email)
-            print(f"Refreshed Microsoft token for {email}")
+            logger.info(f"Refreshed Microsoft token for {_redact_email(email)}")
 
         except Exception as e:
             results["failed"].append({"email": email, "error": str(e)})
-            print(f"Error refreshing token for {email}: {e}")
+            logger.error(f"Error refreshing token for {_redact_email(email)}: {e}")
 
-    print(
+    logger.info(
         f"Microsoft token refresh complete: "
         f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed",
     )
@@ -2344,7 +2467,7 @@ async def scheduled_microsoft_tokens(request: Request):
     return results
 
 
-@app.post("/scheduled/teams-watches")
+@app.post("/scheduled/teams-watches", dependencies=[Depends(require_admin_key)])
 async def scheduled_teams_watches(request: Request):
     """
     Cloud Run endpoint that renews Teams chat AND channel subscriptions for all assistants.
@@ -2375,7 +2498,7 @@ async def scheduled_teams_watches(request: Request):
                 )
             all_assistants = response.json().get("info", [])
         except Exception as e:
-            print(f"Failed to get assistants: {e}")
+            logger.error(f"Failed to get assistants: {e}")
             return Response(content=f"Failed to get assistants: {e}", status_code=500)
     else:
         all_assistants = [
@@ -2385,7 +2508,7 @@ async def scheduled_teams_watches(request: Request):
             },
         ]
 
-    print(f"Processing {len(all_assistants)} assistants for Teams watch renewal")
+    logger.info(f"Processing {len(all_assistants)} assistants for Teams watch renewal")
 
     results = {
         "chats_renewed": [],
@@ -2423,7 +2546,9 @@ async def scheduled_teams_watches(request: Request):
                 results["chats_renewed"].append({"email": email, **result})
             else:
                 results["failed"].append({"email": email, "type": "chat", **result})
-            print(f"Teams chat watch for {email}: {result.get('success', False)}")
+            logger.info(
+                f"Teams chat watch for {_redact_email(email)}: {result.get('success', False)}",
+            )
 
             # 2. Renew any existing channel subscriptions
             # List all subscriptions and renew those matching /teams/{id}/channels/{id}/messages
@@ -2434,8 +2559,9 @@ async def scheduled_teams_watches(request: Request):
                     timeout=30.0,
                 )
 
-            print(f"Subscriptions response status code: {subs_response.status_code}")
-            print(f"Subscriptions response text: {subs_response.text}")
+            logger.info(
+                f"Subscriptions response status code: {subs_response.status_code}",
+            )
             if subs_response.status_code == 200:
                 subs_data = subs_response.json()
                 for sub in subs_data.get("value", []):
@@ -2474,26 +2600,29 @@ async def scheduled_teams_watches(request: Request):
                                 results["failed"].append(
                                     {"email": email, "type": "channel", **ch_result},
                                 )
-                            print(
-                                f"Teams channel watch for {email} ({team_id}/{channel_id}): "
+                            logger.info(
+                                f"Teams channel watch for {_redact_email(email)} ({team_id}/{channel_id}): "
                                 f"{ch_result.get('success', False)}",
                             )
                         except (ValueError, IndexError) as e:
-                            print(f"Could not parse channel subscription: {resource}")
+                            logger.error(
+                                f"Could not parse channel subscription: {resource}",
+                            )
 
         except requests.exceptions.Timeout:
             # Timeout is not a failure - the request was sent and may succeed
-            print(f"Teams watch for {email}: timed out (request may still succeed)")
+            logger.info(
+                f"Teams watch for {_redact_email(email)}: timed out (request may still succeed)",
+            )
             results["channels_renewed"].append({"email": email, "status": "timeout"})
         except Exception as e:
-            error_msg = f"Error renewing Teams watch for {email}: {str(e)}"
-            print(error_msg)
-            traceback.print_exc()
+            error_msg = f"Error renewing Teams watch for {_redact_email(email)}: {e}"
+            logger.error(error_msg, exc_info=True)
             results["failed"].append(
                 {"email": email, "success": False, "error": error_msg},
             )
 
-    print(
+    logger.info(
         f"Teams watch renewal complete: "
         f"{len(results['chats_renewed'])} chats, "
         f"{len(results['channels_renewed'])} channels, "
@@ -2502,7 +2631,7 @@ async def scheduled_teams_watches(request: Request):
     return results
 
 
-@app.post("/scheduled/jobs/create")
+@app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
 async def scheduled_jobs_create(request: Request):
     """Cloud Run endpoint that creates a new idle job."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
@@ -2521,7 +2650,7 @@ async def scheduled_jobs_create(request: Request):
     return response.json()
 
 
-@app.post("/scheduled/jobs/cleanup")
+@app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])
 async def scheduled_jobs_cleanup(request: Request):
     """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
@@ -2556,8 +2685,8 @@ async def scheduled_jobs_cleanup(request: Request):
     else:
         new_idle_jobs = [sorted(new_idle_jobs)[-1]]
     idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
-    print(f"Idle jobs up to deletion: {idle_jobs}")
-    print(f"Idle jobs to retain: {new_idle_jobs}")
+    logger.info(f"Idle jobs up to deletion: {idle_jobs}")
+    logger.info(f"Idle jobs to retain: {new_idle_jobs}")
 
     # delete all old idle jobs (re-check label to guard against race conditions)
     for job_name in idle_jobs:
@@ -2580,32 +2709,32 @@ async def scheduled_jobs_cleanup(request: Request):
 if __name__ == "__main__":
     import uvicorn
 
-    print("Starting Unity Adapters server...")
-    print("Available endpoints:")
-    print("  Twilio:")
-    print("    - POST /twilio/call")
-    print("    - POST /twilio/call-status")
-    print("    - POST /twilio/sms")
-    print("    - POST /twilio/whatsapp")
-    print("  Unify:")
-    print("    - POST /unify/message")
-    print("    - POST /unify/meet")
-    print("  Unity:")
-    print("    - POST /unity/system-event")
-    print("    - POST /unity/pre-hire")
-    print("  Assistant:")
-    print("    - POST /assistant/wakeup")
-    print("    - POST /assistant/update")
-    print("  Email:")
-    print("    - POST /email/gmail")
-    print("    - POST /email/outlook")
-    print("  Microsoft:")
-    print("    - POST /microsoft/router")
-    print("    - GET  /microsoft/auth/callback")
-    print("  Scheduled:")
-    print("    - POST /scheduled/email-watches")
-    print("    - POST /scheduled/jobs/create")
-    print("    - POST /scheduled/jobs/cleanup")
-    print("Server running at: http://localhost:8080")
+    logger.info("Starting Unity Adapters server...")
+    logger.info("Available endpoints:")
+    logger.info("  Twilio:")
+    logger.info("    - POST /twilio/call")
+    logger.info("    - POST /twilio/call-status")
+    logger.info("    - POST /twilio/sms")
+    logger.info("    - POST /twilio/whatsapp")
+    logger.info("  Unify:")
+    logger.info("    - POST /unify/message")
+    logger.info("    - POST /unify/meet")
+    logger.info("  Unity:")
+    logger.info("    - POST /unity/system-event")
+    logger.info("    - POST /unity/pre-hire")
+    logger.info("  Assistant:")
+    logger.info("    - POST /assistant/wakeup")
+    logger.info("    - POST /assistant/update")
+    logger.info("  Email:")
+    logger.info("    - POST /email/gmail")
+    logger.info("    - POST /email/outlook")
+    logger.info("  Microsoft:")
+    logger.info("    - POST /microsoft/router")
+    logger.info("    - GET  /microsoft/auth/callback")
+    logger.info("  Scheduled:")
+    logger.info("    - POST /scheduled/email-watches")
+    logger.info("    - POST /scheduled/jobs/create")
+    logger.info("    - POST /scheduled/jobs/cleanup")
+    logger.info("Server running at: http://localhost:8080")
 
     uvicorn.run("adapters.main:app", host="0.0.0.0", port=8080, reload=True)

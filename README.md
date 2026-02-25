@@ -42,6 +42,60 @@ This repository provides a unified communication service with two primary compon
 
 ---
 
+## Security
+
+### Endpoint Authentication
+
+All adapter endpoints that can trigger actions (start containers, send messages, manage infrastructure) require admin key authentication via a `Depends(require_admin_key)` FastAPI dependency. The admin key is validated with `secrets.compare_digest()` for timing-attack resistance.
+
+**Authenticated endpoints** (require `Authorization: Bearer {ORCHESTRA_ADMIN_KEY}`):
+- `/assistant/wakeup`, `/assistant/update` — called by Orchestra during hiring/config changes
+- `/unify/attachment`, `/unify/message`, `/unify/meet` — called by Unity containers and Console
+- `/unity/system-event`, `/unity/pre-hire` — called by Orchestra
+- `/scheduled/*` (all 5 endpoints) — called by Cloud Scheduler with admin key in headers
+
+**Signature-validated endpoints** (Twilio):
+- `/twilio/call`, `/twilio/call-status`, `/twilio/sms`, `/twilio/whatsapp` — validated via `X-Twilio-Signature` using `TWILIO_AUTH_TOKEN` (gracefully skipped if token not configured)
+
+**Externally-validated endpoints** (no app-level auth, validated by the external service):
+- `/livekit/recording-complete` — LiveKit webhook signature verification
+- `/email/gmail` — Google Pub/Sub push (validated by Pub/Sub delivery)
+- `/email/outlook`, `/chat/teams` — Microsoft Graph `clientState` secret validation
+- `/microsoft/router`, `/microsoft/auth/callback` — Microsoft OAuth flow
+- `/health` — health check
+
+### Webhook Secrets
+
+Outlook and Teams webhook validation requires secrets that must be set as environment variables. The service logs an error and returns 500 if they are missing when a webhook arrives.
+
+### Rate Limiting
+
+An IP-based rate limiter protects all endpoints (120 requests per IP per 60-second window).
+
+### PII Handling
+
+All logging uses `logger` (not `print`). Phone numbers are redacted to last 4 digits, email addresses to domain only, and message bodies are never logged.
+
+### SBC Proxy (Kamailio)
+
+The SBC proxy at `sbc.unify.ai` uses TLS 1.2 with certificate verification enabled. IP allowlisting restricts inbound Teams Direct Routing calls to Microsoft's IP ranges.
+
+### Required Environment Variables (Security)
+
+| Variable | Purpose | Impact if missing |
+|----------|---------|-------------------|
+| `ORCHESTRA_ADMIN_KEY` | Admin endpoint authentication | Authenticated endpoints reject all requests |
+| `TWILIO_AUTH_TOKEN` | Twilio webhook signature validation | Validation skipped (warning logged) |
+| `OUTLOOK_WEBHOOK_SECRET` | Outlook notification validation | Outlook webhooks return 500 |
+| `TEAMS_WEBHOOK_SECRET` | Teams notification validation | Teams webhooks return 500 |
+| `OAUTH_STATE_SIGNING_KEY` | (Optional) HMAC signing for OAuth state parameter | State signature verification skipped |
+
+### GCP Infrastructure (not tracked in code)
+
+Cloud Scheduler jobs in `gcp-project-runtime` (both staging and production) include `Authorization: Bearer {admin_key}` headers for all 10 adapter scheduled endpoints.
+
+---
+
 ## Repository Structure
 
 - `adapters/`

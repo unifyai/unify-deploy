@@ -589,14 +589,13 @@ def create_job(assistant_id: str):
     """
 
     try:
-        # Determine the correct URL based on staging/prod
         idle_job_url = ADAPTERS_URL + "/scheduled/jobs/create"
-        # Make request with 1 second timeout - just enough to send it
-        requests.post(idle_job_url, timeout=1)
+        admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
+        headers = {"Authorization": f"Bearer {admin_key}"} if admin_key else {}
+        requests.post(idle_job_url, headers=headers, timeout=1)
         print(f"Idle job creation request sent for assistant {assistant_id}")
         return True
-    except requests.exceptions.Timeout as e:
-        # timeout exception is expected, just return True
+    except requests.exceptions.Timeout:
         print(f"Idle job creation request sent for assistant {assistant_id} (timeout)")
         return True
     except Exception as e:
