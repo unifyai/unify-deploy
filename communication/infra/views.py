@@ -115,6 +115,10 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             request["message_retention_duration"] = duration_pb2.Duration(
                 seconds=1800,
             )
+            # Ordering guarantees the console SSE endpoint receives action
+            # events in publish order.  The publisher (unity) sets
+            # ordering_key=assistant_id on each message.
+            request["enable_message_ordering"] = True
             subscriber.create_subscription(request=request)
         except Exception as e:
             if "already exists" in str(e).lower():
@@ -136,27 +140,43 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
                 subscriber.update_subscription(request=update_request)
                 # Actions subscription may not exist yet on older assistants
                 # created before this feature. Try to create it; if it already
-                # exists, update its expiration policy.
+                # exists, ensure message ordering is enabled.
+                #
+                # enable_message_ordering cannot be changed on an existing
+                # subscription — the only way to add it is delete + recreate.
+                # This is safe: Orchestra is the durable store, and the
+                # console re-fetches the full tree on initial load.
+                actions_sub_request = {
+                    "name": actions_subscription_path,
+                    "topic": topic_path,
+                    "expiration_policy": expiration_policy,
+                    "filter": 'attributes.thread = "action_event"',
+                    "message_retention_duration": duration_pb2.Duration(
+                        seconds=1800,
+                    ),
+                    "enable_message_ordering": True,
+                }
                 try:
-                    subscriber.create_subscription(
-                        request={
-                            "name": actions_subscription_path,
-                            "topic": topic_path,
-                            "expiration_policy": expiration_policy,
-                            "filter": 'attributes.thread = "action_event"',
-                            "message_retention_duration": duration_pb2.Duration(
-                                seconds=1800,
-                            ),
-                        },
-                    )
+                    subscriber.create_subscription(request=actions_sub_request)
                 except Exception as actions_err:
                     if "already exists" in str(actions_err).lower():
-                        actions_subscription = pubsub_v1.types.Subscription(
-                            name=actions_subscription_path,
-                            expiration_policy=expiration_policy,
+                        existing = subscriber.get_subscription(
+                            request={"subscription": actions_subscription_path},
                         )
-                        update_request["subscription"] = actions_subscription
-                        subscriber.update_subscription(request=update_request)
+                        if not existing.enable_message_ordering:
+                            # Recreate with ordering enabled (can't update this flag)
+                            subscriber.delete_subscription(
+                                request={"subscription": actions_subscription_path},
+                            )
+                            subscriber.create_subscription(request=actions_sub_request)
+                        else:
+                            # Already ordered — just update expiration policy
+                            actions_subscription = pubsub_v1.types.Subscription(
+                                name=actions_subscription_path,
+                                expiration_policy=expiration_policy,
+                            )
+                            update_request["subscription"] = actions_subscription
+                            subscriber.update_subscription(request=update_request)
                     else:
                         raise
             else:

@@ -3,9 +3,12 @@ Unit tests for the /infra/pubsub/topic create and delete endpoints.
 
 These tests verify:
 - All three subscriptions are created with correct filters
-- The actions subscription has 10-minute message retention
+- The actions subscription has 30-minute message retention
+- The actions subscription has message ordering enabled
 - The "already exists" path updates existing subscriptions and creates the
   actions subscription if it is missing (migration from older assistants)
+- Existing actions subscriptions without ordering are deleted and recreated
+  (enable_message_ordering cannot be updated on an existing subscription)
 - Deletion iterates all attached subscriptions (no code change needed, but
   we verify the existing behaviour still holds with the new subscription)
 """
@@ -194,6 +197,30 @@ class TestCreatePubSubTopic:
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
+    def test_actions_sub_has_message_ordering_enabled(
+        self,
+        mock_pub_cls,
+        mock_sub_cls,
+        mock_creds,
+        client,
+    ):
+        """The -actions-sub should have message ordering enabled so events
+        are delivered in publish order."""
+        publisher, subscriber, captured = _setup_pubsub_mocks(
+            mock_pub_cls,
+            mock_sub_cls,
+            mock_creds,
+        )
+
+        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
+
+        req = captured[2]
+        assert req.get("enable_message_ordering") is True
+
+    @patch("communication.infra.views.Credentials.from_service_account_info")
+    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
+    @patch("communication.infra.views.pubsub_v1.PublisherClient")
+    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
     def test_actions_sub_has_30min_message_retention(
         self,
         mock_pub_cls,
@@ -284,27 +311,31 @@ class TestCreatePubSubTopicAlreadyExists:
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_updates_existing_subs_when_already_exist(
+    def test_updates_existing_subs_when_already_exist_and_ordered(
         self,
         mock_pub_cls,
         mock_sub_cls,
         mock_creds,
         client,
     ):
-        """When the first create_subscription fails with 'already exists',
-        existing subscriptions should be updated and the actions sub should
-        be attempted as a create (then updated if it also already exists)."""
+        """When all subscriptions already exist and the actions sub already
+        has ordering enabled, expiration policies should be updated without
+        recreating the actions subscription."""
         publisher, subscriber, _ = _setup_pubsub_mocks(
             mock_pub_cls,
             mock_sub_cls,
             mock_creds,
         )
 
-        # Every create_subscription call raises "already exists"
         def always_exists(*, request):
             raise Exception("Resource already exists")
 
         subscriber.create_subscription.side_effect = always_exists
+
+        # Actions sub already has ordering — no delete+recreate needed
+        existing_sub = MagicMock()
+        existing_sub.enable_message_ordering = True
+        subscriber.get_subscription.return_value = existing_sub
 
         response = client.post(
             "/infra/pubsub/topic",
@@ -312,8 +343,58 @@ class TestCreatePubSubTopicAlreadyExists:
         )
 
         assert response.status_code == 200
-        # 2 updates for main + outbound, 1 update for actions (after failed create)
+        # 2 updates for main + outbound, 1 update for actions (expiration only)
         assert subscriber.update_subscription.call_count == 3
+        subscriber.delete_subscription.assert_not_called()
+
+    @patch("communication.infra.views.Credentials.from_service_account_info")
+    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
+    @patch("communication.infra.views.pubsub_v1.PublisherClient")
+    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
+    def test_recreates_actions_sub_when_ordering_not_enabled(
+        self,
+        mock_pub_cls,
+        mock_sub_cls,
+        mock_creds,
+        client,
+    ):
+        """When the actions sub exists but lacks message ordering, it should
+        be deleted and recreated with ordering enabled. This is necessary
+        because enable_message_ordering cannot be updated on an existing sub."""
+        publisher, subscriber, _ = _setup_pubsub_mocks(
+            mock_pub_cls,
+            mock_sub_cls,
+            mock_creds,
+        )
+
+        create_call_count = {"n": 0}
+
+        def create_side_effect(*, request):
+            create_call_count["n"] += 1
+            if create_call_count["n"] <= 2:
+                # First two calls (main-sub in try, actions-sub in except) fail
+                raise Exception("Resource already exists")
+            # Third call is the recreated actions-sub — succeeds
+            return MagicMock()
+
+        subscriber.create_subscription.side_effect = create_side_effect
+
+        # Actions sub exists WITHOUT ordering — must delete and recreate
+        existing_sub = MagicMock()
+        existing_sub.enable_message_ordering = False
+        subscriber.get_subscription.return_value = existing_sub
+
+        response = client.post(
+            "/infra/pubsub/topic",
+            data={"topic_name": "unity-test-staging"},
+        )
+
+        assert response.status_code == 200
+        # main + outbound updated (actions was recreated, not updated)
+        assert subscriber.update_subscription.call_count == 2
+        subscriber.delete_subscription.assert_called_once()
+        # 3 total creates: main-sub (failed), actions-sub (failed), actions-sub (recreated)
+        assert subscriber.create_subscription.call_count == 3
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
