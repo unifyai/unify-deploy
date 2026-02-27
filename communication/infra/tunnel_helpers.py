@@ -208,7 +208,7 @@ def generate_client_config(
         f"[client]\n"
         f'remote_addr = "{TUNNEL_SUBDOMAIN}:{TUNNEL_CONTROL_PORT}"\n'
         f'default_token = "{token}"\n'
-        f"heartbeat_interval = 30\n"
+        f"heartbeat_timeout = 40\n"
         f"retry_interval = 5\n"
         f"\n"
         f"[client.services.{tunnel_id}]\n"
