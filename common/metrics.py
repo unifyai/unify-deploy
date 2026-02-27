@@ -82,6 +82,14 @@ BUILD_WEBHOOK_CONTEXT_DURATION = Histogram(
     registry=REGISTRY,
 )
 
+JOB_DEMAND_TOTAL = Counter(
+    "adapter_job_demand_total",
+    "Inbound requests that require a live container, regardless of whether "
+    "one was already running. Measures raw demand for container capacity.",
+    labelnames=["channel"],
+    registry=REGISTRY,
+)
+
 
 # ---------------------------------------------------------------------------
 # FastAPI middleware
