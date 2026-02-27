@@ -70,6 +70,34 @@ from .vm_config import (
 logger = logging.getLogger(__name__)
 
 
+def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
+    """Probe whether Caddy is listening on port 443.
+
+    Uses ``verify=False`` because Caddy may still be using a temporary
+    self-signed certificate while the ACME challenge completes.  The goal is
+    to confirm that Caddy is *up and accepting connections*, not that the
+    certificate chain is valid.  Downstream callers (Unity) also skip TLS
+    verification for the same reason — the connection is within GCP's VPC
+    where infrastructure-level encryption already applies.
+    """
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=requests.packages.urllib3.exceptions.InsecureRequestWarning,
+            )
+            resp = requests.head(
+                f"https://{hostname}/",
+                timeout=timeout,
+                verify=False,
+            )
+        return resp.status_code < 500
+    except requests.RequestException:
+        return False
+
+
 # =============================================================================
 # Secret Manager
 # =============================================================================
@@ -889,7 +917,15 @@ def get_vm_status(
 
             vm_ready_at = ready_at_dt.isoformat()
             now = datetime.now(timezone.utc)
-            vm_ready = now >= ready_at_dt
+            timer_ready = now >= ready_at_dt
+
+            # After the timer expires, verify the VM is actually serving HTTPS.
+            # The timer is a lower-bound estimate; Caddy may still be starting
+            # up or waiting for its ACME certificate.
+            if timer_ready and external_ip:
+                vm_ready = _probe_vm_https(hostname)
+            else:
+                vm_ready = False
 
         return {
             "vm_name": vm_name,

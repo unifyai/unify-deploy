@@ -1,5 +1,7 @@
+import asyncio
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Form, HTTPException, Request
+from functools import partial
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
 from google.protobuf import duration_pb2
@@ -811,11 +813,16 @@ async def create_vm_endpoint(request: VMCreateRequest):
         vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = provision_vm_full(
-            assistant_id=request.assistant_id,
-            unify_apikey=request.unify_apikey,
-            assistant_name=request.assistant_name,
-            vm_type=request.vm_type,
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                provision_vm_full,
+                assistant_id=request.assistant_id,
+                unify_apikey=request.unify_apikey,
+                assistant_name=request.assistant_name,
+                vm_type=request.vm_type,
+            ),
         )
         return VMCreateResponse(**result)
     except Exception as e:
@@ -835,7 +842,11 @@ async def start_vm_endpoint(request: VMActionRequest):
         vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = start_vm(request.assistant_id, request.vm_type)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(start_vm, request.assistant_id, request.vm_type),
+        )
         return VMActionResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -856,7 +867,11 @@ async def stop_vm_endpoint(request: VMActionRequest):
         vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = stop_vm(request.assistant_id, request.vm_type)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(stop_vm, request.assistant_id, request.vm_type),
+        )
         return VMActionResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -880,7 +895,11 @@ async def delete_vm_endpoint(request: VMActionRequest):
         vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = deprovision_vm_full(request.assistant_id, request.vm_type)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(deprovision_vm_full, request.assistant_id, request.vm_type),
+        )
         return VMDeleteResponse(**result)
     except Exception as e:
         logger.error(f"Failed to delete VM: {e}")
@@ -896,7 +915,11 @@ async def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
         assistant_id: The assistant ID (path parameter)
         vm_type: "windows" or "ubuntu" (query parameter, defaults to "windows")
     """
-    result = get_vm_status(assistant_id, vm_type)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None,
+        partial(get_vm_status, assistant_id, vm_type),
+    )
     if result is None:
         raise HTTPException(
             status_code=404,
