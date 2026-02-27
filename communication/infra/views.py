@@ -459,6 +459,7 @@ async def start_job(
     user_desktop_filesys_sync: str = Form("false"),
     user_desktop_url: str = Form(""),
     demo_id: str = Form(""),
+    team_ids: str = Form(""),
 ):
     """
     Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
@@ -489,6 +490,7 @@ async def start_job(
         user_desktop_filesys_sync: Whether to sync user desktop filesystem (optional, defaults to "false")
         user_desktop_url: URL to user's own desktop (optional)
         demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
+        team_ids: JSON-encoded list of team IDs the user belongs to (optional, defaults to empty)
     """
     try:
         # Get credentials from environment variable
@@ -535,6 +537,7 @@ async def start_job(
                 "user_desktop_url": user_desktop_url if user_desktop_url else None,
                 # Pass demo_id as int or None; Unity derives demo_mode from presence
                 "demo_id": int(demo_id) if demo_id else None,
+                "team_ids": json.loads(team_ids) if team_ids else [],
             },
         }
 
