@@ -1,106 +1,119 @@
 import json
 import os
 import subprocess
+import threading
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
 
 from communication.helpers import ADAPTERS_URL, COMMS_URL, ORCHESTRA_URL
 
+_k8s_clients: tuple | None = None
+_k8s_lock = threading.Lock()
+
 
 def setup_kubernetes_client():
-    """Initialize Kubernetes client using GKE authentication
+    """Initialize Kubernetes client using GKE authentication.
+
+    The clients are cached after the first successful setup so that subsequent
+    calls return instantly instead of re-running gcloud auth subprocesses.
 
     Returns:
         tuple: (BatchV1Api, CoreV1Api, NetworkingV1Api) - Kubernetes API clients
         tuple: (None, None, None) - If setup fails
     """
-    try:
-        print("🔧 Starting Kubernetes client setup...")
+    global _k8s_clients
 
-        # Get service account credentials from environment variable
-        creds_json = os.getenv("GCP_SA_KEY")
-        if not creds_json:
-            print("❌ GCP_SA_KEY environment variable not set")
+    if _k8s_clients is not None:
+        return _k8s_clients
+
+    with _k8s_lock:
+        # Double-check after acquiring lock
+        if _k8s_clients is not None:
+            return _k8s_clients
+
+        try:
+            print("🔧 Starting Kubernetes client setup...")
+
+            creds_json = os.getenv("GCP_SA_KEY")
+            if not creds_json:
+                print("❌ GCP_SA_KEY environment variable not set")
+                return None, None, None
+
+            creds_data = json.loads(creds_json)
+            project_id = creds_data.get("project_id", "gcp-project-runtime")
+            service_account_email = creds_data.get("client_email", "unknown")
+
+            print(f"🔑 Using service account: {service_account_email}")
+            print(f"🏗️  Project: {project_id}")
+
+            cluster_name = "unity"
+            region = "us-central1"
+
+            print("🔐 Setting up GKE authentication...")
+            sa_key_path = "/tmp/gcp-sa-key.json"
+            with open(sa_key_path, "w") as f:
+                f.write(creds_json)
+
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
+
+            print("🔑 Authenticating with gcloud...")
+            subprocess.run(
+                [
+                    "gcloud",
+                    "auth",
+                    "activate-service-account",
+                    "--key-file",
+                    sa_key_path,
+                    "--quiet",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            print("🔗 Getting cluster credentials...")
+            subprocess.run(
+                [
+                    "gcloud",
+                    "container",
+                    "clusters",
+                    "get-credentials",
+                    cluster_name,
+                    "--region",
+                    region,
+                    "--project",
+                    project_id,
+                    "--quiet",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+            print(
+                "✅ Successfully authenticated with gcloud and got cluster credentials",
+            )
+
+            print("⚙️  Loading kubeconfig...")
+            config.load_kube_config()
+
+            print("🔗 Creating API clients...")
+            batch_api = k8s_client.BatchV1Api()
+            core_api = k8s_client.CoreV1Api()
+            networking_api = k8s_client.NetworkingV1Api()
+
+            print("🧪 Testing API connection...")
+            namespaces = core_api.list_namespace(limit=1)
+            print(
+                f"✅ Successfully connected! Found {len(namespaces.items)} namespaces",
+            )
+
+            print("✅ Kubernetes client setup complete!")
+
+            _k8s_clients = (batch_api, core_api, networking_api)
+            return _k8s_clients
+
+        except Exception as e:
+            print(f"❌ Error setting up Kubernetes client: {e}")
             return None, None, None
-
-        # Parse credentials to get project info
-        creds_data = json.loads(creds_json)
-        project_id = creds_data.get("project_id", "gcp-project-runtime")
-        service_account_email = creds_data.get("client_email", "unknown")
-
-        print(f"🔑 Using service account: {service_account_email}")
-        print(f"🏗️  Project: {project_id}")
-
-        # Cluster configuration
-        cluster_name = "unity"
-        region = "us-central1"
-
-        print("🔐 Setting up GKE authentication...")
-        # Write service account key to file for gcloud authentication
-        sa_key_path = "/tmp/gcp-sa-key.json"
-        with open(sa_key_path, "w") as f:
-            f.write(creds_json)
-
-        # Set GOOGLE_APPLICATION_CREDENTIALS
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
-
-        # Authenticate with gcloud using service account
-        print("🔑 Authenticating with gcloud...")
-        subprocess.run(
-            [
-                "gcloud",
-                "auth",
-                "activate-service-account",
-                "--key-file",
-                sa_key_path,
-                "--quiet",
-            ],
-            check=True,
-            capture_output=True,
-        )
-
-        # Get cluster credentials using gcloud
-        print("🔗 Getting cluster credentials...")
-        subprocess.run(
-            [
-                "gcloud",
-                "container",
-                "clusters",
-                "get-credentials",
-                cluster_name,
-                "--region",
-                region,
-                "--project",
-                project_id,
-                "--quiet",
-            ],
-            check=True,
-            capture_output=True,
-        )
-
-        print("✅ Successfully authenticated with gcloud and got cluster credentials")
-
-        # Load kubeconfig and create API clients
-        print("⚙️  Loading kubeconfig...")
-        config.load_kube_config()
-
-        print("🔗 Creating API clients...")
-        batch_api = k8s_client.BatchV1Api()
-        core_api = k8s_client.CoreV1Api()
-        networking_api = k8s_client.NetworkingV1Api()
-
-        # Test the connection
-        print("🧪 Testing API connection...")
-        namespaces = core_api.list_namespace(limit=1)
-        print(f"✅ Successfully connected! Found {len(namespaces.items)} namespaces")
-
-        print("✅ Kubernetes client setup complete!")
-
-        return batch_api, core_api, networking_api
-
-    except Exception as e:
-        print(f"❌ Error setting up Kubernetes client: {e}")
-        return None, None, None
 
 
 def delete_job(
