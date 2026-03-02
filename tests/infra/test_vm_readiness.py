@@ -335,3 +335,121 @@ class TestTimerCalculation:
 
         result = get_vm_status("999", vm_type="ubuntu")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# /infra/vm/ready endpoint — HTTPS probe gate
+# ---------------------------------------------------------------------------
+
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture()
+def vm_ready_client():
+    """Test client wired to the tunnel_router (hosts /vm/ready)."""
+    from fastapi import FastAPI
+    from communication.infra.views import tunnel_router
+
+    app = FastAPI()
+    app.include_router(tunnel_router, prefix="/infra")
+    return TestClient(app)
+
+
+_VM_READY_URL = "/infra/vm/ready"
+_AUTH_HEADER = {"Authorization": "Bearer test-key"}
+_VALID_BODY = {"assistant_id": "564", "vm_type": "windows"}
+
+
+class TestVmReadyEndpointProbe:
+    """The /vm/ready endpoint must probe HTTPS before publishing the event."""
+
+    @patch.dict(
+        "os.environ",
+        {"GCP_SA_KEY": '{"type":"service_account","project_id":"test"}'},
+    )
+    @patch("communication.infra.views.Credentials.from_service_account_info")
+    @patch("communication.infra.views.pubsub_v1.PublisherClient")
+    @patch("communication.infra.views._probe_vm_https", return_value=True)
+    @patch("communication.infra.views.authenticate_user_api_key")
+    @patch("communication.infra.views.extract_api_key", return_value="test-key")
+    def test_publishes_when_probe_succeeds(
+        self,
+        _mock_extract,
+        _mock_auth,
+        mock_probe,
+        mock_publisher_cls,
+        _mock_creds,
+    ):
+        from communication.infra.vm_helpers import get_dns_hostname
+
+        mock_future = MagicMock()
+        mock_future.result.return_value = "msg-123"
+        mock_publisher_cls.return_value.publish.return_value = mock_future
+        mock_publisher_cls.return_value.topic_path.return_value = "projects/p/topics/t"
+
+        from fastapi import FastAPI
+        from communication.infra.views import tunnel_router
+
+        app = FastAPI()
+        app.include_router(tunnel_router, prefix="/infra")
+        client = TestClient(app)
+
+        resp = client.post(_VM_READY_URL, json=_VALID_BODY, headers=_AUTH_HEADER)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["assistant_id"] == "564"
+        mock_probe.assert_called_once_with(get_dns_hostname("564"))
+        mock_publisher_cls.return_value.publish.assert_called_once()
+
+    @patch("communication.infra.views.pubsub_v1.PublisherClient")
+    @patch("communication.infra.views._probe_vm_https", return_value=False)
+    @patch("communication.infra.views.authenticate_user_api_key")
+    @patch("communication.infra.views.extract_api_key", return_value="test-key")
+    def test_returns_503_when_probe_fails(
+        self,
+        _mock_extract,
+        _mock_auth,
+        mock_probe,
+        mock_publisher_cls,
+    ):
+        from fastapi import FastAPI
+        from communication.infra.views import tunnel_router
+
+        app = FastAPI()
+        app.include_router(tunnel_router, prefix="/infra")
+        client = TestClient(app)
+
+        resp = client.post(_VM_READY_URL, json=_VALID_BODY, headers=_AUTH_HEADER)
+
+        assert resp.status_code == 503
+        assert "not reachable" in resp.json()["detail"].lower()
+        mock_probe.assert_called_once()
+        mock_publisher_cls.return_value.publish.assert_not_called()
+
+    @patch("communication.infra.views.pubsub_v1.PublisherClient")
+    @patch("communication.infra.views._probe_vm_https", return_value=False)
+    @patch("communication.infra.views.authenticate_user_api_key")
+    @patch("communication.infra.views.extract_api_key", return_value="test-key")
+    def test_probe_failure_does_not_publish_event(
+        self,
+        _mock_extract,
+        _mock_auth,
+        mock_probe,
+        mock_publisher_cls,
+    ):
+        """Specifically verify no Pub/Sub message escapes on probe failure."""
+        from fastapi import FastAPI
+        from communication.infra.views import tunnel_router
+
+        app = FastAPI()
+        app.include_router(tunnel_router, prefix="/infra")
+        client = TestClient(app)
+
+        client.post(_VM_READY_URL, json=_VALID_BODY, headers=_AUTH_HEADER)
+
+        mock_publisher_cls.return_value.publish.assert_not_called()
+        mock_publisher_cls.return_value.topic_path.assert_not_called()
