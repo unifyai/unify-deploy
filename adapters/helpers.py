@@ -686,15 +686,6 @@ def build_webhook_context(
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_local_assistant
 
-    # track raw demand for container capacity
-    if (
-        ensure_job
-        and is_valid_contact
-        and not is_test_assistant
-        and not is_local_assistant
-    ):
-        JOB_DEMAND_TOTAL.labels(channel=channel).inc()
-
     # ensure job is running (skip for local/test assistants)
     job_started = False
     is_running = is_job_running(user_id, assistant_id)
@@ -703,6 +694,7 @@ def build_webhook_context(
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )
     if should_start_job:
+        JOB_DEMAND_TOTAL.labels(channel=channel).inc()
         # Mark as running BEFORE sending the startup message to prevent
         # race conditions when multiple requests come in quickly
         mark_job_running(assistant_data, channel)
