@@ -614,6 +614,30 @@ fi
 echo ""
 
 # =============================================================================
+# Write VM-ready notifier to supervisord config
+# =============================================================================
+if [[ -n "$COMMS_URL" && -n "$CONFIG_HOSTNAME" && -n "$UNIFY_KEY" ]]; then
+    ASSISTANT_ID=$(echo "$CONFIG_HOSTNAME" | sed 's/^unity-assistant-//;s/\(-staging\)\?\.vm\.unify\.ai$//')
+    # Strip any existing vm-ready-notify block before rewriting
+    sed -i '/\[program:vm-ready-notify\]/,/^$/d' /etc/supervisor/conf.d/unity-vm.conf
+    cat >> /etc/supervisor/conf.d/unity-vm.conf << NOTIFIER_EOF
+
+[program:vm-ready-notify]
+command=bash -c 'curl -sf -X POST "$COMMS_URL/infra/vm/ready" -H "Content-Type: application/json" -H "Authorization: Bearer $UNIFY_KEY" -d "{\"assistant_id\": \"$ASSISTANT_ID\", \"vm_type\": \"ubuntu\"}" && echo "VM ready notification sent" || echo "VM ready notification failed (non-fatal)"'
+autorestart=false
+startsecs=0
+priority=60
+stdout_logfile=/var/log/supervisor/vm-ready-notify.log
+stderr_logfile=/var/log/supervisor/vm-ready-notify.err
+stdout_logfile_maxbytes=1MB
+stderr_logfile_maxbytes=1MB
+NOTIFIER_EOF
+    echo "VM ready notifier configured for assistant $ASSISTANT_ID"
+else
+    echo "VM ready notifier skipped (missing COMMS_URL, hostname, or UNIFY_KEY)"
+fi
+
+# =============================================================================
 # Start Services via supervisord
 # =============================================================================
 echo "Starting services via supervisord..."
