@@ -1116,6 +1116,12 @@ function Setup-Caddyfile {
 
     New-Item -ItemType Directory -Force -Path $caddyDir | Out-Null
 
+    # Use wildcard TLS cert if available (avoids per-VM ACME requests)
+    $tlsDirective = ""
+    if (Test-Path "C:\caddy\certs\fullchain.pem") {
+        $tlsDirective = "    tls C:\caddy\certs\fullchain.pem C:\caddy\certs\privkey.pem"
+    }
+
     # Routing: /desktop -> noVNC (6080), /api -> Agent Service (3000)
     # Root path (/) returns 404
     $caddyConfig = @"
@@ -1124,6 +1130,7 @@ function Setup-Caddyfile {
 # Generated: $(Get-Date)
 
 $Hostname {
+$tlsDirective
     # Handle WebSocket upgrade for noVNC (only for /desktop paths)
     @websocket {
         path /desktop/*
@@ -2008,6 +2015,8 @@ $gcpCommsUrl = Get-GCPMetadata -Key "comms-url"
 $gcpStaging = Get-GCPMetadata -Key "staging"
 $gcpSshPublicKey = Get-GCPMetadata -Key "ssh-public-key"
 $gcpMakKey = Get-GCPMetadata -Key "office-mak-key"
+$gcpTlsFullchain = Get-GCPMetadata -Key "tls-fullchain"
+$gcpTlsPrivkey = Get-GCPMetadata -Key "tls-privkey"
 # Note: SSH uses windows-username for authentication (no separate ssh-username needed)
 
 if ($gcpHostname) {
@@ -2518,6 +2527,15 @@ if (Test-Path "$novncDir\vnc.html") {
 
 # Run config functions (they now skip if already configured)
 Setup-AgentServiceEnv -UnifyKey $gcpUnifyKey -UnifyBaseUrl $gcpUnifyBaseUrl -CommsUrl $gcpCommsUrl
+
+# Write wildcard TLS cert if provided (avoids per-VM ACME requests)
+if ($gcpTlsFullchain -and $gcpTlsPrivkey) {
+    New-Item -ItemType Directory -Force -Path "C:\caddy\certs" | Out-Null
+    [System.IO.File]::WriteAllText("C:\caddy\certs\fullchain.pem", $gcpTlsFullchain)
+    [System.IO.File]::WriteAllText("C:\caddy\certs\privkey.pem", $gcpTlsPrivkey)
+    Write-Host "  Wildcard TLS cert written to C:\caddy\certs\" -ForegroundColor Green
+}
+
 $caddyConfigured = Setup-Caddyfile -Hostname $hostname
 Setup-Websockify -TargetUser $windowsUser
 

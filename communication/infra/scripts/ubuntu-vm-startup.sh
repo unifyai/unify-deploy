@@ -81,6 +81,8 @@ COMMS_URL=$(get_metadata "comms-url")
 STAGING=$(get_metadata "staging")
 SSH_USERNAME=$(get_metadata "ssh-username")
 SSH_PUBLIC_KEY=$(get_metadata "ssh-public-key")
+TLS_FULLCHAIN=$(get_metadata "tls-fullchain")
+TLS_PRIVKEY=$(get_metadata "tls-privkey")
 
 # Defaults
 VNC_PASSWORD=${VNC_PASSWORD:-"unify123"}
@@ -96,6 +98,7 @@ echo "  Comms URL:      ${COMMS_URL:-(not configured)}"
 echo "  Staging Branch: ${STAGING:-no}"
 echo "  SSH Username:   ${SSH_USERNAME:-(not configured)}"
 echo "  SSH Public Key: ${SSH_PUBLIC_KEY:+(set)}"
+echo "  TLS Wildcard:   ${TLS_FULLCHAIN:+(set)}"
 echo ""
 
 # =============================================================================
@@ -485,6 +488,17 @@ echo "=== Configuring Caddy ==="
 mkdir -p /etc/caddy
 mkdir -p /var/log/caddy
 
+# Write wildcard TLS cert if provided (avoids per-VM ACME requests)
+TLS_DIRECTIVE=""
+if [[ -n "$TLS_FULLCHAIN" && -n "$TLS_PRIVKEY" ]]; then
+    mkdir -p /etc/caddy/certs
+    echo "$TLS_FULLCHAIN" > /etc/caddy/certs/fullchain.pem
+    echo "$TLS_PRIVKEY" > /etc/caddy/certs/privkey.pem
+    chmod 600 /etc/caddy/certs/privkey.pem
+    TLS_DIRECTIVE="    tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem"
+    echo "  Wildcard TLS cert written to /etc/caddy/certs/"
+fi
+
 if [[ -n "$CONFIG_HOSTNAME" ]]; then
     cat > /etc/caddy/Caddyfile << EOF
 # Ubuntu VM - Caddy Configuration
@@ -492,6 +506,7 @@ if [[ -n "$CONFIG_HOSTNAME" ]]; then
 # Generated: $(date)
 
 $CONFIG_HOSTNAME {
+$TLS_DIRECTIVE
     # Handle WebSocket upgrade for noVNC
     @websocket {
         path /desktop/*

@@ -51,6 +51,8 @@ from .vm_config import (
     ENV_SUFFIX,
     MAK_KEY,
     SSH_SYNC_PORT,
+    VM_WILDCARD_CERT_SECRET,
+    VM_WILDCARD_KEY_SECRET,
     # Windows VM config
     WINDOWS_VM_MACHINE_TYPE,
     WINDOWS_VM_DISK_SIZE_GB,
@@ -536,6 +538,14 @@ def create_windows_vm(
     metadata_items.append(compute_v1.Items(key="unify-key", value=unify_apikey))
     logger.info("Added Unify key to VM metadata")
 
+    # Add wildcard TLS cert from Secret Manager (eliminates per-VM ACME requests)
+    tls_cert = get_secret(VM_WILDCARD_CERT_SECRET)
+    tls_key = get_secret(VM_WILDCARD_KEY_SECRET)
+    if tls_cert and tls_key:
+        metadata_items.append(compute_v1.Items(key="tls-fullchain", value=tls_cert))
+        metadata_items.append(compute_v1.Items(key="tls-privkey", value=tls_key))
+        logger.info("Added wildcard TLS cert to VM metadata")
+
     # Configure the VM
     instance = compute_v1.Instance(
         name=vm_name,
@@ -688,6 +698,14 @@ def create_ubuntu_vm(
     # Use the passed unify_apikey directly
     metadata_items.append(compute_v1.Items(key="unify-key", value=unify_apikey))
     logger.info("Added Unify key to VM metadata")
+
+    # Add wildcard TLS cert from Secret Manager (eliminates per-VM ACME requests)
+    tls_cert = get_secret(VM_WILDCARD_CERT_SECRET)
+    tls_key = get_secret(VM_WILDCARD_KEY_SECRET)
+    if tls_cert and tls_key:
+        metadata_items.append(compute_v1.Items(key="tls-fullchain", value=tls_cert))
+        metadata_items.append(compute_v1.Items(key="tls-privkey", value=tls_key))
+        logger.info("Added wildcard TLS cert to VM metadata")
 
     # Configure the VM
     instance = compute_v1.Instance(
