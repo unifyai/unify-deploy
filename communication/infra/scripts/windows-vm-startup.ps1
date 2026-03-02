@@ -2590,5 +2590,18 @@ if ($newUserCreated -eq $true) {
     Restart-Computer -Force
 } else {
     Write-Host "Existing user detected, continuing with installations..." -ForegroundColor Green
-t "Existing user detected, continuing with installations..." -ForegroundColor Green
+
+    # Notify Communication API that the VM is ready (after Caddy is reachable)
+    if ($gcpCommsUrl -and $hostname -and $gcpUnifyKey) {
+        $assistantId = ($hostname -replace "^unity-assistant-", "" -replace "(-staging)?\.vm\.unify\.ai$", "")
+        try {
+            Invoke-RestMethod -Uri "$gcpCommsUrl/infra/vm/ready" `
+                -Method POST -ContentType "application/json" `
+                -Headers @{ Authorization = "Bearer $gcpUnifyKey" } `
+                -Body (@{ assistant_id = $assistantId; vm_type = "windows" } | ConvertTo-Json)
+            Write-Host "VM ready notification sent for assistant $assistantId" -ForegroundColor Green
+        } catch {
+            Write-Host "Failed to send VM ready notification: $_" -ForegroundColor Yellow
+        }
+    }
 }
