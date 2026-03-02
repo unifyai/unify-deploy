@@ -12,6 +12,7 @@ from common.metrics import (
     ORCHESTRA_GET_ASSISTANT_DURATION,
     MARK_JOB_RUNNING_DURATION,
     BUILD_WEBHOOK_CONTEXT_DURATION,
+    JOB_DEMAND_TOTAL,
 )
 
 from google.cloud import pubsub_v1
@@ -684,6 +685,15 @@ def build_webhook_context(
     is_local_assistant = bool(assistant_data.get("is_local", False))
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_local_assistant
+
+    # track raw demand for container capacity
+    if (
+        ensure_job
+        and is_valid_contact
+        and not is_test_assistant
+        and not is_local_assistant
+    ):
+        JOB_DEMAND_TOTAL.labels(channel=channel).inc()
 
     # ensure job is running (skip for local/test assistants)
     job_started = False

@@ -65,6 +65,11 @@ class VMDeleteResponse(BaseModel):
     ip_released: bool
 
 
+class VMReadyRequest(BaseModel):
+    assistant_id: str
+    vm_type: Literal["windows", "ubuntu"] = "windows"
+
+
 # =============================================================================
 # Tunnel Management Models
 # =============================================================================

@@ -1,5 +1,7 @@
+import asyncio
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Form, HTTPException, Request
+from functools import partial
 from google.cloud import pubsub_v1, storage
 from google.oauth2.service_account import Credentials
 from google.protobuf import duration_pb2
@@ -34,6 +36,7 @@ from .models import (
     VMStatusResponse,
     VMActionResponse,
     VMDeleteResponse,
+    VMReadyRequest,
     TunnelRegisterRequest,
     TunnelRegisterResponse,
     TunnelStatusResponse,
@@ -811,11 +814,16 @@ async def create_vm_endpoint(request: VMCreateRequest):
         vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = provision_vm_full(
-            assistant_id=request.assistant_id,
-            unify_apikey=request.unify_apikey,
-            assistant_name=request.assistant_name,
-            vm_type=request.vm_type,
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                provision_vm_full,
+                assistant_id=request.assistant_id,
+                unify_apikey=request.unify_apikey,
+                assistant_name=request.assistant_name,
+                vm_type=request.vm_type,
+            ),
         )
         return VMCreateResponse(**result)
     except Exception as e:
@@ -835,7 +843,11 @@ async def start_vm_endpoint(request: VMActionRequest):
         vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = start_vm(request.assistant_id, request.vm_type)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(start_vm, request.assistant_id, request.vm_type),
+        )
         return VMActionResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -856,7 +868,11 @@ async def stop_vm_endpoint(request: VMActionRequest):
         vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = stop_vm(request.assistant_id, request.vm_type)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(stop_vm, request.assistant_id, request.vm_type),
+        )
         return VMActionResponse(**result)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -880,7 +896,11 @@ async def delete_vm_endpoint(request: VMActionRequest):
         vm_type: "windows" or "ubuntu" (defaults to "windows")
     """
     try:
-        result = deprovision_vm_full(request.assistant_id, request.vm_type)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(deprovision_vm_full, request.assistant_id, request.vm_type),
+        )
         return VMDeleteResponse(**result)
     except Exception as e:
         logger.error(f"Failed to delete VM: {e}")
@@ -896,7 +916,11 @@ async def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
         assistant_id: The assistant ID (path parameter)
         vm_type: "windows" or "ubuntu" (query parameter, defaults to "windows")
     """
-    result = get_vm_status(assistant_id, vm_type)
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None,
+        partial(get_vm_status, assistant_id, vm_type),
+    )
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -992,3 +1016,56 @@ async def list_tunnels_endpoint(request: Request):
 
     result = list_user_tunnels(user_id)
     return TunnelListResponse(**result)
+
+
+# =============================================================================
+# VM Ready Notification (user API key auth)
+# =============================================================================
+
+
+@tunnel_router.post("/vm/ready")
+async def vm_ready_endpoint(
+    request_body: VMReadyRequest,
+    request: Request,
+):
+    """Publish an assistant_desktop_ready system event when a VM finishes startup.
+
+    Called by the VM startup script once services are running.
+    Authenticated via user API key (Authorization: Bearer <unify-key>).
+    """
+    api_key = extract_api_key(request)
+    await authenticate_user_api_key(api_key)
+
+    assistant_id = request_body.assistant_id
+    vm_type = request_body.vm_type
+
+    creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+    creds = Credentials.from_service_account_info(creds_json)
+    publisher = pubsub_v1.PublisherClient(credentials=creds)
+
+    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+    topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
+
+    message_data = json.dumps(
+        {
+            "thread": "unity_system_event",
+            "event": {
+                "assistant_id": assistant_id,
+                "event_type": "assistant_desktop_ready",
+                "message": f"VM ({vm_type}) startup complete",
+            },
+        },
+    ).encode("utf-8")
+
+    future = publisher.publish(topic_path, data=message_data)
+    message_id = future.result()
+
+    logger.info(
+        f"Published assistant_desktop_ready for assistant {assistant_id} (message_id={message_id})",
+    )
+
+    return {
+        "success": True,
+        "message_id": message_id,
+        "assistant_id": assistant_id,
+    }
