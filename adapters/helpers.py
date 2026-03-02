@@ -406,6 +406,47 @@ def is_job_running(user_id: str, assistant_id: str):
     return bool(logs)
 
 
+def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
+    """Mark all previous running=True records for this assistant as running=False.
+
+    Prevents stale records from confusing consumers (e.g. the console's
+    desktop-ready poll) when a new container starts for the same assistant.
+    """
+    try:
+        resp = requests.get(
+            f"{ORCHESTRA_URL}/logs",
+            params={
+                "project_name": "AssistantJobs",
+                "context": "startup_events",
+                "filter_expr": f"assistant_id == '{assistant_id}' and running == 'true'",
+            },
+            headers={"Authorization": f"Bearer {shared_key}"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return
+        stale_logs = resp.json().get("logs", [])
+        if not stale_logs:
+            return
+        stale_ids = [log["id"] for log in stale_logs if "id" in log]
+        if not stale_ids:
+            return
+        requests.put(
+            f"{ORCHESTRA_URL}/logs",
+            json={
+                "logs": stale_ids,
+                "context": "startup_events",
+                "entries": {"running": False},
+                "overwrite": True,
+            },
+            headers={"Authorization": f"Bearer {shared_key}"},
+            timeout=10,
+        )
+        print(f"Expired {len(stale_ids)} stale record(s) for assistant {assistant_id}")
+    except Exception as e:
+        print(f"[_expire_stale_records] Non-fatal error: {e}")
+
+
 def mark_job_running(assistant_data: dict, medium: str) -> bool:
     """Mark a job as running immediately to prevent duplicate startups.
 
@@ -439,6 +480,8 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
             )
         except Exception:
             pass  # Project may already exist
+
+        _expire_stale_records(assistant_id, shared_key)
 
         # Create the running record with all available info
         # job_name and liveview_url will be added later by the Unity container
