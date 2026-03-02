@@ -36,6 +36,7 @@ from .models import (
     VMStatusResponse,
     VMActionResponse,
     VMDeleteResponse,
+    VMReadyRequest,
     TunnelRegisterRequest,
     TunnelRegisterResponse,
     TunnelStatusResponse,
@@ -1015,3 +1016,56 @@ async def list_tunnels_endpoint(request: Request):
 
     result = list_user_tunnels(user_id)
     return TunnelListResponse(**result)
+
+
+# =============================================================================
+# VM Ready Notification (user API key auth)
+# =============================================================================
+
+
+@tunnel_router.post("/vm/ready")
+async def vm_ready_endpoint(
+    request_body: VMReadyRequest,
+    request: Request,
+):
+    """Publish an assistant_desktop_ready system event when a VM finishes startup.
+
+    Called by the VM startup script once services are running.
+    Authenticated via user API key (Authorization: Bearer <unify-key>).
+    """
+    api_key = extract_api_key(request)
+    await authenticate_user_api_key(api_key)
+
+    assistant_id = request_body.assistant_id
+    vm_type = request_body.vm_type
+
+    creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+    creds = Credentials.from_service_account_info(creds_json)
+    publisher = pubsub_v1.PublisherClient(credentials=creds)
+
+    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+    topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
+
+    message_data = json.dumps(
+        {
+            "thread": "unity_system_event",
+            "event": {
+                "assistant_id": assistant_id,
+                "event_type": "assistant_desktop_ready",
+                "message": f"VM ({vm_type}) startup complete",
+            },
+        },
+    ).encode("utf-8")
+
+    future = publisher.publish(topic_path, data=message_data)
+    message_id = future.result()
+
+    logger.info(
+        f"Published assistant_desktop_ready for assistant {assistant_id} (message_id={message_id})",
+    )
+
+    return {
+        "success": True,
+        "message_id": message_id,
+        "assistant_id": assistant_id,
+    }
