@@ -2712,6 +2712,20 @@ async def scheduled_jobs_cleanup(request: Request):
     return Response(content=json.dumps({"idle_jobs": idle_jobs}), status_code=200)
 
 
+@app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
+async def scheduled_cert_renewal(request: Request):
+    """Renew the *.vm.unify.ai wildcard TLS cert if within 30 days of expiry.
+
+    Triggered monthly by Cloud Scheduler. Checks the current cert in Secret
+    Manager; if it expires within 30 days (or is missing), performs a DNS-01
+    challenge via Let's Encrypt and updates the secrets.
+    """
+    from communication.infra.cert_renewal import renew_if_needed
+
+    result = renew_if_needed(days_threshold=30)
+    return result
+
+
 # =============================================================================
 # Main Entry Point
 # =============================================================================
@@ -2745,6 +2759,7 @@ if __name__ == "__main__":
     logger.info("    - POST /scheduled/email-watches")
     logger.info("    - POST /scheduled/jobs/create")
     logger.info("    - POST /scheduled/jobs/cleanup")
+    logger.info("    - POST /scheduled/cert-renewal")
     logger.info("Server running at: http://localhost:8080")
 
     uvicorn.run("adapters.main:app", host="0.0.0.0", port=8080, reload=True)
