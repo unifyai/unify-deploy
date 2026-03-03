@@ -10,7 +10,11 @@ from livekit.protocol.sip import (
     ListSIPInboundTrunkRequest,
     DeleteSIPTrunkRequest,
 )
-from common.livekit import create_room_and_dispatch_agent
+from common.livekit import (
+    create_room_and_dispatch_agent,
+    ensure_phone_dispatch_rule,
+    make_sip_uri,
+)
 from communication.helpers import ADAPTERS_URL, get_twilio_client
 from dotenv import load_dotenv
 
@@ -93,7 +97,8 @@ async def send_call(request: Request):
     phone_number = data.get("To")
     twilio_number = data.get("From")
     room_name = data.get("room_name")
-    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = make_sip_uri(twilio_number)
+    await ensure_phone_dispatch_rule(twilio_number, room_name)
     twilio_client = get_twilio_client()
     call = twilio_client.calls.create(
         to=sip_uri,

@@ -39,7 +39,13 @@ def _redact_email(email: str) -> str:
 
 from common.metrics import setup_metrics
 
-from common.livekit import make_room_name, start_room_egress, verify_livekit_webhook
+from common.livekit import (
+    ensure_phone_dispatch_rule,
+    make_room_name,
+    make_sip_uri,
+    start_room_egress,
+    verify_livekit_webhook,
+)
 
 from .helpers import (
     add_user_to_conference,
@@ -218,9 +224,11 @@ async def twilio_call_webhook(request: Request):
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     room_name = make_room_name(assistant_id, "phone")
-    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = make_sip_uri(twilio_number)
     logger.info(f"Setting up conference {conference_name}")
     logger.info(f"LiveKit room will be: {room_name}")
+
+    await ensure_phone_dispatch_rule(twilio_number, room_name)
 
     # publish to Pub/Sub
     pubsub_client = pubsub_v1.PublisherClient()
@@ -681,7 +689,7 @@ async def teams_call_webhook(request: Request):
         )
 
     room_name = make_room_name(assistant_id, "teams")
-    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"  # Teams uses SBC proxy with IP-based trunk
 
     # print(f"Teams call for assistant {assistant_id}, room: {room_name}")
 
