@@ -17,6 +17,11 @@ METADATA_HEADER="Metadata-Flavor: Google"
 ETAG=""
 PREV_UNIFY_KEY=""
 
+source /etc/profile.d/unity-vm.sh 2>/dev/null || true
+source /etc/profile.d/bun.sh 2>/dev/null || true
+export HOME=/root
+export PATH="/root/.bun/bin:$PATH"
+
 get_metadata() {
     local key=$1
     curl -sf -H "$METADATA_HEADER" "$METADATA_URL/instance/attributes/$key" 2>/dev/null || echo ""
@@ -26,11 +31,119 @@ log() {
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
 }
 
+# ─── Code update helpers ─────────────────────────────────────────────────
+
+get_remote_commit_hash() {
+    local repo_url=$1
+    local branch=$2
+    git ls-remote "$repo_url" "refs/heads/$branch" 2>/dev/null | cut -c1-12
+}
+
+get_saved_commit_hash() {
+    local dir=$1
+    cat "$dir/.commit-hash" 2>/dev/null || echo ""
+}
+
+save_commit_hash() {
+    local dir=$1
+    local hash=$2
+    if [[ -n "$hash" ]]; then
+        echo -n "$hash" > "$dir/.commit-hash"
+    fi
+}
+
+do_update() {
+    log "UPDATE: checking for code updates"
+
+    local github_token
+    local staging
+    github_token=$(get_metadata "github-token")
+    staging=$(get_metadata "staging")
+
+    local magnitude_url unity_url unity_branch
+    if [[ -n "$github_token" ]]; then
+        magnitude_url="https://${github_token}@github.com/unifyai/magnitude.git"
+        unity_url="https://${github_token}@github.com/unifyai/unity.git"
+    else
+        magnitude_url="https://github.com/unifyai/magnitude.git"
+        unity_url="https://github.com/unifyai/unity.git"
+    fi
+    unity_branch="main"
+    [[ -n "$staging" ]] && unity_branch="staging"
+
+    # ── Magnitude ──
+    local mag_saved mag_remote
+    mag_saved=$(get_saved_commit_hash /magnitude)
+    mag_remote=$(get_remote_commit_hash "$magnitude_url" "unity-modifications")
+
+    if [[ -n "$mag_saved" && -n "$mag_remote" && "$mag_saved" == "$mag_remote" ]]; then
+        log "Magnitude up-to-date ($mag_saved)"
+    else
+        log "Magnitude updating ($mag_saved -> $mag_remote)"
+        if [[ -d "/magnitude/.git" ]]; then
+            cd /magnitude
+            [[ -n "$github_token" ]] && git remote set-url origin "$magnitude_url" 2>/dev/null || true
+            git fetch --depth 1 origin unity-modifications 2>&1 || true
+            git reset --hard origin/unity-modifications 2>&1 || true
+            local commit
+            commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
+            save_commit_hash /magnitude "$commit"
+            cd /
+        fi
+        log "Installing Magnitude dependencies..."
+        cd /magnitude
+        if command -v bun &>/dev/null; then
+            bun install 2>&1
+        else
+            npm install 2>&1
+        fi
+        cd /
+        log "Magnitude updated"
+    fi
+
+    # ── Agent Service (sparse checkout from unity monorepo) ──
+    local as_saved as_remote
+    as_saved=$(get_saved_commit_hash /agent-service)
+    as_remote=$(get_remote_commit_hash "$unity_url" "$unity_branch")
+
+    if [[ -n "$as_saved" && -n "$as_remote" && "$as_saved" == "$as_remote" ]]; then
+        log "Agent Service up-to-date ($as_saved)"
+    else
+        log "Agent Service updating ($as_saved -> $as_remote)"
+        local tmp_dir
+        tmp_dir=$(mktemp -d)
+        git clone --depth 1 --branch "$unity_branch" --filter=blob:none --sparse "$unity_url" "$tmp_dir" 2>&1
+        cd "$tmp_dir"
+        git sparse-checkout set agent-service 2>&1
+        local commit
+        commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
+
+        # Preserve node_modules to speed up npm install
+        if [[ -d /agent-service/node_modules ]]; then
+            mv /agent-service/node_modules "$tmp_dir/agent-service/node_modules"
+        fi
+        rm -rf /agent-service
+        mv agent-service /agent-service
+        save_commit_hash /agent-service "$commit"
+        rm -rf "$tmp_dir"
+
+        cd /agent-service
+        npm install 2>&1
+        cd /
+        log "Agent Service updated ($commit)"
+    fi
+
+    log "UPDATE complete"
+}
+
 # ─── Assignment: configure VM for an assistant ───────────────────────────
 
 do_assign() {
     local unify_key=$1
     log "ASSIGN: configuring VM for assistant"
+
+    # Update code before configuring (skips quickly if already up-to-date)
+    do_update
 
     local vnc_password
     local ssh_public_key
@@ -51,14 +164,12 @@ do_assign() {
     # Mount persistent disk
     if [[ -n "$disk_device" ]]; then
         local dev_path="/dev/disk/by-id/google-${disk_device}"
-        # Wait for device to appear (GCE disk attach can take a moment)
         for i in $(seq 1 30); do
             [[ -e "$dev_path" ]] && break
             sleep 1
         done
 
         if [[ -e "$dev_path" ]]; then
-            # Format if no filesystem
             if ! blkid "$dev_path" &>/dev/null; then
                 log "Formatting new disk: $dev_path"
                 mkfs.ext4 -q "$dev_path"
@@ -122,7 +233,6 @@ EOF
 
     # Send ready notification
     if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" ]]; then
-        # Retry the ready notification (Caddy may need a moment)
         for attempt in $(seq 1 10); do
             local http_code
             http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
@@ -202,6 +312,9 @@ PYSCRIPT
             log "Unmounted /Unity/Local"
         fi
     fi
+
+    # Update code while VM is idle so next assignment starts with latest
+    do_update
 
     log "RELEASE complete"
 }
