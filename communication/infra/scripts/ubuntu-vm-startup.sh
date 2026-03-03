@@ -638,7 +638,7 @@ if [[ -n "$COMMS_URL" && -n "$CONFIG_HOSTNAME" && -n "$UNIFY_KEY" ]]; then
     cat >> /etc/supervisor/conf.d/unity-vm.conf << NOTIFIER_EOF
 
 [program:vm-ready-notify]
-command=bash -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do curl -ksfm5 https://localhost/ >/dev/null 2>&1 && break; echo "Waiting for Caddy TLS... (attempt $$i)"; sleep 2; done; curl -sf -X POST "$COMMS_URL/infra/vm/ready" -H "Content-Type: application/json" -H "Authorization: Bearer $UNIFY_KEY" -d "{\"assistant_id\": \"$ASSISTANT_ID\", \"vm_type\": \"ubuntu\"}" && echo "VM ready notification sent" || echo "VM ready notification failed"'
+command=bash -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do (echo >/dev/tcp/localhost/443) 2>/dev/null && break; echo "Waiting for Caddy port 443... (attempt $$i)"; sleep 2; done; sleep 1; curl -sf -X POST "$COMMS_URL/infra/vm/ready" -H "Content-Type: application/json" -H "Authorization: Bearer $UNIFY_KEY" -d "{\"assistant_id\": \"$ASSISTANT_ID\", \"vm_type\": \"ubuntu\"}" && echo "VM ready notification sent" || echo "VM ready notification failed"'
 autorestart=false
 startsecs=0
 priority=60

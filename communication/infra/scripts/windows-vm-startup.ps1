@@ -2613,23 +2613,18 @@ if ($newUserCreated -eq $true) {
     if ($gcpCommsUrl -and $hostname -and $gcpUnifyKey) {
         $assistantId = ($hostname -replace "^unity-assistant-", "" -replace "(-staging)?\.vm\.unify\.ai$", "")
 
-        # Poll localhost:443 until Caddy is serving TLS (up to 30s)
+        # Poll localhost:443 until Caddy is listening (up to 30s)
         $caddyReady = $false
         for ($attempt = 1; $attempt -le 15; $attempt++) {
             try {
-                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-                $resp = Invoke-WebRequest -Uri "https://localhost/" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+                $tcp = New-Object System.Net.Sockets.TcpClient
+                $tcp.Connect("localhost", 443)
+                $tcp.Close()
                 $caddyReady = $true
+                Start-Sleep -Seconds 1
                 break
-            } catch [System.Net.WebException] {
-                if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
-                    $caddyReady = $true
-                    break
-                }
-                Write-Host "  Waiting for Caddy TLS... (attempt $attempt)" -ForegroundColor Gray
-                Start-Sleep -Seconds 2
             } catch {
-                Write-Host "  Waiting for Caddy TLS... (attempt $attempt)" -ForegroundColor Gray
+                Write-Host "  Waiting for Caddy port 443... (attempt $attempt)" -ForegroundColor Gray
                 Start-Sleep -Seconds 2
             }
         }
