@@ -2609,17 +2609,43 @@ if ($newUserCreated -eq $true) {
 } else {
     Write-Host "Existing user detected, continuing with installations..." -ForegroundColor Green
 
-    # Notify Communication API that the VM is ready (after Caddy is reachable)
+    # Wait for Caddy TLS to be serving, then notify Communication API
     if ($gcpCommsUrl -and $hostname -and $gcpUnifyKey) {
         $assistantId = ($hostname -replace "^unity-assistant-", "" -replace "(-staging)?\.vm\.unify\.ai$", "")
-        try {
-            Invoke-RestMethod -Uri "$gcpCommsUrl/infra/vm/ready" `
-                -Method POST -ContentType "application/json" `
-                -Headers @{ Authorization = "Bearer $gcpUnifyKey" } `
-                -Body (@{ assistant_id = $assistantId; vm_type = "windows" } | ConvertTo-Json)
-            Write-Host "VM ready notification sent for assistant $assistantId" -ForegroundColor Green
-        } catch {
-            Write-Host "Failed to send VM ready notification: $_" -ForegroundColor Yellow
+
+        # Poll localhost:443 until Caddy is serving TLS (up to 30s)
+        $caddyReady = $false
+        for ($attempt = 1; $attempt -le 15; $attempt++) {
+            try {
+                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+                $resp = Invoke-WebRequest -Uri "https://localhost/" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+                $caddyReady = $true
+                break
+            } catch [System.Net.WebException] {
+                if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                    $caddyReady = $true
+                    break
+                }
+                Write-Host "  Waiting for Caddy TLS... (attempt $attempt)" -ForegroundColor Gray
+                Start-Sleep -Seconds 2
+            } catch {
+                Write-Host "  Waiting for Caddy TLS... (attempt $attempt)" -ForegroundColor Gray
+                Start-Sleep -Seconds 2
+            }
+        }
+
+        if ($caddyReady) {
+            try {
+                Invoke-RestMethod -Uri "$gcpCommsUrl/infra/vm/ready" `
+                    -Method POST -ContentType "application/json" `
+                    -Headers @{ Authorization = "Bearer $gcpUnifyKey" } `
+                    -Body (@{ assistant_id = $assistantId; vm_type = "windows" } | ConvertTo-Json)
+                Write-Host "VM ready notification sent for assistant $assistantId" -ForegroundColor Green
+            } catch {
+                Write-Host "Failed to send VM ready notification: $_" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "Caddy TLS not ready after 30s, skipping VM ready notification" -ForegroundColor Yellow
         }
     }
 }
