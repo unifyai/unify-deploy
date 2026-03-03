@@ -29,6 +29,22 @@ class TestMakeRoomName:
         b = make_room_name("99", "meet")
         assert a == b
 
+    def test_room_name_format_regex(self):
+        """Room names follow the pattern unity_{id}_{medium}."""
+        for aid, medium in [("568", "phone"), ("42", "meet"), ("7", "teams")]:
+            name = make_room_name(aid, medium)
+            assert re.match(
+                r"^unity_\w+_(phone|meet|teams)$",
+                name,
+            ), f"Bad room name format: {name}"
+
+    def test_sip_uri_uses_room_name_not_phone_number(self):
+        """SIP URIs built from room names must not contain phone digits."""
+        room = make_room_name("568", "phone")
+        sip_uri = f"sip:{room}@example.sip.livekit.cloud"
+        assert sip_uri == "sip:unity_568_phone@example.sip.livekit.cloud"
+        assert "+" not in sip_uri
+
 
 TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}")
 ENV_DEFAULTS = {

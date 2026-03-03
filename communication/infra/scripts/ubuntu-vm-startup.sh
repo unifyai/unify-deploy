@@ -81,6 +81,8 @@ COMMS_URL=$(get_metadata "comms-url")
 STAGING=$(get_metadata "staging")
 SSH_USERNAME=$(get_metadata "ssh-username")
 SSH_PUBLIC_KEY=$(get_metadata "ssh-public-key")
+TLS_FULLCHAIN=$(get_metadata "tls-fullchain")
+TLS_PRIVKEY=$(get_metadata "tls-privkey")
 
 # Defaults
 VNC_PASSWORD=${VNC_PASSWORD:-"unify123"}
@@ -96,6 +98,7 @@ echo "  Comms URL:      ${COMMS_URL:-(not configured)}"
 echo "  Staging Branch: ${STAGING:-no}"
 echo "  SSH Username:   ${SSH_USERNAME:-(not configured)}"
 echo "  SSH Public Key: ${SSH_PUBLIC_KEY:+(set)}"
+echo "  TLS Wildcard:   ${TLS_FULLCHAIN:+(set)}"
 echo ""
 
 # =============================================================================
@@ -485,6 +488,17 @@ echo "=== Configuring Caddy ==="
 mkdir -p /etc/caddy
 mkdir -p /var/log/caddy
 
+# Write wildcard TLS cert if provided (avoids per-VM ACME requests)
+TLS_DIRECTIVE=""
+if [[ -n "$TLS_FULLCHAIN" && -n "$TLS_PRIVKEY" ]]; then
+    mkdir -p /etc/caddy/certs
+    echo "$TLS_FULLCHAIN" > /etc/caddy/certs/fullchain.pem
+    echo "$TLS_PRIVKEY" > /etc/caddy/certs/privkey.pem
+    chmod 600 /etc/caddy/certs/privkey.pem
+    TLS_DIRECTIVE="    tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem"
+    echo "  Wildcard TLS cert written to /etc/caddy/certs/"
+fi
+
 if [[ -n "$CONFIG_HOSTNAME" ]]; then
     cat > /etc/caddy/Caddyfile << EOF
 # Ubuntu VM - Caddy Configuration
@@ -492,6 +506,7 @@ if [[ -n "$CONFIG_HOSTNAME" ]]; then
 # Generated: $(date)
 
 $CONFIG_HOSTNAME {
+$TLS_DIRECTIVE
     # Handle WebSocket upgrade for noVNC
     @websocket {
         path /desktop/*
@@ -612,6 +627,30 @@ else
     echo "Boot mode: NORMAL (full setup)"
 fi
 echo ""
+
+# =============================================================================
+# Write VM-ready notifier to supervisord config
+# =============================================================================
+if [[ -n "$COMMS_URL" && -n "$CONFIG_HOSTNAME" && -n "$UNIFY_KEY" ]]; then
+    ASSISTANT_ID=$(echo "$CONFIG_HOSTNAME" | sed 's/^unity-assistant-//;s/\(-staging\)\?\.vm\.unify\.ai$//')
+    # Strip any existing vm-ready-notify block before rewriting
+    sed -i '/\[program:vm-ready-notify\]/,/^$/d' /etc/supervisor/conf.d/unity-vm.conf
+    cat >> /etc/supervisor/conf.d/unity-vm.conf << NOTIFIER_EOF
+
+[program:vm-ready-notify]
+command=bash -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do (echo >/dev/tcp/localhost/443) 2>/dev/null && break; echo "Waiting for Caddy port 443... (attempt $$i)"; sleep 2; done; sleep 1; curl -sf -X POST "$COMMS_URL/infra/vm/ready" -H "Content-Type: application/json" -H "Authorization: Bearer $UNIFY_KEY" -d "{\"assistant_id\": \"$ASSISTANT_ID\", \"vm_type\": \"ubuntu\"}" && echo "VM ready notification sent" || echo "VM ready notification failed"'
+autorestart=false
+startsecs=0
+priority=60
+stdout_logfile=/var/log/supervisor/vm-ready-notify.log
+stderr_logfile=/var/log/supervisor/vm-ready-notify.err
+stdout_logfile_maxbytes=1MB
+stderr_logfile_maxbytes=1MB
+NOTIFIER_EOF
+    echo "VM ready notifier configured for assistant $ASSISTANT_ID"
+else
+    echo "VM ready notifier skipped (missing COMMS_URL, hostname, or UNIFY_KEY)"
+fi
 
 # =============================================================================
 # Start Services via supervisord

@@ -92,7 +92,8 @@ async def send_call(request: Request):
     data = await request.json()
     phone_number = data.get("To")
     twilio_number = data.get("From")
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    room_name = data.get("room_name")
+    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
     twilio_client = get_twilio_client()
     call = twilio_client.calls.create(
         to=sip_uri,

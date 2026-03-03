@@ -7,6 +7,9 @@ import re
 import time
 import traceback
 import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 from common.metrics import (
     ORCHESTRA_GET_ASSISTANT_DURATION,
@@ -157,8 +160,8 @@ def get_assistant(
             status=_status,
         ).observe(time.perf_counter() - _t0)
 
-    print(f"get_assistant params: {params}")
-    print(f"get_assistant response: {response}")
+    logger.info(f"get_assistant params: {params}")
+    logger.info(f"get_assistant response: {response}")
 
     if "detail" in response:
         return {**local_assistant_data, "assistant_id": None}
@@ -257,7 +260,7 @@ def check_contact_details(
         user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
     """
-    print(
+    logger.info(
         f"Checking contact details: {email_address}, {phone_number}, {medium}, "
         f"{user_number}, {user_whatsapp_number}, {user_email}",
     )
@@ -295,7 +298,7 @@ def check_valid_contact(
         user_email: The email of the user.
         assistant_data: The data of the assistant.
     """
-    print(
+    logger.info(
         f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
         f"{user_number}, {user_whatsapp_number}, {user_email}, {assistant_context}",
     )
@@ -328,24 +331,24 @@ def check_valid_contact(
                 user_whatsapp_number=user_whatsapp_number,
                 user_email=user_email,
             ):
-                print(
+                logger.info(
                     f"Boss user found: {email_address}, {phone_number}, {medium}, "
                     f"{user_number}, {user_whatsapp_number}, {user_email}",
                 )
                 return default_contacts, True
 
         # otherwise
-        print(f"Failed to get contacts for assistant {assistant_context}")
-        print(response_json)
+        logger.info(f"Failed to get contacts for assistant {assistant_context}")
+        logger.info(response_json)
         return default_contacts, False
     contacts = [c["entries"] for c in resp_contacts]
-    print(f"Contacts: {contacts}")
+    logger.info(f"Contacts: {contacts}")
     if len(contacts) == 0:
         return default_contacts, False
 
     # check for boss user
     boss_contact = [contact for contact in contacts if contact["contact_id"] == 1]
-    print(f"Boss contact: {boss_contact}")
+    logger.info(f"Boss contact: {boss_contact}")
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
         boss_user_number = boss_contact.get("phone_number", "")
@@ -358,13 +361,13 @@ def check_valid_contact(
             user_whatsapp_number=user_whatsapp_number,
             user_email=boss_user_email,
         ):
-            print(
+            logger.info(
                 f"Boss user found: {email_address}, {phone_number}, {medium}, "
                 f"{boss_user_number}, {user_whatsapp_number}, {boss_user_email}",
             )
             return contacts, True
     else:
-        print("No boss user found")
+        logger.info("No boss user found")
         return default_contacts, False
 
     # check all contacts
@@ -377,14 +380,14 @@ def check_valid_contact(
             user_whatsapp_number=assistant_data["user_whatsapp_number"],
             user_email=contact.get("email_address", ""),
         ):
-            print(f"Contact found: {contact}")
+            logger.info(f"Contact found: {contact}")
             return contacts, True
     return default_contacts, False
 
 
 def is_job_running(user_id: str, assistant_id: str):
     """Check if a job is running for this assistant."""
-    print(f"Checking if job is running for {user_id} --> {assistant_id}")
+    logger.info(f"Checking if job is running for {user_id} --> {assistant_id}")
     response = requests.get(
         f"{ORCHESTRA_URL}/logs",
         params={
@@ -398,12 +401,55 @@ def is_job_running(user_id: str, assistant_id: str):
         },
         headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
     )
-    print(f"Response: {response.status_code}")
+    logger.info(f"Response: {response.status_code}")
     if response.status_code != 200:
         return False
     logs = response.json()["logs"]
-    print(f"Logs: {logs}")
+    logger.info(f"Logs: {logs}")
     return bool(logs)
+
+
+def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
+    """Mark all previous running=True records for this assistant as running=False.
+
+    Prevents stale records from confusing consumers (e.g. the console's
+    desktop-ready poll) when a new container starts for the same assistant.
+    """
+    try:
+        resp = requests.get(
+            f"{ORCHESTRA_URL}/logs",
+            params={
+                "project_name": "AssistantJobs",
+                "context": "startup_events",
+                "filter_expr": f"assistant_id == '{assistant_id}' and running == 'true'",
+            },
+            headers={"Authorization": f"Bearer {shared_key}"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return
+        stale_logs = resp.json().get("logs", [])
+        if not stale_logs:
+            return
+        stale_ids = [log["id"] for log in stale_logs if "id" in log]
+        if not stale_ids:
+            return
+        requests.put(
+            f"{ORCHESTRA_URL}/logs",
+            json={
+                "logs": stale_ids,
+                "context": "startup_events",
+                "entries": {"running": False},
+                "overwrite": True,
+            },
+            headers={"Authorization": f"Bearer {shared_key}"},
+            timeout=10,
+        )
+        logger.info(
+            f"Expired {len(stale_ids)} stale record(s) for assistant {assistant_id}"
+        )
+    except Exception as e:
+        logger.info(f"[_expire_stale_records] Non-fatal error: {e}")
 
 
 def mark_job_running(assistant_data: dict, medium: str) -> bool:
@@ -418,11 +464,11 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
     """
     user_id = assistant_data["user_id"]
     assistant_id = assistant_data["assistant_id"]
-    print(f"Marking job as running for {user_id} --> {assistant_id}")
+    logger.info(f"Marking job as running for {user_id} --> {assistant_id}")
 
     shared_key = os.getenv("SHARED_UNIFY_KEY")
     if not shared_key:
-        print("[mark_job_running] No SHARED_UNIFY_KEY available")
+        logger.info("[mark_job_running] No SHARED_UNIFY_KEY available")
         return False
 
     timestamp = datetime.now(tz=timezone.utc).isoformat()
@@ -439,6 +485,8 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
             )
         except Exception:
             pass  # Project may already exist
+
+        _expire_stale_records(assistant_id, shared_key)
 
         # Create the running record with all available info
         # job_name and liveview_url will be added later by the Unity container
@@ -469,17 +517,17 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
             headers={"Authorization": f"Bearer {shared_key}"},
         )
         if response.status_code in (200, 201):
-            print(f"Marked job as running for {assistant_id}")
+            logger.info(f"Marked job as running for {assistant_id}")
             _status = "success"
             return True
         else:
-            print(
+            logger.info(
                 f"Failed to mark job as running: {response.status_code} "
                 f"{response.text}",
             )
             return False
     except Exception as e:
-        print(f"Error marking job as running: {e}")
+        logger.info(f"Error marking job as running: {e}")
         traceback.print_exc()
         return False
     finally:
@@ -494,7 +542,7 @@ def start_unity_job(assistant: dict, medium: str):
     assistant_id = assistant["assistant_id"]
 
     if api_key == "":
-        print(f"No user name for assistant {assistant_id}")
+        logger.info(f"No user name for assistant {assistant_id}")
         return
 
     # Extract desktop fields
@@ -546,11 +594,11 @@ def start_unity_job(assistant: dict, medium: str):
             timeout=1,
         )
         if response.status_code != 200:
-            print(f"Failed to start job for assistant {assistant_id}")
+            logger.info(f"Failed to start job for assistant {assistant_id}")
         else:
-            print(f"Job started for assistant {assistant_id}")
+            logger.info(f"Job started for assistant {assistant_id}")
     except requests.exceptions.Timeout:
-        print(f"Job started for assistant {assistant_id} (timeout)")
+        logger.info(f"Job started for assistant {assistant_id} (timeout)")
 
     # Start VM if desktop_mode requires it
     if desktop_mode in ("windows", "ubuntu"):
@@ -563,23 +611,27 @@ def start_unity_job(assistant: dict, medium: str):
                 timeout=1,
             )
             if vm_response.status_code == 200:
-                print(f"{vm_type.capitalize()} VM started for assistant {assistant_id}")
+                logger.info(
+                    f"{vm_type.capitalize()} VM started for assistant {assistant_id}"
+                )
             elif vm_response.status_code == 404:
-                print(
+                logger.info(
                     f"{vm_type.capitalize()} VM not found for assistant {assistant_id} - "
                     "VM should be created at hire time",
                 )
             else:
-                print(
+                logger.info(
                     f"Failed to start {vm_type} VM for {assistant_id}: "
                     f"{vm_response.status_code} - {vm_response.text}",
                 )
         except requests.exceptions.Timeout:
-            print(
+            logger.info(
                 f"{vm_type.capitalize()} VM start request sent for assistant {assistant_id} (timeout)",
             )
         except Exception as e:
-            print(f"Error starting {vm_type} VM for assistant {assistant_id}: {e}")
+            logger.info(
+                f"Error starting {vm_type} VM for assistant {assistant_id}: {e}"
+            )
 
 
 def create_job(assistant_id: str):
@@ -593,13 +645,15 @@ def create_job(assistant_id: str):
         admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
         headers = {"Authorization": f"Bearer {admin_key}"} if admin_key else {}
         requests.post(idle_job_url, headers=headers, timeout=1)
-        print(f"Idle job creation request sent for assistant {assistant_id}")
+        logger.info(f"Idle job creation request sent for assistant {assistant_id}")
         return True
     except requests.exceptions.Timeout:
-        print(f"Idle job creation request sent for assistant {assistant_id} (timeout)")
+        logger.info(
+            f"Idle job creation request sent for assistant {assistant_id} (timeout)"
+        )
         return True
     except Exception as e:
-        print(
+        logger.info(
             f"Error sending idle job creation request for assistant {assistant_id}: {e}",
         )
         return False
@@ -633,7 +687,9 @@ def build_webhook_context(
         if assistant_id:
             assistant_data = get_assistant(assistant_id=assistant_id)
         else:
-            print(f"Getting assistant data for {destination} with is_email: {is_email}")
+            logger.info(
+                f"Getting assistant data for {destination} with is_email: {is_email}"
+            )
             assistant_data = (
                 get_assistant(email_address=destination)
                 if is_email
@@ -645,12 +701,12 @@ def build_webhook_context(
     user_number = assistant_data["user_number"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]
     user_email = assistant_data["user_email"]
-    print("assistant_data:", assistant_data)
+    logger.info(f"assistant_data: {assistant_data}")
 
     # validate contact
     contacts = []
     is_valid_contact = True
-    print("validate_contact:", validate_contact)
+    logger.info(f"validate_contact: {validate_contact}")
     if validate_contact:
         contacts, is_valid_contact = check_valid_contact(
             email_address=(sender if is_email else ""),
@@ -672,28 +728,19 @@ def build_webhook_context(
         # hiring a new assistant, whenever the wakeup message is sent, the contact
         # manager gets initialized in unity so there's a stage where the context is
         # created but the contacts haven't been added yet
-        print(f"response status_code: {status_code}, contacts: {response}")
+        logger.info(f"response status_code: {status_code}, contacts: {response}")
         resp_contacts = response["logs"] if status_code == 200 else []
         if len(resp_contacts) < 2:
-            print("contact fetching failed, using default contacts")
+            logger.info("contact fetching failed, using default contacts")
             contacts = get_default_contacts(assistant_data)
         else:
             contacts = [c["entries"] for c in resp_contacts]
-    print("contacts:", contacts)
+    logger.info(f"contacts: {contacts}")
 
     # check contact validity
     is_local_assistant = bool(assistant_data.get("is_local", False))
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_local_assistant
-
-    # track raw demand for container capacity
-    if (
-        ensure_job
-        and is_valid_contact
-        and not is_test_assistant
-        and not is_local_assistant
-    ):
-        JOB_DEMAND_TOTAL.labels(channel=channel).inc()
 
     # ensure job is running (skip for local/test assistants)
     job_started = False
@@ -703,6 +750,7 @@ def build_webhook_context(
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )
     if should_start_job:
+        JOB_DEMAND_TOTAL.labels(channel=channel).inc()
         # Mark as running BEFORE sending the startup message to prevent
         # race conditions when multiple requests come in quickly
         mark_job_running(assistant_data, channel)
@@ -711,7 +759,7 @@ def build_webhook_context(
         job_started = True
         is_running = True
 
-    print("is_valid_contact:", is_valid_contact)
+    logger.info(f"is_valid_contact: {is_valid_contact}")
     _ctx_status = "error" if assistant_data.get("assistant_id") is None else "success"
     BUILD_WEBHOOK_CONTEXT_DURATION.labels(
         channel=channel,
@@ -1192,12 +1240,12 @@ def publish_outlook_thread_id(
         publish_future = publisher.publish(topic_path, data=data)
         if "test" in assistant_id:
             msg_id = publish_future.result(timeout=10)
-            print(f"Message ID: {msg_id}")
-        print(
+            logger.info(f"Message ID: {msg_id}")
+        logger.info(
             f"Published conversation_id {conversation_id} for user {user_id} to {topic_path}",
         )
     except Exception as e:
-        print(
+        logger.info(
             f"Failed to publish conversation_id {conversation_id} for user {user_id}: {e}",
         )
 
@@ -1209,7 +1257,7 @@ def dispatch_livekit_agent(room_name: str):
         json={"room_name": room_name},
     )
     if response.status_code != 200:
-        print(f"Failed to dispatch LiveKit agent. Status: {response.status_code}")
+        logger.info(f"Failed to dispatch LiveKit agent. Status: {response.status_code}")
         return False
     return True
 
@@ -1279,7 +1327,7 @@ async def store_microsoft_tokens(
     - MICROSOFT_TOKEN_EXPIRES_AT
     """
     if not ORCHESTRA_URL:
-        print("ORCHESTRA_URL not configured")
+        logger.info("ORCHESTRA_URL not configured")
         return False
 
     secrets_to_store = {
@@ -1289,7 +1337,7 @@ async def store_microsoft_tokens(
     }
 
     if not api_key:
-        print("api_key not configured")
+        logger.info("api_key not configured")
         return False
 
     success = True
@@ -1303,22 +1351,26 @@ async def store_microsoft_tokens(
                     "timeout": 30.0,
                 }
                 if old_secrets and secret_name in old_secrets:
-                    print(f"Updating secret {secret_name} for assistant {assistant_id}")
+                    logger.info(
+                        f"Updating secret {secret_name} for assistant {assistant_id}"
+                    )
                     args["url"] += f"/{secret_name}"
                     args["json"].pop("secret_name")
                     response = await client.put(**args)
                 else:
-                    print(f"Creating secret {secret_name} for assistant {assistant_id}")
+                    logger.info(
+                        f"Creating secret {secret_name} for assistant {assistant_id}"
+                    )
                     response = await client.post(**args)
                 if response.status_code in (200, 201):
-                    print(f"Stored {secret_name} for assistant {assistant_id}")
+                    logger.info(f"Stored {secret_name} for assistant {assistant_id}")
                 else:
-                    print(
+                    logger.info(
                         f"Failed to store {secret_name}: {response.status_code} - {response.text}",
                     )
                     success = False
             except Exception as e:
-                print(f"Error storing {secret_name}: {e}")
+                logger.info(f"Error storing {secret_name}: {e}")
                 success = False
 
     return success

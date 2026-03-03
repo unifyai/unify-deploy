@@ -21,6 +21,7 @@ from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 
@@ -91,10 +92,19 @@ def _get_twilio_validator() -> RequestValidator:
 
 
 async def validate_twilio_signature(request: Request):
-    """FastAPI dependency that validates the X-Twilio-Signature header."""
+    """FastAPI dependency that validates the X-Twilio-Signature header.
+
+    Cloud Run proxies rewrite the Host header, so ``str(request.url)``
+    returns an internal URL that differs from the public URL Twilio signed
+    against. Reconstruct the original URL from forwarded headers.
+    """
     validator = _get_twilio_validator()
     signature = request.headers.get("X-Twilio-Signature", "")
-    url = str(request.url)
+    proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+    host = request.headers.get("X-Forwarded-Host", request.headers.get("Host", ""))
+    url = f"{proto}://{host}{request.url.path}"
+    if request.url.query:
+        url += f"?{request.url.query}"
     form_data = await request.form()
     params = {k: v for k, v in form_data.items()}
     if not validator.validate(url, params, signature):
@@ -208,7 +218,7 @@ async def twilio_call_webhook(request: Request):
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     room_name = make_room_name(assistant_id, "phone")
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
     logger.info(f"Setting up conference {conference_name}")
     logger.info(f"LiveKit room will be: {room_name}")
 
@@ -671,7 +681,7 @@ async def teams_call_webhook(request: Request):
         )
 
     room_name = make_room_name(assistant_id, "teams")
-    sip_uri = f"sip:{teams_number}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
 
     # print(f"Teams call for assistant {assistant_id}, room: {room_name}")
 
@@ -2712,6 +2722,20 @@ async def scheduled_jobs_cleanup(request: Request):
     return Response(content=json.dumps({"idle_jobs": idle_jobs}), status_code=200)
 
 
+@app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
+async def scheduled_cert_renewal(request: Request):
+    """Renew the *.vm.unify.ai wildcard TLS cert if within 30 days of expiry.
+
+    Triggered monthly by Cloud Scheduler. Checks the current cert in Secret
+    Manager; if it expires within 30 days (or is missing), performs a DNS-01
+    challenge via Let's Encrypt and updates the secrets.
+    """
+    from communication.infra.cert_renewal import renew_if_needed
+
+    result = renew_if_needed(days_threshold=30)
+    return result
+
+
 # =============================================================================
 # Main Entry Point
 # =============================================================================
@@ -2745,6 +2769,7 @@ if __name__ == "__main__":
     logger.info("    - POST /scheduled/email-watches")
     logger.info("    - POST /scheduled/jobs/create")
     logger.info("    - POST /scheduled/jobs/cleanup")
+    logger.info("    - POST /scheduled/cert-renewal")
     logger.info("Server running at: http://localhost:8080")
 
     uvicorn.run("adapters.main:app", host="0.0.0.0", port=8080, reload=True)

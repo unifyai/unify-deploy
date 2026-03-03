@@ -134,6 +134,8 @@ def delete_job(
         if required_labels:
             job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
             current_labels = job.metadata.labels or {}
+            print(f"Current labels: {current_labels}")
+            print(f"Required labels: {required_labels}")
             for key, value in required_labels.items():
                 if current_labels.get(key) != value:
                     print(

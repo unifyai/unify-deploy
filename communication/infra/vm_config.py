@@ -77,6 +77,12 @@ UBUNTU_INIT_SCRIPT_PATH = os.path.join(
 )
 
 # =============================================================================
+# Wildcard TLS Certificate (Secret Manager)
+# =============================================================================
+VM_WILDCARD_CERT_SECRET = "VM_WILDCARD_FULLCHAIN"
+VM_WILDCARD_KEY_SECRET = "VM_WILDCARD_PRIVKEY"
+
+# =============================================================================
 # Secrets (loaded from Secret Manager in production)
 # =============================================================================
 MAK_KEY = os.getenv("MAK_KEY", "")

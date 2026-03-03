@@ -22,6 +22,8 @@ from .vm_helpers import (
     start_vm,
     stop_vm,
     get_vm_status,
+    get_dns_hostname,
+    _probe_vm_https,
 )
 from .tunnel_helpers import (
     register_tunnel,
@@ -1038,6 +1040,22 @@ async def vm_ready_endpoint(
 
     assistant_id = request_body.assistant_id
     vm_type = request_body.vm_type
+
+    hostname = get_dns_hostname(assistant_id)
+    loop = asyncio.get_running_loop()
+    reachable = await loop.run_in_executor(
+        None,
+        partial(_probe_vm_https, hostname),
+    )
+    if not reachable:
+        logger.warning(
+            f"VM HTTPS probe failed for {hostname} (assistant {assistant_id}), "
+            "not publishing assistant_desktop_ready",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"VM HTTPS not reachable at {hostname}",
+        )
 
     creds_json = json.loads(os.getenv("GCP_SA_KEY"))
     creds = Credentials.from_service_account_info(creds_json)

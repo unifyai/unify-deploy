@@ -157,6 +157,28 @@ steps:
       --location="${_REGION}"
   waitFor: ['deploy']
 
+  # Update Cloud Scheduler: Cert Renewal
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-cert-renewal'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    gcloud scheduler jobs update http "cert-renewal" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/cert-renewal" \
+      --http-method POST \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "cert-renewal" \
+      --schedule "0 3 1 * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/cert-renewal" \
+      --http-method POST \
+      --message-body '{}' \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+  waitFor: ['deploy']
+
 # Options
 options:
   substitutionOption: ALLOW_LOOSE
