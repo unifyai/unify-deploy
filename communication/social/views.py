@@ -11,6 +11,8 @@ load_dotenv()
 
 router = APIRouter()
 
+MESSAGING_SERVICE_NAME = "Unity"
+
 
 # --- Schema ---
 class VerificationRequest(BaseModel):
@@ -28,6 +30,28 @@ class VerificationRequest(BaseModel):
 def generate_verification_code(length: int = 6) -> str:
     """Generates a random numeric verification code."""
     return "".join(random.choices(string.digits, k=length))
+
+
+_messaging_service_sid: str | None = None
+
+
+def _get_messaging_service_sid() -> str:
+    """Look up the SID of the 'Unity' Twilio Messaging Service.
+
+    The Messaging Service has a pool of phone numbers across countries,
+    so Twilio automatically selects a valid sender for the destination.
+    """
+    global _messaging_service_sid
+    if _messaging_service_sid is not None:
+        return _messaging_service_sid
+    twilio_client = get_twilio_client()
+    for service in twilio_client.messaging.v1.services.list():
+        if service.friendly_name == MESSAGING_SERVICE_NAME:
+            _messaging_service_sid = service.sid
+            return _messaging_service_sid
+    raise RuntimeError(
+        f"Twilio Messaging Service '{MESSAGING_SERVICE_NAME}' not found",
+    )
 
 
 # --- API Endpoints ---
@@ -71,7 +95,6 @@ async def send_verification_message(request: VerificationRequest):
                 body=message,
             )
         except Exception as e:
-            # Log the full error for debugging but return a generic message to the user
             print(f"ERROR sending WhatsApp verification: {e}")
             raise HTTPException(
                 status_code=500,
@@ -82,24 +105,17 @@ async def send_verification_message(request: VerificationRequest):
         message = f"Your Unify verification code is: {code}"
         try:
             twilio_client = get_twilio_client()
-
-            from_number = os.getenv("TWILIO_VERIFICATION_NUMBER")
-            if not from_number:
-                raise HTTPException(
-                    status_code=500,
-                    detail="TWILIO_VERIFICATION_NUMBER environment variable is not configured.",
-                )
-
+            messaging_sid = _get_messaging_service_sid()
             twilio_client.messages.create(
                 to=identifier,
-                from_=from_number,
+                messaging_service_sid=messaging_sid,
                 body=message,
             )
         except Exception as e:
             print(f"ERROR sending phone verification: {e}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to send phone verification sms.",
+                detail="Failed to send phone verification sms.",
             )
 
     else:
@@ -108,7 +124,6 @@ async def send_verification_message(request: VerificationRequest):
             detail=f"Platform '{platform}' is not supported. Supported platforms are: 'whatsapp', 'phone'.",
         )
 
-    # If sending was successful, return the code and a UTC timestamp.
     sent_at = datetime.now(timezone.utc).isoformat()
 
     return {
