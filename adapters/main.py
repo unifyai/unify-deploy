@@ -91,10 +91,19 @@ def _get_twilio_validator() -> RequestValidator:
 
 
 async def validate_twilio_signature(request: Request):
-    """FastAPI dependency that validates the X-Twilio-Signature header."""
+    """FastAPI dependency that validates the X-Twilio-Signature header.
+
+    Cloud Run proxies rewrite the Host header, so ``str(request.url)``
+    returns an internal URL that differs from the public URL Twilio signed
+    against. Reconstruct the original URL from forwarded headers.
+    """
     validator = _get_twilio_validator()
     signature = request.headers.get("X-Twilio-Signature", "")
-    url = str(request.url)
+    proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+    host = request.headers.get("X-Forwarded-Host", request.headers.get("Host", ""))
+    url = f"{proto}://{host}{request.url.path}"
+    if request.url.query:
+        url += f"?{request.url.query}"
     form_data = await request.form()
     params = {k: v for k, v in form_data.items()}
     if not validator.validate(url, params, signature):
@@ -208,7 +217,7 @@ async def twilio_call_webhook(request: Request):
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     room_name = make_room_name(assistant_id, "phone")
-    sip_uri = f"sip:+{twilio_number[1:]}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
     logger.info(f"Setting up conference {conference_name}")
     logger.info(f"LiveKit room will be: {room_name}")
 
@@ -671,7 +680,7 @@ async def teams_call_webhook(request: Request):
         )
 
     room_name = make_room_name(assistant_id, "teams")
-    sip_uri = f"sip:{teams_number}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
 
     # print(f"Teams call for assistant {assistant_id}, room: {room_name}")
 

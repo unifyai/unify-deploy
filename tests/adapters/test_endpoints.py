@@ -87,6 +87,9 @@ def test_twilio_call_webhook(test_client):
         assert f"Unity_{assistant_number[1:]}" in data["event"]["conference_name"]
         assert data["event"]["caller_number"] == user_number
         assert data["event"]["livekit_room"] == "unity_default-test-assistant_phone"
+        assert data["event"]["sip_uri"].startswith(
+            "sip:unity_default-test-assistant_phone@",
+        ), f"SIP URI should use room name, got: {data['event']['sip_uri']}"
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert (
             "call_metadata" in data["event"]
