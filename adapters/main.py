@@ -21,6 +21,7 @@ from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.twiml.voice_response import VoiceResponse
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 
