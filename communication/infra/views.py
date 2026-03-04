@@ -548,6 +548,7 @@ async def start_job(
         # Publish the message
         future = publisher.publish(topic_path, data=message_data)
         message_id = future.result()
+        print(f"Job start request published for assistant {assistant_id}")
 
         return {
             "success": True,
