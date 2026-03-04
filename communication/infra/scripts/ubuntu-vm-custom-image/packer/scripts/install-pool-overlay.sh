@@ -99,6 +99,15 @@ systemctl enable unity-pool-watcher.service
 echo "  Systemd service installed and enabled"
 
 # =============================================================================
+# Patchright Chromium (pre-installed for faster first assign)
+# =============================================================================
+echo ""
+echo "=== Installing Patchright Chromium ==="
+
+npx --yes patchright install --with-deps chromium 2>&1 || true
+echo "  Patchright Chromium installed"
+
+# =============================================================================
 # Summary
 # =============================================================================
 echo ""
@@ -108,5 +117,6 @@ echo "=========================================="
 echo ""
 echo "Added:"
 echo "  - Pool user: unityuser (SFTP on port 2222)"
+echo "  - Patchright Chromium"
 echo "  - Pool watcher: unity-pool-watcher.service (systemd)"
 echo ""

@@ -98,6 +98,14 @@ do_update() {
             npm install 2>&1
         fi
         cd /
+
+        # Install Patchright Chromium from magnitude-core
+        if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
+            log "Installing Patchright Chromium..."
+            cd /magnitude/packages/magnitude-core && npx --yes patchright install --with-deps chromium 2>&1 || true
+            cd /
+            log "Patchright Chromium installed"
+        fi
         log "Magnitude updated"
     fi
 
@@ -219,6 +227,7 @@ NODE_ENV=production
 UNIFY_KEY=$unify_key
 ORCHESTRA_URL=$orchestra_url
 UNITY_COMMS_URL=$comms_url
+PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 EOF
     log "Agent Service .env configured"
 
