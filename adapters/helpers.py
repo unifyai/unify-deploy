@@ -202,6 +202,7 @@ def get_assistant(
         "demo_id": assistants[0].get("demo_id", None),
         "is_local": assistants[0].get("is_local", False),
         "team_ids": assistants[0].get("team_ids", []),
+        "org_id": assistants[0].get("organization_id", None),
     }
 
 
@@ -590,6 +591,7 @@ def start_unity_job(assistant: dict, medium: str):
                 # Pass demo_id directly; Unity derives demo_mode from demo_id presence
                 "demo_id": str(demo_id) if demo_id else "",
                 "team_ids": json.dumps(assistant.get("team_ids", [])),
+                "org_id": str(assistant.get("org_id", "")) if assistant.get("org_id") is not None else "",
             },
             timeout=1,
         )

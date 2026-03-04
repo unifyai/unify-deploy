@@ -461,6 +461,7 @@ async def start_job(
     user_desktop_url: str = Form(""),
     demo_id: str = Form(""),
     team_ids: str = Form(""),
+    org_id: str = Form(""),
 ):
     """
     Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
@@ -492,6 +493,7 @@ async def start_job(
         user_desktop_url: URL to user's own desktop (optional)
         demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
         team_ids: JSON-encoded list of team IDs the user belongs to (optional, defaults to empty)
+        org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
     try:
         # Get credentials from environment variable
@@ -539,6 +541,7 @@ async def start_job(
                 # Pass demo_id as int or None; Unity derives demo_mode from presence
                 "demo_id": int(demo_id) if demo_id else None,
                 "team_ids": json.loads(team_ids) if team_ids else [],
+                "org_id": int(org_id) if org_id else None,
             },
         }
 
