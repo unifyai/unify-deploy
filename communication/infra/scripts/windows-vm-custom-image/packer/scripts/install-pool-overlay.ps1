@@ -57,20 +57,26 @@ if ($sshCapability.State -ne "Installed") {
 }
 
 $sshdConfigPath = "C:\ProgramData\ssh\sshd_config"
-if (Test-Path $sshdConfigPath) {
-    $content = Get-Content $sshdConfigPath -Raw
-    if ($content -notmatch "Port 2222") {
-        $content = $content -replace "#Port 22", "Port 2222"
-        if ($content -notmatch "Port 2222") {
-            $content += "`nPort 2222`n"
-        }
-        Set-Content -Path $sshdConfigPath -Value $content
-        Write-Host "  Configured SSHD on port 2222"
-    }
-}
+New-Item -ItemType Directory -Force -Path "C:\ProgramData\ssh" | Out-Null
+$sshdConfig = @"
+# Unity File Sync - OpenSSH Server Configuration
+
+Port 2222
+PasswordAuthentication no
+PubkeyAuthentication yes
+
+# Use administrators_authorized_keys for all users
+AuthorizedKeysFile C:/ProgramData/ssh/administrators_authorized_keys
+
+# Subsystem for SFTP
+Subsystem sftp sftp-server.exe
+"@
+Set-Content -Path $sshdConfigPath -Value $sshdConfig -Encoding UTF8
+Write-Host "  Configured SSHD on port 2222 (full config)"
 
 Set-Service -Name sshd -StartupType Automatic
-Write-Host "  SSHD set to auto-start"
+Start-Service sshd -ErrorAction SilentlyContinue
+Write-Host "  SSHD started and set to auto-start"
 
 # Firewall rule for SSH port 2222
 New-NetFirewallRule -DisplayName "Unity SSH 2222" -Direction Inbound -LocalPort 2222 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue

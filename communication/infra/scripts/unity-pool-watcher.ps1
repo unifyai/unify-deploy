@@ -89,18 +89,23 @@ function Invoke-Assign($unifyKey) {
         }
     }
 
-    # SSH authorized_keys
-    if ($sshPublicKey) {
-        $sshDir = "C:\ProgramData\ssh"
-        New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
-        Set-Content -Path "$sshDir\administrators_authorized_keys" -Value $sshPublicKey -Encoding UTF8
-        icacls "$sshDir\administrators_authorized_keys" /inheritance:r /grant "SYSTEM:F" /grant "Administrators:F" 2>$null
-        Write-Log "SSH authorized_keys configured"
+    # SSH authorized_keys + restart SSHD
+    try {
+        if ($sshPublicKey) {
+            $sshDir = "C:\ProgramData\ssh"
+            New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+            Set-Content -Path "$sshDir\administrators_authorized_keys" -Value $sshPublicKey -Encoding UTF8
+            icacls "$sshDir\administrators_authorized_keys" /inheritance:r /grant "SYSTEM:F" /grant "Administrators:F" 2>$null
+            Restart-Service sshd -ErrorAction SilentlyContinue
+            Write-Log "SSH authorized_keys configured, SSHD restarted"
+        }
+    } catch {
+        Write-Log "WARNING: SSH setup failed: $_"
     }
 
     # TightVNC password via registry
-    if ($vncPassword) {
-        try {
+    try {
+        if ($vncPassword) {
             $vncKey = [System.Text.Encoding]::ASCII.GetBytes(($vncPassword + "`0`0`0`0`0`0`0`0").Substring(0, 8))
             $desKey = [byte[]]@(0xe8, 0x4a, 0xd6, 0x60, 0xc4, 0x72, 0x1a, 0xe0)
             $des = [System.Security.Cryptography.DES]::Create()
@@ -109,36 +114,62 @@ function Invoke-Assign($unifyKey) {
             $des.Key = $desKey
             $encryptor = $des.CreateEncryptor()
             $encrypted = $encryptor.TransformFinalBlock($vncKey, 0, 8)
-            Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "Password" -Value $encrypted -Type Binary -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "ControlPassword" -Value $encrypted -Type Binary -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "Password" -Value $encrypted -Type Binary
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "ControlPassword" -Value $encrypted -Type Binary
             Restart-Service "TightVNC Server" -ErrorAction SilentlyContinue
             Write-Log "VNC password updated"
-        } catch {
-            Write-Log "WARNING: failed to update VNC password: $_"
+
+            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" `
+                -Name "DefaultPassword" -Value $vncPassword -ErrorAction SilentlyContinue
         }
+    } catch {
+        Write-Log "WARNING: VNC password update failed: $_"
     }
 
-    # Update auto-logon password
-    if ($vncPassword) {
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" `
-            -Name "DefaultPassword" -Value $vncPassword -ErrorAction SilentlyContinue
-    }
+    # Agent Service: kill existing, write .env, start directly
+    try {
+        Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
 
-    # Agent Service .env
-    $envContent = @"
+        $agentServiceDir = "C:\agent-service"
+        $envContent = @"
 PORT=3000
 NODE_ENV=production
 UNIFY_KEY=$unifyKey
 ORCHESTRA_URL=$orchestraUrl
 UNITY_COMMS_URL=$commsUrl
 "@
-    Set-Content -Path "C:\agent-service\.env" -Value $envContent -Encoding UTF8
-    Write-Log "Agent Service .env configured"
+        Set-Content -Path "$agentServiceDir\.env" -Value $envContent -Encoding UTF8
+        Write-Log "Agent Service .env configured"
 
-    # Start Agent Service scheduled task
-    Enable-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-    Start-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-    Write-Log "Agent Service started"
+        # Ensure start script exists
+        $startBat = @"
+@echo off
+set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
+cd /d C:\agent-service
+npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
+"@
+        Set-Content -Path "$agentServiceDir\start-agent.bat" -Value $startBat -Encoding ASCII
+
+        if (Test-Path "$agentServiceDir\package.json") {
+            Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$agentServiceDir\start-agent.bat`"" `
+                -WorkingDirectory $agentServiceDir -WindowStyle Hidden
+            Write-Log "Agent Service started (direct)"
+        }
+    } catch {
+        Write-Log "WARNING: Agent Service start failed: $_"
+    }
+
+    # Display resolution: run the script directly in the console session
+    try {
+        $resScript = "C:\novnc\set-resolution.ps1"
+        if (Test-Path $resScript) {
+            Start-ScheduledTask -TaskName "SetDisplayResolution" -ErrorAction SilentlyContinue
+            Write-Log "Display resolution task triggered"
+        }
+    } catch {
+        Write-Log "WARNING: Display resolution trigger failed: $_"
+    }
 
     # Send ready notification
     if ($commsUrl -and $hostname -and $unifyKey -and $assistantId) {
@@ -191,6 +222,7 @@ function Invoke-Release {
         $encrypted = $encryptor.TransformFinalBlock($deadPw, 0, 8)
         Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "Password" -Value $encrypted -Type Binary -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "ControlPassword" -Value $encrypted -Type Binary -ErrorAction SilentlyContinue
+        Restart-Service "TightVNC Server" -ErrorAction SilentlyContinue
         Write-Log "VNC password reset"
     } catch {
         Write-Log "WARNING: failed to reset VNC password: $_"
