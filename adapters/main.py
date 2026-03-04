@@ -800,6 +800,9 @@ ALLOWED_EXTENSIONS = {
     ".xml",
     ".yaml",
     ".yml",
+    # Web
+    ".html",
+    ".htm",
 }
 
 # Blocked extensions (executables, scripts)
@@ -862,6 +865,8 @@ ALLOWED_MIME_TYPES = {
     "text/xml",
     "application/x-yaml",
     "text/yaml",
+    # Web
+    "text/html",
     # Generic (for unknown but allowed extensions)
     "application/octet-stream",
 }
@@ -2716,7 +2721,7 @@ async def scheduled_jobs_cleanup(request: Request):
 
     idle_jobs_to_delete = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
     logger.info(
-        f"Idle jobs to deletion: {[j['job_name'] for j in idle_jobs_to_delete]}"
+        f"Idle jobs to deletion: {[j['job_name'] for j in idle_jobs_to_delete]}",
     )
     logger.info(f"Idle jobs to retain: {[j['job_name'] for j in new_idle_jobs]}")
 
