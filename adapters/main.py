@@ -827,20 +827,6 @@ async def unify_attachment_upload(
         # Sanitize filename (handles both Unix and Windows path separators)
         safe_filename = sanitize_filename(filename)
 
-        # Validate file size (max 25MB to match Gmail limit)
-        max_size_bytes = 25 * 1024 * 1024
-        if file_size > max_size_bytes:
-            file_size_mb = file_size / (1024 * 1024)
-            return Response(
-                content=json.dumps(
-                    {
-                        "error": f"File too large: {file_size_mb:.1f}MB exceeds 25MB limit",
-                    },
-                ),
-                status_code=400,
-                media_type="application/json",
-            )
-
         # Generate unique ID for the attachment
         attachment_id = str(uuid.uuid4())
 
