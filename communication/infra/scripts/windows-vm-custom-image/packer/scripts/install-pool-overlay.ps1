@@ -98,6 +98,113 @@ Start-Process msiexec.exe -ArgumentList "/i `"$tightVncInstaller`" /quiet /nores
 Write-Host "  TightVNC installed with dummy password"
 
 # =============================================================================
+# Display Resolution (1920x1080 scheduled task for unityuser)
+# =============================================================================
+Write-Host ""
+Write-Host "=== Setting up Display Resolution ===" -ForegroundColor Cyan
+
+$novncDir = "C:\novnc"
+New-Item -ItemType Directory -Force -Path $novncDir | Out-Null
+
+$resolutionScript = @'
+$code = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class DisplaySettings {
+    [DllImport("user32.dll")]
+    public static extern int EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
+
+    [DllImport("user32.dll")]
+    public static extern int ChangeDisplaySettings(ref DEVMODE devMode, int flags);
+
+    public const int ENUM_CURRENT_SETTINGS = -1;
+    public const int CDS_UPDATEREGISTRY = 0x01;
+    public const int CDS_TEST = 0x02;
+    public const int DISP_CHANGE_SUCCESSFUL = 0;
+    public const int DM_PELSWIDTH = 0x80000;
+    public const int DM_PELSHEIGHT = 0x100000;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public struct DEVMODE {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmDeviceName;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
+    }
+
+    public static int SetResolution(int width, int height) {
+        DEVMODE dm = new DEVMODE();
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm) == 0) {
+            return -1;
+        }
+        dm.dmPelsWidth = width;
+        dm.dmPelsHeight = height;
+        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+        int testResult = ChangeDisplaySettings(ref dm, CDS_TEST);
+        if (testResult != DISP_CHANGE_SUCCESSFUL) {
+            return testResult;
+        }
+        return ChangeDisplaySettings(ref dm, CDS_UPDATEREGISTRY);
+    }
+}
+"@
+
+try {
+    Add-Type -TypeDefinition $code -Language CSharp -ErrorAction Stop
+} catch {}
+
+$result = [DisplaySettings]::SetResolution(1920, 1080)
+if ($result -eq 0) {
+    "Resolution set to 1920x1080" | Out-File -FilePath "C:\novnc\resolution.log" -Append -Encoding UTF8
+} else {
+    "Failed to set resolution, error code: $result" | Out-File -FilePath "C:\novnc\resolution.log" -Append -Encoding UTF8
+}
+'@
+
+$resolutionScript | Out-File -FilePath "$novncDir\set-resolution.ps1" -Encoding UTF8
+Write-Host "  Created resolution script at $novncDir\set-resolution.ps1"
+
+$taskName = "SetDisplayResolution"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 3; & 'C:\novnc\set-resolution.ps1'`"" `
+    -WorkingDirectory $novncDir
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
+$principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+Write-Host "  Scheduled task '$taskName' created for unityuser (at logon)"
+
+# =============================================================================
 # Pool Watcher (NSSM Windows service)
 # =============================================================================
 Write-Host ""
@@ -136,5 +243,6 @@ Write-Host "Added:" -ForegroundColor Cyan
 Write-Host "  - Pool user: unityuser (auto-logon, Administrator)"
 Write-Host "  - OpenSSH Server (port 2222)"
 Write-Host "  - TightVNC Server (dummy password, updated at assignment)"
+Write-Host "  - Display resolution (1920x1080 at logon)"
 Write-Host "  - Pool watcher: UnityPoolWatcher service (NSSM)"
 Write-Host ""

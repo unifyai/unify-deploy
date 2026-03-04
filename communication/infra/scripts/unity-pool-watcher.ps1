@@ -50,7 +50,13 @@ function Invoke-Assign($unifyKey) {
         $maxWait = 30
         $disk = $null
         for ($i = 0; $i -lt $maxWait; $i++) {
-            $disk = Get-Disk | Where-Object { $_.FriendlyName -match $diskDevice -or $_.SerialNumber -match $diskDevice } | Select-Object -First 1
+            Update-HostStorageCache -ErrorAction SilentlyContinue
+            $disk = Get-Disk | Where-Object {
+                $_.SerialNumber -and $_.SerialNumber -match $diskDevice
+            } | Select-Object -First 1
+            if (-not $disk) {
+                $disk = Get-Disk | Where-Object { $_.Number -gt 0 } | Select-Object -First 1
+            }
             if ($disk) { break }
             Start-Sleep -Seconds 1
         }
