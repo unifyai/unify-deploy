@@ -120,34 +120,31 @@ def delete_job(
     batch_api,
     job_name: str,
     namespace: str = "default",
-    required_labels: dict | None = None,
+    resource_version: str | None = None,
 ):
     """Delete a Unity job.
 
     Args:
-        required_labels: If provided, the job's current labels must contain all
-            of these key-value pairs or the deletion is skipped (returns False).
-            Guards against TOCTOU races where a job's status changes between
-            listing and deletion.
+        resource_version: If provided, the job's resourceVersion must match this
+            exactly or the deletion is skipped (returns False). Guards against
+            TOCTOU races where a job's status changes between listing and deletion.
     """
     try:
-        if required_labels:
-            job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
-            current_labels = job.metadata.labels or {}
-            print(f"Current labels: {current_labels}")
-            print(f"Required labels: {required_labels}")
-            for key, value in required_labels.items():
-                if current_labels.get(key) != value:
-                    print(
-                        f"⏭️  Skipping delete for {job_name}: "
-                        f"label {key}={current_labels.get(key)!r}, expected {value!r}",
-                    )
-                    return False
+        # Use preconditions to guard against TOCTOU races. If the job's
+        # resourceVersion has changed (e.g. label patched to 'running'),
+        # the delete will fail with 409 Conflict.
+        delete_options = k8s_client.V1DeleteOptions(
+            propagation_policy="Background",
+        )
+        if resource_version:
+            delete_options.preconditions = k8s_client.V1Preconditions(
+                resource_version=resource_version,
+            )
 
         batch_api.delete_namespaced_job(
             name=job_name,
             namespace=namespace,
-            propagation_policy="Background",
+            body=delete_options,
         )
 
         print(f"✅ Job deleted successfully: {job_name}")
@@ -157,6 +154,12 @@ def delete_job(
         if e.status == 404:
             print(f"⚠️  Job not found (already deleted): {job_name}")
             return True
+        elif e.status == 409:
+            print(
+                f"⏭️  Skipping delete for {job_name}: "
+                f"Conflict (resource modified since last check)",
+            )
+            return False
         else:
             print(f"❌ Error deleting job: {e}")
             return False

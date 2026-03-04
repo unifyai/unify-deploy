@@ -2689,45 +2689,52 @@ async def scheduled_jobs_cleanup(request: Request):
         params={"label_selector": "app=unity,unity-status=idle"},
         headers=headers,
     )
-    jobs = resp.json()
+    jobs_data = resp.json()
     idle_jobs = [
-        job["job_name"]
-        for job in jobs["jobs"]
+        job
+        for job in jobs_data["jobs"]
         if (STAGING and "staging" in job["job_name"])
         or (not STAGING and "staging" not in job["job_name"])
     ]
 
     # separate recently-created idle jobs (< 11 min old) to retain one
     new_idle_jobs = []
-    for job_name in idle_jobs:
+    for job in idle_jobs:
+        job_name = job["job_name"]
         job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
         delta = now - job_timestamp
         if delta < timedelta(minutes=11):
-            new_idle_jobs.append(job_name)
+            new_idle_jobs.append(job)
 
     if len(new_idle_jobs) == 0:
         if len(idle_jobs) != 0:
-            idle_jobs = sorted(idle_jobs)[:-1]
+            idle_jobs = sorted(idle_jobs, key=lambda x: x["job_name"])[:-1]
     else:
-        new_idle_jobs = [sorted(new_idle_jobs)[-1]]
-    idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
-    logger.info(f"Idle jobs up to deletion: {idle_jobs}")
-    logger.info(f"Idle jobs to retain: {new_idle_jobs}")
+        new_idle_jobs = [sorted(new_idle_jobs, key=lambda x: x["job_name"])[-1]]
+
+    idle_jobs_to_delete = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
+    logger.info(
+        f"Idle jobs to deletion: {[j['job_name'] for j in idle_jobs_to_delete]}"
+    )
+    logger.info(f"Idle jobs to retain: {[j['job_name'] for j in new_idle_jobs]}")
 
     # delete all old idle jobs (re-check label to guard against race conditions)
-    for job_name in idle_jobs:
+    for job in idle_jobs_to_delete:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
             data={
-                "job_name": job_name,
-                "required_labels": json.dumps({"unity-status": "idle"}),
+                "job_name": job["job_name"],
+                "resource_version": job["resource_version"],
             },
             headers=headers,
         )
 
-    return Response(content=json.dumps({"idle_jobs": idle_jobs}), status_code=200)
+    return Response(
+        content=json.dumps({"idle_jobs": [j["job_name"] for j in idle_jobs_to_delete]}),
+        status_code=200,
+    )
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
