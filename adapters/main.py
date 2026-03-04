@@ -2720,7 +2720,7 @@ async def scheduled_jobs_cleanup(request: Request):
     )
     logger.info(f"Idle jobs to retain: {[j['job_name'] for j in new_idle_jobs]}")
 
-    # delete all old idle jobs (re-check label to guard against race conditions)
+    # delete all old idle jobs (unless the resource version changed)
     for job in idle_jobs_to_delete:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
