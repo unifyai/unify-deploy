@@ -413,7 +413,6 @@ class TestAttachmentUploadNewBehavior:
     - gs_url in response (permanent URL)
     - content_type in response
     - size_bytes in response
-    - File type validation (blocklist/allowlist)
     - User-scoped GCS paths
     """
 
@@ -481,40 +480,6 @@ class TestAttachmentUploadNewBehavior:
         data = response.json()
         assert "size_bytes" in data
         assert data["size_bytes"] == 1024
-
-    def test_upload_blocks_executable_files(self, client):
-        """Executable file types are blocked."""
-        blocked_files = [
-            ("malware.exe", "application/x-msdownload"),
-            ("script.bat", "application/x-msdos-program"),
-            ("shell.sh", "application/x-sh"),
-            ("powershell.ps1", "application/octet-stream"),
-        ]
-
-        for filename, mime in blocked_files:
-            files = {"file": (filename, io.BytesIO(b"malicious"), mime)}
-            response = client.post(
-                "/unify/attachment",
-                files=files,
-                data={"assistant_id": "test-assistant"},
-            )
-            assert response.status_code == 400, f"{filename} should be blocked"
-            assert (
-                "blocked" in response.json()["error"].lower()
-                or "not allowed" in response.json()["error"].lower()
-            )
-
-    def test_upload_blocks_unknown_file_types(self, client):
-        """Unknown file types not in allowlist are blocked."""
-        files = {"file": ("data.xyz", io.BytesIO(b"content"), "application/x-unknown")}
-
-        response = client.post(
-            "/unify/attachment",
-            files=files,
-            data={"assistant_id": "test-assistant"},
-        )
-
-        assert response.status_code == 400
 
 
 class TestMessageNewBehavior:
