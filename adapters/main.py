@@ -766,106 +766,6 @@ UNIFY_ATTACHMENTS_BUCKET = os.getenv(
     "assistant-message-attachments",
 )
 
-# File type validation - allowed extensions
-ALLOWED_EXTENSIONS = {
-    # Images
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".svg",
-    ".bmp",
-    ".ico",
-    # Documents
-    ".pdf",
-    ".doc",
-    ".docx",
-    ".txt",
-    ".rtf",
-    ".odt",
-    # Spreadsheets
-    ".xls",
-    ".xlsx",
-    ".csv",
-    ".ods",
-    # Presentations
-    ".ppt",
-    ".pptx",
-    ".odp",
-    # Archives (for document bundles)
-    ".zip",
-    # Data
-    ".json",
-    ".xml",
-    ".yaml",
-    ".yml",
-}
-
-# Blocked extensions (executables, scripts)
-BLOCKED_EXTENSIONS = {
-    ".exe",
-    ".bat",
-    ".cmd",
-    ".sh",
-    ".ps1",
-    ".dll",
-    ".so",
-    ".dylib",
-    ".app",
-    ".msi",
-    ".com",
-    ".scr",
-    ".vbs",
-    ".js",
-    ".jse",
-    ".wsf",
-    ".wsh",
-    ".psc1",
-    ".reg",
-    ".inf",
-    ".lnk",
-    ".pif",
-}
-
-# Allowed MIME types
-ALLOWED_MIME_TYPES = {
-    # Images
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-    "image/svg+xml",
-    "image/bmp",
-    "image/x-icon",
-    # Documents
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "text/plain",
-    "application/rtf",
-    "application/vnd.oasis.opendocument.text",
-    # Spreadsheets
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "text/csv",
-    "application/vnd.oasis.opendocument.spreadsheet",
-    # Presentations
-    "application/vnd.ms-powerpoint",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "application/vnd.oasis.opendocument.presentation",
-    # Archives
-    "application/zip",
-    # Data
-    "application/json",
-    "application/xml",
-    "text/xml",
-    "application/x-yaml",
-    "text/yaml",
-    # Generic (for unknown but allowed extensions)
-    "application/octet-stream",
-}
-
 # Maximum attachments per message
 MAX_ATTACHMENTS_PER_MESSAGE = 10
 
@@ -883,45 +783,6 @@ def sanitize_filename(filename: str) -> str:
     basename = basename.replace("..", "")
     # If empty after sanitization, use default
     return basename if basename else "attachment"
-
-
-def get_file_extension(filename: str) -> str:
-    """Get lowercase file extension including the dot."""
-    _, ext = os.path.splitext(filename)
-    return ext.lower()
-
-
-def validate_file_type(filename: str, content_type: str) -> tuple[bool, str]:
-    """
-    Validate file type against blocklist and allowlist.
-
-    Returns (is_valid, error_message).
-    """
-    ext = get_file_extension(filename)
-
-    # Check blocklist first (security)
-    if ext in BLOCKED_EXTENSIONS:
-        return False, f"File type '{ext}' is blocked for security reasons"
-
-    # Check extension allowlist
-    if ext and ext not in ALLOWED_EXTENSIONS:
-        return (
-            False,
-            f"File type '{ext}' is not allowed. Allowed types: images, documents, spreadsheets, presentations, zip, json, xml, yaml",
-        )
-
-    # Check MIME type (but be lenient - some clients send wrong MIME types)
-    # Only block if MIME type is clearly executable
-    blocked_mimes = {
-        "application/x-msdownload",
-        "application/x-msdos-program",
-        "application/x-sh",
-        "application/x-shellscript",
-    }
-    if content_type in blocked_mimes:
-        return False, f"MIME type '{content_type}' is blocked for security reasons"
-
-    return True, ""
 
 
 @app.post("/unify/attachment", dependencies=[Depends(require_admin_key)])
@@ -965,30 +826,6 @@ async def unify_attachment_upload(
 
         # Sanitize filename (handles both Unix and Windows path separators)
         safe_filename = sanitize_filename(filename)
-
-        # Validate file type
-        is_valid, error_msg = validate_file_type(safe_filename, content_type)
-        if not is_valid:
-            logger.info(f"File type validation failed: {error_msg}")
-            return Response(
-                content=json.dumps({"error": error_msg}),
-                status_code=400,
-                media_type="application/json",
-            )
-
-        # Validate file size (max 25MB to match Gmail limit)
-        max_size_bytes = 25 * 1024 * 1024
-        if file_size > max_size_bytes:
-            file_size_mb = file_size / (1024 * 1024)
-            return Response(
-                content=json.dumps(
-                    {
-                        "error": f"File too large: {file_size_mb:.1f}MB exceeds 25MB limit",
-                    },
-                ),
-                status_code=400,
-                media_type="application/json",
-            )
 
         # Generate unique ID for the attachment
         attachment_id = str(uuid.uuid4())
@@ -2689,52 +2526,45 @@ async def scheduled_jobs_cleanup(request: Request):
         params={"label_selector": "app=unity,unity-status=idle"},
         headers=headers,
     )
-    jobs_data = resp.json()
+    jobs = resp.json()
     idle_jobs = [
-        job
-        for job in jobs_data["jobs"]
+        job["job_name"]
+        for job in jobs["jobs"]
         if (STAGING and "staging" in job["job_name"])
         or (not STAGING and "staging" not in job["job_name"])
     ]
 
     # separate recently-created idle jobs (< 11 min old) to retain one
     new_idle_jobs = []
-    for job in idle_jobs:
-        job_name = job["job_name"]
+    for job_name in idle_jobs:
         job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
         delta = now - job_timestamp
         if delta < timedelta(minutes=11):
-            new_idle_jobs.append(job)
+            new_idle_jobs.append(job_name)
 
     if len(new_idle_jobs) == 0:
         if len(idle_jobs) != 0:
-            idle_jobs = sorted(idle_jobs, key=lambda x: x["job_name"])[:-1]
+            idle_jobs = sorted(idle_jobs)[:-1]
     else:
-        new_idle_jobs = [sorted(new_idle_jobs, key=lambda x: x["job_name"])[-1]]
+        new_idle_jobs = [sorted(new_idle_jobs)[-1]]
+    idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
+    logger.info(f"Idle jobs up to deletion: {idle_jobs}")
+    logger.info(f"Idle jobs to retain: {new_idle_jobs}")
 
-    idle_jobs_to_delete = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
-    logger.info(
-        f"Idle jobs to deletion: {[j['job_name'] for j in idle_jobs_to_delete]}"
-    )
-    logger.info(f"Idle jobs to retain: {[j['job_name'] for j in new_idle_jobs]}")
-
-    # delete all old idle jobs (unless the resource version changed)
-    for job in idle_jobs_to_delete:
+    # delete all old idle jobs (re-check label to guard against race conditions)
+    for job_name in idle_jobs:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
             data={
-                "job_name": job["job_name"],
-                "resource_version": job["resource_version"],
+                "job_name": job_name,
+                "required_labels": json.dumps({"unity-status": "idle"}),
             },
             headers=headers,
         )
 
-    return Response(
-        content=json.dumps({"idle_jobs": [j["job_name"] for j in idle_jobs_to_delete]}),
-        status_code=200,
-    )
+    return Response(content=json.dumps({"idle_jobs": idle_jobs}), status_code=200)
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])

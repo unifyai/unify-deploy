@@ -182,33 +182,6 @@ class TestAttachmentUploadCurrentBehavior:
         assert response.status_code == 200
         assert response.json()["filename"] == "my_document.pdf"
 
-    def test_upload_rejects_file_over_25mb(self, client):
-        """Files larger than 25MB are rejected."""
-        large_content = b"x" * (26 * 1024 * 1024)
-        files = {"file": ("large.zip", io.BytesIO(large_content), "application/zip")}
-
-        response = client.post(
-            "/unify/attachment",
-            files=files,
-            data={"assistant_id": "test-assistant"},
-        )
-
-        assert response.status_code == 400
-        assert "25" in response.json()["error"]
-
-    def test_upload_accepts_file_at_25mb(self, client):
-        """Files exactly at 25MB are accepted."""
-        content = b"x" * (25 * 1024 * 1024)
-        files = {"file": ("at_limit.zip", io.BytesIO(content), "application/zip")}
-
-        response = client.post(
-            "/unify/attachment",
-            files=files,
-            data={"assistant_id": "test-assistant"},
-        )
-
-        assert response.status_code == 200
-
     def test_upload_sanitizes_path_traversal(self, client):
         """Path traversal attempts are sanitized."""
         files = {"file": ("../../../etc/passwd", io.BytesIO(b"x"), "text/plain")}
@@ -413,7 +386,6 @@ class TestAttachmentUploadNewBehavior:
     - gs_url in response (permanent URL)
     - content_type in response
     - size_bytes in response
-    - File type validation (blocklist/allowlist)
     - User-scoped GCS paths
     """
 
@@ -481,40 +453,6 @@ class TestAttachmentUploadNewBehavior:
         data = response.json()
         assert "size_bytes" in data
         assert data["size_bytes"] == 1024
-
-    def test_upload_blocks_executable_files(self, client):
-        """Executable file types are blocked."""
-        blocked_files = [
-            ("malware.exe", "application/x-msdownload"),
-            ("script.bat", "application/x-msdos-program"),
-            ("shell.sh", "application/x-sh"),
-            ("powershell.ps1", "application/octet-stream"),
-        ]
-
-        for filename, mime in blocked_files:
-            files = {"file": (filename, io.BytesIO(b"malicious"), mime)}
-            response = client.post(
-                "/unify/attachment",
-                files=files,
-                data={"assistant_id": "test-assistant"},
-            )
-            assert response.status_code == 400, f"{filename} should be blocked"
-            assert (
-                "blocked" in response.json()["error"].lower()
-                or "not allowed" in response.json()["error"].lower()
-            )
-
-    def test_upload_blocks_unknown_file_types(self, client):
-        """Unknown file types not in allowlist are blocked."""
-        files = {"file": ("data.xyz", io.BytesIO(b"content"), "application/x-unknown")}
-
-        response = client.post(
-            "/unify/attachment",
-            files=files,
-            data={"assistant_id": "test-assistant"},
-        )
-
-        assert response.status_code == 400
 
 
 class TestMessageNewBehavior:
@@ -729,34 +667,6 @@ class TestEdgeCases:
 
 class TestStressBehavior:
     """Test behavior at boundaries and under stress conditions."""
-
-    def test_upload_at_exact_size_boundary(self, client):
-        """Test precisely at the 25MB boundary."""
-        # Exactly 25MB
-        content = b"x" * (25 * 1024 * 1024)
-        files = {"file": ("exact_25mb.zip", io.BytesIO(content), "application/zip")}
-
-        response = client.post(
-            "/unify/attachment",
-            files=files,
-            data={"assistant_id": "test-assistant"},
-        )
-
-        assert response.status_code == 200
-
-    def test_upload_one_byte_over_limit(self, client):
-        """Test one byte over 25MB limit."""
-        # 25MB + 1 byte
-        content = b"x" * (25 * 1024 * 1024 + 1)
-        files = {"file": ("over_limit.zip", io.BytesIO(content), "application/zip")}
-
-        response = client.post(
-            "/unify/attachment",
-            files=files,
-            data={"assistant_id": "test-assistant"},
-        )
-
-        assert response.status_code == 400
 
     def test_many_sequential_uploads(self, client):
         """Multiple sequential uploads all get unique IDs."""
