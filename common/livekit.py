@@ -7,13 +7,21 @@ from urllib.parse import quote_plus
 
 from livekit.api import (
     CreateAgentDispatchRequest,
+    CreateSIPDispatchRuleRequest,
     EncodedFileOutput,
     GCPUpload,
     LiveKitAPI,
     RoomCompositeEgressRequest,
+    SIPDispatchRuleInfo,
     TokenVerifier,
     WebhookConfig,
     WebhookReceiver,
+)
+from livekit.protocol.sip import (
+    ListSIPDispatchRuleRequest,
+    ListSIPInboundTrunkRequest,
+    SIPDispatchRule,
+    SIPDispatchRuleDirect,
 )
 
 
@@ -143,6 +151,87 @@ async def _start_room_egress(
         f"[Egress] Started room composite egress {info.egress_id} "
         f"for room '{room_name}' -> gs://{gcs_bucket}/{filepath}",
     )
+
+
+def make_sip_uri(phone_number: str) -> str:
+    """SIP URI for bridging a Twilio call into LiveKit.
+
+    Uses the E.164 phone number as the user part so that LiveKit can match
+    it against the inbound SIP trunk's ``numbers`` field.  A per-trunk
+    dispatch rule (created by ``ensure_phone_dispatch_rule``) then routes
+    the SIP participant into the correct ``unity_{id}_{medium}`` room.
+    """
+    sip_domain = os.getenv("LIVEKIT_SIP_URI", "")
+    normalized = phone_number if phone_number.startswith("+") else f"+{phone_number}"
+    return f"sip:{normalized}@{sip_domain}"
+
+
+async def ensure_phone_dispatch_rule(
+    phone_number: str,
+    room_name: str,
+) -> None:
+    """Ensure a ``dispatch_rule_direct`` exists that routes SIP calls for
+    *phone_number* into *room_name*.
+
+    Idempotent: skips creation when a matching rule already exists.  When
+    the room_name has changed (number reassigned to a different assistant),
+    the stale rule is deleted and a fresh one is created.
+    """
+    livekit_api = get_livekit_api()
+    try:
+        normalized = (
+            phone_number if phone_number.startswith("+") else f"+{phone_number}"
+        )
+
+        trunks = await livekit_api.sip.list_sip_inbound_trunk(
+            ListSIPInboundTrunkRequest(),
+        )
+        trunk_id = None
+        for t in trunks.items:
+            if normalized in list(t.numbers):
+                trunk_id = t.sip_trunk_id
+                break
+        if trunk_id is None:
+            print(
+                f"[SIP] No inbound trunk for {normalized}, "
+                "skipping dispatch rule creation",
+            )
+            return
+
+        rules = await livekit_api.sip.list_sip_dispatch_rule(
+            ListSIPDispatchRuleRequest(),
+        )
+        for r in rules.items:
+            if trunk_id not in list(r.trunk_ids):
+                continue
+            if (
+                r.rule.HasField("dispatch_rule_direct")
+                and r.rule.dispatch_rule_direct.room_name == room_name
+            ):
+                return
+            # Stale rule for this trunk (room_name changed) — delete it.
+            await livekit_api.sip.delete_sip_dispatch_rule(
+                r.sip_dispatch_rule_id,
+            )
+
+        await livekit_api.sip.create_sip_dispatch_rule(
+            CreateSIPDispatchRuleRequest(
+                dispatch_rule=SIPDispatchRuleInfo(
+                    rule=SIPDispatchRule(
+                        dispatch_rule_direct=SIPDispatchRuleDirect(
+                            room_name=room_name,
+                        ),
+                    ),
+                    name=f"Unity_phone_{normalized}",
+                    trunk_ids=[trunk_id],
+                ),
+            ),
+        )
+        print(f"[SIP] Created dispatch rule: {normalized} -> {room_name}")
+    except Exception as e:
+        print(f"[SIP] Failed to ensure dispatch rule for {phone_number}: {e}")
+    finally:
+        await livekit_api.aclose()
 
 
 def verify_livekit_webhook(body: str, auth_token: str):

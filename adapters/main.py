@@ -39,7 +39,13 @@ def _redact_email(email: str) -> str:
 
 from common.metrics import setup_metrics
 
-from common.livekit import make_room_name, start_room_egress, verify_livekit_webhook
+from common.livekit import (
+    ensure_phone_dispatch_rule,
+    make_room_name,
+    make_sip_uri,
+    start_room_egress,
+    verify_livekit_webhook,
+)
 
 from .helpers import (
     add_user_to_conference,
@@ -218,9 +224,11 @@ async def twilio_call_webhook(request: Request):
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
     room_name = make_room_name(assistant_id, "phone")
-    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = make_sip_uri(twilio_number)
     logger.info(f"Setting up conference {conference_name}")
     logger.info(f"LiveKit room will be: {room_name}")
+
+    await ensure_phone_dispatch_rule(twilio_number, room_name)
 
     # publish to Pub/Sub
     pubsub_client = pubsub_v1.PublisherClient()
@@ -681,7 +689,7 @@ async def teams_call_webhook(request: Request):
         )
 
     room_name = make_room_name(assistant_id, "teams")
-    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"
+    sip_uri = f"sip:{room_name}@{os.getenv('LIVEKIT_SIP_URI')}"  # Teams uses SBC proxy with IP-based trunk
 
     # print(f"Teams call for assistant {assistant_id}, room: {room_name}")
 
@@ -2681,45 +2689,52 @@ async def scheduled_jobs_cleanup(request: Request):
         params={"label_selector": "app=unity,unity-status=idle"},
         headers=headers,
     )
-    jobs = resp.json()
+    jobs_data = resp.json()
     idle_jobs = [
-        job["job_name"]
-        for job in jobs["jobs"]
+        job
+        for job in jobs_data["jobs"]
         if (STAGING and "staging" in job["job_name"])
         or (not STAGING and "staging" not in job["job_name"])
     ]
 
     # separate recently-created idle jobs (< 11 min old) to retain one
     new_idle_jobs = []
-    for job_name in idle_jobs:
+    for job in idle_jobs:
+        job_name = job["job_name"]
         job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
         delta = now - job_timestamp
         if delta < timedelta(minutes=11):
-            new_idle_jobs.append(job_name)
+            new_idle_jobs.append(job)
 
     if len(new_idle_jobs) == 0:
         if len(idle_jobs) != 0:
-            idle_jobs = sorted(idle_jobs)[:-1]
+            idle_jobs = sorted(idle_jobs, key=lambda x: x["job_name"])[:-1]
     else:
-        new_idle_jobs = [sorted(new_idle_jobs)[-1]]
-    idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
-    logger.info(f"Idle jobs up to deletion: {idle_jobs}")
-    logger.info(f"Idle jobs to retain: {new_idle_jobs}")
+        new_idle_jobs = [sorted(new_idle_jobs, key=lambda x: x["job_name"])[-1]]
 
-    # delete all old idle jobs (re-check label to guard against race conditions)
-    for job_name in idle_jobs:
+    idle_jobs_to_delete = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
+    logger.info(
+        f"Idle jobs to deletion: {[j['job_name'] for j in idle_jobs_to_delete]}"
+    )
+    logger.info(f"Idle jobs to retain: {[j['job_name'] for j in new_idle_jobs]}")
+
+    # delete all old idle jobs (unless the resource version changed)
+    for job in idle_jobs_to_delete:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
             data={
-                "job_name": job_name,
-                "required_labels": json.dumps({"unity-status": "idle"}),
+                "job_name": job["job_name"],
+                "resource_version": job["resource_version"],
             },
             headers=headers,
         )
 
-    return Response(content=json.dumps({"idle_jobs": idle_jobs}), status_code=200)
+    return Response(
+        content=json.dumps({"idle_jobs": [j["job_name"] for j in idle_jobs_to_delete]}),
+        status_code=200,
+    )
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])

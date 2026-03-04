@@ -328,7 +328,7 @@ async def create_kubernetes_job(
 async def delete_kubernetes_job(
     job_name: str = Form(...),
     namespace: str = Form(DEFAULT_NAMESPACE),
-    required_labels: str = Form(None),
+    resource_version: str = Form(None),
 ):
     """
     Delete a Kubernetes Job for a Unity assistant.
@@ -336,14 +336,10 @@ async def delete_kubernetes_job(
     Args:
         job_name: Name of the job (required)
         namespace: Kubernetes namespace (optional, defaults to production/staging)
-        required_labels: JSON-encoded dict of labels the job must currently have
-            for the deletion to proceed (optional, guards against race conditions)
+        resource_version: The specific resource version of the job to delete
+            (optional, provides optimistic locking)
     """
     try:
-        parsed_required_labels = (
-            json.loads(required_labels) if required_labels else None
-        )
-
         batch_api, core_api, networking_api = setup_kubernetes_client()
         if not batch_api or not core_api or not networking_api:
             raise HTTPException(
@@ -351,7 +347,12 @@ async def delete_kubernetes_job(
                 detail="Failed to connect to Kubernetes cluster",
             )
 
-        success = delete_job(batch_api, job_name, namespace, parsed_required_labels)
+        success = delete_job(
+            batch_api,
+            job_name,
+            namespace,
+            resource_version,
+        )
 
         if success:
             return {
@@ -360,10 +361,10 @@ async def delete_kubernetes_job(
                 "job_name": job_name,
                 "namespace": namespace,
             }
-        elif parsed_required_labels:
+        elif resource_version:
             raise HTTPException(
                 status_code=409,
-                detail=f"Job {job_name} no longer matches required labels {parsed_required_labels}",
+                detail=f"Job {job_name} has changed since it was last read (resource_version conflict)",
             )
         else:
             raise HTTPException(
@@ -371,11 +372,6 @@ async def delete_kubernetes_job(
                 detail=f"Failed to delete job: {job_name}",
             )
 
-    except json.JSONDecodeError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid JSON in required_labels parameter",
-        )
     except HTTPException:
         raise
     except Exception as e:
@@ -552,6 +548,7 @@ async def start_job(
         # Publish the message
         future = publisher.publish(topic_path, data=message_data)
         message_id = future.result()
+        print(f"Job start request published for assistant {assistant_id}")
 
         return {
             "success": True,
@@ -662,6 +659,7 @@ async def list_kubernetes_jobs(
                 "job_name": job.metadata.name,
                 "assistant_id": assistant_id,
                 "status": status,
+                "resource_version": job.metadata.resource_version,
                 "creation_timestamp": (
                     job.metadata.creation_timestamp.isoformat()
                     if job.metadata.creation_timestamp
