@@ -375,6 +375,9 @@ Write-Host "=== Installing Unity Pool Watcher ===" -ForegroundColor Cyan
 
 if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
     choco install nssm -y --no-progress 2>$null
+    if (-not (Get-Command nssm -ErrorAction SilentlyContinue)) {
+        throw "NSSM installation failed - pool watcher service cannot be registered without it"
+    }
     Write-Host "  NSSM installed"
 }
 
