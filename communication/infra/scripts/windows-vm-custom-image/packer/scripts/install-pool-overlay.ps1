@@ -205,6 +205,169 @@ Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Pr
 Write-Host "  Scheduled task '$taskName' created for unityuser (at logon)"
 
 # =============================================================================
+# Invisible Cursor (transparent cursor for clean VNC streaming)
+# =============================================================================
+Write-Host ""
+Write-Host "=== Setting up Invisible Cursor ===" -ForegroundColor Cyan
+
+$cursorDir = 'C:\Windows\Cursors'
+$blankCursorPath = "$cursorDir\blank.cur"
+
+# Create a minimal transparent 32x32 cursor file
+$curHeader = [byte[]]@(
+    0x00, 0x00,       # Reserved
+    0x02, 0x00,       # Type (2 = cursor)
+    0x01, 0x00        # Number of images (1)
+)
+$curDirEntry = [byte[]]@(
+    0x20,             # Width (32)
+    0x20,             # Height (32)
+    0x00,             # Color count
+    0x00,             # Reserved
+    0x00, 0x00,       # Hotspot X
+    0x00, 0x00,       # Hotspot Y
+    0x30, 0x01, 0x00, 0x00,  # Size of image data (304 bytes)
+    0x16, 0x00, 0x00, 0x00   # Offset to image data (22 bytes)
+)
+$bmpHeader = [byte[]]@(
+    0x28, 0x00, 0x00, 0x00,  # Header size (40)
+    0x20, 0x00, 0x00, 0x00,  # Width (32)
+    0x40, 0x00, 0x00, 0x00,  # Height (64 = 32*2 for XOR+AND masks)
+    0x01, 0x00,              # Planes (1)
+    0x01, 0x00,              # Bits per pixel (1)
+    0x00, 0x00, 0x00, 0x00,  # Compression (none)
+    0x00, 0x01, 0x00, 0x00,  # Image size (256 bytes)
+    0x00, 0x00, 0x00, 0x00,  # X pixels per meter
+    0x00, 0x00, 0x00, 0x00,  # Y pixels per meter
+    0x00, 0x00, 0x00, 0x00,  # Colors used
+    0x00, 0x00, 0x00, 0x00   # Important colors
+)
+$colorTable = [byte[]]@(
+    0x00, 0x00, 0x00, 0x00,  # Black (BGRX)
+    0xFF, 0xFF, 0xFF, 0x00   # White (BGRX)
+)
+$xorMask = New-Object byte[] 128
+$andMask = New-Object byte[] 128
+for ($i = 0; $i -lt 128; $i++) { $andMask[$i] = 0xFF }
+
+$cursorData = $curHeader + $curDirEntry + $bmpHeader + $colorTable + $xorMask + $andMask
+[System.IO.File]::WriteAllBytes($blankCursorPath, $cursorData)
+Write-Host "  Created blank cursor at $blankCursorPath"
+
+# Script that applies invisible cursor in the user's interactive session
+$cursorScript = @'
+$blankCursorPath = 'C:\Windows\Cursors\blank.cur'
+if (-not (Test-Path $blankCursorPath)) {
+    "Blank cursor not found: $blankCursorPath" | Out-File -FilePath "C:\novnc\cursor.log" -Append -Encoding UTF8
+    exit 1
+}
+
+$cursorTypes = @(
+    'Arrow', 'Help', 'AppStarting', 'Wait', 'NWPen', 'No',
+    'SizeNS', 'SizeWE', 'Crosshair', 'IBeam', 'SizeNWSE',
+    'SizeNESW', 'SizeAll', 'UpArrow', 'Hand'
+)
+
+$regPath = 'HKCU:\Control Panel\Cursors'
+if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+
+foreach ($type in $cursorTypes) {
+    Set-ItemProperty -Path $regPath -Name $type -Value $blankCursorPath -ErrorAction SilentlyContinue
+}
+
+Set-ItemProperty -Path $regPath -Name 'ContactVisualization' -Value 0 -Type DWord -ErrorAction SilentlyContinue
+Set-ItemProperty -Path $regPath -Name 'GestureVisualization' -Value 0 -Type DWord -ErrorAction SilentlyContinue
+
+$cursorHelperCode = @"
+using System;
+using System.Runtime.InteropServices;
+
+public class CursorHelperLogon {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool SystemParametersInfo(int uAction, int uParam, int lpvParam, int fuWinIni);
+
+    public const int SPI_SETCURSORS = 0x0057;
+    public const int SPIF_UPDATEINIFILE = 0x01;
+    public const int SPIF_SENDCHANGE = 0x02;
+
+    public static bool ApplyCursors() {
+        return SystemParametersInfo(SPI_SETCURSORS, 0, 0, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+    }
+}
+"@
+
+try { Add-Type -TypeDefinition $cursorHelperCode -Language CSharp -ErrorAction SilentlyContinue } catch {}
+
+$result = [CursorHelperLogon]::ApplyCursors()
+"$(Get-Date): Cursor applied, result: $result" | Out-File -FilePath "C:\novnc\cursor.log" -Append -Encoding UTF8
+'@
+
+$cursorScriptPath = "$novncDir\set-invisible-cursor.ps1"
+$cursorScript | Out-File -FilePath $cursorScriptPath -Encoding UTF8
+Write-Host "  Created cursor script at $cursorScriptPath"
+
+$cursorTaskName = "SetInvisibleCursor"
+$cursorAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 2; & '$cursorScriptPath'`"" `
+    -WorkingDirectory $novncDir
+$cursorTrigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
+$cursorPrincipal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Highest
+$cursorSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName $cursorTaskName -Action $cursorAction -Trigger $cursorTrigger -Principal $cursorPrincipal -Settings $cursorSettings | Out-Null
+Write-Host "  Scheduled task '$cursorTaskName' created for unityuser (at logon)"
+
+# =============================================================================
+# Agent Service (scheduled task for interactive session)
+# =============================================================================
+Write-Host ""
+Write-Host "=== Setting up Agent Service Scheduled Task ===" -ForegroundColor Cyan
+
+$agentServiceDir = "C:\agent-service"
+$startBat = @"
+@echo off
+set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
+cd /d C:\agent-service
+npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
+"@
+New-Item -ItemType Directory -Force -Path $agentServiceDir | Out-Null
+$startBat | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
+
+$agentTaskName = "StartAgentService"
+$agentAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$agentServiceDir\start-agent.bat'`"" `
+    -WorkingDirectory $agentServiceDir
+$agentTrigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
+$agentPrincipal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Highest
+$agentSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName $agentTaskName -Action $agentAction -Trigger $agentTrigger -Principal $agentPrincipal -Settings $agentSettings | Out-Null
+Disable-ScheduledTask -TaskName $agentTaskName | Out-Null
+Write-Host "  Scheduled task '$agentTaskName' created for unityuser (disabled until assign)"
+
+# =============================================================================
+# Patchright Chromium (pre-installed for faster first assign)
+# =============================================================================
+Write-Host ""
+Write-Host "=== Installing Patchright Chromium ===" -ForegroundColor Cyan
+
+[System.Environment]::SetEnvironmentVariable('PLAYWRIGHT_BROWSERS_PATH', 'C:\ms-playwright', 'Machine')
+$env:PLAYWRIGHT_BROWSERS_PATH = 'C:\ms-playwright'
+New-Item -ItemType Directory -Force -Path 'C:\ms-playwright' | Out-Null
+$npxCmd = 'C:\Program Files\nodejs\npx.cmd'
+if (Test-Path $npxCmd) {
+    Write-Host "  Running patchright install..."
+    try {
+        $output = cmd /c "`"$npxCmd`" --yes patchright install chromium 2>&1"
+        $output | ForEach-Object { Write-Host "  $_" }
+        Write-Host "  Patchright Chromium installed at C:\ms-playwright"
+    } catch {
+        Write-Host "  WARNING: Patchright install failed: $_" -ForegroundColor Yellow
+        Write-Host "  Chromium will be installed on first assignment instead" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  WARNING: npx not found, skipping Patchright install" -ForegroundColor Yellow
+}
+
+# =============================================================================
 # Pool Watcher (NSSM Windows service)
 # =============================================================================
 Write-Host ""
@@ -244,5 +407,8 @@ Write-Host "  - Pool user: unityuser (auto-logon, Administrator)"
 Write-Host "  - OpenSSH Server (port 2222)"
 Write-Host "  - TightVNC Server (dummy password, updated at assignment)"
 Write-Host "  - Display resolution (1920x1080 at logon)"
+Write-Host "  - Invisible cursor (transparent for clean VNC streaming)"
+Write-Host "  - Agent Service scheduled task (interactive, disabled until assign)"
+Write-Host "  - Patchright Chromium (C:\ms-playwright)"
 Write-Host "  - Pool watcher: UnityPoolWatcher service (NSSM)"
 Write-Host ""

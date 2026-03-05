@@ -32,10 +32,177 @@ function Write-Log($message) {
     Write-Host "[$ts] $message"
 }
 
+# ─── Code update helpers ─────────────────────────────────────────────────
+
+function Get-RemoteCommitHash($repoUrl, $branch) {
+    try {
+        $output = git ls-remote $repoUrl "refs/heads/$branch" 2>$null
+        if ($output) { return ($output -split "\s")[0].Substring(0, 12) }
+    } catch {}
+    return ""
+}
+
+function Get-SavedCommitHash($dir) {
+    $hashFile = Join-Path $dir ".commit-hash"
+    if (Test-Path $hashFile) { return (Get-Content $hashFile -Raw).Trim() }
+    return ""
+}
+
+function Save-CommitHash($dir, $hash) {
+    if ($hash) { $hash | Out-File -FilePath (Join-Path $dir ".commit-hash") -Encoding UTF8 -NoNewline }
+}
+
+function Invoke-Update {
+    Write-Log "UPDATE: checking for code updates"
+
+    $githubToken = (Get-Metadata "github-token").Trim()
+    $staging = Get-Metadata "staging"
+
+    if ($githubToken) {
+        $magnitudeUrl = "https://${githubToken}@github.com/unifyai/magnitude.git"
+        $unityUrl = "https://${githubToken}@github.com/unifyai/unity.git"
+    } else {
+        $magnitudeUrl = "https://github.com/unifyai/magnitude.git"
+        $unityUrl = "https://github.com/unifyai/unity.git"
+    }
+    $unityBranch = if ($staging) { "staging" } else { "main" }
+
+    # ── Magnitude ──
+    $magnitudeDir = "C:\magnitude"
+    $magSaved = Get-SavedCommitHash $magnitudeDir
+    $magRemote = Get-RemoteCommitHash $magnitudeUrl "unity-modifications"
+
+    if ($magSaved -and $magRemote -and ($magSaved -eq $magRemote)) {
+        Write-Log "Magnitude up-to-date ($magSaved)"
+    } else {
+        Write-Log "Magnitude updating ($magSaved -> $magRemote)"
+        if (Test-Path "$magnitudeDir\.git") {
+            Push-Location $magnitudeDir
+            if ($githubToken) { git remote set-url origin $magnitudeUrl 2>$null }
+            git fetch --depth 1 origin unity-modifications 2>&1
+            git reset --hard origin/unity-modifications 2>&1
+            $commit = (git rev-parse --short=12 HEAD 2>&1)
+            Save-CommitHash $magnitudeDir $commit
+            Pop-Location
+        } else {
+            Write-Log "Magnitude not found, cloning fresh..."
+            if (Test-Path $magnitudeDir) {
+                cmd /c "rmdir /s /q `"$magnitudeDir`"" 2>&1 | Out-Null
+            }
+            git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1
+            if (Test-Path "$magnitudeDir\package.json") {
+                Push-Location $magnitudeDir
+                $commit = (git rev-parse --short=12 HEAD 2>&1)
+                Save-CommitHash $magnitudeDir $commit
+                Pop-Location
+                Write-Log "Magnitude cloned (commit: $commit)"
+            } else {
+                Write-Log "WARNING: Magnitude clone failed"
+            }
+        }
+        if (Test-Path "$magnitudeDir\package.json") {
+            Write-Log "Installing Magnitude dependencies..."
+            Push-Location $magnitudeDir
+            $bunExe = "C:\Windows\System32\config\systemprofile\.bun\bin\bun.exe"
+            if (Test-Path $bunExe) {
+                & $bunExe install 2>&1
+            } else {
+                npm install 2>&1
+            }
+            Pop-Location
+        }
+
+        # Install Patchright Chromium from magnitude-core
+        $magCore = "$magnitudeDir\packages\magnitude-core"
+        if (Test-Path "$magCore\package.json") {
+            Write-Log "Installing Patchright Chromium..."
+            $env:PLAYWRIGHT_BROWSERS_PATH = "C:\ms-playwright"
+            Push-Location $magCore
+            npx --yes patchright install chromium 2>&1 | Out-Null
+            Pop-Location
+            Write-Log "Patchright Chromium installed"
+        }
+        Write-Log "Magnitude updated"
+    }
+
+    # ── Agent Service (sparse checkout from unity monorepo) ──
+    $agentServiceDir = "C:\agent-service"
+    $asSaved = Get-SavedCommitHash $agentServiceDir
+    $asRemote = Get-RemoteCommitHash $unityUrl $unityBranch
+
+    if ($asSaved -and $asRemote -and ($asSaved -eq $asRemote)) {
+        Write-Log "Agent Service up-to-date ($asSaved)"
+    } else {
+        Write-Log "Agent Service updating ($asSaved -> $asRemote)"
+
+        # Backup .env if exists
+        $envBackup = $null
+        if (Test-Path "$agentServiceDir\.env") {
+            $envBackup = Get-Content "$agentServiceDir\.env" -Raw
+        }
+
+        $tmpDir = Join-Path $env:TEMP "unity-repo-$(Get-Random)"
+        Write-Log "Cloning unity repo (sparse) to $tmpDir..."
+        git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $tmpDir 2>&1
+        if (Test-Path $tmpDir) {
+            Push-Location $tmpDir
+            git sparse-checkout set agent-service 2>&1
+            $commit = (git rev-parse --short=12 HEAD 2>&1)
+            Pop-Location
+        }
+
+        if (Test-Path "$tmpDir\agent-service") {
+            # Kill node processes to release file locks before replacing directory
+            Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+            Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+
+            # Preserve node_modules
+            if (Test-Path "$agentServiceDir\node_modules") {
+                Move-Item "$agentServiceDir\node_modules" "$tmpDir\agent-service\node_modules" -Force
+            }
+            # Remove old dir (rmdir + fallback to Remove-Item if locks prevented it)
+            if (Test-Path $agentServiceDir) {
+                cmd /c "rmdir /s /q `"$agentServiceDir`"" 2>&1 | Out-Null
+            }
+            if (Test-Path $agentServiceDir) {
+                Remove-Item $agentServiceDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            Move-Item "$tmpDir\agent-service" $agentServiceDir
+            Save-CommitHash $agentServiceDir $commit
+            Write-Log "Agent Service cloned (commit: $commit)"
+        } else {
+            Write-Log "WARNING: Agent Service clone failed (check github-token metadata)"
+        }
+        if (Test-Path $tmpDir) {
+            cmd /c "rmdir /s /q `"$tmpDir`"" 2>&1 | Out-Null
+        }
+
+        # Install dependencies
+        if (Test-Path "$agentServiceDir\package.json") {
+            Write-Log "Installing Agent Service dependencies..."
+            Push-Location $agentServiceDir
+            npm install 2>&1
+            Pop-Location
+        }
+
+        # Restore .env
+        if ($envBackup) {
+            $envBackup | Out-File -FilePath "$agentServiceDir\.env" -Encoding UTF8 -NoNewline
+        }
+        Write-Log "Agent Service updated"
+    }
+
+    Write-Log "UPDATE complete"
+}
+
 # ─── Assignment: configure VM for an assistant ───────────────────────────
 
 function Invoke-Assign($unifyKey) {
     Write-Log "ASSIGN: configuring VM for assistant"
+
+    # Update code before configuring (skips quickly if already up-to-date)
+    Invoke-Update
 
     $vncPassword = Get-Metadata "vnc-password"
     $sshPublicKey = Get-Metadata "ssh-public-key"
@@ -132,8 +299,9 @@ function Invoke-Assign($unifyKey) {
         Write-Log "WARNING: VNC password update failed: $_"
     }
 
-    # Agent Service: kill existing, write .env, start directly
+    # Agent Service: kill existing, write .env, start via scheduled task (interactive session)
     try {
+        Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
         Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
 
@@ -144,11 +312,11 @@ NODE_ENV=production
 UNIFY_KEY=$unifyKey
 ORCHESTRA_URL=$orchestraUrl
 UNITY_COMMS_URL=$commsUrl
+PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 "@
         Set-Content -Path "$agentServiceDir\.env" -Value $envContent -Encoding UTF8
         Write-Log "Agent Service .env configured"
 
-        # Ensure start script exists
         $startBat = @"
 @echo off
 set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
@@ -158,9 +326,9 @@ npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
         Set-Content -Path "$agentServiceDir\start-agent.bat" -Value $startBat -Encoding ASCII
 
         if (Test-Path "$agentServiceDir\package.json") {
-            Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$agentServiceDir\start-agent.bat`"" `
-                -WorkingDirectory $agentServiceDir -WindowStyle Hidden
-            Write-Log "Agent Service started (direct)"
+            Enable-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+            Start-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+            Write-Log "Agent Service started (interactive session via scheduled task)"
         }
     } catch {
         Write-Log "WARNING: Agent Service start failed: $_"
@@ -204,6 +372,7 @@ function Invoke-Release {
     Write-Log "RELEASE: cleaning up VM"
 
     # Stop Agent Service
+    Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
     Disable-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
     Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Write-Log "Agent Service stopped"
@@ -243,6 +412,9 @@ function Invoke-Release {
             Set-Disk -IsOffline $true -ErrorAction SilentlyContinue
         Write-Log "Unmounted persistent disk"
     }
+
+    # Update code while VM is idle so next assignment starts with latest
+    Invoke-Update
 
     Write-Log "RELEASE complete"
 }
