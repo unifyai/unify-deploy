@@ -591,7 +591,11 @@ def start_unity_job(assistant: dict, medium: str):
                 # Pass demo_id directly; Unity derives demo_mode from demo_id presence
                 "demo_id": str(demo_id) if demo_id else "",
                 "team_ids": json.dumps(assistant.get("team_ids", [])),
-                "org_id": str(assistant.get("org_id", "")) if assistant.get("org_id") is not None else "",
+                "org_id": (
+                    str(assistant.get("org_id", ""))
+                    if assistant.get("org_id") is not None
+                    else ""
+                ),
             },
             timeout=1,
         )
