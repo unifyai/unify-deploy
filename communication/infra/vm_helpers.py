@@ -1151,7 +1151,9 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
         label_filter += f" AND labels.vm-type={vm_type}"
 
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID, zone=ZONE, filter=label_filter,
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=label_filter,
     )
     results = []
     for instance in client.list(request=request):
@@ -1166,16 +1168,18 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
                             break
 
         hostname = labels.get("pool-hostname", instance.name + f".{DOMAIN_SUFFIX}")
-        results.append({
-            "vm_name": instance.name,
-            "pool_role": labels.get("pool-role", "unknown"),
-            "assistant_id": labels.get("assistant-id", "") or None,
-            "vm_type": labels.get("vm-type", "unknown"),
-            "ip_address": external_ip,
-            "hostname": hostname,
-            "status": instance.status,
-            "label_fingerprint": instance.label_fingerprint,
-        })
+        results.append(
+            {
+                "vm_name": instance.name,
+                "pool_role": labels.get("pool-role", "unknown"),
+                "assistant_id": labels.get("assistant-id", "") or None,
+                "vm_type": labels.get("vm-type", "unknown"),
+                "ip_address": external_ip,
+                "hostname": hostname,
+                "status": instance.status,
+                "label_fingerprint": instance.label_fingerprint,
+            }
+        )
     return results
 
 
@@ -1195,7 +1199,9 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         description=f"Static IP for pool VM {vm_name}",
     )
     try:
-        op = ip_client.insert(project=VM_PROJECT_ID, region=REGION, address_resource=address)
+        op = ip_client.insert(
+            project=VM_PROJECT_ID, region=REGION, address_resource=address
+        )
         op.result()
         logger.info(f"Reserved static IP: {ip_name}")
     except Conflict:
@@ -1289,7 +1295,9 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         ),
     )
     if cfg["enable_display"]:
-        instance_kwargs["display_device"] = compute_v1.DisplayDevice(enable_display=True)
+        instance_kwargs["display_device"] = compute_v1.DisplayDevice(
+            enable_display=True
+        )
 
     instance = compute_v1.Instance(**instance_kwargs)
     client = compute_v1.InstancesClient()
@@ -1313,11 +1321,15 @@ def claim_idle_vm(assistant_id: str, vm_type: str) -> Dict[str, Any]:
     Raises ValueError if no idle VMs are available.
     """
     client = compute_v1.InstancesClient()
-    label_filter = f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
+    label_filter = (
+        f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
+    )
 
     while True:
         request = compute_v1.ListInstancesRequest(
-            project=VM_PROJECT_ID, zone=ZONE, filter=label_filter,
+            project=VM_PROJECT_ID,
+            zone=ZONE,
+            filter=label_filter,
         )
         idle_vms = list(client.list(request=request))
         if not idle_vms:
@@ -1339,7 +1351,9 @@ def claim_idle_vm(assistant_id: str, vm_type: str) -> Dict[str, Any]:
                 ),
             )
             op.result()
-            logger.info(f"Claimed pool VM {candidate.name} for assistant {assistant_id}")
+            logger.info(
+                f"Claimed pool VM {candidate.name} for assistant {assistant_id}"
+            )
 
             external_ip = None
             if candidate.network_interfaces:
@@ -1351,7 +1365,11 @@ def claim_idle_vm(assistant_id: str, vm_type: str) -> Dict[str, Any]:
                                 break
 
             hostname_label = new_labels.get("pool-hostname", "")
-            hostname = hostname_label.replace("-", ".") if hostname_label else candidate.name + f".{DOMAIN_SUFFIX}"
+            hostname = (
+                hostname_label.replace("-", ".")
+                if hostname_label
+                else candidate.name + f".{DOMAIN_SUFFIX}"
+            )
             # Fix the hostname reconstruction: pool-hostname stores dots as dashes,
             # but we need to be careful about which dashes are literal.
             # The label stores e.g. "unity-pool-ubuntu-1--vm--unify--ai" or similar.
@@ -1398,7 +1416,9 @@ def create_assistant_disk(assistant_id: str) -> str:
     try:
         op = client.insert(project=VM_PROJECT_ID, zone=ZONE, disk_resource=disk)
         op.result()
-        logger.info(f"Created assistant disk: {disk_name} ({POOL_ASSISTANT_DISK_SIZE_GB} GB)")
+        logger.info(
+            f"Created assistant disk: {disk_name} ({POOL_ASSISTANT_DISK_SIZE_GB} GB)"
+        )
     except Conflict:
         logger.info(f"Assistant disk {disk_name} already exists")
 
@@ -1461,7 +1481,9 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
         device_name=actual_device_name,
     )
     op.result()
-    logger.info(f"Detached disk {disk_name} from {vm_name} (device: {actual_device_name})")
+    logger.info(
+        f"Detached disk {disk_name} from {vm_name} (device: {actual_device_name})"
+    )
     return True
 
 
@@ -1524,13 +1546,16 @@ def assign_pool_vm(
     store_ssh_private_key(assistant_id, private_key, unify_apikey)
 
     # Update metadata to trigger watcher reconfiguration
-    _update_instance_metadata(vm_name, {
-        "unify-key": unify_apikey,
-        "vnc-password": unify_apikey,
-        "ssh-public-key": public_key,
-        "disk-device": device_name,
-        "assistant-id": assistant_id,
-    })
+    _update_instance_metadata(
+        vm_name,
+        {
+            "unify-key": unify_apikey,
+            "vnc-password": unify_apikey,
+            "ssh-public-key": public_key,
+            "disk-device": device_name,
+            "assistant-id": assistant_id,
+        },
+    )
 
     logger.info(f"Pool assignment complete: {vm_name} -> assistant {assistant_id}")
     return {
@@ -1555,24 +1580,35 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     label_filter = f"labels.pool-role=assigned AND labels.assistant-id={sanitized}"
 
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID, zone=ZONE, filter=label_filter,
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=label_filter,
     )
     vms = list(client.list(request=request))
     if not vms:
-        logger.info(f"No pool VM assigned to assistant {assistant_id} — nothing to release")
-        return {"released": False, "assistant_id": assistant_id, "message": "No VM assigned"}
+        logger.info(
+            f"No pool VM assigned to assistant {assistant_id} — nothing to release"
+        )
+        return {
+            "released": False,
+            "assistant_id": assistant_id,
+            "message": "No VM assigned",
+        }
 
     vm = vms[0]
     vm_name = vm.name
 
     # Clear assignment metadata (triggers watcher cleanup)
-    _update_instance_metadata(vm_name, {
-        "unify-key": "",
-        "vnc-password": "",
-        "ssh-public-key": "",
-        "disk-device": "",
-        "assistant-id": "",
-    })
+    _update_instance_metadata(
+        vm_name,
+        {
+            "unify-key": "",
+            "vnc-password": "",
+            "ssh-public-key": "",
+            "disk-device": "",
+            "assistant-id": "",
+        },
+    )
 
     # Detach persistent disk
     detach_assistant_disk(vm_name, assistant_id)
@@ -1597,7 +1633,12 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
 
     logger.info(f"Released pool VM {vm_name} from assistant {assistant_id}")
 
-    return {"released": True, "assistant_id": assistant_id, "vm_name": vm_name, "vm_type": labels.get("vm-type", "ubuntu")}
+    return {
+        "released": True,
+        "assistant_id": assistant_id,
+        "vm_name": vm_name,
+        "vm_type": labels.get("vm-type", "ubuntu"),
+    }
 
 
 def rebalance_pool(vm_type: str) -> Dict[str, Any]:
@@ -1609,13 +1650,23 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
     client = compute_v1.InstancesClient()
     type_filter = f"labels.vm-type={vm_type}"
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID, zone=ZONE, filter=type_filter,
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=type_filter,
     )
     all_vms = list(client.list(request=request))
 
     pool_vms = [vm for vm in all_vms if vm.labels and vm.labels.get("pool-role")]
-    idle_vms = [vm for vm in pool_vms if vm.labels.get("pool-role") == "idle" and vm.status == "RUNNING"]
-    stopped_vms = [vm for vm in pool_vms if vm.labels.get("pool-role") == "stopped" or vm.status == "TERMINATED"]
+    idle_vms = [
+        vm
+        for vm in pool_vms
+        if vm.labels.get("pool-role") == "idle" and vm.status == "RUNNING"
+    ]
+    stopped_vms = [
+        vm
+        for vm in pool_vms
+        if vm.labels.get("pool-role") == "stopped" or vm.status == "TERMINATED"
+    ]
 
     actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
 
@@ -1629,7 +1680,9 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 # Update label to idle
                 labels = dict(vm.labels) if vm.labels else {}
                 labels["pool-role"] = "idle"
-                vm_fresh = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
+                vm_fresh = client.get(
+                    project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
+                )
                 client.set_labels(
                     project=VM_PROJECT_ID,
                     zone=ZONE,
@@ -1666,7 +1719,9 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 op.result()
                 labels = dict(vm.labels) if vm.labels else {}
                 labels["pool-role"] = "stopped"
-                vm_fresh = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
+                vm_fresh = client.get(
+                    project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
+                )
                 client.set_labels(
                     project=VM_PROJECT_ID,
                     zone=ZONE,
