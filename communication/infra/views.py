@@ -8,6 +8,7 @@ from google.protobuf import duration_pb2
 import json
 import logging
 import os
+import uuid
 from .helpers import (
     setup_kubernetes_client,
     create_unity_job,
@@ -292,12 +293,13 @@ async def create_kubernetes_job(
                 detail="Failed to connect to Kubernetes cluster. Make sure gcloud CLI is installed and configured.",
             )
 
-        # Create the job name with unity- prefix
+        # Create the job name with unity- prefix and unique ID for high-load uniqueness
+        random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         job_name = (
-            f"unity-{timestamp_str}"
+            f"unity-{random_id}-{timestamp_str}"
             if not STAGING
-            else f"unity-{timestamp_str}-staging"
+            else f"unity-{random_id}-{timestamp_str}-staging"
         )
 
         # Create the job
@@ -651,7 +653,12 @@ async def list_kubernetes_jobs(
                 lambda job: (
                     datetime.now()
                     - datetime.strptime(
-                        job.metadata.name.replace("unity-", "").replace("-staging", ""),
+                        "-".join(
+                            filter(
+                                lambda part: part.isdigit() and len(part) in [2, 4],
+                                job.metadata.name.split("-"),
+                            )
+                        ),
                         "%Y-%m-%d-%H-%M-%S",
                     )
                 )

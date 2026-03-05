@@ -2537,7 +2537,14 @@ async def scheduled_jobs_cleanup(request: Request):
     # separate recently-created idle jobs (< 11 min old) to retain one
     new_idle_jobs = []
     for job_name in idle_jobs:
-        job_timestamp_str = job_name.replace("unity-", "").replace("-staging", "")
+        # job_name format: unity-{random_id}-{YYYY-MM-DD-HH-MM-SS}{-staging}
+        # Extract only the numeric parts that form the timestamp
+        job_timestamp_str = "-".join(
+            filter(
+                lambda part: part.isdigit() and len(part) in [2, 4],
+                job_name.split("-"),
+            )
+        )
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
         delta = now - job_timestamp
