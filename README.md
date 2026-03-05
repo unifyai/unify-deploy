@@ -36,9 +36,9 @@ Related repositories:
 
 This repository provides a unified communication service with two primary components:
 
-1. **Adapters** – HTTP Cloud Functions (Flask + Functions Framework) that handle unauthenticated, form-encoded webhooks from Twilio (voice, SMS, WhatsApp) and Gmail.  They reside in the `adapters/` directory and are deployed as Google Cloud Functions.
+1. **Adapters** – A FastAPI application that handles unauthenticated webhooks from Twilio (voice, SMS, WhatsApp), Gmail, and Microsoft (Outlook, Teams). These endpoints are typically form-encoded or JSON-based callbacks from external services. The code resides in the `adapters/` directory and is deployed to Cloud Run.
 
-2. **Communication API** – A FastAPI application exposing JSON endpoints, protected by an admin API key (`auth_admin_key`), for orchestration by Unity/Orchestra. The code lives in the root and the `communication/` package and is deployed (e.g.) to Cloud Run.
+2. **Communication API** – A FastAPI application exposing JSON endpoints, protected by an admin API key (`auth_admin_key`), for orchestration by Unity/Orchestra. The code lives in the `communication/` package and is also deployed to Cloud Run.
 
 ---
 
@@ -131,25 +131,34 @@ The following infrastructure settings are configured directly in GCP (`gcp-proje
 
 ## Setup
 
+### Environment Variables
+
+Both the Communication API and the Adapters require specific environment variables to function correctly. You can find template files in the root directory:
+
+- **Communication API**: `env.communication.example`
+- **Adapters**: `env.adapters.example`
+
+Copy these to `.env` in the respective directories (or use them to set your environment) and fill in the required values.
+
 ### Install Dependencies
 
 ```bash
-pip install -r requirements.txt           # Communication API
-pip install -r adapters/requirements.txt  # Adapters
+# Install all dependencies using the pyproject.toml in the root
+pip install -e .
 ```
 
 ### Run Locally
 
 **Communication API** (FastAPI):
 ```bash
-uvicorn main:app --reload --port 8080
+# Runs on port 8080 by default
+python -m communication.main
 ```
 
-**Adapters** (Cloud Functions emulator):
+**Adapters** (FastAPI):
 ```bash
-cd adapters
-functions-framework --target=twilio_call_webhook --port=8081
-# Repeat for other entry points (twilio_msg_webhook, twilio_whatsapp_webhook, etc.)
+# Runs on port 8081 by default
+python -m adapters.main
 ```
 
 ### Local Development with `local.sh`
@@ -236,18 +245,22 @@ export ORCHESTRA_URL="http://127.0.0.1:8000/v0"
 
 ## Adapters (Webhooks)
 
-These are unauthenticated HTTP functions that receive form-encoded callbacks and:
+The Adapters service is a FastAPI application that handles unauthenticated callbacks from external services. It primarily:
 
-- Publish events to Pub/Sub for background processing
-- Return TwiML (for voice) or simple acknowledgments
+- Validates incoming webhooks (e.g., Twilio signatures).
+- Resolves the target assistant and user context via Orchestra.
+- Publishes events to Pub/Sub for Unity to consume.
+- Returns appropriate responses (e.g., TwiML for voice calls).
 
-**Key entry points**:
+**Key Endpoints**:
 
-- `twilio_call_webhook`  – `/` (default HTTP trigger) for Twilio voice call events
-- `twilio_msg_webhook`   – `/` for Twilio SMS events
-- `twilio_whatsapp_webhook`   – `/` for Twilio WhatsApp events
-- `renew_watch`           – CloudEvent/HTTP for Gmail watch renewal
-- `process_notification`  – Pub/Sub handler for Gmail history
+- `POST /twilio/call` – Inbound Twilio voice calls.
+- `POST /twilio/sms` – Inbound Twilio SMS messages.
+- `POST /twilio/whatsapp` – Inbound Twilio WhatsApp messages.
+- `POST /email/gmail` – Google Pub/Sub push notifications for Gmail.
+- `POST /email/outlook` – Microsoft Graph notifications for Outlook.
+- `POST /chat/teams` – Microsoft Graph notifications for Teams.
+- `POST /scheduled/*` – Cron jobs for maintenance (token refresh, watch renewals, etc.).
 
 ---
 
@@ -334,7 +347,11 @@ Note: The `black` formatting check always runs on every push.
 
 ## Deployment
 
-- **Adapters**: Deploy individual entry points in `adapters/` as Cloud Functions with the `functions-framework` HTTP trigger.
-- **Communication API**: Build and deploy via Cloud Run (or any container platform), ensuring the `PORT` environment variable is respected.
+Both services are containerized and deployed to **Google Cloud Run**.
 
-See `.github/workflows` and `cloudbuild/` for CI/CD examples.
+- **Communication API**: Build using `Dockerfile-comms` and deploy to the `unity-comms-app` service.
+- **Adapters**: Build using `Dockerfile-adapters` and deploy to the `unity-adapters` service.
+
+Deployment is automated via **Google Cloud Build**. See the `cloudbuild/` directory for the build configurations:
+- `unity-comms-app.yaml`
+- `adapters.yaml`
