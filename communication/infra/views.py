@@ -297,9 +297,9 @@ async def create_kubernetes_job(
         random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         job_name = (
-            f"unity-{random_id}-{timestamp_str}"
+            f"unity-{timestamp_str}-{random_id}"
             if not STAGING
-            else f"unity-{random_id}-{timestamp_str}-staging"
+            else f"unity-{timestamp_str}-{random_id}-staging"
         )
 
         # Create the job

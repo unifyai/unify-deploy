@@ -2537,7 +2537,7 @@ async def scheduled_jobs_cleanup(request: Request):
     # separate recently-created idle jobs (< 11 min old) to retain one
     new_idle_jobs = []
     for job_name in idle_jobs:
-        # job_name format: unity-{random_id}-{YYYY-MM-DD-HH-MM-SS}{-staging}
+        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
         # Extract only the numeric parts that form the timestamp
         job_timestamp_str = "-".join(
             filter(
