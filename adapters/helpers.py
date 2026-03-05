@@ -1186,6 +1186,7 @@ def publish_gmail_thread_id(
 
         message_dict = {
             "thread": "email",
+            "publish_timestamp": time.time(),
             "event": {
                 "contacts": contacts,
                 "thread_id": thread_id,
@@ -1228,6 +1229,7 @@ def publish_outlook_thread_id(
 
         message_dict = {
             "thread": "email",
+            "publish_timestamp": time.time(),
             "event": {
                 "contacts": contacts,
                 "thread_id": conversation_id,

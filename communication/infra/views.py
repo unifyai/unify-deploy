@@ -8,6 +8,7 @@ from google.protobuf import duration_pb2
 import json
 import logging
 import os
+import time
 import uuid
 from .helpers import (
     setup_kubernetes_client,
@@ -529,6 +530,7 @@ async def start_job(
         # Prepare the job data
         job_data = {
             "thread": "startup",
+            "publish_timestamp": time.time(),
             "event": {
                 "api_key": api_key,
                 "medium": medium,
@@ -1091,6 +1093,7 @@ async def vm_ready_endpoint(
     message_data = json.dumps(
         {
             "thread": "unity_system_event",
+            "publish_timestamp": time.time(),
             "event": {
                 "assistant_id": assistant_id,
                 "event_type": "assistant_desktop_ready",

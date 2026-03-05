@@ -238,6 +238,7 @@ async def twilio_call_webhook(request: Request):
     try:
         pubsub_message = {
             "thread": "call",
+            "publish_timestamp": time.time(),
             "event": {
                 "contacts": contacts,
                 "conference_name": conference_name,
@@ -347,6 +348,7 @@ async def twilio_call_status_webhook(request: Request):
                 json.dumps(
                     {
                         "thread": thread,
+                        "publish_timestamp": time.time(),
                         "event": {
                             "contacts": contacts,
                             "assistant_id": assistant_id,
@@ -451,6 +453,7 @@ async def livekit_recording_complete(request: Request):
             json.dumps(
                 {
                     "thread": "recording_ready",
+                    "publish_timestamp": time.time(),
                     "event": {
                         "assistant_id": str(assistant_id),
                         "user_id": str(user_id),
@@ -518,6 +521,7 @@ async def twilio_sms_webhook(request: Request):
             json.dumps(
                 {
                     "thread": "msg",
+                    "publish_timestamp": time.time(),
                     "event": {
                         "contacts": contacts,
                         "to_number": to_number,
@@ -584,6 +588,7 @@ async def twilio_whatsapp_webhook(request: Request):
             json.dumps(
                 {
                     "thread": "whatsapp",
+                    "publish_timestamp": time.time(),
                     "event": {
                         "contacts": contacts,
                         "to_number": to_number,
@@ -703,6 +708,7 @@ async def teams_call_webhook(request: Request):
     try:
         pubsub_message = {
             "thread": "call",
+            "publish_timestamp": time.time(),
             "event": {
                 "contacts": contacts,
                 "conference_name": f"Teams_{teams_number[1:]}_{call_id[:8]}",
@@ -999,6 +1005,7 @@ async def unify_message_webhook(request: Request):
             json.dumps(
                 {
                     "thread": "unify_message",
+                    "publish_timestamp": time.time(),
                     "event": {
                         "contact_id": contact_id,
                         "contacts": contacts,
@@ -1073,6 +1080,7 @@ async def unify_meet_webhook(request: Request):
             json.dumps(
                 {
                     "thread": "unify_meet",
+                    "publish_timestamp": time.time(),
                     "event": {
                         "contacts": contacts,
                         "assistant_id": assistant_id,
@@ -1156,6 +1164,7 @@ async def unity_system_event_webhook(request: Request):
             json.dumps(
                 {
                     "thread": "unity_system_event",
+                    "publish_timestamp": time.time(),
                     "event": {
                         "contacts": contacts,
                         "assistant_id": assistant_id,
@@ -1248,6 +1257,7 @@ async def unity_pre_hire_webhook(request: Request):
             json.dumps(
                 {
                     "thread": "log_pre_hire_chats",
+                    "publish_timestamp": time.time(),
                     "event": {
                         "contacts": contacts,
                         "assistant_id": assistant_id,
@@ -1330,7 +1340,11 @@ async def assistant_update_webhook(request: Request):
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         # Prepare message in the same format as startup event
-        message_data = {"thread": "assistant_update", "event": assistant_data}
+        message_data = {
+            "thread": "assistant_update",
+            "publish_timestamp": time.time(),
+            "event": assistant_data,
+        }
 
         logger.info(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
         publish_future = pubsub_client.publish(
@@ -1838,6 +1852,7 @@ async def teams_notification_processor(request: Request):
 
         pubsub_message = {
             "thread": "teams_channel" if is_channel_message else "teams_chat",
+            "publish_timestamp": time.time(),
             "event": event_data,
         }
         logger.info("Publishing Teams event to Pub/Sub")
