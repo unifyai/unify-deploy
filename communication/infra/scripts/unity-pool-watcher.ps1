@@ -55,6 +55,11 @@ function Save-CommitHash($dir, $hash) {
 function Invoke-Update {
     Write-Log "UPDATE: checking for code updates"
 
+    # Kill node processes upfront to release file locks on Magnitude's built files
+    Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+
     $githubToken = (Get-Metadata "github-token").Trim()
     $staging = Get-Metadata "staging"
 
@@ -152,11 +157,6 @@ function Invoke-Update {
         }
 
         if (Test-Path "$tmpDir\agent-service") {
-            # Kill node processes to release file locks before replacing directory
-            Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-            Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 500
-
             # Preserve node_modules
             if (Test-Path "$agentServiceDir\node_modules") {
                 Move-Item "$agentServiceDir\node_modules" "$tmpDir\agent-service\node_modules" -Force

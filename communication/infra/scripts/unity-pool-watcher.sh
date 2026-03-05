@@ -55,6 +55,11 @@ save_commit_hash() {
 do_update() {
     log "UPDATE: checking for code updates"
 
+    # Kill node processes upfront to release file locks on Magnitude's built files
+    pkill -f "ts-node src/index.ts" 2>/dev/null || true
+    pkill -f "node" 2>/dev/null || true
+    sleep 1
+
     local github_token
     local staging
     github_token=$(get_metadata "github-token")
