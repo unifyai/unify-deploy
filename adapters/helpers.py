@@ -34,7 +34,7 @@ STAGING = os.getenv("STAGING")
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
-    else "https://service.a.run.app/v0"
+    else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
 
@@ -591,7 +591,11 @@ def start_unity_job(assistant: dict, medium: str):
                 # Pass demo_id directly; Unity derives demo_mode from demo_id presence
                 "demo_id": str(demo_id) if demo_id else "",
                 "team_ids": json.dumps(assistant.get("team_ids", [])),
-                "org_id": str(assistant.get("org_id", "")) if assistant.get("org_id") is not None else "",
+                "org_id": (
+                    str(assistant.get("org_id", ""))
+                    if assistant.get("org_id") is not None
+                    else ""
+                ),
             },
             timeout=1,
         )
@@ -1182,6 +1186,7 @@ def publish_gmail_thread_id(
 
         message_dict = {
             "thread": "email",
+            "publish_timestamp": time.time(),
             "event": {
                 "contacts": contacts,
                 "thread_id": thread_id,
@@ -1224,6 +1229,7 @@ def publish_outlook_thread_id(
 
         message_dict = {
             "thread": "email",
+            "publish_timestamp": time.time(),
             "event": {
                 "contacts": contacts,
                 "thread_id": conversation_id,

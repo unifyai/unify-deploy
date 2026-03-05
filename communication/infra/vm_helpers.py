@@ -28,7 +28,7 @@ STAGING = os.environ.get("STAGING", "false").lower() == "true"
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
-    else "https://service.a.run.app/v0"
+    else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.environ.get("ORCHESTRA_URL", _default_orchestra_url)
 
@@ -67,6 +67,14 @@ from .vm_config import (
     UBUNTU_VM_IMAGE_PROJECT,
     UBUNTU_VM_TAGS,
     UBUNTU_INIT_SCRIPT_PATH,
+    # Pool config
+    POOL_SSH_USERNAME,
+    POOL_TARGET_IDLE,
+    POOL_ASSISTANT_DISK_SIZE_GB,
+    POOL_ASSISTANT_DISK_TYPE,
+    POOL_VM_NAME_PREFIX,
+    POOL_UBUNTU_VM_IMAGE_FAMILY,
+    POOL_WINDOWS_VM_IMAGE_FAMILY,
 )
 
 logger = logging.getLogger(__name__)
@@ -1081,3 +1089,651 @@ def deprovision_vm_full(assistant_id: str, vm_type: str = "windows") -> Dict[str
 
     logger.info(f"Full deprovisioning complete for assistant: {assistant_id}")
     return results
+
+
+# =============================================================================
+# VM Pool Management
+# =============================================================================
+
+
+def _pool_vm_config(vm_type: str) -> Dict[str, Any]:
+    """Return type-specific configuration for pool VMs.
+
+    Uses dedicated pool image families (unity-pool-ubuntu-vm / unity-pool-windows-vm)
+    so pool images don't affect existing legacy VMs.
+    """
+    if vm_type == "windows":
+        return {
+            "machine_type": WINDOWS_VM_MACHINE_TYPE,
+            "disk_size_gb": WINDOWS_VM_DISK_SIZE_GB,
+            "image_family": POOL_WINDOWS_VM_IMAGE_FAMILY,
+            "image_project": WINDOWS_VM_IMAGE_PROJECT,
+            "tags": WINDOWS_VM_TAGS,
+            "startup_script_key": "windows-startup-script-ps1",
+            "startup_script_loader": load_windows_startup_script,
+            "enable_display": True,
+        }
+    return {
+        "machine_type": UBUNTU_VM_MACHINE_TYPE,
+        "disk_size_gb": UBUNTU_VM_DISK_SIZE_GB,
+        "image_family": POOL_UBUNTU_VM_IMAGE_FAMILY,
+        "image_project": UBUNTU_VM_IMAGE_PROJECT,
+        "tags": UBUNTU_VM_TAGS,
+        "startup_script_key": "startup-script",
+        "startup_script_loader": load_ubuntu_startup_script,
+        "enable_display": False,
+    }
+
+
+def _pool_vm_name(vm_type: str, n: int) -> str:
+    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{ENV_SUFFIX}"
+
+
+def _pool_ip_name(vm_type: str, n: int) -> str:
+    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-ip-{n}{ENV_SUFFIX}"
+
+
+def _pool_hostname(vm_type: str, n: int) -> str:
+    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{ENV_SUFFIX}.{DOMAIN_SUFFIX}"
+
+
+def _assistant_disk_name(assistant_id: str) -> str:
+    sanitized = assistant_id.lower().replace("_", "-")
+    return f"unity-disk-{sanitized}{ENV_SUFFIX}"
+
+
+def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
+    """List all pool VMs, optionally filtered by type."""
+    client = compute_v1.InstancesClient()
+
+    label_filter = f"labels.pool-role:*"
+    if vm_type:
+        label_filter += f" AND labels.vm-type={vm_type}"
+
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=label_filter,
+    )
+    results = []
+    for instance in client.list(request=request):
+        labels = dict(instance.labels) if instance.labels else {}
+        external_ip = None
+        if instance.network_interfaces:
+            for ni in instance.network_interfaces:
+                if ni.access_configs:
+                    for ac in ni.access_configs:
+                        if ac.nat_i_p:
+                            external_ip = ac.nat_i_p
+                            break
+
+        hostname = labels.get("pool-hostname", instance.name + f".{DOMAIN_SUFFIX}")
+        results.append(
+            {
+                "vm_name": instance.name,
+                "pool_role": labels.get("pool-role", "unknown"),
+                "assistant_id": labels.get("assistant-id", "") or None,
+                "vm_type": labels.get("vm-type", "unknown"),
+                "ip_address": external_ip,
+                "hostname": hostname,
+                "status": instance.status,
+                "label_fingerprint": instance.label_fingerprint,
+            }
+        )
+    return results
+
+
+def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
+    """Create a new pool VM with generic name, IP, DNS, and idle labels."""
+    vm_name = _pool_vm_name(vm_type, n)
+    ip_name = _pool_ip_name(vm_type, n)
+    hostname = _pool_hostname(vm_type, n)
+    cfg = _pool_vm_config(vm_type)
+
+    # Reserve static IP
+    ip_client = compute_v1.AddressesClient()
+    address = compute_v1.Address(
+        name=ip_name,
+        address_type="EXTERNAL",
+        network_tier="PREMIUM",
+        description=f"Static IP for pool VM {vm_name}",
+    )
+    try:
+        op = ip_client.insert(
+            project=VM_PROJECT_ID, region=REGION, address_resource=address
+        )
+        op.result()
+        logger.info(f"Reserved static IP: {ip_name}")
+    except Conflict:
+        logger.info(f"Static IP {ip_name} already exists, reusing")
+
+    ip_result = ip_client.get(project=VM_PROJECT_ID, region=REGION, address=ip_name)
+    static_ip = ip_result.address
+
+    # Create DNS A record
+    dns_client = dns.Client(project=DNS_PROJECT_ID)
+    zone = dns_client.zone(DNS_ZONE_NAME)
+    fqdn = f"{hostname}."
+    try:
+        for record in zone.list_resource_record_sets():
+            if record.name == fqdn and record.record_type == "A":
+                changes = zone.changes()
+                changes.delete_record_set(record)
+                changes.create()
+                break
+    except Exception as e:
+        logger.warning(f"Could not check existing DNS records: {e}")
+
+    record_set = zone.resource_record_set(fqdn, "A", 300, [static_ip])
+    changes = zone.changes()
+    changes.add_record_set(record_set)
+    changes.create()
+    logger.info(f"Created DNS A record: {hostname} -> {static_ip}")
+
+    # Fetch secrets
+    github_token = get_secret("DEVBOT_GITHUB_TOKEN")
+    tls_cert = get_secret(VM_WILDCARD_CERT_SECRET)
+    tls_key = get_secret(VM_WILDCARD_KEY_SECRET)
+
+    startup_script = cfg["startup_script_loader"]()
+
+    metadata_items = [
+        compute_v1.Items(key=cfg["startup_script_key"], value=startup_script),
+        compute_v1.Items(key="hostname", value=hostname),
+        compute_v1.Items(key="orchestra-url", value=ORCHESTRA_URL),
+        compute_v1.Items(key="comms-url", value=COMMS_URL),
+    ]
+    if github_token:
+        metadata_items.append(compute_v1.Items(key="github-token", value=github_token))
+    if tls_cert and tls_key:
+        metadata_items.append(compute_v1.Items(key="tls-fullchain", value=tls_cert))
+        metadata_items.append(compute_v1.Items(key="tls-privkey", value=tls_key))
+    if STAGING:
+        metadata_items.append(compute_v1.Items(key="staging", value="true"))
+
+    labels = {
+        "pool-role": "idle",
+        "assistant-id": "",
+        "vm-type": vm_type,
+        "pool-hostname": hostname.replace(".", "-"),
+    }
+
+    instance_kwargs = dict(
+        name=vm_name,
+        machine_type=f"zones/{ZONE}/machineTypes/{cfg['machine_type']}",
+        description=f"Unity pool VM ({vm_type}) #{n}",
+        labels=labels,
+        tags=compute_v1.Tags(items=cfg["tags"]),
+        disks=[
+            compute_v1.AttachedDisk(
+                boot=True,
+                auto_delete=True,
+                initialize_params=compute_v1.AttachedDiskInitializeParams(
+                    disk_size_gb=cfg["disk_size_gb"],
+                    disk_type=f"zones/{ZONE}/diskTypes/{VM_DISK_TYPE}",
+                    source_image=f"projects/{cfg['image_project']}/global/images/family/{cfg['image_family']}",
+                ),
+            ),
+        ],
+        network_interfaces=[
+            compute_v1.NetworkInterface(
+                network=f"global/networks/{VM_NETWORK}",
+                access_configs=[
+                    compute_v1.AccessConfig(
+                        name="External NAT",
+                        type_="ONE_TO_ONE_NAT",
+                        nat_i_p=static_ip,
+                        network_tier="PREMIUM",
+                    ),
+                ],
+            ),
+        ],
+        metadata=compute_v1.Metadata(items=metadata_items),
+        scheduling=compute_v1.Scheduling(
+            on_host_maintenance="MIGRATE",
+            automatic_restart=True,
+        ),
+    )
+    if cfg["enable_display"]:
+        instance_kwargs["display_device"] = compute_v1.DisplayDevice(
+            enable_display=True
+        )
+
+    instance = compute_v1.Instance(**instance_kwargs)
+    client = compute_v1.InstancesClient()
+    op = client.insert(project=VM_PROJECT_ID, zone=ZONE, instance_resource=instance)
+    op.result()
+
+    logger.info(f"Provisioned pool VM: {vm_name} ({vm_type}) with IP {static_ip}")
+    return {
+        "vm_name": vm_name,
+        "ip_address": static_ip,
+        "hostname": hostname,
+        "vm_type": vm_type,
+        "status": "RUNNING",
+    }
+
+
+def claim_idle_vm(assistant_id: str, vm_type: str) -> Dict[str, Any]:
+    """Atomically claim an idle pool VM using label fingerprint CAS.
+
+    Retries on Conflict (another request claimed the same VM).
+    Raises ValueError if no idle VMs are available.
+    """
+    client = compute_v1.InstancesClient()
+    label_filter = (
+        f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
+    )
+
+    while True:
+        request = compute_v1.ListInstancesRequest(
+            project=VM_PROJECT_ID,
+            zone=ZONE,
+            filter=label_filter,
+        )
+        idle_vms = list(client.list(request=request))
+        if not idle_vms:
+            raise ValueError(f"No idle {vm_type} pool VMs available")
+
+        candidate = idle_vms[0]
+        new_labels = dict(candidate.labels) if candidate.labels else {}
+        new_labels["pool-role"] = "assigned"
+        new_labels["assistant-id"] = assistant_id.lower().replace("_", "-")
+
+        try:
+            op = client.set_labels(
+                project=VM_PROJECT_ID,
+                zone=ZONE,
+                instance=candidate.name,
+                instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+                    labels=new_labels,
+                    label_fingerprint=candidate.label_fingerprint,
+                ),
+            )
+            op.result()
+            logger.info(
+                f"Claimed pool VM {candidate.name} for assistant {assistant_id}"
+            )
+
+            external_ip = None
+            if candidate.network_interfaces:
+                for ni in candidate.network_interfaces:
+                    if ni.access_configs:
+                        for ac in ni.access_configs:
+                            if ac.nat_i_p:
+                                external_ip = ac.nat_i_p
+                                break
+
+            hostname_label = new_labels.get("pool-hostname", "")
+            hostname = (
+                hostname_label.replace("-", ".")
+                if hostname_label
+                else candidate.name + f".{DOMAIN_SUFFIX}"
+            )
+            # Fix the hostname reconstruction: pool-hostname stores dots as dashes,
+            # but we need to be careful about which dashes are literal.
+            # The label stores e.g. "unity-pool-ubuntu-1--vm--unify--ai" or similar.
+            # Simpler: just read hostname from instance metadata.
+            hostname = _read_instance_metadata(candidate, "hostname") or hostname
+
+            return {
+                "vm_name": candidate.name,
+                "assistant_id": assistant_id,
+                "ip_address": external_ip,
+                "hostname": hostname,
+                "desktop_url": f"https://{hostname}",
+                "status": "RUNNING",
+            }
+        except Conflict:
+            logger.info(f"CAS conflict claiming {candidate.name}, retrying")
+            continue
+
+
+def _read_instance_metadata(instance, key: str) -> Optional[str]:
+    """Read a metadata value from a GCE instance object."""
+    if instance.metadata and instance.metadata.items:
+        for item in instance.metadata.items:
+            if item.key == key:
+                return item.value
+    return None
+
+
+def create_assistant_disk(assistant_id: str) -> str:
+    """Create a persistent disk for an assistant (64 GB standard PD).
+
+    Returns the disk self-link. Idempotent — returns existing disk if present.
+    """
+    client = compute_v1.DisksClient()
+    disk_name = _assistant_disk_name(assistant_id)
+
+    disk = compute_v1.Disk(
+        name=disk_name,
+        size_gb=POOL_ASSISTANT_DISK_SIZE_GB,
+        type_=f"zones/{ZONE}/diskTypes/{POOL_ASSISTANT_DISK_TYPE}",
+        description=f"Persistent storage for assistant {assistant_id}",
+    )
+
+    try:
+        op = client.insert(project=VM_PROJECT_ID, zone=ZONE, disk_resource=disk)
+        op.result()
+        logger.info(
+            f"Created assistant disk: {disk_name} ({POOL_ASSISTANT_DISK_SIZE_GB} GB)"
+        )
+    except Conflict:
+        logger.info(f"Assistant disk {disk_name} already exists")
+
+    result = client.get(project=VM_PROJECT_ID, zone=ZONE, disk=disk_name)
+    return result.self_link
+
+
+def attach_assistant_disk(vm_name: str, assistant_id: str) -> str:
+    """Attach an assistant's persistent disk to a pool VM.
+
+    Returns the device name used for mounting.
+    """
+    client = compute_v1.InstancesClient()
+    disk_name = _assistant_disk_name(assistant_id)
+    disk_source = f"projects/{VM_PROJECT_ID}/zones/{ZONE}/disks/{disk_name}"
+
+    attached_disk = compute_v1.AttachedDisk(
+        source=disk_source,
+        device_name=disk_name,
+        auto_delete=False,
+        mode="READ_WRITE",
+    )
+
+    op = client.attach_disk(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        instance=vm_name,
+        attached_disk_resource=attached_disk,
+    )
+    op.result()
+
+    # The device name defaults to the disk name
+    device_name = disk_name
+    logger.info(f"Attached disk {disk_name} to {vm_name} (device: {device_name})")
+    return device_name
+
+
+def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
+    """Detach an assistant's persistent disk from a pool VM."""
+    client = compute_v1.InstancesClient()
+    disk_name = _assistant_disk_name(assistant_id)
+    disk_suffix = f"/disks/{disk_name}"
+
+    vm = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+    actual_device_name = None
+    if vm.disks:
+        for d in vm.disks:
+            if d.source and d.source.endswith(disk_suffix):
+                actual_device_name = d.device_name
+                break
+
+    if not actual_device_name:
+        logger.warning(f"Disk {disk_name} not attached to {vm_name}, skipping detach")
+        return False
+
+    op = client.detach_disk(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        instance=vm_name,
+        device_name=actual_device_name,
+    )
+    op.result()
+    logger.info(
+        f"Detached disk {disk_name} from {vm_name} (device: {actual_device_name})"
+    )
+    return True
+
+
+def delete_assistant_disk(assistant_id: str) -> bool:
+    """Delete an assistant's persistent disk."""
+    client = compute_v1.DisksClient()
+    disk_name = _assistant_disk_name(assistant_id)
+
+    try:
+        op = client.delete(project=VM_PROJECT_ID, zone=ZONE, disk=disk_name)
+        op.result()
+        logger.info(f"Deleted assistant disk: {disk_name}")
+        return True
+    except NotFound:
+        logger.warning(f"Assistant disk {disk_name} not found")
+        return False
+
+
+def _update_instance_metadata(vm_name: str, updates: Dict[str, str]) -> None:
+    """Update metadata on a running instance (merge with existing)."""
+    client = compute_v1.InstancesClient()
+    instance = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+
+    existing = {}
+    if instance.metadata and instance.metadata.items:
+        existing = {item.key: item.value for item in instance.metadata.items}
+
+    existing.update(updates)
+
+    items = [compute_v1.Items(key=k, value=v) for k, v in existing.items()]
+    metadata = compute_v1.Metadata(
+        items=items,
+        fingerprint=instance.metadata.fingerprint if instance.metadata else None,
+    )
+    op = client.set_metadata(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        instance=vm_name,
+        metadata_resource=metadata,
+    )
+    op.result()
+    logger.info(f"Updated metadata on {vm_name}: {list(updates.keys())}")
+
+
+def assign_pool_vm(
+    assistant_id: str,
+    unify_apikey: str,
+    vm_type: str = "ubuntu",
+) -> Dict[str, Any]:
+    """Full pool assignment: claim VM, create/attach disk, set metadata."""
+    claimed = claim_idle_vm(assistant_id, vm_type)
+    vm_name = claimed["vm_name"]
+
+    # Create disk if it doesn't exist, then attach
+    create_assistant_disk(assistant_id)
+    device_name = attach_assistant_disk(vm_name, assistant_id)
+
+    # Generate SSH keypair and store private key
+    private_key, public_key = generate_ssh_keypair()
+    store_ssh_private_key(assistant_id, private_key, unify_apikey)
+
+    # Update metadata to trigger watcher reconfiguration
+    _update_instance_metadata(
+        vm_name,
+        {
+            "unify-key": unify_apikey,
+            "vnc-password": unify_apikey,
+            "ssh-public-key": public_key,
+            "disk-device": device_name,
+            "assistant-id": assistant_id,
+        },
+    )
+
+    logger.info(f"Pool assignment complete: {vm_name} -> assistant {assistant_id}")
+    return {
+        "vm_name": vm_name,
+        "assistant_id": assistant_id,
+        "ip_address": claimed["ip_address"],
+        "hostname": claimed["hostname"],
+        "desktop_url": claimed["desktop_url"],
+        "status": "RUNNING",
+        "ssh_username": POOL_SSH_USERNAME,
+        "ssh_port": SSH_SYNC_PORT,
+    }
+
+
+def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
+    """Release a pool VM: clear metadata, detach disk, reset labels.
+
+    Idempotent — returns success if no VM is currently assigned.
+    """
+    client = compute_v1.InstancesClient()
+    sanitized = assistant_id.lower().replace("_", "-")
+    label_filter = f"labels.pool-role=assigned AND labels.assistant-id={sanitized}"
+
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=label_filter,
+    )
+    vms = list(client.list(request=request))
+    if not vms:
+        logger.info(
+            f"No pool VM assigned to assistant {assistant_id} — nothing to release"
+        )
+        return {
+            "released": False,
+            "assistant_id": assistant_id,
+            "message": "No VM assigned",
+        }
+
+    vm = vms[0]
+    vm_name = vm.name
+
+    # Clear assignment metadata (triggers watcher cleanup)
+    _update_instance_metadata(
+        vm_name,
+        {
+            "unify-key": "",
+            "vnc-password": "",
+            "ssh-public-key": "",
+            "disk-device": "",
+            "assistant-id": "",
+        },
+    )
+
+    # Detach persistent disk
+    detach_assistant_disk(vm_name, assistant_id)
+
+    # Reset labels to idle
+    labels = dict(vm.labels) if vm.labels else {}
+    labels["pool-role"] = "idle"
+    labels["assistant-id"] = ""
+
+    # Re-read to get fresh fingerprint after metadata update
+    vm = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+    op = client.set_labels(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        instance=vm_name,
+        instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+            labels=labels,
+            label_fingerprint=vm.label_fingerprint,
+        ),
+    )
+    op.result()
+
+    logger.info(f"Released pool VM {vm_name} from assistant {assistant_id}")
+
+    return {
+        "released": True,
+        "assistant_id": assistant_id,
+        "vm_name": vm_name,
+        "vm_type": labels.get("vm-type", "ubuntu"),
+    }
+
+
+def rebalance_pool(vm_type: str) -> Dict[str, Any]:
+    """Ensure exactly POOL_TARGET_IDLE idle VMs for the given type.
+
+    Scale up: start a stopped VM or provision a new one.
+    Scale down: stop excess idle VMs.
+    """
+    client = compute_v1.InstancesClient()
+    type_filter = f"labels.vm-type={vm_type}"
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=type_filter,
+    )
+    all_vms = list(client.list(request=request))
+
+    pool_vms = [vm for vm in all_vms if vm.labels and vm.labels.get("pool-role")]
+    idle_vms = [
+        vm
+        for vm in pool_vms
+        if vm.labels.get("pool-role") == "idle" and vm.status == "RUNNING"
+    ]
+    stopped_vms = [
+        vm
+        for vm in pool_vms
+        if vm.labels.get("pool-role") == "stopped" or vm.status == "TERMINATED"
+    ]
+
+    actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
+
+    if len(idle_vms) <= 1:
+        # Scale up
+        if stopped_vms:
+            vm = stopped_vms[0]
+            try:
+                op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
+                op.result()
+                # Update label to idle
+                labels = dict(vm.labels) if vm.labels else {}
+                labels["pool-role"] = "idle"
+                vm_fresh = client.get(
+                    project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
+                )
+                client.set_labels(
+                    project=VM_PROJECT_ID,
+                    zone=ZONE,
+                    instance=vm.name,
+                    instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+                        labels=labels,
+                        label_fingerprint=vm_fresh.label_fingerprint,
+                    ),
+                ).result()
+                actions["actions"].append(f"Started stopped VM {vm.name}")
+                logger.info(f"Rebalance: started stopped VM {vm.name}")
+            except Exception as e:
+                logger.error(f"Rebalance: failed to start {vm.name}: {e}")
+        else:
+            # Find next available pool number
+            existing_names = {vm.name for vm in pool_vms}
+            n = 1
+            while _pool_vm_name(vm_type, n) in existing_names:
+                n += 1
+            try:
+                provision_pool_vm(vm_type, n)
+                actions["actions"].append(f"Provisioned new pool VM #{n}")
+                logger.info(f"Rebalance: provisioned new {vm_type} pool VM #{n}")
+            except Exception as e:
+                logger.error(f"Rebalance: failed to provision new VM: {e}")
+
+    elif len(idle_vms) > POOL_TARGET_IDLE:
+        excess = len(idle_vms) - POOL_TARGET_IDLE
+        # Stop the highest-numbered idle VMs
+        to_stop = sorted(idle_vms, key=lambda vm: vm.name, reverse=True)[:excess]
+        for vm in to_stop:
+            try:
+                op = client.stop(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
+                op.result()
+                labels = dict(vm.labels) if vm.labels else {}
+                labels["pool-role"] = "stopped"
+                vm_fresh = client.get(
+                    project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
+                )
+                client.set_labels(
+                    project=VM_PROJECT_ID,
+                    zone=ZONE,
+                    instance=vm.name,
+                    instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+                        labels=labels,
+                        label_fingerprint=vm_fresh.label_fingerprint,
+                    ),
+                ).result()
+                actions["actions"].append(f"Stopped excess VM {vm.name}")
+                logger.info(f"Rebalance: stopped excess VM {vm.name}")
+            except Exception as e:
+                logger.error(f"Rebalance: failed to stop {vm.name}: {e}")
+
+    return actions

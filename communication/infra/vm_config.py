@@ -9,8 +9,8 @@ import os
 # =============================================================================
 # GCP Project Configuration
 # =============================================================================
-# Project B: Where VMs and static IPs are created
-VM_PROJECT_ID = "gcp-project-runtime"
+# Dedicated project for assistant VMs and static IPs (isolated from GKE cluster)
+VM_PROJECT_ID = "gcp-project-vms"
 
 # DNS Project: Where DNS zone is managed (gcp-project-dns)
 DNS_PROJECT_ID = "gcp-project-dns"
@@ -45,7 +45,7 @@ VM_NETWORK = "default"
 WINDOWS_VM_MACHINE_TYPE = "e2-standard-4"  # 4 vCPU, 16GB RAM
 WINDOWS_VM_DISK_SIZE_GB = 100
 WINDOWS_VM_IMAGE_FAMILY = "unity-windows-vm"
-WINDOWS_VM_IMAGE_PROJECT = "gcp-project-runtime"
+WINDOWS_VM_IMAGE_PROJECT = "gcp-project-vms"
 WINDOWS_VM_TAGS = ["unity-windows-vm", "https-server", "http-server", "allow-2222"]
 
 # Path to the Windows init script
@@ -61,7 +61,7 @@ WINDOWS_INIT_SCRIPT_PATH = os.path.join(
 UBUNTU_VM_MACHINE_TYPE = "e2-standard-2"  # 2 vCPU, 8GB RAM
 UBUNTU_VM_DISK_SIZE_GB = 50
 UBUNTU_VM_IMAGE_FAMILY = "unity-ubuntu-vm"
-UBUNTU_VM_IMAGE_PROJECT = "gcp-project-runtime"
+UBUNTU_VM_IMAGE_PROJECT = "gcp-project-vms"
 UBUNTU_VM_TAGS = ["unity-ubuntu-vm", "https-server", "http-server", "allow-2222"]
 
 # =============================================================================
@@ -86,3 +86,16 @@ VM_WILDCARD_KEY_SECRET = "VM_WILDCARD_PRIVKEY"
 # Secrets (loaded from Secret Manager in production)
 # =============================================================================
 MAK_KEY = os.getenv("MAK_KEY", "")
+
+# =============================================================================
+# VM Pool Configuration
+# =============================================================================
+POOL_SSH_USERNAME = "unityuser"
+POOL_TARGET_IDLE = 2
+POOL_ASSISTANT_DISK_SIZE_GB = 64
+POOL_ASSISTANT_DISK_TYPE = "pd-standard"
+POOL_VM_NAME_PREFIX = "unity-pool"
+
+# Pool image families (separate from legacy to avoid affecting existing VMs)
+POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"
+POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"

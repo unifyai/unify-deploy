@@ -8,6 +8,8 @@ from google.protobuf import duration_pb2
 import json
 import logging
 import os
+import time
+import uuid
 from .helpers import (
     setup_kubernetes_client,
     create_unity_job,
@@ -24,6 +26,13 @@ from .vm_helpers import (
     get_vm_status,
     get_dns_hostname,
     _probe_vm_https,
+    # Pool helpers
+    provision_pool_vm,
+    assign_pool_vm,
+    release_pool_vm,
+    rebalance_pool,
+    list_pool_vms,
+    delete_assistant_disk,
 )
 from .tunnel_helpers import (
     register_tunnel,
@@ -44,6 +53,14 @@ from .models import (
     TunnelStatusResponse,
     TunnelListResponse,
     TunnelDeleteResponse,
+    # Pool models
+    PoolProvisionRequest,
+    PoolAssignRequest,
+    PoolAssignResponse,
+    PoolReleaseRequest,
+    PoolDiskDeleteRequest,
+    PoolStatusResponse,
+    PoolVMStatus,
 )
 from communication.helpers import STAGING
 from communication.dependencies import authenticate_user_api_key, extract_api_key
@@ -277,12 +294,13 @@ async def create_kubernetes_job(
                 detail="Failed to connect to Kubernetes cluster. Make sure gcloud CLI is installed and configured.",
             )
 
-        # Create the job name with unity- prefix
+        # Create the job name with unity- prefix and unique ID for high-load uniqueness
+        random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         job_name = (
-            f"unity-{timestamp_str}"
+            f"unity-{timestamp_str}-{random_id}"
             if not STAGING
-            else f"unity-{timestamp_str}-staging"
+            else f"unity-{timestamp_str}-{random_id}-staging"
         )
 
         # Create the job
@@ -512,6 +530,7 @@ async def start_job(
         # Prepare the job data
         job_data = {
             "thread": "startup",
+            "publish_timestamp": time.time(),
             "event": {
                 "api_key": api_key,
                 "medium": medium,
@@ -636,7 +655,12 @@ async def list_kubernetes_jobs(
                 lambda job: (
                     datetime.now()
                     - datetime.strptime(
-                        job.metadata.name.replace("unity-", "").replace("-staging", ""),
+                        "-".join(
+                            filter(
+                                lambda part: part.isdigit() and len(part) in [2, 4],
+                                job.metadata.name.split("-"),
+                            )
+                        ),
                         "%Y-%m-%d-%H-%M-%S",
                     )
                 )
@@ -1042,7 +1066,8 @@ async def vm_ready_endpoint(
     assistant_id = request_body.assistant_id
     vm_type = request_body.vm_type
 
-    hostname = get_dns_hostname(assistant_id)
+    # Pool VMs pass their own hostname; legacy VMs derive it from assistant_id
+    hostname = request_body.hostname or get_dns_hostname(assistant_id)
     loop = asyncio.get_running_loop()
     reachable = await loop.run_in_executor(
         None,
@@ -1068,9 +1093,12 @@ async def vm_ready_endpoint(
     message_data = json.dumps(
         {
             "thread": "unity_system_event",
+            "publish_timestamp": time.time(),
             "event": {
                 "assistant_id": assistant_id,
                 "event_type": "assistant_desktop_ready",
+                "desktop_url": f"https://{hostname}",
+                "vm_type": vm_type,
                 "message": f"VM ({vm_type}) startup complete",
             },
         },
@@ -1088,3 +1116,142 @@ async def vm_ready_endpoint(
         "message_id": message_id,
         "assistant_id": assistant_id,
     }
+
+
+# =============================================================================
+# VM Pool Endpoints
+# =============================================================================
+
+
+@router.post("/vm/pool/provision")
+async def provision_pool_endpoint(request: PoolProvisionRequest):
+    """Create new idle pool VMs.
+
+    Provisions `count` VMs of the specified type with generic names,
+    static IPs, DNS records, and idle labels.
+    """
+    results = []
+    loop = asyncio.get_running_loop()
+
+    # Find next available pool number(s)
+    existing = await loop.run_in_executor(None, partial(list_pool_vms, request.vm_type))
+    existing_names = {vm["vm_name"] for vm in existing}
+
+    n = 1
+    provisioned = 0
+    while provisioned < request.count:
+        from .vm_config import POOL_VM_NAME_PREFIX, ENV_SUFFIX
+
+        candidate = f"{POOL_VM_NAME_PREFIX}-{request.vm_type}-{n}{ENV_SUFFIX}"
+        if candidate not in existing_names:
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    partial(provision_pool_vm, request.vm_type, n),
+                )
+                results.append(result)
+                provisioned += 1
+            except Exception as e:
+                logger.error(f"Failed to provision pool VM #{n}: {e}")
+                results.append({"error": str(e), "n": n})
+        n += 1
+
+    return {"provisioned": results}
+
+
+@router.post("/vm/pool/assign", response_model=PoolAssignResponse)
+async def assign_pool_endpoint(request: PoolAssignRequest):
+    """Assign an idle pool VM to an assistant.
+
+    Claims an idle VM (race-safe via label CAS), creates/attaches the
+    assistant's persistent disk, generates SSH keys, and updates metadata
+    to trigger the on-VM watcher.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                assign_pool_vm,
+                assistant_id=request.assistant_id,
+                unify_apikey=request.unify_apikey,
+                vm_type=request.vm_type,
+            ),
+        )
+
+        # Trigger async rebalance (don't block the response)
+        loop.run_in_executor(None, partial(rebalance_pool, request.vm_type))
+
+        return PoolAssignResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to assign pool VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/vm/pool/release")
+async def release_pool_endpoint(request: PoolReleaseRequest):
+    """Release a pool VM back to idle.
+
+    Clears assignment metadata (triggering watcher cleanup), detaches
+    the persistent disk, and resets labels. Idempotent.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(release_pool_vm, request.assistant_id),
+        )
+
+        # Trigger async rebalance (don't block the response)
+        vm_type = result.get("vm_type", "ubuntu")
+        loop.run_in_executor(None, partial(rebalance_pool, vm_type))
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to release pool VM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/vm/pool/disk/{assistant_id}")
+async def delete_pool_disk_endpoint(assistant_id: str):
+    """Delete an assistant's persistent disk (on unhire)."""
+    try:
+        loop = asyncio.get_running_loop()
+        deleted = await loop.run_in_executor(
+            None,
+            partial(delete_assistant_disk, assistant_id),
+        )
+        return {"assistant_id": assistant_id, "deleted": deleted}
+    except Exception as e:
+        logger.error(f"Failed to delete assistant disk: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/vm/pool/status", response_model=PoolStatusResponse)
+async def pool_status_endpoint(vm_type: str = None):
+    """List all pool VMs with their current state."""
+    loop = asyncio.get_running_loop()
+    vms = await loop.run_in_executor(None, partial(list_pool_vms, vm_type))
+
+    pool_vms = [PoolVMStatus(**vm) for vm in vms]
+    idle = sum(1 for vm in vms if vm["pool_role"] == "idle")
+    assigned = sum(1 for vm in vms if vm["pool_role"] == "assigned")
+    stopped = sum(1 for vm in vms if vm["pool_role"] == "stopped")
+
+    return PoolStatusResponse(
+        vms=pool_vms,
+        total=len(pool_vms),
+        idle=idle,
+        assigned=assigned,
+        stopped=stopped,
+    )
+
+
+@router.post("/vm/pool/rebalance")
+async def rebalance_pool_endpoint(vm_type: str = "ubuntu"):
+    """Manually trigger pool rebalance for a VM type."""
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, partial(rebalance_pool, vm_type))
+    return result
