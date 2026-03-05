@@ -18,7 +18,7 @@ TUNNEL_SUBDOMAIN = "staging.tunnel.unify.ai" if STAGING else "tunnel.unify.ai"
 # =============================================================================
 # GCP Project Configuration
 # =============================================================================
-TUNNEL_PROJECT_ID = "gcp-project-vms"
+TUNNEL_PROJECT_ID = "gcp-project-runtime"
 DNS_PROJECT_ID = "gcp-project-dns"
 
 # =============================================================================
