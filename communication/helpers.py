@@ -12,7 +12,7 @@ STAGING = os.getenv("STAGING")
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
-    else "https://service.a.run.app/v0"
+    else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
 ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")

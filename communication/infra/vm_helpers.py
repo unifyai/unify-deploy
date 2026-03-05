@@ -28,7 +28,7 @@ STAGING = os.environ.get("STAGING", "false").lower() == "true"
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
     if not STAGING
-    else "https://service.a.run.app/v0"
+    else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.environ.get("ORCHESTRA_URL", _default_orchestra_url)
 
