@@ -240,6 +240,19 @@ EOF
     cd /
     log "Agent Service started (PID $(cat /var/run/agent-service.pid))"
 
+    # Wait for Agent Service to be listening
+    log "Waiting for Agent Service on port 3000..."
+    for i in $(seq 1 60); do
+        if ss -tlnp | grep -q ':3000 '; then
+            log "Agent Service is listening on port 3000 (after ${i}s)"
+            break
+        fi
+        if [[ $i -eq 60 ]]; then
+            log "WARNING: Agent Service not listening on port 3000 after 60s, proceeding anyway"
+        fi
+        sleep 1
+    done
+
     # Send ready notification
     if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" ]]; then
         for attempt in $(seq 1 10); do

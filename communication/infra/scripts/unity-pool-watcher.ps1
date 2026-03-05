@@ -334,6 +334,20 @@ npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
         Write-Log "WARNING: Agent Service start failed: $_"
     }
 
+    # Wait for Agent Service to be listening
+    Write-Log "Waiting for Agent Service on port 3000..."
+    for ($i = 1; $i -le 60; $i++) {
+        $listener = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
+        if ($listener) {
+            Write-Log "Agent Service is listening on port 3000 (after ${i}s)"
+            break
+        }
+        if ($i -eq 60) {
+            Write-Log "WARNING: Agent Service not listening on port 3000 after 60s, proceeding anyway"
+        }
+        Start-Sleep -Seconds 1
+    }
+
     # Display resolution: run the script directly in the console session
     try {
         $resScript = "C:\novnc\set-resolution.ps1"
