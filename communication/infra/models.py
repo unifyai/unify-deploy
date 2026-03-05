@@ -68,6 +68,60 @@ class VMDeleteResponse(BaseModel):
 class VMReadyRequest(BaseModel):
     assistant_id: str
     vm_type: Literal["windows", "ubuntu"] = "windows"
+    hostname: Optional[str] = None
+
+
+# =============================================================================
+# VM Pool Models
+# =============================================================================
+
+
+class PoolProvisionRequest(BaseModel):
+    vm_type: Literal["windows", "ubuntu"] = "ubuntu"
+    count: int = 1
+
+
+class PoolAssignRequest(BaseModel):
+    assistant_id: str
+    unify_apikey: str
+    vm_type: Literal["windows", "ubuntu"] = "ubuntu"
+
+
+class PoolAssignResponse(BaseModel):
+    vm_name: str
+    assistant_id: str
+    ip_address: str
+    hostname: str
+    desktop_url: str
+    status: str
+    ssh_username: str
+    ssh_port: int
+
+
+class PoolReleaseRequest(BaseModel):
+    assistant_id: str
+
+
+class PoolDiskDeleteRequest(BaseModel):
+    assistant_id: str
+
+
+class PoolVMStatus(BaseModel):
+    vm_name: str
+    pool_role: str
+    assistant_id: Optional[str] = None
+    vm_type: str
+    ip_address: Optional[str] = None
+    hostname: str
+    status: str
+
+
+class PoolStatusResponse(BaseModel):
+    vms: list[PoolVMStatus]
+    total: int
+    idle: int
+    assigned: int
+    stopped: int
 
 
 # =============================================================================

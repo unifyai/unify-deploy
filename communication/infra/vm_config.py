@@ -86,3 +86,16 @@ VM_WILDCARD_KEY_SECRET = "VM_WILDCARD_PRIVKEY"
 # Secrets (loaded from Secret Manager in production)
 # =============================================================================
 MAK_KEY = os.getenv("MAK_KEY", "")
+
+# =============================================================================
+# VM Pool Configuration
+# =============================================================================
+POOL_SSH_USERNAME = "unityuser"
+POOL_TARGET_IDLE = 2
+POOL_ASSISTANT_DISK_SIZE_GB = 64
+POOL_ASSISTANT_DISK_TYPE = "pd-standard"
+POOL_VM_NAME_PREFIX = "unity-pool"
+
+# Pool image families (separate from legacy to avoid affecting existing VMs)
+POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"
+POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"
