@@ -11,6 +11,7 @@ from fastapi.routing import APIRoute
 from prometheus_client import (
     CollectorRegistry,
     Counter,
+    Gauge,
     Histogram,
     ProcessCollector,
     generate_latest,
@@ -82,10 +83,10 @@ BUILD_WEBHOOK_CONTEXT_DURATION = Histogram(
     registry=REGISTRY,
 )
 
-JOB_DEMAND_TOTAL = Counter(
-    "adapter_job_demand_total",
-    "Inbound requests that require a live container, regardless of whether "
-    "one was already running. Measures raw demand for container capacity.",
+JOB_DEMAND_TOTAL = Gauge(
+    "adapter_job_demand",
+    "Monotonically increasing count of job start requests. Typed as Gauge "
+    "to avoid increase() extrapolation; query with max_over_time - min_over_time.",
     labelnames=["channel"],
     registry=REGISTRY,
 )
