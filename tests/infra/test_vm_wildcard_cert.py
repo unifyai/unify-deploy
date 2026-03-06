@@ -8,7 +8,6 @@ gracefully when the cert is not available.
 
 from unittest.mock import patch, MagicMock
 
-
 _FAKE_CERT = "-----BEGIN CERTIFICATE-----\nMIIFake...\n-----END CERTIFICATE-----\n"
 _FAKE_KEY = "-----BEGIN PRIVATE KEY-----\nMIIFake...\n-----END PRIVATE KEY-----\n"
 
@@ -71,7 +70,9 @@ class TestPoolVmWildcardCert:
             }.get(name)
 
         mock_get_secret.side_effect = _secret
-        meta = _mock_provision("ubuntu", mock_client_cls, mock_get_secret, mock_dns, mock_addr)
+        meta = _mock_provision(
+            "ubuntu", mock_client_cls, mock_get_secret, mock_dns, mock_addr
+        )
 
         assert meta.get("tls-fullchain") == _FAKE_CERT
         assert meta.get("tls-privkey") == _FAKE_KEY
@@ -89,7 +90,9 @@ class TestPoolVmWildcardCert:
             return None
 
         mock_get_secret.side_effect = _secret
-        meta = _mock_provision("ubuntu", mock_client_cls, mock_get_secret, mock_dns, mock_addr)
+        meta = _mock_provision(
+            "ubuntu", mock_client_cls, mock_get_secret, mock_dns, mock_addr
+        )
 
         assert "tls-fullchain" not in meta
         assert "tls-privkey" not in meta
@@ -109,7 +112,9 @@ class TestPoolVmWildcardCert:
             }.get(name)
 
         mock_get_secret.side_effect = _secret
-        meta = _mock_provision("windows", mock_client_cls, mock_get_secret, mock_dns, mock_addr)
+        meta = _mock_provision(
+            "windows", mock_client_cls, mock_get_secret, mock_dns, mock_addr
+        )
 
         assert meta.get("tls-fullchain") == _FAKE_CERT
         assert meta.get("tls-privkey") == _FAKE_KEY
@@ -127,7 +132,9 @@ class TestPoolVmWildcardCert:
             return None
 
         mock_get_secret.side_effect = _secret
-        meta = _mock_provision("windows", mock_client_cls, mock_get_secret, mock_dns, mock_addr)
+        meta = _mock_provision(
+            "windows", mock_client_cls, mock_get_secret, mock_dns, mock_addr
+        )
 
         assert "tls-fullchain" not in meta
         assert "tls-privkey" not in meta
