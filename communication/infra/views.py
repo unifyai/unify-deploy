@@ -19,14 +19,8 @@ from .helpers import (
     suspend_job,
 )
 from .vm_helpers import (
-    provision_vm_full,
-    deprovision_vm_full,
-    start_vm,
-    stop_vm,
-    get_vm_status,
     get_dns_hostname,
     _probe_vm_https,
-    # Pool helpers
     provision_pool_vm,
     assign_pool_vm,
     release_pool_vm,
@@ -41,19 +35,12 @@ from .tunnel_helpers import (
     list_user_tunnels,
 )
 from .models import (
-    VMCreateRequest,
-    VMActionRequest,
-    VMCreateResponse,
-    VMStatusResponse,
-    VMActionResponse,
-    VMDeleteResponse,
     VMReadyRequest,
     TunnelRegisterRequest,
     TunnelRegisterResponse,
     TunnelStatusResponse,
     TunnelListResponse,
     TunnelDeleteResponse,
-    # Pool models
     PoolProvisionRequest,
     PoolAssignRequest,
     PoolAssignResponse,
@@ -817,143 +804,6 @@ async def get_latest_unity_image_commit():
             status_code=500,
             detail=f"Failed to get latest Unity image commit: {str(e)}",
         )
-
-
-# =============================================================================
-# VM Management Endpoints (Windows and Ubuntu)
-# =============================================================================
-
-
-@router.post("/vm/create", response_model=VMCreateResponse)
-async def create_vm_endpoint(request: VMCreateRequest):
-    """
-    Create a new VM (Windows or Ubuntu) with full provisioning:
-    - Reserve static IP
-    - Create DNS A record (unity-assistant-{id}.vm.unify.ai)
-    - Create and start VM with init script
-
-    Called by external hire webhook when assistant has desktop_mode set.
-
-    Args:
-        assistant_id: The assistant ID (numeric string)
-        unify_apikey: Unify API key (used for VNC password and Windows password)
-        assistant_name: Assistant name (used for Windows username, ignored for Ubuntu)
-        vm_type: "windows" or "ubuntu" (defaults to "windows")
-    """
-    try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(
-                provision_vm_full,
-                assistant_id=request.assistant_id,
-                unify_apikey=request.unify_apikey,
-                assistant_name=request.assistant_name,
-                vm_type=request.vm_type,
-            ),
-        )
-        return VMCreateResponse(**result)
-    except Exception as e:
-        logger.error(f"Failed to create VM: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/vm/start", response_model=VMActionResponse)
-async def start_vm_endpoint(request: VMActionRequest):
-    """
-    Start a stopped VM (Windows or Ubuntu).
-
-    Called by external wakeup webhook when assistant needs to be activated.
-
-    Args:
-        assistant_id: The assistant ID
-        vm_type: "windows" or "ubuntu" (defaults to "windows")
-    """
-    try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(start_vm, request.assistant_id, request.vm_type),
-        )
-        return VMActionResponse(**result)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to start VM: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/vm/stop", response_model=VMActionResponse)
-async def stop_vm_endpoint(request: VMActionRequest):
-    """
-    Stop a running VM (Windows or Ubuntu). Preserves data.
-
-    Called when assistant job/session ends.
-
-    Args:
-        assistant_id: The assistant ID
-        vm_type: "windows" or "ubuntu" (defaults to "windows")
-    """
-    try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(stop_vm, request.assistant_id, request.vm_type),
-        )
-        return VMActionResponse(**result)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Failed to stop VM: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/vm/delete", response_model=VMDeleteResponse)
-async def delete_vm_endpoint(request: VMActionRequest):
-    """
-    Delete a VM (Windows or Ubuntu) with full deprovisioning:
-    - Delete VM
-    - Delete DNS record
-    - Release static IP
-
-    Called by external unhire webhook when assistant is removed.
-
-    Args:
-        assistant_id: The assistant ID
-        vm_type: "windows" or "ubuntu" (defaults to "windows")
-    """
-    try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(deprovision_vm_full, request.assistant_id, request.vm_type),
-        )
-        return VMDeleteResponse(**result)
-    except Exception as e:
-        logger.error(f"Failed to delete VM: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/vm/status/{assistant_id}", response_model=VMStatusResponse)
-async def get_vm_status_endpoint(assistant_id: str, vm_type: str = "windows"):
-    """
-    Get the current status of a VM (Windows or Ubuntu).
-
-    Args:
-        assistant_id: The assistant ID (path parameter)
-        vm_type: "windows" or "ubuntu" (query parameter, defaults to "windows")
-    """
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(
-        None,
-        partial(get_vm_status, assistant_id, vm_type),
-    )
-    if result is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"VM not found for assistant {assistant_id}",
-        )
-    return VMStatusResponse(**result)
 
 
 # =============================================================================
