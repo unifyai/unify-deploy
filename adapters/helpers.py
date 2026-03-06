@@ -666,7 +666,7 @@ def get_target_idle_count(live_count: int) -> int:
     if demand_factor <= 0:
         return min_idle_floor
 
-    demand_buffer = live_count // demand_factor
+    demand_buffer = -(-live_count // demand_factor)
     return max(min_idle_floor, demand_buffer)
 
 
