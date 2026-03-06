@@ -653,6 +653,42 @@ else
 fi
 
 # =============================================================================
+# Pool VM: mark as idle once setup is complete
+# =============================================================================
+TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null || true)
+
+if [[ -n "$TOKEN" ]]; then
+    GCP_PROJECT=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/project/project-id")
+    GCP_ZONE=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{print $NF}')
+    GCP_INSTANCE=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/name")
+
+    INFO=$(curl -sf -H "Authorization: Bearer $TOKEN" \
+        "https://compute.googleapis.com/compute/v1/projects/$GCP_PROJECT/zones/$GCP_ZONE/instances/$GCP_INSTANCE")
+    POOL_ROLE=$(echo "$INFO" | python3 -c "import sys,json; print(json.load(sys.stdin).get('labels',{}).get('pool-role',''))" 2>/dev/null || true)
+
+    if [[ "$POOL_ROLE" == "provisioning" ]]; then
+        FINGERPRINT=$(echo "$INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['labelFingerprint'])")
+        NEW_LABELS=$(echo "$INFO" | python3 -c "
+import sys, json
+labels = json.load(sys.stdin).get('labels', {})
+labels['pool-role'] = 'idle'
+print(json.dumps(labels))
+")
+        curl -sf -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://compute.googleapis.com/compute/v1/projects/$GCP_PROJECT/zones/$GCP_ZONE/instances/$GCP_INSTANCE/setLabels" \
+            -d "{\"labels\": $NEW_LABELS, \"labelFingerprint\": \"$FINGERPRINT\"}"
+        echo "Pool VM marked as idle"
+    fi
+fi
+
+# =============================================================================
 # Start Services via supervisord
 # =============================================================================
 echo "Starting services via supervisord..."
