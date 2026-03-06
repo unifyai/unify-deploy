@@ -2514,20 +2514,28 @@ async def scheduled_teams_watches(request: Request):
 
 
 @app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
-async def scheduled_jobs_create(request: Request):
-    """Cloud Run endpoint that creates a new idle job.
-    Now supports a dynamic buffer based on current demand.
+async def scheduled_jobs_create(request: Request, refresh: bool = False):
+    """Cloud Run endpoint that creates idle jobs.
+
+    Two modes of operation:
+    - **Fill mode** (default): Only creates jobs if the pool is below the target.
+      Used by reactive replenishment from build_webhook_context.
+    - **Refresh mode** (?refresh=true): Always creates `target` new jobs regardless
+      of current pool size. The cleanup endpoint (10 min later) will delete the
+      older containers, effectively rotating the pool to the latest image.
+      Used by the hourly cron and CloudBuild deployments.
     """
-    # Get current inventory in a single request
     inventory = get_unity_jobs_inventory()
     live_count = len(inventory["live"])
     current_idle_count = len(inventory["idle"])
 
-    # Determine how many jobs we SHOULD have
     target_idle_count = get_target_idle_count(live_count)
 
-    # Calculate how many to create
-    num_to_create = max(0, target_idle_count - current_idle_count)
+    if refresh:
+        num_to_create = target_idle_count
+    else:
+        num_to_create = max(0, target_idle_count - current_idle_count)
+
     if num_to_create == 0:
         logger.info(
             f"Idle pool is healthy (current: {current_idle_count}, target: {target_idle_count}). No jobs created."
@@ -2538,9 +2546,9 @@ async def scheduled_jobs_create(request: Request):
             "target": target_idle_count,
         }
 
-    # Create the jobs
+    mode = "refresh" if refresh else "fill"
     logger.info(
-        f"Creating {num_to_create} idle jobs to reach target of {target_idle_count}..."
+        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {target_idle_count})..."
     )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
@@ -2561,6 +2569,7 @@ async def scheduled_jobs_create(request: Request):
         created_jobs.append(resp.json())
 
     return {
+        "mode": mode,
         "created": len(created_jobs),
         "target": target_idle_count,
         "details": created_jobs,
