@@ -110,6 +110,8 @@ function Invoke-Update {
             Push-Location $magnitudeDir
             $bunExe = "C:\Windows\System32\config\systemprofile\.bun\bin\bun.exe"
             if (Test-Path $bunExe) {
+                $bunDir = Split-Path $bunExe
+                $env:Path = "$bunDir;$env:Path"
                 & $bunExe install 2>&1
             } else {
                 npm install 2>&1
