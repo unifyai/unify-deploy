@@ -294,9 +294,6 @@ function Invoke-Assign($unifyKey) {
             Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "ControlPassword" -Value $encrypted -Type Binary
             Restart-Service "TightVNC Server" -ErrorAction SilentlyContinue
             Write-Log "VNC password updated"
-
-            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" `
-                -Name "DefaultPassword" -Value $vncPassword -ErrorAction SilentlyContinue
         }
     } catch {
         Write-Log "WARNING: VNC password update failed: $_"
