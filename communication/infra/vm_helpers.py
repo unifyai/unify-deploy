@@ -11,6 +11,7 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple
 
@@ -1252,7 +1253,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         metadata_items.append(compute_v1.Items(key="staging", value="true"))
 
     labels = {
-        "pool-role": "idle",
+        "pool-role": "provisioning",
         "assistant-id": "",
         "vm-type": vm_type,
         "pool-hostname": hostname.replace(".", "-"),
@@ -1293,6 +1294,12 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
             on_host_maintenance="MIGRATE",
             automatic_restart=True,
         ),
+        service_accounts=[
+            compute_v1.ServiceAccount(
+                email=f"pool-vm-sa@{VM_PROJECT_ID}.iam.gserviceaccount.com",
+                scopes=["https://www.googleapis.com/auth/compute"],
+            ),
+        ],
     )
     if cfg["enable_display"]:
         instance_kwargs["display_device"] = compute_v1.DisplayDevice(
@@ -1318,12 +1325,15 @@ def claim_idle_vm(assistant_id: str, vm_type: str) -> Dict[str, Any]:
     """Atomically claim an idle pool VM using label fingerprint CAS.
 
     Retries on Conflict (another request claimed the same VM).
+    Waits up to 300s if VMs are provisioning but none idle yet.
     Raises ValueError if no idle VMs are available.
     """
     client = compute_v1.InstancesClient()
     label_filter = (
         f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
     )
+    max_wait = 300
+    elapsed = 0
 
     while True:
         request = compute_v1.ListInstancesRequest(
@@ -1333,6 +1343,20 @@ def claim_idle_vm(assistant_id: str, vm_type: str) -> Dict[str, Any]:
         )
         idle_vms = list(client.list(request=request))
         if not idle_vms:
+            provisioning_request = compute_v1.ListInstancesRequest(
+                project=VM_PROJECT_ID,
+                zone=ZONE,
+                filter=f"labels.pool-role=provisioning AND labels.vm-type={vm_type}",
+            )
+            provisioning_vms = list(client.list(request=provisioning_request))
+            if provisioning_vms and elapsed < max_wait:
+                logger.info(
+                    f"{len(provisioning_vms)} {vm_type} VMs provisioning, "
+                    f"waiting for idle (elapsed {elapsed}s)..."
+                )
+                time.sleep(5)
+                elapsed += 5
+                continue
             raise ValueError(f"No idle {vm_type} pool VMs available")
 
         candidate = idle_vms[0]
@@ -1670,16 +1694,18 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
 
     actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
 
-    if len(idle_vms) <= 1:
-        # Scale up
+    existing_names = {vm.name for vm in pool_vms}
+    started_one = False
+
+    # Rule 1: ensure idle VMs are available
+    if len(idle_vms) <= 2:
         if stopped_vms:
             vm = stopped_vms[0]
             try:
                 op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
                 op.result()
-                # Update label to idle
                 labels = dict(vm.labels) if vm.labels else {}
-                labels["pool-role"] = "idle"
+                labels["pool-role"] = "provisioning"
                 vm_fresh = client.get(
                     project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
                 )
@@ -1694,22 +1720,37 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 ).result()
                 actions["actions"].append(f"Started stopped VM {vm.name}")
                 logger.info(f"Rebalance: started stopped VM {vm.name}")
+                started_one = True
             except Exception as e:
                 logger.error(f"Rebalance: failed to start {vm.name}: {e}")
         else:
-            # Find next available pool number
-            existing_names = {vm.name for vm in pool_vms}
             n = 1
             while _pool_vm_name(vm_type, n) in existing_names:
                 n += 1
             try:
                 provision_pool_vm(vm_type, n)
+                existing_names.add(_pool_vm_name(vm_type, n))
                 actions["actions"].append(f"Provisioned new pool VM #{n}")
                 logger.info(f"Rebalance: provisioned new {vm_type} pool VM #{n}")
             except Exception as e:
                 logger.error(f"Rebalance: failed to provision new VM: {e}")
 
-    elif len(idle_vms) > POOL_TARGET_IDLE:
+    # Rule 2: ensure stopped reserve
+    effective_stopped = len(stopped_vms) - (1 if started_one else 0)
+    if effective_stopped <= 2:
+        n = 1
+        while _pool_vm_name(vm_type, n) in existing_names:
+            n += 1
+        try:
+            provision_pool_vm(vm_type, n)
+            existing_names.add(_pool_vm_name(vm_type, n))
+            actions["actions"].append(f"Provisioned new pool VM #{n} (stopped reserve)")
+            logger.info(f"Rebalance: provisioned new {vm_type} pool VM #{n} (stopped reserve)")
+        except Exception as e:
+            logger.error(f"Rebalance: failed to provision new VM: {e}")
+
+    # Scale down: too many idle VMs
+    if len(idle_vms) > POOL_TARGET_IDLE:
         excess = len(idle_vms) - POOL_TARGET_IDLE
         # Stop the highest-numbered idle VMs
         to_stop = sorted(idle_vms, key=lambda vm: vm.name, reverse=True)[:excess]

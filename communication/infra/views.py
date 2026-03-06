@@ -1238,6 +1238,7 @@ async def pool_status_endpoint(vm_type: str = None):
     pool_vms = [PoolVMStatus(**vm) for vm in vms]
     idle = sum(1 for vm in vms if vm["pool_role"] == "idle")
     assigned = sum(1 for vm in vms if vm["pool_role"] == "assigned")
+    provisioning = sum(1 for vm in vms if vm["pool_role"] == "provisioning")
     stopped = sum(1 for vm in vms if vm["pool_role"] == "stopped")
 
     return PoolStatusResponse(
@@ -1245,6 +1246,7 @@ async def pool_status_endpoint(vm_type: str = None):
         total=len(pool_vms),
         idle=idle,
         assigned=assigned,
+        provisioning=provisioning,
         stopped=stopped,
     )
 

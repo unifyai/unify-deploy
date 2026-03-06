@@ -121,6 +121,7 @@ class PoolStatusResponse(BaseModel):
     total: int
     idle: int
     assigned: int
+    provisioning: int
     stopped: int
 
 
