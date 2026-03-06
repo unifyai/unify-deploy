@@ -748,16 +748,16 @@ def assign_pool_vm(
     store_ssh_private_key(assistant_id, private_key, unify_apikey)
 
     # Update metadata to trigger watcher reconfiguration
-    _update_instance_metadata(
-        vm_name,
-        {
-            "unify-key": unify_apikey,
-            "vnc-password": unify_apikey,
-            "ssh-public-key": public_key,
-            "disk-device": device_name,
-            "assistant-id": assistant_id,
-        },
-    )
+    metadata = {
+        "unify-key": unify_apikey,
+        "vnc-password": unify_apikey,
+        "ssh-public-key": public_key,
+        "disk-device": device_name,
+        "assistant-id": assistant_id,
+    }
+    if vm_type == "windows" and MAK_KEY:
+        metadata["office-mak-key"] = MAK_KEY
+    _update_instance_metadata(vm_name, metadata)
 
     logger.info(f"Pool assignment complete: {vm_name} -> assistant {assistant_id}")
     return {
@@ -958,3 +958,47 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 logger.error(f"Rebalance: failed to stop {vm.name}: {e}")
 
     return actions
+
+
+# =============================================================================
+# TLS Certificate Push to Running Pool VMs
+# =============================================================================
+
+
+def push_cert_to_pool_vms() -> Dict[str, Any]:
+    """Push the latest wildcard TLS cert to all running pool VMs via metadata.
+
+    After a cert renewal, running VMs still hold the old cert in their
+    metadata. This function fetches the fresh cert from Secret Manager and
+    updates ``tls-fullchain`` / ``tls-privkey`` on every running pool VM.
+    The watchers on each VM detect the metadata change and reload Caddy.
+    """
+    tls_cert = get_secret(VM_WILDCARD_CERT_SECRET)
+    tls_key = get_secret(VM_WILDCARD_KEY_SECRET)
+    if not tls_cert or not tls_key:
+        logger.warning("push_cert_to_pool_vms: cert/key not found in Secret Manager")
+        return {"pushed": False, "reason": "cert_not_found", "vms": []}
+
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter="labels.pool-role:*",
+    )
+    all_vms = list(client.list(request=request))
+    running_vms = [vm for vm in all_vms if vm.status == "RUNNING"]
+
+    results: list[str] = []
+    for vm in running_vms:
+        try:
+            _update_instance_metadata(vm.name, {
+                "tls-fullchain": tls_cert,
+                "tls-privkey": tls_key,
+            })
+            results.append(vm.name)
+            logger.info(f"Pushed cert to {vm.name}")
+        except Exception as e:
+            logger.error(f"Failed to push cert to {vm.name}: {e}")
+
+    logger.info(f"Cert push complete: {len(results)}/{len(running_vms)} VMs updated")
+    return {"pushed": True, "vms": results, "total_running": len(running_vms)}

@@ -237,6 +237,14 @@ def renew_if_needed(days_threshold: int = 30) -> dict:
     fullchain, privkey = perform_dns01_renewal()
     update_secrets(fullchain, privkey)
 
+    # Push renewed cert to all running pool VMs
+    from .vm_helpers import push_cert_to_pool_vms
+
+    push_result = push_cert_to_pool_vms()
+    logger.info(
+        f"Cert pushed to {len(push_result.get('vms', []))} running pool VMs"
+    )
+
     new_days = check_cert_expiry()
     logger.info(f"Renewal complete, new cert valid for {new_days} days")
 
@@ -244,4 +252,5 @@ def renew_if_needed(days_threshold: int = 30) -> dict:
         "renewed": True,
         "days_remaining": new_days,
         "message": f"Cert renewed, valid for {new_days} days",
+        "push_result": push_result,
     }
