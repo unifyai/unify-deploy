@@ -43,7 +43,7 @@ steps:
   - '--cpu=1'
   - '--timeout=300'
   - '--cpu-boost'
-  - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=1,UNITY_IDLE_JOB_DEMAND_FACTOR=5,STAGING=true'
+  - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=5,STAGING=true'
   waitFor: ['push-sha-tag']
 
   # Update Cloud Scheduler: Email Watches Staging
