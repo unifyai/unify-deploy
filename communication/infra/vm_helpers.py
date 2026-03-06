@@ -1745,7 +1745,9 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
             provision_pool_vm(vm_type, n)
             existing_names.add(_pool_vm_name(vm_type, n))
             actions["actions"].append(f"Provisioned new pool VM #{n} (stopped reserve)")
-            logger.info(f"Rebalance: provisioned new {vm_type} pool VM #{n} (stopped reserve)")
+            logger.info(
+                f"Rebalance: provisioned new {vm_type} pool VM #{n} (stopped reserve)"
+            )
         except Exception as e:
             logger.error(f"Rebalance: failed to provision new VM: {e}")
 
