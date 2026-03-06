@@ -672,6 +672,7 @@ async def list_kubernetes_jobs(
             job_info = {
                 "job_name": job.metadata.name,
                 "assistant_id": assistant_id,
+                "labels": job.metadata.labels,
                 "status": status,
                 "resource_version": job.metadata.resource_version,
                 "creation_timestamp": (

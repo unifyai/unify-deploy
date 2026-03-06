@@ -66,6 +66,8 @@ from .helpers import (
     get_microsoft_user_info,
     start_unity_job,
     store_microsoft_tokens,
+    get_unity_jobs_inventory,
+    get_target_idle_count,
     STAGING,
     ORCHESTRA_URL,
     COMMS_URL,
@@ -2513,7 +2515,33 @@ async def scheduled_teams_watches(request: Request):
 
 @app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
 async def scheduled_jobs_create(request: Request):
-    """Cloud Run endpoint that creates a new idle job."""
+    """Cloud Run endpoint that creates a new idle job.
+    Now supports a dynamic buffer based on current demand.
+    """
+    # Get current inventory in a single request
+    inventory = get_unity_jobs_inventory()
+    live_count = len(inventory["live"])
+    current_idle_count = len(inventory["idle"])
+
+    # Determine how many jobs we SHOULD have
+    target_idle_count = get_target_idle_count(live_count)
+
+    # Calculate how many to create
+    num_to_create = max(0, target_idle_count - current_idle_count)
+    if num_to_create == 0:
+        logger.info(
+            f"Idle pool is healthy (current: {current_idle_count}, target: {target_idle_count}). No jobs created."
+        )
+        return {
+            "status": "healthy",
+            "current": current_idle_count,
+            "target": target_idle_count,
+        }
+
+    # Create the jobs
+    logger.info(
+        f"Creating {num_to_create} idle jobs to reach target of {target_idle_count}..."
+    )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
@@ -2522,12 +2550,21 @@ async def scheduled_jobs_create(request: Request):
         + ("/unity:" if not STAGING else "/unity-staging:")
         + commit_hash
     )
-    response = requests.post(
-        f"{COMMS_URL}/infra/job/create",
-        data={"image": image},
-        headers=headers,
-    )
-    return response.json()
+
+    created_jobs = []
+    for _ in range(num_to_create):
+        resp = requests.post(
+            f"{COMMS_URL}/infra/job/create",
+            data={"image": image},
+            headers=headers,
+        )
+        created_jobs.append(resp.json())
+
+    return {
+        "created": len(created_jobs),
+        "target": target_idle_count,
+        "details": created_jobs,
+    }
 
 
 @app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])
@@ -2535,58 +2572,58 @@ async def scheduled_jobs_cleanup(request: Request):
     """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
-    # get all idle jobs via K8s label selector
-    resp = requests.get(
-        f"{COMMS_URL}/infra/jobs",
-        params={"label_selector": "app=unity,unity-status=idle"},
-        headers=headers,
-    )
-    jobs = resp.json()
-    idle_jobs = [
-        job["job_name"]
-        for job in jobs["jobs"]
-        if (STAGING and "staging" in job["job_name"])
-        or (not STAGING and "staging" not in job["job_name"])
-    ]
+    # Get current inventory in a single request
+    inventory = get_unity_jobs_inventory()
+    live_count = len(inventory["live"])
+    idle_jobs = inventory["idle"]
 
-    # separate recently-created idle jobs (< 11 min old) to retain one
+    # Determine how many jobs we SHOULD have
+    retain_count = get_target_idle_count(live_count)
+
+    # Separate recently-created idle jobs (< 11 min old) to retain a buffer
     new_idle_jobs = []
-    for job_name in idle_jobs:
-        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
-        # Extract only the numeric parts that form the timestamp
+    for job in idle_jobs:
+        name = job["job_name"]
         job_timestamp_str = "-".join(
             filter(
                 lambda part: part.isdigit() and len(part) in [2, 4],
-                job_name.split("-"),
+                name.split("-"),
             )
         )
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
         delta = now - job_timestamp
         if delta < timedelta(minutes=11):
-            new_idle_jobs.append(job_name)
+            new_idle_jobs.append(job)
 
-    if len(new_idle_jobs) == 0:
-        if len(idle_jobs) != 0:
-            idle_jobs = sorted(idle_jobs)[:-1]
+    if len(new_idle_jobs) <= retain_count:
+        retained_jobs = new_idle_jobs
     else:
-        new_idle_jobs = [sorted(new_idle_jobs)[-1]]
-    idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
-    logger.info(f"Idle jobs up to deletion: {idle_jobs}")
-    logger.info(f"Idle jobs to retain: {new_idle_jobs}")
+        retained_jobs = sorted(new_idle_jobs, key=lambda x: x["job_name"])[
+            -retain_count:
+        ]
 
-    # delete all old idle jobs (re-check label to guard against race conditions)
-    for job_name in idle_jobs:
+    idle_jobs_to_delete = list(filter(lambda job: job not in retained_jobs, idle_jobs))
+    logger.info(
+        f"Idle jobs for deletion: {[j['job_name'] for j in idle_jobs_to_delete]}"
+    )
+    logger.info(f"Idle jobs to retain: {[j['job_name'] for j in retained_jobs]}")
+
+    # Delete all old idle jobs (re-check label to guard against race conditions)
+    for job in idle_jobs_to_delete:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
             data={
-                "job_name": job_name,
+                "job_name": job["job_name"],
                 "required_labels": json.dumps({"unity-status": "idle"}),
             },
             headers=headers,
         )
 
-    return Response(content=json.dumps({"idle_jobs": idle_jobs}), status_code=200)
+    return Response(
+        content=json.dumps({"idle_jobs": [j["job_name"] for j in idle_jobs_to_delete]}),
+        status_code=200,
+    )
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])

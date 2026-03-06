@@ -653,28 +653,89 @@ def start_unity_job(assistant: dict, medium: str):
             logger.info(f"Error assigning pool VM for assistant {assistant_id}: {e}")
 
 
+def get_target_idle_count(live_count: int) -> int:
+    """Calculate the target number of idle jobs based on current demand.
+
+    Logic: max(UNITY_MIN_IDLE_JOBS, live_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
+    Example: If factor is 5, target is 1 idle job per 5 live assistants.
+    """
+    min_idle_floor = int(os.getenv("UNITY_MIN_IDLE_JOBS", "3"))
+    demand_factor = int(os.getenv("UNITY_IDLE_JOB_DEMAND_FACTOR", "5"))
+
+    # Avoid division by zero
+    if demand_factor <= 0:
+        return min_idle_floor
+
+    demand_buffer = live_count // demand_factor
+    return max(min_idle_floor, demand_buffer)
+
+
+def get_unity_jobs_inventory() -> dict[str, list[dict]]:
+    """Get a categorized inventory of Unity jobs from GKE in a single request.
+
+    Returns:
+        A dict with 'live' and 'idle' keys, each containing a list of job dicts
+        filtered by the current environment (staging vs production).
+    """
+    try:
+        admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
+        headers = {"Authorization": f"Bearer {admin_key}"} if admin_key else {}
+
+        # Get ALL unity jobs in one go to minimize network roundtrips
+        # We use a specific label selector to avoid fetching 'done' jobs which can be numerous.
+        # Comma-separated labels act as a logical AND.
+        resp = requests.get(
+            f"{COMMS_URL}/infra/jobs",
+            params={"label_selector": "app=unity,unity-status!=done"},
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.error(f"Failed to fetch jobs: {resp.status_code} - {resp.text}")
+            return {"live": [], "idle": []}
+
+        all_jobs = resp.json().get("jobs", [])
+        inventory = {"live": [], "idle": []}
+
+        for job in all_jobs:
+            # Filter by environment
+            is_env_match = (STAGING and "staging" in job["job_name"]) or (
+                not STAGING and "staging" not in job["job_name"]
+            )
+            if not is_env_match:
+                continue
+
+            # Categorize by authoritative labels
+            labels = job.get("labels", {})
+            unity_status = labels.get("unity-status")
+
+            if unity_status == "live":
+                inventory["live"].append(job)
+            elif unity_status == "idle":
+                inventory["idle"].append(job)
+
+        return inventory
+    except Exception as e:
+        logger.error(f"Error fetching unity jobs inventory: {e}")
+        return {"live": [], "idle": []}
+
+
 def create_job(assistant_id: str):
     """
-    Create idle job by calling the dedicated Cloud Function.
-    Uses httpx.Client with minimal timeout for fire-and-forget behavior.
+    Trigger the smart idle job creation endpoint.
+    The endpoint handles inventory checks and replenishes the pool to the target.
     """
-
     try:
         idle_job_url = ADAPTERS_URL + "/scheduled/jobs/create"
         admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
         headers = {"Authorization": f"Bearer {admin_key}"} if admin_key else {}
         requests.post(idle_job_url, headers=headers, timeout=1)
-        logger.info(f"Idle job creation request sent for assistant {assistant_id}")
+        logger.info(f"Idle job replenishment triggered for assistant {assistant_id}")
         return True
     except requests.exceptions.Timeout:
-        logger.info(
-            f"Idle job creation request sent for assistant {assistant_id} (timeout)"
-        )
         return True
     except Exception as e:
-        logger.info(
-            f"Error sending idle job creation request for assistant {assistant_id}: {e}",
-        )
+        logger.info(f"Error triggering idle job replenishment: {e}")
         return False
 
 
@@ -774,7 +835,11 @@ def build_webhook_context(
         # race conditions when multiple requests come in quickly
         mark_job_running(assistant_data, channel)
         start_unity_job(assistant_data, channel)
+
+        # Trigger smart replenishment. The endpoint will check inventory
+        # and ensure the idle pool matches the current demand-based target.
         create_job(assistant_id)
+
         job_started = True
         is_running = True
 
