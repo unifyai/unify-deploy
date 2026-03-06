@@ -115,7 +115,6 @@ def get_assistant(
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
         "desktop_mode": "ubuntu",
-        "desktop_url": None,
         "user_desktop_mode": None,
         "user_desktop_filesys_sync": False,
         "user_desktop_url": None,
@@ -192,7 +191,6 @@ def get_assistant(
         "voice_id": assistants[0]["voice_id"],
         "secrets": assistants[0].get("secrets", {}),
         "desktop_mode": assistants[0].get("desktop_mode", "ubuntu"),
-        "desktop_url": assistants[0].get("desktop_url", None),
         "user_desktop_mode": assistants[0].get("user_desktop_mode", None),
         "user_desktop_filesys_sync": assistants[0].get(
             "user_desktop_filesys_sync",
@@ -561,9 +559,7 @@ def start_unity_job(assistant: dict, medium: str):
         logger.info(f"No user name for assistant {assistant_id}")
         return
 
-    # Extract desktop fields
     desktop_mode = assistant.get("desktop_mode", "ubuntu")
-    desktop_url = assistant.get("desktop_url", None)
     user_desktop_mode = assistant.get("user_desktop_mode", None)
     user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
     user_desktop_url = assistant.get("user_desktop_url", None)
@@ -597,7 +593,6 @@ def start_unity_job(assistant: dict, medium: str):
                 "voice_provider": assistant["voice_provider"],
                 "voice_id": assistant["voice_id"],
                 "desktop_mode": desktop_mode,
-                "desktop_url": desktop_url or "",
                 "user_desktop_mode": user_desktop_mode or "",
                 "user_desktop_filesys_sync": (
                     "true" if user_desktop_filesys_sync else "false"
