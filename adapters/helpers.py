@@ -413,8 +413,8 @@ def is_job_running(user_id: str, assistant_id: str):
 def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
     """Mark all previous running=True records for this assistant as running=False.
 
-    Prevents stale records from confusing consumers (e.g. the console's
-    desktop-ready poll) when a new container starts for the same assistant.
+    Also releases any pool VM still assigned from a crashed job — prevents
+    leaked VMs from lingering in "assigned" state.
     """
     try:
         resp = requests.get(
@@ -449,6 +449,21 @@ def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
         logger.info(
             f"Expired {len(stale_ids)} stale record(s) for assistant {assistant_id}"
         )
+
+        # Release any leaked pool VM from the crashed job (idempotent)
+        if COMMS_URL:
+            try:
+                requests.post(
+                    f"{COMMS_URL}/infra/vm/pool/release",
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"
+                    },
+                    json={"assistant_id": assistant_id},
+                    timeout=10,
+                )
+                print(f"Released leaked pool VM for assistant {assistant_id} (if any)")
+            except Exception as release_err:
+                print(f"[_expire_stale_records] Pool release non-fatal: {release_err}")
     except Exception as e:
         logger.info(f"[_expire_stale_records] Non-fatal error: {e}")
 
@@ -606,38 +621,41 @@ def start_unity_job(assistant: dict, medium: str):
     except requests.exceptions.Timeout:
         logger.info(f"Job started for assistant {assistant_id} (timeout)")
 
-    # Start VM if desktop_mode requires it
+    # Assign a pool VM if desktop_mode requires it
     if desktop_mode in ("windows", "ubuntu"):
-        vm_type = desktop_mode  # "windows" or "ubuntu"
+        vm_type = desktop_mode
         try:
             vm_response = requests.post(
-                f"{COMMS_URL}/infra/vm/start",
+                f"{COMMS_URL}/infra/vm/pool/assign",
                 headers=headers,
-                json={"assistant_id": assistant_id, "vm_type": vm_type},
+                json={
+                    "assistant_id": assistant_id,
+                    "unify_apikey": api_key,
+                    "vm_type": vm_type,
+                },
                 timeout=1,
             )
             if vm_response.status_code == 200:
+                result = vm_response.json()
+                desktop_url = result.get("desktop_url", "")
                 logger.info(
-                    f"{vm_type.capitalize()} VM started for assistant {assistant_id}"
+                    f"Pool VM assigned for assistant {assistant_id}: {desktop_url}",
                 )
-            elif vm_response.status_code == 404:
+            elif vm_response.status_code == 503:
                 logger.info(
-                    f"{vm_type.capitalize()} VM not found for assistant {assistant_id} - "
-                    "VM should be created at hire time",
+                    f"No idle {vm_type} pool VMs available for assistant {assistant_id}",
                 )
             else:
                 logger.info(
-                    f"Failed to start {vm_type} VM for {assistant_id}: "
+                    f"Failed to assign pool VM for {assistant_id}: "
                     f"{vm_response.status_code} - {vm_response.text}",
                 )
         except requests.exceptions.Timeout:
             logger.info(
-                f"{vm_type.capitalize()} VM start request sent for assistant {assistant_id} (timeout)",
+                f"Pool VM assigned to assistant {assistant_id} (timeout)",
             )
         except Exception as e:
-            logger.info(
-                f"Error starting {vm_type} VM for assistant {assistant_id}: {e}"
-            )
+            logger.info(f"Error assigning pool VM for assistant {assistant_id}: {e}")
 
 
 def create_job(assistant_id: str):
