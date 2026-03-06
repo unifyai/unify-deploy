@@ -241,9 +241,7 @@ def renew_if_needed(days_threshold: int = 30) -> dict:
     from .vm_helpers import push_cert_to_pool_vms
 
     push_result = push_cert_to_pool_vms()
-    logger.info(
-        f"Cert pushed to {len(push_result.get('vms', []))} running pool VMs"
-    )
+    logger.info(f"Cert pushed to {len(push_result.get('vms', []))} running pool VMs")
 
     new_days = check_cert_expiry()
     logger.info(f"Renewal complete, new cert valid for {new_days} days")

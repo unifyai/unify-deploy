@@ -991,10 +991,13 @@ def push_cert_to_pool_vms() -> Dict[str, Any]:
     results: list[str] = []
     for vm in running_vms:
         try:
-            _update_instance_metadata(vm.name, {
-                "tls-fullchain": tls_cert,
-                "tls-privkey": tls_key,
-            })
+            _update_instance_metadata(
+                vm.name,
+                {
+                    "tls-fullchain": tls_cert,
+                    "tls-privkey": tls_key,
+                },
+            )
             results.append(vm.name)
             logger.info(f"Pushed cert to {vm.name}")
         except Exception as e:
