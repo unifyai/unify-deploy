@@ -66,6 +66,7 @@ from .vm_config import (
     UBUNTU_INIT_SCRIPT_PATH,
     POOL_SSH_USERNAME,
     POOL_TARGET_IDLE,
+    POOL_TARGET_STOPPED,
     POOL_ASSISTANT_DISK_SIZE_GB,
     POOL_ASSISTANT_DISK_TYPE,
     POOL_VM_NAME_PREFIX,
@@ -876,7 +877,7 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
     started_one = False
 
     # Rule 1: ensure idle VMs are available
-    if len(idle_vms) <= 2:
+    if len(idle_vms) <= POOL_TARGET_IDLE:
         if stopped_vms:
             vm = stopped_vms[0]
             try:
@@ -915,7 +916,7 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
 
     # Rule 2: ensure stopped reserve
     effective_stopped = len(stopped_vms) - (1 if started_one else 0)
-    if effective_stopped <= 2:
+    if effective_stopped <= POOL_TARGET_STOPPED:
         n = 1
         while _pool_vm_name(vm_type, n) in existing_names:
             n += 1
