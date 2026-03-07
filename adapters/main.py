@@ -1029,6 +1029,65 @@ async def unify_message_webhook(request: Request):
     return Response(status_code=200)
 
 
+# =============================================================================
+# API Message
+# =============================================================================
+
+
+@app.post("/api/message", dependencies=[Depends(require_admin_key)])
+async def api_message_webhook(request: Request):
+    """
+    API message webhook — handles programmatic messages sent via Orchestra's
+    REST API. Ensures the assistant's Unity job is running before publishing.
+    """
+    payload = await request.json()
+    assistant_id_input = payload.get("assistant_id", "")
+    api_message_id = payload.get("api_message_id", "")
+    body = payload.get("body", "") or ""
+
+    if not assistant_id_input:
+        return Response(status_code=400, content="assistant_id is required")
+    if not api_message_id:
+        return Response(status_code=400, content="api_message_id is required")
+
+    context = build_webhook_context(
+        channel="api_message",
+        destination="",
+        sender="",
+        assistant_id=assistant_id_input,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    try:
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "api_message",
+                    "publish_timestamp": time.time(),
+                    "event": {
+                        "api_message_id": api_message_id,
+                        "content": body,
+                        "contact_id": 1,
+                        "assistant_id": assistant_id,
+                    },
+                },
+            ).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            publish_future.result(timeout=10)
+    except Exception as e:
+        logger.error(f"Error publishing api_message to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    return Response(status_code=200)
+
+
 @app.post("/unify/meet", dependencies=[Depends(require_admin_key)])
 async def unify_meet_webhook(request: Request):
     """Unify meet webhook - handles internal meet events."""
