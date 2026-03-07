@@ -90,7 +90,7 @@ class TestApiMessage:
         published = json.loads(call_args[0][1].decode("utf-8"))
         assert published["thread"] == "api_message"
         assert published["event"]["api_message_id"] == "msg-uuid-123"
-        assert published["event"]["content"] == "Hello from API"
+        assert published["event"]["body"] == "Hello from API"
         assert published["event"]["contact_id"] == 1
         assert published["event"]["assistant_id"] == "test-assistant"
         assert "publish_timestamp" in published
