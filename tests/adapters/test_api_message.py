@@ -146,6 +146,122 @@ class TestApiMessage:
         )
         assert response.status_code == 401
 
+    # ─── Attachments and Tags ───
+
+    def test_tags_included_in_pubsub(self, client):
+        response = client.post(
+            "/api/message",
+            json={
+                "assistant_id": "test-assistant",
+                "api_message_id": "msg-tags-001",
+                "body": "Tagged message",
+                "tags": ["source:slack", "channel:#general"],
+            },
+        )
+        assert response.status_code == 200
+
+        call_args = client._mock_pubsub.publish.call_args
+        published = json.loads(call_args[0][1].decode("utf-8"))
+        assert published["event"]["tags"] == ["source:slack", "channel:#general"]
+
+    def test_attachments_included_in_pubsub(self, client):
+        attachment = {
+            "id": "att-001",
+            "filename": "report.pdf",
+            "gs_url": "gs://bucket/path/report.pdf",
+            "content_type": "application/pdf",
+            "size_bytes": 12345,
+        }
+        response = client.post(
+            "/api/message",
+            json={
+                "assistant_id": "test-assistant",
+                "api_message_id": "msg-att-001",
+                "body": "See attached",
+                "attachments": [attachment],
+            },
+        )
+        assert response.status_code == 200
+
+        call_args = client._mock_pubsub.publish.call_args
+        published = json.loads(call_args[0][1].decode("utf-8"))
+        atts = published["event"]["attachments"]
+        assert len(atts) == 1
+        assert atts[0]["id"] == "att-001"
+        assert atts[0]["filename"] == "report.pdf"
+        assert atts[0]["gs_url"] == "gs://bucket/path/report.pdf"
+
+    def test_invalid_attachments_skipped(self, client):
+        response = client.post(
+            "/api/message",
+            json={
+                "assistant_id": "test-assistant",
+                "api_message_id": "msg-att-bad",
+                "body": "Bad attachments",
+                "attachments": [
+                    {"id": "att-ok", "filename": "ok.txt", "gs_url": "gs://bucket/ok"},
+                    {"bad": "data"},
+                    "not-a-dict",
+                ],
+            },
+        )
+        assert response.status_code == 200
+
+        call_args = client._mock_pubsub.publish.call_args
+        published = json.loads(call_args[0][1].decode("utf-8"))
+        assert len(published["event"]["attachments"]) == 1
+
+    def test_too_many_attachments_rejected(self, client):
+        attachments = [
+            {"id": f"att-{i}", "filename": f"f{i}.txt", "gs_url": f"gs://bucket/{i}"}
+            for i in range(11)
+        ]
+        response = client.post(
+            "/api/message",
+            json={
+                "assistant_id": "test-assistant",
+                "api_message_id": "msg-att-many",
+                "body": "Too many",
+                "attachments": attachments,
+            },
+        )
+        assert response.status_code == 400
+        assert "10" in response.text
+
+    def test_empty_tags_and_attachments_omitted_from_event(self, client):
+        response = client.post(
+            "/api/message",
+            json={
+                "assistant_id": "test-assistant",
+                "api_message_id": "msg-empty-extras",
+                "body": "No extras",
+                "tags": [],
+                "attachments": [],
+            },
+        )
+        assert response.status_code == 200
+
+        call_args = client._mock_pubsub.publish.call_args
+        published = json.loads(call_args[0][1].decode("utf-8"))
+        assert "attachments" not in published["event"]
+        assert "tags" not in published["event"]
+
+    def test_no_tags_or_attachments_backward_compatible(self, client):
+        response = client.post(
+            "/api/message",
+            json={
+                "assistant_id": "test-assistant",
+                "api_message_id": "msg-compat",
+                "body": "Old-style message",
+            },
+        )
+        assert response.status_code == 200
+
+        call_args = client._mock_pubsub.publish.call_args
+        published = json.loads(call_args[0][1].decode("utf-8"))
+        assert "attachments" not in published["event"]
+        assert "tags" not in published["event"]
+
     def test_calls_build_webhook_context(self, app_module, mock_pubsub):
         from fastapi.testclient import TestClient
 
