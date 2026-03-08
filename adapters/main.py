@@ -1027,6 +1027,102 @@ async def unify_message_webhook(request: Request):
     return Response(status_code=200)
 
 
+# =============================================================================
+# API Message
+# =============================================================================
+
+
+@app.post("/api/message", dependencies=[Depends(require_admin_key)])
+async def api_message_webhook(request: Request):
+    """
+    API message webhook — handles programmatic messages sent via Orchestra's
+    REST API. Ensures the assistant's Unity job is running before publishing.
+    Supports optional file attachments and developer-supplied tags.
+    """
+    payload = await request.json()
+    assistant_id_input = payload.get("assistant_id", "")
+    api_message_id = payload.get("api_message_id", "")
+    body = payload.get("body", "") or ""
+    attachments = payload.get("attachments") or []
+    tags = payload.get("tags") or []
+
+    if not assistant_id_input:
+        return Response(status_code=400, content="assistant_id is required")
+    if not api_message_id:
+        return Response(status_code=400, content="api_message_id is required")
+
+    if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+        return Response(
+            status_code=400,
+            content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
+        )
+
+    validated_attachments = []
+    for att in attachments:
+        if (
+            isinstance(att, dict)
+            and att.get("id")
+            and att.get("filename")
+            and (att.get("url") or att.get("gs_url"))
+        ):
+            validated_att = {
+                "id": str(att["id"]),
+                "filename": str(att["filename"]),
+                "url": str(att.get("url", "")),
+            }
+            if att.get("gs_url"):
+                validated_att["gs_url"] = str(att["gs_url"])
+            if att.get("content_type"):
+                validated_att["content_type"] = str(att["content_type"])
+            if att.get("size_bytes") is not None:
+                validated_att["size_bytes"] = int(att["size_bytes"])
+            validated_attachments.append(validated_att)
+        else:
+            logger.info(f"Skipping invalid api_message attachment: {att}")
+
+    context = build_webhook_context(
+        channel="api_message",
+        destination="",
+        sender="",
+        assistant_id=assistant_id_input,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    try:
+        event_data = {
+            "api_message_id": api_message_id,
+            "body": body,
+            "contact_id": 1,
+            "assistant_id": assistant_id,
+        }
+        if validated_attachments:
+            event_data["attachments"] = validated_attachments
+        if tags:
+            event_data["tags"] = tags
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "api_message",
+                    "publish_timestamp": time.time(),
+                    "event": event_data,
+                },
+            ).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            publish_future.result(timeout=10)
+    except Exception as e:
+        logger.error(f"Error publishing api_message to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    return Response(status_code=200)
+
+
 @app.post("/unify/meet", dependencies=[Depends(require_admin_key)])
 async def unify_meet_webhook(request: Request):
     """Unify meet webhook - handles internal meet events."""
@@ -2558,7 +2654,7 @@ async def scheduled_jobs_cleanup(request: Request):
             filter(
                 lambda part: part.isdigit() and len(part) in [2, 4],
                 job_name.split("-"),
-            )
+            ),
         )
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()

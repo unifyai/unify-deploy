@@ -43,7 +43,7 @@ steps:
   - '--cpu=1'
   - '--timeout=300'
   - '--cpu-boost'
-  - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},STAGING=true'
+  - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,STAGING=true'
   waitFor: ['push-sha-tag']
 
   # Update Cloud Scheduler: Email Watches Staging
@@ -78,13 +78,13 @@ steps:
   - |
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     gcloud scheduler jobs update http "jobs-create-staging" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
       --http-method POST \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "jobs-create-staging" \
       --schedule "0 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
       --http-method POST \
       --time-zone "UTC" \
       --location="${_REGION}"

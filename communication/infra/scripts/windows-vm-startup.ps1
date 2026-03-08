@@ -2644,3 +2644,40 @@ if ($newUserCreated -eq $true) {
         }
     }
 }
+
+# =============================================================================
+# Pool VM: mark as idle once setup is complete
+# =============================================================================
+try {
+    $metaHeaders = @{ "Metadata-Flavor" = "Google" }
+    $tokenResponse = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" -Headers $metaHeaders
+    $token = $tokenResponse.access_token
+
+    $gcpProject = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/project/project-id" -Headers $metaHeaders
+    $zoneUri = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/zone" -Headers $metaHeaders
+    $gcpZone = ($zoneUri -split '/')[-1]
+    $gcpInstance = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/name" -Headers $metaHeaders
+
+    $apiBase = "https://compute.googleapis.com/compute/v1/projects/$gcpProject/zones/$gcpZone/instances/$gcpInstance"
+    $info = Invoke-RestMethod -Uri $apiBase -Headers @{ Authorization = "Bearer $token" }
+    $poolRole = $info.labels.'pool-role'
+
+    if ($poolRole -eq "provisioning") {
+        $labels = @{}
+        $info.labels.PSObject.Properties | ForEach-Object { $labels[$_.Name] = $_.Value }
+        $labels['pool-role'] = 'idle'
+
+        $body = @{
+            labels = $labels
+            labelFingerprint = $info.labelFingerprint
+        } | ConvertTo-Json
+
+        Invoke-RestMethod -Uri "$apiBase/setLabels" `
+            -Method POST -ContentType "application/json" `
+            -Headers @{ Authorization = "Bearer $token" } `
+            -Body $body
+        Write-Host "Pool VM marked as idle" -ForegroundColor Green
+    }
+} catch {
+    Write-Host "Pool VM label update skipped: $_" -ForegroundColor Gray
+}

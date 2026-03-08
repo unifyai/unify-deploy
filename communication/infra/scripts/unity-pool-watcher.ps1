@@ -16,6 +16,7 @@ $MetadataUrl = "http://metadata.google.internal/computeMetadata/v1"
 $MetadataHeaders = @{"Metadata-Flavor" = "Google"}
 $Etag = ""
 $PrevUnifyKey = ""
+$PrevTlsHash = ""
 
 function Get-Metadata($key) {
     try {
@@ -110,6 +111,8 @@ function Invoke-Update {
             Push-Location $magnitudeDir
             $bunExe = "C:\Windows\System32\config\systemprofile\.bun\bin\bun.exe"
             if (Test-Path $bunExe) {
+                $bunDir = Split-Path $bunExe
+                $env:Path = "$bunDir;$env:Path"
                 & $bunExe install 2>&1
             } else {
                 npm install 2>&1
@@ -291,9 +294,6 @@ function Invoke-Assign($unifyKey) {
             Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "ControlPassword" -Value $encrypted -Type Binary
             Restart-Service "TightVNC Server" -ErrorAction SilentlyContinue
             Write-Log "VNC password updated"
-
-            Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" `
-                -Name "DefaultPassword" -Value $vncPassword -ErrorAction SilentlyContinue
         }
     } catch {
         Write-Log "WARNING: VNC password update failed: $_"
@@ -357,6 +357,22 @@ npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
         }
     } catch {
         Write-Log "WARNING: Display resolution trigger failed: $_"
+    }
+
+    # Activate Office if MAK key provided and not already licensed
+    $makKey = Get-Metadata "office-mak-key"
+    if ($makKey) {
+        $osppPath = "C:\Program Files\Microsoft Office\root\Office16\OSPP.VBS"
+        if (Test-Path $osppPath) {
+            $status = cscript //nologo $osppPath /dstatus 2>$null | Out-String
+            if ($status -notmatch "---LICENSED---") {
+                cscript //nologo $osppPath /inpkey:$makKey 2>$null | Out-Null
+                cscript //nologo $osppPath /act 2>$null | Out-Null
+                Write-Log "Office activated with MAK key"
+            } else {
+                Write-Log "Office already activated, skipping"
+            }
+        }
     }
 
     # Send ready notification
@@ -433,12 +449,60 @@ function Invoke-Release {
     Write-Log "RELEASE complete"
 }
 
+# ─── TLS cert refresh: update Caddy when cert metadata changes ────────────
+
+function Invoke-RefreshTls {
+    $tlsCert = Get-Metadata "tls-fullchain"
+    $tlsKey = Get-Metadata "tls-privkey"
+    if (-not $tlsCert -or -not $tlsKey) { return }
+
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($tlsCert)
+    $hash = [BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").ToLower()
+
+    if ($hash -eq $script:PrevTlsHash) { return }
+
+    Write-Log "TLS cert changed, updating Caddy certs"
+    $certDir = "C:\caddy\certs"
+    New-Item -ItemType Directory -Force -Path $certDir -ErrorAction SilentlyContinue | Out-Null
+    [System.IO.File]::WriteAllText("$certDir\fullchain.pem", $tlsCert)
+    [System.IO.File]::WriteAllText("$certDir\privkey.pem", $tlsKey)
+
+    $caddyProc = Get-Process -Name "caddy" -ErrorAction SilentlyContinue
+    if ($caddyProc) {
+        $caddyDir = "C:\caddy"
+        $caddyExe = "$caddyDir\caddy.exe"
+        $caddyfile = "$caddyDir\Caddyfile"
+        try {
+            & $caddyExe reload --config $caddyfile 2>$null
+            Write-Log "Caddy reloaded with new cert"
+        } catch {
+            Write-Log "WARNING: Caddy reload failed, restarting"
+            Stop-Process -Name "caddy" -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+            $psCommand = "Set-Location '$caddyDir'; & '$caddyExe' run --config '$caddyfile'"
+            Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory $caddyDir
+            Write-Log "Caddy restarted with new cert"
+        }
+    }
+
+    $script:PrevTlsHash = $hash
+}
+
 # ─── Main watcher loop ───────────────────────────────────────────────────
 
 Write-Log "Unity Pool Watcher starting"
 
 $PrevUnifyKey = Get-Metadata "unify-key"
 Write-Log "Initial unify-key: $(if ($PrevUnifyKey) { '(set)' } else { '(empty)' })"
+
+# Seed TLS hash to avoid unnecessary reload on first loop iteration
+$initTls = Get-Metadata "tls-fullchain"
+if ($initTls) {
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($initTls)
+    $PrevTlsHash = [BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").ToLower()
+}
 
 while ($true) {
     try {
@@ -466,6 +530,9 @@ while ($true) {
         }
 
         $PrevUnifyKey = $currentUnifyKey
+
+        # Refresh TLS cert if metadata changed (handles renewal pushes)
+        Invoke-RefreshTls
     } catch {
         Write-Log "ERROR in watcher loop: $_"
         Start-Sleep -Seconds 5

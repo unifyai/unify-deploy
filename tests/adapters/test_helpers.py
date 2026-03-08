@@ -163,7 +163,6 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "voice_provider": "elevenlabs",
         "voice_id": "voice-123",
         "desktop_mode": desktop_mode,  # Use "none" to skip VM start
-        "desktop_url": None,
         "user_desktop_mode": None,
         "user_desktop_filesys_sync": False,
         "user_desktop_url": None,

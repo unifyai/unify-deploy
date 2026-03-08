@@ -16,6 +16,7 @@ METADATA_URL="http://metadata.google.internal/computeMetadata/v1"
 METADATA_HEADER="Metadata-Flavor: Google"
 ETAG=""
 PREV_UNIFY_KEY=""
+PREV_TLS_HASH=""
 
 source /etc/profile.d/unity-vm.sh 2>/dev/null || true
 source /etc/profile.d/bun.sh 2>/dev/null || true
@@ -346,6 +347,39 @@ PYSCRIPT
     log "RELEASE complete"
 }
 
+# ─── TLS cert refresh: update Caddy when cert metadata changes ────────────
+
+refresh_tls() {
+    local tls_cert tls_key
+    tls_cert=$(get_metadata "tls-fullchain")
+    tls_key=$(get_metadata "tls-privkey")
+
+    if [[ -z "$tls_cert" || -z "$tls_key" ]]; then
+        return
+    fi
+
+    local new_hash
+    new_hash=$(echo -n "$tls_cert" | md5sum | cut -d' ' -f1)
+
+    if [[ "$new_hash" == "$PREV_TLS_HASH" ]]; then
+        return
+    fi
+
+    log "TLS cert changed, updating Caddy certs"
+    mkdir -p /etc/caddy/certs
+    echo "$tls_cert" > /etc/caddy/certs/fullchain.pem
+    echo "$tls_key" > /etc/caddy/certs/privkey.pem
+    chmod 600 /etc/caddy/certs/privkey.pem
+
+    if systemctl is-active --quiet caddy; then
+        caddy reload --config /etc/caddy/Caddyfile 2>/dev/null && \
+            log "Caddy reloaded with new cert" || \
+            log "WARNING: Caddy reload failed"
+    fi
+
+    PREV_TLS_HASH="$new_hash"
+}
+
 # ─── Main watcher loop ───────────────────────────────────────────────────
 
 log "Unity Pool Watcher starting"
@@ -353,6 +387,12 @@ log "Unity Pool Watcher starting"
 # Read initial state
 PREV_UNIFY_KEY=$(get_metadata "unify-key")
 log "Initial unify-key: $([ -n "$PREV_UNIFY_KEY" ] && echo '(set)' || echo '(empty)')"
+
+# Seed TLS hash to avoid unnecessary reload on first loop iteration
+_init_tls=$(get_metadata "tls-fullchain")
+if [[ -n "$_init_tls" ]]; then
+    PREV_TLS_HASH=$(echo -n "$_init_tls" | md5sum | cut -d' ' -f1)
+fi
 
 while true; do
     # Long-poll for metadata changes
@@ -382,4 +422,7 @@ while true; do
     fi
 
     PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
+
+    # Refresh TLS cert if metadata changed (handles renewal pushes)
+    refresh_tls
 done
