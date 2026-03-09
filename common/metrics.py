@@ -2,29 +2,45 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import time
 from typing import Callable
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
 from fastapi.routing import APIRoute
+
+# ---------------------------------------------------------------------------
+# Multiprocess setup — must happen BEFORE importing metric types.
+# When PROMETHEUS_MULTIPROC_DIR is set (Cloud Run with multiple workers),
+# metrics are backed by shared mmap'd files so every worker's writes are
+# visible at scrape time regardless of which worker handles /metrics.
+# ---------------------------------------------------------------------------
+_MULTIPROC_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+if _MULTIPROC_DIR:
+    if os.path.exists(_MULTIPROC_DIR):
+        shutil.rmtree(_MULTIPROC_DIR)
+    os.makedirs(_MULTIPROC_DIR, exist_ok=True)
+
 from prometheus_client import (
     CollectorRegistry,
     Counter,
     Gauge,
     Histogram,
-    ProcessCollector,
     generate_latest,
     CONTENT_TYPE_LATEST,
 )
 
 # ---------------------------------------------------------------------------
 # Registry — one per process so metrics survive hot-reload in dev.
-# ProcessCollector exposes process_start_time_seconds which the GMP
-# sidecar needs to correctly timestamp cumulative metrics.
+# ProcessCollector is only registered in single-process mode; in multiprocess
+# mode it reports per-worker values that don't aggregate correctly.
 # ---------------------------------------------------------------------------
 REGISTRY = CollectorRegistry()
-ProcessCollector(registry=REGISTRY)
+if not _MULTIPROC_DIR:
+    from prometheus_client import ProcessCollector
+    ProcessCollector(registry=REGISTRY)
 
 # ---------------------------------------------------------------------------
 # Shared HTTP metrics (used by the middleware on both services)
@@ -89,6 +105,7 @@ JOB_DEMAND_TOTAL = Gauge(
     "to avoid increase() extrapolation; query with max_over_time - min_over_time.",
     labelnames=["channel"],
     registry=REGISTRY,
+    multiprocess_mode="livesum",
 )
 
 STALE_JOBS_LAST_SWEEP = Gauge(
@@ -96,6 +113,7 @@ STALE_JOBS_LAST_SWEEP = Gauge(
     "Number of stale jobs found in the most recent daily sweep. "
     "Resets to 0 at the start of each sweep.",
     registry=REGISTRY,
+    multiprocess_mode="max",
 )
 
 
@@ -153,7 +171,14 @@ def add_metrics_middleware(app: FastAPI, service_name: str) -> None:
 
 def metrics_endpoint(_request: Request) -> Response:
     """Handler for GET /metrics — returns Prometheus text exposition format."""
-    body = generate_latest(REGISTRY)
+    if _MULTIPROC_DIR:
+        from prometheus_client.multiprocess import MultiProcessCollector
+
+        registry = CollectorRegistry()
+        MultiProcessCollector(registry)
+        body = generate_latest(registry)
+    else:
+        body = generate_latest(REGISTRY)
     return PlainTextResponse(content=body, media_type=CONTENT_TYPE_LATEST)
 
 
