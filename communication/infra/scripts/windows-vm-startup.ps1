@@ -2060,6 +2060,21 @@ Write-Host "  SSH Public Key:  $(if ($gcpSshPublicKey) { '(set, uses Windows use
 Write-Host ""
 
 # =============================================================================
+# Update Pool Watcher from Metadata
+# =============================================================================
+$poolWatcherScript = Get-GCPMetadata -Key "pool-watcher-script"
+if ($poolWatcherScript) {
+    Set-Content -Path "C:\unity-pool-watcher.ps1" -Value $poolWatcherScript -Encoding UTF8
+    $nssmPath = (Get-Command nssm -ErrorAction SilentlyContinue).Source
+    if ($nssmPath) {
+        & $nssmPath restart UnityPoolWatcher 2>$null
+    }
+    Write-Host "Pool watcher updated from metadata and service restarted" -ForegroundColor Green
+} else {
+    Write-Host "No pool-watcher-script metadata found, using baked-in version" -ForegroundColor Yellow
+}
+
+# =============================================================================
 # Phase 1: User Setup (may trigger reboot if NEW user created)
 # =============================================================================
 
