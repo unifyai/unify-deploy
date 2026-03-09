@@ -54,11 +54,13 @@ steps:
   args:
   - '-c'
   - |
+    set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
     gcloud scheduler jobs update http "email-watches-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
@@ -70,6 +72,7 @@ steps:
       --message-body '{}' \
       --time-zone "UTC" \
       --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
   # Update Cloud Scheduler: Jobs Create Staging
@@ -80,11 +83,13 @@ steps:
   args:
   - '-c'
   - |
+    set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
     gcloud scheduler jobs update http "jobs-create-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "jobs-create-staging" \
@@ -94,6 +99,7 @@ steps:
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --time-zone "UTC" \
       --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
   # Update Cloud Scheduler: Jobs Cleanup Staging
@@ -104,11 +110,13 @@ steps:
   args:
   - '-c'
   - |
+    set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
     gcloud scheduler jobs update http "jobs-cleanup-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "jobs-cleanup-staging" \
@@ -118,6 +126,7 @@ steps:
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --time-zone "UTC" \
       --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
   # Update Cloud Scheduler: Stale Jobs Expire Staging
@@ -128,11 +137,13 @@ steps:
   args:
   - '-c'
   - |
+    set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
     gcloud scheduler jobs update http "stale-jobs-expire-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "stale-jobs-expire-staging" \
@@ -142,6 +153,7 @@ steps:
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --time-zone "UTC" \
       --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
   # Update Cloud Scheduler: Microsoft Token Refresh Staging
@@ -152,11 +164,13 @@ steps:
   args:
   - '-c'
   - |
+    set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
     gcloud scheduler jobs update http "microsoft-tokens-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
@@ -168,6 +182,7 @@ steps:
       --message-body '{}' \
       --time-zone "UTC" \
       --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
   # Update Cloud Scheduler: Teams Chat Watches Staging (runs every 30 mins - subscriptions expire in 60 mins)
@@ -178,11 +193,13 @@ steps:
   args:
   - '-c'
   - |
+    set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
     gcloud scheduler jobs update http "teams-watches-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
@@ -194,6 +211,7 @@ steps:
       --message-body '{}' \
       --time-zone "UTC" \
       --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
   # Update Cloud Scheduler: Cert Renewal (Staging)
@@ -204,11 +222,13 @@ steps:
   args:
   - '-c'
   - |
+    set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
     gcloud scheduler jobs update http "cert-renewal-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/cert-renewal" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "cert-renewal-staging" \
@@ -219,6 +239,7 @@ steps:
       --message-body '{}' \
       --time-zone "UTC" \
       --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
 # Options
