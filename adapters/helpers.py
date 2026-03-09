@@ -491,7 +491,9 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         timeout=30,
     )
     if resp.status_code != 200:
-        logger.error(f"[expire_all_stale_jobs] Failed to fetch running logs: {resp.text}")
+        logger.error(
+            f"[expire_all_stale_jobs] Failed to fetch running logs: {resp.text}"
+        )
         return {"total_running": 0, "expired": 0, "error": resp.text}
 
     all_running = resp.json().get("logs", [])
@@ -545,7 +547,9 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
                 suspended_jobs.append(job_name)
                 logger.info(f"[expire_all_stale_jobs] Suspended K8s job: {job_name}")
             except Exception as exc:
-                logger.info(f"[expire_all_stale_jobs] Job suspend non-fatal for {job_name}: {exc}")
+                logger.info(
+                    f"[expire_all_stale_jobs] Job suspend non-fatal for {job_name}: {exc}"
+                )
         assistant_id = e.get("assistant_id")
         if assistant_id:
             unique_assistants.add(assistant_id)
@@ -562,7 +566,9 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
                 )
                 released_assistants.append(assistant_id)
             except Exception as e:
-                logger.info(f"[expire_all_stale_jobs] VM release non-fatal for {assistant_id}: {e}")
+                logger.info(
+                    f"[expire_all_stale_jobs] VM release non-fatal for {assistant_id}: {e}"
+                )
 
     stale_ids = [log["id"] for log in stale if "id" in log]
     if stale_ids:
@@ -577,7 +583,9 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             headers={"Authorization": f"Bearer {shared_key}"},
             timeout=30,
         )
-        logger.info(f"[expire_all_stale_jobs] Marked {len(stale_ids)} stale job(s) as done")
+        logger.info(
+            f"[expire_all_stale_jobs] Marked {len(stale_ids)} stale job(s) as done"
+        )
 
     return {
         "total_running": len(all_running),
