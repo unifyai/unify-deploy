@@ -111,6 +111,27 @@ steps:
       --location="${_REGION}"
   waitFor: ['deploy']
 
+  # Update Cloud Scheduler: Stale Jobs Expire Staging
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-stale-jobs-expire'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    gcloud scheduler jobs update http "stale-jobs-expire-staging" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
+      --http-method POST \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "stale-jobs-expire-staging" \
+      --schedule "0 1 * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
+      --http-method POST \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+  waitFor: ['deploy']
+
   # Update Cloud Scheduler: Microsoft Token Refresh Staging
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-microsoft-tokens'
