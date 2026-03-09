@@ -16,6 +16,7 @@ from common.metrics import (
     MARK_JOB_RUNNING_DURATION,
     BUILD_WEBHOOK_CONTEXT_DURATION,
     JOB_DEMAND_TOTAL,
+    STALE_JOBS_LAST_SWEEP,
 )
 
 from google.cloud import pubsub_v1
@@ -464,6 +465,134 @@ def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
                 print(f"[_expire_stale_records] Pool release non-fatal: {release_err}")
     except Exception as e:
         logger.info(f"[_expire_stale_records] Non-fatal error: {e}")
+
+
+def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
+    """Sweep all AssistantJobs logs that are still running and older than max_age_hours.
+
+    For each stale log:
+    - Suspends the K8s job if a job_name is present
+    - Releases any leaked pool VM for the assistant
+    - Marks the log entry as running=False
+    - Records Prometheus metrics
+    """
+    shared_key = os.getenv("SHARED_UNIFY_KEY")
+    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+    resp = requests.get(
+        f"{ORCHESTRA_URL}/logs",
+        params={
+            "project_name": "AssistantJobs",
+            "context": "startup_events",
+            "filter_expr": "running == 'true'",
+        },
+        headers={"Authorization": f"Bearer {shared_key}"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        logger.error(
+            f"[expire_all_stale_jobs] Failed to fetch running logs: {resp.text}"
+        )
+        return {"total_running": 0, "expired": 0, "error": resp.text}
+
+    all_running = resp.json().get("logs", [])
+
+    stale = []
+    for log in all_running:
+        ts_str = log.get("entries", {}).get("timestamp", "")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts < cutoff:
+                stale.append(log)
+        except (ValueError, TypeError):
+            continue
+
+    STALE_JOBS_LAST_SWEEP.set(len(stale))
+
+    logger.info(
+        f"[expire_all_stale_jobs] Found {len(all_running)} running job(s), "
+        f"{len(stale)} stale (>{max_age_hours}h old)"
+    )
+
+    if not stale:
+        return {"total_running": len(all_running), "expired": 0}
+
+    suspended_jobs = []
+    unique_assistants = set()
+    for log in stale:
+        e = log.get("entries", {})
+        logger.info(
+            f"[expire_all_stale_jobs] Stale log id={log.get('id')} "
+            f"assistant_id={e.get('assistant_id')} "
+            f"job_name={e.get('job_name')} "
+            f"medium={e.get('medium')} "
+            f"timestamp={e.get('timestamp')} "
+            f"assistant_name={e.get('assistant_name')} "
+            f"user_email={e.get('user_email')}"
+        )
+        job_name = e.get("job_name")
+        if job_name and COMMS_URL:
+            try:
+                requests.post(
+                    f"{COMMS_URL}/infra/job/stop",
+                    data={"job_name": job_name},
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    timeout=10,
+                )
+                suspended_jobs.append(job_name)
+                logger.info(f"[expire_all_stale_jobs] Suspended K8s job: {job_name}")
+            except Exception as exc:
+                logger.info(
+                    f"[expire_all_stale_jobs] Job suspend non-fatal for {job_name}: {exc}"
+                )
+        assistant_id = e.get("assistant_id")
+        if assistant_id:
+            unique_assistants.add(assistant_id)
+
+    released_assistants = []
+    if COMMS_URL:
+        for assistant_id in unique_assistants:
+            try:
+                requests.post(
+                    f"{COMMS_URL}/infra/vm/pool/release",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json={"assistant_id": assistant_id},
+                    timeout=10,
+                )
+                released_assistants.append(assistant_id)
+            except Exception as e:
+                logger.info(
+                    f"[expire_all_stale_jobs] VM release non-fatal for {assistant_id}: {e}"
+                )
+
+    stale_ids = [log["id"] for log in stale if "id" in log]
+    if stale_ids:
+        requests.put(
+            f"{ORCHESTRA_URL}/logs",
+            json={
+                "logs": stale_ids,
+                "context": "startup_events",
+                "entries": {"running": False},
+                "overwrite": True,
+            },
+            headers={"Authorization": f"Bearer {shared_key}"},
+            timeout=30,
+        )
+        logger.info(
+            f"[expire_all_stale_jobs] Marked {len(stale_ids)} stale job(s) as done"
+        )
+
+    return {
+        "total_running": len(all_running),
+        "expired": len(stale),
+        "suspended_k8s_jobs": suspended_jobs,
+        "released_assistants": released_assistants,
+    }
 
 
 def mark_job_running(assistant_data: dict, medium: str) -> bool:

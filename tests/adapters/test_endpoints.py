@@ -393,6 +393,21 @@ def test_idle_job_adapters(test_client):
     assert len(response.json()["idle_jobs"])
 
 
+def test_stale_jobs_expire(test_client):
+    """Test the daily stale jobs sweep endpoint returns successfully."""
+    endpoint = "/scheduled/jobs/expire-stale"
+    response = test_client.make_request("POST", endpoint, json={})
+
+    print("Stale jobs expire:", response.text)
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "total_running" in data
+    assert "expired" in data
+    assert isinstance(data["total_running"], int)
+    assert isinstance(data["expired"], int)
+
+
 def test_assistant_update_webhook(test_client):
     """Test successful assistant update webhook processing."""
     endpoint = "/assistant/update"

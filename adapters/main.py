@@ -54,6 +54,7 @@ from .helpers import (
     create_conference_response,
     create_job,
     dispatch_livekit_agent,
+    expire_all_stale_jobs,
     get_assistant,
     get_graph_client_from_token,
     get_outlook_thread_id,
@@ -2756,6 +2757,20 @@ async def scheduled_jobs_cleanup(request: Request):
     }
 
 
+@app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
+async def scheduled_jobs_expire_stale(request: Request):
+    """Daily sweep: mark all AssistantJobs still running after 24h as done.
+
+    Also suspends any lingering K8s jobs and releases leaked pool VMs.
+    Triggered by Cloud Scheduler at 01:00 UTC.
+    """
+    result = expire_all_stale_jobs(max_age_hours=24)
+    return Response(
+        content=json.dumps(result),
+        status_code=200,
+    )
+
+
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
 async def scheduled_cert_renewal(request: Request):
     """Renew the *.vm.unify.ai wildcard TLS cert if within 30 days of expiry.
@@ -2803,6 +2818,7 @@ if __name__ == "__main__":
     logger.info("    - POST /scheduled/email-watches")
     logger.info("    - POST /scheduled/jobs/create")
     logger.info("    - POST /scheduled/jobs/cleanup")
+    logger.info("    - POST /scheduled/jobs/expire-stale")
     logger.info("    - POST /scheduled/cert-renewal")
     logger.info("Server running at: http://localhost:8080")
 

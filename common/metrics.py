@@ -91,6 +91,13 @@ JOB_DEMAND_TOTAL = Gauge(
     registry=REGISTRY,
 )
 
+STALE_JOBS_LAST_SWEEP = Gauge(
+    "stale_jobs_last_sweep_count",
+    "Number of stale jobs found in the most recent daily sweep. "
+    "Resets to 0 at the start of each sweep.",
+    registry=REGISTRY,
+)
+
 
 # ---------------------------------------------------------------------------
 # FastAPI middleware
