@@ -65,10 +65,10 @@ from .helpers import (
     publish_outlook_thread_id,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
+    get_target_idle_count,
+    get_unity_jobs_inventory,
     start_unity_job,
     store_microsoft_tokens,
-    get_unity_jobs_inventory,
-    get_target_idle_count,
     STAGING,
     ORCHESTRA_URL,
     COMMS_URL,
@@ -1025,6 +1025,102 @@ async def unify_message_webhook(request: Request):
         logger.info("unify_message message published to Pub/Sub successfully")
     except Exception as e:
         logger.error(f"Error publishing unify_message to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    return Response(status_code=200)
+
+
+# =============================================================================
+# API Message
+# =============================================================================
+
+
+@app.post("/api/message", dependencies=[Depends(require_admin_key)])
+async def api_message_webhook(request: Request):
+    """
+    API message webhook — handles programmatic messages sent via Orchestra's
+    REST API. Ensures the assistant's Unity job is running before publishing.
+    Supports optional file attachments and developer-supplied tags.
+    """
+    payload = await request.json()
+    assistant_id_input = payload.get("assistant_id", "")
+    api_message_id = payload.get("api_message_id", "")
+    body = payload.get("body", "") or ""
+    attachments = payload.get("attachments") or []
+    tags = payload.get("tags") or []
+
+    if not assistant_id_input:
+        return Response(status_code=400, content="assistant_id is required")
+    if not api_message_id:
+        return Response(status_code=400, content="api_message_id is required")
+
+    if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+        return Response(
+            status_code=400,
+            content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
+        )
+
+    validated_attachments = []
+    for att in attachments:
+        if (
+            isinstance(att, dict)
+            and att.get("id")
+            and att.get("filename")
+            and (att.get("url") or att.get("gs_url"))
+        ):
+            validated_att = {
+                "id": str(att["id"]),
+                "filename": str(att["filename"]),
+                "url": str(att.get("url", "")),
+            }
+            if att.get("gs_url"):
+                validated_att["gs_url"] = str(att["gs_url"])
+            if att.get("content_type"):
+                validated_att["content_type"] = str(att["content_type"])
+            if att.get("size_bytes") is not None:
+                validated_att["size_bytes"] = int(att["size_bytes"])
+            validated_attachments.append(validated_att)
+        else:
+            logger.info(f"Skipping invalid api_message attachment: {att}")
+
+    context = build_webhook_context(
+        channel="api_message",
+        destination="",
+        sender="",
+        assistant_id=assistant_id_input,
+        validate_contact=False,
+        ensure_job=True,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+
+    pubsub_client = pubsub_v1.PublisherClient()
+    topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    try:
+        event_data = {
+            "api_message_id": api_message_id,
+            "body": body,
+            "contact_id": 1,
+            "assistant_id": assistant_id,
+        }
+        if validated_attachments:
+            event_data["attachments"] = validated_attachments
+        if tags:
+            event_data["tags"] = tags
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": "api_message",
+                    "publish_timestamp": time.time(),
+                    "event": event_data,
+                },
+            ).encode("utf-8"),
+        )
+        if "test" in assistant_id:
+            publish_future.result(timeout=10)
+    except Exception as e:
+        logger.error(f"Error publishing api_message to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
@@ -2539,7 +2635,7 @@ async def scheduled_jobs_create(request: Request, refresh: bool = False):
 
     if num_to_create == 0:
         logger.info(
-            f"Idle pool is healthy (current: {current_idle_count}, target: {target_idle_count}). No jobs created."
+            f"Idle pool is healthy (current: {current_idle_count}, target: {target_idle_count}). No jobs created.",
         )
         return {
             "status": "healthy",
@@ -2549,7 +2645,7 @@ async def scheduled_jobs_create(request: Request, refresh: bool = False):
 
     mode = "refresh" if refresh else "fill"
     logger.info(
-        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {target_idle_count})..."
+        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {target_idle_count})...",
     )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
@@ -2579,61 +2675,86 @@ async def scheduled_jobs_create(request: Request, refresh: bool = False):
 
 @app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])
 async def scheduled_jobs_cleanup(request: Request):
-    """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
+    """Clean up old idle jobs, retaining the newest up to the target count.
+
+    Runs 10 minutes after /scheduled/jobs/create. Keeps recently-created idle
+    jobs (< 11 min old) up to the demand-aware target and deletes the rest.
+    Uses required_labels to guard against race conditions where a job
+    transitions to live between the fetch and the delete.
+    """
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
-    # Get current inventory in a single request
     inventory = get_unity_jobs_inventory()
     live_count = len(inventory["live"])
-    idle_jobs = inventory["idle"]
+    target_retain = get_target_idle_count(live_count)
 
-    # Determine how many jobs we SHOULD have
-    retain_count = get_target_idle_count(live_count)
+    # Get all idle jobs via K8s label selector
+    resp = requests.get(
+        f"{COMMS_URL}/infra/jobs",
+        params={"label_selector": "app=unity,unity-status=idle"},
+        headers=headers,
+    )
+    jobs = resp.json()
+    idle_jobs = [
+        job["job_name"]
+        for job in jobs["jobs"]
+        if (STAGING and "staging" in job["job_name"])
+        or (not STAGING and "staging" not in job["job_name"])
+    ]
 
-    # Separate recently-created idle jobs (< 11 min old) to retain a buffer
+    # Separate recently-created idle jobs (< 11 min old) from older ones
     new_idle_jobs = []
-    for job in idle_jobs:
-        name = job["job_name"]
+    old_idle_jobs = []
+    for job_name in idle_jobs:
+        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
         job_timestamp_str = "-".join(
             filter(
                 lambda part: part.isdigit() and len(part) in [2, 4],
-                name.split("-"),
-            )
+                job_name.split("-"),
+            ),
         )
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
         now = datetime.now()
         delta = now - job_timestamp
         if delta < timedelta(minutes=11):
-            new_idle_jobs.append(job)
+            new_idle_jobs.append(job_name)
+        else:
+            old_idle_jobs.append(job_name)
 
-    if len(new_idle_jobs) <= retain_count:
-        retained_jobs = new_idle_jobs
-    else:
-        retained_jobs = sorted(new_idle_jobs, key=lambda x: x["job_name"])[
-            -retain_count:
-        ]
+    # Retain the N most recent idle jobs (where N = target), delete the rest.
+    # Prefer new jobs; fall back to old ones if not enough new ones exist.
+    new_idle_jobs = sorted(new_idle_jobs, reverse=True)
+    old_idle_jobs = sorted(old_idle_jobs, reverse=True)
+    retain = new_idle_jobs[:target_retain]
+    if len(retain) < target_retain:
+        retain += old_idle_jobs[: target_retain - len(retain)]
+    retain_set = set(retain)
 
-    idle_jobs_to_delete = list(filter(lambda job: job not in retained_jobs, idle_jobs))
+    to_delete = [j for j in idle_jobs if j not in retain_set]
     logger.info(
-        f"Idle jobs for deletion: {[j['job_name'] for j in idle_jobs_to_delete]}"
+        f"Cleanup: retain={len(retain)} (target={target_retain}), "
+        f"delete={len(to_delete)}, live={live_count}",
     )
-    logger.info(f"Idle jobs to retain: {[j['job_name'] for j in retained_jobs]}")
+    logger.info(f"Idle jobs to retain: {sorted(retain)}")
+    logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
 
-    # Delete all old idle jobs (re-check label to guard against race conditions)
-    for job in idle_jobs_to_delete:
+    # Delete old idle jobs (re-check label to guard against race conditions)
+    for job_name in to_delete:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
             data={
-                "job_name": job["job_name"],
+                "job_name": job_name,
                 "required_labels": json.dumps({"unity-status": "idle"}),
             },
             headers=headers,
         )
 
-    return Response(
-        content=json.dumps({"idle_jobs": [j["job_name"] for j in idle_jobs_to_delete]}),
-        status_code=200,
-    )
+    return {
+        "retained": len(retain),
+        "deleted": len(to_delete),
+        "target": target_retain,
+        "live": live_count,
+    }
 
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])

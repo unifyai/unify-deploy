@@ -102,6 +102,19 @@ echo "  TLS Wildcard:   ${TLS_FULLCHAIN:+(set)}"
 echo ""
 
 # =============================================================================
+# Update Pool Watcher from Metadata
+# =============================================================================
+WATCHER_PATH="/usr/local/bin/unity-pool-watcher.sh"
+if curl -sf -H "$METADATA_HEADER" "$METADATA_URL/pool-watcher-script" \
+    -o "$WATCHER_PATH" 2>/dev/null && [[ -s "$WATCHER_PATH" ]]; then
+    chmod +x "$WATCHER_PATH"
+    systemctl restart unity-pool-watcher.service 2>/dev/null || true
+    echo "Pool watcher updated from metadata and service restarted"
+else
+    echo "No pool-watcher-script metadata found, using baked-in version"
+fi
+
+# =============================================================================
 # Fast Mode Detection
 # =============================================================================
 fast_mode_check() {

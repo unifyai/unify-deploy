@@ -7,6 +7,12 @@ Centralized configuration for GCP VM lifecycle management (Windows and Ubuntu).
 import os
 
 # =============================================================================
+# Environment
+# =============================================================================
+STAGING = os.getenv("STAGING", "").lower() == "true"
+ENV_SUFFIX = "-staging" if STAGING else ""
+
+# =============================================================================
 # GCP Project Configuration
 # =============================================================================
 # Dedicated project for assistant VMs and static IPs (isolated from GKE cluster)
@@ -19,19 +25,13 @@ DNS_PROJECT_ID = "gcp-project-dns"
 # Region/Zone Configuration
 # =============================================================================
 REGION = "us-central1"
-ZONE = "us-central1-a"
+ZONE = "us-central1-a" if STAGING else "us-central1-f"
 
 # =============================================================================
 # DNS Configuration (Managed in Project A)
 # =============================================================================
 DNS_ZONE_NAME = "unifyai"  # Existing Cloud DNS managed zone
 DOMAIN_SUFFIX = "vm.unify.ai"  # Subdomain for VMs
-
-# =============================================================================
-# Environment
-# =============================================================================
-STAGING = os.getenv("STAGING", "").lower() == "true"
-ENV_SUFFIX = "-staging" if STAGING else ""
 
 # =============================================================================
 # Shared VM Configuration
@@ -53,6 +53,11 @@ WINDOWS_INIT_SCRIPT_PATH = os.path.join(
     "scripts",
     "windows-vm-startup.ps1",
 )
+WINDOWS_POOL_WATCHER_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "scripts",
+    "unity-pool-watcher.ps1",
+)
 
 # =============================================================================
 # Ubuntu VM Configuration
@@ -72,6 +77,11 @@ UBUNTU_INIT_SCRIPT_PATH = os.path.join(
     os.path.dirname(__file__),
     "scripts",
     "ubuntu-vm-startup.sh",
+)
+UBUNTU_POOL_WATCHER_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "scripts",
+    "unity-pool-watcher.sh",
 )
 
 # =============================================================================
