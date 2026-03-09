@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build-windows.sh - Build Unity Windows VM custom image via Packer
+# build-windows.sh - Build Unity Pool Windows VM image via Packer
 # =============================================================================
+#
+# Builds the pool Windows image (base + pool overlay) into the
+# "unity-pool-windows-vm" image family.
 #
 # Usage:
 #   ./build-windows.sh --project PROJECT_ID [--credentials-file PATH]
@@ -61,7 +64,7 @@ command -v packer &>/dev/null || die "packer not found. Install from https://dev
 # =============================================================================
 
 echo "=========================================="
-echo "  Building Windows VM Custom Image"
+echo "  Building Pool Windows VM Image"
 echo "=========================================="
 echo ""
 echo "  Project:     $PROJECT_ID"
@@ -87,13 +90,12 @@ if [[ -n "$CREDENTIALS_FILE" ]]; then
     PACKER_ARGS+=(-var "credentials_file=$CREDENTIALS_FILE")
 fi
 
-packer build "${PACKER_ARGS[@]}" windows-vm.pkr.hcl
+packer build "${PACKER_ARGS[@]}" windows-pool-vm.pkr.hcl
 
 echo ""
 echo "=========================================="
-echo "  Windows image build complete!"
+echo "  Pool Windows image build complete!"
 echo "=========================================="
 echo ""
-echo "The image is now the latest in family: unity-windows-vm"
-echo "New VMs will automatically use this image."
-echo "Existing VMs need migration (see migrate-vm.sh)."
+echo "The image is now the latest in family: unity-pool-windows-vm"
+echo "New pool VMs will automatically use this image."
