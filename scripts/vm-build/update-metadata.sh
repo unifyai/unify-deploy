@@ -1,27 +1,37 @@
 #!/usr/bin/env bash
 # =============================================================================
-# update-metadata.sh - Update metadata on all Unity VMs
+# update-metadata.sh - Update metadata on all Unity pool VMs
 # =============================================================================
 #
-# Discovers all Unity VMs (unity-ubuntu-*, unity-win-*) and updates their
-# metadata. Automatically applies the correct startup script based on VM type.
+# Discovers all pool VMs (unity-pool-ubuntu-*, unity-pool-windows-*) and
+# updates their metadata. Automatically applies the correct startup script
+# based on VM type.
 #
 # Usage:
 #   ./update-metadata.sh [options]
 #
 # Options:
-#   --update-startup-script   Push latest local startup script to all VMs
-#   --metadata KEY=VALUE      Add/update a metadata key (repeatable)
-#   --restart                 Stop+start VMs after update (only RUNNING VMs)
-#   --staging                 Target staging VMs only (default: non-staging)
-#   --dry-run                 Show what would happen without making changes
-#   -h, --help                Show this help
+#   --update-startup-script    Push latest local startup script to all VMs
+#   --update-pool-watcher      Push latest local pool watcher script to all VMs
+#   --metadata KEY=VALUE       Add/update a metadata key (repeatable)
+#   --ubuntu                   Target only Ubuntu pool VMs
+#   --windows                  Target only Windows pool VMs
+#   --restart                  Stop+start VMs after update (only RUNNING VMs)
+#   --staging                  Target staging VMs only (default: non-staging)
+#   --dry-run                  Show what would happen without making changes
+#   -h, --help                 Show this help
 #
 # Examples:
-#   # Push latest startup scripts to all production VMs
+#   # Push latest startup scripts to all production pool VMs
 #   ./update-metadata.sh --update-startup-script
 #
-#   # Update orchestra URL on all VMs and restart them
+#   # Push latest pool watcher scripts
+#   ./update-metadata.sh --update-pool-watcher
+#
+#   # Push both startup and pool watcher scripts
+#   ./update-metadata.sh --update-startup-script --update-pool-watcher
+#
+#   # Update orchestra URL on all pool VMs and restart them
 #   ./update-metadata.sh --metadata orchestra-url=https://new.api.url --restart
 #
 #   # Preview what would happen on staging
@@ -36,16 +46,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-PROJECT="${GCP_PROJECT_ID:-gcp-project-runtime}"
-ZONE="${GCP_ZONE:-us-central1-a}"
+PROJECT="${GCP_PROJECT_ID:-gcp-project-vms}"
+ZONE="${GCP_ZONE:-us-central1-f}"
 
 # Startup script paths (local files)
 UBUNTU_STARTUP_SCRIPT="$REPO_ROOT/communication/infra/scripts/ubuntu-vm-startup.sh"
 WINDOWS_STARTUP_SCRIPT="$REPO_ROOT/communication/infra/scripts/windows-vm-startup.ps1"
 
+# Pool watcher script paths (local files)
+UBUNTU_POOL_WATCHER="$REPO_ROOT/communication/infra/scripts/unity-pool-watcher.sh"
+WINDOWS_POOL_WATCHER="$REPO_ROOT/communication/infra/scripts/unity-pool-watcher.ps1"
+
 # Options
 UPDATE_STARTUP=false
+UPDATE_POOL_WATCHER=false
 METADATA_ARGS=()
+ONLY_UBUNTU=false
+ONLY_WINDOWS=false
 RESTART=false
 DRY_RUN=false
 STAGING=false
@@ -62,9 +79,9 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 get_vm_type() {
     local name="$1"
-    if [[ "$name" == unity-ubuntu-* ]]; then
+    if [[ "$name" == unity-pool-ubuntu-* ]]; then
         echo "ubuntu"
-    elif [[ "$name" == unity-win-* ]]; then
+    elif [[ "$name" == unity-pool-windows-* ]]; then
         echo "windows"
     else
         echo "unknown"
@@ -82,9 +99,12 @@ is_staging_vm() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --update-startup-script) UPDATE_STARTUP=true; shift ;;
+        --update-pool-watcher)   UPDATE_POOL_WATCHER=true; shift ;;
         --metadata)              METADATA_ARGS+=("$2"); shift 2 ;;
+        --ubuntu)                ONLY_UBUNTU=true; shift ;;
+        --windows)               ONLY_WINDOWS=true; shift ;;
         --restart)               RESTART=true; shift ;;
-        --staging)               STAGING=true; shift ;;
+        --staging)               STAGING=true; ZONE="${GCP_ZONE:-us-central1-a}"; shift ;;
         --dry-run)               DRY_RUN=true; shift ;;
         -h|--help)               usage; exit 0 ;;
         *)                       die "Unknown argument: $1" ;;
@@ -92,16 +112,24 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate: at least one action
-if [[ "$UPDATE_STARTUP" == false && ${#METADATA_ARGS[@]} -eq 0 ]]; then
-    die "Nothing to do. Specify --update-startup-script and/or --metadata KEY=VALUE"
+if [[ "$UPDATE_STARTUP" == false && "$UPDATE_POOL_WATCHER" == false && ${#METADATA_ARGS[@]} -eq 0 ]]; then
+    die "Nothing to do. Specify --update-startup-script, --update-pool-watcher, and/or --metadata KEY=VALUE"
+fi
+
+if [[ "$ONLY_UBUNTU" == true && "$ONLY_WINDOWS" == true ]]; then
+    die "--ubuntu and --windows are mutually exclusive"
 fi
 
 command -v gcloud &>/dev/null || die "gcloud not found"
 
-# Validate startup script files exist
+# Validate script files exist
 if [[ "$UPDATE_STARTUP" == true ]]; then
     [[ -f "$UBUNTU_STARTUP_SCRIPT" ]] || die "Ubuntu startup script not found: $UBUNTU_STARTUP_SCRIPT"
     [[ -f "$WINDOWS_STARTUP_SCRIPT" ]] || die "Windows startup script not found: $WINDOWS_STARTUP_SCRIPT"
+fi
+if [[ "$UPDATE_POOL_WATCHER" == true ]]; then
+    [[ -f "$UBUNTU_POOL_WATCHER" ]] || die "Ubuntu pool watcher not found: $UBUNTU_POOL_WATCHER"
+    [[ -f "$WINDOWS_POOL_WATCHER" ]] || die "Windows pool watcher not found: $WINDOWS_POOL_WATCHER"
 fi
 
 # =============================================================================
@@ -109,28 +137,40 @@ fi
 # =============================================================================
 
 echo "=========================================="
-echo "  Update Unity VM Metadata"
+echo "  Update Pool VM Metadata"
 echo "=========================================="
 echo ""
 if [[ "$DRY_RUN" == true ]]; then
     echo "  *** DRY RUN — no changes will be made ***"
     echo ""
 fi
+VM_TYPE_LABEL="all"
+if [[ "$ONLY_UBUNTU" == true ]]; then
+    VM_TYPE_LABEL="ubuntu only"
+    VM_NAME_FILTER="name~'^unity-pool-ubuntu-'"
+elif [[ "$ONLY_WINDOWS" == true ]]; then
+    VM_TYPE_LABEL="windows only"
+    VM_NAME_FILTER="name~'^unity-pool-windows-'"
+else
+    VM_NAME_FILTER="name~'^unity-pool-(ubuntu|windows)-'"
+fi
+
 echo "  Project:  $PROJECT"
 echo "  Zone:     $ZONE"
 echo "  Target:   $(if $STAGING; then echo "staging"; else echo "production"; fi)"
+echo "  VM type:  $VM_TYPE_LABEL"
 echo ""
 
-echo "Discovering Unity VMs..."
+echo "Discovering pool VMs..."
 VM_LIST=$(gcloud compute instances list \
     --project="$PROJECT" \
     --zones="$ZONE" \
-    --filter="name~'^unity-(ubuntu|win)-'" \
+    --filter="$VM_NAME_FILTER" \
     --format="csv[no-heading](name,status)" \
     2>/dev/null) || true
 
 if [[ -z "$VM_LIST" ]]; then
-    echo "No Unity VMs found."
+    echo "No pool VMs found."
     exit 0
 fi
 
@@ -189,6 +229,11 @@ if [[ "$UPDATE_STARTUP" == true ]]; then
     windows_lines=$(wc -l < "$WINDOWS_STARTUP_SCRIPT" | tr -d ' ')
     echo "  - Startup script (ubuntu: ${ubuntu_lines} lines, windows: ${windows_lines} lines)"
 fi
+if [[ "$UPDATE_POOL_WATCHER" == true ]]; then
+    ubuntu_watcher_lines=$(wc -l < "$UBUNTU_POOL_WATCHER" | tr -d ' ')
+    windows_watcher_lines=$(wc -l < "$WINDOWS_POOL_WATCHER" | tr -d ' ')
+    echo "  - Pool watcher (ubuntu: ${ubuntu_watcher_lines} lines, windows: ${windows_watcher_lines} lines)"
+fi
 for meta in "${METADATA_ARGS[@]}"; do
     echo "  - Metadata: $meta"
 done
@@ -234,6 +279,28 @@ for vm_name in "${TARGET_VMS[@]}"; do
             echo "  Startup script updated."
         else
             echo "  FAILED to update startup script." >&2
+            ((fail_count++)) || true
+            continue
+        fi
+    fi
+
+    # Update pool watcher script
+    if [[ "$UPDATE_POOL_WATCHER" == true ]]; then
+        if [[ "$vm_type" == "ubuntu" ]]; then
+            watcher_path="$UBUNTU_POOL_WATCHER"
+        else
+            watcher_path="$WINDOWS_POOL_WATCHER"
+        fi
+
+        echo "  Updating pool-watcher-script..."
+        if gcloud compute instances add-metadata "$vm_name" \
+            --project="$PROJECT" \
+            --zone="$ZONE" \
+            --metadata-from-file="pool-watcher-script=$watcher_path" \
+            2>&1; then
+            echo "  Pool watcher updated."
+        else
+            echo "  FAILED to update pool watcher." >&2
             ((fail_count++)) || true
             continue
         fi
