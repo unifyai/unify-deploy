@@ -64,6 +64,8 @@ from .helpers import (
     publish_outlook_thread_id,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
+    get_target_idle_count,
+    get_unity_jobs_inventory,
     start_unity_job,
     store_microsoft_tokens,
     STAGING,
@@ -2608,8 +2610,42 @@ async def scheduled_teams_watches(request: Request):
 
 
 @app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
-async def scheduled_jobs_create(request: Request):
-    """Cloud Run endpoint that creates a new idle job."""
+async def scheduled_jobs_create(request: Request, refresh: bool = False):
+    """Cloud Run endpoint that creates idle jobs.
+
+    Two modes of operation:
+    - **Fill mode** (default): Only creates jobs if the pool is below the target.
+      Used by reactive replenishment from build_webhook_context.
+    - **Refresh mode** (?refresh=true): Always creates `target` new jobs regardless
+      of current pool size. The cleanup endpoint (10 min later) will delete the
+      older containers, effectively rotating the pool to the latest image.
+      Used by the hourly cron and CloudBuild deployments.
+    """
+    inventory = get_unity_jobs_inventory()
+    live_count = len(inventory["live"])
+    current_idle_count = len(inventory["idle"])
+
+    target_idle_count = get_target_idle_count(live_count)
+
+    if refresh:
+        num_to_create = target_idle_count
+    else:
+        num_to_create = max(0, target_idle_count - current_idle_count)
+
+    if num_to_create == 0:
+        logger.info(
+            f"Idle pool is healthy (current: {current_idle_count}, target: {target_idle_count}). No jobs created.",
+        )
+        return {
+            "status": "healthy",
+            "current": current_idle_count,
+            "target": target_idle_count,
+        }
+
+    mode = "refresh" if refresh else "fill"
+    logger.info(
+        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {target_idle_count})...",
+    )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
@@ -2618,20 +2654,40 @@ async def scheduled_jobs_create(request: Request):
         + ("/unity:" if not STAGING else "/unity-staging:")
         + commit_hash
     )
-    response = requests.post(
-        f"{COMMS_URL}/infra/job/create",
-        data={"image": image},
-        headers=headers,
-    )
-    return response.json()
+
+    created_jobs = []
+    for _ in range(num_to_create):
+        resp = requests.post(
+            f"{COMMS_URL}/infra/job/create",
+            data={"image": image},
+            headers=headers,
+        )
+        created_jobs.append(resp.json())
+
+    return {
+        "mode": mode,
+        "created": len(created_jobs),
+        "target": target_idle_count,
+        "details": created_jobs,
+    }
 
 
 @app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])
 async def scheduled_jobs_cleanup(request: Request):
-    """Cloud Run endpoint that cleans idle jobs that have been around for >24 hours."""
+    """Clean up old idle jobs, retaining the newest up to the target count.
+
+    Runs 10 minutes after /scheduled/jobs/create. Keeps recently-created idle
+    jobs (< 11 min old) up to the demand-aware target and deletes the rest.
+    Uses required_labels to guard against race conditions where a job
+    transitions to live between the fetch and the delete.
+    """
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
-    # get all idle jobs via K8s label selector
+    inventory = get_unity_jobs_inventory()
+    live_count = len(inventory["live"])
+    target_retain = get_target_idle_count(live_count)
+
+    # Get all idle jobs via K8s label selector
     resp = requests.get(
         f"{COMMS_URL}/infra/jobs",
         params={"label_selector": "app=unity,unity-status=idle"},
@@ -2645,11 +2701,11 @@ async def scheduled_jobs_cleanup(request: Request):
         or (not STAGING and "staging" not in job["job_name"])
     ]
 
-    # separate recently-created idle jobs (< 11 min old) to retain one
+    # Separate recently-created idle jobs (< 11 min old) from older ones
     new_idle_jobs = []
+    old_idle_jobs = []
     for job_name in idle_jobs:
         # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
-        # Extract only the numeric parts that form the timestamp
         job_timestamp_str = "-".join(
             filter(
                 lambda part: part.isdigit() and len(part) in [2, 4],
@@ -2661,18 +2717,28 @@ async def scheduled_jobs_cleanup(request: Request):
         delta = now - job_timestamp
         if delta < timedelta(minutes=11):
             new_idle_jobs.append(job_name)
+        else:
+            old_idle_jobs.append(job_name)
 
-    if len(new_idle_jobs) == 0:
-        if len(idle_jobs) != 0:
-            idle_jobs = sorted(idle_jobs)[:-1]
-    else:
-        new_idle_jobs = [sorted(new_idle_jobs)[-1]]
-    idle_jobs = list(filter(lambda job: job not in new_idle_jobs, idle_jobs))
-    logger.info(f"Idle jobs up to deletion: {idle_jobs}")
-    logger.info(f"Idle jobs to retain: {new_idle_jobs}")
+    # Retain the N most recent idle jobs (where N = target), delete the rest.
+    # Prefer new jobs; fall back to old ones if not enough new ones exist.
+    new_idle_jobs = sorted(new_idle_jobs, reverse=True)
+    old_idle_jobs = sorted(old_idle_jobs, reverse=True)
+    retain = new_idle_jobs[:target_retain]
+    if len(retain) < target_retain:
+        retain += old_idle_jobs[: target_retain - len(retain)]
+    retain_set = set(retain)
 
-    # delete all old idle jobs (re-check label to guard against race conditions)
-    for job_name in idle_jobs:
+    to_delete = [j for j in idle_jobs if j not in retain_set]
+    logger.info(
+        f"Cleanup: retain={len(retain)} (target={target_retain}), "
+        f"delete={len(to_delete)}, live={live_count}",
+    )
+    logger.info(f"Idle jobs to retain: {sorted(retain)}")
+    logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
+
+    # Delete old idle jobs (re-check label to guard against race conditions)
+    for job_name in to_delete:
         requests.delete(
             f"{COMMS_URL}/infra/job/delete",
             data={
@@ -2682,7 +2748,12 @@ async def scheduled_jobs_cleanup(request: Request):
             headers=headers,
         )
 
-    return Response(content=json.dumps({"idle_jobs": idle_jobs}), status_code=200)
+    return {
+        "retained": len(retain),
+        "deleted": len(to_delete),
+        "target": target_retain,
+        "live": live_count,
+    }
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# build-ubuntu.sh - Build Unity Ubuntu VM custom image via Packer
+# build-ubuntu.sh - Build Unity Pool Ubuntu VM image via Packer
 # =============================================================================
+#
+# Builds the pool Ubuntu image (base + pool overlay) into the
+# "unity-pool-ubuntu-vm" image family.
 #
 # Usage:
 #   ./build-ubuntu.sh --project PROJECT_ID [--credentials-file PATH]
@@ -56,7 +59,7 @@ command -v packer &>/dev/null || die "packer not found. Install from https://dev
 # =============================================================================
 
 echo "=========================================="
-echo "  Building Ubuntu VM Custom Image"
+echo "  Building Pool Ubuntu VM Image"
 echo "=========================================="
 echo ""
 echo "  Project:     $PROJECT_ID"
@@ -80,13 +83,12 @@ if [[ -n "$CREDENTIALS_FILE" ]]; then
     PACKER_ARGS+=(-var "credentials_file=$CREDENTIALS_FILE")
 fi
 
-packer build "${PACKER_ARGS[@]}" ubuntu-vm.pkr.hcl
+packer build "${PACKER_ARGS[@]}" ubuntu-pool-vm.pkr.hcl
 
 echo ""
 echo "=========================================="
-echo "  Ubuntu image build complete!"
+echo "  Pool Ubuntu image build complete!"
 echo "=========================================="
 echo ""
-echo "The image is now the latest in family: unity-ubuntu-vm"
-echo "New VMs will automatically use this image."
-echo "Existing VMs need migration (see migrate-vm.sh)."
+echo "The image is now the latest in family: unity-pool-ubuntu-vm"
+echo "New pool VMs will automatically use this image."

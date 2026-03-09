@@ -53,6 +53,11 @@ WINDOWS_INIT_SCRIPT_PATH = os.path.join(
     "scripts",
     "windows-vm-startup.ps1",
 )
+WINDOWS_POOL_WATCHER_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "scripts",
+    "unity-pool-watcher.ps1",
+)
 
 # =============================================================================
 # Ubuntu VM Configuration
@@ -72,6 +77,11 @@ UBUNTU_INIT_SCRIPT_PATH = os.path.join(
     os.path.dirname(__file__),
     "scripts",
     "ubuntu-vm-startup.sh",
+)
+UBUNTU_POOL_WATCHER_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "scripts",
+    "unity-pool-watcher.sh",
 )
 
 # =============================================================================

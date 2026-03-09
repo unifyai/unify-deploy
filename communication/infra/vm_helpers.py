@@ -59,11 +59,13 @@ from .vm_config import (
     WINDOWS_VM_IMAGE_PROJECT,
     WINDOWS_VM_TAGS,
     WINDOWS_INIT_SCRIPT_PATH,
+    WINDOWS_POOL_WATCHER_PATH,
     UBUNTU_VM_MACHINE_TYPE,
     UBUNTU_VM_DISK_SIZE_GB,
     UBUNTU_VM_IMAGE_PROJECT,
     UBUNTU_VM_TAGS,
     UBUNTU_INIT_SCRIPT_PATH,
+    UBUNTU_POOL_WATCHER_PATH,
     POOL_SSH_USERNAME,
     POOL_TARGET_IDLE,
     POOL_TARGET_STOPPED,
@@ -168,6 +170,16 @@ def load_ubuntu_startup_script() -> str:
         The bash startup script content.
     """
     with open(UBUNTU_INIT_SCRIPT_PATH, "r") as f:
+        return f.read()
+
+
+def load_windows_pool_watcher() -> str:
+    with open(WINDOWS_POOL_WATCHER_PATH, "r") as f:
+        return f.read()
+
+
+def load_ubuntu_pool_watcher() -> str:
+    with open(UBUNTU_POOL_WATCHER_PATH, "r") as f:
         return f.read()
 
 
@@ -291,6 +303,7 @@ def _pool_vm_config(vm_type: str) -> Dict[str, Any]:
             "tags": WINDOWS_VM_TAGS,
             "startup_script_key": "windows-startup-script-ps1",
             "startup_script_loader": load_windows_startup_script,
+            "pool_watcher_loader": load_windows_pool_watcher,
             "enable_display": True,
         }
     return {
@@ -301,6 +314,7 @@ def _pool_vm_config(vm_type: str) -> Dict[str, Any]:
         "tags": UBUNTU_VM_TAGS,
         "startup_script_key": "startup-script",
         "startup_script_loader": load_ubuntu_startup_script,
+        "pool_watcher_loader": load_ubuntu_pool_watcher,
         "enable_display": False,
     }
 
@@ -416,9 +430,11 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     tls_key = get_secret(VM_WILDCARD_KEY_SECRET)
 
     startup_script = cfg["startup_script_loader"]()
+    pool_watcher_script = cfg["pool_watcher_loader"]()
 
     metadata_items = [
         compute_v1.Items(key=cfg["startup_script_key"], value=startup_script),
+        compute_v1.Items(key="pool-watcher-script", value=pool_watcher_script),
         compute_v1.Items(key="hostname", value=hostname),
         compute_v1.Items(key="orchestra-url", value=ORCHESTRA_URL),
         compute_v1.Items(key="comms-url", value=COMMS_URL),
