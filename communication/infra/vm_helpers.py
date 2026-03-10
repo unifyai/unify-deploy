@@ -546,8 +546,7 @@ def claim_idle_vm(
         if not idle_vms:
             if elapsed >= POOL_ASSIGN_TIMEOUT:
                 raise ValueError(
-                    f"No idle {vm_type} pool VMs available "
-                    f"after waiting {elapsed}s"
+                    f"No idle {vm_type} pool VMs available after waiting {elapsed}s"
                 )
             logger.info(
                 f"No idle {vm_type} VMs, waiting "
@@ -908,9 +907,7 @@ def replenish_pool(vm_type: str) -> Dict[str, Any]:
     Called after an assign consumes an idle VM. Also replenishes the
     stopped reserve if starting a stopped VM depleted it.
     """
-    client, pool_vms, idle_vms, stopped_vms, existing_names = _list_pool_state(
-        vm_type
-    )
+    client, pool_vms, idle_vms, stopped_vms, existing_names = _list_pool_state(vm_type)
     actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
     started_one = False
 
@@ -959,9 +956,7 @@ def replenish_pool(vm_type: str) -> Dict[str, Any]:
         try:
             provision_pool_vm(vm_type, n)
             existing_names.add(_pool_vm_name(vm_type, n))
-            actions["actions"].append(
-                f"Provisioned new pool VM #{n} (stopped reserve)"
-            )
+            actions["actions"].append(f"Provisioned new pool VM #{n} (stopped reserve)")
             logger.info(
                 f"Replenish: provisioned new {vm_type} pool VM #{n} (stopped reserve)"
             )
@@ -976,9 +971,7 @@ def trim_pool(vm_type: str) -> Dict[str, Any]:
 
     Called after a release returns a VM to idle.
     """
-    client, pool_vms, idle_vms, stopped_vms, existing_names = _list_pool_state(
-        vm_type
-    )
+    client, pool_vms, idle_vms, stopped_vms, existing_names = _list_pool_state(vm_type)
     actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
 
     if len(idle_vms) > POOL_TARGET_IDLE:

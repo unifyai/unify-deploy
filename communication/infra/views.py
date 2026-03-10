@@ -635,12 +635,16 @@ async def list_kubernetes_jobs(
 
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=hours)
-        relevant_dates = sorted({
-            cutoff.strftime("%Y-%m-%d"),
-            now.strftime("%Y-%m-%d"),
-        })
+        relevant_dates = sorted(
+            {
+                cutoff.strftime("%Y-%m-%d"),
+                now.strftime("%Y-%m-%d"),
+            }
+        )
         date_filter = f"unity-date in ({','.join(relevant_dates)})"
-        full_selector = f"{label_selector},{date_filter}" if label_selector else date_filter
+        full_selector = (
+            f"{label_selector},{date_filter}" if label_selector else date_filter
+        )
 
         loop = asyncio.get_event_loop()
         jobs = await loop.run_in_executor(
