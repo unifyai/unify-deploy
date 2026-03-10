@@ -901,17 +901,26 @@ def _list_pool_state(vm_type: str):
     return client, pool_vms, idle_vms, stopped_vms, existing_names
 
 
-def replenish_pool(vm_type: str) -> Dict[str, Any]:
+def replenish_pool(vm_type: str, max_retries: int = 3) -> Dict[str, Any]:
     """Start or provision VMs to maintain POOL_TARGET_IDLE idle VMs.
 
     Called after an assign consumes an idle VM. Also replenishes the
     stopped reserve if starting a stopped VM depleted it.
+
+    Retries on Conflict so concurrent calls from concurrent assigns
+    each successfully start/provision a different VM rather than all
+    racing on the same one and silently giving up.
     """
-    client, pool_vms, idle_vms, stopped_vms, existing_names = _list_pool_state(vm_type)
-    actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
+    actions = {"vm_type": vm_type, "actions": []}
     started_one = False
 
-    if len(idle_vms) < POOL_TARGET_IDLE:
+    for attempt in range(max_retries + 1):
+        client, _, idle_vms, stopped_vms, existing_names = _list_pool_state(vm_type)
+        actions["idle_count"] = len(idle_vms)
+
+        if len(idle_vms) >= POOL_TARGET_IDLE:
+            break
+
         if stopped_vms:
             vm = stopped_vms[0]
             try:
@@ -934,34 +943,53 @@ def replenish_pool(vm_type: str) -> Dict[str, Any]:
                 actions["actions"].append(f"Started stopped VM {vm.name}")
                 logger.info(f"Replenish: started stopped VM {vm.name}")
                 started_one = True
+                break
+            except Conflict:
+                logger.info(
+                    f"Replenish: conflict on {vm.name}, "
+                    f"retrying ({attempt + 1}/{max_retries})"
+                )
+                continue
             except Exception as e:
                 logger.error(f"Replenish: failed to start {vm.name}: {e}")
+                break
         else:
             n = 1
             while _pool_vm_name(vm_type, n) in existing_names:
                 n += 1
             try:
                 provision_pool_vm(vm_type, n)
-                existing_names.add(_pool_vm_name(vm_type, n))
                 actions["actions"].append(f"Provisioned new pool VM #{n}")
                 logger.info(f"Replenish: provisioned new {vm_type} pool VM #{n}")
+                break
+            except Conflict:
+                logger.info(
+                    f"Replenish: conflict provisioning VM #{n}, "
+                    f"retrying ({attempt + 1}/{max_retries})"
+                )
+                continue
             except Exception as e:
                 logger.error(f"Replenish: failed to provision new VM: {e}")
+                break
 
-    effective_stopped = len(stopped_vms) - (1 if started_one else 0)
-    if effective_stopped < POOL_TARGET_STOPPED:
-        n = 1
-        while _pool_vm_name(vm_type, n) in existing_names:
-            n += 1
-        try:
-            provision_pool_vm(vm_type, n)
-            existing_names.add(_pool_vm_name(vm_type, n))
-            actions["actions"].append(f"Provisioned new pool VM #{n} (stopped reserve)")
-            logger.info(
-                f"Replenish: provisioned new {vm_type} pool VM #{n} (stopped reserve)"
-            )
-        except Exception as e:
-            logger.error(f"Replenish: failed to provision new VM: {e}")
+    # Replenish stopped reserve if starting a stopped VM depleted it
+    if started_one:
+        _, _, _, stopped_vms_now, existing_names_now = _list_pool_state(vm_type)
+        if len(stopped_vms_now) < POOL_TARGET_STOPPED:
+            n = 1
+            while _pool_vm_name(vm_type, n) in existing_names_now:
+                n += 1
+            try:
+                provision_pool_vm(vm_type, n)
+                actions["actions"].append(
+                    f"Provisioned new pool VM #{n} (stopped reserve)"
+                )
+                logger.info(
+                    f"Replenish: provisioned new {vm_type} pool VM #{n} "
+                    f"(stopped reserve)"
+                )
+            except Exception as e:
+                logger.error(f"Replenish: failed to provision reserve VM: {e}")
 
     return actions
 
