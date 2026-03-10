@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import json
 import os
 import subprocess
@@ -241,6 +242,7 @@ def create_unity_job(
                     "app": "unity",
                     "created-by": "create_job_script",
                     "unity-status": "idle",
+                    "unity-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 },
             },
             "spec": {

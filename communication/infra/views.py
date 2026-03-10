@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Form, HTTPException, Request
 from functools import partial
 from google.cloud import pubsub_v1, storage
@@ -24,6 +24,8 @@ from .vm_helpers import (
     provision_pool_vm,
     assign_pool_vm,
     release_pool_vm,
+    replenish_pool,
+    trim_pool,
     rebalance_pool,
     list_pool_vms,
     delete_assistant_disk,
@@ -631,19 +633,32 @@ async def list_kubernetes_jobs(
     try:
         batch_api, core_api, networking_api = await _get_k8s_clients()
 
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=hours)
+        relevant_dates = sorted(
+            {
+                cutoff.strftime("%Y-%m-%d"),
+                now.strftime("%Y-%m-%d"),
+            }
+        )
+        date_filter = f"unity-date in ({','.join(relevant_dates)})"
+        full_selector = (
+            f"{label_selector},{date_filter}" if label_selector else date_filter
+        )
+
         loop = asyncio.get_event_loop()
         jobs = await loop.run_in_executor(
             None,
             partial(
                 batch_api.list_namespaced_job,
                 namespace=namespace,
-                label_selector=label_selector,
+                label_selector=full_selector,
             ),
         )
         job_items = list(
             filter(
                 lambda job: (
-                    datetime.now()
+                    now
                     - datetime.strptime(
                         "-".join(
                             filter(
@@ -652,7 +667,7 @@ async def list_kubernetes_jobs(
                             )
                         ),
                         "%Y-%m-%d-%H-%M-%S",
-                    )
+                    ).replace(tzinfo=timezone.utc)
                 )
                 < timedelta(hours=hours),
                 jobs.items,
@@ -1032,8 +1047,8 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
             ),
         )
 
-        # Trigger async rebalance (don't block the response)
-        loop.run_in_executor(None, partial(rebalance_pool, request.vm_type))
+        # Replenish: start/provision VMs to replace the one just claimed
+        loop.run_in_executor(None, partial(replenish_pool, request.vm_type))
 
         return PoolAssignResponse(**result)
     except ValueError as e:
@@ -1057,9 +1072,9 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
             partial(release_pool_vm, request.assistant_id),
         )
 
-        # Trigger async rebalance (don't block the response)
+        # Trim: stop excess idle VMs now that one was returned
         vm_type = result.get("vm_type", "ubuntu")
-        loop.run_in_executor(None, partial(rebalance_pool, vm_type))
+        loop.run_in_executor(None, partial(trim_pool, vm_type))
 
         return result
     except Exception as e:
