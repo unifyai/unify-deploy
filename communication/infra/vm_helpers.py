@@ -905,9 +905,10 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
 
     existing_names = {vm.name for vm in pool_vms}
     started_one = False
+    stopped_count = 0
 
     # Rule 1: ensure idle VMs are available
-    if len(idle_vms) <= POOL_TARGET_IDLE:
+    if len(idle_vms) < POOL_TARGET_IDLE:
         if stopped_vms:
             vm = stopped_vms[0]
             try:
@@ -948,6 +949,7 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
         excess = len(idle_vms) - POOL_TARGET_IDLE
         # Stop the highest-numbered idle VMs
         to_stop = sorted(idle_vms, key=lambda vm: vm.name, reverse=True)[:excess]
+        stopped_count = 0
         for vm in to_stop:
             try:
                 op = client.stop(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
@@ -968,12 +970,15 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 ).result()
                 actions["actions"].append(f"Stopped excess VM {vm.name}")
                 logger.info(f"Rebalance: stopped excess VM {vm.name}")
+                stopped_count += 1
             except Exception as e:
                 logger.error(f"Rebalance: failed to stop {vm.name}: {e}")
 
     # Rule 2: ensure stopped reserve
-    effective_stopped = len(stopped_vms) - (1 if started_one else 0)
-    if effective_stopped <= POOL_TARGET_STOPPED:
+    effective_stopped = (
+        len(stopped_vms) - (1 if started_one else 0) + stopped_count
+    )
+    if effective_stopped < POOL_TARGET_STOPPED:
         n = 1
         while _pool_vm_name(vm_type, n) in existing_names:
             n += 1
