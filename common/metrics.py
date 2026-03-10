@@ -40,6 +40,7 @@ from prometheus_client import (
 REGISTRY = CollectorRegistry()
 if not _MULTIPROC_DIR:
     from prometheus_client import ProcessCollector
+
     ProcessCollector(registry=REGISTRY)
 
 # ---------------------------------------------------------------------------

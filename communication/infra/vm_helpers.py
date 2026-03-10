@@ -565,8 +565,7 @@ def claim_idle_vm(
             if not matching:
                 idle_names = [vm.name for vm in idle_vms]
                 raise ValueError(
-                    f"VM {target_name} is not idle. "
-                    f"Idle VMs: {idle_names}"
+                    f"VM {target_name} is not idle. " f"Idle VMs: {idle_names}"
                 )
             candidate = matching[0]
         else:
