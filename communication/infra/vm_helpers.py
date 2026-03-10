@@ -546,7 +546,8 @@ def claim_idle_vm(
         if not idle_vms:
             if elapsed >= POOL_ASSIGN_TIMEOUT:
                 raise ValueError(
-                    f"No idle {vm_type} pool VMs available " f"after waiting {elapsed}s"
+                    f"No idle {vm_type} pool VMs available "
+                    f"after waiting {elapsed}s"
                 )
             logger.info(
                 f"No idle {vm_type} VMs, waiting "
@@ -873,11 +874,10 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     }
 
 
-def rebalance_pool(vm_type: str) -> Dict[str, Any]:
-    """Ensure exactly POOL_TARGET_IDLE idle VMs for the given type.
+def _list_pool_state(vm_type: str):
+    """Snapshot current pool state for a VM type.
 
-    Scale up: start a stopped VM or provision a new one.
-    Scale down: stop excess idle VMs.
+    Returns (client, pool_vms, idle_vms, stopped_vms, existing_names).
     """
     client = compute_v1.InstancesClient()
     type_filter = f"labels.vm-type={vm_type}"
@@ -887,7 +887,6 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
         filter=type_filter,
     )
     all_vms = list(client.list(request=request))
-
     pool_vms = [vm for vm in all_vms if vm.labels and vm.labels.get("pool-role")]
     idle_vms = [
         vm
@@ -899,14 +898,22 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
         for vm in pool_vms
         if vm.labels.get("pool-role") == "stopped" or vm.status == "TERMINATED"
     ]
-
-    actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
-
     existing_names = {vm.name for vm in pool_vms}
-    started_one = False
-    stopped_count = 0
+    return client, pool_vms, idle_vms, stopped_vms, existing_names
 
-    # Rule 1: ensure idle VMs are available
+
+def replenish_pool(vm_type: str) -> Dict[str, Any]:
+    """Start or provision VMs to maintain POOL_TARGET_IDLE idle VMs.
+
+    Called after an assign consumes an idle VM. Also replenishes the
+    stopped reserve if starting a stopped VM depleted it.
+    """
+    client, pool_vms, idle_vms, stopped_vms, existing_names = _list_pool_state(
+        vm_type
+    )
+    actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
+    started_one = False
+
     if len(idle_vms) < POOL_TARGET_IDLE:
         if stopped_vms:
             vm = stopped_vms[0]
@@ -928,10 +935,10 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                     ),
                 ).result()
                 actions["actions"].append(f"Started stopped VM {vm.name}")
-                logger.info(f"Rebalance: started stopped VM {vm.name}")
+                logger.info(f"Replenish: started stopped VM {vm.name}")
                 started_one = True
             except Exception as e:
-                logger.error(f"Rebalance: failed to start {vm.name}: {e}")
+                logger.error(f"Replenish: failed to start {vm.name}: {e}")
         else:
             n = 1
             while _pool_vm_name(vm_type, n) in existing_names:
@@ -940,15 +947,43 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 provision_pool_vm(vm_type, n)
                 existing_names.add(_pool_vm_name(vm_type, n))
                 actions["actions"].append(f"Provisioned new pool VM #{n}")
-                logger.info(f"Rebalance: provisioned new {vm_type} pool VM #{n}")
+                logger.info(f"Replenish: provisioned new {vm_type} pool VM #{n}")
             except Exception as e:
-                logger.error(f"Rebalance: failed to provision new VM: {e}")
-    # Scale down: too many idle VMs
-    elif len(idle_vms) > POOL_TARGET_IDLE:
+                logger.error(f"Replenish: failed to provision new VM: {e}")
+
+    effective_stopped = len(stopped_vms) - (1 if started_one else 0)
+    if effective_stopped < POOL_TARGET_STOPPED:
+        n = 1
+        while _pool_vm_name(vm_type, n) in existing_names:
+            n += 1
+        try:
+            provision_pool_vm(vm_type, n)
+            existing_names.add(_pool_vm_name(vm_type, n))
+            actions["actions"].append(
+                f"Provisioned new pool VM #{n} (stopped reserve)"
+            )
+            logger.info(
+                f"Replenish: provisioned new {vm_type} pool VM #{n} (stopped reserve)"
+            )
+        except Exception as e:
+            logger.error(f"Replenish: failed to provision new VM: {e}")
+
+    return actions
+
+
+def trim_pool(vm_type: str) -> Dict[str, Any]:
+    """Stop excess idle VMs to maintain POOL_TARGET_IDLE.
+
+    Called after a release returns a VM to idle.
+    """
+    client, pool_vms, idle_vms, stopped_vms, existing_names = _list_pool_state(
+        vm_type
+    )
+    actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
+
+    if len(idle_vms) > POOL_TARGET_IDLE:
         excess = len(idle_vms) - POOL_TARGET_IDLE
-        # Stop the highest-numbered idle VMs
         to_stop = sorted(idle_vms, key=lambda vm: vm.name, reverse=True)[:excess]
-        stopped_count = 0
         for vm in to_stop:
             try:
                 op = client.stop(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
@@ -968,28 +1003,21 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                     ),
                 ).result()
                 actions["actions"].append(f"Stopped excess VM {vm.name}")
-                logger.info(f"Rebalance: stopped excess VM {vm.name}")
-                stopped_count += 1
+                logger.info(f"Trim: stopped excess VM {vm.name}")
             except Exception as e:
-                logger.error(f"Rebalance: failed to stop {vm.name}: {e}")
-
-    # Rule 2: ensure stopped reserve
-    effective_stopped = len(stopped_vms) - (1 if started_one else 0) + stopped_count
-    if effective_stopped < POOL_TARGET_STOPPED:
-        n = 1
-        while _pool_vm_name(vm_type, n) in existing_names:
-            n += 1
-        try:
-            provision_pool_vm(vm_type, n)
-            existing_names.add(_pool_vm_name(vm_type, n))
-            actions["actions"].append(f"Provisioned new pool VM #{n} (stopped reserve)")
-            logger.info(
-                f"Rebalance: provisioned new {vm_type} pool VM #{n} (stopped reserve)"
-            )
-        except Exception as e:
-            logger.error(f"Rebalance: failed to provision new VM: {e}")
+                logger.error(f"Trim: failed to stop {vm.name}: {e}")
 
     return actions
+
+
+def rebalance_pool(vm_type: str) -> Dict[str, Any]:
+    """Full rebalance: replenish then trim. For manual use."""
+    replenish_result = replenish_pool(vm_type)
+    trim_result = trim_pool(vm_type)
+    return {
+        "vm_type": vm_type,
+        "actions": replenish_result["actions"] + trim_result["actions"],
+    }
 
 
 # =============================================================================
