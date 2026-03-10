@@ -100,12 +100,6 @@ def setup_kubernetes_client():
             core_api = k8s_client.CoreV1Api()
             networking_api = k8s_client.NetworkingV1Api()
 
-            print("🧪 Testing API connection...")
-            namespaces = core_api.list_namespace(limit=1)
-            print(
-                f"✅ Successfully connected! Found {len(namespaces.items)} namespaces",
-            )
-
             print("✅ Kubernetes client setup complete!")
 
             _k8s_clients = (batch_api, core_api, networking_api)
