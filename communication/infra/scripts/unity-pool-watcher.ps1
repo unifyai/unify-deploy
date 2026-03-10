@@ -140,6 +140,15 @@ function Invoke-Update {
 
     if ($asSaved -and $asRemote -and ($asSaved -eq $asRemote)) {
         Write-Log "Agent Service up-to-date ($asSaved)"
+
+        # Install dependencies
+        if (Test-Path "$agentServiceDir\package.json") {
+            Write-Log "Installing Agent Service dependencies..."
+            Push-Location $agentServiceDir
+            npm install 2>&1
+            Pop-Location
+        }
+        Write-Log "Agent Service dependencies installed"
     } else {
         Write-Log "Agent Service updating ($asSaved -> $asRemote)"
 
@@ -292,7 +301,7 @@ function Invoke-Assign($unifyKey) {
             $encrypted = $encryptor.TransformFinalBlock($vncKey, 0, 8)
             Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "Password" -Value $encrypted -Type Binary
             Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "ControlPassword" -Value $encrypted -Type Binary
-            Restart-Service "TightVNC Server" -ErrorAction SilentlyContinue
+            Restart-Service "tvnserver" -ErrorAction SilentlyContinue
             Write-Log "VNC password updated"
         }
     } catch {
@@ -427,7 +436,7 @@ function Invoke-Release {
         $encrypted = $encryptor.TransformFinalBlock($deadPw, 0, 8)
         Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "Password" -Value $encrypted -Type Binary -ErrorAction SilentlyContinue
         Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "ControlPassword" -Value $encrypted -Type Binary -ErrorAction SilentlyContinue
-        Restart-Service "TightVNC Server" -ErrorAction SilentlyContinue
+        Restart-Service "tvnserver" -ErrorAction SilentlyContinue
         Write-Log "VNC password reset"
     } catch {
         Write-Log "WARNING: failed to reset VNC password: $_"

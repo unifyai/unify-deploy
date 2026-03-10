@@ -26,6 +26,7 @@
 $ErrorActionPreference = 'Continue'
 $script:StartTime = Get-Date
 $script:GitExe = 'C:\Program Files\Git\bin\git.exe'
+$script:CmdExe = 'C:\Windows\System32\cmd.exe'
 
 Write-Host "=========================================="
 Write-Host "  Windows VM Startup Script"
@@ -35,6 +36,11 @@ Write-Host ""
 # =============================================================================
 # Helpers
 # =============================================================================
+
+function Invoke-Git {
+    $argStr = $args -join ' '
+    & $script:CmdExe /c "`"$script:GitExe`" $argStr 2>&1"
+}
 
 function Get-GCPMetadata {
     param([string]$Key)
@@ -49,7 +55,7 @@ function Get-GCPMetadata {
 function Get-RemoteCommitHash {
     param([string]$RepoUrl, [string]$Branch)
     try {
-        $output = & $script:GitExe ls-remote $RepoUrl "refs/heads/$Branch" 2>&1
+        $output = Invoke-Git ls-remote $RepoUrl "refs/heads/$Branch"
         if ($output -match '^([a-f0-9]+)\s') {
             return $matches[1].Substring(0, 12)
         }
@@ -84,16 +90,16 @@ function Update-GitRepo {
     Push-Location $RepoPath
     try {
         if ($GithubToken) {
-            $remoteUrl = & $script:GitExe remote get-url origin 2>&1
+            $remoteUrl = Invoke-Git remote get-url origin
             if ($remoteUrl -notlike "*$GithubToken*") {
-                & $script:GitExe remote set-url origin "https://$GithubToken@github.com/unifyai/$RepoName.git" 2>&1 | Out-Null
+                Invoke-Git remote set-url origin "https://$GithubToken@github.com/unifyai/$RepoName.git" | Out-Null
             }
         }
 
-        & $script:GitExe fetch --depth 1 origin $Branch 2>&1 | Out-Null
-        & $script:GitExe reset --hard origin/$Branch 2>&1 | Out-Null
+        Invoke-Git fetch --depth 1 origin $Branch | Out-Null
+        Invoke-Git reset --hard origin/$Branch | Out-Null
 
-        $commit = & $script:GitExe rev-parse --short=12 HEAD 2>&1
+        $commit = Invoke-Git rev-parse --short=12 HEAD
         Write-Host "  Updated to commit: $commit" -ForegroundColor Green
         if ($commit) {
             $commit | Out-File -FilePath "$RepoPath\.commit-hash" -Encoding UTF8 -NoNewline
@@ -112,7 +118,8 @@ function Update-GitRepo {
 # =============================================================================
 Write-Host "Reading GCP metadata..."
 $gcpHostname = Get-GCPMetadata -Key "hostname"
-$gcpGithubToken = Get-GCPMetadata -Key "github-token"
+$gcpGithubToken = (Get-GCPMetadata -Key "github-token")
+if ($gcpGithubToken) { $gcpGithubToken = $gcpGithubToken.Trim() }
 $gcpStaging = Get-GCPMetadata -Key "staging"
 $gcpTlsFullchain = Get-GCPMetadata -Key "tls-fullchain"
 $gcpTlsPrivkey = Get-GCPMetadata -Key "tls-privkey"
@@ -166,10 +173,7 @@ if (-not (Test-Path $systemBunExe)) {
 $poolWatcherScript = Get-GCPMetadata -Key "pool-watcher-script"
 if ($poolWatcherScript) {
     Set-Content -Path "C:\unity-pool-watcher.ps1" -Value $poolWatcherScript -Encoding UTF8
-    $nssmPath = (Get-Command nssm -ErrorAction SilentlyContinue).Source
-    if ($nssmPath) {
-        & $nssmPath restart UnityPoolWatcher 2>$null
-    }
+    & 'C:\ProgramData\chocolatey\bin\nssm.exe' restart UnityPoolWatcher 2>$null
     Write-Host "Pool watcher updated from metadata" -ForegroundColor Green
 } else {
     Write-Host "No pool-watcher-script metadata, using baked-in version" -ForegroundColor Yellow
@@ -203,12 +207,12 @@ if (Test-Path "$magnitudeDir\.git") {
 } elseif (-not (Test-Path "$magnitudeDir\package.json")) {
     Write-Host "  Cloning Magnitude..."
     if (Test-Path $magnitudeDir) {
-        cmd /c "rmdir /s /q `"$magnitudeDir`"" 2>&1 | Out-Null
+        & $script:CmdExe /c "rmdir /s /q `"$magnitudeDir`" 2>nul"
     }
-    & $script:GitExe clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir 2>&1
+    Invoke-Git clone --depth 1 --branch unity-modifications $magnitudeUrl $magnitudeDir
     if (Test-Path "$magnitudeDir\package.json") {
         Push-Location $magnitudeDir
-        $commit = (& $script:GitExe rev-parse --short=12 HEAD 2>&1)
+        $commit = Invoke-Git rev-parse --short=12 HEAD
         Save-CommitHash -Dir $magnitudeDir -Hash $commit
         Write-Host "  Magnitude cloned (commit: $commit)" -ForegroundColor Green
         Pop-Location
@@ -219,9 +223,9 @@ if (Test-Path "$magnitudeDir\package.json") {
     Write-Host "  Installing dependencies..." -ForegroundColor Yellow
     Push-Location $magnitudeDir
     if (Test-Path $systemBunExe) {
-        & $systemBunExe install 2>&1 | Out-Null
+        & $script:CmdExe /c "`"$systemBunExe`" install 2>&1" | Out-Null
     } else {
-        npm install 2>&1 | Out-Null
+        & $script:CmdExe /c "npm install 2>&1" | Out-Null
     }
     Pop-Location
     Write-Host "  Magnitude dependencies installed" -ForegroundColor Green
@@ -232,7 +236,7 @@ if (Test-Path "$magnitudeDir\package.json") {
         Write-Host "  Installing Patchright Chromium..." -ForegroundColor Yellow
         $env:PLAYWRIGHT_BROWSERS_PATH = "C:\ms-playwright"
         Push-Location $magCore
-        npx --yes patchright install chromium 2>&1 | Out-Null
+        & $script:CmdExe /c "npx --yes patchright install chromium 2>&1" | Out-Null
         Pop-Location
         Write-Host "  Patchright Chromium installed" -ForegroundColor Green
     }
@@ -278,16 +282,16 @@ if (Test-Path "$agentServiceDir\.git") {
         $unityRepoDir = 'C:\temp\unity-repo'
         New-Item -ItemType Directory -Force -Path 'C:\temp' | Out-Null
         if (Test-Path $unityRepoDir) {
-            cmd /c "rmdir /s /q `"$unityRepoDir`"" 2>&1 | Out-Null
+            & $script:CmdExe /c "rmdir /s /q `"$unityRepoDir`" 2>nul"
         }
 
-        & $script:GitExe clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir 2>&1
+        Invoke-Git clone --depth 1 --branch $unityBranch --filter=blob:none --sparse $unityUrl $unityRepoDir
 
         if (Test-Path $unityRepoDir) {
             $commitHash = $null
             Push-Location $unityRepoDir
-            $commitHash = (& $script:GitExe rev-parse --short=12 HEAD 2>&1)
-            & $script:GitExe sparse-checkout set agent-service 2>&1 | Out-Null
+            $commitHash = Invoke-Git rev-parse --short=12 HEAD
+            Invoke-Git sparse-checkout set agent-service | Out-Null
             Pop-Location
 
             if (Test-Path "$unityRepoDir\agent-service") {
@@ -296,7 +300,7 @@ if (Test-Path "$agentServiceDir\.git") {
                     Move-Item "$agentServiceDir\node_modules" "$unityRepoDir\agent-service\node_modules" -Force -ErrorAction SilentlyContinue
                 }
                 if (Test-Path $agentServiceDir) {
-                    cmd /c "rmdir /s /q `"$agentServiceDir`"" 2>&1 | Out-Null
+                    & $script:CmdExe /c "rmdir /s /q `"$agentServiceDir`" 2>nul"
                 }
                 Move-Item "$unityRepoDir\agent-service" $agentServiceDir
                 if ($commitHash) {
@@ -304,7 +308,7 @@ if (Test-Path "$agentServiceDir\.git") {
                 }
                 Write-Host "  Agent Service updated (commit: $commitHash)" -ForegroundColor Green
             }
-            cmd /c "rmdir /s /q `"$unityRepoDir`"" 2>&1 | Out-Null
+            & $script:CmdExe /c "rmdir /s /q `"$unityRepoDir`" 2>nul"
         }
     }
 }
@@ -312,7 +316,7 @@ if (Test-Path "$agentServiceDir\.git") {
 if (Test-Path "$agentServiceDir\package.json") {
     Write-Host "  Installing dependencies..." -ForegroundColor Yellow
     Push-Location $agentServiceDir
-    npm install 2>&1 | Out-Null
+    & $script:CmdExe /c "npm install 2>&1" | Out-Null
     Pop-Location
     Write-Host "  Agent Service dependencies installed" -ForegroundColor Green
 }
@@ -441,10 +445,15 @@ cd /d C:\novnc
 Write-Host ""
 Write-Host "=== Starting Services ===" -ForegroundColor Cyan
 
-# TightVNC service
+# TightVNC: ensure loopback connections are allowed (websockify connects via localhost)
+$vncRegPath = "HKLM:\SOFTWARE\TightVNC\Server"
+if (Test-Path $vncRegPath) {
+    Set-ItemProperty -Path $vncRegPath -Name "AllowLoopback" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $vncRegPath -Name "LoopbackOnly" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+}
 $tvnService = Get-Service -Name "tvnserver" -ErrorAction SilentlyContinue
-if ($tvnService -and $tvnService.Status -ne 'Running') {
-    Start-Service -Name "tvnserver" -ErrorAction SilentlyContinue
+if ($tvnService) {
+    Restart-Service -Name "tvnserver" -ErrorAction SilentlyContinue
 }
 if ((Get-Service -Name "tvnserver" -ErrorAction SilentlyContinue).Status -eq 'Running') {
     Write-Host "  TightVNC: Running" -ForegroundColor Green
@@ -501,7 +510,7 @@ try {
     $info = Invoke-RestMethod -Uri $apiBase -Headers @{ Authorization = "Bearer $token" }
     $poolRole = $info.labels.'pool-role'
 
-    if ($poolRole -eq "provisioning") {
+    if ($poolRole -eq "provisioning" -or $poolRole -eq "stopped") {
         $labels = @{}
         $info.labels.PSObject.Properties | ForEach-Object { $labels[$_.Name] = $_.Value }
         $labels['pool-role'] = 'idle'
