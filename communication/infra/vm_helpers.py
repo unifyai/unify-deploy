@@ -946,25 +946,8 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 logger.info(f"Rebalance: provisioned new {vm_type} pool VM #{n}")
             except Exception as e:
                 logger.error(f"Rebalance: failed to provision new VM: {e}")
-
-    # Rule 2: ensure stopped reserve
-    effective_stopped = len(stopped_vms) - (1 if started_one else 0)
-    if effective_stopped <= POOL_TARGET_STOPPED:
-        n = 1
-        while _pool_vm_name(vm_type, n) in existing_names:
-            n += 1
-        try:
-            provision_pool_vm(vm_type, n)
-            existing_names.add(_pool_vm_name(vm_type, n))
-            actions["actions"].append(f"Provisioned new pool VM #{n} (stopped reserve)")
-            logger.info(
-                f"Rebalance: provisioned new {vm_type} pool VM #{n} (stopped reserve)"
-            )
-        except Exception as e:
-            logger.error(f"Rebalance: failed to provision new VM: {e}")
-
     # Scale down: too many idle VMs
-    if len(idle_vms) > POOL_TARGET_IDLE:
+    elif len(idle_vms) > POOL_TARGET_IDLE:
         excess = len(idle_vms) - POOL_TARGET_IDLE
         # Stop the highest-numbered idle VMs
         to_stop = sorted(idle_vms, key=lambda vm: vm.name, reverse=True)[:excess]
@@ -990,6 +973,22 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 logger.info(f"Rebalance: stopped excess VM {vm.name}")
             except Exception as e:
                 logger.error(f"Rebalance: failed to stop {vm.name}: {e}")
+
+    # Rule 2: ensure stopped reserve
+    effective_stopped = len(stopped_vms) - (1 if started_one else 0)
+    if effective_stopped <= POOL_TARGET_STOPPED:
+        n = 1
+        while _pool_vm_name(vm_type, n) in existing_names:
+            n += 1
+        try:
+            provision_pool_vm(vm_type, n)
+            existing_names.add(_pool_vm_name(vm_type, n))
+            actions["actions"].append(f"Provisioned new pool VM #{n} (stopped reserve)")
+            logger.info(
+                f"Rebalance: provisioned new {vm_type} pool VM #{n} (stopped reserve)"
+            )
+        except Exception as e:
+            logger.error(f"Rebalance: failed to provision new VM: {e}")
 
     return actions
 
