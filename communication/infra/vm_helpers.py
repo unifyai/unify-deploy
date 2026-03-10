@@ -74,6 +74,8 @@ from .vm_config import (
     POOL_VM_NAME_PREFIX,
     POOL_UBUNTU_VM_IMAGE_FAMILY,
     POOL_WINDOWS_VM_IMAGE_FAMILY,
+    POOL_ASSIGN_TIMEOUT,
+    POOL_ASSIGN_POLL_INTERVAL,
 )
 
 logger = logging.getLogger(__name__)
@@ -532,7 +534,6 @@ def claim_idle_vm(
     label_filter = (
         f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
     )
-    max_wait = 300
     elapsed = 0
 
     while True:
@@ -543,21 +544,18 @@ def claim_idle_vm(
         )
         idle_vms = list(client.list(request=request))
         if not idle_vms:
-            provisioning_request = compute_v1.ListInstancesRequest(
-                project=VM_PROJECT_ID,
-                zone=ZONE,
-                filter=f"labels.pool-role=provisioning AND labels.vm-type={vm_type}",
-            )
-            provisioning_vms = list(client.list(request=provisioning_request))
-            if provisioning_vms and elapsed < max_wait:
-                logger.info(
-                    f"{len(provisioning_vms)} {vm_type} VMs provisioning, "
-                    f"waiting for idle (elapsed {elapsed}s)..."
+            if elapsed >= POOL_ASSIGN_TIMEOUT:
+                raise ValueError(
+                    f"No idle {vm_type} pool VMs available "
+                    f"after waiting {elapsed}s"
                 )
-                time.sleep(5)
-                elapsed += 5
-                continue
-            raise ValueError(f"No idle {vm_type} pool VMs available")
+            logger.info(
+                f"No idle {vm_type} VMs, waiting "
+                f"({elapsed}s/{POOL_ASSIGN_TIMEOUT}s)..."
+            )
+            time.sleep(POOL_ASSIGN_POLL_INTERVAL)
+            elapsed += POOL_ASSIGN_POLL_INTERVAL
+            continue
 
         if vm_number is not None:
             target_name = _pool_vm_name(vm_type, vm_number)
