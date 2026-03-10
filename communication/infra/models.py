@@ -28,6 +28,7 @@ class PoolAssignRequest(BaseModel):
     assistant_id: str
     unify_apikey: str
     vm_type: Literal["windows", "ubuntu"] = "ubuntu"
+    vm_number: Optional[int] = None
 
 
 class PoolAssignResponse(BaseModel):

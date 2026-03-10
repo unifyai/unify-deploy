@@ -516,12 +516,17 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     }
 
 
-def claim_idle_vm(assistant_id: str, vm_type: str) -> Dict[str, Any]:
+def claim_idle_vm(
+    assistant_id: str, vm_type: str, vm_number: int | None = None
+) -> Dict[str, Any]:
     """Atomically claim an idle pool VM using label fingerprint CAS.
 
     Retries on Conflict (another request claimed the same VM).
     Waits up to 300s if VMs are provisioning but none idle yet.
     Raises ValueError if no idle VMs are available.
+
+    If vm_number is provided, targets the specific VM (e.g. vm_number=3
+    targets unity-pool-{vm_type}-3) instead of auto-selecting.
     """
     client = compute_v1.InstancesClient()
     label_filter = (
@@ -554,7 +559,18 @@ def claim_idle_vm(assistant_id: str, vm_type: str) -> Dict[str, Any]:
                 continue
             raise ValueError(f"No idle {vm_type} pool VMs available")
 
-        candidate = idle_vms[0]
+        if vm_number is not None:
+            target_name = _pool_vm_name(vm_type, vm_number)
+            matching = [vm for vm in idle_vms if vm.name == target_name]
+            if not matching:
+                idle_names = [vm.name for vm in idle_vms]
+                raise ValueError(
+                    f"VM {target_name} is not idle. "
+                    f"Idle VMs: {idle_names}"
+                )
+            candidate = matching[0]
+        else:
+            candidate = idle_vms[0]
         new_labels = dict(candidate.labels) if candidate.labels else {}
         new_labels["pool-role"] = "assigned"
         new_labels["assistant-id"] = assistant_id.lower().replace("_", "-")
@@ -751,9 +767,10 @@ def assign_pool_vm(
     assistant_id: str,
     unify_apikey: str,
     vm_type: str = "ubuntu",
+    vm_number: int | None = None,
 ) -> Dict[str, Any]:
     """Full pool assignment: claim VM, create/attach disk, set metadata."""
-    claimed = claim_idle_vm(assistant_id, vm_type)
+    claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
     vm_name = claimed["vm_name"]
 
     # Create disk if it doesn't exist, then attach

@@ -1028,6 +1028,7 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
                 assistant_id=request.assistant_id,
                 unify_apikey=request.unify_apikey,
                 vm_type=request.vm_type,
+                vm_number=request.vm_number,
             ),
         )
 
