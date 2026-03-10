@@ -24,6 +24,8 @@ from .vm_helpers import (
     provision_pool_vm,
     assign_pool_vm,
     release_pool_vm,
+    replenish_pool,
+    trim_pool,
     rebalance_pool,
     list_pool_vms,
     delete_assistant_disk,
@@ -1041,8 +1043,8 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
             ),
         )
 
-        # Trigger async rebalance (don't block the response)
-        loop.run_in_executor(None, partial(rebalance_pool, request.vm_type))
+        # Replenish: start/provision VMs to replace the one just claimed
+        loop.run_in_executor(None, partial(replenish_pool, request.vm_type))
 
         return PoolAssignResponse(**result)
     except ValueError as e:
@@ -1066,9 +1068,9 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
             partial(release_pool_vm, request.assistant_id),
         )
 
-        # Trigger async rebalance (don't block the response)
+        # Trim: stop excess idle VMs now that one was returned
         vm_type = result.get("vm_type", "ubuntu")
-        loop.run_in_executor(None, partial(rebalance_pool, vm_type))
+        loop.run_in_executor(None, partial(trim_pool, vm_type))
 
         return result
     except Exception as e:
