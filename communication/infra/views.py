@@ -54,6 +54,23 @@ from communication.dependencies import authenticate_user_api_key, extract_api_ke
 
 logger = logging.getLogger(__name__)
 
+
+async def _get_k8s_clients():
+    """Return cached K8s API clients, running the (potentially blocking)
+    setup in a thread so the event loop is never stalled."""
+    loop = asyncio.get_event_loop()
+    batch_api, core_api, networking_api = await loop.run_in_executor(
+        None,
+        setup_kubernetes_client,
+    )
+    if not batch_api or not core_api or not networking_api:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to connect to Kubernetes cluster",
+        )
+    return batch_api, core_api, networking_api
+
+
 router = APIRouter()
 
 # Project ID from the existing codebase
@@ -273,15 +290,8 @@ async def create_kubernetes_job(
         image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
-        # Initialize Kubernetes client
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to connect to Kubernetes cluster. Make sure gcloud CLI is installed and configured.",
-            )
+        batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        # Create the job name with unity- prefix and unique ID for high-load uniqueness
         random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         job_name = (
@@ -290,13 +300,17 @@ async def create_kubernetes_job(
             else f"unity-{timestamp_str}-{random_id}-staging"
         )
 
-        # Create the job
-        job = create_unity_job(
-            batch_api=batch_api,
-            job_name=job_name,
-            namespace=namespace,
-            image=image,
-            is_staging=bool(STAGING),
+        loop = asyncio.get_event_loop()
+        job = await loop.run_in_executor(
+            None,
+            partial(
+                create_unity_job,
+                batch_api=batch_api,
+                job_name=job_name,
+                namespace=namespace,
+                image=image,
+                is_staging=bool(STAGING),
+            ),
         )
 
         if job:
@@ -345,18 +359,12 @@ async def delete_kubernetes_job(
             (optional, provides optimistic locking)
     """
     try:
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to connect to Kubernetes cluster",
-            )
+        batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        success = delete_job(
-            batch_api,
-            job_name,
-            namespace,
-            resource_version,
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(
+            None,
+            partial(delete_job, batch_api, job_name, namespace, resource_version),
         )
 
         if success:
@@ -400,14 +408,13 @@ async def patch_kubernetes_job_labels(
     try:
         parsed_labels = json.loads(labels)
 
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to connect to Kubernetes cluster",
-            )
+        batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        success = patch_job_labels(batch_api, job_name, parsed_labels, namespace)
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(
+            None,
+            partial(patch_job_labels, batch_api, job_name, parsed_labels, namespace),
+        )
 
         if success:
             return {
@@ -583,15 +590,13 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
     Stop a Kubernetes Job for a Unity assistant.
     """
     try:
-        # Initialize Kubernetes client
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to connect to Kubernetes cluster",
-            )
-        # Suspend the job
-        success = suspend_job(batch_api, job_name, namespace)
+        batch_api, core_api, networking_api = await _get_k8s_clients()
+
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(
+            None,
+            partial(suspend_job, batch_api, job_name, namespace),
+        )
         if success:
             return {
                 "success": True,
@@ -624,18 +629,16 @@ async def list_kubernetes_jobs(
         label_selector: K8s label selector (optional, defaults to "app=unity")
     """
     try:
-        # Initialize Kubernetes client
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to connect to Kubernetes cluster",
-            )
+        batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        # List jobs
-        jobs = batch_api.list_namespaced_job(
-            namespace=namespace,
-            label_selector=label_selector,
+        loop = asyncio.get_event_loop()
+        jobs = await loop.run_in_executor(
+            None,
+            partial(
+                batch_api.list_namespaced_job,
+                namespace=namespace,
+                label_selector=label_selector,
+            ),
         )
         job_items = list(
             filter(
@@ -715,20 +718,18 @@ async def get_job_logs_endpoint(
         tail_lines: Number of lines to tail (optional, defaults to 10)
     """
     try:
-        # Initialize Kubernetes client
-        batch_api, core_api, networking_api = setup_kubernetes_client()
-        if not batch_api or not core_api or not networking_api:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to connect to Kubernetes cluster",
-            )
+        batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        # Get logs
-        result = get_job_logs(
-            core_api=core_api,
-            job_name=job_name,
-            namespace=namespace,
-            tail_lines=tail_lines,
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(
+                get_job_logs,
+                core_api=core_api,
+                job_name=job_name,
+                namespace=namespace,
+                tail_lines=tail_lines,
+            ),
         )
 
         if result["success"]:
@@ -1027,6 +1028,7 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
                 assistant_id=request.assistant_id,
                 unify_apikey=request.unify_apikey,
                 vm_type=request.vm_type,
+                vm_number=request.vm_number,
             ),
         )
 

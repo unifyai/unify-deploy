@@ -1,3 +1,6 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends
 from communication.phone.views import (
     auth_router as phone_auth_router,
@@ -8,6 +11,7 @@ from communication.gmail.views import router as gmail_router
 from communication.outlook.views import router as outlook_router
 from communication.teams.views import router as teams_router
 from communication.infra.views import router as infra_router, tunnel_router
+from communication.infra.helpers import setup_kubernetes_client
 from communication.social.views import router as social_router
 from communication.sharepoint.views import router as sharepoint_router
 from communication.unillm import router as unillm_router
@@ -18,8 +22,16 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, setup_kubernetes_client)
+    yield
+
+
 admin_auth = [Depends(auth_admin_key)]
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 setup_metrics(app, service_name="comms")
 app.include_router(phone_auth_router, prefix="/phone", dependencies=admin_auth)
 app.include_router(phone_unauth_router, prefix="/phone")
