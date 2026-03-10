@@ -26,7 +26,7 @@ load_dotenv(override=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, setup_kubernetes_client)
+    loop.run_in_executor(None, setup_kubernetes_client)
     yield
 
 
