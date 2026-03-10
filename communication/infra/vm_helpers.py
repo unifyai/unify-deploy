@@ -546,8 +546,7 @@ def claim_idle_vm(
         if not idle_vms:
             if elapsed >= POOL_ASSIGN_TIMEOUT:
                 raise ValueError(
-                    f"No idle {vm_type} pool VMs available "
-                    f"after waiting {elapsed}s"
+                    f"No idle {vm_type} pool VMs available " f"after waiting {elapsed}s"
                 )
             logger.info(
                 f"No idle {vm_type} VMs, waiting "
@@ -975,9 +974,7 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
                 logger.error(f"Rebalance: failed to stop {vm.name}: {e}")
 
     # Rule 2: ensure stopped reserve
-    effective_stopped = (
-        len(stopped_vms) - (1 if started_one else 0) + stopped_count
-    )
+    effective_stopped = len(stopped_vms) - (1 if started_one else 0) + stopped_count
     if effective_stopped < POOL_TARGET_STOPPED:
         n = 1
         while _pool_vm_name(vm_type, n) in existing_names:
