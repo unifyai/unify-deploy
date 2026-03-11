@@ -556,6 +556,7 @@ def claim_idle_vm(
         f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
     )
     elapsed = 0
+    replenish_triggered = False
 
     while True:
         request = compute_v1.ListInstancesRequest(
@@ -565,14 +566,13 @@ def claim_idle_vm(
         )
         idle_vms = list(client.list(request=request))
         if not idle_vms:
+            if not replenish_triggered:
+                replenish_pool(vm_type)
+                replenish_triggered = True
             if elapsed >= POOL_ASSIGN_TIMEOUT:
                 raise ValueError(
                     f"No idle {vm_type} pool VMs available after waiting {elapsed}s"
                 )
-            logger.info(
-                f"No idle {vm_type} VMs, waiting "
-                f"({elapsed}s/{POOL_ASSIGN_TIMEOUT}s)..."
-            )
             time.sleep(POOL_ASSIGN_POLL_INTERVAL)
             elapsed += POOL_ASSIGN_POLL_INTERVAL
             continue
@@ -636,8 +636,7 @@ def claim_idle_vm(
                 "desktop_url": f"https://{hostname}",
                 "status": "RUNNING",
             }
-        except PreconditionFailed:
-            logger.info(f"CAS conflict claiming {candidate.name}, retrying")
+        except PreconditionFailed as e:
             continue
 
 
@@ -807,16 +806,11 @@ def assign_pool_vm(
     """Full pool assignment: claim VM, create/attach disk, set metadata."""
     claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
     vm_name = claimed["vm_name"]
-
-    # Create disk if it doesn't exist, then attach
     create_assistant_disk(assistant_id)
     device_name = attach_assistant_disk(vm_name, assistant_id)
-
-    # Generate SSH keypair and store private key
     private_key, public_key = generate_ssh_keypair()
     store_ssh_private_key(assistant_id, private_key, unify_apikey)
 
-    # Update metadata to trigger watcher reconfiguration
     metadata = {
         "unify-key": unify_apikey,
         "vnc-password": unify_apikey,
@@ -931,95 +925,75 @@ def _list_pool_state(vm_type: str):
         for vm in pool_vms
         if vm.labels.get("pool-role") == "idle" and vm.status == "RUNNING"
     ]
-    stopped_vms = [
-        vm
-        for vm in pool_vms
-        if vm.labels.get("pool-role") == "stopped" or vm.status == "TERMINATED"
-    ]
+    stopped_vms = [vm for vm in pool_vms if vm.status == "TERMINATED"]
     existing_names = {vm.name for vm in pool_vms}
     return client, pool_vms, idle_vms, stopped_vms, existing_names
 
 
-def replenish_pool(vm_type: str, max_retries: int = 3) -> Dict[str, Any]:
-    """Start or provision VMs to maintain POOL_TARGET_IDLE idle VMs.
+def _start_one_stopped_vm(client, vm) -> bool:
+    """Start a single stopped VM.
 
-    Called after an assign consumes an idle VM. Also replenishes the
-    stopped reserve if starting a stopped VM depleted it.
-
-    Retries on Conflict so concurrent calls from concurrent assigns
-    each successfully start/provision a different VM rather than all
-    racing on the same one and silently giving up.
+    The startup script handles setting pool-role to idle once boot completes.
+    The stopped_vms filter uses status==TERMINATED, so a started VM naturally
+    drops out of the candidate list without needing a label change here.
     """
-    actions = {"vm_type": vm_type, "actions": []}
-    started_one = False
+    try:
+        op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
+        op.result()
+        logger.info(f"Replenish: started stopped VM {vm.name}")
+        return True
+    except Exception as e:
+        logger.error(f"Replenish: failed to start {vm.name}: {e}")
+        return False
 
-    for attempt in range(max_retries + 1):
-        client, _, idle_vms, stopped_vms, existing_names = _list_pool_state(vm_type)
-        actions["idle_count"] = len(idle_vms)
 
-        if len(idle_vms) >= POOL_TARGET_IDLE:
-            break
+def replenish_pool(vm_type: str) -> Dict[str, Any]:
+    """Start or provision VMs to fill the full deficit up to POOL_TARGET_IDLE.
 
-        if stopped_vms:
-            vm = stopped_vms[0]
-            try:
-                op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
-                op.result()
-                labels = dict(vm.labels) if vm.labels else {}
-                labels["pool-role"] = "provisioning"
-                vm_fresh = client.get(
-                    project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
-                )
-                client.set_labels(
-                    project=VM_PROJECT_ID,
-                    zone=ZONE,
-                    instance=vm.name,
-                    instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
-                        labels=labels,
-                        label_fingerprint=vm_fresh.label_fingerprint,
-                    ),
-                ).result()
+    Called after an assign consumes an idle VM. Starts as many stopped
+    VMs as needed (or provisions new ones if none are stopped). Also
+    replenishes the stopped reserve if depleted.
+    """
+    client, _, idle_vms, stopped_vms, existing_names = _list_pool_state(vm_type)
+    deficit = POOL_TARGET_IDLE - len(idle_vms)
+    actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
+
+    if deficit <= 0:
+        return actions
+
+    started_count = 0
+    stopped_iter = iter(stopped_vms)
+
+    for _ in range(deficit):
+        vm = next(stopped_iter, None)
+        if vm is not None:
+            if _start_one_stopped_vm(client, vm):
                 actions["actions"].append(f"Started stopped VM {vm.name}")
-                logger.info(f"Replenish: started stopped VM {vm.name}")
-                started_one = True
-                break
-            except PreconditionFailed:
-                logger.info(
-                    f"Replenish: conflict on {vm.name}, "
-                    f"retrying ({attempt + 1}/{max_retries})"
-                )
-                continue
-            except Exception as e:
-                logger.error(f"Replenish: failed to start {vm.name}: {e}")
-                break
+                started_count += 1
         else:
             n = 1
             while _pool_vm_name(vm_type, n) in existing_names:
                 n += 1
             try:
                 provision_pool_vm(vm_type, n)
+                existing_names.add(_pool_vm_name(vm_type, n))
                 actions["actions"].append(f"Provisioned new pool VM #{n}")
                 logger.info(f"Replenish: provisioned new {vm_type} pool VM #{n}")
-                break
             except Conflict:
-                logger.info(
-                    f"Replenish: conflict provisioning VM #{n}, "
-                    f"retrying ({attempt + 1}/{max_retries})"
-                )
-                continue
+                logger.info(f"Replenish: conflict provisioning VM #{n}, skipping")
             except Exception as e:
                 logger.error(f"Replenish: failed to provision new VM: {e}")
-                break
 
-    # Replenish stopped reserve if starting a stopped VM depleted it
-    if started_one:
+    if started_count > 0:
         _, _, _, stopped_vms_now, existing_names_now = _list_pool_state(vm_type)
-        if len(stopped_vms_now) < POOL_TARGET_STOPPED:
+        reserve_deficit = POOL_TARGET_STOPPED - len(stopped_vms_now)
+        for _ in range(reserve_deficit):
             n = 1
             while _pool_vm_name(vm_type, n) in existing_names_now:
                 n += 1
             try:
                 provision_pool_vm(vm_type, n)
+                existing_names_now.add(_pool_vm_name(vm_type, n))
                 actions["actions"].append(
                     f"Provisioned new pool VM #{n} (stopped reserve)"
                 )
