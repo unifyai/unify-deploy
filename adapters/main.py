@@ -1,3 +1,4 @@
+import asyncio
 import json
 import base64
 import logging
@@ -10,7 +11,16 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from typing import Optional
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -48,16 +58,18 @@ from common.livekit import (
 )
 
 from .helpers import (
+    cleanup_idle_pool,
+    replenish_idle_pool,
     add_user_to_conference,
     build_webhook_context,
     check_valid_contact,
     create_conference_response,
-    create_job,
     dispatch_livekit_agent,
     expire_all_stale_jobs,
     get_assistant,
     get_graph_client_from_token,
     get_outlook_thread_id,
+    get_pubsub_client,
     get_thread_id,
     is_job_running,
     parse_teams_resource_id,
@@ -65,8 +77,6 @@ from .helpers import (
     publish_outlook_thread_id,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
-    get_target_idle_count,
-    get_unity_jobs_inventory,
     start_unity_job,
     store_microsoft_tokens,
     STAGING,
@@ -208,7 +218,9 @@ async def twilio_call_webhook(request: Request):
     )
 
     # shared context
-    context = build_webhook_context("phone", to_number, from_number)
+    context = await asyncio.to_thread(
+        build_webhook_context, "phone", to_number, from_number
+    )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
 
@@ -234,7 +246,7 @@ async def twilio_call_webhook(request: Request):
     await ensure_phone_dispatch_rule(twilio_number, room_name)
 
     # publish to Pub/Sub
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing call to Pub/Sub at path: {topic_path}")
@@ -324,7 +336,8 @@ async def twilio_call_status_webhook(request: Request):
     # Handle call answered (in-progress) or not answered (no-answer, busy, canceled, failed)
     if call_status in ("in-progress", "no-answer", "busy", "canceled", "failed"):
         # get assistant data
-        context = build_webhook_context(
+        context = await asyncio.to_thread(
+            build_webhook_context,
             "phone",
             assistant_number,
             user_number,
@@ -341,7 +354,7 @@ async def twilio_call_status_webhook(request: Request):
             thread = "call_not_answered"
 
         # publish to pubsub
-        pubsub_client = pubsub_v1.PublisherClient()
+        pubsub_client = get_pubsub_client()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
         logger.info(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
@@ -422,7 +435,8 @@ async def livekit_recording_complete(request: Request):
     # has a receiver. Uses validate_contact=False (this is an internal
     # infrastructure event, not a user-initiated contact).
     try:
-        context = build_webhook_context(
+        context = await asyncio.to_thread(
+            build_webhook_context,
             "recording",
             destination="",
             sender="",
@@ -446,7 +460,7 @@ async def livekit_recording_complete(request: Request):
         f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
     )
 
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing recording_ready to Pub/Sub at path: {topic_path}")
@@ -494,7 +508,9 @@ async def twilio_sms_webhook(request: Request):
     )
 
     # shared context
-    context = build_webhook_context("msg", to_number, from_number)
+    context = await asyncio.to_thread(
+        build_webhook_context, "msg", to_number, from_number
+    )
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
     contacts = context["contacts"]
@@ -514,7 +530,7 @@ async def twilio_sms_webhook(request: Request):
     resp_user = MessagingResponse()
 
     # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
@@ -561,7 +577,9 @@ async def twilio_whatsapp_webhook(request: Request):
     )
 
     # shared context
-    context = build_webhook_context("whatsapp", to_number, from_number)
+    context = await asyncio.to_thread(
+        build_webhook_context, "whatsapp", to_number, from_number
+    )
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
     contacts = context["contacts"]
@@ -581,7 +599,7 @@ async def twilio_whatsapp_webhook(request: Request):
     resp_user = MessagingResponse()
 
     # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
@@ -679,7 +697,8 @@ async def teams_call_webhook(request: Request):
     # Look up assistant by the Teams virtual number
     # This uses the same flow as Twilio - the number maps to an assistant
     try:
-        context = build_webhook_context(
+        context = await asyncio.to_thread(
+            build_webhook_context,
             "meet",
             teams_number,
             from_uri,
@@ -702,7 +721,7 @@ async def teams_call_webhook(request: Request):
     # print(f"Teams call for assistant {assistant_id}, room: {room_name}")
 
     # Publish to Pub/Sub (same format as Twilio webhook)
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     # topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_name = "test"
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
@@ -763,6 +782,10 @@ class UnifyMessagePayload(BaseModel):
     assistant_id: str
     contact_id: int  # Required - no default to prevent silent privilege escalation
     body: Optional[str] = ""
+
+
+class ScheduledPayload(BaseModel):
+    test: bool = False
 
 
 # =============================================================================
@@ -984,7 +1007,8 @@ async def unify_message_webhook(request: Request):
     )
 
     # shared context
-    context = build_webhook_context(
+    context = await asyncio.to_thread(
+        build_webhook_context,
         channel="unify_message",
         destination="",
         sender="",
@@ -998,7 +1022,7 @@ async def unify_message_webhook(request: Request):
     logger.info(f"Job running: {running}")
 
     # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
@@ -1083,7 +1107,8 @@ async def api_message_webhook(request: Request):
         else:
             logger.info(f"Skipping invalid api_message attachment: {att}")
 
-    context = build_webhook_context(
+    context = await asyncio.to_thread(
+        build_webhook_context,
         channel="api_message",
         destination="",
         sender="",
@@ -1093,7 +1118,7 @@ async def api_message_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
 
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     try:
@@ -1155,7 +1180,8 @@ async def unify_meet_webhook(request: Request):
     )
 
     # shared context
-    context = build_webhook_context(
+    context = await asyncio.to_thread(
+        build_webhook_context,
         channel="unify_meet",
         destination="",
         sender="",
@@ -1169,7 +1195,7 @@ async def unify_meet_webhook(request: Request):
     logger.info(f"Job running: {running}")
 
     # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
@@ -1239,7 +1265,8 @@ async def unity_system_event_webhook(request: Request):
     )
 
     # shared context
-    context = build_webhook_context(
+    context = await asyncio.to_thread(
+        build_webhook_context,
         channel="unity_system_event",
         destination="",
         sender="",
@@ -1253,7 +1280,7 @@ async def unity_system_event_webhook(request: Request):
     logger.info(f"Job running: {running}")
 
     # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
@@ -1332,7 +1359,8 @@ async def unity_pre_hire_webhook(request: Request):
     )
 
     # shared context
-    context = build_webhook_context(
+    context = await asyncio.to_thread(
+        build_webhook_context,
         channel="unify_message",
         destination="",
         sender="",
@@ -1346,7 +1374,7 @@ async def unity_pre_hire_webhook(request: Request):
     logger.info(f"Job running: {running}")
 
     # publish to pubsub
-    pubsub_client = pubsub_v1.PublisherClient()
+    pubsub_client = get_pubsub_client()
     topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
@@ -1390,7 +1418,8 @@ async def assistant_wakeup_webhook(request: Request):
     logger.info(f"Assistant {assistant_id} woke up")
 
     # shared context
-    build_webhook_context(
+    await asyncio.to_thread(
+        build_webhook_context,
         channel="wakeup",
         destination="",
         sender="",
@@ -1417,7 +1446,8 @@ async def assistant_update_webhook(request: Request):
         logger.info(f"Received assistant_id: {assistant_id}")
 
         # Use build_webhook_context to handle job startup if needed
-        context = build_webhook_context(
+        context = await asyncio.to_thread(
+            build_webhook_context,
             channel="assistant_update",
             destination="",
             sender="",
@@ -1434,7 +1464,7 @@ async def assistant_update_webhook(request: Request):
         assistant_data.pop("assistant_whatsapp_number")
 
         # Job is running, publish to assistant topic
-        pubsub_client = pubsub_v1.PublisherClient()
+        pubsub_client = get_pubsub_client()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
@@ -1485,14 +1515,13 @@ async def assistant_update_webhook(request: Request):
 
 
 @app.post("/email/gmail")
-async def gmail_notification_processor(request: Request):
+def gmail_notification_processor(envelope: dict = Body(...)):
     """
     Cloud Run endpoint that processes Gmail notifications via Pub/Sub push.
     Receives push messages from Pub/Sub subscription.
     """
     try:
         # Parse the Pub/Sub push message envelope
-        envelope = await request.json()
         if not envelope or "message" not in envelope:
             logger.info("Bad Request: no Pub/Sub message")
             return Response(content="Bad Request: no Pub/Sub message", status_code=400)
@@ -1624,7 +1653,8 @@ async def outlook_notification_processor(request: Request):
         )
 
         # Get assistant data, secrets, and contacts in one call
-        context = build_webhook_context(
+        context = await asyncio.to_thread(
+            build_webhook_context,
             channel="email",
             destination=assistant_email_address,
             sender="",  # Unknown until we fetch the message
@@ -1672,47 +1702,50 @@ async def outlook_notification_processor(request: Request):
         from_email = last_message["sender"]
         logger.info(f"from_email: {_redact_email(from_email)}")
 
-        # Validate contact now that we have the sender
-        contacts, is_valid_contact = check_valid_contact(
-            email_address=from_email,
-            medium="email",
-            assistant_context=f"{user_id}/{assistant_id}",
-            api_key=api_key,
-            user_number=assistant_data.get("user_number", ""),
-            user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),
-            user_email=assistant_data.get("user_email", ""),
-            assistant_data=assistant_data,
-        )
-
-        if not is_valid_contact:
-            error_message = (
-                "This email address is no longer active. Please visit "
-                "console.unify.ai to view your assistant details."
+        def _process_outlook():
+            # Validate contact now that we have the sender
+            contacts, is_valid = check_valid_contact(
+                email_address=from_email,
+                medium="email",
+                assistant_context=f"{user_id}/{assistant_id}",
+                api_key=api_key,
+                user_number=assistant_data.get("user_number", ""),
+                user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),
+                user_email=assistant_data.get("user_email", ""),
+                assistant_data=assistant_data,
             )
-            return Response(content=error_message, status_code=500)
 
-        # Start job if not already running
-        is_running = is_job_running(user_id, assistant_id)
-        is_default = "default" in assistant_id
-        if not is_running and not is_default:
-            start_unity_job(assistant_data, "email")
-            create_job(assistant_id)
-            is_running = True
+            if not is_valid:
+                error_message = (
+                    "This email address is no longer active. Please visit "
+                    "console.unify.ai to view your assistant details."
+                )
+                return Response(content=error_message, status_code=500)
 
-        logger.info(f"Job running: {is_running}")
+            # Start job if not already running
+            running = is_job_running(user_id, assistant_id)
+            is_default = "default" in assistant_id
+            if not running and not is_default:
+                start_unity_job(assistant_data, "email")
+                replenish_idle_pool(refresh=False)
+                running = True
 
-        logger.info(
-            f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
-        )
-        publish_outlook_thread_id(
-            assistant_id,
-            user_id,
-            conversation_id,
-            email_id,
-            last_message,
-            contacts,
-        )
-        return Response(content="OK", status_code=200)
+            logger.info(f"Job running: {running}")
+
+            logger.info(
+                f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
+            )
+            publish_outlook_thread_id(
+                assistant_id,
+                user_id,
+                conversation_id,
+                email_id,
+                last_message,
+                contacts,
+            )
+            return Response(content="OK", status_code=200)
+
+        return await asyncio.to_thread(_process_outlook)
 
     except Exception as e:
         error_message = f"Error processing notification: {str(e)}"
@@ -1799,7 +1832,8 @@ async def teams_notification_processor(request: Request):
             )
 
         # Get assistant data
-        context = build_webhook_context(
+        context = await asyncio.to_thread(
+            build_webhook_context,
             channel="teams",
             destination=assistant_email,
             sender="",
@@ -1886,29 +1920,36 @@ async def teams_notification_processor(request: Request):
             logger.info(f"Skipping self-message from {_redact_email(sender_email)}")
             return Response(status_code=200)
 
-        # Validate contact
-        contacts, is_valid = check_valid_contact(
-            email_address=sender_email,
-            medium="teams",
-            assistant_context=f"{user_id}/{assistant_id}",
-            api_key=api_key,
-            user_number=assistant_data.get("user_number", ""),
-            user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),
-            user_email=assistant_data.get("user_email", ""),
-            assistant_data=assistant_data,
-        )
-        if not is_valid:
-            logger.info(f"Invalid contact: {_redact_email(sender_email)}")
-            return Response(status_code=200)
+        # Validate contact and start job (blocking calls offloaded to thread)
+        def _validate_and_start():
+            # Validate contact
+            contacts, is_valid = check_valid_contact(
+                email_address=sender_email,
+                medium="teams",
+                assistant_context=f"{user_id}/{assistant_id}",
+                api_key=api_key,
+                user_number=assistant_data.get("user_number", ""),
+                user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),
+                user_email=assistant_data.get("user_email", ""),
+                assistant_data=assistant_data,
+            )
+            if not is_valid:
+                logger.info(f"Invalid contact: {_redact_email(sender_email)}")
+                return None, False
 
-        # Start job if needed
-        is_running = is_job_running(user_id, assistant_id)
-        is_default = assistant_id and "default" in assistant_id
-        if not is_running and not is_default:
-            start_unity_job(assistant_data, "teams")
-            create_job(assistant_id)
-            is_running = True
-        logger.info(f"Job running: {is_running}")
+            # Start job if needed
+            running = is_job_running(user_id, assistant_id)
+            is_default = assistant_id and "default" in assistant_id
+            if not running and not is_default:
+                start_unity_job(assistant_data, "teams")
+                replenish_idle_pool(refresh=False)
+                running = True
+            logger.info(f"Job running: {running}")
+            return contacts, True
+
+        contacts, valid = await asyncio.to_thread(_validate_and_start)
+        if not valid:
+            return Response(status_code=200)
 
         # Build event payload
         message_content = message_data.get("body", {}).get("content", "")
@@ -1945,7 +1986,7 @@ async def teams_notification_processor(request: Request):
             event_data.update({"chat_id": chat_id, "action": "new_message"})
 
         # Publish to Pub/Sub
-        pubsub_client = pubsub_v1.PublisherClient()
+        pubsub_client = get_pubsub_client()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
@@ -2188,22 +2229,19 @@ async def microsoft_oauth_callback(request: Request):
 
 
 @app.post("/scheduled/email-watches", dependencies=[Depends(require_admin_key)])
-async def scheduled_email_watches(request: Request):
+def scheduled_email_watches(payload: ScheduledPayload):
     """
     Cloud Run endpoint that renews email watches for all assistants.
     Automatically detects provider based on secrets:
-    - If MICROSOFT_ACCESS_TOKEN exists → Outlook watch
-    - Otherwise → Gmail watch
+    - If MICROSOFT_ACCESS_TOKEN exists -> Outlook watch
+    - Otherwise -> Gmail watch
     """
-    payload = await request.json()
-    test = payload.get("test", False)
-
     admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
 
     # Fetch all assistants with their secrets
-    if not test:
+    if not payload.test:
         try:
             response = requests.get(
                 f"{ORCHESTRA_URL}/admin/assistant",
@@ -2291,7 +2329,7 @@ async def scheduled_email_watches(request: Request):
             )
 
     # Renew policy assistant (Gmail-based, staging only)
-    if STAGING and not test:
+    if STAGING and not payload.test:
         try:
             response = requests.post(
                 f"{COMMS_URL}/gmail/watch",
@@ -2314,7 +2352,7 @@ async def scheduled_email_watches(request: Request):
 
 
 @app.post("/scheduled/microsoft-tokens", dependencies=[Depends(require_admin_key)])
-async def scheduled_microsoft_tokens(request: Request):
+def scheduled_microsoft_tokens(payload: ScheduledPayload):
     """
     Cloud Run endpoint that refreshes Microsoft OAuth tokens for all assistants.
     Should be scheduled to run every 30-45 minutes to keep access tokens fresh.
@@ -2322,9 +2360,6 @@ async def scheduled_microsoft_tokens(request: Request):
     Fetches all assistants in a single call and only processes those with
     Microsoft tokens configured in their secrets.
     """
-    payload = await request.json()
-    test = payload.get("test", False)
-
     admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
@@ -2353,7 +2388,7 @@ async def scheduled_microsoft_tokens(request: Request):
         assistant_id = assistant.get("agent_id")
 
         # Skip test in non-test mode
-        if test and email != "default-test-assistant@unify.ai":
+        if payload.test and email != "default-test-assistant@unify.ai":
             continue
 
         # Skip if no Microsoft tokens configured
@@ -2403,9 +2438,9 @@ async def scheduled_microsoft_tokens(request: Request):
                 + timedelta(seconds=new_tokens.get("expires_in", 3600))
             ).isoformat()
 
-            # Store updated tokens
             api_key = assistant.get("api_key")
 
+            # Store updated tokens
             secrets_to_store = {
                 "MICROSOFT_ACCESS_TOKEN": new_tokens["access_token"],
                 "MICROSOFT_TOKEN_EXPIRES_AT": expires_at,
@@ -2442,12 +2477,11 @@ async def scheduled_microsoft_tokens(request: Request):
         f"Microsoft token refresh complete: "
         f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed",
     )
-
     return results
 
 
 @app.post("/scheduled/teams-watches", dependencies=[Depends(require_admin_key)])
-async def scheduled_teams_watches(request: Request):
+def scheduled_teams_watches(payload: ScheduledPayload):
     """
     Cloud Run endpoint that renews Teams chat AND channel subscriptions for all assistants.
     Teams subscriptions expire after 60 minutes, so this should run every 30-45 mins.
@@ -2456,15 +2490,12 @@ async def scheduled_teams_watches(request: Request):
     For chats: Creates/renews /me/chats/getAllMessages subscription
     For channels: Finds and renews any existing channel subscriptions
     """
-    payload = await request.json()
-    test = payload.get("test", False)
-
     admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
 
     # Fetch all assistants with their secrets
-    if not test:
+    if not payload.test:
         try:
             response = requests.get(
                 f"{ORCHESTRA_URL}/admin/assistant",
@@ -2531,12 +2562,11 @@ async def scheduled_teams_watches(request: Request):
 
             # 2. Renew any existing channel subscriptions
             # List all subscriptions and renew those matching /teams/{id}/channels/{id}/messages
-            async with httpx.AsyncClient() as client:
-                subs_response = await client.get(
-                    "https://graph.microsoft.com/v1.0/subscriptions",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    timeout=30.0,
-                )
+            subs_response = requests.get(
+                "https://graph.microsoft.com/v1.0/subscriptions",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=30,
+            )
 
             logger.info(
                 f"Subscriptions response status code: {subs_response.status_code}",
@@ -2583,7 +2613,7 @@ async def scheduled_teams_watches(request: Request):
                                 f"Teams channel watch for {_redact_email(email)} ({team_id}/{channel_id}): "
                                 f"{ch_result.get('success', False)}",
                             )
-                        except (ValueError, IndexError) as e:
+                        except (ValueError, IndexError):
                             logger.error(
                                 f"Could not parse channel subscription: {resource}",
                             )
@@ -2611,7 +2641,7 @@ async def scheduled_teams_watches(request: Request):
 
 
 @app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
-async def scheduled_jobs_create(request: Request, refresh: bool = False):
+def scheduled_jobs_create(refresh: bool = False):
     """Cloud Run endpoint that creates idle jobs.
 
     Two modes of operation:
@@ -2622,59 +2652,11 @@ async def scheduled_jobs_create(request: Request, refresh: bool = False):
       older containers, effectively rotating the pool to the latest image.
       Used by the hourly cron and CloudBuild deployments.
     """
-    inventory = get_unity_jobs_inventory()
-    live_count = len(inventory["live"])
-    current_idle_count = len(inventory["idle"])
-
-    target_idle_count = get_target_idle_count(live_count)
-
-    if refresh:
-        num_to_create = target_idle_count
-    else:
-        num_to_create = max(0, target_idle_count - current_idle_count)
-
-    if num_to_create == 0:
-        logger.info(
-            f"Idle pool is healthy (current: {current_idle_count}, target: {target_idle_count}). No jobs created.",
-        )
-        return {
-            "status": "healthy",
-            "current": current_idle_count,
-            "target": target_idle_count,
-        }
-
-    mode = "refresh" if refresh else "fill"
-    logger.info(
-        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {target_idle_count})...",
-    )
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
-    commit_hash = response.json()["commit_hash"]
-    image = (
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if not STAGING else "/unity-staging:")
-        + commit_hash
-    )
-
-    created_jobs = []
-    for _ in range(num_to_create):
-        resp = requests.post(
-            f"{COMMS_URL}/infra/job/create",
-            data={"image": image},
-            headers=headers,
-        )
-        created_jobs.append(resp.json())
-
-    return {
-        "mode": mode,
-        "created": len(created_jobs),
-        "target": target_idle_count,
-        "details": created_jobs,
-    }
+    return replenish_idle_pool(refresh=refresh)
 
 
 @app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])
-async def scheduled_jobs_cleanup(request: Request):
+def scheduled_jobs_cleanup():
     """Clean up old idle jobs, retaining the newest up to the target count.
 
     Runs 10 minutes after /scheduled/jobs/create. Keeps recently-created idle
@@ -2682,83 +2664,11 @@ async def scheduled_jobs_cleanup(request: Request):
     Uses required_labels to guard against race conditions where a job
     transitions to live between the fetch and the delete.
     """
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-
-    inventory = get_unity_jobs_inventory()
-    live_count = len(inventory["live"])
-    target_retain = get_target_idle_count(live_count)
-
-    # Get all idle jobs via K8s label selector
-    resp = requests.get(
-        f"{COMMS_URL}/infra/jobs",
-        params={"label_selector": "app=unity,unity-status=idle"},
-        headers=headers,
-    )
-    jobs = resp.json()
-    idle_jobs = [
-        job["job_name"]
-        for job in jobs["jobs"]
-        if (STAGING and "staging" in job["job_name"])
-        or (not STAGING and "staging" not in job["job_name"])
-    ]
-
-    # Separate recently-created idle jobs (< 11 min old) from older ones
-    new_idle_jobs = []
-    old_idle_jobs = []
-    for job_name in idle_jobs:
-        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
-        job_timestamp_str = "-".join(
-            filter(
-                lambda part: part.isdigit() and len(part) in [2, 4],
-                job_name.split("-"),
-            ),
-        )
-        job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
-        now = datetime.now()
-        delta = now - job_timestamp
-        if delta < timedelta(minutes=11):
-            new_idle_jobs.append(job_name)
-        else:
-            old_idle_jobs.append(job_name)
-
-    # Retain the N most recent idle jobs (where N = target), delete the rest.
-    # Prefer new jobs; fall back to old ones if not enough new ones exist.
-    new_idle_jobs = sorted(new_idle_jobs, reverse=True)
-    old_idle_jobs = sorted(old_idle_jobs, reverse=True)
-    retain = new_idle_jobs[:target_retain]
-    if len(retain) < target_retain:
-        retain += old_idle_jobs[: target_retain - len(retain)]
-    retain_set = set(retain)
-
-    to_delete = [j for j in idle_jobs if j not in retain_set]
-    logger.info(
-        f"Cleanup: retain={len(retain)} (target={target_retain}), "
-        f"delete={len(to_delete)}, live={live_count}",
-    )
-    logger.info(f"Idle jobs to retain: {sorted(retain)}")
-    logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
-
-    # Delete old idle jobs (re-check label to guard against race conditions)
-    for job_name in to_delete:
-        requests.delete(
-            f"{COMMS_URL}/infra/job/delete",
-            data={
-                "job_name": job_name,
-                "required_labels": json.dumps({"unity-status": "idle"}),
-            },
-            headers=headers,
-        )
-
-    return {
-        "retained": len(retain),
-        "deleted": len(to_delete),
-        "target": target_retain,
-        "live": live_count,
-    }
+    return cleanup_idle_pool()
 
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
-async def scheduled_jobs_expire_stale(request: Request):
+def scheduled_jobs_expire_stale():
     """Daily sweep: mark all AssistantJobs still running after 24h as done.
 
     Also suspends any lingering K8s jobs and releases leaked pool VMs.
@@ -2772,7 +2682,7 @@ async def scheduled_jobs_expire_stale(request: Request):
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
-async def scheduled_cert_renewal(request: Request):
+def scheduled_cert_renewal():
     """Renew the *.vm.unify.ai wildcard TLS cert if within 30 days of expiry.
 
     Triggered monthly by Cloud Scheduler. Checks the current cert in Secret
