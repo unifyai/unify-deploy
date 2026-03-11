@@ -409,6 +409,7 @@ def is_job_running(user_id: str, assistant_id: str):
                 f"assistant_id == '{assistant_id}' and "
                 f"running == 'true'"
             ),
+            "limit": 100,
         },
         headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
     )
@@ -433,6 +434,7 @@ def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
                 "project_name": "AssistantJobs",
                 "context": "startup_events",
                 "filter_expr": f"assistant_id == '{assistant_id}' and running == 'true'",
+                "limit": 100,
             },
             headers={"Authorization": f"Bearer {shared_key}"},
             timeout=10,
@@ -497,6 +499,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             "project_name": "AssistantJobs",
             "context": "startup_events",
             "filter_expr": "running == 'true'",
+            "limit": 100,
         },
         headers={"Authorization": f"Bearer {shared_key}"},
         timeout=30,
