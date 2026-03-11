@@ -42,6 +42,17 @@ if not _MULTIPROC_DIR:
     from prometheus_client import ProcessCollector
 
     ProcessCollector(registry=REGISTRY)
+else:
+    # In multiprocess mode ProcessCollector is skipped (per-worker values
+    # don't aggregate), but the GMP sidecar needs process_start_time_seconds
+    # to anchor cumulative metric timestamps.  Expose it manually.
+    _PROCESS_START = Gauge(
+        "process_start_time_seconds",
+        "Start time of the process since unix epoch in seconds.",
+        registry=REGISTRY,
+        multiprocess_mode="min",
+    )
+    _PROCESS_START.set(time.time())
 
 # ---------------------------------------------------------------------------
 # Shared HTTP metrics (used by the middleware on both services)
