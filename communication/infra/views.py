@@ -1108,10 +1108,14 @@ async def pool_status_endpoint(vm_type: str = None):
     vms = await asyncio.to_thread(list_pool_vms, vm_type)
 
     pool_vms = [PoolVMStatus(**vm) for vm in vms]
-    idle = sum(1 for vm in vms if vm["pool_role"] == "idle")
+    idle = sum(
+        1
+        for vm in vms
+        if vm["pool_role"] == "idle" and vm["status"] == "RUNNING"
+    )
     assigned = sum(1 for vm in vms if vm["pool_role"] == "assigned")
     provisioning = sum(1 for vm in vms if vm["pool_role"] == "provisioning")
-    stopped = sum(1 for vm in vms if vm["pool_role"] == "stopped")
+    stopped = sum(1 for vm in vms if vm["status"] == "TERMINATED")
 
     return PoolStatusResponse(
         vms=pool_vms,
