@@ -99,9 +99,9 @@ MAK_KEY = os.getenv("MAK_KEY", "")
 # VM Pool Configuration
 # =============================================================================
 POOL_SSH_USERNAME = "unityuser"
-POOL_TARGET_IDLE = 3
+POOL_TARGET_IDLE = 5
 POOL_TARGET_STOPPED = 3
-POOL_ASSIGN_TIMEOUT = 120
+POOL_ASSIGN_TIMEOUT = 180
 POOL_ASSIGN_POLL_INTERVAL = 5
 POOL_ASSISTANT_DISK_SIZE_GB = 64
 POOL_ASSISTANT_DISK_TYPE = "pd-standard"
