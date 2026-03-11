@@ -961,52 +961,27 @@ def _list_pool_state(vm_type: str):
         if vm.labels.get("pool-role") == "idle" and vm.status == "RUNNING"
     ]
     stopped_vms = [
-        vm
-        for vm in pool_vms
-        if vm.labels.get("pool-role") == "stopped" or vm.status == "TERMINATED"
+        vm for vm in pool_vms if vm.status == "TERMINATED"
     ]
     existing_names = {vm.name for vm in pool_vms}
     return client, pool_vms, idle_vms, stopped_vms, existing_names
 
 
-def _start_one_stopped_vm(
-    client, vm, max_cas_retries: int = 3
-) -> bool:
-    """Start a single stopped VM and mark it as provisioning.
+def _start_one_stopped_vm(client, vm) -> bool:
+    """Start a single stopped VM.
 
-    Returns True on success. Retries on PreconditionFailed (CAS conflict
-    on set_labels) by re-reading the label fingerprint.
+    The startup script handles setting pool-role to idle once boot completes.
+    The stopped_vms filter uses status==TERMINATED, so a started VM naturally
+    drops out of the candidate list without needing a label change here.
     """
-    for attempt in range(max_cas_retries + 1):
-        try:
-            op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
-            op.result()
-            labels = dict(vm.labels) if vm.labels else {}
-            labels["pool-role"] = "provisioning"
-            vm_fresh = client.get(
-                project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
-            )
-            client.set_labels(
-                project=VM_PROJECT_ID,
-                zone=ZONE,
-                instance=vm.name,
-                instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
-                    labels=labels,
-                    label_fingerprint=vm_fresh.label_fingerprint,
-                ),
-            ).result()
-            logger.info(f"Replenish: started stopped VM {vm.name}")
-            return True
-        except PreconditionFailed:
-            logger.info(
-                f"Replenish: label conflict on {vm.name}, "
-                f"retrying ({attempt + 1}/{max_cas_retries})"
-            )
-            continue
-        except Exception as e:
-            logger.error(f"Replenish: failed to start {vm.name}: {e}")
-            return False
-    return False
+    try:
+        op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
+        op.result()
+        logger.info(f"Replenish: started stopped VM {vm.name}")
+        return True
+    except Exception as e:
+        logger.error(f"Replenish: failed to start {vm.name}: {e}")
+        return False
 
 
 def replenish_pool(vm_type: str) -> Dict[str, Any]:
