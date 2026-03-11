@@ -19,6 +19,8 @@ from common.metrics import (
     STALE_JOBS_LAST_SWEEP,
 )
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from google.cloud import pubsub_v1
 
 from twilio.rest import Client as TwilioClient
@@ -41,6 +43,15 @@ ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
 
 COMMS_URL = os.getenv("UNITY_COMMS_URL")
 ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
+
+_pubsub_client = None
+
+
+def get_pubsub_client():
+    global _pubsub_client
+    if _pubsub_client is None:
+        _pubsub_client = pubsub_v1.PublisherClient()
+    return _pubsub_client
 
 
 def parse_teams_resource_id(resource: str, key: str) -> str | None:
@@ -522,7 +533,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     if not stale:
         return {"total_running": len(all_running), "expired": 0}
 
-    suspended_jobs = []
+    jobs_to_suspend = []
     unique_assistants = set()
     for log in stale:
         e = log.get("entries", {})
@@ -537,38 +548,55 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         )
         job_name = e.get("job_name")
         if job_name and COMMS_URL:
-            try:
-                requests.post(
-                    f"{COMMS_URL}/infra/job/stop",
-                    data={"job_name": job_name},
-                    headers={"Authorization": f"Bearer {admin_key}"},
-                    timeout=10,
-                )
-                suspended_jobs.append(job_name)
-                logger.info(f"[expire_all_stale_jobs] Suspended K8s job: {job_name}")
-            except Exception as exc:
-                logger.info(
-                    f"[expire_all_stale_jobs] Job suspend non-fatal for {job_name}: {exc}"
-                )
+            jobs_to_suspend.append(job_name)
         assistant_id = e.get("assistant_id")
         if assistant_id:
             unique_assistants.add(assistant_id)
 
+    suspended_jobs = []
+
+    def _suspend_job(job_name):
+        try:
+            requests.post(
+                f"{COMMS_URL}/infra/job/stop",
+                data={"job_name": job_name},
+                headers={"Authorization": f"Bearer {admin_key}"},
+                timeout=10,
+            )
+            logger.info(f"[expire_all_stale_jobs] Suspended K8s job: {job_name}")
+            return job_name
+        except Exception as exc:
+            logger.info(
+                f"[expire_all_stale_jobs] Job suspend non-fatal for {job_name}: {exc}"
+            )
+            return None
+
+    if jobs_to_suspend:
+        with ThreadPoolExecutor(max_workers=len(jobs_to_suspend)) as pool:
+            results = list(pool.map(_suspend_job, jobs_to_suspend))
+        suspended_jobs = [r for r in results if r is not None]
+
     released_assistants = []
-    if COMMS_URL:
-        for assistant_id in unique_assistants:
-            try:
-                requests.post(
-                    f"{COMMS_URL}/infra/vm/pool/release",
-                    headers={"Authorization": f"Bearer {admin_key}"},
-                    json={"assistant_id": assistant_id},
-                    timeout=10,
-                )
-                released_assistants.append(assistant_id)
-            except Exception as e:
-                logger.info(
-                    f"[expire_all_stale_jobs] VM release non-fatal for {assistant_id}: {e}"
-                )
+
+    def _release_vm(aid):
+        try:
+            requests.post(
+                f"{COMMS_URL}/infra/vm/pool/release",
+                headers={"Authorization": f"Bearer {admin_key}"},
+                json={"assistant_id": aid},
+                timeout=10,
+            )
+            return aid
+        except Exception as exc:
+            logger.info(
+                f"[expire_all_stale_jobs] VM release non-fatal for {aid}: {exc}"
+            )
+            return None
+
+    if COMMS_URL and unique_assistants:
+        with ThreadPoolExecutor(max_workers=len(unique_assistants)) as pool:
+            results = list(pool.map(_release_vm, unique_assistants))
+        released_assistants = [r for r in results if r is not None]
 
     stale_ids = [log["id"] for log in stale if "id" in log]
     if stale_ids:
@@ -849,23 +877,147 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         return {"live": [], "idle": []}
 
 
-def create_job(assistant_id: str):
+def replenish_idle_pool(refresh: bool = False) -> dict:
+    """Core logic for idle job pool replenishment.
+
+    Called by build_webhook_context() and by the /scheduled/jobs/create endpoint.
     """
-    Trigger the smart idle job creation endpoint.
-    The endpoint handles inventory checks and replenishes the pool to the target.
+    inventory = get_unity_jobs_inventory()
+    live_count = len(inventory["live"])
+    current_idle_count = len(inventory["idle"])
+
+    target_idle_count = get_target_idle_count(live_count)
+
+    if refresh:
+        num_to_create = target_idle_count
+    else:
+        num_to_create = max(0, target_idle_count - current_idle_count)
+
+    if num_to_create == 0:
+        logger.info(
+            f"Idle pool is healthy (current: {current_idle_count}, target: {target_idle_count}). No jobs created.",
+        )
+        return {
+            "status": "healthy",
+            "current": current_idle_count,
+            "target": target_idle_count,
+        }
+
+    mode = "refresh" if refresh else "fill"
+    logger.info(
+        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {target_idle_count})...",
+    )
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
+    commit_hash = response.json()["commit_hash"]
+    image = (
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
+        + ("/unity:" if not STAGING else "/unity-staging:")
+        + commit_hash
+    )
+
+    def _create_single_job():
+        resp = requests.post(
+            f"{COMMS_URL}/infra/job/create",
+            data={"image": image},
+            headers=headers,
+        )
+        return resp.json()
+
+    with ThreadPoolExecutor(max_workers=num_to_create) as pool:
+        futures = [pool.submit(_create_single_job) for _ in range(num_to_create)]
+        created_jobs = [f.result() for f in as_completed(futures)]
+
+    return {
+        "mode": mode,
+        "created": len(created_jobs),
+        "target": target_idle_count,
+        "details": created_jobs,
+    }
+
+
+def cleanup_idle_pool() -> dict:
+    """Core logic for idle job pool cleanup.
+
+    Called by the /scheduled/jobs/cleanup endpoint via run_in_executor.
     """
-    try:
-        idle_job_url = ADAPTERS_URL + "/scheduled/jobs/create"
-        admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
-        headers = {"Authorization": f"Bearer {admin_key}"} if admin_key else {}
-        requests.post(idle_job_url, headers=headers, timeout=1)
-        logger.info(f"Idle job replenishment triggered for assistant {assistant_id}")
-        return True
-    except requests.exceptions.Timeout:
-        return True
-    except Exception as e:
-        logger.info(f"Error triggering idle job replenishment: {e}")
-        return False
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+
+    inventory = get_unity_jobs_inventory()
+    live_count = len(inventory["live"])
+    target_retain = get_target_idle_count(live_count)
+
+    # Get all idle jobs via K8s label selector
+    resp = requests.get(
+        f"{COMMS_URL}/infra/jobs",
+        params={"label_selector": "app=unity,unity-status=idle"},
+        headers=headers,
+    )
+    jobs = resp.json()
+    idle_jobs = [
+        job["job_name"]
+        for job in jobs["jobs"]
+        if (STAGING and "staging" in job["job_name"])
+        or (not STAGING and "staging" not in job["job_name"])
+    ]
+
+    # Separate recently-created idle jobs (< 11 min old) from older ones
+    new_idle_jobs = []
+    old_idle_jobs = []
+    for job_name in idle_jobs:
+        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
+        job_timestamp_str = "-".join(
+            filter(
+                lambda part: part.isdigit() and len(part) in [2, 4],
+                job_name.split("-"),
+            ),
+        )
+        job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
+        now = datetime.now()
+        delta = now - job_timestamp
+        if delta < timedelta(minutes=11):
+            new_idle_jobs.append(job_name)
+        else:
+            old_idle_jobs.append(job_name)
+
+    # Retain the N most recent idle jobs (where N = target), delete the rest.
+    # Prefer new jobs; fall back to old ones if not enough new ones exist.
+    new_idle_jobs = sorted(new_idle_jobs, reverse=True)
+    old_idle_jobs = sorted(old_idle_jobs, reverse=True)
+    retain = new_idle_jobs[:target_retain]
+    if len(retain) < target_retain:
+        retain += old_idle_jobs[: target_retain - len(retain)]
+    retain_set = set(retain)
+
+    to_delete = [j for j in idle_jobs if j not in retain_set]
+    logger.info(
+        f"Cleanup: retain={len(retain)} (target={target_retain}), "
+        f"delete={len(to_delete)}, live={live_count}",
+    )
+    logger.info(f"Idle jobs to retain: {sorted(retain)}")
+    logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
+
+    # Delete old idle jobs (re-check label to guard against race conditions)
+    def _delete_single_job(job_name):
+        requests.delete(
+            f"{COMMS_URL}/infra/job/delete",
+            data={
+                "job_name": job_name,
+                "required_labels": json.dumps({"unity-status": "idle"}),
+            },
+            headers=headers,
+        )
+
+    if to_delete:
+        with ThreadPoolExecutor(max_workers=len(to_delete)) as pool:
+            list(pool.map(_delete_single_job, to_delete))
+
+    return {
+        "retained": len(retain),
+        "deleted": len(to_delete),
+        "target": target_retain,
+        "live": live_count,
+    }
 
 
 def build_webhook_context(
@@ -967,7 +1119,7 @@ def build_webhook_context(
 
         # Trigger smart replenishment. The endpoint will check inventory
         # and ensure the idle pool matches the current demand-based target.
-        create_job(assistant_id)
+        replenish_idle_pool(refresh=False)
 
         job_started = True
         is_running = True
@@ -1387,7 +1539,7 @@ def publish_gmail_thread_id(
 ):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
-        publisher = pubsub_v1.PublisherClient()
+        publisher = get_pubsub_client()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
@@ -1430,7 +1582,7 @@ def publish_outlook_thread_id(
 ):
     """Publish the Outlook conversation to pub/sub topic."""
     try:
-        publisher = pubsub_v1.PublisherClient()
+        publisher = get_pubsub_client()
         topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 

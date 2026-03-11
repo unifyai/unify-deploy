@@ -65,9 +65,7 @@ ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assi
 async def _get_k8s_clients():
     """Return cached K8s API clients, running the (potentially blocking)
     setup in a thread so the event loop is never stalled."""
-    loop = asyncio.get_event_loop()
-    batch_api, core_api, networking_api = await loop.run_in_executor(
-        None,
+    batch_api, core_api, networking_api = await asyncio.to_thread(
         setup_kubernetes_client,
     )
     if not batch_api or not core_api or not networking_api:
@@ -307,17 +305,13 @@ async def create_kubernetes_job(
             else f"unity-{timestamp_str}-{random_id}-staging"
         )
 
-        loop = asyncio.get_event_loop()
-        job = await loop.run_in_executor(
-            None,
-            partial(
-                create_unity_job,
-                batch_api=batch_api,
-                job_name=job_name,
-                namespace=namespace,
-                image=image,
-                is_staging=bool(STAGING),
-            ),
+        job = await asyncio.to_thread(
+            create_unity_job,
+            batch_api=batch_api,
+            job_name=job_name,
+            namespace=namespace,
+            image=image,
+            is_staging=bool(STAGING),
         )
 
         if job:
@@ -368,10 +362,8 @@ async def delete_kubernetes_job(
     try:
         batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        loop = asyncio.get_event_loop()
-        success = await loop.run_in_executor(
-            None,
-            partial(delete_job, batch_api, job_name, namespace, resource_version),
+        success = await asyncio.to_thread(
+            delete_job, batch_api, job_name, namespace, resource_version
         )
 
         if success:
@@ -417,10 +409,8 @@ async def patch_kubernetes_job_labels(
 
         batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        loop = asyncio.get_event_loop()
-        success = await loop.run_in_executor(
-            None,
-            partial(patch_job_labels, batch_api, job_name, parsed_labels, namespace),
+        success = await asyncio.to_thread(
+            patch_job_labels, batch_api, job_name, parsed_labels, namespace
         )
 
         if success:
@@ -599,11 +589,7 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
     try:
         batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        loop = asyncio.get_event_loop()
-        success = await loop.run_in_executor(
-            None,
-            partial(suspend_job, batch_api, job_name, namespace),
-        )
+        success = await asyncio.to_thread(suspend_job, batch_api, job_name, namespace)
         if success:
             return {
                 "success": True,
@@ -651,14 +637,10 @@ async def list_kubernetes_jobs(
             f"{label_selector},{date_filter}" if label_selector else date_filter
         )
 
-        loop = asyncio.get_event_loop()
-        jobs = await loop.run_in_executor(
-            None,
-            partial(
-                batch_api.list_namespaced_job,
-                namespace=namespace,
-                label_selector=full_selector,
-            ),
+        jobs = await asyncio.to_thread(
+            batch_api.list_namespaced_job,
+            namespace=namespace,
+            label_selector=full_selector,
         )
         job_items = list(
             filter(
@@ -740,16 +722,12 @@ async def get_job_logs_endpoint(
     try:
         batch_api, core_api, networking_api = await _get_k8s_clients()
 
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(
-                get_job_logs,
-                core_api=core_api,
-                job_name=job_name,
-                namespace=namespace,
-                tail_lines=tail_lines,
-            ),
+        result = await asyncio.to_thread(
+            get_job_logs,
+            core_api=core_api,
+            job_name=job_name,
+            namespace=namespace,
+            tail_lines=tail_lines,
         )
 
         if result["success"]:
@@ -940,11 +918,7 @@ async def vm_ready_endpoint(
 
     # Pool VMs pass their own hostname; legacy VMs derive it from assistant_id
     hostname = request_body.hostname or get_dns_hostname(assistant_id)
-    loop = asyncio.get_running_loop()
-    reachable = await loop.run_in_executor(
-        None,
-        partial(_probe_vm_https, hostname),
-    )
+    reachable = await asyncio.to_thread(_probe_vm_https, hostname)
     if not reachable:
         logger.warning(
             f"VM HTTPS probe failed for {hostname} (assistant {assistant_id}), "
@@ -1003,10 +977,9 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
     static IPs, DNS records, and idle labels.
     """
     results = []
-    loop = asyncio.get_running_loop()
 
     # Find next available pool number(s)
-    existing = await loop.run_in_executor(None, partial(list_pool_vms, request.vm_type))
+    existing = await asyncio.to_thread(list_pool_vms, request.vm_type)
     existing_names = {vm["vm_name"] for vm in existing}
 
     n = 1
@@ -1017,10 +990,7 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
         candidate = f"{POOL_VM_NAME_PREFIX}-{request.vm_type}-{n}{ENV_SUFFIX}"
         if candidate not in existing_names:
             try:
-                result = await loop.run_in_executor(
-                    None,
-                    partial(provision_pool_vm, request.vm_type, n),
-                )
+                result = await asyncio.to_thread(provision_pool_vm, request.vm_type, n)
                 results.append(result)
                 provisioned += 1
             except Exception as e:
@@ -1040,8 +1010,7 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
     to trigger the on-VM watcher.
     """
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
+        result = await asyncio.get_running_loop().run_in_executor(
             ASSIGN_EXECUTOR,
             partial(
                 assign_pool_vm,
@@ -1052,8 +1021,10 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
             ),
         )
 
-        # Replenish: start/provision VMs to replace the one just claimed
-        loop.run_in_executor(None, partial(replenish_pool, request.vm_type))
+        # Replenish: start/provision VMs to replace the one just claimed (fire-and-forget)
+        asyncio.get_running_loop().run_in_executor(
+            None, partial(replenish_pool, request.vm_type)
+        )
 
         return PoolAssignResponse(**result)
     except ValueError as e:
@@ -1071,15 +1042,11 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
     the persistent disk, and resets labels. Idempotent.
     """
     try:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            partial(release_pool_vm, request.assistant_id),
-        )
+        result = await asyncio.to_thread(release_pool_vm, request.assistant_id)
 
-        # Trim: stop excess idle VMs now that one was returned
+        # Trim: stop excess idle VMs now that one was returned (fire-and-forget)
         vm_type = result.get("vm_type", "ubuntu")
-        loop.run_in_executor(None, partial(trim_pool, vm_type))
+        asyncio.get_running_loop().run_in_executor(None, partial(trim_pool, vm_type))
 
         return result
     except Exception as e:
@@ -1091,11 +1058,7 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
 async def delete_pool_disk_endpoint(assistant_id: str):
     """Delete an assistant's persistent disk (on unhire)."""
     try:
-        loop = asyncio.get_running_loop()
-        deleted = await loop.run_in_executor(
-            None,
-            partial(delete_assistant_disk, assistant_id),
-        )
+        deleted = await asyncio.to_thread(delete_assistant_disk, assistant_id)
         return {"assistant_id": assistant_id, "deleted": deleted}
     except Exception as e:
         logger.error(f"Failed to delete assistant disk: {e}")
@@ -1110,8 +1073,7 @@ async def detach_pool_disk_endpoint(assistant_id: str):
     then detaches the disk. The disk is preserved for re-attachment.
     """
     try:
-        loop = asyncio.get_running_loop()
-        vms = await loop.run_in_executor(None, partial(list_pool_vms))
+        vms = await asyncio.to_thread(list_pool_vms)
         sanitized = assistant_id.lower().replace("_", "-")
         assigned = [
             vm
@@ -1121,18 +1083,13 @@ async def detach_pool_disk_endpoint(assistant_id: str):
         if assigned:
             vm_name = assigned[0]["vm_name"]
         else:
-            vm_name = await loop.run_in_executor(
-                None, partial(find_vm_with_disk, assistant_id)
-            )
+            vm_name = await asyncio.to_thread(find_vm_with_disk, assistant_id)
             if not vm_name:
                 raise HTTPException(
                     status_code=404,
                     detail=f"No VM found with disk for assistant {assistant_id}",
                 )
-        detached = await loop.run_in_executor(
-            None,
-            partial(detach_assistant_disk, vm_name, assistant_id),
-        )
+        detached = await asyncio.to_thread(detach_assistant_disk, vm_name, assistant_id)
         return {
             "assistant_id": assistant_id,
             "vm_name": vm_name,
@@ -1148,8 +1105,7 @@ async def detach_pool_disk_endpoint(assistant_id: str):
 @router.get("/vm/pool/status", response_model=PoolStatusResponse)
 async def pool_status_endpoint(vm_type: str = None):
     """List all pool VMs with their current state."""
-    loop = asyncio.get_running_loop()
-    vms = await loop.run_in_executor(None, partial(list_pool_vms, vm_type))
+    vms = await asyncio.to_thread(list_pool_vms, vm_type)
 
     pool_vms = [PoolVMStatus(**vm) for vm in vms]
     idle = sum(1 for vm in vms if vm["pool_role"] == "idle")
@@ -1170,6 +1126,5 @@ async def pool_status_endpoint(vm_type: str = None):
 @router.post("/vm/pool/rebalance")
 async def rebalance_pool_endpoint(vm_type: str = "ubuntu"):
     """Manually trigger pool rebalance for a VM type."""
-    loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, partial(rebalance_pool, vm_type))
+    result = await asyncio.to_thread(rebalance_pool, vm_type)
     return result
