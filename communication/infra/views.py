@@ -28,6 +28,8 @@ from .vm_helpers import (
     trim_pool,
     rebalance_pool,
     list_pool_vms,
+    find_vm_with_disk,
+    detach_assistant_disk,
     delete_assistant_disk,
 )
 from .tunnel_helpers import (
@@ -1094,6 +1096,49 @@ async def delete_pool_disk_endpoint(assistant_id: str):
         return {"assistant_id": assistant_id, "deleted": deleted}
     except Exception as e:
         logger.error(f"Failed to delete assistant disk: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/vm/pool/disk/detach/{assistant_id}")
+async def detach_pool_disk_endpoint(assistant_id: str):
+    """Detach an assistant's persistent disk from its assigned VM.
+
+    Finds the VM currently assigned to the assistant by label lookup,
+    then detaches the disk. The disk is preserved for re-attachment.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        vms = await loop.run_in_executor(None, partial(list_pool_vms))
+        sanitized = assistant_id.lower().replace("_", "-")
+        assigned = [
+            vm
+            for vm in vms
+            if vm["pool_role"] == "assigned" and vm.get("assistant_id") == sanitized
+        ]
+        if assigned:
+            vm_name = assigned[0]["vm_name"]
+        else:
+            vm_name = await loop.run_in_executor(
+                None, partial(find_vm_with_disk, assistant_id)
+            )
+            if not vm_name:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No VM found with disk for assistant {assistant_id}",
+                )
+        detached = await loop.run_in_executor(
+            None,
+            partial(detach_assistant_disk, vm_name, assistant_id),
+        )
+        return {
+            "assistant_id": assistant_id,
+            "vm_name": vm_name,
+            "detached": detached,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to detach assistant disk: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
