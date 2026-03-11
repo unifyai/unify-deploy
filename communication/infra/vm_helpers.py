@@ -556,6 +556,7 @@ def claim_idle_vm(
         f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
     )
     elapsed = 0
+    print(f"[ASSIGN DEBUG] claim_idle_vm called: assistant={assistant_id}, type={vm_type}, vm_number={vm_number}")
 
     while True:
         request = compute_v1.ListInstancesRequest(
@@ -564,15 +565,14 @@ def claim_idle_vm(
             filter=label_filter,
         )
         idle_vms = list(client.list(request=request))
+        print(f"[ASSIGN DEBUG] [{assistant_id}] Found {len(idle_vms)} idle VMs: {[vm.name for vm in idle_vms]}")
         if not idle_vms:
             if elapsed >= POOL_ASSIGN_TIMEOUT:
+                print(f"[ASSIGN DEBUG] [{assistant_id}] TIMEOUT: no idle {vm_type} VMs after {elapsed}s")
                 raise ValueError(
                     f"No idle {vm_type} pool VMs available after waiting {elapsed}s"
                 )
-            logger.info(
-                f"No idle {vm_type} VMs, waiting "
-                f"({elapsed}s/{POOL_ASSIGN_TIMEOUT}s)..."
-            )
+            print(f"[ASSIGN DEBUG] [{assistant_id}] Waiting for idle VM ({elapsed}s/{POOL_ASSIGN_TIMEOUT}s)...")
             time.sleep(POOL_ASSIGN_POLL_INTERVAL)
             elapsed += POOL_ASSIGN_POLL_INTERVAL
             continue
@@ -592,6 +592,7 @@ def claim_idle_vm(
         new_labels["pool-role"] = "assigned"
         new_labels["assistant-id"] = assistant_id.lower().replace("_", "-")
 
+        print(f"[ASSIGN DEBUG] [{assistant_id}] Attempting CAS claim on {candidate.name} (fingerprint={candidate.label_fingerprint})")
         try:
             op = client.set_labels(
                 project=VM_PROJECT_ID,
@@ -603,6 +604,7 @@ def claim_idle_vm(
                 ),
             )
             op.result()
+            print(f"[ASSIGN DEBUG] [{assistant_id}] CAS claim SUCCESS on {candidate.name}")
             logger.info(
                 f"Claimed pool VM {candidate.name} for assistant {assistant_id}"
             )
@@ -636,8 +638,8 @@ def claim_idle_vm(
                 "desktop_url": f"https://{hostname}",
                 "status": "RUNNING",
             }
-        except PreconditionFailed:
-            logger.info(f"CAS conflict claiming {candidate.name}, retrying")
+        except PreconditionFailed as e:
+            print(f"[ASSIGN DEBUG] [{assistant_id}] CAS conflict (412) claiming {candidate.name}: {e}")
             continue
 
 
@@ -805,18 +807,23 @@ def assign_pool_vm(
     vm_number: int | None = None,
 ) -> Dict[str, Any]:
     """Full pool assignment: claim VM, create/attach disk, set metadata."""
+    print(f"[ASSIGN DEBUG] assign_pool_vm START: assistant={assistant_id}, type={vm_type}")
     claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
     vm_name = claimed["vm_name"]
+    print(f"[ASSIGN DEBUG] [{assistant_id}] Claimed VM: {vm_name}")
 
-    # Create disk if it doesn't exist, then attach
+    print(f"[ASSIGN DEBUG] [{assistant_id}] Creating assistant disk...")
     create_assistant_disk(assistant_id)
+    print(f"[ASSIGN DEBUG] [{assistant_id}] Attaching disk to {vm_name}...")
     device_name = attach_assistant_disk(vm_name, assistant_id)
+    print(f"[ASSIGN DEBUG] [{assistant_id}] Disk attached: device={device_name}")
 
-    # Generate SSH keypair and store private key
+    print(f"[ASSIGN DEBUG] [{assistant_id}] Generating SSH keypair...")
     private_key, public_key = generate_ssh_keypair()
+    print(f"[ASSIGN DEBUG] [{assistant_id}] Storing SSH private key via Orchestra...")
     store_ssh_private_key(assistant_id, private_key, unify_apikey)
 
-    # Update metadata to trigger watcher reconfiguration
+    print(f"[ASSIGN DEBUG] [{assistant_id}] Updating instance metadata on {vm_name}...")
     metadata = {
         "unify-key": unify_apikey,
         "vnc-password": unify_apikey,
@@ -828,6 +835,7 @@ def assign_pool_vm(
         metadata["office-mak-key"] = MAK_KEY
     _update_instance_metadata(vm_name, metadata)
 
+    print(f"[ASSIGN DEBUG] assign_pool_vm COMPLETE: {vm_name} -> {assistant_id}")
     logger.info(f"Pool assignment complete: {vm_name} -> assistant {assistant_id}")
     return {
         "vm_name": vm_name,
