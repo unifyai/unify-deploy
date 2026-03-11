@@ -556,7 +556,9 @@ def claim_idle_vm(
         f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
     )
     elapsed = 0
-    print(f"[ASSIGN DEBUG] claim_idle_vm called: assistant={assistant_id}, type={vm_type}, vm_number={vm_number}")
+    print(
+        f"[ASSIGN DEBUG] claim_idle_vm called: assistant={assistant_id}, type={vm_type}, vm_number={vm_number}"
+    )
 
     while True:
         request = compute_v1.ListInstancesRequest(
@@ -565,14 +567,20 @@ def claim_idle_vm(
             filter=label_filter,
         )
         idle_vms = list(client.list(request=request))
-        print(f"[ASSIGN DEBUG] [{assistant_id}] Found {len(idle_vms)} idle VMs: {[vm.name for vm in idle_vms]}")
+        print(
+            f"[ASSIGN DEBUG] [{assistant_id}] Found {len(idle_vms)} idle VMs: {[vm.name for vm in idle_vms]}"
+        )
         if not idle_vms:
             if elapsed >= POOL_ASSIGN_TIMEOUT:
-                print(f"[ASSIGN DEBUG] [{assistant_id}] TIMEOUT: no idle {vm_type} VMs after {elapsed}s")
+                print(
+                    f"[ASSIGN DEBUG] [{assistant_id}] TIMEOUT: no idle {vm_type} VMs after {elapsed}s"
+                )
                 raise ValueError(
                     f"No idle {vm_type} pool VMs available after waiting {elapsed}s"
                 )
-            print(f"[ASSIGN DEBUG] [{assistant_id}] Waiting for idle VM ({elapsed}s/{POOL_ASSIGN_TIMEOUT}s)...")
+            print(
+                f"[ASSIGN DEBUG] [{assistant_id}] Waiting for idle VM ({elapsed}s/{POOL_ASSIGN_TIMEOUT}s)..."
+            )
             time.sleep(POOL_ASSIGN_POLL_INTERVAL)
             elapsed += POOL_ASSIGN_POLL_INTERVAL
             continue
@@ -592,7 +600,9 @@ def claim_idle_vm(
         new_labels["pool-role"] = "assigned"
         new_labels["assistant-id"] = assistant_id.lower().replace("_", "-")
 
-        print(f"[ASSIGN DEBUG] [{assistant_id}] Attempting CAS claim on {candidate.name} (fingerprint={candidate.label_fingerprint})")
+        print(
+            f"[ASSIGN DEBUG] [{assistant_id}] Attempting CAS claim on {candidate.name} (fingerprint={candidate.label_fingerprint})"
+        )
         try:
             op = client.set_labels(
                 project=VM_PROJECT_ID,
@@ -604,7 +614,9 @@ def claim_idle_vm(
                 ),
             )
             op.result()
-            print(f"[ASSIGN DEBUG] [{assistant_id}] CAS claim SUCCESS on {candidate.name}")
+            print(
+                f"[ASSIGN DEBUG] [{assistant_id}] CAS claim SUCCESS on {candidate.name}"
+            )
             logger.info(
                 f"Claimed pool VM {candidate.name} for assistant {assistant_id}"
             )
@@ -639,7 +651,9 @@ def claim_idle_vm(
                 "status": "RUNNING",
             }
         except PreconditionFailed as e:
-            print(f"[ASSIGN DEBUG] [{assistant_id}] CAS conflict (412) claiming {candidate.name}: {e}")
+            print(
+                f"[ASSIGN DEBUG] [{assistant_id}] CAS conflict (412) claiming {candidate.name}: {e}"
+            )
             continue
 
 
@@ -807,7 +821,9 @@ def assign_pool_vm(
     vm_number: int | None = None,
 ) -> Dict[str, Any]:
     """Full pool assignment: claim VM, create/attach disk, set metadata."""
-    print(f"[ASSIGN DEBUG] assign_pool_vm START: assistant={assistant_id}, type={vm_type}")
+    print(
+        f"[ASSIGN DEBUG] assign_pool_vm START: assistant={assistant_id}, type={vm_type}"
+    )
     claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
     vm_name = claimed["vm_name"]
     print(f"[ASSIGN DEBUG] [{assistant_id}] Claimed VM: {vm_name}")
