@@ -156,6 +156,15 @@ do_assign() {
     local unify_key=$1
     log "ASSIGN: configuring VM for assistant"
 
+    # Clean up any previous assignment (handles re-assignment without explicit release)
+    pkill -f "ts-node src/index.ts" 2>/dev/null || true
+    if mountpoint -q /Unity/Local 2>/dev/null; then
+        fuser -km /Unity/Local 2>/dev/null || true
+        sleep 1
+        umount /Unity/Local 2>/dev/null || umount -l /Unity/Local 2>/dev/null || true
+        log "Unmounted previous disk from /Unity/Local"
+    fi
+
     # Update code before configuring (skips quickly if already up-to-date)
     do_update
 
@@ -415,10 +424,12 @@ while true; do
     # Check unify-key
     CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
 
-    if [[ -n "$CURRENT_UNIFY_KEY" && -z "$PREV_UNIFY_KEY" ]]; then
-        do_assign "$CURRENT_UNIFY_KEY"
-    elif [[ -z "$CURRENT_UNIFY_KEY" && -n "$PREV_UNIFY_KEY" ]]; then
-        do_release
+    if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" ]]; then
+        if [[ -n "$CURRENT_UNIFY_KEY" ]]; then
+            do_assign "$CURRENT_UNIFY_KEY"
+        else
+            do_release
+        fi
     fi
 
     PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"

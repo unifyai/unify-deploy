@@ -213,6 +213,15 @@ function Invoke-Update {
 function Invoke-Assign($unifyKey) {
     Write-Log "ASSIGN: configuring VM for assistant"
 
+    # Clean up any previous assignment (handles re-assignment without explicit release)
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    if (Test-Path "C:\Unity\Local") {
+        cmd /c rmdir "C:\Unity\Local" 2>$null
+        Get-Disk | Where-Object { $_.Number -gt 0 } |
+            Set-Disk -IsOffline $true -ErrorAction SilentlyContinue
+        Write-Log "Unmounted previous disk"
+    }
+
     # Update code before configuring (skips quickly if already up-to-date)
     Invoke-Update
 
@@ -532,10 +541,12 @@ while ($true) {
 
         $currentUnifyKey = Get-Metadata "unify-key"
 
-        if ($currentUnifyKey -and -not $PrevUnifyKey) {
-            Invoke-Assign $currentUnifyKey
-        } elseif (-not $currentUnifyKey -and $PrevUnifyKey) {
-            Invoke-Release
+        if ($currentUnifyKey -ne $PrevUnifyKey) {
+            if ($currentUnifyKey) {
+                Invoke-Assign $currentUnifyKey
+            } else {
+                Invoke-Release
+            }
         }
 
         $PrevUnifyKey = $currentUnifyKey

@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Form, HTTPException, Request
 from functools import partial
@@ -57,6 +58,8 @@ from communication.helpers import STAGING
 from communication.dependencies import authenticate_user_api_key, extract_api_key
 
 logger = logging.getLogger(__name__)
+
+ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
 
 
 async def _get_k8s_clients():
@@ -1039,7 +1042,7 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
     try:
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            None,
+            ASSIGN_EXECUTOR,
             partial(
                 assign_pool_vm,
                 assistant_id=request.assistant_id,
