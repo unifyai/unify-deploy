@@ -19,7 +19,7 @@ import requests
 from google.cloud import compute_v1
 from google.cloud import dns
 from google.cloud import secretmanager
-from google.api_core.exceptions import NotFound, Conflict
+from google.api_core.exceptions import NotFound, Conflict, PreconditionFailed
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
@@ -338,6 +338,27 @@ def _assistant_disk_name(assistant_id: str) -> str:
     return f"unity-disk-{sanitized}{ENV_SUFFIX}"
 
 
+def find_vm_with_disk(assistant_id: str) -> Optional[str]:
+    """Find a VM that has the assistant's disk attached, regardless of labels.
+
+    Scans all VMs in the zone. Returns the VM name, or None.
+    """
+    client = compute_v1.InstancesClient()
+    disk_name = _assistant_disk_name(assistant_id)
+    disk_suffix = f"/disks/{disk_name}"
+
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+    )
+    for instance in client.list(request=request):
+        if instance.disks:
+            for d in instance.disks:
+                if d.source and d.source.endswith(disk_suffix):
+                    return instance.name
+    return None
+
+
 def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
     """List all pool VMs, optionally filtered by type."""
     client = compute_v1.InstancesClient()
@@ -615,7 +636,7 @@ def claim_idle_vm(
                 "desktop_url": f"https://{hostname}",
                 "status": "RUNNING",
             }
-        except Conflict:
+        except PreconditionFailed:
             logger.info(f"CAS conflict claiming {candidate.name}, retrying")
             continue
 
@@ -733,30 +754,48 @@ def delete_assistant_disk(assistant_id: str) -> bool:
         return False
 
 
-def _update_instance_metadata(vm_name: str, updates: Dict[str, str]) -> None:
-    """Update metadata on a running instance (merge with existing)."""
+def _update_instance_metadata(
+    vm_name: str, updates: Dict[str, str], max_retries: int = 3
+) -> None:
+    """Update metadata on a running instance (merge with existing).
+
+    Retries on PreconditionFailed (412) which occurs when the metadata
+    fingerprint is stale due to a concurrent update.
+    """
     client = compute_v1.InstancesClient()
-    instance = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
 
-    existing = {}
-    if instance.metadata and instance.metadata.items:
-        existing = {item.key: item.value for item in instance.metadata.items}
+    for attempt in range(max_retries + 1):
+        instance = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
 
-    existing.update(updates)
+        existing = {}
+        if instance.metadata and instance.metadata.items:
+            existing = {item.key: item.value for item in instance.metadata.items}
 
-    items = [compute_v1.Items(key=k, value=v) for k, v in existing.items()]
-    metadata = compute_v1.Metadata(
-        items=items,
-        fingerprint=instance.metadata.fingerprint if instance.metadata else None,
-    )
-    op = client.set_metadata(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
-        instance=vm_name,
-        metadata_resource=metadata,
-    )
-    op.result()
-    logger.info(f"Updated metadata on {vm_name}: {list(updates.keys())}")
+        existing.update(updates)
+
+        items = [compute_v1.Items(key=k, value=v) for k, v in existing.items()]
+        metadata = compute_v1.Metadata(
+            items=items,
+            fingerprint=instance.metadata.fingerprint if instance.metadata else None,
+        )
+        try:
+            op = client.set_metadata(
+                project=VM_PROJECT_ID,
+                zone=ZONE,
+                instance=vm_name,
+                metadata_resource=metadata,
+            )
+            op.result()
+            logger.info(f"Updated metadata on {vm_name}: {list(updates.keys())}")
+            return
+        except PreconditionFailed:
+            if attempt < max_retries:
+                logger.info(
+                    f"Metadata fingerprint conflict on {vm_name}, "
+                    f"retrying ({attempt + 1}/{max_retries})"
+                )
+                continue
+            raise
 
 
 def assign_pool_vm(
@@ -944,7 +983,7 @@ def replenish_pool(vm_type: str, max_retries: int = 3) -> Dict[str, Any]:
                 logger.info(f"Replenish: started stopped VM {vm.name}")
                 started_one = True
                 break
-            except Conflict:
+            except PreconditionFailed:
                 logger.info(
                     f"Replenish: conflict on {vm.name}, "
                     f"retrying ({attempt + 1}/{max_retries})"
