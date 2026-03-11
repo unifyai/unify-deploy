@@ -810,21 +810,36 @@ def start_unity_job(assistant: dict, medium: str):
             logger.info(f"Error assigning pool VM for assistant {assistant_id}: {e}")
 
 
-def get_target_idle_count(live_count: int) -> int:
+class IdlePoolTarget:
+    __slots__ = ("target", "min_floor", "demand_buffer")
+
+    def __init__(self, target: int, min_floor: int, demand_buffer: int):
+        self.target = target
+        self.min_floor = min_floor
+        self.demand_buffer = demand_buffer
+
+    @property
+    def demand_exceeds_floor(self) -> bool:
+        return self.demand_buffer > self.min_floor
+
+
+def get_target_idle_count(live_count: int) -> IdlePoolTarget:
     """Calculate the target number of idle jobs based on current demand.
 
-    Logic: max(UNITY_MIN_IDLE_JOBS, live_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
-    Example: If factor is 5, target is 1 idle job per 5 live assistants.
+    Returns an IdlePoolTarget with:
+    - target: max(min_floor, demand_buffer)
+    - min_floor: the UNITY_MIN_IDLE_JOBS value
+    - demand_buffer: ceil(live_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
+    - demand_exceeds_floor: whether demand-based scaling has kicked in
     """
-    min_idle_floor = int(os.getenv("UNITY_MIN_IDLE_JOBS", "3"))
+    min_floor = int(os.getenv("UNITY_MIN_IDLE_JOBS", "3"))
     demand_factor = int(os.getenv("UNITY_IDLE_JOB_DEMAND_FACTOR", "5"))
 
-    # Avoid division by zero
     if demand_factor <= 0:
-        return min_idle_floor
+        return IdlePoolTarget(min_floor, min_floor, 0)
 
     demand_buffer = -(-live_count // demand_factor)
-    return max(min_idle_floor, demand_buffer)
+    return IdlePoolTarget(max(min_floor, demand_buffer), min_floor, demand_buffer)
 
 
 def get_unity_jobs_inventory() -> dict[str, list[dict]]:
@@ -881,31 +896,46 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     """Core logic for idle job pool replenishment.
 
     Called by build_webhook_context() and by the /scheduled/jobs/create endpoint.
+
+    Fill mode has two regimes:
+    - Floor regime (demand_buffer <= min_idle_floor): Creates exactly 1 job per
+      call with no pool size check. This avoids race conditions when multiple
+      webhooks fire concurrently — each sees the same stale inventory and would
+      otherwise over- or under-provision. The hourly cleanup trims the excess.
+    - Demand regime (demand_buffer > min_idle_floor): Checks inventory and fills
+      the gap to the demand-based target. At this scale, small race-induced
+      discrepancies are negligible relative to pool size.
     """
     inventory = get_unity_jobs_inventory()
     live_count = len(inventory["live"])
     current_idle_count = len(inventory["idle"])
 
-    target_idle_count = get_target_idle_count(live_count)
+    pool_target = get_target_idle_count(live_count)
 
     if refresh:
-        num_to_create = target_idle_count
+        num_to_create = pool_target.target
+    elif not pool_target.demand_exceeds_floor:
+        num_to_create = 1
     else:
-        num_to_create = max(0, target_idle_count - current_idle_count)
+        num_to_create = max(0, pool_target.target - current_idle_count)
 
     if num_to_create == 0:
         logger.info(
-            f"Idle pool is healthy (current: {current_idle_count}, target: {target_idle_count}). No jobs created.",
+            f"Idle pool is healthy (current: {current_idle_count}, target: {pool_target.target}). No jobs created.",
         )
         return {
             "status": "healthy",
             "current": current_idle_count,
-            "target": target_idle_count,
+            "target": pool_target.target,
         }
 
-    mode = "refresh" if refresh else "fill"
+    mode = (
+        "refresh"
+        if refresh
+        else ("fill-floor" if not pool_target.demand_exceeds_floor else "fill-demand")
+    )
     logger.info(
-        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {target_idle_count})...",
+        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {pool_target.target})...",
     )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
@@ -931,7 +961,7 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     return {
         "mode": mode,
         "created": len(created_jobs),
-        "target": target_idle_count,
+        "target": pool_target.target,
         "details": created_jobs,
     }
 
@@ -945,7 +975,7 @@ def cleanup_idle_pool() -> dict:
 
     inventory = get_unity_jobs_inventory()
     live_count = len(inventory["live"])
-    target_retain = get_target_idle_count(live_count)
+    target_retain = get_target_idle_count(live_count).target
 
     # Get all idle jobs via K8s label selector
     resp = requests.get(
