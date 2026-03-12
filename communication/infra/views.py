@@ -85,6 +85,78 @@ DEFAULT_REGION = "us-central1"
 # Namespace based on environment
 DEFAULT_NAMESPACE = "staging" if STAGING else "production"
 
+_pubsub_publisher: pubsub_v1.PublisherClient | None = None
+_pubsub_subscriber: pubsub_v1.SubscriberClient | None = None
+
+
+def _get_pubsub_clients() -> (
+    tuple[pubsub_v1.PublisherClient, pubsub_v1.SubscriberClient]
+):
+    """Return cached PubSub publisher and subscriber clients."""
+    global _pubsub_publisher, _pubsub_subscriber
+    if _pubsub_publisher is None or _pubsub_subscriber is None:
+        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+        creds = Credentials.from_service_account_info(creds_json)
+        _pubsub_publisher = pubsub_v1.PublisherClient(credentials=creds)
+        _pubsub_subscriber = pubsub_v1.SubscriberClient(credentials=creds)
+    return _pubsub_publisher, _pubsub_subscriber
+
+
+def _ensure_subscription(
+    subscriber: pubsub_v1.SubscriberClient,
+    topic_path: str,
+    subscription_path: str,
+    filter_str: str,
+    *,
+    enable_message_ordering: bool = False,
+    message_retention_seconds: int | None = None,
+):
+    """Create or update a single subscription (blocking). Idempotent."""
+    expiration_policy = pubsub_v1.types.ExpirationPolicy(ttl=None)
+    request = {
+        "name": subscription_path,
+        "topic": topic_path,
+        "expiration_policy": expiration_policy,
+        "filter": filter_str,
+    }
+    if message_retention_seconds is not None:
+        request["message_retention_duration"] = duration_pb2.Duration(
+            seconds=message_retention_seconds,
+        )
+    if enable_message_ordering:
+        request["enable_message_ordering"] = True
+
+    try:
+        subscriber.create_subscription(request=request)
+        return
+    except Exception as e:
+        if "already exists" not in str(e).lower():
+            raise
+
+    if enable_message_ordering:
+        existing = subscriber.get_subscription(
+            request={"subscription": subscription_path},
+        )
+        if not existing.enable_message_ordering:
+            # enable_message_ordering cannot be changed on an existing
+            # subscription — the only way to add it is delete + recreate.
+            subscriber.delete_subscription(
+                request={"subscription": subscription_path},
+            )
+            subscriber.create_subscription(request=request)
+            return
+
+    subscription = pubsub_v1.types.Subscription(
+        name=subscription_path,
+        expiration_policy=expiration_policy,
+    )
+    subscriber.update_subscription(
+        request={
+            "update_mask": {"paths": ["expiration_policy.ttl"]},
+            "subscription": subscription,
+        },
+    )
+
 
 # create pubsub topic
 @router.post("/pubsub/topic")
@@ -94,15 +166,8 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
     the name.
     """
     try:
-        # Get credentials from environment variable
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        creds = Credentials.from_service_account_info(creds_json)
+        publisher, subscriber = await asyncio.to_thread(_get_pubsub_clients)
 
-        # Initialize the publisher and subscriber clients
-        publisher = pubsub_v1.PublisherClient(credentials=creds)
-        subscriber = pubsub_v1.SubscriberClient(credentials=creds)
-
-        # Create the topic path using the project ID and assistant ID
         topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
         subscription_path = subscriber.subscription_path(
             GCP_PROJECT_ID,
@@ -117,101 +182,45 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             f"{topic_name}-actions-sub",
         )
 
-        # Create the topic if it doesn't already exist
+        # Create topic (idempotent)
         try:
-            publisher.create_topic(request={"name": topic_path})
+            await asyncio.to_thread(
+                publisher.create_topic,
+                request={"name": topic_path},
+            )
         except Exception as e:
             if "already exists" not in str(e).lower():
                 raise
 
-        # Create or update the subscriptions with no expiration
-        expiration_policy = pubsub_v1.types.ExpirationPolicy(ttl=None)
-
-        try:
-            request = {
-                "name": subscription_path,
-                "topic": topic_path,
-                "expiration_policy": expiration_policy,
-                "filter": (
+        # Create/update all three subscriptions in parallel
+        await asyncio.gather(
+            asyncio.to_thread(
+                _ensure_subscription,
+                subscriber,
+                topic_path,
+                subscription_path,
+                (
                     'NOT attributes.thread = "unify_message_outbound"'
                     ' AND NOT attributes.thread = "action_event"'
                 ),
-            }
-            subscriber.create_subscription(request=request)
-            request["name"] = outbound_subscription_path
-            request["filter"] = 'attributes.thread = "unify_message_outbound"'
-            subscriber.create_subscription(request=request)
-            request["name"] = actions_subscription_path
-            request["filter"] = 'attributes.thread = "action_event"'
-            request["message_retention_duration"] = duration_pb2.Duration(
-                seconds=1800,
-            )
-            # Ordering guarantees the console SSE endpoint receives action
-            # events in publish order.  The publisher (unity) sets
-            # ordering_key=assistant_id on each message.
-            request["enable_message_ordering"] = True
-            subscriber.create_subscription(request=request)
-        except Exception as e:
-            if "already exists" in str(e).lower():
-                # Ensure existing subscriptions never expire
-                subscription = pubsub_v1.types.Subscription(
-                    name=subscription_path,
-                    expiration_policy=expiration_policy,
-                )
-                update_request = {
-                    "update_mask": {"paths": ["expiration_policy.ttl"]},
-                    "subscription": subscription,
-                }
-                subscriber.update_subscription(request=update_request)
-                outbound_subscription = pubsub_v1.types.Subscription(
-                    name=outbound_subscription_path,
-                    expiration_policy=expiration_policy,
-                )
-                update_request["subscription"] = outbound_subscription
-                subscriber.update_subscription(request=update_request)
-                # Actions subscription may not exist yet on older assistants
-                # created before this feature. Try to create it; if it already
-                # exists, ensure message ordering is enabled.
-                #
-                # enable_message_ordering cannot be changed on an existing
-                # subscription — the only way to add it is delete + recreate.
-                # This is safe: Orchestra is the durable store, and the
-                # console re-fetches the full tree on initial load.
-                actions_sub_request = {
-                    "name": actions_subscription_path,
-                    "topic": topic_path,
-                    "expiration_policy": expiration_policy,
-                    "filter": 'attributes.thread = "action_event"',
-                    "message_retention_duration": duration_pb2.Duration(
-                        seconds=1800,
-                    ),
-                    "enable_message_ordering": True,
-                }
-                try:
-                    subscriber.create_subscription(request=actions_sub_request)
-                except Exception as actions_err:
-                    if "already exists" in str(actions_err).lower():
-                        existing = subscriber.get_subscription(
-                            request={"subscription": actions_subscription_path},
-                        )
-                        if not existing.enable_message_ordering:
-                            # Recreate with ordering enabled (can't update this flag)
-                            subscriber.delete_subscription(
-                                request={"subscription": actions_subscription_path},
-                            )
-                            subscriber.create_subscription(request=actions_sub_request)
-                        else:
-                            # Already ordered — just update expiration policy
-                            actions_subscription = pubsub_v1.types.Subscription(
-                                name=actions_subscription_path,
-                                expiration_policy=expiration_policy,
-                            )
-                            update_request["subscription"] = actions_subscription
-                            subscriber.update_subscription(request=update_request)
-                    else:
-                        raise
-            else:
-                raise
+            ),
+            asyncio.to_thread(
+                _ensure_subscription,
+                subscriber,
+                topic_path,
+                outbound_subscription_path,
+                'attributes.thread = "unify_message_outbound"',
+            ),
+            asyncio.to_thread(
+                _ensure_subscription,
+                subscriber,
+                topic_path,
+                actions_subscription_path,
+                'attributes.thread = "action_event"',
+                enable_message_ordering=True,
+                message_retention_seconds=1800,
+            ),
+        )
 
         return {
             "success": True,
@@ -235,19 +244,11 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
     Delete a Google Cloud Pub/Sub topic with the assistant_id as the topic name.
     Subscriptions are explicitly deleted first to avoid orphaned resources.
     """
-    try:
-        # Get credentials from environment variable
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        creds = Credentials.from_service_account_info(creds_json)
 
-        # Initialize the publisher and subscriber clients
-        publisher = pubsub_v1.PublisherClient(credentials=creds)
-        subscriber = pubsub_v1.SubscriberClient(credentials=creds)
-
-        # Create the topic path using the project ID and assistant ID
+    def _delete_topic_and_subs():
+        publisher, subscriber = _get_pubsub_clients()
         topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
 
-        # Delete all subscriptions attached to the topic (if any)
         try:
             for subscription_name in publisher.list_topic_subscriptions(
                 request={"topic": topic_path},
@@ -257,20 +258,21 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
                         request={"subscription": subscription_name},
                     )
                 except Exception as sub_err:
-                    # If the subscription was already deleted, continue
                     if "not found" not in str(sub_err).lower():
                         raise
         except Exception as list_err:
-            # If the topic is not found, there are no subscriptions to delete
             if "not found" not in str(list_err).lower():
                 raise
 
-        # Delete the topic
         publisher.delete_topic(request={"topic": topic_path})
+        return topic_path
+
+    try:
+        topic_path = await asyncio.to_thread(_delete_topic_and_subs)
 
         return {
             "success": True,
-            "message": f"Topic deleted successfully",
+            "message": "Topic deleted successfully",
             "topic_name": topic_path,
             "project_id": GCP_PROJECT_ID,
         }
@@ -505,20 +507,13 @@ async def start_job(
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
     try:
-        # Get credentials from environment variable
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        creds = Credentials.from_service_account_info(creds_json)
+        publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
 
-        # Initialize the publisher client
-        publisher = pubsub_v1.PublisherClient(credentials=creds)
-
-        # Create the topic path
         topic_path = publisher.topic_path(
             GCP_PROJECT_ID,
             "unity-startup" if not STAGING else "unity-startup-staging",
         )
 
-        # Prepare the job data
         job_data = {
             "thread": "startup",
             "publish_timestamp": time.time(),
@@ -548,20 +543,17 @@ async def start_job(
                 "user_desktop_filesys_sync": user_desktop_filesys_sync.lower()
                 == "true",
                 "user_desktop_url": user_desktop_url if user_desktop_url else None,
-                # Pass demo_id as int or None; Unity derives demo_mode from presence
                 "demo_id": int(demo_id) if demo_id else None,
                 "team_ids": json.loads(team_ids) if team_ids else [],
                 "org_id": int(org_id) if org_id else None,
             },
         }
 
-        # Convert to JSON string
         message_data = json.dumps(job_data).encode("utf-8")
 
-        # Publish the message
         future = publisher.publish(topic_path, data=message_data)
-        message_id = future.result()
-        print(f"Job start request published for assistant {assistant_id}")
+        message_id = await asyncio.to_thread(future.result)
+        logger.info(f"Job start request published for assistant {assistant_id}")
 
         return {
             "success": True,
@@ -929,9 +921,7 @@ async def vm_ready_endpoint(
             detail=f"VM HTTPS not reachable at {hostname}",
         )
 
-    creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-    creds = Credentials.from_service_account_info(creds_json)
-    publisher = pubsub_v1.PublisherClient(credentials=creds)
+    publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
 
     topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
     topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
@@ -951,7 +941,7 @@ async def vm_ready_endpoint(
     ).encode("utf-8")
 
     future = publisher.publish(topic_path, data=message_data)
-    message_id = future.result()
+    message_id = await asyncio.to_thread(future.result)
 
     logger.info(
         f"Published assistant_desktop_ready for assistant {assistant_id} (message_id={message_id})",

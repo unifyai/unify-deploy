@@ -10,7 +10,11 @@ from communication.whatsapp.views import router as whatsapp_router
 from communication.gmail.views import router as gmail_router
 from communication.outlook.views import router as outlook_router
 from communication.teams.views import router as teams_router
-from communication.infra.views import router as infra_router, tunnel_router
+from communication.infra.views import (
+    router as infra_router,
+    tunnel_router,
+    _get_pubsub_clients,
+)
 from communication.infra.helpers import setup_kubernetes_client
 from communication.social.views import router as social_router
 from communication.sharepoint.views import router as sharepoint_router
@@ -27,6 +31,7 @@ load_dotenv(override=True)
 async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, setup_kubernetes_client)
+    loop.run_in_executor(None, _get_pubsub_clients)
     yield
 
 
