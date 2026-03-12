@@ -596,9 +596,7 @@ def claim_idle_vm(
         )
     finally:
         with _pending_lock:
-            _pending_claims[vm_type] = max(
-                0, _pending_claims.get(vm_type, 0) - 1
-            )
+            _pending_claims[vm_type] = max(0, _pending_claims.get(vm_type, 0) - 1)
 
 
 def _claim_idle_vm_inner(
@@ -1050,8 +1048,8 @@ def replenish_pool(vm_type: str) -> Dict[str, Any]:
 
 
 def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
-    client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = (
-        _list_pool_state(vm_type)
+    client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
+        vm_type
     )
 
     with _pending_lock:
@@ -1148,7 +1146,9 @@ def trim_pool(vm_type: str) -> Dict[str, Any]:
 
     Called after a release returns a VM to idle.
     """
-    client, pool_vms, idle_vms, stopped_vms, _, existing_names = _list_pool_state(vm_type)
+    client, pool_vms, idle_vms, stopped_vms, _, existing_names = _list_pool_state(
+        vm_type
+    )
     actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
 
     if len(idle_vms) > POOL_TARGET_IDLE:
