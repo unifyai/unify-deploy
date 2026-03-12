@@ -11,6 +11,7 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 
 import logging
 import os
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple
@@ -585,58 +586,69 @@ def claim_idle_vm(
                 raise ValueError(
                     f"VM {target_name} is not idle. " f"Idle VMs: {idle_names}"
                 )
-            candidate = matching[0]
+            candidate_name = matching[0].name
         else:
-            candidate = idle_vms[0]
-        new_labels = dict(candidate.labels) if candidate.labels else {}
+            candidate_name = random.choice(idle_vms).name
+
+        # Point-read for strongly consistent state and fingerprint.
+        # The LIST above is eventually consistent — its fingerprint may be
+        # stale, allowing two concurrent setLabels calls to both pass the
+        # CAS check.  GET is strongly consistent per GCE docs.
+        fresh = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=candidate_name)
+        if fresh.labels.get("pool-role") != "idle":
+            logger.info(
+                f"VM {candidate_name} already claimed (pool-role="
+                f"{fresh.labels.get('pool-role')}), retrying"
+            )
+            continue
+
+        sanitized = assistant_id.lower().replace("_", "-")
+        new_labels = dict(fresh.labels) if fresh.labels else {}
         new_labels["pool-role"] = "assigned"
-        new_labels["assistant-id"] = assistant_id.lower().replace("_", "-")
+        new_labels["assistant-id"] = sanitized
 
         try:
             op = client.set_labels(
                 project=VM_PROJECT_ID,
                 zone=ZONE,
-                instance=candidate.name,
+                instance=candidate_name,
                 instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
                     labels=new_labels,
-                    label_fingerprint=candidate.label_fingerprint,
+                    label_fingerprint=fresh.label_fingerprint,
                 ),
             )
             op.result()
             logger.info(
-                f"Claimed pool VM {candidate.name} for assistant {assistant_id}"
+                f"Claimed pool VM {candidate_name} for assistant {assistant_id}"
             )
 
             external_ip = None
-            if candidate.network_interfaces:
-                for ni in candidate.network_interfaces:
+            if fresh.network_interfaces:
+                for ni in fresh.network_interfaces:
                     if ni.access_configs:
                         for ac in ni.access_configs:
                             if ac.nat_i_p:
                                 external_ip = ac.nat_i_p
                                 break
 
-            hostname_label = new_labels.get("pool-hostname", "")
-            hostname = (
-                hostname_label.replace("-", ".")
-                if hostname_label
-                else candidate.name + f".{DOMAIN_SUFFIX}"
-            )
-            # Fix the hostname reconstruction: pool-hostname stores dots as dashes,
-            # but we need to be careful about which dashes are literal.
-            # The label stores e.g. "unity-pool-ubuntu-1--vm--unify--ai" or similar.
-            # Simpler: just read hostname from instance metadata.
-            hostname = _read_instance_metadata(candidate, "hostname") or hostname
+            hostname = _read_instance_metadata(fresh, "hostname")
+            if not hostname:
+                hostname_label = new_labels.get("pool-hostname", "")
+                hostname = (
+                    hostname_label.replace("-", ".")
+                    if hostname_label
+                    else candidate_name + f".{DOMAIN_SUFFIX}"
+                )
 
             return {
-                "vm_name": candidate.name,
+                "vm_name": candidate_name,
                 "assistant_id": assistant_id,
                 "ip_address": external_ip,
                 "hostname": hostname,
                 "desktop_url": f"https://{hostname}",
                 "status": "RUNNING",
             }
-        except PreconditionFailed as e:
+        except PreconditionFailed:
             continue
 
 
