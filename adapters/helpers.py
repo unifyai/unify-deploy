@@ -20,7 +20,6 @@ from common.metrics import (
 )
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from google.cloud import pubsub_v1
 
 from twilio.rest import Client as TwilioClient
@@ -437,7 +436,6 @@ def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
                 "limit": 100,
             },
             headers={"Authorization": f"Bearer {shared_key}"},
-            timeout=10,
         )
         if resp.status_code != 200:
             return
@@ -447,17 +445,20 @@ def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
         stale_ids = [log["id"] for log in stale_logs if "id" in log]
         if not stale_ids:
             return
-        requests.put(
-            f"{ORCHESTRA_URL}/logs",
-            json={
-                "logs": stale_ids,
-                "context": "startup_events",
-                "entries": {"running": False},
-                "overwrite": True,
-            },
-            headers={"Authorization": f"Bearer {shared_key}"},
-            timeout=10,
-        )
+        try:
+            requests.put(
+                f"{ORCHESTRA_URL}/logs",
+                json={
+                    "logs": stale_ids,
+                    "context": "startup_events",
+                    "entries": {"running": False},
+                    "overwrite": True,
+                },
+                headers={"Authorization": f"Bearer {shared_key}"},
+                timeout=0.1,
+            )
+        except requests.exceptions.Timeout:
+            pass
         logger.info(
             f"Expired {len(stale_ids)} stale record(s) for assistant {assistant_id}"
         )
@@ -471,7 +472,7 @@ def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
                         "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"
                     },
                     json={"assistant_id": assistant_id},
-                    timeout=10,
+                    timeout=0.1,
                 )
                 print(f"Released leaked pool VM for assistant {assistant_id} (if any)")
             except Exception as release_err:
@@ -656,6 +657,7 @@ def mark_job_running(assistant_data: dict, medium: str) -> bool:
                 f"{ORCHESTRA_URL}/project",
                 json={"name": "AssistantJobs"},
                 headers={"Authorization": f"Bearer {shared_key}"},
+                timeout=0.1,
             )
         except Exception:
             pass  # Project may already exist
@@ -767,7 +769,7 @@ def start_unity_job(assistant: dict, medium: str):
                     else ""
                 ),
             },
-            timeout=1,
+            timeout=0.1,
         )
         if response.status_code != 200:
             logger.info(f"Failed to start job for assistant {assistant_id}")
@@ -788,7 +790,7 @@ def start_unity_job(assistant: dict, medium: str):
                     "unify_apikey": api_key,
                     "vm_type": vm_type,
                 },
-                timeout=1,
+                timeout=0.1,
             )
             if vm_response.status_code == 200:
                 result = vm_response.json()
@@ -950,12 +952,16 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     )
 
     def _create_single_job():
-        resp = requests.post(
-            f"{COMMS_URL}/infra/job/create",
-            data={"image": image},
-            headers=headers,
-        )
-        return resp.json()
+        try:
+            resp = requests.post(
+                f"{COMMS_URL}/infra/job/create",
+                data={"image": image},
+                headers=headers,
+                timeout=0.1,
+            )
+            return resp.json()
+        except requests.exceptions.Timeout:
+            return {"status": "dispatched"}
 
     with ThreadPoolExecutor(max_workers=num_to_create) as pool:
         futures = [pool.submit(_create_single_job) for _ in range(num_to_create)]
@@ -1053,6 +1059,48 @@ def cleanup_idle_pool() -> dict:
     }
 
 
+def _resolve_contacts(
+    validate_contact: bool,
+    sender: str,
+    is_email: bool,
+    normalized_sender: str,
+    channel: str,
+    user_id: str,
+    assistant_id: str,
+    api_key: str,
+    user_number: str,
+    user_whatsapp_number: str,
+    user_email: str,
+    assistant_data: dict,
+) -> tuple[list, bool]:
+    """Resolve contacts for an assistant. Returns (contacts, is_valid_contact)."""
+    if validate_contact:
+        return check_valid_contact(
+            email_address=(sender if is_email else ""),
+            phone_number=("" if is_email else normalized_sender),
+            medium=channel,
+            assistant_context=f"{user_id}/{assistant_id}",
+            api_key=api_key,
+            user_number=user_number,
+            user_whatsapp_number=user_whatsapp_number,
+            user_email=user_email,
+            assistant_data=assistant_data,
+        )
+    response, status_code = get_contacts(
+        f"{user_id}/{assistant_id}/Contacts",
+        api_key,
+    )
+    # len(resp_contacts) < 2 handles the race condition on hiring:
+    # the contact manager gets initialized in unity so there's a stage
+    # where the context is created but contacts haven't been added yet
+    logger.info(f"response status_code: {status_code}, contacts: {response}")
+    resp_contacts = response["logs"] if status_code == 200 else []
+    if len(resp_contacts) < 2:
+        logger.info("contact fetching failed, using default contacts")
+        return get_default_contacts(assistant_data), True
+    return [c["entries"] for c in resp_contacts], True
+
+
 def build_webhook_context(
     channel: str,
     destination: str,
@@ -1097,38 +1145,28 @@ def build_webhook_context(
     user_email = assistant_data["user_email"]
     logger.info(f"assistant_data: {assistant_data}")
 
-    # validate contact
-    contacts = []
-    is_valid_contact = True
+    # resolve contacts and check job status in parallel
     logger.info(f"validate_contact: {validate_contact}")
-    if validate_contact:
-        contacts, is_valid_contact = check_valid_contact(
-            email_address=(sender if is_email else ""),
-            phone_number=("" if is_email else normalized_sender),
-            medium=channel,
-            assistant_context=f"{user_id}/{assistant_id}",
-            api_key=api_key,
-            user_number=user_number,
-            user_whatsapp_number=user_whatsapp_number,
-            user_email=user_email,
-            assistant_data=assistant_data,
-        )
-    else:
-        response, status_code = get_contacts(
-            f"{user_id}/{assistant_id}/Contacts",
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        contacts_future = pool.submit(
+            _resolve_contacts,
+            validate_contact,
+            sender,
+            is_email,
+            normalized_sender,
+            channel,
+            user_id,
+            assistant_id,
             api_key,
+            user_number,
+            user_whatsapp_number,
+            user_email,
+            assistant_data,
         )
-        # additional check for len(resp_contacts) < 2 to deal with race conditions right on
-        # hiring a new assistant, whenever the wakeup message is sent, the contact
-        # manager gets initialized in unity so there's a stage where the context is
-        # created but the contacts haven't been added yet
-        logger.info(f"response status_code: {status_code}, contacts: {response}")
-        resp_contacts = response["logs"] if status_code == 200 else []
-        if len(resp_contacts) < 2:
-            logger.info("contact fetching failed, using default contacts")
-            contacts = get_default_contacts(assistant_data)
-        else:
-            contacts = [c["entries"] for c in resp_contacts]
+        running_future = pool.submit(is_job_running, user_id, assistant_id)
+    contacts, is_valid_contact = contacts_future.result()
+    is_running = running_future.result()
     logger.info(f"contacts: {contacts}")
 
     # check contact validity
@@ -1138,21 +1176,18 @@ def build_webhook_context(
 
     # ensure job is running (skip for local/test assistants)
     job_started = False
-    is_running = is_job_running(user_id, assistant_id)
     skip_auto_start = is_test_assistant or is_local_assistant or is_running
     should_start_job = (
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
-        # Mark as running BEFORE sending the startup message to prevent
-        # race conditions when multiple requests come in quickly
-        mark_job_running(assistant_data, channel)
-        start_unity_job(assistant_data, channel)
-
-        # Trigger smart replenishment. The endpoint will check inventory
-        # and ensure the idle pool matches the current demand-based target.
-        replenish_idle_pool(refresh=False)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            mark_future = pool.submit(mark_job_running, assistant_data, channel)
+            start_future = pool.submit(start_unity_job, assistant_data, channel)
+            pool.submit(replenish_idle_pool, False)  # Trigger smart replenishment.
+            mark_future.result()
+            start_future.result()
 
         job_started = True
         is_running = True
