@@ -12,7 +12,9 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 import logging
 import os
 import random
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple
 
@@ -80,6 +82,32 @@ from .vm_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Demand tracking for pool replenishment
+# ---------------------------------------------------------------------------
+_pending_claims: Dict[str, int] = {}
+_pending_lock = threading.Lock()
+
+_replenish_locks: Dict[str, threading.Lock] = {}
+_replenish_locks_guard = threading.Lock()
+
+_vm_claim_locks: Dict[str, threading.Lock] = {}
+_vm_claim_locks_guard = threading.Lock()
+
+
+def _get_replenish_lock(vm_type: str) -> threading.Lock:
+    with _replenish_locks_guard:
+        if vm_type not in _replenish_locks:
+            _replenish_locks[vm_type] = threading.Lock()
+        return _replenish_locks[vm_type]
+
+
+def _get_vm_claim_lock(vm_name: str) -> threading.Lock:
+    with _vm_claim_locks_guard:
+        if vm_name not in _vm_claim_locks:
+            _vm_claim_locks[vm_name] = threading.Lock()
+        return _vm_claim_locks[vm_name]
 
 
 def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
@@ -545,20 +573,40 @@ def claim_idle_vm(
 ) -> Dict[str, Any]:
     """Atomically claim an idle pool VM using label fingerprint CAS.
 
-    Retries on Conflict (another request claimed the same VM).
-    Waits up to 300s if VMs are provisioning but none idle yet.
-    Raises ValueError if no idle VMs are available.
+    Tracks demand via a process-level counter so that replenish_pool
+    provisions enough VMs for all waiting threads, not just
+    POOL_TARGET_IDLE.  Calls replenish_pool on every poll iteration;
+    the non-blocking lock inside replenish_pool deduplicates work.
 
-    If vm_number is provided, targets the specific VM (e.g. vm_number=3
-    targets unity-pool-{vm_type}-3) instead of auto-selecting.
+    Raises ValueError if no idle VMs become available within
+    POOL_ASSIGN_TIMEOUT seconds.
     """
     client = compute_v1.InstancesClient()
     label_filter = (
         f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
     )
     elapsed = 0
-    replenish_triggered = False
 
+    with _pending_lock:
+        _pending_claims[vm_type] = _pending_claims.get(vm_type, 0) + 1
+
+    try:
+        return _claim_idle_vm_inner(
+            client, label_filter, assistant_id, vm_type, vm_number, elapsed
+        )
+    finally:
+        with _pending_lock:
+            _pending_claims[vm_type] = max(0, _pending_claims.get(vm_type, 0) - 1)
+
+
+def _claim_idle_vm_inner(
+    client,
+    label_filter: str,
+    assistant_id: str,
+    vm_type: str,
+    vm_number: int | None,
+    elapsed: int,
+) -> Dict[str, Any]:
     while True:
         request = compute_v1.ListInstancesRequest(
             project=VM_PROJECT_ID,
@@ -567,9 +615,7 @@ def claim_idle_vm(
         )
         idle_vms = list(client.list(request=request))
         if not idle_vms:
-            if not replenish_triggered:
-                replenish_pool(vm_type)
-                replenish_triggered = True
+            replenish_pool(vm_type)
             if elapsed >= POOL_ASSIGN_TIMEOUT:
                 raise ValueError(
                     f"No idle {vm_type} pool VMs available after waiting {elapsed}s"
@@ -584,72 +630,84 @@ def claim_idle_vm(
             if not matching:
                 idle_names = [vm.name for vm in idle_vms]
                 raise ValueError(
-                    f"VM {target_name} is not idle. " f"Idle VMs: {idle_names}"
+                    f"VM {target_name} is not idle. Idle VMs: {idle_names}"
                 )
             candidate_name = matching[0].name
         else:
             candidate_name = random.choice(idle_vms).name
 
-        # Point-read for strongly consistent state and fingerprint.
-        # The LIST above is eventually consistent — its fingerprint may be
-        # stale, allowing two concurrent setLabels calls to both pass the
-        # CAS check.  GET is strongly consistent per GCE docs.
-        fresh = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=candidate_name)
-        if fresh.labels.get("pool-role") != "idle":
+        vm_lock = _get_vm_claim_lock(candidate_name)
+        if not vm_lock.acquire(blocking=False):
             logger.info(
-                f"VM {candidate_name} already claimed (pool-role="
-                f"{fresh.labels.get('pool-role')}), retrying"
+                f"VM {candidate_name} being claimed by another thread, retrying"
             )
             continue
-
-        sanitized = assistant_id.lower().replace("_", "-")
-        new_labels = dict(fresh.labels) if fresh.labels else {}
-        new_labels["pool-role"] = "assigned"
-        new_labels["assistant-id"] = sanitized
 
         try:
-            op = client.set_labels(
-                project=VM_PROJECT_ID,
-                zone=ZONE,
-                instance=candidate_name,
-                instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
-                    labels=new_labels,
-                    label_fingerprint=fresh.label_fingerprint,
-                ),
+            # Point-read for strongly consistent state and fingerprint.
+            # The LIST above is eventually consistent — its fingerprint may
+            # be stale, allowing two concurrent setLabels calls to both pass
+            # the CAS check.  GET is strongly consistent per GCE docs.
+            fresh = client.get(
+                project=VM_PROJECT_ID, zone=ZONE, instance=candidate_name
             )
-            op.result()
-            logger.info(
-                f"Claimed pool VM {candidate_name} for assistant {assistant_id}"
-            )
+            if fresh.labels.get("pool-role") != "idle":
+                logger.info(
+                    f"VM {candidate_name} already claimed (pool-role="
+                    f"{fresh.labels.get('pool-role')}), retrying"
+                )
+                continue
 
-            external_ip = None
-            if fresh.network_interfaces:
-                for ni in fresh.network_interfaces:
-                    if ni.access_configs:
-                        for ac in ni.access_configs:
-                            if ac.nat_i_p:
-                                external_ip = ac.nat_i_p
-                                break
+            sanitized = assistant_id.lower().replace("_", "-")
+            new_labels = dict(fresh.labels) if fresh.labels else {}
+            new_labels["pool-role"] = "assigned"
+            new_labels["assistant-id"] = sanitized
 
-            hostname = _read_instance_metadata(fresh, "hostname")
-            if not hostname:
-                hostname_label = new_labels.get("pool-hostname", "")
-                hostname = (
-                    hostname_label.replace("-", ".")
-                    if hostname_label
-                    else candidate_name + f".{DOMAIN_SUFFIX}"
+            try:
+                op = client.set_labels(
+                    project=VM_PROJECT_ID,
+                    zone=ZONE,
+                    instance=candidate_name,
+                    instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+                        labels=new_labels,
+                        label_fingerprint=fresh.label_fingerprint,
+                    ),
+                )
+                op.result()
+                logger.info(
+                    f"Claimed pool VM {candidate_name} for assistant {assistant_id}"
                 )
 
-            return {
-                "vm_name": candidate_name,
-                "assistant_id": assistant_id,
-                "ip_address": external_ip,
-                "hostname": hostname,
-                "desktop_url": f"https://{hostname}",
-                "status": "RUNNING",
-            }
-        except PreconditionFailed:
-            continue
+                external_ip = None
+                if fresh.network_interfaces:
+                    for ni in fresh.network_interfaces:
+                        if ni.access_configs:
+                            for ac in ni.access_configs:
+                                if ac.nat_i_p:
+                                    external_ip = ac.nat_i_p
+                                    break
+
+                hostname = _read_instance_metadata(fresh, "hostname")
+                if not hostname:
+                    hostname_label = new_labels.get("pool-hostname", "")
+                    hostname = (
+                        hostname_label.replace("-", ".")
+                        if hostname_label
+                        else candidate_name + f".{DOMAIN_SUFFIX}"
+                    )
+
+                return {
+                    "vm_name": candidate_name,
+                    "assistant_id": assistant_id,
+                    "ip_address": external_ip,
+                    "hostname": hostname,
+                    "desktop_url": f"https://{hostname}",
+                    "status": "RUNNING",
+                }
+            except PreconditionFailed:
+                continue
+        finally:
+            vm_lock.release()
 
 
 def _read_instance_metadata(instance, key: str) -> Optional[str]:
@@ -921,7 +979,9 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
 def _list_pool_state(vm_type: str):
     """Snapshot current pool state for a VM type.
 
-    Returns (client, pool_vms, idle_vms, stopped_vms, existing_names).
+    Returns (client, pool_vms, idle_vms, stopped_vms, in_flight_vms, existing_names).
+    in_flight_vms are VMs that are booting but not yet idle (provisioning or
+    recently started stopped VMs).
     """
     client = compute_v1.InstancesClient()
     type_filter = f"labels.vm-type={vm_type}"
@@ -938,8 +998,14 @@ def _list_pool_state(vm_type: str):
         if vm.labels.get("pool-role") == "idle" and vm.status == "RUNNING"
     ]
     stopped_vms = [vm for vm in pool_vms if vm.status == "TERMINATED"]
+    in_flight_vms = [
+        vm
+        for vm in pool_vms
+        if vm.status in ("STAGING", "RUNNING")
+        and vm.labels.get("pool-role") not in ("idle", "assigned")
+    ]
     existing_names = {vm.name for vm in pool_vms}
-    return client, pool_vms, idle_vms, stopped_vms, existing_names
+    return client, pool_vms, idle_vms, stopped_vms, in_flight_vms, existing_names
 
 
 def _start_one_stopped_vm(client, vm) -> bool:
@@ -960,63 +1026,119 @@ def _start_one_stopped_vm(client, vm) -> bool:
 
 
 def replenish_pool(vm_type: str) -> Dict[str, Any]:
-    """Start or provision VMs to fill the full deficit up to POOL_TARGET_IDLE.
+    """Start or provision VMs to meet current demand.
 
-    Called after an assign consumes an idle VM. Starts as many stopped
-    VMs as needed (or provisions new ones if none are stopped). Also
-    replenishes the stopped reserve if depleted.
+    Demand-aware: computes deficit from the number of threads currently
+    waiting in claim_idle_vm, not just POOL_TARGET_IDLE.  Subtracts VMs
+    already booting (in-flight) to avoid runaway over-provisioning across
+    sequential replenish cycles.
+
+    Uses a non-blocking per-vm_type lock so concurrent callers (fire-and-
+    forget from assign_pool_endpoint, poll-driven from claim_idle_vm) don't
+    duplicate work.  Starts and provisions are parallelised via a thread pool.
     """
-    client, _, idle_vms, stopped_vms, existing_names = _list_pool_state(vm_type)
-    deficit = POOL_TARGET_IDLE - len(idle_vms)
-    actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
+    lock = _get_replenish_lock(vm_type)
+    if not lock.acquire(blocking=False):
+        return {"vm_type": vm_type, "actions": [], "skipped": True}
+
+    try:
+        return _replenish_pool_inner(vm_type)
+    finally:
+        lock.release()
+
+
+def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
+    client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
+        vm_type
+    )
+
+    with _pending_lock:
+        pending = _pending_claims.get(vm_type, 0)
+
+    target = max(POOL_TARGET_IDLE, pending)
+    deficit = target - len(idle_vms) - len(in_flight_vms)
+    actions: list[str] = []
+
+    logger.info(
+        f"Replenish {vm_type}: target={target} idle={len(idle_vms)} "
+        f"in_flight={len(in_flight_vms)} stopped={len(stopped_vms)} "
+        f"deficit={deficit}"
+    )
 
     if deficit <= 0:
-        return actions
+        return {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": actions}
 
-    started_count = 0
-    stopped_iter = iter(stopped_vms)
+    # Decide what to start vs provision
+    vms_to_start = stopped_vms[:deficit]
+    remaining_deficit = deficit - len(vms_to_start)
 
-    for _ in range(deficit):
-        vm = next(stopped_iter, None)
-        if vm is not None:
-            if _start_one_stopped_vm(client, vm):
-                actions["actions"].append(f"Started stopped VM {vm.name}")
-                started_count += 1
-        else:
-            n = 1
-            while _pool_vm_name(vm_type, n) in existing_names:
-                n += 1
+    numbers_to_provision: list[int] = []
+    n = 1
+    for _ in range(remaining_deficit):
+        while _pool_vm_name(vm_type, n) in existing_names:
+            n += 1
+        numbers_to_provision.append(n)
+        existing_names.add(_pool_vm_name(vm_type, n))
+        n += 1
+
+    # Run starts and provisions in parallel
+    with ThreadPoolExecutor(
+        max_workers=max(len(vms_to_start) + len(numbers_to_provision), 1),
+        thread_name_prefix="replenish",
+    ) as pool:
+        futures = {}
+        for vm in vms_to_start:
+            f = pool.submit(_start_one_stopped_vm, client, vm)
+            futures[f] = f"Started stopped VM {vm.name}"
+        for num in numbers_to_provision:
+            f = pool.submit(provision_pool_vm, vm_type, num)
+            futures[f] = f"Provisioned new pool VM #{num}"
+
+        started_count = 0
+        for f in as_completed(futures):
+            desc = futures[f]
             try:
-                provision_pool_vm(vm_type, n)
-                existing_names.add(_pool_vm_name(vm_type, n))
-                actions["actions"].append(f"Provisioned new pool VM #{n}")
-                logger.info(f"Replenish: provisioned new {vm_type} pool VM #{n}")
+                result = f.result()
+                if result is not False:
+                    actions.append(desc)
+                    if desc.startswith("Started"):
+                        started_count += 1
             except Conflict:
-                logger.info(f"Replenish: conflict provisioning VM #{n}, skipping")
+                logger.info(f"Replenish: conflict — {desc}, skipping")
             except Exception as e:
-                logger.error(f"Replenish: failed to provision new VM: {e}")
+                logger.error(f"Replenish: failed — {desc}: {e}")
 
+    # Replenish the stopped reserve if we consumed any
     if started_count > 0:
-        _, _, _, stopped_vms_now, existing_names_now = _list_pool_state(vm_type)
+        _, _, _, stopped_vms_now, _, existing_names_now = _list_pool_state(vm_type)
         reserve_deficit = POOL_TARGET_STOPPED - len(stopped_vms_now)
-        for _ in range(reserve_deficit):
-            n = 1
-            while _pool_vm_name(vm_type, n) in existing_names_now:
-                n += 1
-            try:
-                provision_pool_vm(vm_type, n)
-                existing_names_now.add(_pool_vm_name(vm_type, n))
-                actions["actions"].append(
-                    f"Provisioned new pool VM #{n} (stopped reserve)"
-                )
-                logger.info(
-                    f"Replenish: provisioned new {vm_type} pool VM #{n} "
-                    f"(stopped reserve)"
-                )
-            except Exception as e:
-                logger.error(f"Replenish: failed to provision reserve VM: {e}")
+        if reserve_deficit > 0:
+            with ThreadPoolExecutor(
+                max_workers=reserve_deficit, thread_name_prefix="replenish-reserve"
+            ) as pool:
+                reserve_futures = {}
+                nr = 1
+                for _ in range(reserve_deficit):
+                    while _pool_vm_name(vm_type, nr) in existing_names_now:
+                        nr += 1
+                    rf = pool.submit(provision_pool_vm, vm_type, nr)
+                    reserve_futures[rf] = nr
+                    existing_names_now.add(_pool_vm_name(vm_type, nr))
+                    nr += 1
 
-    return actions
+                for rf in as_completed(reserve_futures):
+                    num = reserve_futures[rf]
+                    try:
+                        rf.result()
+                        actions.append(
+                            f"Provisioned new pool VM #{num} (stopped reserve)"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Replenish: failed to provision reserve VM #{num}: {e}"
+                        )
+
+    return {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": actions}
 
 
 def trim_pool(vm_type: str) -> Dict[str, Any]:
@@ -1024,7 +1146,9 @@ def trim_pool(vm_type: str) -> Dict[str, Any]:
 
     Called after a release returns a VM to idle.
     """
-    client, pool_vms, idle_vms, stopped_vms, existing_names = _list_pool_state(vm_type)
+    client, pool_vms, idle_vms, stopped_vms, _, existing_names = _list_pool_state(
+        vm_type
+    )
     actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
 
     if len(idle_vms) > POOL_TARGET_IDLE:
