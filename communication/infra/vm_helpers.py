@@ -92,12 +92,22 @@ _pending_lock = threading.Lock()
 _replenish_locks: Dict[str, threading.Lock] = {}
 _replenish_locks_guard = threading.Lock()
 
+_vm_claim_locks: Dict[str, threading.Lock] = {}
+_vm_claim_locks_guard = threading.Lock()
+
 
 def _get_replenish_lock(vm_type: str) -> threading.Lock:
     with _replenish_locks_guard:
         if vm_type not in _replenish_locks:
             _replenish_locks[vm_type] = threading.Lock()
         return _replenish_locks[vm_type]
+
+
+def _get_vm_claim_lock(vm_name: str) -> threading.Lock:
+    with _vm_claim_locks_guard:
+        if vm_name not in _vm_claim_locks:
+            _vm_claim_locks[vm_name] = threading.Lock()
+        return _vm_claim_locks[vm_name]
 
 
 def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
@@ -628,68 +638,78 @@ def _claim_idle_vm_inner(
         else:
             candidate_name = random.choice(idle_vms).name
 
-        # Point-read for strongly consistent state and fingerprint.
-        # The LIST above is eventually consistent — its fingerprint may be
-        # stale, allowing two concurrent setLabels calls to both pass the
-        # CAS check.  GET is strongly consistent per GCE docs.
-        fresh = client.get(
-            project=VM_PROJECT_ID, zone=ZONE, instance=candidate_name
-        )
-        if fresh.labels.get("pool-role") != "idle":
+        vm_lock = _get_vm_claim_lock(candidate_name)
+        if not vm_lock.acquire(blocking=False):
             logger.info(
-                f"VM {candidate_name} already claimed (pool-role="
-                f"{fresh.labels.get('pool-role')}), retrying"
+                f"VM {candidate_name} being claimed by another thread, retrying"
             )
             continue
-
-        sanitized = assistant_id.lower().replace("_", "-")
-        new_labels = dict(fresh.labels) if fresh.labels else {}
-        new_labels["pool-role"] = "assigned"
-        new_labels["assistant-id"] = sanitized
 
         try:
-            op = client.set_labels(
-                project=VM_PROJECT_ID,
-                zone=ZONE,
-                instance=candidate_name,
-                instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
-                    labels=new_labels,
-                    label_fingerprint=fresh.label_fingerprint,
-                ),
+            # Point-read for strongly consistent state and fingerprint.
+            # The LIST above is eventually consistent — its fingerprint may
+            # be stale, allowing two concurrent setLabels calls to both pass
+            # the CAS check.  GET is strongly consistent per GCE docs.
+            fresh = client.get(
+                project=VM_PROJECT_ID, zone=ZONE, instance=candidate_name
             )
-            op.result()
-            logger.info(
-                f"Claimed pool VM {candidate_name} for assistant {assistant_id}"
-            )
+            if fresh.labels.get("pool-role") != "idle":
+                logger.info(
+                    f"VM {candidate_name} already claimed (pool-role="
+                    f"{fresh.labels.get('pool-role')}), retrying"
+                )
+                continue
 
-            external_ip = None
-            if fresh.network_interfaces:
-                for ni in fresh.network_interfaces:
-                    if ni.access_configs:
-                        for ac in ni.access_configs:
-                            if ac.nat_i_p:
-                                external_ip = ac.nat_i_p
-                                break
+            sanitized = assistant_id.lower().replace("_", "-")
+            new_labels = dict(fresh.labels) if fresh.labels else {}
+            new_labels["pool-role"] = "assigned"
+            new_labels["assistant-id"] = sanitized
 
-            hostname = _read_instance_metadata(fresh, "hostname")
-            if not hostname:
-                hostname_label = new_labels.get("pool-hostname", "")
-                hostname = (
-                    hostname_label.replace("-", ".")
-                    if hostname_label
-                    else candidate_name + f".{DOMAIN_SUFFIX}"
+            try:
+                op = client.set_labels(
+                    project=VM_PROJECT_ID,
+                    zone=ZONE,
+                    instance=candidate_name,
+                    instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+                        labels=new_labels,
+                        label_fingerprint=fresh.label_fingerprint,
+                    ),
+                )
+                op.result()
+                logger.info(
+                    f"Claimed pool VM {candidate_name} for assistant {assistant_id}"
                 )
 
-            return {
-                "vm_name": candidate_name,
-                "assistant_id": assistant_id,
-                "ip_address": external_ip,
-                "hostname": hostname,
-                "desktop_url": f"https://{hostname}",
-                "status": "RUNNING",
-            }
-        except PreconditionFailed:
-            continue
+                external_ip = None
+                if fresh.network_interfaces:
+                    for ni in fresh.network_interfaces:
+                        if ni.access_configs:
+                            for ac in ni.access_configs:
+                                if ac.nat_i_p:
+                                    external_ip = ac.nat_i_p
+                                    break
+
+                hostname = _read_instance_metadata(fresh, "hostname")
+                if not hostname:
+                    hostname_label = new_labels.get("pool-hostname", "")
+                    hostname = (
+                        hostname_label.replace("-", ".")
+                        if hostname_label
+                        else candidate_name + f".{DOMAIN_SUFFIX}"
+                    )
+
+                return {
+                    "vm_name": candidate_name,
+                    "assistant_id": assistant_id,
+                    "ip_address": external_ip,
+                    "hostname": hostname,
+                    "desktop_url": f"https://{hostname}",
+                    "status": "RUNNING",
+                }
+            except PreconditionFailed:
+                continue
+        finally:
+            vm_lock.release()
 
 
 def _read_instance_metadata(instance, key: str) -> Optional[str]:
