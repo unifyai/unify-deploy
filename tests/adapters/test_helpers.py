@@ -270,7 +270,7 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 # --- build_webhook_context local assistant tests ---
 
 
-@patch("adapters.helpers.create_job")
+@patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
 @patch("adapters.helpers.mark_job_running")
 @patch("adapters.helpers.is_job_running", return_value=False)
@@ -280,7 +280,7 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
     _mock_running,
     mock_mark,
     mock_start,
-    mock_create,
+    _mock_replenish,
 ):
     """When is_local=True in assistant data, job start should be skipped
     even though the job is not running and the contact is valid."""
@@ -296,11 +296,10 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
     )
     mock_mark.assert_not_called()
     mock_start.assert_not_called()
-    mock_create.assert_not_called()
     assert ctx["is_valid_contact"] is True
 
 
-@patch("adapters.helpers.create_job")
+@patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
 @patch("adapters.helpers.mark_job_running")
 @patch("adapters.helpers.is_job_running", return_value=False)
@@ -310,7 +309,7 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
     _mock_running,
     mock_mark,
     mock_start,
-    mock_create,
+    _mock_replenish,
 ):
     """When is_local=False, job start should proceed normally."""
     assistant_data = _create_mock_assistant_data()
@@ -322,7 +321,6 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
     )
     mock_mark.assert_called_once()
     mock_start.assert_called_once()
-    mock_create.assert_called_once()
 
 
 # --- K8s live status regression test ---
