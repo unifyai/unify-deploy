@@ -317,11 +317,20 @@ function Invoke-Assign($unifyKey) {
         Write-Log "WARNING: VNC password update failed: $_"
     }
 
-    # Agent Service: kill existing, write .env, start via scheduled task (interactive session)
+    # Agent Service: kill existing, wait for port 3000 to be free, write .env, start
     try {
         Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
         Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
+        for ($_w = 1; $_w -le 10; $_w++) {
+            if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) { break }
+            Start-Sleep -Seconds 1
+        }
+        if (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue) {
+            Write-Log "Port 3000 still held after Stop-Process, force-killing"
+            $proc = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($proc) { Stop-Process -Id $proc.OwningProcess -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 1
+        }
 
         $agentServiceDir = "C:\agent-service"
         $envContent = @"
@@ -419,10 +428,20 @@ npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 function Invoke-Release {
     Write-Log "RELEASE: cleaning up VM"
 
-    # Stop Agent Service
+    # Stop Agent Service and wait for port 3000 to be released
     Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
     Disable-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
     Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    for ($_w = 1; $_w -le 10; $_w++) {
+        if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Seconds 1
+    }
+    if (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue) {
+        Write-Log "Port 3000 still held after Stop-Process, force-killing"
+        $proc = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($proc) { Stop-Process -Id $proc.OwningProcess -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Seconds 1
+    }
     Write-Log "Agent Service stopped"
 
     # Clear .env
