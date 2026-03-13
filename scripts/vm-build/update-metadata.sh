@@ -13,9 +13,11 @@
 # Options:
 #   --update-startup-script    Push latest local startup script to all VMs
 #   --update-pool-watcher      Push latest local pool watcher script to all VMs
+#   --update-supervisord-conf  Push latest local supervisord.conf to Ubuntu VMs
 #   --metadata KEY=VALUE       Add/update a metadata key (repeatable)
 #   --ubuntu                   Target only Ubuntu pool VMs
 #   --windows                  Target only Windows pool VMs
+#   --vm-number N              Target a single VM by number (e.g. --vm-number 13)
 #   --restart                  Stop+start VMs after update (only RUNNING VMs)
 #   --staging                  Target staging VMs only (default: non-staging)
 #   --dry-run                  Show what would happen without making changes
@@ -30,6 +32,9 @@
 #
 #   # Push both startup and pool watcher scripts
 #   ./update-metadata.sh --update-startup-script --update-pool-watcher
+#
+#   # Push latest supervisord.conf to Ubuntu VMs
+#   ./update-metadata.sh --update-supervisord-conf --ubuntu
 #
 #   # Update orchestra URL on all pool VMs and restart them
 #   ./update-metadata.sh --metadata orchestra-url=https://new.api.url --restart
@@ -57,12 +62,17 @@ WINDOWS_STARTUP_SCRIPT="$REPO_ROOT/communication/infra/scripts/windows-vm-startu
 UBUNTU_POOL_WATCHER="$REPO_ROOT/communication/infra/scripts/unity-pool-watcher.sh"
 WINDOWS_POOL_WATCHER="$REPO_ROOT/communication/infra/scripts/unity-pool-watcher.ps1"
 
+# Supervisord config path (Ubuntu only)
+UBUNTU_SUPERVISORD_CONF="$REPO_ROOT/communication/infra/scripts/ubuntu-vm-custom-image/packer/files/supervisord.conf"
+
 # Options
 UPDATE_STARTUP=false
 UPDATE_POOL_WATCHER=false
+UPDATE_SUPERVISORD_CONF=false
 METADATA_ARGS=()
 ONLY_UBUNTU=false
 ONLY_WINDOWS=false
+VM_NUMBER=""
 RESTART=false
 DRY_RUN=false
 STAGING=false
@@ -98,11 +108,13 @@ is_staging_vm() {
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --update-startup-script) UPDATE_STARTUP=true; shift ;;
-        --update-pool-watcher)   UPDATE_POOL_WATCHER=true; shift ;;
+        --update-startup-script)    UPDATE_STARTUP=true; shift ;;
+        --update-pool-watcher)      UPDATE_POOL_WATCHER=true; shift ;;
+        --update-supervisord-conf)  UPDATE_SUPERVISORD_CONF=true; shift ;;
         --metadata)              METADATA_ARGS+=("$2"); shift 2 ;;
         --ubuntu)                ONLY_UBUNTU=true; shift ;;
         --windows)               ONLY_WINDOWS=true; shift ;;
+        --vm-number)             VM_NUMBER="$2"; shift 2 ;;
         --restart)               RESTART=true; shift ;;
         --staging)               STAGING=true; ZONE="${GCP_ZONE:-us-central1-a}"; shift ;;
         --dry-run)               DRY_RUN=true; shift ;;
@@ -112,8 +124,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate: at least one action
-if [[ "$UPDATE_STARTUP" == false && "$UPDATE_POOL_WATCHER" == false && ${#METADATA_ARGS[@]} -eq 0 ]]; then
-    die "Nothing to do. Specify --update-startup-script, --update-pool-watcher, and/or --metadata KEY=VALUE"
+if [[ "$UPDATE_STARTUP" == false && "$UPDATE_POOL_WATCHER" == false && "$UPDATE_SUPERVISORD_CONF" == false && ${#METADATA_ARGS[@]} -eq 0 ]]; then
+    die "Nothing to do. Specify --update-startup-script, --update-pool-watcher, --update-supervisord-conf, and/or --metadata KEY=VALUE"
 fi
 
 if [[ "$ONLY_UBUNTU" == true && "$ONLY_WINDOWS" == true ]]; then
@@ -145,7 +157,20 @@ if [[ "$DRY_RUN" == true ]]; then
     echo ""
 fi
 VM_TYPE_LABEL="all"
-if [[ "$ONLY_UBUNTU" == true ]]; then
+if [[ -n "$VM_NUMBER" ]]; then
+    STAGING_SUFFIX=""
+    $STAGING && STAGING_SUFFIX="-staging"
+    if [[ "$ONLY_UBUNTU" == true ]]; then
+        VM_NAME_FILTER="name=unity-pool-ubuntu-${VM_NUMBER}${STAGING_SUFFIX}"
+        VM_TYPE_LABEL="ubuntu #${VM_NUMBER}"
+    elif [[ "$ONLY_WINDOWS" == true ]]; then
+        VM_NAME_FILTER="name=unity-pool-windows-${VM_NUMBER}${STAGING_SUFFIX}"
+        VM_TYPE_LABEL="windows #${VM_NUMBER}"
+    else
+        VM_NAME_FILTER="name~'^unity-pool-(ubuntu|windows)-${VM_NUMBER}${STAGING_SUFFIX}$'"
+        VM_TYPE_LABEL="#${VM_NUMBER} (any type)"
+    fi
+elif [[ "$ONLY_UBUNTU" == true ]]; then
     VM_TYPE_LABEL="ubuntu only"
     VM_NAME_FILTER="name~'^unity-pool-ubuntu-'"
 elif [[ "$ONLY_WINDOWS" == true ]]; then
@@ -301,6 +326,22 @@ for vm_name in "${TARGET_VMS[@]}"; do
             echo "  Pool watcher updated."
         else
             echo "  FAILED to update pool watcher." >&2
+            ((fail_count++)) || true
+            continue
+        fi
+    fi
+
+    # Update supervisord config (Ubuntu only)
+    if [[ "$UPDATE_SUPERVISORD_CONF" == true && "$vm_type" == "ubuntu" ]]; then
+        echo "  Updating supervisord-conf..."
+        if gcloud compute instances add-metadata "$vm_name" \
+            --project="$PROJECT" \
+            --zone="$ZONE" \
+            --metadata-from-file="supervisord-conf=$UBUNTU_SUPERVISORD_CONF" \
+            2>&1; then
+            echo "  Supervisord config updated."
+        else
+            echo "  FAILED to update supervisord config." >&2
             ((fail_count++)) || true
             continue
         fi
