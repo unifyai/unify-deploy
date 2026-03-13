@@ -323,7 +323,7 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
     mock_start.assert_called_once()
 
 
-# --- K8s live status regression test ---
+# --- K8s live status regression tests ---
 
 
 @patch("adapters.helpers.replenish_idle_pool")
@@ -331,24 +331,39 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
 @patch("adapters.helpers.mark_job_running")
 @patch("adapters.helpers.requests.get")
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_build_webhook_context_starts_job_when_k8s_shows_no_active_pods(
+def test_build_webhook_context_starts_job_when_stale_orchestra_record(
     _mock_check,
     mock_requests_get,
     mock_mark,
     mock_start,
     _mock_replenish,
 ):
-    """A new job must start when K8s reports no active pods, regardless of
-    any stale Orchestra running=True record.
+    """A new job must start when K8s reports no active pods and the
+    Orchestra running record is older than 120 seconds (stale).
 
     Regression test for the silent message loss bug where a crashed pod
     left running=True in AssistantJobs, causing all subsequent messages
     to be published to a Pub/Sub topic nobody was listening to.
     """
-    mock_k8s_response = MagicMock()
-    mock_k8s_response.status_code = 200
-    mock_k8s_response.json.return_value = {"jobs": []}
-    mock_requests_get.return_value = mock_k8s_response
+    from datetime import datetime, timezone, timedelta
+
+    stale_ts = (datetime.now(tz=timezone.utc) - timedelta(minutes=10)).isoformat()
+
+    def mock_get(url, **kwargs):
+        resp = MagicMock()
+        if "/infra/jobs" in url:
+            resp.status_code = 200
+            resp.json.return_value = {"jobs": []}
+        elif "/logs" in url:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "logs": [{"entries": {"timestamp": stale_ts, "running": True}}],
+            }
+        else:
+            resp.status_code = 404
+        return resp
+
+    mock_requests_get.side_effect = mock_get
 
     assistant_data = _create_mock_assistant_data()
     ctx = build_webhook_context(
@@ -360,3 +375,49 @@ def test_build_webhook_context_starts_job_when_k8s_shows_no_active_pods(
     mock_start.assert_called_once()
     mock_mark.assert_called_once()
     assert ctx["job_started"] is True
+
+
+@patch("adapters.helpers.replenish_idle_pool")
+@patch("adapters.helpers.start_unity_job")
+@patch("adapters.helpers.mark_job_running")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.check_valid_contact", return_value=([], True))
+def test_build_webhook_context_skips_job_when_recent_orchestra_record(
+    _mock_check,
+    mock_requests_get,
+    mock_mark,
+    mock_start,
+    _mock_replenish,
+):
+    """If K8s shows no labeled pod but Orchestra has a running record
+    from less than 120s ago, skip job start (pod is still initializing).
+    """
+    from datetime import datetime, timezone, timedelta
+
+    recent_ts = (datetime.now(tz=timezone.utc) - timedelta(seconds=30)).isoformat()
+
+    def mock_get(url, **kwargs):
+        resp = MagicMock()
+        if "/infra/jobs" in url:
+            resp.status_code = 200
+            resp.json.return_value = {"jobs": []}
+        elif "/logs" in url:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "logs": [{"entries": {"timestamp": recent_ts, "running": True}}],
+            }
+        else:
+            resp.status_code = 404
+        return resp
+
+    mock_requests_get.side_effect = mock_get
+
+    assistant_data = _create_mock_assistant_data()
+    ctx = build_webhook_context(
+        channel="unify_message",
+        destination="",
+        sender="",
+        assistant_data=assistant_data,
+    )
+    mock_start.assert_not_called()
+    assert ctx["job_started"] is False
