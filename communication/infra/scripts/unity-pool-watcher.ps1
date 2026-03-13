@@ -511,8 +511,9 @@ function Invoke-RefreshTls {
 
 Write-Log "Unity Pool Watcher starting"
 
-$PrevUnifyKey = Get-Metadata "unify-key"
-Write-Log "Initial unify-key: $(if ($PrevUnifyKey) { '(set)' } else { '(empty)' })"
+# $PrevUnifyKey starts empty (line 19) so the first loop iteration
+# detects an already-set key and runs Invoke-Assign.  This handles the
+# case where assign_pool_vm wrote metadata before the watcher started.
 
 # Seed TLS hash to avoid unnecessary reload on first loop iteration
 $initTls = Get-Metadata "tls-fullchain"
@@ -526,9 +527,7 @@ while ($true) {
     try {
         # Long-poll for metadata changes
         $uri = "$MetadataUrl/instance/attributes/?recursive=true&wait_for_change=true"
-        if ($Etag) {
-            $uri += "&last_etag=$Etag"
-        }
+        $uri += "&last_etag=$Etag"
 
         try {
             $response = Invoke-WebRequest -Uri $uri -Headers $MetadataHeaders -TimeoutSec 0 -UseBasicParsing
