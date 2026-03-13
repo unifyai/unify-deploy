@@ -553,7 +553,7 @@ async def start_job(
 
         future = publisher.publish(topic_path, data=message_data)
         message_id = await asyncio.to_thread(future.result)
-        logger.info(f"Job start request published for assistant {assistant_id}")
+        print(f"Job start request published for assistant {assistant_id}")
 
         return {
             "success": True,
