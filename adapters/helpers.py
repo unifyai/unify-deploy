@@ -1182,12 +1182,10 @@ def build_webhook_context(
     )
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            mark_future = pool.submit(mark_job_running, assistant_data, channel)
-            start_future = pool.submit(start_unity_job, assistant_data, channel)
-            pool.submit(replenish_idle_pool, False)  # Trigger smart replenishment.
-            mark_future.result()
-            start_future.result()
+        mark_job_running(assistant_data, channel)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pool.submit(start_unity_job, assistant_data, channel)
+            pool.submit(replenish_idle_pool, False)
 
         job_started = True
         is_running = True
