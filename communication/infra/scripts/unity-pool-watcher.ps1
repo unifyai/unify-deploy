@@ -511,8 +511,9 @@ function Invoke-RefreshTls {
 
 Write-Log "Unity Pool Watcher starting"
 
-$PrevUnifyKey = Get-Metadata "unify-key"
-Write-Log "Initial unify-key: $(if ($PrevUnifyKey) { '(set)' } else { '(empty)' })"
+# $PrevUnifyKey starts empty (line 19) so the first loop iteration
+# detects an already-set key and runs Invoke-Assign.  This handles the
+# case where assign_pool_vm wrote metadata before the watcher started.
 
 # Seed TLS hash to avoid unnecessary reload on first loop iteration
 $initTls = Get-Metadata "tls-fullchain"

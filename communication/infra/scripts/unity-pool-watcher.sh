@@ -393,9 +393,9 @@ refresh_tls() {
 
 log "Unity Pool Watcher starting"
 
-# Read initial state
-PREV_UNIFY_KEY=$(get_metadata "unify-key")
-log "Initial unify-key: $([ -n "$PREV_UNIFY_KEY" ] && echo '(set)' || echo '(empty)')"
+# PREV_UNIFY_KEY starts empty (line 18) so the first loop iteration
+# detects an already-set key and runs do_assign.  This handles the case
+# where assign_pool_vm wrote metadata before the watcher started.
 
 # Seed TLS hash to avoid unnecessary reload on first loop iteration
 _init_tls=$(get_metadata "tls-fullchain")
