@@ -253,62 +253,34 @@ def generate_ssh_keypair() -> Tuple[str, str]:
 def store_ssh_private_key(
     assistant_id: str,
     private_key: str,
-    api_key: str,
 ) -> bool:
-    """Store SSH private key as an assistant secret via Orchestra API.
-
-    Uses the assistant secrets API to store the private key so it can
-    be retrieved by the Unity assistant for file sync.
+    """Store SSH private key on the assistant profile via the admin PATCH endpoint.
 
     Args:
         assistant_id: The assistant ID
         private_key: The SSH private key (PEM format)
-        api_key: Unify API key for authentication
 
     Returns:
         True if stored successfully, False otherwise
     """
-    secret_name = "vm_ssh_private_key"
-    url = f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret"
+    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
+    if not admin_key:
+        logger.error("ORCHESTRA_ADMIN_KEY not configured, cannot store SSH key")
+        return False
 
+    url = f"{ORCHESTRA_URL}/admin/assistant/{assistant_id}"
     try:
-        response = requests.post(
+        response = requests.patch(
             url,
-            json={
-                "secret_name": secret_name,
-                "secret_value": private_key,
-                "description": "SSH private key for VM file sync (Ed25519)",
-            },
-            headers={"Authorization": f"Bearer {api_key}"},
+            json={"desktop_filesync_sshkey": private_key},
+            headers={"Authorization": f"Bearer {admin_key}"},
             timeout=30,
         )
-
-        if response.status_code in (200, 201):
+        if response.status_code == 200:
             logger.info(f"Stored SSH private key for assistant {assistant_id}")
             return True
-        elif response.status_code == 409:
-            # Secret already exists, update it
-            update_url = f"{url}/{secret_name}"
-            update_response = requests.put(
-                update_url,
-                json={"secret_value": private_key},
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=30,
-            )
-            if update_response.status_code == 200:
-                logger.info(f"Updated SSH private key for assistant {assistant_id}")
-                return True
-            else:
-                logger.error(
-                    f"Failed to update SSH key: {update_response.status_code} "
-                    f"{update_response.text}",
-                )
-                return False
-        else:
-            logger.error(
-                f"Failed to store SSH key: {response.status_code} {response.text}",
-            )
-            return False
+        logger.error(f"Failed to store SSH key: {response.status_code} {response.text}")
+        return False
     except Exception as e:
         logger.error(f"Error storing SSH private key: {e}")
         return False
@@ -879,7 +851,7 @@ def assign_pool_vm(
     create_assistant_disk(assistant_id)
     device_name = attach_assistant_disk(vm_name, assistant_id)
     private_key, public_key = generate_ssh_keypair()
-    store_ssh_private_key(assistant_id, private_key, unify_apikey)
+    store_ssh_private_key(assistant_id, private_key)
 
     metadata = {
         "unify-key": unify_apikey,
