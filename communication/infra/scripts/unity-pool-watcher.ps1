@@ -527,9 +527,7 @@ while ($true) {
     try {
         # Long-poll for metadata changes
         $uri = "$MetadataUrl/instance/attributes/?recursive=true&wait_for_change=true"
-        if ($Etag) {
-            $uri += "&last_etag=$Etag"
-        }
+        $uri += "&last_etag=$Etag"
 
         try {
             $response = Invoke-WebRequest -Uri $uri -Headers $MetadataHeaders -TimeoutSec 0 -UseBasicParsing
