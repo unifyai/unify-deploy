@@ -395,29 +395,32 @@ def check_valid_contact(
     return default_contacts, False
 
 
-def is_job_running(user_id: str, assistant_id: str):
-    """Check if a job is running for this assistant."""
-    logger.info(f"Checking if job is running for {user_id} --> {assistant_id}")
-    response = requests.get(
-        f"{ORCHESTRA_URL}/logs",
-        params={
-            "project_name": "AssistantJobs",
-            "context": "startup_events",
-            "filter_expr": (
-                f"user_id == '{user_id}' and "
-                f"assistant_id == '{assistant_id}' and "
-                f"running == 'true'"
-            ),
-            "limit": 100,
-        },
-        headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
-    )
-    logger.info(f"Response: {response.status_code}")
-    if response.status_code != 200:
+def is_job_running(user_id: str, assistant_id: str) -> bool:
+    """Check if a K8s job is actively running for this assistant.
+
+    Queries the Communication service's ``/infra/jobs`` endpoint which
+    reads live state from the Kubernetes API.  Returns ``False`` on any
+    error (fail-open) so the adapter defaults to starting a new job
+    rather than silently dropping messages.
+    """
+    logger.info(f"Checking K8s for active job: assistant_id={assistant_id}")
+    try:
+        resp = requests.get(
+            f"{COMMS_URL}/infra/jobs",
+            params={"label_selector": f"app=unity,assistant-id={assistant_id}"},
+            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            logger.info(f"K8s job query failed: {resp.status_code}")
+            return False
+        jobs = resp.json().get("jobs", [])
+        active = any(j.get("status") == "Running" for j in jobs)
+        logger.info(f"K8s job query: {len(jobs)} job(s), active={active}")
+        return active
+    except Exception as e:
+        logger.info(f"K8s job query error: {e}")
         return False
-    logs = response.json()["logs"]
-    logger.info(f"Logs: {logs}")
-    return bool(logs)
 
 
 def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
@@ -460,7 +463,7 @@ def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
         except requests.exceptions.Timeout:
             pass
         logger.info(
-            f"Expired {len(stale_ids)} stale record(s) for assistant {assistant_id}"
+            f"Expired {len(stale_ids)} stale record(s) for assistant {assistant_id}",
         )
 
         # Release any leaked pool VM from the crashed job (idempotent)
@@ -469,7 +472,7 @@ def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
                 requests.post(
                     f"{COMMS_URL}/infra/vm/pool/release",
                     headers={
-                        "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"
+                        "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}",
                     },
                     json={"assistant_id": assistant_id},
                     timeout=0.1,
@@ -507,7 +510,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     )
     if resp.status_code != 200:
         logger.error(
-            f"[expire_all_stale_jobs] Failed to fetch running logs: {resp.text}"
+            f"[expire_all_stale_jobs] Failed to fetch running logs: {resp.text}",
         )
         return {"total_running": 0, "expired": 0, "error": resp.text}
 
@@ -531,7 +534,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
 
     logger.info(
         f"[expire_all_stale_jobs] Found {len(all_running)} running job(s), "
-        f"{len(stale)} stale (>{max_age_hours}h old)"
+        f"{len(stale)} stale (>{max_age_hours}h old)",
     )
 
     if not stale:
@@ -548,7 +551,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             f"medium={e.get('medium')} "
             f"timestamp={e.get('timestamp')} "
             f"assistant_name={e.get('assistant_name')} "
-            f"user_email={e.get('user_email')}"
+            f"user_email={e.get('user_email')}",
         )
         job_name = e.get("job_name")
         if job_name and COMMS_URL:
@@ -571,7 +574,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             return job_name
         except Exception as exc:
             logger.info(
-                f"[expire_all_stale_jobs] Job suspend non-fatal for {job_name}: {exc}"
+                f"[expire_all_stale_jobs] Job suspend non-fatal for {job_name}: {exc}",
             )
             return None
 
@@ -593,7 +596,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             return aid
         except Exception as exc:
             logger.info(
-                f"[expire_all_stale_jobs] VM release non-fatal for {aid}: {exc}"
+                f"[expire_all_stale_jobs] VM release non-fatal for {aid}: {exc}",
             )
             return None
 
@@ -616,7 +619,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             timeout=30,
         )
         logger.info(
-            f"[expire_all_stale_jobs] Marked {len(stale_ids)} stale job(s) as done"
+            f"[expire_all_stale_jobs] Marked {len(stale_ids)} stale job(s) as done",
         )
 
     return {
@@ -1136,7 +1139,7 @@ def build_webhook_context(
             assistant_data = get_assistant(assistant_id=assistant_id)
         else:
             logger.info(
-                f"Getting assistant data for {destination} with is_email: {is_email}"
+                f"Getting assistant data for {destination} with is_email: {is_email}",
             )
             assistant_data = (
                 get_assistant(email_address=destination)
@@ -1791,14 +1794,14 @@ async def store_microsoft_tokens(
                 }
                 if old_secrets and secret_name in old_secrets:
                     logger.info(
-                        f"Updating secret {secret_name} for assistant {assistant_id}"
+                        f"Updating secret {secret_name} for assistant {assistant_id}",
                     )
                     args["url"] += f"/{secret_name}"
                     args["json"].pop("secret_name")
                     response = await client.put(**args)
                 else:
                     logger.info(
-                        f"Creating secret {secret_name} for assistant {assistant_id}"
+                        f"Creating secret {secret_name} for assistant {assistant_id}",
                     )
                     response = await client.post(**args)
                 if response.status_code in (200, 201):

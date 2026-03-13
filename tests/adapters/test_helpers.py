@@ -323,3 +323,42 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
     mock_mark.assert_called_once()
     mock_start.assert_called_once()
     mock_create.assert_called_once()
+
+
+# --- K8s live status regression test ---
+
+
+@patch("adapters.helpers.replenish_idle_pool")
+@patch("adapters.helpers.start_unity_job")
+@patch("adapters.helpers.mark_job_running")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.check_valid_contact", return_value=([], True))
+def test_build_webhook_context_starts_job_when_k8s_shows_no_active_pods(
+    _mock_check,
+    mock_requests_get,
+    mock_mark,
+    mock_start,
+    _mock_replenish,
+):
+    """A new job must start when K8s reports no active pods, regardless of
+    any stale Orchestra running=True record.
+
+    Regression test for the silent message loss bug where a crashed pod
+    left running=True in AssistantJobs, causing all subsequent messages
+    to be published to a Pub/Sub topic nobody was listening to.
+    """
+    mock_k8s_response = MagicMock()
+    mock_k8s_response.status_code = 200
+    mock_k8s_response.json.return_value = {"jobs": []}
+    mock_requests_get.return_value = mock_k8s_response
+
+    assistant_data = _create_mock_assistant_data()
+    ctx = build_webhook_context(
+        channel="unify_message",
+        destination="",
+        sender="",
+        assistant_data=assistant_data,
+    )
+    mock_start.assert_called_once()
+    mock_mark.assert_called_once()
+    assert ctx["job_started"] is True
