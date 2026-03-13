@@ -97,6 +97,17 @@ else
 fi
 
 # =============================================================================
+# Update Supervisord Config from Metadata
+# =============================================================================
+SUPERVISORD_CONF_PATH="/etc/supervisor/conf.d/unity-vm.conf"
+if curl -sf -H "$METADATA_HEADER" "$METADATA_URL/supervisord-conf" \
+    -o "$SUPERVISORD_CONF_PATH" 2>/dev/null && [[ -s "$SUPERVISORD_CONF_PATH" ]]; then
+    echo "Supervisord config updated from metadata"
+else
+    echo "No supervisord-conf metadata, using baked-in version"
+fi
+
+# =============================================================================
 # VNC Default Password (so supervisord can start TigerVNC)
 # =============================================================================
 mkdir -p /root/.vnc

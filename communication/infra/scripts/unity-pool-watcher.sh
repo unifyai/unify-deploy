@@ -246,16 +246,15 @@ PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 EOF
     log "Agent Service .env configured"
 
-    # Start Agent Service directly (bypass supervisord which may not be running)
+    # Start Agent Service
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
+    pkill -f "node" 2>/dev/null || true
     sleep 1
     cd /agent-service
     nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
-    echo $! > /var/run/agent-service.pid
     cd /
-    log "Agent Service started (PID $(cat /var/run/agent-service.pid))"
+    log "Agent Service started"
 
-    # Wait for Agent Service to be listening
     log "Waiting for Agent Service on port 3000..."
     for i in $(seq 1 60); do
         if ss -tlnp | grep -q ':3000 '; then
@@ -296,21 +295,9 @@ EOF
 do_release() {
     log "RELEASE: cleaning up VM"
 
-    # Stop Agent Service via PID file, then fall back to pkill
-    if [[ -f /var/run/agent-service.pid ]]; then
-        local agent_pid
-        agent_pid=$(cat /var/run/agent-service.pid)
-        if kill -0 "$agent_pid" 2>/dev/null; then
-            kill "$agent_pid" 2>/dev/null
-            for i in $(seq 1 10); do
-                kill -0 "$agent_pid" 2>/dev/null || break
-                sleep 0.5
-            done
-            kill -9 "$agent_pid" 2>/dev/null || true
-        fi
-        rm -f /var/run/agent-service.pid
-    fi
+    # Stop Agent Service (supervisord will auto-restart it, but .env is cleared below)
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
+    pkill -f "node" 2>/dev/null || true
     sleep 1
     log "Agent Service stopped"
 

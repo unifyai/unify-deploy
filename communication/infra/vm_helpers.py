@@ -69,6 +69,7 @@ from .vm_config import (
     UBUNTU_VM_TAGS,
     UBUNTU_INIT_SCRIPT_PATH,
     UBUNTU_POOL_WATCHER_PATH,
+    UBUNTU_SUPERVISORD_CONF_PATH,
     POOL_SSH_USERNAME,
     POOL_TARGET_IDLE,
     POOL_TARGET_STOPPED,
@@ -214,6 +215,11 @@ def load_ubuntu_pool_watcher() -> str:
         return f.read()
 
 
+def load_ubuntu_supervisord_conf() -> str:
+    with open(UBUNTU_SUPERVISORD_CONF_PATH, "r") as f:
+        return f.read()
+
+
 # =============================================================================
 # SSH Key Generation for File Sync
 # =============================================================================
@@ -318,6 +324,7 @@ def _pool_vm_config(vm_type: str) -> Dict[str, Any]:
         "startup_script_key": "startup-script",
         "startup_script_loader": load_ubuntu_startup_script,
         "pool_watcher_loader": load_ubuntu_pool_watcher,
+        "supervisord_conf_loader": load_ubuntu_supervisord_conf,
         "enable_display": False,
     }
 
@@ -459,6 +466,15 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     metadata_items = [
         compute_v1.Items(key=cfg["startup_script_key"], value=startup_script),
         compute_v1.Items(key="pool-watcher-script", value=pool_watcher_script),
+    ]
+
+    supervisord_conf_loader = cfg.get("supervisord_conf_loader")
+    if supervisord_conf_loader:
+        metadata_items.append(
+            compute_v1.Items(key="supervisord-conf", value=supervisord_conf_loader())
+        )
+
+    metadata_items += [
         compute_v1.Items(key="hostname", value=hostname),
         compute_v1.Items(key="orchestra-url", value=ORCHESTRA_URL),
         compute_v1.Items(key="comms-url", value=COMMS_URL),

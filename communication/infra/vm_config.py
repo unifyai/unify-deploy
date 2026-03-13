@@ -83,6 +83,14 @@ UBUNTU_POOL_WATCHER_PATH = os.path.join(
     "scripts",
     "unity-pool-watcher.sh",
 )
+UBUNTU_SUPERVISORD_CONF_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "scripts",
+    "ubuntu-vm-custom-image",
+    "packer",
+    "files",
+    "supervisord.conf",
+)
 
 # =============================================================================
 # Wildcard TLS Certificate (Secret Manager)
