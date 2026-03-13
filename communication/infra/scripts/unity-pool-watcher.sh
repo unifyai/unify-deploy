@@ -105,6 +105,14 @@ do_update() {
         fi
         cd /
 
+        # Build magnitude-core (source is pulled but dist/ needs recompiling)
+        if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
+            log "Building magnitude-core..."
+            cd /magnitude/packages/magnitude-core && npm run build 2>&1 || log "WARNING: magnitude-core build failed"
+            cd /
+            log "magnitude-core built"
+        fi
+
         # Install Patchright Chromium from magnitude-core
         if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
             log "Installing Patchright Chromium..."
