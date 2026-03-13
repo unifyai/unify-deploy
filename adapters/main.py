@@ -2669,12 +2669,12 @@ def scheduled_jobs_cleanup():
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_expire_stale():
-    """Daily sweep: mark all AssistantJobs still running after 24h as done.
+    """Sweep: mark all AssistantJobs still running after 12h as done.
 
     Also suspends any lingering K8s jobs and releases leaked pool VMs.
-    Triggered by Cloud Scheduler at 01:00 UTC.
+    Triggered by Cloud Scheduler every 6 hours.
     """
-    result = expire_all_stale_jobs(max_age_hours=24)
+    result = expire_all_stale_jobs(max_age_hours=12)
     return Response(
         content=json.dumps(result),
         status_code=200,

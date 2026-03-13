@@ -147,7 +147,7 @@ steps:
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "stale-jobs-expire" \
-      --schedule "0 1 * * *" \
+      --schedule "0 1,7,13,19 * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
       --http-method POST \
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
