@@ -511,10 +511,6 @@ function Invoke-RefreshTls {
 
 Write-Log "Unity Pool Watcher starting"
 
-# $PrevUnifyKey starts empty (line 19) so the first loop iteration
-# detects an already-set key and runs Invoke-Assign.  This handles the
-# case where assign_pool_vm wrote metadata before the watcher started.
-
 # Seed TLS hash to avoid unnecessary reload on first loop iteration
 $initTls = Get-Metadata "tls-fullchain"
 if ($initTls) {
@@ -523,9 +519,30 @@ if ($initTls) {
     $PrevTlsHash = [BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").ToLower()
 }
 
+# Pre-fetch etag so the first long-poll has a valid value and won't block
+# on already-set metadata. Also check current state immediately to handle
+# assignments that happened before the watcher started.
+try {
+    $initResponse = Invoke-WebRequest -Uri "$MetadataUrl/instance/attributes/?recursive=true" `
+        -Headers $MetadataHeaders -TimeoutSec 10 -UseBasicParsing
+    $Etag = $initResponse.Headers["ETag"]
+} catch {
+    Write-Log "WARNING: Initial metadata fetch failed: $_"
+}
+
+$currentUnifyKey = Get-Metadata "unify-key"
+if ($currentUnifyKey -ne $PrevUnifyKey) {
+    if ($currentUnifyKey) {
+        Invoke-Assign $currentUnifyKey
+    } else {
+        Invoke-Release
+    }
+}
+$PrevUnifyKey = $currentUnifyKey
+
 while ($true) {
     try {
-        # Long-poll for metadata changes
+        # Long-poll for metadata changes (Etag is always valid here)
         $uri = "$MetadataUrl/instance/attributes/?recursive=true&wait_for_change=true"
         $uri += "&last_etag=$Etag"
 
