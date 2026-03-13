@@ -10,7 +10,7 @@
 # Systemd unit: /etc/systemd/system/unity-pool-watcher.service
 # =============================================================================
 
-set -euo pipefail
+set -u
 
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1"
 METADATA_HEADER="Metadata-Flavor: Google"
@@ -380,18 +380,32 @@ refresh_tls() {
 
 log "Unity Pool Watcher starting"
 
-# PREV_UNIFY_KEY starts empty (line 18) so the first loop iteration
-# detects an already-set key and runs do_assign.  This handles the case
-# where assign_pool_vm wrote metadata before the watcher started.
-
 # Seed TLS hash to avoid unnecessary reload on first loop iteration
 _init_tls=$(get_metadata "tls-fullchain")
 if [[ -n "$_init_tls" ]]; then
     PREV_TLS_HASH=$(echo -n "$_init_tls" | md5sum | cut -d' ' -f1)
 fi
 
+# Pre-fetch etag so the first long-poll has a valid value and won't block
+# on already-set metadata. Also check current state immediately to handle
+# assignments that happened before the watcher started.
+ETAG=$(curl -sf -H "$METADATA_HEADER" \
+    -o /dev/null -D - \
+    "$METADATA_URL/instance/attributes/?recursive=true" \
+    2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
+
+CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
+if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" ]]; then
+    if [[ -n "$CURRENT_UNIFY_KEY" ]]; then
+        do_assign "$CURRENT_UNIFY_KEY"
+    else
+        do_release
+    fi
+fi
+PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
+
 while true; do
-    # Long-poll for metadata changes
+    # Long-poll for metadata changes (ETAG is always valid here)
     RESPONSE=$(curl -sf -H "$METADATA_HEADER" \
         "$METADATA_URL/instance/attributes/?recursive=true&wait_for_change=true&last_etag=$ETAG" \
         2>/dev/null || echo "")
