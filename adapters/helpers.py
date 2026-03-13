@@ -1000,9 +1000,11 @@ def cleanup_idle_pool() -> dict:
         or (not STAGING and "staging" not in job["job_name"])
     ]
 
-    # Separate recently-created idle jobs (< 11 min old) from older ones
-    new_idle_jobs = []
-    old_idle_jobs = []
+    # Classify idle jobs by age into three buckets
+    very_new_idle_jobs = []  # < 1 min: always retained, exempt from quota
+    new_idle_jobs = []  # 1–11 min: preferred when filling the quota
+    old_idle_jobs = []  # >= 11 min: used to fill quota if new ones aren't enough
+    now = datetime.now()
     for job_name in idle_jobs:
         # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
         job_timestamp_str = "-".join(
@@ -1012,26 +1014,30 @@ def cleanup_idle_pool() -> dict:
             ),
         )
         job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
-        now = datetime.now()
         delta = now - job_timestamp
-        if delta < timedelta(minutes=11):
+        if delta < timedelta(minutes=1):
+            very_new_idle_jobs.append(job_name)
+        elif delta < timedelta(minutes=11):
             new_idle_jobs.append(job_name)
         else:
             old_idle_jobs.append(job_name)
 
-    # Retain the N most recent idle jobs (where N = target), delete the rest.
-    # Prefer new jobs; fall back to old ones if not enough new ones exist.
+    # Very-new jobs are unconditionally retained (not counted against the quota).
+    # From the remaining jobs, retain up to target_retain, preferring newer ones.
     new_idle_jobs = sorted(new_idle_jobs, reverse=True)
     old_idle_jobs = sorted(old_idle_jobs, reverse=True)
-    retain = new_idle_jobs[:target_retain]
-    if len(retain) < target_retain:
-        retain += old_idle_jobs[: target_retain - len(retain)]
+    retain = list(very_new_idle_jobs)
+    quota_retain = new_idle_jobs[:target_retain]
+    if len(quota_retain) < target_retain:
+        quota_retain += old_idle_jobs[: target_retain - len(quota_retain)]
+    retain += quota_retain
     retain_set = set(retain)
 
     to_delete = [j for j in idle_jobs if j not in retain_set]
     logger.info(
-        f"Cleanup: retain={len(retain)} (target={target_retain}), "
-        f"delete={len(to_delete)}, live={live_count}",
+        f"Cleanup: retain={len(retain)} "
+        f"(very_new={len(very_new_idle_jobs)}, quota={len(quota_retain)}, "
+        f"target={target_retain}), delete={len(to_delete)}, live={live_count}",
     )
     logger.info(f"Idle jobs to retain: {sorted(retain)}")
     logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
