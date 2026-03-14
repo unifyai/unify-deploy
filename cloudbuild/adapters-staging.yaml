@@ -1,16 +1,26 @@
 steps:
-  # Build Docker Image
+  # Pull previous image for Docker layer cache
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'pull-cache'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest || true
+
+  # Build Docker Image with BuildKit inline cache
 - name: 'gcr.io/cloud-builders/docker'
   id: 'build-image'
+  entrypoint: 'bash'
   args:
-  - 'build'
-  - '-f'
-  - 'Dockerfile-adapters'
-  - '-t'
-  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
-  - '-t'
-  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'
-  - '.'
+  - '-c'
+  - |
+    DOCKER_BUILDKIT=1 docker build -f Dockerfile-adapters \
+      --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
+  waitFor: ['pull-cache']
 
   # Push Docker Image (SHA Tag)
 - name: 'gcr.io/cloud-builders/docker'

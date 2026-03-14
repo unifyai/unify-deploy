@@ -1,0 +1,31 @@
+# Git
+.git/
+.gitignore
+
+# Tests
+tests/
+
+# CI/CD
+.github/
+cloudbuild/
+
+# Documentation
+*.md
+
+# IDE
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Environment
+.env
+.env.*
+.venv/
+
+# OS
+.DS_Store
