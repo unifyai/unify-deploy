@@ -276,12 +276,12 @@ def create_unity_job(
                                 "resources": {
                                     "requests": {
                                         "cpu": "2",
-                                        "memory": "8Gi",
+                                        "memory": "16Gi",
                                         "ephemeral-storage": "10Gi",
                                     },
                                     "limits": {
                                         "cpu": "2",
-                                        "memory": "8Gi",
+                                        "memory": "16Gi",
                                         "ephemeral-storage": "10Gi",
                                     },
                                 },

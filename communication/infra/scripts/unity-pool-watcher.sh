@@ -105,6 +105,14 @@ do_update() {
         fi
         cd /
 
+        # Build magnitude-core (source is pulled but dist/ needs recompiling)
+        if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
+            log "Building magnitude-core..."
+            cd /magnitude/packages/magnitude-core && npm run build 2>&1 || log "WARNING: magnitude-core build failed"
+            cd /
+            log "magnitude-core built"
+        fi
+
         # Install Patchright Chromium from magnitude-core
         if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
             log "Installing Patchright Chromium..."
@@ -246,10 +254,20 @@ PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 EOF
     log "Agent Service .env configured"
 
-    # Start Agent Service
+    # Stop any existing Agent Service and wait for port 3000 to be released
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
     pkill -f "node" 2>/dev/null || true
-    sleep 1
+    for _w in $(seq 1 10); do
+        ss -tlnp | grep -q ':3000 ' || break
+        sleep 1
+    done
+    if ss -tlnp | grep -q ':3000 '; then
+        log "Port 3000 still held after SIGTERM, force-killing"
+        fuser -k 3000/tcp 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Start Agent Service
     cd /agent-service
     nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
     cd /
@@ -295,10 +313,18 @@ EOF
 do_release() {
     log "RELEASE: cleaning up VM"
 
-    # Stop Agent Service (supervisord will auto-restart it, but .env is cleared below)
+    # Stop Agent Service and wait for port 3000 to be released
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
     pkill -f "node" 2>/dev/null || true
-    sleep 1
+    for _w in $(seq 1 10); do
+        ss -tlnp | grep -q ':3000 ' || break
+        sleep 1
+    done
+    if ss -tlnp | grep -q ':3000 '; then
+        log "Port 3000 still held after SIGTERM, force-killing"
+        fuser -k 3000/tcp 2>/dev/null || true
+        sleep 1
+    fi
     log "Agent Service stopped"
 
     # Clear .env
