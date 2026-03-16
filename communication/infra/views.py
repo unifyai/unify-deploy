@@ -62,6 +62,40 @@ logger = logging.getLogger(__name__)
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
 
 
+async def _publish_desktop_ready(
+    assistant_id: str, hostname: str, vm_type: str
+) -> str:
+    """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
+
+    Returns the Pub/Sub message ID.
+    """
+    publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
+    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+    topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
+
+    message_data = json.dumps(
+        {
+            "thread": "unity_system_event",
+            "publish_timestamp": time.time(),
+            "event": {
+                "assistant_id": assistant_id,
+                "event_type": "assistant_desktop_ready",
+                "desktop_url": f"https://{hostname}",
+                "vm_type": vm_type,
+                "message": f"VM ({vm_type}) startup complete",
+            },
+        },
+    ).encode("utf-8")
+
+    future = publisher.publish(topic_path, data=message_data)
+    message_id = await asyncio.to_thread(future.result)
+    logger.info(
+        f"Published assistant_desktop_ready for assistant {assistant_id} "
+        f"(message_id={message_id})",
+    )
+    return message_id
+
+
 async def _get_k8s_clients():
     """Return cached K8s API clients, running the (potentially blocking)
     setup in a thread so the event loop is never stalled."""
@@ -921,31 +955,7 @@ async def vm_ready_endpoint(
             detail=f"VM HTTPS not reachable at {hostname}",
         )
 
-    publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
-
-    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
-    topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
-
-    message_data = json.dumps(
-        {
-            "thread": "unity_system_event",
-            "publish_timestamp": time.time(),
-            "event": {
-                "assistant_id": assistant_id,
-                "event_type": "assistant_desktop_ready",
-                "desktop_url": f"https://{hostname}",
-                "vm_type": vm_type,
-                "message": f"VM ({vm_type}) startup complete",
-            },
-        },
-    ).encode("utf-8")
-
-    future = publisher.publish(topic_path, data=message_data)
-    message_id = await asyncio.to_thread(future.result)
-
-    logger.info(
-        f"Published assistant_desktop_ready for assistant {assistant_id} (message_id={message_id})",
-    )
+    message_id = await _publish_desktop_ready(assistant_id, hostname, vm_type)
 
     return {
         "success": True,
@@ -995,9 +1005,12 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
 async def assign_pool_endpoint(request: PoolAssignRequest):
     """Assign an idle pool VM to an assistant.
 
-    Claims an idle VM (race-safe via label CAS), creates/attaches the
-    assistant's persistent disk, generates SSH keys, and updates metadata
-    to trigger the on-VM watcher.
+    Idempotent — if the assistant already has a RUNNING assigned VM,
+    returns it and re-publishes ``assistant_desktop_ready``.
+
+    For new assignments: claims an idle VM (race-safe via label CAS),
+    creates/attaches the assistant's persistent disk, generates SSH keys,
+    and updates metadata to trigger the on-VM watcher.
     """
     try:
         result = await asyncio.get_running_loop().run_in_executor(
@@ -1011,10 +1024,19 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
             ),
         )
 
-        # Replenish: start/provision VMs to replace the one just claimed (fire-and-forget)
-        asyncio.get_running_loop().run_in_executor(
-            None, partial(replenish_pool, request.vm_type)
-        )
+        already_assigned = result.pop("already_assigned", False)
+
+        if already_assigned:
+            hostname = result["hostname"]
+            reachable = await asyncio.to_thread(_probe_vm_https, hostname)
+            if reachable:
+                await _publish_desktop_ready(
+                    request.assistant_id, hostname, request.vm_type,
+                )
+        else:
+            asyncio.get_running_loop().run_in_executor(
+                None, partial(replenish_pool, request.vm_type)
+            )
 
         return PoolAssignResponse(**result)
     except ValueError as e:

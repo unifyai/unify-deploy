@@ -855,13 +855,108 @@ def _update_instance_metadata(
             raise
 
 
+def _extract_vm_response(instance, assistant_id: str) -> Dict[str, Any]:
+    """Build a pool-assign response dict from a GCE instance object."""
+    hostname = _read_instance_metadata(instance, "hostname")
+    if not hostname:
+        labels = dict(instance.labels) if instance.labels else {}
+        hostname_label = labels.get("pool-hostname", "")
+        hostname = (
+            hostname_label.replace("-", ".")
+            if hostname_label
+            else instance.name + f".{DOMAIN_SUFFIX}"
+        )
+
+    external_ip = None
+    if instance.network_interfaces:
+        for ni in instance.network_interfaces:
+            if ni.access_configs:
+                for ac in ni.access_configs:
+                    if ac.nat_i_p:
+                        external_ip = ac.nat_i_p
+                        break
+
+    return {
+        "vm_name": instance.name,
+        "assistant_id": assistant_id,
+        "ip_address": external_ip,
+        "hostname": hostname,
+        "desktop_url": f"https://{hostname}",
+        "status": instance.status,
+        "ssh_username": POOL_SSH_USERNAME,
+        "ssh_port": SSH_SYNC_PORT,
+    }
+
+
+def _release_stale_assignment(
+    client: compute_v1.InstancesClient,
+    instance,
+    assistant_id: str,
+) -> None:
+    """Release a non-RUNNING assigned VM: detach disk, reset labels to idle."""
+    vm_name = instance.name
+    logger.info(
+        f"Releasing stale assignment on {vm_name} (status={instance.status}) "
+        f"for assistant {assistant_id}"
+    )
+    try:
+        detach_assistant_disk(vm_name, assistant_id)
+    except Exception as e:
+        logger.warning(f"Failed to detach disk from stale VM {vm_name}: {e}")
+
+    try:
+        labels = dict(instance.labels) if instance.labels else {}
+        labels["pool-role"] = "idle"
+        labels["assistant-id"] = ""
+        fresh = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+        client.set_labels(
+            project=VM_PROJECT_ID,
+            zone=ZONE,
+            instance=vm_name,
+            instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+                labels=labels,
+                label_fingerprint=fresh.label_fingerprint,
+            ),
+        ).result()
+    except Exception as e:
+        logger.warning(f"Failed to reset labels on stale VM {vm_name}: {e}")
+
+
 def assign_pool_vm(
     assistant_id: str,
     unify_apikey: str,
     vm_type: str = "ubuntu",
     vm_number: int | None = None,
 ) -> Dict[str, Any]:
-    """Full pool assignment: claim VM, create/attach disk, set metadata."""
+    """Full pool assignment: claim VM, create/attach disk, set metadata.
+
+    Idempotent — if the assistant already has a RUNNING assigned VM, returns
+    it with ``already_assigned=True`` instead of claiming a new one.
+    Non-RUNNING stale assignments are released first so their disk is freed.
+    """
+    client = compute_v1.InstancesClient()
+    sanitized = assistant_id.lower().replace("_", "-")
+    existing_filter = f"labels.pool-role=assigned AND labels.assistant-id={sanitized}"
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=existing_filter,
+    )
+    assigned_vms = list(client.list(request=request))
+
+    running = [vm for vm in assigned_vms if vm.status == "RUNNING"]
+    stale = [vm for vm in assigned_vms if vm.status != "RUNNING"]
+
+    for vm in stale:
+        _release_stale_assignment(client, vm, assistant_id)
+
+    if running:
+        vm = running[0]
+        result = _extract_vm_response(vm, assistant_id)
+        result["already_assigned"] = True
+        logger.info(f"Assistant {assistant_id} already assigned to {vm.name}")
+        return result
+
     claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
     vm_name = claimed["vm_name"]
     create_assistant_disk(assistant_id)
