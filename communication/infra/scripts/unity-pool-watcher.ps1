@@ -421,6 +421,42 @@ npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
         }
     }
 
+    # Wait for Caddy on port 443 before notifying (the /vm/ready endpoint probes HTTPS back)
+    Write-Log "Waiting for Caddy on port 443..."
+    $caddyReady = $false
+    for ($i = 1; $i -le 30; $i++) {
+        $listener = Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue
+        if ($listener) {
+            Write-Log "Caddy is listening on port 443 (after ${i}s)"
+            $caddyReady = $true
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $caddyReady) {
+        Write-Log "Caddy not listening after 30s, restarting..."
+        Stop-Process -Name "caddy" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        $caddyExe = "C:\caddy\caddy.exe"
+        $caddyfile = "C:\caddy\Caddyfile"
+        if ((Test-Path $caddyExe) -and (Test-Path $caddyfile)) {
+            $psCommand = "Set-Location 'C:\caddy'; & '$caddyExe' run --config '$caddyfile'"
+            Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory "C:\caddy"
+        }
+        for ($i = 1; $i -le 30; $i++) {
+            $listener = Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue
+            if ($listener) {
+                Write-Log "Caddy is listening on port 443 (after restart, ${i}s)"
+                $caddyReady = $true
+                break
+            }
+            if ($i -eq 30) {
+                Write-Log "WARNING: Caddy not listening on port 443 after restart, proceeding anyway"
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
+
     # Send ready notification
     if ($commsUrl -and $hostname -and $unifyKey -and $assistantId) {
         for ($attempt = 1; $attempt -le 10; $attempt++) {

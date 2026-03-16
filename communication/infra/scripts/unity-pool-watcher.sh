@@ -288,6 +288,32 @@ EOF
         sleep 1
     done
 
+    # Wait for Caddy on port 443 before notifying (the /vm/ready endpoint probes HTTPS back)
+    log "Waiting for Caddy on port 443..."
+    for i in $(seq 1 30); do
+        if ss -tlnp | grep -q ':443 '; then
+            log "Caddy is listening on port 443 (after ${i}s)"
+            break
+        fi
+        if [[ $i -eq 30 ]]; then
+            log "Caddy not listening after 30s, restarting via supervisord..."
+            supervisorctl restart caddy 2>/dev/null || true
+        fi
+        sleep 1
+    done
+    if ! ss -tlnp | grep -q ':443 '; then
+        for i in $(seq 1 30); do
+            if ss -tlnp | grep -q ':443 '; then
+                log "Caddy is listening on port 443 (after restart, ${i}s)"
+                break
+            fi
+            if [[ $i -eq 30 ]]; then
+                log "WARNING: Caddy not listening on port 443 after restart, proceeding anyway"
+            fi
+            sleep 1
+        done
+    fi
+
     # Send ready notification
     if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" ]]; then
         for attempt in $(seq 1 10); do
