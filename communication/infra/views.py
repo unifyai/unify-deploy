@@ -62,9 +62,7 @@ logger = logging.getLogger(__name__)
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
 
 
-async def _publish_desktop_ready(
-    assistant_id: str, hostname: str, vm_type: str
-) -> str:
+async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
     Returns the Pub/Sub message ID.
@@ -1031,7 +1029,9 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
             reachable = await asyncio.to_thread(_probe_vm_https, hostname)
             if reachable:
                 await _publish_desktop_ready(
-                    request.assistant_id, hostname, request.vm_type,
+                    request.assistant_id,
+                    hostname,
+                    request.vm_type,
                 )
         else:
             asyncio.get_running_loop().run_in_executor(
