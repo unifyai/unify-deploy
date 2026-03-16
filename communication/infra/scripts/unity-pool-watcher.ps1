@@ -53,13 +53,28 @@ function Save-CommitHash($dir, $hash) {
     if ($hash) { $hash | Out-File -FilePath (Join-Path $dir ".commit-hash") -Encoding UTF8 -NoNewline }
 }
 
+function Stop-AgentService {
+    Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+    for ($i = 1; $i -le 10; $i++) {
+        $listener = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
+        if (-not $listener) { return }
+        if ($i -ge 3) {
+            $pids = $listener | Select-Object -ExpandProperty OwningProcess -Unique
+            foreach ($p in $pids) {
+                Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    Write-Log "WARNING: port 3000 still in use after Stop-AgentService"
+}
+
 function Invoke-Update {
     Write-Log "UPDATE: checking for code updates"
 
-    # Kill node processes upfront to release file locks on Magnitude's built files
-    Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 500
+    Stop-AgentService
 
     $githubToken = (Get-Metadata "github-token").Trim()
     $staging = Get-Metadata "staging"
@@ -80,6 +95,21 @@ function Invoke-Update {
 
     if ($magSaved -and $magRemote -and ($magSaved -eq $magRemote)) {
         Write-Log "Magnitude up-to-date ($magSaved)"
+
+        if (Test-Path "$magnitudeDir\package.json") {
+            Write-Log "Installing Magnitude dependencies..."
+            Push-Location $magnitudeDir
+            $bunExe = "C:\Windows\System32\config\systemprofile\.bun\bin\bun.exe"
+            if (Test-Path $bunExe) {
+                $bunDir = Split-Path $bunExe
+                $env:Path = "$bunDir;$env:Path"
+                & $bunExe install 2>&1
+            } else {
+                npm install 2>&1
+            }
+            Pop-Location
+        }
+        Write-Log "Magnitude dependencies installed"
     } else {
         Write-Log "Magnitude updating ($magSaved -> $magRemote)"
         if (Test-Path "$magnitudeDir\.git") {
@@ -214,7 +244,7 @@ function Invoke-Assign($unifyKey) {
     Write-Log "ASSIGN: configuring VM for assistant"
 
     # Clean up any previous assignment (handles re-assignment without explicit release)
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Stop-AgentService
     if (Test-Path "C:\Unity\Local") {
         cmd /c rmdir "C:\Unity\Local" 2>$null
         Get-Disk | Where-Object { $_.Number -gt 0 } |
@@ -317,20 +347,9 @@ function Invoke-Assign($unifyKey) {
         Write-Log "WARNING: VNC password update failed: $_"
     }
 
-    # Agent Service: kill existing, wait for port 3000 to be free, write .env, start
+    # Agent Service: kill existing, write .env, start via scheduled task (interactive session)
     try {
-        Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-        Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        for ($_w = 1; $_w -le 10; $_w++) {
-            if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) { break }
-            Start-Sleep -Seconds 1
-        }
-        if (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue) {
-            Write-Log "Port 3000 still held after Stop-Process, force-killing"
-            $proc = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($proc) { Stop-Process -Id $proc.OwningProcess -Force -ErrorAction SilentlyContinue }
-            Start-Sleep -Seconds 1
-        }
+        Stop-AgentService
 
         $agentServiceDir = "C:\agent-service"
         $envContent = @"
@@ -402,6 +421,42 @@ npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
         }
     }
 
+    # Wait for Caddy on port 443 before notifying (the /vm/ready endpoint probes HTTPS back)
+    Write-Log "Waiting for Caddy on port 443..."
+    $caddyReady = $false
+    for ($i = 1; $i -le 30; $i++) {
+        $listener = Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue
+        if ($listener) {
+            Write-Log "Caddy is listening on port 443 (after ${i}s)"
+            $caddyReady = $true
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $caddyReady) {
+        Write-Log "Caddy not listening after 30s, restarting..."
+        Stop-Process -Name "caddy" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        $caddyExe = "C:\caddy\caddy.exe"
+        $caddyfile = "C:\caddy\Caddyfile"
+        if ((Test-Path $caddyExe) -and (Test-Path $caddyfile)) {
+            $psCommand = "Set-Location 'C:\caddy'; & '$caddyExe' run --config '$caddyfile'"
+            Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory "C:\caddy"
+        }
+        for ($i = 1; $i -le 30; $i++) {
+            $listener = Get-NetTCPConnection -LocalPort 443 -State Listen -ErrorAction SilentlyContinue
+            if ($listener) {
+                Write-Log "Caddy is listening on port 443 (after restart, ${i}s)"
+                $caddyReady = $true
+                break
+            }
+            if ($i -eq 30) {
+                Write-Log "WARNING: Caddy not listening on port 443 after restart, proceeding anyway"
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
+
     # Send ready notification
     if ($commsUrl -and $hostname -and $unifyKey -and $assistantId) {
         for ($attempt = 1; $attempt -le 10; $attempt++) {
@@ -428,20 +483,9 @@ npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 function Invoke-Release {
     Write-Log "RELEASE: cleaning up VM"
 
-    # Stop Agent Service and wait for port 3000 to be released
-    Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+    # Stop Agent Service
+    Stop-AgentService
     Disable-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    for ($_w = 1; $_w -le 10; $_w++) {
-        if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) { break }
-        Start-Sleep -Seconds 1
-    }
-    if (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue) {
-        Write-Log "Port 3000 still held after Stop-Process, force-killing"
-        $proc = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($proc) { Stop-Process -Id $proc.OwningProcess -Force -ErrorAction SilentlyContinue }
-        Start-Sleep -Seconds 1
-    }
     Write-Log "Agent Service stopped"
 
     # Clear .env
