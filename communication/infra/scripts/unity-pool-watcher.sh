@@ -84,6 +84,16 @@ do_update() {
 
     if [[ -n "$mag_saved" && -n "$mag_remote" && "$mag_saved" == "$mag_remote" ]]; then
         log "Magnitude up-to-date ($mag_saved)"
+
+        log "Installing Magnitude dependencies..."
+        cd /magnitude
+        if command -v bun &>/dev/null; then
+            bun install 2>&1
+        else
+            npm install 2>&1
+        fi
+        cd /
+        log "Magnitude dependencies installed"
     else
         log "Magnitude updating ($mag_saved -> $mag_remote)"
         if [[ -d "/magnitude/.git" ]]; then
@@ -104,14 +114,6 @@ do_update() {
             npm install 2>&1
         fi
         cd /
-
-        # Build magnitude-core (source is pulled but dist/ needs recompiling)
-        if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
-            log "Building magnitude-core..."
-            cd /magnitude/packages/magnitude-core && npm run build 2>&1 || log "WARNING: magnitude-core build failed"
-            cd /
-            log "magnitude-core built"
-        fi
 
         # Install Patchright Chromium from magnitude-core
         if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
@@ -254,20 +256,10 @@ PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 EOF
     log "Agent Service .env configured"
 
-    # Stop any existing Agent Service and wait for port 3000 to be released
+    # Start Agent Service
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
     pkill -f "node" 2>/dev/null || true
-    for _w in $(seq 1 10); do
-        ss -tlnp | grep -q ':3000 ' || break
-        sleep 1
-    done
-    if ss -tlnp | grep -q ':3000 '; then
-        log "Port 3000 still held after SIGTERM, force-killing"
-        fuser -k 3000/tcp 2>/dev/null || true
-        sleep 1
-    fi
-
-    # Start Agent Service
+    sleep 1
     cd /agent-service
     nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
     cd /
@@ -313,18 +305,10 @@ EOF
 do_release() {
     log "RELEASE: cleaning up VM"
 
-    # Stop Agent Service and wait for port 3000 to be released
+    # Stop Agent Service
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
     pkill -f "node" 2>/dev/null || true
-    for _w in $(seq 1 10); do
-        ss -tlnp | grep -q ':3000 ' || break
-        sleep 1
-    done
-    if ss -tlnp | grep -q ':3000 '; then
-        log "Port 3000 still held after SIGTERM, force-killing"
-        fuser -k 3000/tcp 2>/dev/null || true
-        sleep 1
-    fi
+    sleep 1
     log "Agent Service stopped"
 
     # Clear .env

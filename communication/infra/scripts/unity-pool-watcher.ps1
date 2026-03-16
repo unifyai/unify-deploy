@@ -80,6 +80,21 @@ function Invoke-Update {
 
     if ($magSaved -and $magRemote -and ($magSaved -eq $magRemote)) {
         Write-Log "Magnitude up-to-date ($magSaved)"
+
+        if (Test-Path "$magnitudeDir\package.json") {
+            Write-Log "Installing Magnitude dependencies..."
+            Push-Location $magnitudeDir
+            $bunExe = "C:\Windows\System32\config\systemprofile\.bun\bin\bun.exe"
+            if (Test-Path $bunExe) {
+                $bunDir = Split-Path $bunExe
+                $env:Path = "$bunDir;$env:Path"
+                & $bunExe install 2>&1
+            } else {
+                npm install 2>&1
+            }
+            Pop-Location
+        }
+        Write-Log "Magnitude dependencies installed"
     } else {
         Write-Log "Magnitude updating ($magSaved -> $magRemote)"
         if (Test-Path "$magnitudeDir\.git") {
@@ -317,20 +332,11 @@ function Invoke-Assign($unifyKey) {
         Write-Log "WARNING: VNC password update failed: $_"
     }
 
-    # Agent Service: kill existing, wait for port 3000 to be free, write .env, start
+    # Agent Service: kill existing, write .env, start via scheduled task (interactive session)
     try {
         Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
         Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        for ($_w = 1; $_w -le 10; $_w++) {
-            if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) { break }
-            Start-Sleep -Seconds 1
-        }
-        if (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue) {
-            Write-Log "Port 3000 still held after Stop-Process, force-killing"
-            $proc = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($proc) { Stop-Process -Id $proc.OwningProcess -Force -ErrorAction SilentlyContinue }
-            Start-Sleep -Seconds 1
-        }
+        Start-Sleep -Seconds 1
 
         $agentServiceDir = "C:\agent-service"
         $envContent = @"
@@ -428,20 +434,10 @@ npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
 function Invoke-Release {
     Write-Log "RELEASE: cleaning up VM"
 
-    # Stop Agent Service and wait for port 3000 to be released
+    # Stop Agent Service
     Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
     Disable-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
     Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    for ($_w = 1; $_w -le 10; $_w++) {
-        if (-not (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)) { break }
-        Start-Sleep -Seconds 1
-    }
-    if (Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue) {
-        Write-Log "Port 3000 still held after Stop-Process, force-killing"
-        $proc = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($proc) { Stop-Process -Id $proc.OwningProcess -Force -ErrorAction SilentlyContinue }
-        Start-Sleep -Seconds 1
-    }
     Write-Log "Agent Service stopped"
 
     # Clear .env
