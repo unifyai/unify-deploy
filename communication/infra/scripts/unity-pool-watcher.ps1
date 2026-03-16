@@ -53,13 +53,28 @@ function Save-CommitHash($dir, $hash) {
     if ($hash) { $hash | Out-File -FilePath (Join-Path $dir ".commit-hash") -Encoding UTF8 -NoNewline }
 }
 
+function Stop-AgentService {
+    Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+    for ($i = 1; $i -le 10; $i++) {
+        $listener = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue
+        if (-not $listener) { return }
+        if ($i -ge 3) {
+            $pids = $listener | Select-Object -ExpandProperty OwningProcess -Unique
+            foreach ($p in $pids) {
+                Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    Write-Log "WARNING: port 3000 still in use after Stop-AgentService"
+}
+
 function Invoke-Update {
     Write-Log "UPDATE: checking for code updates"
 
-    # Kill node processes upfront to release file locks on Magnitude's built files
-    Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 500
+    Stop-AgentService
 
     $githubToken = (Get-Metadata "github-token").Trim()
     $staging = Get-Metadata "staging"
@@ -229,7 +244,7 @@ function Invoke-Assign($unifyKey) {
     Write-Log "ASSIGN: configuring VM for assistant"
 
     # Clean up any previous assignment (handles re-assignment without explicit release)
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Stop-AgentService
     if (Test-Path "C:\Unity\Local") {
         cmd /c rmdir "C:\Unity\Local" 2>$null
         Get-Disk | Where-Object { $_.Number -gt 0 } |
@@ -334,9 +349,7 @@ function Invoke-Assign($unifyKey) {
 
     # Agent Service: kill existing, write .env, start via scheduled task (interactive session)
     try {
-        Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-        Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
+        Stop-AgentService
 
         $agentServiceDir = "C:\agent-service"
         $envContent = @"
@@ -435,9 +448,8 @@ function Invoke-Release {
     Write-Log "RELEASE: cleaning up VM"
 
     # Stop Agent Service
-    Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
+    Stop-AgentService
     Disable-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Write-Log "Agent Service stopped"
 
     # Clear .env

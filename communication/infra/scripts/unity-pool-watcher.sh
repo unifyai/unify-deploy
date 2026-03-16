@@ -53,13 +53,26 @@ save_commit_hash() {
     fi
 }
 
+kill_agent_service() {
+    pkill -f "ts-node src/index.ts" 2>/dev/null || true
+    pkill -f "node" 2>/dev/null || true
+
+    for i in $(seq 1 10); do
+        if ! ss -tlnp | grep -q ':3000 '; then
+            return
+        fi
+        if [[ $i -ge 3 ]]; then
+            fuser -k -KILL 3000/tcp 2>/dev/null || true
+        fi
+        sleep 1
+    done
+    log "WARNING: port 3000 still in use after kill_agent_service"
+}
+
 do_update() {
     log "UPDATE: checking for code updates"
 
-    # Kill node processes upfront to release file locks on Magnitude's built files
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
-    pkill -f "node" 2>/dev/null || true
-    sleep 1
+    kill_agent_service
 
     local github_token
     local staging
@@ -167,7 +180,7 @@ do_assign() {
     log "ASSIGN: configuring VM for assistant"
 
     # Clean up any previous assignment (handles re-assignment without explicit release)
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
+    kill_agent_service
     if mountpoint -q /Unity/Local 2>/dev/null; then
         fuser -km /Unity/Local 2>/dev/null || true
         sleep 1
@@ -257,9 +270,7 @@ EOF
     log "Agent Service .env configured"
 
     # Start Agent Service
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
-    pkill -f "node" 2>/dev/null || true
-    sleep 1
+    kill_agent_service
     cd /agent-service
     nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
     cd /
@@ -306,9 +317,7 @@ do_release() {
     log "RELEASE: cleaning up VM"
 
     # Stop Agent Service
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
-    pkill -f "node" 2>/dev/null || true
-    sleep 1
+    kill_agent_service
     log "Agent Service stopped"
 
     # Clear .env
