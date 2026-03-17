@@ -396,73 +396,28 @@ def check_valid_contact(
 
 
 def is_job_running(user_id: str, assistant_id: str) -> bool:
-    """Check if a K8s job is actively running for this assistant.
-
-    Two-phase check:
-    1. Query K8s via ``/infra/jobs`` for a pod labeled with this
-       ``assistant-id`` (authoritative once the label is set).
-    2. Fall back to Orchestra ``AssistantJobs`` for a *recent*
-       ``running=True`` record (covers the brief window between job
-       start and K8s label propagation).  Records older than 120 s
-       are ignored to prevent stale flags from blocking new jobs.
-
-    Returns ``False`` on any error (fail-open) so the adapter defaults
-    to starting a new job rather than silently dropping messages.
-    """
-    logger.info(f"Checking job status: assistant_id={assistant_id}")
-
-    # Phase 1: live K8s state (ground truth once label is set)
-    try:
-        resp = requests.get(
-            f"{COMMS_URL}/infra/jobs",
-            params={"label_selector": f"app=unity,assistant-id={assistant_id}"},
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            jobs = resp.json().get("jobs", [])
-            if any(j.get("status") == "Running" for j in jobs):
-                logger.info(f"K8s: active pod found for assistant {assistant_id}")
-                return True
-            logger.info(f"K8s: {len(jobs)} job(s), none active")
-    except Exception as e:
-        logger.info(f"K8s job query error (non-fatal): {e}")
-
-    # Phase 2: time-bounded Orchestra fallback (startup window)
-    try:
-        resp = requests.get(
-            f"{ORCHESTRA_URL}/logs",
-            params={
-                "project_name": "AssistantJobs",
-                "context": "startup_events",
-                "filter_expr": (
-                    f"assistant_id == '{assistant_id}' and running == 'true'"
-                ),
-                "limit": 1,
-            },
-            headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            logs = resp.json().get("logs", [])
-            if logs:
-                ts = logs[0].get("entries", {}).get("timestamp", "")
-                if ts:
-                    record_time = datetime.fromisoformat(ts)
-                    age = (datetime.now(tz=timezone.utc) - record_time).total_seconds()
-                    if age < 120:
-                        logger.info(
-                            f"Orchestra: recent running record ({age:.0f}s old) "
-                            f"for assistant {assistant_id}",
-                        )
-                        return True
-                    logger.info(
-                        f"Orchestra: stale running record ({age:.0f}s old), ignoring",
-                    )
-    except Exception as e:
-        logger.info(f"Orchestra fallback error (non-fatal): {e}")
-
-    return False
+    """Check if a job is running for this assistant."""
+    logger.info(f"Checking if job is running for {user_id} --> {assistant_id}")
+    response = requests.get(
+        f"{ORCHESTRA_URL}/logs",
+        params={
+            "project_name": "AssistantJobs",
+            "context": "startup_events",
+            "filter_expr": (
+                f"user_id == '{user_id}' and "
+                f"assistant_id == '{assistant_id}' and "
+                f"running == 'true'"
+            ),
+            "limit": 100,
+        },
+        headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
+    )
+    logger.info(f"Response: {response.status_code}")
+    if response.status_code != 200:
+        return False
+    logs = response.json()["logs"]
+    logger.info(f"Logs: {logs}")
+    return bool(logs)
 
 
 def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
