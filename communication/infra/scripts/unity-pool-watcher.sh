@@ -53,13 +53,26 @@ save_commit_hash() {
     fi
 }
 
+kill_agent_service() {
+    pkill -f "ts-node src/index.ts" 2>/dev/null || true
+    pkill -f "node" 2>/dev/null || true
+
+    for i in $(seq 1 10); do
+        if ! ss -tlnp | grep -q ':3000 '; then
+            return
+        fi
+        if [[ $i -ge 3 ]]; then
+            fuser -k -KILL 3000/tcp 2>/dev/null || true
+        fi
+        sleep 1
+    done
+    log "WARNING: port 3000 still in use after kill_agent_service"
+}
+
 do_update() {
     log "UPDATE: checking for code updates"
 
-    # Kill node processes upfront to release file locks on Magnitude's built files
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
-    pkill -f "node" 2>/dev/null || true
-    sleep 1
+    kill_agent_service
 
     local github_token
     local staging
@@ -84,6 +97,16 @@ do_update() {
 
     if [[ -n "$mag_saved" && -n "$mag_remote" && "$mag_saved" == "$mag_remote" ]]; then
         log "Magnitude up-to-date ($mag_saved)"
+
+        log "Installing Magnitude dependencies..."
+        cd /magnitude
+        if command -v bun &>/dev/null; then
+            bun install 2>&1
+        else
+            npm install 2>&1
+        fi
+        cd /
+        log "Magnitude dependencies installed"
     else
         log "Magnitude updating ($mag_saved -> $mag_remote)"
         if [[ -d "/magnitude/.git" ]]; then
@@ -104,14 +127,6 @@ do_update() {
             npm install 2>&1
         fi
         cd /
-
-        # Build magnitude-core (source is pulled but dist/ needs recompiling)
-        if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
-            log "Building magnitude-core..."
-            cd /magnitude/packages/magnitude-core && npm run build 2>&1 || log "WARNING: magnitude-core build failed"
-            cd /
-            log "magnitude-core built"
-        fi
 
         # Install Patchright Chromium from magnitude-core
         if [[ -f /magnitude/packages/magnitude-core/package.json ]]; then
@@ -165,7 +180,7 @@ do_assign() {
     log "ASSIGN: configuring VM for assistant"
 
     # Clean up any previous assignment (handles re-assignment without explicit release)
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
+    kill_agent_service
     if mountpoint -q /Unity/Local 2>/dev/null; then
         fuser -km /Unity/Local 2>/dev/null || true
         sleep 1
@@ -254,20 +269,8 @@ PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 EOF
     log "Agent Service .env configured"
 
-    # Stop any existing Agent Service and wait for port 3000 to be released
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
-    pkill -f "node" 2>/dev/null || true
-    for _w in $(seq 1 10); do
-        ss -tlnp | grep -q ':3000 ' || break
-        sleep 1
-    done
-    if ss -tlnp | grep -q ':3000 '; then
-        log "Port 3000 still held after SIGTERM, force-killing"
-        fuser -k 3000/tcp 2>/dev/null || true
-        sleep 1
-    fi
-
     # Start Agent Service
+    kill_agent_service
     cd /agent-service
     nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
     cd /
@@ -284,6 +287,32 @@ EOF
         fi
         sleep 1
     done
+
+    # Wait for Caddy on port 443 before notifying (the /vm/ready endpoint probes HTTPS back)
+    log "Waiting for Caddy on port 443..."
+    for i in $(seq 1 30); do
+        if ss -tlnp | grep -q ':443 '; then
+            log "Caddy is listening on port 443 (after ${i}s)"
+            break
+        fi
+        if [[ $i -eq 30 ]]; then
+            log "Caddy not listening after 30s, restarting via supervisord..."
+            supervisorctl restart caddy 2>/dev/null || true
+        fi
+        sleep 1
+    done
+    if ! ss -tlnp | grep -q ':443 '; then
+        for i in $(seq 1 30); do
+            if ss -tlnp | grep -q ':443 '; then
+                log "Caddy is listening on port 443 (after restart, ${i}s)"
+                break
+            fi
+            if [[ $i -eq 30 ]]; then
+                log "WARNING: Caddy not listening on port 443 after restart, proceeding anyway"
+            fi
+            sleep 1
+        done
+    fi
 
     # Send ready notification
     if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" ]]; then
@@ -313,18 +342,8 @@ EOF
 do_release() {
     log "RELEASE: cleaning up VM"
 
-    # Stop Agent Service and wait for port 3000 to be released
-    pkill -f "ts-node src/index.ts" 2>/dev/null || true
-    pkill -f "node" 2>/dev/null || true
-    for _w in $(seq 1 10); do
-        ss -tlnp | grep -q ':3000 ' || break
-        sleep 1
-    done
-    if ss -tlnp | grep -q ':3000 '; then
-        log "Port 3000 still held after SIGTERM, force-killing"
-        fuser -k 3000/tcp 2>/dev/null || true
-        sleep 1
-    fi
+    # Stop Agent Service
+    kill_agent_service
     log "Agent Service stopped"
 
     # Clear .env
