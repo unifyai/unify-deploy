@@ -828,13 +828,13 @@ class IdlePoolTarget:
         return self.demand_buffer > self.min_floor
 
 
-def get_target_idle_count(live_count: int) -> IdlePoolTarget:
+def get_target_idle_count(running_count: int) -> IdlePoolTarget:
     """Calculate the target number of idle jobs based on current demand.
 
     Returns an IdlePoolTarget with:
     - target: max(min_floor, demand_buffer)
     - min_floor: the UNITY_MIN_IDLE_JOBS value
-    - demand_buffer: ceil(live_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
+    - demand_buffer: ceil(running_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
     - demand_exceeds_floor: whether demand-based scaling has kicked in
     """
     min_floor = int(os.getenv("UNITY_MIN_IDLE_JOBS", "3"))
@@ -843,7 +843,7 @@ def get_target_idle_count(live_count: int) -> IdlePoolTarget:
     if demand_factor <= 0:
         return IdlePoolTarget(min_floor, min_floor, 0)
 
-    demand_buffer = -(-live_count // demand_factor)
+    demand_buffer = -(-running_count // demand_factor)
     return IdlePoolTarget(max(min_floor, demand_buffer), min_floor, demand_buffer)
 
 
@@ -851,7 +851,7 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
     """Get a categorized inventory of Unity jobs from GKE in a single request.
 
     Returns:
-        A dict with 'live' and 'idle' keys, each containing a list of job dicts
+        A dict with 'running' and 'idle' keys, each containing a list of job dicts
         filtered by the current environment (staging vs production).
     """
     try:
@@ -869,10 +869,10 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         )
         if resp.status_code != 200:
             logger.error(f"Failed to fetch jobs: {resp.status_code} - {resp.text}")
-            return {"live": [], "idle": []}
+            return {"running": [], "idle": []}
 
         all_jobs = resp.json().get("jobs", [])
-        inventory = {"live": [], "idle": []}
+        inventory = {"running": [], "idle": []}
 
         for job in all_jobs:
             # Filter by environment
@@ -886,15 +886,15 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
             labels = job.get("labels", {})
             unity_status = labels.get("unity-status")
 
-            if unity_status == "live":
-                inventory["live"].append(job)
+            if unity_status == "running":
+                inventory["running"].append(job)
             elif unity_status == "idle":
                 inventory["idle"].append(job)
 
         return inventory
     except Exception as e:
         logger.error(f"Error fetching unity jobs inventory: {e}")
-        return {"live": [], "idle": []}
+        return {"running": [], "idle": []}
 
 
 def replenish_idle_pool(refresh: bool = False) -> dict:
@@ -912,10 +912,10 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
       discrepancies are negligible relative to pool size.
     """
     inventory = get_unity_jobs_inventory()
-    live_count = len(inventory["live"])
+    running_count = len(inventory["running"])
     current_idle_count = len(inventory["idle"])
 
-    pool_target = get_target_idle_count(live_count)
+    pool_target = get_target_idle_count(running_count)
 
     if refresh:
         num_to_create = pool_target.target
@@ -983,8 +983,8 @@ def cleanup_idle_pool() -> dict:
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
     inventory = get_unity_jobs_inventory()
-    live_count = len(inventory["live"])
-    target_retain = get_target_idle_count(live_count).target
+    running_count = len(inventory["running"])
+    target_retain = get_target_idle_count(running_count).target
 
     # Get all idle jobs via K8s label selector
     resp = requests.get(
@@ -1037,7 +1037,7 @@ def cleanup_idle_pool() -> dict:
     logger.info(
         f"Cleanup: retain={len(retain)} "
         f"(very_new={len(very_new_idle_jobs)}, quota={len(quota_retain)}, "
-        f"target={target_retain}), delete={len(to_delete)}, live={live_count}",
+        f"target={target_retain}), delete={len(to_delete)}, running={running_count}",
     )
     logger.info(f"Idle jobs to retain: {sorted(retain)}")
     logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
@@ -1061,7 +1061,7 @@ def cleanup_idle_pool() -> dict:
         "retained": len(retain),
         "deleted": len(to_delete),
         "target": target_retain,
-        "live": live_count,
+        "running": running_count,
     }
 
 
