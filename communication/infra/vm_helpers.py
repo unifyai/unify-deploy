@@ -1240,12 +1240,12 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
 
 
 def push_cert_to_pool_vms() -> Dict[str, Any]:
-    """Push the latest wildcard TLS cert to all running pool VMs via metadata.
+    """Push the latest wildcard TLS cert to all pool VMs via metadata.
 
-    After a cert renewal, running VMs still hold the old cert in their
-    metadata. This function fetches the fresh cert from Secret Manager and
-    updates ``tls-fullchain`` / ``tls-privkey`` on every running pool VM.
-    The watchers on each VM detect the metadata change and reload Caddy.
+    Updates ``tls-fullchain`` / ``tls-privkey`` on every pool VM in the
+    current environment (zone is staging- or prod-scoped).  Includes
+    stopped VMs so they boot with the fresh cert when replenish starts
+    them.  Running VMs pick up the change via the watcher's long-poll.
     """
     tls_cert = get_secret(VM_WILDCARD_CERT_SECRET)
     tls_key = get_secret(VM_WILDCARD_KEY_SECRET)
@@ -1259,11 +1259,10 @@ def push_cert_to_pool_vms() -> Dict[str, Any]:
         zone=ZONE,
         filter="labels.pool-role:*",
     )
-    all_vms = list(client.list(request=request))
-    running_vms = [vm for vm in all_vms if vm.status == "RUNNING"]
+    pool_vms = list(client.list(request=request))
 
     results: list[str] = []
-    for vm in running_vms:
+    for vm in pool_vms:
         try:
             _update_instance_metadata(
                 vm.name,
@@ -1277,5 +1276,5 @@ def push_cert_to_pool_vms() -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Failed to push cert to {vm.name}: {e}")
 
-    logger.info(f"Cert push complete: {len(results)}/{len(running_vms)} VMs updated")
-    return {"pushed": True, "vms": results, "total_running": len(running_vms)}
+    logger.info(f"Cert push complete: {len(results)}/{len(pool_vms)} VMs updated")
+    return {"pushed": True, "vms": results, "total": len(pool_vms)}
