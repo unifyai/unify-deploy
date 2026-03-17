@@ -49,7 +49,7 @@ steps:
   - '--min-instances=1'
   - '--max-instances=100'
   - '--concurrency=80'
-  - '--memory=512Mi'
+  - '--memory=2Gi'
   - '--cpu=1'
   - '--timeout=300'
   - '--cpu-boost'
