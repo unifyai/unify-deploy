@@ -93,6 +93,9 @@ _pending_lock = threading.Lock()
 _replenish_locks: Dict[str, threading.Lock] = {}
 _replenish_locks_guard = threading.Lock()
 
+_trim_locks: Dict[str, threading.Lock] = {}
+_trim_locks_guard = threading.Lock()
+
 _vm_claim_locks: Dict[str, threading.Lock] = {}
 _vm_claim_locks_guard = threading.Lock()
 
@@ -102,6 +105,13 @@ def _get_replenish_lock(vm_type: str) -> threading.Lock:
         if vm_type not in _replenish_locks:
             _replenish_locks[vm_type] = threading.Lock()
         return _replenish_locks[vm_type]
+
+
+def _get_trim_lock(vm_type: str) -> threading.Lock:
+    with _trim_locks_guard:
+        if vm_type not in _trim_locks:
+            _trim_locks[vm_type] = threading.Lock()
+        return _trim_locks[vm_type]
 
 
 def _get_vm_claim_lock(vm_name: str) -> threading.Lock:
@@ -1174,7 +1184,20 @@ def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
 def trim_pool(vm_type: str) -> Dict[str, Any]:
     """Stop excess idle VMs to maintain POOL_TARGET_IDLE.
 
-    Uses label-first ordering: CAS-sets pool-role from idle to stopped
+    Uses a non-blocking per-vm_type lock so concurrent callers (fire-and-
+    forget from release_pool_endpoint) don't duplicate work.
+    """
+    lock = _get_trim_lock(vm_type)
+    if not lock.acquire(blocking=False):
+        return {"vm_type": vm_type, "actions": [], "skipped": True}
+    try:
+        return _trim_pool_inner(vm_type)
+    finally:
+        lock.release()
+
+
+def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
+    """Uses label-first ordering: CAS-sets pool-role from idle to stopped
     before issuing the stop, so a concurrent claim that already flipped
     the label to assigned will cause the CAS to fail cleanly.
 

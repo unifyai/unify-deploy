@@ -60,6 +60,9 @@ from communication.dependencies import authenticate_user_api_key, extract_api_ke
 logger = logging.getLogger(__name__)
 
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
+POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="pool-maint"
+)
 
 
 async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str) -> str:
@@ -1021,7 +1024,7 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
         )
 
         asyncio.get_running_loop().run_in_executor(
-            None, partial(replenish_pool, request.vm_type)
+            POOL_MAINTENANCE_EXECUTOR, partial(replenish_pool, request.vm_type)
         )
 
         return PoolAssignResponse(**result)
@@ -1044,7 +1047,9 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
 
         # Trim: stop excess idle VMs now that one was returned (fire-and-forget)
         vm_type = result.get("vm_type", "ubuntu")
-        asyncio.get_running_loop().run_in_executor(None, partial(trim_pool, vm_type))
+        asyncio.get_running_loop().run_in_executor(
+            POOL_MAINTENANCE_EXECUTOR, partial(trim_pool, vm_type)
+        )
 
         return result
     except Exception as e:

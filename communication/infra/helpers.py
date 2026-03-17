@@ -243,6 +243,9 @@ def create_unity_job(
                     "created-by": "create_job_script",
                     "unity-status": "idle",
                     "unity-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    "unity-image-hash": (
+                        image.rsplit(":", 1)[-1] if ":" in image else "unknown"
+                    ),
                 },
             },
             "spec": {

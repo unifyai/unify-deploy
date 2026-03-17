@@ -993,12 +993,12 @@ def cleanup_idle_pool() -> dict:
         headers=headers,
     )
     jobs = resp.json()
-    idle_jobs = [
-        job["job_name"]
+    idle_jobs = {
+        job["job_name"]: job.get("resource_version")
         for job in jobs["jobs"]
         if (STAGING and "staging" in job["job_name"])
         or (not STAGING and "staging" not in job["job_name"])
-    ]
+    }
 
     # Classify idle jobs by age into three buckets
     very_new_idle_jobs = []  # < 1 min: always retained, exempt from quota
@@ -1033,7 +1033,7 @@ def cleanup_idle_pool() -> dict:
     retain += quota_retain
     retain_set = set(retain)
 
-    to_delete = [j for j in idle_jobs if j not in retain_set]
+    to_delete = {j: idle_jobs[j] for j in idle_jobs if j not in retain_set}
     logger.info(
         f"Cleanup: retain={len(retain)} "
         f"(very_new={len(very_new_idle_jobs)}, quota={len(quota_retain)}, "
@@ -1042,20 +1042,32 @@ def cleanup_idle_pool() -> dict:
     logger.info(f"Idle jobs to retain: {sorted(retain)}")
     logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
 
-    # Delete old idle jobs (re-check label to guard against race conditions)
-    def _delete_single_job(job_name):
-        requests.delete(
+    def _delete_single_job(job_name, resource_version):
+        data = {"job_name": job_name}
+        if resource_version is not None:
+            data["resource_version"] = resource_version
+        resp = requests.delete(
             f"{COMMS_URL}/infra/job/delete",
-            data={
-                "job_name": job_name,
-                "required_labels": json.dumps({"unity-status": "idle"}),
-            },
+            data=data,
             headers=headers,
         )
+        if resp.status_code == 409:
+            logger.info(
+                f"Skipped deleting {job_name}: job changed since listing (409 Conflict)"
+            )
+        elif resp.status_code != 200:
+            logger.warning(
+                f"Failed to delete {job_name}: {resp.status_code} {resp.text}"
+            )
 
     if to_delete:
         with ThreadPoolExecutor(max_workers=len(to_delete)) as pool:
-            list(pool.map(_delete_single_job, to_delete))
+            futures = [
+                pool.submit(_delete_single_job, name, rv)
+                for name, rv in to_delete.items()
+            ]
+            for f in as_completed(futures):
+                f.result()
 
     return {
         "retained": len(retain),
