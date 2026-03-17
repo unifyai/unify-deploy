@@ -1001,14 +1001,12 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
 
 @router.post("/vm/pool/assign", response_model=PoolAssignResponse)
 async def assign_pool_endpoint(request: PoolAssignRequest):
-    """Assign an idle pool VM to an assistant.
+    """Assign a pool VM to an assistant.
 
-    Idempotent — if the assistant already has a RUNNING assigned VM,
-    returns it and re-publishes ``assistant_desktop_ready``.
-
-    For new assignments: claims an idle VM (race-safe via label CAS),
-    creates/attaches the assistant's persistent disk, generates SSH keys,
-    and updates metadata to trigger the on-VM watcher.
+    Releases any existing assignment first, then claims a fresh idle VM
+    (race-safe via label CAS), creates/attaches the assistant's persistent
+    disk, generates SSH keys, and updates metadata to trigger the on-VM
+    watcher.
     """
     try:
         result = await asyncio.get_running_loop().run_in_executor(
@@ -1022,21 +1020,9 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
             ),
         )
 
-        already_assigned = result.pop("already_assigned", False)
-
-        if already_assigned:
-            hostname = result["hostname"]
-            reachable = await asyncio.to_thread(_probe_vm_https, hostname)
-            if reachable:
-                await _publish_desktop_ready(
-                    request.assistant_id,
-                    hostname,
-                    request.vm_type,
-                )
-        else:
-            asyncio.get_running_loop().run_in_executor(
-                None, partial(replenish_pool, request.vm_type)
-            )
+        asyncio.get_running_loop().run_in_executor(
+            None, partial(replenish_pool, request.vm_type)
+        )
 
         return PoolAssignResponse(**result)
     except ValueError as e:
