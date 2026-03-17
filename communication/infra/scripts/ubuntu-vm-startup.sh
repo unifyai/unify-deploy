@@ -276,7 +276,32 @@ else
 fi
 
 # =============================================================================
-# Mark pool VM as idle
+# Start Services (before marking idle, so Caddy is ready before VM is claimable)
+# =============================================================================
+ELAPSED=$(( $(date +%s) - START_TIME ))
+echo ""
+echo "Setup complete in ${ELAPSED}s - launching supervisord"
+
+export VNC_GEOMETRY=${VNC_GEOMETRY:-1920x1080}
+export VNC_DEPTH=${VNC_DEPTH:-24}
+/usr/bin/supervisord -n -c /etc/supervisor/conf.d/unity-vm.conf &
+SUPERVISORD_PID=$!
+trap "kill $SUPERVISORD_PID 2>/dev/null; wait $SUPERVISORD_PID 2>/dev/null" EXIT
+
+echo "Waiting for Caddy on port 443..."
+for i in $(seq 1 30); do
+    if ss -tlnp | grep -q ':443 '; then
+        echo "Caddy listening on port 443 (after ${i}s)"
+        break
+    fi
+    if [[ $i -eq 30 ]]; then
+        echo "WARNING: Caddy not listening after 30s, marking idle anyway"
+    fi
+    sleep 1
+done
+
+# =============================================================================
+# Mark pool VM as idle (only after Caddy is confirmed ready)
 # =============================================================================
 TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
@@ -311,13 +336,7 @@ print(json.dumps(labels))
     fi
 fi
 
-# =============================================================================
-# Start Services
-# =============================================================================
-ELAPSED=$(( $(date +%s) - START_TIME ))
-echo ""
-echo "Startup complete in ${ELAPSED}s - launching supervisord"
+TOTAL_ELAPSED=$(( $(date +%s) - START_TIME ))
+echo "Startup complete in ${TOTAL_ELAPSED}s — VM is idle and ready for assignment"
 
-export VNC_GEOMETRY=${VNC_GEOMETRY:-1920x1080}
-export VNC_DEPTH=${VNC_DEPTH:-24}
-exec /usr/bin/supervisord -n -c /etc/supervisor/conf.d/unity-vm.conf
+wait $SUPERVISORD_PID

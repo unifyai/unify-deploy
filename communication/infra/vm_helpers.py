@@ -556,6 +556,57 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     }
 
 
+def _set_pool_labels(
+    client: compute_v1.InstancesClient,
+    vm_name: str,
+    label_overrides: Dict[str, str],
+    max_retries: int = 3,
+    expected_role: Optional[str] = None,
+) -> bool:
+    """Set labels on a pool VM with retry on fingerprint conflict.
+
+    Re-reads the VM on each attempt so the fingerprint and base labels
+    are always fresh, avoiding 412 PRECONDITION_FAILED when concurrent
+    operations (e.g. parallel trims) update labels between our read and
+    write.
+
+    When ``expected_role`` is set, the current ``pool-role`` label must
+    match before the update is applied.  Returns False immediately if
+    the role doesn't match (another operation claimed or released the
+    VM concurrently).  Returns True on successful update.
+    """
+    for attempt in range(max_retries):
+        fresh = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+        labels = dict(fresh.labels) if fresh.labels else {}
+        if expected_role is not None and labels.get("pool-role") != expected_role:
+            logger.info(
+                f"Skipping label update on {vm_name}: "
+                f"expected pool-role={expected_role}, "
+                f"got {labels.get('pool-role')}"
+            )
+            return False
+        labels.update(label_overrides)
+        try:
+            client.set_labels(
+                project=VM_PROJECT_ID,
+                zone=ZONE,
+                instance=vm_name,
+                instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+                    labels=labels,
+                    label_fingerprint=fresh.label_fingerprint,
+                ),
+            ).result()
+            return True
+        except PreconditionFailed:
+            if attempt == max_retries - 1:
+                raise
+            logger.info(
+                f"Label fingerprint conflict on {vm_name}, "
+                f"retrying ({attempt + 1}/{max_retries})"
+            )
+    return False
+
+
 def claim_idle_vm(
     assistant_id: str, vm_type: str, vm_number: int | None = None
 ) -> Dict[str, Any]:
@@ -855,107 +906,18 @@ def _update_instance_metadata(
             raise
 
 
-def _extract_vm_response(instance, assistant_id: str) -> Dict[str, Any]:
-    """Build a pool-assign response dict from a GCE instance object."""
-    hostname = _read_instance_metadata(instance, "hostname")
-    if not hostname:
-        labels = dict(instance.labels) if instance.labels else {}
-        hostname_label = labels.get("pool-hostname", "")
-        hostname = (
-            hostname_label.replace("-", ".")
-            if hostname_label
-            else instance.name + f".{DOMAIN_SUFFIX}"
-        )
-
-    external_ip = None
-    if instance.network_interfaces:
-        for ni in instance.network_interfaces:
-            if ni.access_configs:
-                for ac in ni.access_configs:
-                    if ac.nat_i_p:
-                        external_ip = ac.nat_i_p
-                        break
-
-    return {
-        "vm_name": instance.name,
-        "assistant_id": assistant_id,
-        "ip_address": external_ip,
-        "hostname": hostname,
-        "desktop_url": f"https://{hostname}",
-        "status": instance.status,
-        "ssh_username": POOL_SSH_USERNAME,
-        "ssh_port": SSH_SYNC_PORT,
-    }
-
-
-def _release_stale_assignment(
-    client: compute_v1.InstancesClient,
-    instance,
-    assistant_id: str,
-) -> None:
-    """Release a non-RUNNING assigned VM: detach disk, reset labels to idle."""
-    vm_name = instance.name
-    logger.info(
-        f"Releasing stale assignment on {vm_name} (status={instance.status}) "
-        f"for assistant {assistant_id}"
-    )
-    try:
-        detach_assistant_disk(vm_name, assistant_id)
-    except Exception as e:
-        logger.warning(f"Failed to detach disk from stale VM {vm_name}: {e}")
-
-    try:
-        labels = dict(instance.labels) if instance.labels else {}
-        labels["pool-role"] = "idle"
-        labels["assistant-id"] = ""
-        fresh = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
-        client.set_labels(
-            project=VM_PROJECT_ID,
-            zone=ZONE,
-            instance=vm_name,
-            instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
-                labels=labels,
-                label_fingerprint=fresh.label_fingerprint,
-            ),
-        ).result()
-    except Exception as e:
-        logger.warning(f"Failed to reset labels on stale VM {vm_name}: {e}")
-
-
 def assign_pool_vm(
     assistant_id: str,
     unify_apikey: str,
     vm_type: str = "ubuntu",
     vm_number: int | None = None,
 ) -> Dict[str, Any]:
-    """Full pool assignment: claim VM, create/attach disk, set metadata.
+    """Full pool assignment: release any existing VM, claim a fresh one.
 
-    Idempotent — if the assistant already has a RUNNING assigned VM, returns
-    it with ``already_assigned=True`` instead of claiming a new one.
-    Non-RUNNING stale assignments are released first so their disk is freed.
+    Always releases the assistant's current VM (if any) before claiming,
+    ensuring metadata, disk, and labels are cleanly handed back to the pool.
     """
-    client = compute_v1.InstancesClient()
-    sanitized = assistant_id.lower().replace("_", "-")
-    existing_filter = f"labels.pool-role=assigned AND labels.assistant-id={sanitized}"
-    request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
-        filter=existing_filter,
-    )
-    assigned_vms = list(client.list(request=request))
-
-    running = [vm for vm in assigned_vms if vm.status == "RUNNING"]
-    stale = [vm for vm in assigned_vms if vm.status != "RUNNING"]
-
-    for vm in stale:
-        _release_stale_assignment(client, vm, assistant_id)
-
-    if running:
-        vm = running[0]
-        result = _extract_vm_response(vm, assistant_id)
-        result["already_assigned"] = True
-        logger.info(f"Assistant {assistant_id} already assigned to {vm.name}")
-        return result
+    release_pool_vm(assistant_id)
 
     claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
     vm_name = claimed["vm_name"]
@@ -1031,31 +993,16 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     # Detach persistent disk
     detach_assistant_disk(vm_name, assistant_id)
 
-    # Reset labels to idle
-    labels = dict(vm.labels) if vm.labels else {}
-    labels["pool-role"] = "idle"
-    labels["assistant-id"] = ""
-
-    # Re-read to get fresh fingerprint after metadata update
-    vm = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
-    op = client.set_labels(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
-        instance=vm_name,
-        instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
-            labels=labels,
-            label_fingerprint=vm.label_fingerprint,
-        ),
-    )
-    op.result()
+    _set_pool_labels(client, vm_name, {"pool-role": "idle", "assistant-id": ""})
 
     logger.info(f"Released pool VM {vm_name} from assistant {assistant_id}")
 
+    vm_type = (dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu")
     return {
         "released": True,
         "assistant_id": assistant_id,
         "vm_name": vm_name,
-        "vm_type": labels.get("vm-type", "ubuntu"),
+        "vm_type": vm_type,
     }
 
 
@@ -1085,7 +1032,7 @@ def _list_pool_state(vm_type: str):
         vm
         for vm in pool_vms
         if vm.status in ("STAGING", "RUNNING")
-        and vm.labels.get("pool-role") not in ("idle", "assigned")
+        and vm.labels.get("pool-role") not in ("idle", "assigned", "stopped")
     ]
     existing_names = {vm.name for vm in pool_vms}
     return client, pool_vms, idle_vms, stopped_vms, in_flight_vms, existing_names
@@ -1227,40 +1174,54 @@ def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
 def trim_pool(vm_type: str) -> Dict[str, Any]:
     """Stop excess idle VMs to maintain POOL_TARGET_IDLE.
 
-    Called after a release returns a VM to idle.
+    Uses label-first ordering: CAS-sets pool-role from idle to stopped
+    before issuing the stop, so a concurrent claim that already flipped
+    the label to assigned will cause the CAS to fail cleanly.
+
+    Re-verifies idle count on each iteration so that concurrent claims
+    reducing the pool below target cause the loop to break early.
     """
-    client, pool_vms, idle_vms, stopped_vms, _, existing_names = _list_pool_state(
-        vm_type
-    )
-    actions = {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": []}
+    client = compute_v1.InstancesClient()
+    actions: list[str] = []
+    max_iterations = 10
 
-    if len(idle_vms) > POOL_TARGET_IDLE:
-        excess = len(idle_vms) - POOL_TARGET_IDLE
-        to_stop = sorted(idle_vms, key=lambda vm: vm.name, reverse=True)[:excess]
-        for vm in to_stop:
+    for _ in range(max_iterations):
+        try:
+            _, _, idle_vms, _, _, _ = _list_pool_state(vm_type)
+            if len(idle_vms) <= POOL_TARGET_IDLE:
+                break
+
+            candidate = sorted(idle_vms, key=lambda v: v.name, reverse=True)[0]
+
+            if not _set_pool_labels(
+                client,
+                candidate.name,
+                {"pool-role": "stopped"},
+                expected_role="idle",
+            ):
+                continue
+
             try:
-                op = client.stop(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
-                op.result()
-                labels = dict(vm.labels) if vm.labels else {}
-                labels["pool-role"] = "stopped"
-                vm_fresh = client.get(
-                    project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
-                )
-                client.set_labels(
-                    project=VM_PROJECT_ID,
-                    zone=ZONE,
-                    instance=vm.name,
-                    instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
-                        labels=labels,
-                        label_fingerprint=vm_fresh.label_fingerprint,
-                    ),
+                client.stop(
+                    project=VM_PROJECT_ID, zone=ZONE, instance=candidate.name
                 ).result()
-                actions["actions"].append(f"Stopped excess VM {vm.name}")
-                logger.info(f"Trim: stopped excess VM {vm.name}")
             except Exception as e:
-                logger.error(f"Trim: failed to stop {vm.name}: {e}")
+                logger.error(
+                    f"Trim: stop failed for {candidate.name}, reverting label: {e}"
+                )
+                _set_pool_labels(client, candidate.name, {"pool-role": "idle"})
+                continue
 
-    return actions
+            actions.append(f"Stopped excess VM {candidate.name}")
+            logger.info(f"Trim: stopped excess VM {candidate.name}")
+        except Exception as e:
+            # Per-VM errors (e.g. CAS exhausting retries, or a failed
+            # label revert after a failed stop) must not abort the loop
+            # — remaining VMs still need processing.
+            logger.error(f"Trim: failed to process VM: {e}")
+
+    _, _, final_idle, _, _, _ = _list_pool_state(vm_type)
+    return {"vm_type": vm_type, "idle_count": len(final_idle), "actions": actions}
 
 
 def rebalance_pool(vm_type: str) -> Dict[str, Any]:
@@ -1279,12 +1240,12 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
 
 
 def push_cert_to_pool_vms() -> Dict[str, Any]:
-    """Push the latest wildcard TLS cert to all running pool VMs via metadata.
+    """Push the latest wildcard TLS cert to all pool VMs via metadata.
 
-    After a cert renewal, running VMs still hold the old cert in their
-    metadata. This function fetches the fresh cert from Secret Manager and
-    updates ``tls-fullchain`` / ``tls-privkey`` on every running pool VM.
-    The watchers on each VM detect the metadata change and reload Caddy.
+    Updates ``tls-fullchain`` / ``tls-privkey`` on every pool VM in the
+    current environment (zone is staging- or prod-scoped).  Includes
+    stopped VMs so they boot with the fresh cert when replenish starts
+    them.  Running VMs pick up the change via the watcher's long-poll.
     """
     tls_cert = get_secret(VM_WILDCARD_CERT_SECRET)
     tls_key = get_secret(VM_WILDCARD_KEY_SECRET)
@@ -1298,11 +1259,10 @@ def push_cert_to_pool_vms() -> Dict[str, Any]:
         zone=ZONE,
         filter="labels.pool-role:*",
     )
-    all_vms = list(client.list(request=request))
-    running_vms = [vm for vm in all_vms if vm.status == "RUNNING"]
+    pool_vms = list(client.list(request=request))
 
     results: list[str] = []
-    for vm in running_vms:
+    for vm in pool_vms:
         try:
             _update_instance_metadata(
                 vm.name,
@@ -1316,5 +1276,5 @@ def push_cert_to_pool_vms() -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Failed to push cert to {vm.name}: {e}")
 
-    logger.info(f"Cert push complete: {len(results)}/{len(running_vms)} VMs updated")
-    return {"pushed": True, "vms": results, "total_running": len(running_vms)}
+    logger.info(f"Cert push complete: {len(results)}/{len(pool_vms)} VMs updated")
+    return {"pushed": True, "vms": results, "total": len(pool_vms)}

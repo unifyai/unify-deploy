@@ -396,73 +396,28 @@ def check_valid_contact(
 
 
 def is_job_running(user_id: str, assistant_id: str) -> bool:
-    """Check if a K8s job is actively running for this assistant.
-
-    Two-phase check:
-    1. Query K8s via ``/infra/jobs`` for a pod labeled with this
-       ``assistant-id`` (authoritative once the label is set).
-    2. Fall back to Orchestra ``AssistantJobs`` for a *recent*
-       ``running=True`` record (covers the brief window between job
-       start and K8s label propagation).  Records older than 120 s
-       are ignored to prevent stale flags from blocking new jobs.
-
-    Returns ``False`` on any error (fail-open) so the adapter defaults
-    to starting a new job rather than silently dropping messages.
-    """
-    logger.info(f"Checking job status: assistant_id={assistant_id}")
-
-    # Phase 1: live K8s state (ground truth once label is set)
-    try:
-        resp = requests.get(
-            f"{COMMS_URL}/infra/jobs",
-            params={"label_selector": f"app=unity,assistant-id={assistant_id}"},
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            jobs = resp.json().get("jobs", [])
-            if any(j.get("status") == "Running" for j in jobs):
-                logger.info(f"K8s: active pod found for assistant {assistant_id}")
-                return True
-            logger.info(f"K8s: {len(jobs)} job(s), none active")
-    except Exception as e:
-        logger.info(f"K8s job query error (non-fatal): {e}")
-
-    # Phase 2: time-bounded Orchestra fallback (startup window)
-    try:
-        resp = requests.get(
-            f"{ORCHESTRA_URL}/logs",
-            params={
-                "project_name": "AssistantJobs",
-                "context": "startup_events",
-                "filter_expr": (
-                    f"assistant_id == '{assistant_id}' and running == 'true'"
-                ),
-                "limit": 1,
-            },
-            headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            logs = resp.json().get("logs", [])
-            if logs:
-                ts = logs[0].get("entries", {}).get("timestamp", "")
-                if ts:
-                    record_time = datetime.fromisoformat(ts)
-                    age = (datetime.now(tz=timezone.utc) - record_time).total_seconds()
-                    if age < 120:
-                        logger.info(
-                            f"Orchestra: recent running record ({age:.0f}s old) "
-                            f"for assistant {assistant_id}",
-                        )
-                        return True
-                    logger.info(
-                        f"Orchestra: stale running record ({age:.0f}s old), ignoring",
-                    )
-    except Exception as e:
-        logger.info(f"Orchestra fallback error (non-fatal): {e}")
-
-    return False
+    """Check if a job is running for this assistant."""
+    logger.info(f"Checking if job is running for {user_id} --> {assistant_id}")
+    response = requests.get(
+        f"{ORCHESTRA_URL}/logs",
+        params={
+            "project_name": "AssistantJobs",
+            "context": "startup_events",
+            "filter_expr": (
+                f"user_id == '{user_id}' and "
+                f"assistant_id == '{assistant_id}' and "
+                f"running == 'true'"
+            ),
+            "limit": 100,
+        },
+        headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
+    )
+    logger.info(f"Response: {response.status_code}")
+    if response.status_code != 200:
+        return False
+    logs = response.json()["logs"]
+    logger.info(f"Logs: {logs}")
+    return bool(logs)
 
 
 def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
@@ -873,13 +828,13 @@ class IdlePoolTarget:
         return self.demand_buffer > self.min_floor
 
 
-def get_target_idle_count(live_count: int) -> IdlePoolTarget:
+def get_target_idle_count(running_count: int) -> IdlePoolTarget:
     """Calculate the target number of idle jobs based on current demand.
 
     Returns an IdlePoolTarget with:
     - target: max(min_floor, demand_buffer)
     - min_floor: the UNITY_MIN_IDLE_JOBS value
-    - demand_buffer: ceil(live_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
+    - demand_buffer: ceil(running_count / UNITY_IDLE_JOB_DEMAND_FACTOR)
     - demand_exceeds_floor: whether demand-based scaling has kicked in
     """
     min_floor = int(os.getenv("UNITY_MIN_IDLE_JOBS", "3"))
@@ -888,7 +843,7 @@ def get_target_idle_count(live_count: int) -> IdlePoolTarget:
     if demand_factor <= 0:
         return IdlePoolTarget(min_floor, min_floor, 0)
 
-    demand_buffer = -(-live_count // demand_factor)
+    demand_buffer = -(-running_count // demand_factor)
     return IdlePoolTarget(max(min_floor, demand_buffer), min_floor, demand_buffer)
 
 
@@ -896,7 +851,7 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
     """Get a categorized inventory of Unity jobs from GKE in a single request.
 
     Returns:
-        A dict with 'live' and 'idle' keys, each containing a list of job dicts
+        A dict with 'running' and 'idle' keys, each containing a list of job dicts
         filtered by the current environment (staging vs production).
     """
     try:
@@ -914,10 +869,10 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         )
         if resp.status_code != 200:
             logger.error(f"Failed to fetch jobs: {resp.status_code} - {resp.text}")
-            return {"live": [], "idle": []}
+            return {"running": [], "idle": []}
 
         all_jobs = resp.json().get("jobs", [])
-        inventory = {"live": [], "idle": []}
+        inventory = {"running": [], "idle": []}
 
         for job in all_jobs:
             # Filter by environment
@@ -931,15 +886,15 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
             labels = job.get("labels", {})
             unity_status = labels.get("unity-status")
 
-            if unity_status == "live":
-                inventory["live"].append(job)
+            if unity_status == "running":
+                inventory["running"].append(job)
             elif unity_status == "idle":
                 inventory["idle"].append(job)
 
         return inventory
     except Exception as e:
         logger.error(f"Error fetching unity jobs inventory: {e}")
-        return {"live": [], "idle": []}
+        return {"running": [], "idle": []}
 
 
 def replenish_idle_pool(refresh: bool = False) -> dict:
@@ -957,10 +912,10 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
       discrepancies are negligible relative to pool size.
     """
     inventory = get_unity_jobs_inventory()
-    live_count = len(inventory["live"])
+    running_count = len(inventory["running"])
     current_idle_count = len(inventory["idle"])
 
-    pool_target = get_target_idle_count(live_count)
+    pool_target = get_target_idle_count(running_count)
 
     if refresh:
         num_to_create = pool_target.target
@@ -1028,8 +983,8 @@ def cleanup_idle_pool() -> dict:
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
     inventory = get_unity_jobs_inventory()
-    live_count = len(inventory["live"])
-    target_retain = get_target_idle_count(live_count).target
+    running_count = len(inventory["running"])
+    target_retain = get_target_idle_count(running_count).target
 
     # Get all idle jobs via K8s label selector
     resp = requests.get(
@@ -1082,7 +1037,7 @@ def cleanup_idle_pool() -> dict:
     logger.info(
         f"Cleanup: retain={len(retain)} "
         f"(very_new={len(very_new_idle_jobs)}, quota={len(quota_retain)}, "
-        f"target={target_retain}), delete={len(to_delete)}, live={live_count}",
+        f"target={target_retain}), delete={len(to_delete)}, running={running_count}",
     )
     logger.info(f"Idle jobs to retain: {sorted(retain)}")
     logger.info(f"Idle jobs to delete: {sorted(to_delete)}")
@@ -1106,7 +1061,7 @@ def cleanup_idle_pool() -> dict:
         "retained": len(retain),
         "deleted": len(to_delete),
         "target": target_retain,
-        "live": live_count,
+        "running": running_count,
     }
 
 
