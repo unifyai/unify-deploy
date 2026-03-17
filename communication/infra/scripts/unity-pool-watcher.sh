@@ -290,28 +290,26 @@ EOF
 
     # Wait for Caddy on port 443 before notifying (the /vm/ready endpoint probes HTTPS back)
     log "Waiting for Caddy on port 443..."
-    for i in $(seq 1 30); do
+    local caddy_up=false
+    for i in $(seq 1 45); do
         if ss -tlnp | grep -q ':443 '; then
             log "Caddy is listening on port 443 (after ${i}s)"
+            caddy_up=true
             break
         fi
-        if [[ $i -eq 30 ]]; then
-            log "Caddy not listening after 30s, restarting via supervisord..."
-            supervisorctl restart caddy 2>/dev/null || true
+        if [[ $i -eq 15 ]]; then
+            if [[ -S /var/run/supervisor.sock ]]; then
+                log "Caddy not listening after 15s, restarting via supervisord..."
+                supervisorctl restart services:caddy 2>/dev/null || true
+            else
+                log "Caddy not listening after 15s, supervisord not available, starting directly..."
+                nohup /usr/local/bin/caddy run --config /etc/caddy/Caddyfile > /var/log/caddy/caddy-direct.log 2>&1 &
+            fi
         fi
         sleep 1
     done
-    if ! ss -tlnp | grep -q ':443 '; then
-        for i in $(seq 1 30); do
-            if ss -tlnp | grep -q ':443 '; then
-                log "Caddy is listening on port 443 (after restart, ${i}s)"
-                break
-            fi
-            if [[ $i -eq 30 ]]; then
-                log "WARNING: Caddy not listening on port 443 after restart, proceeding anyway"
-            fi
-            sleep 1
-        done
+    if [[ "$caddy_up" != "true" ]]; then
+        log "WARNING: Caddy not listening on port 443 after 45s, proceeding anyway"
     fi
 
     # Send ready notification
@@ -412,7 +410,7 @@ refresh_tls() {
     echo "$tls_key" > /etc/caddy/certs/privkey.pem
     chmod 600 /etc/caddy/certs/privkey.pem
 
-    if systemctl is-active --quiet caddy; then
+    if ss -tlnp | grep -q ':443 '; then
         caddy reload --config /etc/caddy/Caddyfile 2>/dev/null && \
             log "Caddy reloaded with new cert" || \
             log "WARNING: Caddy reload failed"
