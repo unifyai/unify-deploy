@@ -663,29 +663,21 @@ async def start_job(
                 startup_config,
             )
 
-            # Assign pool VM after container claim, then replenish (fire-and-forget).
-            # Sequenced so replenish runs after the claim completes.
+            # Assign pool VM after container claim (fire-and-forget)
             if desktop_mode in ("windows", "ubuntu"):
-
-                async def _assign_then_replenish(
-                    _aid=assistant_id, _key=api_key, _vt=desktop_mode
-                ):
-                    loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(
-                        ASSIGN_EXECUTOR,
-                        partial(
-                            assign_pool_vm,
-                            assistant_id=_aid,
-                            unify_apikey=_key,
-                            vm_type=_vt,
-                        ),
-                    )
-                    loop.run_in_executor(
-                        POOL_MAINTENANCE_EXECUTOR,
-                        partial(replenish_pool, _vt, extra_demand=1),
-                    )
-
-                asyncio.create_task(_assign_then_replenish())
+                asyncio.get_running_loop().run_in_executor(
+                    ASSIGN_EXECUTOR,
+                    partial(
+                        assign_pool_vm,
+                        assistant_id=assistant_id,
+                        unify_apikey=api_key,
+                        vm_type=desktop_mode,
+                    ),
+                )
+                asyncio.get_running_loop().run_in_executor(
+                    POOL_MAINTENANCE_EXECUTOR,
+                    partial(replenish_pool, desktop_mode),
+                )
 
             return {
                 "success": True,
@@ -1132,7 +1124,7 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
 
         asyncio.get_running_loop().run_in_executor(
             POOL_MAINTENANCE_EXECUTOR,
-            partial(replenish_pool, request.vm_type, extra_demand=1),
+            partial(replenish_pool, request.vm_type),
         )
 
         return PoolAssignResponse(**result)
