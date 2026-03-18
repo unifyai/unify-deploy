@@ -28,6 +28,20 @@ get_metadata() {
     curl -sf -H "$METADATA_HEADER" "$METADATA_URL/instance/attributes/$key" 2>/dev/null || echo ""
 }
 
+get_deploy_env() {
+    local env_name
+    env_name=$(get_metadata "unity-environment")
+    if [[ -n "$env_name" ]]; then
+        echo "$env_name"
+    elif [[ -n "$(get_metadata "preview")" ]]; then
+        echo "preview"
+    elif [[ -n "$(get_metadata "staging")" ]]; then
+        echo "staging"
+    else
+        echo "production"
+    fi
+}
+
 log() {
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
 }
@@ -75,9 +89,9 @@ do_update() {
     kill_agent_service
 
     local github_token
-    local staging
+    local deploy_env
     github_token=$(get_metadata "github-token")
-    staging=$(get_metadata "staging")
+    deploy_env=$(get_deploy_env)
 
     local magnitude_url unity_url unity_branch
     if [[ -n "$github_token" ]]; then
@@ -87,8 +101,11 @@ do_update() {
         magnitude_url="https://github.com/unifyai/magnitude.git"
         unity_url="https://github.com/unifyai/unity.git"
     fi
-    unity_branch="main"
-    [[ -n "$staging" ]] && unity_branch="staging"
+    case "$deploy_env" in
+        preview) unity_branch="preview" ;;
+        staging) unity_branch="staging" ;;
+        *) unity_branch="main" ;;
+    esac
 
     # ── Magnitude ──
     local mag_saved mag_remote

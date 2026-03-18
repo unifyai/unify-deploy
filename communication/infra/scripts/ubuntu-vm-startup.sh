@@ -16,7 +16,8 @@
 #   7. Start supervisord
 #
 # GCP Metadata Keys (set at pool creation):
-#   hostname, github-token, orchestra-url, comms-url, staging,
+#   hostname, github-token, orchestra-url, comms-url, unity-environment,
+#   staging, preview,
 #   tls-fullchain, tls-privkey, pool-watcher-script
 #
 # GCP Metadata Keys (set at assignment, handled by pool watcher):
@@ -49,6 +50,20 @@ get_metadata() {
     curl -sf -H "$METADATA_HEADER" "$METADATA_URL/$1" 2>/dev/null || echo ""
 }
 
+get_deploy_env() {
+    local env_name
+    env_name=$(get_metadata "unity-environment")
+    if [[ -n "$env_name" ]]; then
+        echo "$env_name"
+    elif [[ -n "$(get_metadata "preview")" ]]; then
+        echo "preview"
+    elif [[ -n "$(get_metadata "staging")" ]]; then
+        echo "staging"
+    else
+        echo "production"
+    fi
+}
+
 get_remote_commit_hash() {
     git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -c1-12
 }
@@ -74,13 +89,13 @@ echo ""
 echo "Reading GCP metadata..."
 CONFIG_HOSTNAME=$(get_metadata "hostname")
 GITHUB_TOKEN=$(get_metadata "github-token")
-STAGING=$(get_metadata "staging")
+DEPLOY_ENV=$(get_deploy_env)
 TLS_FULLCHAIN=$(get_metadata "tls-fullchain")
 TLS_PRIVKEY=$(get_metadata "tls-privkey")
 
 echo "  Hostname:       ${CONFIG_HOSTNAME:-(not configured)}"
 echo "  GitHub Token:   ${GITHUB_TOKEN:+(set)}"
-echo "  Staging Branch: ${STAGING:-no}"
+echo "  Deploy Env:     ${DEPLOY_ENV}"
 echo "  TLS Wildcard:   ${TLS_FULLCHAIN:+(set)}"
 
 # =============================================================================
@@ -132,8 +147,11 @@ else
     MAGNITUDE_URL="https://github.com/unifyai/magnitude.git"
     UNITY_URL="https://github.com/unifyai/unity.git"
 fi
-UNITY_BRANCH="${STAGING:+staging}"
-UNITY_BRANCH="${UNITY_BRANCH:-main}"
+case "$DEPLOY_ENV" in
+    preview) UNITY_BRANCH="preview" ;;
+    staging) UNITY_BRANCH="staging" ;;
+    *) UNITY_BRANCH="main" ;;
+esac
 
 # =============================================================================
 # Update Magnitude

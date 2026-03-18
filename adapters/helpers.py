@@ -31,17 +31,42 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
     MessageItemRequestBuilder,
 )
 
-STAGING = os.getenv("STAGING")
+
+def _get_deploy_env() -> str:
+    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
+    return deploy_env if deploy_env in {"production", "staging", "preview"} else "production"
+
+
+DEPLOY_ENV = _get_deploy_env()
+ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
+GMAIL_NOTIFICATIONS_TOPIC = (
+    "gmail-notifications"
+    if DEPLOY_ENV == "production"
+    else f"gmail-notifications-{DEPLOY_ENV}"
+)
+
+
+def _cloud_run_url(service_name: str) -> str:
+    if service_name.startswith("unity-adapters"):
+        return f"https://{service_name}-ky4ja5fxna-uc.a.run.app"
+    return f"https://{service_name}-000000000000.us-central1.run.app"
+
 
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
-    if not STAGING
+    if DEPLOY_ENV == "production"
     else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
 
-COMMS_URL = os.getenv("UNITY_COMMS_URL")
-ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
+COMMS_URL = os.getenv(
+    "UNITY_COMMS_URL",
+    _cloud_run_url(f"unity-comms-app{ENV_SUFFIX}"),
+)
+ADAPTERS_URL = os.getenv(
+    "UNITY_ADAPTERS_URL",
+    _cloud_run_url(f"unity-adapters{ENV_SUFFIX}"),
+)
 
 _pubsub_client = None
 
@@ -107,6 +132,7 @@ def get_assistant(
 
     local_assistant_data = {
         "assistant_id": "local-assistant",
+        "deploy_env": DEPLOY_ENV,
         "user_id": "local-user",
         "voice_provider": "cartesia",
         "voice_id": None,
@@ -181,6 +207,7 @@ def get_assistant(
 
     return {
         "assistant_id": assistants[0]["agent_id"],
+        "deploy_env": assistants[0].get("deploy_env", DEPLOY_ENV),
         "user_id": assistants[0]["user_id"],
         "api_key": assistants[0]["api_key"],
         "user_first_name": assistants[0]["user_first_name"],
@@ -813,6 +840,7 @@ def start_unity_job(assistant: dict, medium: str):
                     if assistant.get("org_id") is not None
                     else ""
                 ),
+                "deploy_env": DEPLOY_ENV,
             },
             timeout=0.1,
         )
@@ -861,7 +889,7 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
 
     Returns:
         A dict with 'running' and 'idle' keys, each containing a list of job dicts
-        filtered by the current environment (staging vs production).
+        filtered by the current deployment environment.
     """
     try:
         admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
@@ -884,9 +912,10 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         inventory = {"running": [], "idle": []}
 
         for job in all_jobs:
-            # Filter by environment
-            is_env_match = (STAGING and "staging" in job["job_name"]) or (
-                not STAGING and "staging" not in job["job_name"]
+            # Filter by environment-specific job name suffix.
+            is_env_match = job["job_name"].endswith(ENV_SUFFIX) if ENV_SUFFIX else (
+                not job["job_name"].endswith("-staging")
+                and not job["job_name"].endswith("-preview")
             )
             if not is_env_match:
                 continue
@@ -954,9 +983,10 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
+    image_name = "unity" if DEPLOY_ENV == "production" else f"unity-{DEPLOY_ENV}"
     image = (
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if not STAGING else "/unity-staging:")
+        + f"/{image_name}:"
         + commit_hash
     )
 
@@ -1005,8 +1035,14 @@ def cleanup_idle_pool() -> dict:
     idle_jobs = {
         job["job_name"]: job.get("resource_version")
         for job in jobs["jobs"]
-        if (STAGING and "staging" in job["job_name"])
-        or (not STAGING and "staging" not in job["job_name"])
+        if (
+            job["job_name"].endswith(ENV_SUFFIX)
+            if ENV_SUFFIX
+            else (
+                not job["job_name"].endswith("-staging")
+                and not job["job_name"].endswith("-preview")
+            )
+        )
     }
 
     # Classify idle jobs by age into three buckets
@@ -1015,7 +1051,7 @@ def cleanup_idle_pool() -> dict:
     old_idle_jobs = []  # >= 11 min: used to fill quota if new ones aren't enough
     now = datetime.now()
     for job_name in idle_jobs:
-        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
+        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-env_suffix?}
         job_timestamp_str = "-".join(
             filter(
                 lambda part: part.isdigit() and len(part) in [2, 4],
@@ -1635,7 +1671,7 @@ def publish_gmail_thread_id(
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_name = f"unity-{assistant_id}{ENV_SUFFIX}"
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
@@ -1678,7 +1714,7 @@ def publish_outlook_thread_id(
     """Publish the Outlook conversation to pub/sub topic."""
     try:
         publisher = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_name = f"unity-{assistant_id}{ENV_SUFFIX}"
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {

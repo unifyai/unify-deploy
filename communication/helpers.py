@@ -7,19 +7,35 @@ from twilio.rest import Client as TwilioClient
 from azure.core.credentials import AccessToken, TokenCredential
 from msgraph import GraphServiceClient
 
-STAGING = os.getenv("STAGING")
+
+def _get_deploy_env() -> str:
+    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
+    return deploy_env if deploy_env in {"production", "staging", "preview"} else "production"
+
+
+DEPLOY_ENV = _get_deploy_env()
+ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
+
+
+def _cloud_run_url(service_name: str) -> str:
+    if service_name.startswith("unity-adapters"):
+        return f"https://{service_name}-ky4ja5fxna-uc.a.run.app"
+    return f"https://{service_name}-000000000000.us-central1.run.app"
+
 
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
-    if not STAGING
+    if DEPLOY_ENV == "production"
     else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
-ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
-COMMS_URL = (
-    "https://unity-comms-app-staging-000000000000.us-central1.run.app"
-    if STAGING
-    else "https://unity-comms-app-000000000000.us-central1.run.app"
+ADAPTERS_URL = os.getenv(
+    "UNITY_ADAPTERS_URL",
+    _cloud_run_url(f"unity-adapters{ENV_SUFFIX}"),
+)
+COMMS_URL = os.getenv(
+    "UNITY_COMMS_URL",
+    _cloud_run_url(f"unity-comms-app{ENV_SUFFIX}"),
 )
 
 

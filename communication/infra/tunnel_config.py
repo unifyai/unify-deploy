@@ -11,9 +11,17 @@ import os
 # =============================================================================
 # Environment
 # =============================================================================
-STAGING = os.getenv("STAGING")
-ENV_SUFFIX = "-staging" if STAGING else ""
-TUNNEL_SUBDOMAIN = "staging.tunnel.unify.ai" if STAGING else "tunnel.unify.ai"
+
+def _get_deploy_env() -> str:
+    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
+    return deploy_env if deploy_env in {"production", "staging", "preview"} else "production"
+
+
+DEPLOY_ENV = _get_deploy_env()
+ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
+TUNNEL_SUBDOMAIN = (
+    "tunnel.unify.ai" if DEPLOY_ENV == "production" else f"{DEPLOY_ENV}.tunnel.unify.ai"
+)
 
 # =============================================================================
 # GCP Project Configuration
@@ -24,7 +32,7 @@ DNS_PROJECT_ID = "gcp-project-dns"
 # =============================================================================
 # Tunnel Server VM Configuration
 # =============================================================================
-TUNNEL_VM_NAME = "unity-tunnel-server"
+TUNNEL_VM_NAME = f"unity-tunnel-server{ENV_SUFFIX}"
 TUNNEL_VM_ZONE = "us-central1-a"
 TUNNEL_VM_REGION = "us-central1"
 TUNNEL_VM_MACHINE_TYPE = "e2-small"  # Shared across all clients
@@ -40,7 +48,7 @@ TUNNEL_STATIC_IP_NAME = "unity-tunnel-server-ip"
 # DNS Configuration
 # =============================================================================
 DNS_ZONE_NAME = "unifyai"  # Existing Cloud DNS managed zone in gcp-project-dns
-TUNNEL_DOMAIN = "tunnel.unify.ai"  # Wildcard *.tunnel.unify.ai → tunnel VM
+TUNNEL_DOMAIN = TUNNEL_SUBDOMAIN  # Wildcard *.subdomain → tunnel VM
 
 # =============================================================================
 # Tunnel Relay (rathole) Configuration

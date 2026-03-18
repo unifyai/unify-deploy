@@ -9,8 +9,14 @@ import os
 # =============================================================================
 # Environment
 # =============================================================================
-STAGING = os.getenv("STAGING", "").lower() == "true"
-ENV_SUFFIX = "-staging" if STAGING else ""
+
+def _get_deploy_env() -> str:
+    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
+    return deploy_env if deploy_env in {"production", "staging", "preview"} else "production"
+
+
+DEPLOY_ENV = _get_deploy_env()
+ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
 
 # =============================================================================
 # GCP Project Configuration
@@ -25,7 +31,7 @@ DNS_PROJECT_ID = "gcp-project-dns"
 # Region/Zone Configuration
 # =============================================================================
 REGION = "us-central1"
-ZONE = "us-central1-a" if STAGING else "us-central1-f"
+ZONE = "us-central1-a" if DEPLOY_ENV != "production" else "us-central1-f"
 
 # =============================================================================
 # DNS Configuration (Managed in Project A)

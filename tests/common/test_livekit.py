@@ -84,7 +84,7 @@ class TestRecordingFilepath:
 
     def test_filepath_structure_production(self):
         mock_api = _mock_livekit_api()
-        env = {**ENV_DEFAULTS, "STAGING": ""}
+        env = {**ENV_DEFAULTS, "DEPLOY_ENV": "production"}
         with patch.dict("os.environ", env, clear=False):
             asyncio.run(
                 _start_room_egress(mock_api, "unity_42_meet", "42", "user2"),
@@ -101,7 +101,7 @@ class TestRecordingFilepath:
 
     def test_staging_prefix(self):
         mock_api = _mock_livekit_api()
-        env = {**ENV_DEFAULTS, "STAGING": "1"}
+        env = {**ENV_DEFAULTS, "DEPLOY_ENV": "staging"}
         with patch.dict("os.environ", env, clear=False):
             asyncio.run(
                 _start_room_egress(mock_api, "unity_10_phone", "10", "user3"),
@@ -110,12 +110,12 @@ class TestRecordingFilepath:
 
         assert filepath.startswith(
             "staging/10/",
-        ), f"Expected staging/10/ prefix when STAGING is set: {filepath}"
+        ), f"Expected staging/10/ prefix when DEPLOY_ENV=staging: {filepath}"
 
     def test_filepath_pattern_matches_full_format(self):
         """Verify the complete filepath matches {env}/{id}/{room}_{timestamp}.mp3."""
         mock_api = _mock_livekit_api()
-        env = {**ENV_DEFAULTS, "STAGING": ""}
+        env = {**ENV_DEFAULTS, "DEPLOY_ENV": "production"}
         with patch.dict("os.environ", env, clear=False):
             asyncio.run(
                 _start_room_egress(mock_api, "unity_25_phone", "25", "user1"),

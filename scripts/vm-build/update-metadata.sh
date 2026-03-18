@@ -19,7 +19,7 @@
 #   --windows                  Target only Windows pool VMs
 #   --vm-number N              Target a single VM by number (e.g. --vm-number 13)
 #   --restart                  Stop+start VMs after update (only RUNNING VMs)
-#   --staging                  Target staging VMs only (default: non-staging)
+#   --env ENV                  Target environment: production, staging, or preview
 #   --dry-run                  Show what would happen without making changes
 #   -h, --help                 Show this help
 #
@@ -39,8 +39,8 @@
 #   # Update orchestra URL on all pool VMs and restart them
 #   ./update-metadata.sh --metadata orchestra-url=https://new.api.url --restart
 #
-#   # Preview what would happen on staging
-#   ./update-metadata.sh --update-startup-script --staging --dry-run
+#   # Preview what would happen on preview
+#   ./update-metadata.sh --update-startup-script --env preview --dry-run
 #
 set -euo pipefail
 
@@ -75,7 +75,7 @@ ONLY_WINDOWS=false
 VM_NUMBER=""
 RESTART=false
 DRY_RUN=false
-STAGING=false
+TARGET_ENV="production"
 
 # =============================================================================
 # Functions
@@ -98,8 +98,14 @@ get_vm_type() {
     fi
 }
 
-is_staging_vm() {
-    [[ "$1" == *-staging ]]
+get_vm_env() {
+    if [[ "$1" == *-preview ]]; then
+        echo "preview"
+    elif [[ "$1" == *-staging ]]; then
+        echo "staging"
+    else
+        echo "production"
+    fi
 }
 
 # =============================================================================
@@ -116,7 +122,15 @@ while [[ $# -gt 0 ]]; do
         --windows)               ONLY_WINDOWS=true; shift ;;
         --vm-number)             VM_NUMBER="$2"; shift 2 ;;
         --restart)               RESTART=true; shift ;;
-        --staging)               STAGING=true; ZONE="${GCP_ZONE:-us-central1-a}"; shift ;;
+        --env)
+            TARGET_ENV="$2"
+            case "$TARGET_ENV" in
+                production) ZONE="${GCP_ZONE:-us-central1-f}" ;;
+                staging|preview) ZONE="${GCP_ZONE:-us-central1-a}" ;;
+                *) die "Invalid --env value: $TARGET_ENV (expected production, staging, or preview)" ;;
+            esac
+            shift 2
+            ;;
         --dry-run)               DRY_RUN=true; shift ;;
         -h|--help)               usage; exit 0 ;;
         *)                       die "Unknown argument: $1" ;;
@@ -158,16 +172,17 @@ if [[ "$DRY_RUN" == true ]]; then
 fi
 VM_TYPE_LABEL="all"
 if [[ -n "$VM_NUMBER" ]]; then
-    STAGING_SUFFIX=""
-    $STAGING && STAGING_SUFFIX="-staging"
+    ENV_SUFFIX=""
+    [[ "$TARGET_ENV" == "staging" ]] && ENV_SUFFIX="-staging"
+    [[ "$TARGET_ENV" == "preview" ]] && ENV_SUFFIX="-preview"
     if [[ "$ONLY_UBUNTU" == true ]]; then
-        VM_NAME_FILTER="name=unity-pool-ubuntu-${VM_NUMBER}${STAGING_SUFFIX}"
+        VM_NAME_FILTER="name=unity-pool-ubuntu-${VM_NUMBER}${ENV_SUFFIX}"
         VM_TYPE_LABEL="ubuntu #${VM_NUMBER}"
     elif [[ "$ONLY_WINDOWS" == true ]]; then
-        VM_NAME_FILTER="name=unity-pool-windows-${VM_NUMBER}${STAGING_SUFFIX}"
+        VM_NAME_FILTER="name=unity-pool-windows-${VM_NUMBER}${ENV_SUFFIX}"
         VM_TYPE_LABEL="windows #${VM_NUMBER}"
     else
-        VM_NAME_FILTER="name~'^unity-pool-(ubuntu|windows)-${VM_NUMBER}${STAGING_SUFFIX}$'"
+        VM_NAME_FILTER="name~'^unity-pool-(ubuntu|windows)-${VM_NUMBER}${ENV_SUFFIX}$'"
         VM_TYPE_LABEL="#${VM_NUMBER} (any type)"
     fi
 elif [[ "$ONLY_UBUNTU" == true ]]; then
@@ -182,7 +197,7 @@ fi
 
 echo "  Project:  $PROJECT"
 echo "  Zone:     $ZONE"
-echo "  Target:   $(if $STAGING; then echo "staging"; else echo "production"; fi)"
+echo "  Target:   $TARGET_ENV"
 echo "  VM type:  $VM_TYPE_LABEL"
 echo ""
 
@@ -217,12 +232,11 @@ while IFS=',' read -r vm_name vm_status; do
     vm_type=$(get_vm_type "$vm_name")
     [[ "$vm_type" == "unknown" ]] && continue
 
-    # Filter by staging/production
+    # Filter by target environment
     skip_reason=""
-    if $STAGING && ! is_staging_vm "$vm_name"; then
-        skip_reason="(skip: not staging)"
-    elif ! $STAGING && is_staging_vm "$vm_name"; then
-        skip_reason="(skip: staging)"
+    vm_env=$(get_vm_env "$vm_name")
+    if [[ "$vm_env" != "$TARGET_ENV" ]]; then
+        skip_reason="(skip: $vm_env)"
     fi
 
     printf "  %-40s %-10s %-12s %s\n" "$vm_name" "$vm_type" "$vm_status" "$skip_reason"
