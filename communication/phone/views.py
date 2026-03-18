@@ -15,7 +15,8 @@ from common.livekit import (
     ensure_phone_dispatch_rule,
     make_sip_uri,
 )
-from communication.helpers import ADAPTERS_URL, get_twilio_client
+from communication.helpers import get_twilio_client
+from communication.settings import SETTINGS
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -130,9 +131,12 @@ async def create_phone_number(request: Request):
     data = await request.json()
 
     # Extract customizable parameters from request
-    voice_url = data.get("voice_url", ADAPTERS_URL + "/twilio/call")
-    sms_url = data.get("sms_url", ADAPTERS_URL + "/twilio/sms")
-    status_callback = data.get("status_callback", ADAPTERS_URL + "/twilio/call-status")
+    voice_url = data.get("voice_url", SETTINGS.adapters_url + "/twilio/call")
+    sms_url = data.get("sms_url", SETTINGS.adapters_url + "/twilio/sms")
+    status_callback = data.get(
+        "status_callback",
+        SETTINGS.adapters_url + "/twilio/call-status",
+    )
     phone_country = data.get("phone_country", "US")
 
     # Additional args for phone_country
@@ -323,7 +327,7 @@ async def twiml(request: Request):
     data = await request.form()
     twilio_number = data.get("From")
     phone_number = "+" + request.query_params.get("phone_number").replace(" ", "")
-    call_status_url = ADAPTERS_URL + "/twilio/call-status"
+    call_status_url = SETTINGS.adapters_url + "/twilio/call-status"
     resp_user = VoiceResponse()
     dial = resp_user.dial(caller_id=twilio_number, timeout=15)
     dial.number(

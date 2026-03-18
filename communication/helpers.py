@@ -7,40 +7,7 @@ from twilio.rest import Client as TwilioClient
 from azure.core.credentials import AccessToken, TokenCredential
 from msgraph import GraphServiceClient
 
-
-def _get_deploy_env() -> str:
-    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
-    return (
-        deploy_env
-        if deploy_env in {"production", "staging", "preview"}
-        else "production"
-    )
-
-
-DEPLOY_ENV = _get_deploy_env()
-ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
-
-
-def _cloud_run_url(service_name: str) -> str:
-    if service_name.startswith("unity-adapters"):
-        return f"https://{service_name}-ky4ja5fxna-uc.a.run.app"
-    return f"https://{service_name}-000000000000.us-central1.run.app"
-
-
-_default_orchestra_url = (
-    "https://api.unify.ai/v0"
-    if DEPLOY_ENV == "production"
-    else "https://internal.example.com/v0"
-)
-ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
-ADAPTERS_URL = os.getenv(
-    "UNITY_ADAPTERS_URL",
-    _cloud_run_url(f"unity-adapters{ENV_SUFFIX}"),
-)
-COMMS_URL = os.getenv(
-    "UNITY_COMMS_URL",
-    _cloud_run_url(f"unity-comms-app{ENV_SUFFIX}"),
-)
+from communication.settings import SETTINGS
 
 
 class TokenCredentialFromSecret(TokenCredential):
@@ -68,7 +35,7 @@ async def get_graph_client(user_email: str) -> GraphServiceClient:
 
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{ORCHESTRA_URL}/admin/assistant",
+            f"{SETTINGS.orchestra_url}/admin/assistant",
             params={"email": user_email},
             headers={"Authorization": f"Bearer {admin_key}"},
             timeout=30.0,

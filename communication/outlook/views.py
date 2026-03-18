@@ -16,7 +16,8 @@ from msgraph.generated.models.email_address import EmailAddress
 from msgraph.generated.models.subscription import Subscription
 from msgraph.generated.models.message import Message
 
-from communication.helpers import ADAPTERS_URL, get_graph_client
+from communication.helpers import get_graph_client
+from communication.settings import SETTINGS
 
 router = APIRouter()
 
@@ -114,7 +115,7 @@ async def watch_outlook_email(request: Request):
     """
     data = await request.json()
     user_email = data.get("primary_email")
-    webhook_url = data.get("webhook_url") or f"{ADAPTERS_URL}/microsoft/router"
+    webhook_url = data.get("webhook_url") or f"{SETTINGS.adapters_url}/microsoft/router"
 
     if not user_email:
         raise HTTPException(status_code=400, detail="Missing primary_email")

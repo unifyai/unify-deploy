@@ -57,6 +57,8 @@ from common.livekit import (
     verify_livekit_webhook,
 )
 
+from communication.settings import SETTINGS
+
 from .helpers import (
     cleanup_idle_pool,
     replenish_idle_pool,
@@ -72,7 +74,6 @@ from .helpers import (
     get_outlook_thread_id,
     get_pubsub_client,
     get_thread_id,
-    is_job_running,
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
@@ -80,10 +81,6 @@ from .helpers import (
     get_microsoft_user_info,
     start_unity_job,
     store_microsoft_tokens,
-    ENV_SUFFIX,
-    GMAIL_NOTIFICATIONS_TOPIC,
-    ORCHESTRA_URL,
-    COMMS_URL,
 )
 
 load_dotenv()
@@ -93,10 +90,6 @@ app = FastAPI(
     version="1.0.0",
 )
 setup_metrics(app, service_name="adapters")
-
-
-def _unity_topic_name(assistant_id: str) -> str:
-    return f"unity-{assistant_id}{ENV_SUFFIX}"
 
 
 # =============================================================================
@@ -256,7 +249,7 @@ async def twilio_call_webhook(request: Request):
 
     # publish to Pub/Sub
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
@@ -365,7 +358,9 @@ async def twilio_call_status_webhook(request: Request):
 
         # publish to pubsub
         pubsub_client = get_pubsub_client()
-        topic_name = _unity_topic_name(assistant_id)
+        topic_name = f"unity-{assistant_id}" + (
+            "" if not SETTINGS.staging else "-staging"
+        )
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
         logger.info(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
         try:
@@ -472,7 +467,7 @@ async def livekit_recording_complete(request: Request):
     )
 
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing recording_ready to Pub/Sub at path: {topic_path}")
     try:
@@ -546,7 +541,7 @@ async def twilio_sms_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
@@ -619,7 +614,7 @@ async def twilio_whatsapp_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
@@ -742,7 +737,7 @@ async def teams_call_webhook(request: Request):
 
     # Publish to Pub/Sub (same format as Twilio webhook)
     pubsub_client = get_pubsub_client()
-    # topic_name = f"unity-{assistant_id}{ENV_SUFFIX}"
+    # topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_name = "test"
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing Teams call to Pub/Sub at path: {topic_path}")
@@ -818,6 +813,9 @@ UNIFY_ATTACHMENTS_BUCKET = os.getenv(
     "ASSISTANT_MESSAGE_ATTACHMENTS_BUCKET_NAME",
     "assistant-message-attachments",
 )
+
+# Maximum attachments per message
+MAX_ATTACHMENTS_PER_MESSAGE = 10
 
 
 def sanitize_filename(filename: str) -> str:
@@ -978,6 +976,16 @@ async def unify_message_webhook(request: Request):
         logger.info("contact_id is required for unify_message")
         return Response(status_code=400, content="contact_id is required")
 
+    # Validate attachment count limit
+    if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+        logger.info(
+            f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}",
+        )
+        return Response(
+            status_code=400,
+            content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
+        )
+
     # Validate attachments format and preserve full metadata
     validated_attachments = []
     for att in attachments:
@@ -1031,7 +1039,7 @@ async def unify_message_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
     try:
@@ -1087,6 +1095,12 @@ async def api_message_webhook(request: Request):
     if not api_message_id:
         return Response(status_code=400, content="api_message_id is required")
 
+    if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
+        return Response(
+            status_code=400,
+            content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
+        )
+
     validated_attachments = []
     for att in attachments:
         if (
@@ -1122,7 +1136,7 @@ async def api_message_webhook(request: Request):
     assistant_id = context["assistant"]["assistant_id"]
 
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     try:
         event_data = {
@@ -1200,7 +1214,7 @@ async def unify_meet_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
     try:
@@ -1286,7 +1300,7 @@ async def unity_system_event_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
     try:
@@ -1381,7 +1395,7 @@ async def unity_pre_hire_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = _unity_topic_name(assistant_id)
+    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
     try:
@@ -1471,7 +1485,9 @@ async def assistant_update_webhook(request: Request):
 
         # Job is running, publish to assistant topic
         pubsub_client = get_pubsub_client()
-        topic_name = _unity_topic_name(assistant_id)
+        topic_name = f"unity-{assistant_id}" + (
+            "" if not SETTINGS.staging else "-staging"
+        )
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         # Prepare message in the same format as startup event
@@ -1729,15 +1745,13 @@ async def outlook_notification_processor(request: Request):
                 )
                 return Response(content=error_message, status_code=500)
 
-            # Start job if not already running
-            running = is_job_running(user_id, assistant_id)
+            # Start a container (endpoint handles deduplication atomically)
             is_default = "default" in assistant_id
-            if not running and not is_default:
+            if not is_default:
                 start_unity_job(assistant_data, "email")
                 replenish_idle_pool(refresh=False)
-                running = True
 
-            logger.info(f"Job running: {running}")
+            logger.info("Job start requested for email handler")
 
             logger.info(
                 f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
@@ -1944,14 +1958,12 @@ async def teams_notification_processor(request: Request):
                 logger.info(f"Invalid contact: {_redact_email(sender_email)}")
                 return None, False
 
-            # Start job if needed
-            running = is_job_running(user_id, assistant_id)
+            # Start a container (endpoint handles deduplication atomically)
             is_default = assistant_id and "default" in assistant_id
-            if not running and not is_default:
+            if not is_default:
                 start_unity_job(assistant_data, "teams")
                 replenish_idle_pool(refresh=False)
-                running = True
-            logger.info(f"Job running: {running}")
+            logger.info("Job start requested for teams handler")
             return contacts, True
 
         contacts, valid = await asyncio.to_thread(_validate_and_start)
@@ -1994,7 +2006,9 @@ async def teams_notification_processor(request: Request):
 
         # Publish to Pub/Sub
         pubsub_client = get_pubsub_client()
-        topic_name = _unity_topic_name(assistant_id)
+        topic_name = f"unity-{assistant_id}" + (
+            "" if not SETTINGS.staging else "-staging"
+        )
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         pubsub_message = {
@@ -2252,7 +2266,7 @@ def scheduled_email_watches(payload: ScheduledPayload):
     if not payload.test:
         try:
             response = requests.get(
-                f"{ORCHESTRA_URL}/admin/assistant",
+                f"{SETTINGS.orchestra_url}/admin/assistant",
                 headers={"Authorization": f"Bearer {admin_key}"},
             )
             if response.status_code != 200:
@@ -2283,7 +2297,7 @@ def scheduled_email_watches(payload: ScheduledPayload):
             if has_ms_token:
                 # Use Outlook watch
                 watch_response = requests.post(
-                    f"{COMMS_URL}/outlook/watch",
+                    f"{SETTINGS.comms_url}/outlook/watch",
                     json={"primary_email": email},
                     headers={"Authorization": f"Bearer {admin_key}"},
                     timeout=30,
@@ -2303,10 +2317,14 @@ def scheduled_email_watches(payload: ScheduledPayload):
             else:
                 # Use Gmail watch
                 watch_response = requests.post(
-                    f"{COMMS_URL}/gmail/watch",
+                    f"{SETTINGS.comms_url}/gmail/watch",
                     json={
                         "primary_email": email,
-                        "topic_name": GMAIL_NOTIFICATIONS_TOPIC,
+                        "topic_name": (
+                            "gmail-notifications"
+                            if not SETTINGS.staging
+                            else "gmail-notifications-staging"
+                        ),
                     },
                     headers={"Authorization": f"Bearer {admin_key}"},
                     timeout=30,
@@ -2332,11 +2350,11 @@ def scheduled_email_watches(payload: ScheduledPayload):
                 {"email": email, "success": False, "error": error_msg},
             )
 
-    # Renew policy assistant (Gmail-based, skip only in test mode)
-    if not payload.test:
+    # Renew policy assistant (Gmail-based, staging only)
+    if SETTINGS.staging and not payload.test:
         try:
             response = requests.post(
-                f"{COMMS_URL}/gmail/watch",
+                f"{SETTINGS.comms_url}/gmail/watch",
                 json={
                     "primary_email": "mh-policies@unify.ai",
                     "topic_name": "intranet",
@@ -2371,7 +2389,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
     # Get all assistants in a single call (no params = all assistants)
     try:
         response = requests.get(
-            f"{ORCHESTRA_URL}/admin/assistant",
+            f"{SETTINGS.orchestra_url}/admin/assistant",
             headers={"Authorization": f"Bearer {admin_key}"},
         )
         if response.status_code != 200:
@@ -2457,7 +2475,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
 
             for secret_name, secret_value in secrets_to_store.items():
                 response = requests.put(
-                    f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret/{secret_name}",
+                    f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret/{secret_name}",
                     json={"secret_value": secret_value},
                     headers={"Authorization": f"Bearer {api_key}"},
                 )
@@ -2502,7 +2520,7 @@ def scheduled_teams_watches(payload: ScheduledPayload):
     if not payload.test:
         try:
             response = requests.get(
-                f"{ORCHESTRA_URL}/admin/assistant",
+                f"{SETTINGS.orchestra_url}/admin/assistant",
                 headers={"Authorization": f"Bearer {admin_key}"},
             )
             if response.status_code != 200:
@@ -2546,7 +2564,7 @@ def scheduled_teams_watches(payload: ScheduledPayload):
         try:
             # 1. Renew Teams chat watch (DMs and group chats)
             watch_response = requests.post(
-                f"{COMMS_URL}/teams/watch",
+                f"{SETTINGS.comms_url}/teams/watch",
                 json={"primary_email": email},
                 headers={"Authorization": f"Bearer {admin_key}"},
                 timeout=30,
@@ -2591,7 +2609,7 @@ def scheduled_teams_watches(payload: ScheduledPayload):
 
                             # Renew channel subscription
                             channel_response = requests.post(
-                                f"{COMMS_URL}/teams/watch-channel",
+                                f"{SETTINGS.comms_url}/teams/watch-channel",
                                 json={
                                     "primary_email": email,
                                     "team_id": team_id,
@@ -2673,8 +2691,9 @@ def scheduled_jobs_cleanup():
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_expire_stale():
-    """Suspend K8s jobs running longer than 12h and release leaked VMs.
+    """Sweep: mark all AssistantJobs still running after 12h as done.
 
+    Also suspends any lingering K8s jobs and releases leaked pool VMs.
     Triggered by Cloud Scheduler every 6 hours.
     """
     result = expire_all_stale_jobs(max_age_hours=12)

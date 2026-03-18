@@ -9,7 +9,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from starlette import status
 
-from communication.helpers import ORCHESTRA_URL
+from communication.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ async def authenticate_user_api_key(api_key: str) -> dict:
     """
     async with httpx.AsyncClient() as client:
         response = await client.get(
-            f"{ORCHESTRA_URL}/user/basic-info",
+            f"{SETTINGS.orchestra_url}/user/basic-info",
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=10.0,
         )

@@ -285,10 +285,10 @@ create_pubsub_topics() {
 
   log_info "Creating Pub/Sub topics for test assistant: $TEST_ASSISTANT_ID"
 
-  # Topics to create
+  # Topics to create (unity-startup is deprecated; assignment uses Lease + CAS now)
   local topics=(
     "unity-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
-    "unity-startup${TOPIC_SUFFIX}"
+    "unity-pending-startups${TOPIC_SUFFIX}"
   )
 
   for topic in "${topics[@]}"; do
@@ -634,7 +634,7 @@ cmd_start() {
   echo ""
   echo "Test assistant topics created:"
   echo "  unity-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
-  echo "  unity-startup${TOPIC_SUFFIX}"
+  echo "  unity-pending-startups${TOPIC_SUFFIX}"
   echo ""
 
   # Output for eval

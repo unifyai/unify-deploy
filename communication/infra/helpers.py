@@ -8,7 +8,7 @@ import uuid
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
 
-from communication.helpers import ADAPTERS_URL, COMMS_URL, ORCHESTRA_URL
+from communication.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 
@@ -286,9 +286,9 @@ def create_unity_job(
             {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
             {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
             {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
-            {"name": "UNITY_COMMS_URL", "value": COMMS_URL},
-            {"name": "UNITY_ADAPTERS_URL", "value": ADAPTERS_URL},
-            {"name": "ORCHESTRA_URL", "value": ORCHESTRA_URL},
+            {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
+            {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
+            {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
         ]
         if is_staging:
             env_vars += [{"name": "STAGING", "value": "true"}]
@@ -505,8 +505,6 @@ def suspend_job(batch_api, job_name: str, namespace: str = "default"):
 # K8s Lease-based distributed lock for atomic container assignment
 # ---------------------------------------------------------------------------
 
-LEASE_DURATION_SECONDS = 60
-
 
 def _sanitize_for_k8s(value: str) -> str:
     """Sanitize a value for use in K8s resource names and labels."""
@@ -518,7 +516,7 @@ def acquire_assignment_lease(
     assistant_id: str,
     namespace: str,
     holder_id: str,
-    duration: int = LEASE_DURATION_SECONDS,
+    duration: int = SETTINGS.lease_duration_seconds,
 ) -> bool:
     """Atomically acquire a Lease for assigning a container to an assistant.
 
@@ -658,11 +656,6 @@ def claim_idle_container(
 # Pending-startup reconciliation (Pub/Sub consumer)
 # ---------------------------------------------------------------------------
 
-GCP_PROJECT_ID = "gcp-project-runtime"
-_STAGING = os.environ.get("STAGING", "false").lower() == "true"
-_PENDING_TOPIC = "unity-pending-startups" + ("-staging" if _STAGING else "")
-_PENDING_SUB = _PENDING_TOPIC + "-sub"
-
 
 def publish_pending_startup(startup_config_json: str) -> str:
     """Publish a startup config to the pending-startups topic.
@@ -676,12 +669,12 @@ def publish_pending_startup(startup_config_json: str) -> str:
     creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
     creds = Credentials.from_service_account_info(creds_json)
     publisher = pubsub_v1.PublisherClient(credentials=creds)
-    topic_path = publisher.topic_path(GCP_PROJECT_ID, _PENDING_TOPIC)
+    topic_path = publisher.topic_path(SETTINGS.gcp_project_id, SETTINGS.pending_topic)
     future = publisher.publish(topic_path, data=startup_config_json.encode("utf-8"))
     message_id = future.result()
     logger.info(
         "Published pending startup to %s (msg_id=%s)",
-        _PENDING_TOPIC,
+        SETTINGS.pending_topic,
         message_id,
     )
     return message_id
@@ -707,7 +700,10 @@ def process_pending_startups(
     creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
     creds = Credentials.from_service_account_info(creds_json)
     subscriber = pubsub_v1.SubscriberClient(credentials=creds)
-    sub_path = subscriber.subscription_path(GCP_PROJECT_ID, _PENDING_SUB)
+    sub_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        SETTINGS.pending_sub,
+    )
 
     try:
         response = subscriber.pull(

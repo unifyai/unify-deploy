@@ -30,17 +30,7 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
     MessageItemRequestBuilder,
 )
 
-STAGING = os.getenv("STAGING")
-
-_default_orchestra_url = (
-    "https://api.unify.ai/v0"
-    if not STAGING
-    else "https://internal.example.com/v0"
-)
-ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
-
-COMMS_URL = os.getenv("UNITY_COMMS_URL")
-ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
+from communication.settings import SETTINGS
 
 _pubsub_client = None
 
@@ -157,7 +147,7 @@ def get_assistant(
     _status = "error"
     try:
         response = requests.get(
-            f"{ORCHESTRA_URL}/admin/assistant",
+            f"{SETTINGS.orchestra_url}/admin/assistant",
             params=params,
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
         ).json()
@@ -217,7 +207,7 @@ def get_assistant(
 
 def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]:
     response = requests.get(
-        f"{ORCHESTRA_URL}/logs",
+        f"{SETTINGS.orchestra_url}/logs",
         params={"project_name": "Assistants", "context": context},
         headers={"Authorization": f"Bearer {api_key}"},
     )
@@ -409,7 +399,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
 
     resp = requests.get(
-        f"{ORCHESTRA_URL}/logs",
+        f"{SETTINGS.orchestra_url}/logs",
         params={
             "project_name": "AssistantJobs",
             "context": "startup_events",
@@ -465,7 +455,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             f"user_email={e.get('user_email')}",
         )
         job_name = e.get("job_name")
-        if job_name and COMMS_URL:
+        if job_name and SETTINGS.comms_url:
             jobs_to_suspend.append(job_name)
         assistant_id = e.get("assistant_id")
         if assistant_id:
@@ -476,7 +466,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     def _suspend_job(job_name):
         try:
             requests.post(
-                f"{COMMS_URL}/infra/job/stop",
+                f"{SETTINGS.comms_url}/infra/job/stop",
                 data={"job_name": job_name},
                 headers={"Authorization": f"Bearer {admin_key}"},
                 timeout=10,
@@ -499,7 +489,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     def _release_vm(aid):
         try:
             requests.post(
-                f"{COMMS_URL}/infra/vm/pool/release",
+                f"{SETTINGS.comms_url}/infra/vm/pool/release",
                 headers={"Authorization": f"Bearer {admin_key}"},
                 json={"assistant_id": aid},
                 timeout=10,
@@ -511,7 +501,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             )
             return None
 
-    if COMMS_URL and unique_assistants:
+    if SETTINGS.comms_url and unique_assistants:
         with ThreadPoolExecutor(max_workers=len(unique_assistants)) as pool:
             results = list(pool.map(_release_vm, unique_assistants))
         released_assistants = [r for r in results if r is not None]
@@ -519,7 +509,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     stale_ids = [log["id"] for log in stale if "id" in log]
     if stale_ids:
         requests.put(
-            f"{ORCHESTRA_URL}/logs",
+            f"{SETTINGS.orchestra_url}/logs",
             json={
                 "logs": stale_ids,
                 "context": "startup_events",
@@ -561,7 +551,7 @@ def start_unity_job(assistant: dict, medium: str):
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     try:
         response = requests.post(
-            f"{COMMS_URL}/infra/job/start",
+            f"{SETTINGS.comms_url}/infra/job/start",
             headers=headers,
             data={
                 "api_key": api_key,
@@ -623,7 +613,7 @@ def start_unity_job(assistant: dict, medium: str):
         vm_type = desktop_mode
         try:
             vm_response = requests.post(
-                f"{COMMS_URL}/infra/vm/pool/assign",
+                f"{SETTINGS.comms_url}/infra/vm/pool/assign",
                 headers=headers,
                 json={
                     "assistant_id": assistant_id,
@@ -702,7 +692,7 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         # We use a specific label selector to avoid fetching 'done' jobs which can be numerous.
         # Comma-separated labels act as a logical AND.
         resp = requests.get(
-            f"{COMMS_URL}/infra/jobs",
+            f"{SETTINGS.comms_url}/infra/jobs",
             params={"label_selector": "app=unity,unity-status!=done"},
             headers=headers,
             timeout=10,
@@ -735,7 +725,7 @@ def _trigger_pending_reconciliation():
     """
     try:
         requests.post(
-            f"{COMMS_URL}/infra/pending/process",
+            f"{SETTINGS.comms_url}/infra/pending/process",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
             timeout=10,
         )
@@ -791,18 +781,18 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
         f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {pool_target.target})...",
     )
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
-    response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
+    response = requests.get(f"{SETTINGS.comms_url}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
     image = (
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if not STAGING else "/unity-staging:")
+        + ("/unity:" if not SETTINGS.staging else "/unity-staging:")
         + commit_hash
     )
 
     def _create_single_job():
         try:
             resp = requests.post(
-                f"{COMMS_URL}/infra/job/create",
+                f"{SETTINGS.comms_url}/infra/job/create",
                 data={"image": image},
                 headers=headers,
                 timeout=0.1,
@@ -840,7 +830,7 @@ def cleanup_idle_pool() -> dict:
 
     # Get all idle jobs via K8s label selector
     resp = requests.get(
-        f"{COMMS_URL}/infra/jobs",
+        f"{SETTINGS.comms_url}/infra/jobs",
         params={"label_selector": "app=unity,unity-status=idle"},
         headers=headers,
     )
@@ -848,8 +838,8 @@ def cleanup_idle_pool() -> dict:
     idle_jobs = {
         job["job_name"]: job.get("resource_version")
         for job in jobs["jobs"]
-        if (STAGING and "staging" in job["job_name"])
-        or (not STAGING and "staging" not in job["job_name"])
+        if (SETTINGS.staging and "staging" in job["job_name"])
+        or (not SETTINGS.staging and "staging" not in job["job_name"])
     }
 
     # Classify idle jobs by age into three buckets
@@ -899,7 +889,7 @@ def cleanup_idle_pool() -> dict:
         if resource_version is not None:
             data["resource_version"] = resource_version
         resp = requests.delete(
-            f"{COMMS_URL}/infra/job/delete",
+            f"{SETTINGS.comms_url}/infra/job/delete",
             data=data,
             headers=headers,
         )
@@ -1100,7 +1090,7 @@ def create_conference_response(conference_name, with_status=False):
             endConferenceOnExit=True,
             muted=False,
             wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
-            status_callback=f"{COMMS_URL}/phone/conference-status",
+            status_callback=f"{SETTINGS.comms_url}/phone/conference-status",
             status_callback_event="end",
         )
         return resp_user
@@ -1481,7 +1471,9 @@ def publish_gmail_thread_id(
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_name = f"unity-{assistant_id}" + (
+            "" if not SETTINGS.staging else "-staging"
+        )
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
@@ -1524,7 +1516,9 @@ def publish_outlook_thread_id(
     """Publish the Outlook conversation to pub/sub topic."""
     try:
         publisher = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_name = f"unity-{assistant_id}" + (
+            "" if not SETTINGS.staging else "-staging"
+        )
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
@@ -1560,7 +1554,7 @@ def publish_outlook_thread_id(
 
 def dispatch_livekit_agent(room_name: str):
     response = requests.post(
-        f"{COMMS_URL}/phone/dispatch-livekit-agent",
+        f"{SETTINGS.comms_url}/phone/dispatch-livekit-agent",
         headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
         json={"room_name": room_name},
     )
@@ -1634,8 +1628,8 @@ async def store_microsoft_tokens(
     - MICROSOFT_REFRESH_TOKEN
     - MICROSOFT_TOKEN_EXPIRES_AT
     """
-    if not ORCHESTRA_URL:
-        logger.info("ORCHESTRA_URL not configured")
+    if not SETTINGS.orchestra_url:
+        logger.info("SETTINGS.orchestra_url not configured")
         return False
 
     secrets_to_store = {
@@ -1653,7 +1647,7 @@ async def store_microsoft_tokens(
         for secret_name, secret_value in secrets_to_store.items():
             try:
                 args = {
-                    "url": f"{ORCHESTRA_URL}/assistant/{assistant_id}/secret",
+                    "url": f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret",
                     "json": {"secret_name": secret_name, "secret_value": secret_value},
                     "headers": {"Authorization": f"Bearer {api_key}"},
                     "timeout": 30.0,

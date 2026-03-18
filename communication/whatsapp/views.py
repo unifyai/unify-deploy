@@ -3,7 +3,8 @@ import json
 import base64
 import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
-from communication.helpers import ADAPTERS_URL, get_twilio_client, ORCHESTRA_URL
+from communication.helpers import get_twilio_client
+from communication.settings import SETTINGS
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -89,7 +90,7 @@ async def create_whatsapp_sender(request: Request):
             "callback_method": "POST",
             "callback_url": data.get(
                 "callback_url",
-                ADAPTERS_URL + "/twilio/whatsapp",
+                SETTINGS.adapters_url + "/twilio/whatsapp",
             ),
         },
     }
@@ -135,7 +136,7 @@ async def assign_whatsapp_sender(request: Request):
     conflict_whatsapp_number = data.get("conflict_whatsapp_number", None)
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{ORCHESTRA_URL}/admin/assistant?user_whatsapp_number={user_whatsapp_number}",
+            f"{SETTINGS.orchestra_url}/admin/assistant?user_whatsapp_number={user_whatsapp_number}",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
         )
     if resp.status_code >= 400:
@@ -178,7 +179,7 @@ async def get_conflict_whatsapp_number(request: Request):
     # search if target has an assistant with the same whatsapp number
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{ORCHESTRA_URL}/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}",
+            f"{SETTINGS.orchestra_url}/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
         )
     if resp.status_code >= 400:
@@ -194,7 +195,7 @@ async def get_conflict_whatsapp_number(request: Request):
     # search if target is in any other user's contact list
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{ORCHESTRA_URL}/admin/contacts?whatsapp_number={target_whatsapp_number}",
+            f"{SETTINGS.orchestra_url}/admin/contacts?whatsapp_number={target_whatsapp_number}",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
         )
     if resp.status_code >= 400:
@@ -211,7 +212,7 @@ async def get_conflict_whatsapp_number(request: Request):
             # check if user has an assistant
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
-                    f"{ORCHESTRA_URL}/admin/assistant/user/{uid}&assistant_whatsapp_number={assistant_whatsapp_number}",
+                    f"{SETTINGS.orchestra_url}/admin/assistant/user/{uid}&assistant_whatsapp_number={assistant_whatsapp_number}",
                     headers={
                         "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}",
                     },

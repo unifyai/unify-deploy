@@ -8,7 +8,8 @@ from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.body_type import BodyType
 from msgraph.generated.models.subscription import Subscription
 
-from communication.helpers import ADAPTERS_URL, get_graph_client
+from communication.helpers import get_graph_client
+from communication.settings import SETTINGS
 
 router = APIRouter()
 
@@ -113,7 +114,7 @@ async def watch_teams_chat(request: Request):
     """
     data = await request.json()
     user_email = data.get("primary_email")
-    webhook_url = data.get("webhook_url") or f"{ADAPTERS_URL}/microsoft/router"
+    webhook_url = data.get("webhook_url") or f"{SETTINGS.adapters_url}/microsoft/router"
 
     if not user_email:
         raise HTTPException(status_code=400, detail="Missing primary_email")
@@ -365,7 +366,7 @@ async def watch_teams_channel(request: Request):
     user_email = data.get("primary_email")
     team_id = data.get("team_id")
     channel_id = data.get("channel_id")
-    webhook_url = data.get("webhook_url") or f"{ADAPTERS_URL}/microsoft/router"
+    webhook_url = data.get("webhook_url") or f"{SETTINGS.adapters_url}/microsoft/router"
 
     if not user_email:
         raise HTTPException(status_code=400, detail="Missing primary_email")

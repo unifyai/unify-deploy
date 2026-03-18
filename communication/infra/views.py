@@ -67,7 +67,7 @@ from .models import (
     PoolStatusResponse,
     PoolVMStatus,
 )
-from communication.helpers import DEPLOY_ENV, ENV_SUFFIX
+from communication.settings import SETTINGS
 from communication.dependencies import (
     authenticate_user_api_key,
     authenticate_vm_identity,
@@ -89,8 +89,8 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
     Returns the Pub/Sub message ID.
     """
     publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
-    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
-    topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
+    topic_name = f"unity-{assistant_id}" + ("-staging" if SETTINGS.staging else "")
+    topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
 
     message_data = json.dumps(
         {
@@ -129,12 +129,6 @@ async def _get_k8s_clients():
 
 router = APIRouter()
 
-# Project ID from the existing codebase
-GCP_PROJECT_ID = "gcp-project-runtime"
-# Default region for Cloud Run jobs
-DEFAULT_REGION = "us-central1"
-# Namespace based on environment
-DEFAULT_NAMESPACE = "staging" if STAGING else "production"
 
 _pubsub_publisher: pubsub_v1.PublisherClient | None = None
 _pubsub_subscriber: pubsub_v1.SubscriberClient | None = None
@@ -219,17 +213,17 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
     try:
         publisher, subscriber = await asyncio.to_thread(_get_pubsub_clients)
 
-        topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
+        topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
         subscription_path = subscriber.subscription_path(
-            GCP_PROJECT_ID,
+            SETTINGS.gcp_project_id,
             f"{topic_name}-sub",
         )
         outbound_subscription_path = subscriber.subscription_path(
-            GCP_PROJECT_ID,
+            SETTINGS.gcp_project_id,
             f"{topic_name}-outbound-sub",
         )
         actions_subscription_path = subscriber.subscription_path(
-            GCP_PROJECT_ID,
+            SETTINGS.gcp_project_id,
             f"{topic_name}-actions-sub",
         )
         system_error_subscription_path = subscriber.subscription_path(
@@ -288,7 +282,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             "subscription_name": subscription_path,
             "actions_subscription_name": actions_subscription_path,
             "system_error_subscription_name": system_error_subscription_path,
-            "project_id": GCP_PROJECT_ID,
+            "project_id": SETTINGS.gcp_project_id,
         }
     except Exception as e:
         raise HTTPException(
@@ -307,7 +301,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 
     def _delete_topic_and_subs():
         publisher, subscriber = _get_pubsub_clients()
-        topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
+        topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
 
         try:
             for subscription_name in publisher.list_topic_subscriptions(
@@ -334,7 +328,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
             "success": True,
             "message": "Topic deleted successfully",
             "topic_name": topic_path,
-            "project_id": GCP_PROJECT_ID,
+            "project_id": SETTINGS.gcp_project_id,
         }
 
     except Exception as e:
@@ -344,7 +338,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 # create kubernetes job
 @router.post("/job/create")
 async def create_kubernetes_job(
-    namespace: str = Form(DEFAULT_NAMESPACE),
+    namespace: str = Form(SETTINGS.default_namespace),
     image: str = Form(
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
     ),
@@ -363,7 +357,7 @@ async def create_kubernetes_job(
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         job_name = (
             f"unity-{timestamp_str}-{random_id}"
-            if not STAGING
+            if not SETTINGS.staging
             else f"unity-{timestamp_str}-{random_id}-staging"
         )
 
@@ -373,7 +367,7 @@ async def create_kubernetes_job(
             job_name=job_name,
             namespace=namespace,
             image=image,
-            is_staging=bool(STAGING),
+            is_staging=bool(SETTINGS.staging),
         )
 
         if job:
@@ -427,7 +421,7 @@ async def get_kubernetes_job(
 @router.delete("/job/delete")
 async def delete_kubernetes_job(
     job_name: str = Form(...),
-    namespace: str = Form(DEFAULT_NAMESPACE),
+    namespace: str = Form(SETTINGS.default_namespace),
     resource_version: str = Form(None),
 ):
     """
@@ -478,7 +472,7 @@ async def delete_kubernetes_job(
 async def patch_kubernetes_job_labels(
     job_name: str = Form(...),
     labels: str = Form(...),
-    namespace: str = Form(DEFAULT_NAMESPACE),
+    namespace: str = Form(SETTINGS.default_namespace),
 ):
     """
     Patch labels on an existing Kubernetes Job.
@@ -530,7 +524,7 @@ async def patch_kubernetes_job_labels(
 
 
 @router.get("/job/{job_name}")
-async def read_job(job_name: str, namespace: str = DEFAULT_NAMESPACE):
+async def read_job(job_name: str, namespace: str = SETTINGS.default_namespace):
     """Read a single Job's labels, annotations, and status by name.
 
     Used by idle containers to poll their own assignment state.
@@ -632,7 +626,7 @@ async def start_job(
         # ── Check if a container already serves this assistant ────────
         existing = await asyncio.to_thread(
             batch_api.list_namespaced_job,
-            namespace=DEFAULT_NAMESPACE,
+            namespace=SETTINGS.default_namespace,
             label_selector=f"app=unity,assistant-id={sanitized_aid}",
         )
         already_running = [
@@ -651,7 +645,7 @@ async def start_job(
             acquire_assignment_lease,
             coord_api,
             assistant_id,
-            DEFAULT_NAMESPACE,
+            SETTINGS.default_namespace,
             holder_id,
         )
         if not acquired:
@@ -702,7 +696,7 @@ async def start_job(
                 claim_idle_container,
                 batch_api,
                 assistant_id,
-                DEFAULT_NAMESPACE,
+                SETTINGS.default_namespace,
                 startup_config,
             )
 
@@ -742,7 +736,7 @@ async def start_job(
                 release_assignment_lease,
                 coord_api,
                 assistant_id,
-                DEFAULT_NAMESPACE,
+                SETTINGS.default_namespace,
             )
 
     except RuntimeError:
@@ -781,7 +775,7 @@ async def process_pending():
             process_pending_startups,
             batch_api,
             coord_api,
-            DEFAULT_NAMESPACE,
+            SETTINGS.default_namespace,
         )
         return {"success": True, **result}
     except Exception as e:
@@ -794,7 +788,10 @@ async def process_pending():
 
 # stop kubernetes job
 @router.post("/job/stop")
-async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAMESPACE)):
+async def stop_job(
+    job_name: str = Form(...),
+    namespace: str = Form(SETTINGS.default_namespace),
+):
     """
     Stop a Kubernetes Job for a Unity assistant.
     """
@@ -821,7 +818,7 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
 # list kubernetes jobs
 @router.get("/jobs")
 async def list_kubernetes_jobs(
-    namespace: str = DEFAULT_NAMESPACE,
+    namespace: str = SETTINGS.default_namespace,
     hours: int = 8,
     label_selector: str = "app=unity",
 ):
@@ -920,7 +917,7 @@ async def list_kubernetes_jobs(
 @router.get("/job/logs")
 async def get_job_logs_endpoint(
     job_name: str,
-    namespace: str = DEFAULT_NAMESPACE,
+    namespace: str = SETTINGS.default_namespace,
     tail_lines: int = 10,
 ):
     """
@@ -972,7 +969,9 @@ async def get_latest_unity_image_commit():
 
         # Define the bucket and file path
         bucket_name = "unity-image-hash"
-        blob_name = "image_hash.txt" if not STAGING else "image_hash_staging.txt"
+        blob_name = (
+            "image_hash.txt" if not SETTINGS.staging else "image_hash_staging.txt"
+        )
 
         try:
             # Get the bucket
