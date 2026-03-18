@@ -27,19 +27,35 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 # Environment detection
-STAGING = os.environ.get("STAGING", "false").lower() == "true"
+
+
+def _get_deploy_env() -> str:
+    deploy_env = (os.environ.get("DEPLOY_ENV") or "production").strip().lower()
+    return (
+        deploy_env
+        if deploy_env in {"production", "staging", "preview"}
+        else "production"
+    )
+
+
+DEPLOY_ENV = _get_deploy_env()
+
+
+def _cloud_run_url(service_name: str) -> str:
+    return f"https://{service_name}-000000000000.us-central1.run.app"
+
 
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
-    if not STAGING
+    if DEPLOY_ENV == "production"
     else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.environ.get("ORCHESTRA_URL", _default_orchestra_url)
 
 _default_comms_url = (
-    "https://unity-comms-app-000000000000.us-central1.run.app"
-    if not STAGING
-    else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+    _cloud_run_url("unity-comms-app")
+    if DEPLOY_ENV == "production"
+    else _cloud_run_url(f"unity-comms-app-{DEPLOY_ENV}")
 )
 COMMS_URL = os.environ.get("UNITY_COMMS_URL", _default_comms_url)
 
@@ -181,7 +197,7 @@ def get_secret(secret_name: str, project_id: str = None) -> Optional[str]:
 def get_dns_hostname(assistant_id: str) -> str:
     """Generate consistent DNS hostname from assistant ID.
 
-    Format: unity-assistant-{id}{-staging}.vm.unify.ai
+    Format: unity-assistant-{id}{-env}.vm.unify.ai for non-production.
 
     NOTE: Same for both Windows and Ubuntu - only one VM per assistant.
     """
@@ -300,49 +316,6 @@ def store_ssh_private_key(
     except Exception as e:
         logger.error(f"Error storing SSH private key: {e}")
         return False
-
-
-def _fetch_existing_ssh_key(assistant_id: str) -> Optional[str]:
-    """Fetch the assistant's existing SSH private key from Orchestra.
-
-    Returns the PEM-encoded private key string, or None if not found.
-    """
-    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
-    if not admin_key:
-        return None
-
-    url = f"{ORCHESTRA_URL}/admin/assistant"
-    try:
-        response = requests.get(
-            url,
-            params={"agent_id": str(assistant_id)},
-            headers={"Authorization": f"Bearer {admin_key}"},
-            timeout=30,
-        )
-        if response.status_code == 200:
-            assistants = response.json().get("info", [])
-            if assistants:
-                return assistants[0].get("desktop_filesync_sshkey")
-    except Exception as e:
-        logger.warning(f"Failed to fetch existing SSH key for {assistant_id}: {e}")
-    return None
-
-
-def _derive_public_key(private_key_pem: str) -> str:
-    """Derive the OpenSSH public key from a PEM-encoded Ed25519 private key."""
-    private_key = serialization.load_ssh_private_key(
-        private_key_pem.encode("utf-8"),
-        password=None,
-    )
-    public_key_openssh = (
-        private_key.public_key()
-        .public_bytes(
-            encoding=serialization.Encoding.OpenSSH,
-            format=serialization.PublicFormat.OpenSSH,
-        )
-        .decode("utf-8")
-    )
-    return f"{public_key_openssh} unity-file-sync"
 
 
 # =============================================================================
@@ -537,8 +510,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     if tls_cert and tls_key:
         metadata_items.append(compute_v1.Items(key="tls-fullchain", value=tls_cert))
         metadata_items.append(compute_v1.Items(key="tls-privkey", value=tls_key))
-    if STAGING:
-        metadata_items.append(compute_v1.Items(key="staging", value="true"))
+    metadata_items.append(compute_v1.Items(key="unity-environment", value=DEPLOY_ENV))
 
     labels = {
         "pool-role": "provisioning",
@@ -976,13 +948,8 @@ def assign_pool_vm(
     vm_name = claimed["vm_name"]
     create_assistant_disk(assistant_id)
     device_name = attach_assistant_disk(vm_name, assistant_id)
-    existing_key = _fetch_existing_ssh_key(assistant_id)
-    if existing_key:
-        private_key = existing_key
-        public_key = _derive_public_key(existing_key)
-    else:
-        private_key, public_key = generate_ssh_keypair()
-        store_ssh_private_key(assistant_id, private_key)
+    private_key, public_key = generate_ssh_keypair()
+    store_ssh_private_key(assistant_id, private_key)
 
     metadata = {
         "unify-key": unify_apikey,
@@ -1113,16 +1080,13 @@ def _start_one_stopped_vm(client, vm) -> bool:
         return False
 
 
-def replenish_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
+def replenish_pool(vm_type: str) -> Dict[str, Any]:
     """Start or provision VMs to meet current demand.
 
     Demand-aware: computes deficit from the number of threads currently
     waiting in claim_idle_vm, not just POOL_TARGET_IDLE.  Subtracts VMs
     already booting (in-flight) to avoid runaway over-provisioning across
     sequential replenish cycles.
-
-    extra_demand compensates for VMs just claimed whose label change may
-    not yet be reflected in the eventually-consistent GCE instances.list.
 
     Uses a non-blocking per-vm_type lock so concurrent callers (fire-and-
     forget from assign_pool_endpoint, poll-driven from claim_idle_vm) don't
@@ -1133,12 +1097,12 @@ def replenish_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
         return {"vm_type": vm_type, "actions": [], "skipped": True}
 
     try:
-        return _replenish_pool_inner(vm_type, extra_demand)
+        return _replenish_pool_inner(vm_type)
     finally:
         lock.release()
 
 
-def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
+def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
     client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
         vm_type
     )
@@ -1147,13 +1111,13 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
         pending = _pending_claims.get(vm_type, 0)
 
     target = max(POOL_TARGET_IDLE, pending)
-    deficit = target - len(idle_vms) - len(in_flight_vms) + extra_demand
+    deficit = target - len(idle_vms) - len(in_flight_vms)
     actions: list[str] = []
 
     logger.info(
         f"Replenish {vm_type}: target={target} idle={len(idle_vms)} "
         f"in_flight={len(in_flight_vms)} stopped={len(stopped_vms)} "
-        f"extra_demand={extra_demand} deficit={deficit}"
+        f"deficit={deficit}"
     )
 
     if deficit <= 0:

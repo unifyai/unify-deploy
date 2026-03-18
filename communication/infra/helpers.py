@@ -1,15 +1,12 @@
 from datetime import datetime, timezone
 import json
-import logging
 import os
 import subprocess
 import threading
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
 
-from communication.helpers import ADAPTERS_URL, COMMS_URL, ORCHESTRA_URL
-
-logger = logging.getLogger(__name__)
+from communication.helpers import ADAPTERS_URL, COMMS_URL, DEPLOY_ENV, ORCHESTRA_URL
 
 _k8s_clients: tuple | None = None
 _k8s_lock = threading.Lock()
@@ -22,8 +19,8 @@ def setup_kubernetes_client():
     calls return instantly instead of re-running gcloud auth subprocesses.
 
     Returns:
-        tuple: (BatchV1Api, CoreV1Api, NetworkingV1Api, CoordinationV1Api)
-        tuple: (None, None, None, None) - If setup fails
+        tuple: (BatchV1Api, CoreV1Api, NetworkingV1Api) - Kubernetes API clients
+        tuple: (None, None, None) - If setup fails
     """
     global _k8s_clients
 
@@ -36,7 +33,7 @@ def setup_kubernetes_client():
             return _k8s_clients
 
         try:
-            print("Starting Kubernetes client setup...")
+            print("🔧 Starting Kubernetes client setup...")
 
             creds_json = os.getenv("GCP_SA_KEY")
             if not creds_json:
@@ -103,16 +100,15 @@ def setup_kubernetes_client():
             batch_api = k8s_client.BatchV1Api()
             core_api = k8s_client.CoreV1Api()
             networking_api = k8s_client.NetworkingV1Api()
-            coord_api = k8s_client.CoordinationV1Api()
 
-            print("Kubernetes client setup complete!")
+            print("✅ Kubernetes client setup complete!")
 
-            _k8s_clients = (batch_api, core_api, networking_api, coord_api)
+            _k8s_clients = (batch_api, core_api, networking_api)
             return _k8s_clients
 
         except Exception as e:
-            print(f"Error setting up Kubernetes client: {e}")
-            return None, None, None, None
+            print(f"❌ Error setting up Kubernetes client: {e}")
+            return None, None, None
 
 
 def delete_job(
@@ -194,7 +190,6 @@ def create_unity_job(
     job_name: str,
     namespace: str = "default",
     image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
-    is_staging: bool = False,
     ttl_seconds_after_finished: int = None,
 ):
     """
@@ -205,13 +200,13 @@ def create_unity_job(
         job_name: Name of the job
         namespace: Kubernetes namespace
         image: Docker image to use
-        is_staging: Whether to use staging image
         ttl_seconds_after_finished: Seconds after job completion before cleanup (None to disable)
     """
     try:
         # Define the assistant-specific environment variables
         env_vars = [
             {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
+            {"name": "DEPLOY_ENV", "value": DEPLOY_ENV},
             {
                 "name": "GOOGLE_APPLICATION_CREDENTIALS",
                 "value": "/secrets/key.json",
@@ -232,8 +227,6 @@ def create_unity_job(
             {"name": "UNITY_ADAPTERS_URL", "value": ADAPTERS_URL},
             {"name": "ORCHESTRA_URL", "value": ORCHESTRA_URL},
         ]
-        if is_staging:
-            env_vars += [{"name": "STAGING", "value": "true"}]
 
         # Define the job manifest
         job_manifest = {
@@ -436,161 +429,8 @@ def suspend_job(batch_api, job_name: str, namespace: str = "default"):
             namespace=namespace,
             body=patch_body,
         )
-        print(f"Patched job to suspend: {job_name}")
+        print(f"🛑 Patched job to stop new pods and retries: {job_name}")
         return True
     except Exception as e:
-        print(f"Error stopping job: {e}")
+        print(f"❌ Error stopping job: {e}")
         return False
-
-
-# ---------------------------------------------------------------------------
-# K8s Lease-based distributed lock for atomic container assignment
-# ---------------------------------------------------------------------------
-
-LEASE_DURATION_SECONDS = 60
-
-
-def _sanitize_for_k8s(value: str) -> str:
-    """Sanitize a value for use in K8s resource names and labels."""
-    return str(value).lower().replace("_", "-")
-
-
-def acquire_assignment_lease(
-    coord_api,
-    assistant_id: str,
-    namespace: str,
-    holder_id: str,
-    duration: int = LEASE_DURATION_SECONDS,
-) -> bool:
-    """Atomically acquire a Lease for assigning a container to an assistant.
-
-    Returns True if the Lease was acquired, False if another caller holds it.
-    Stale Leases (older than *duration* seconds) are cleaned up automatically.
-    """
-    lease_name = f"assistant-claim-{_sanitize_for_k8s(assistant_id)}"
-    now = datetime.now(timezone.utc)
-
-    lease_body = k8s_client.V1Lease(
-        metadata=k8s_client.V1ObjectMeta(name=lease_name, namespace=namespace),
-        spec=k8s_client.V1LeaseSpec(
-            holder_identity=holder_id,
-            lease_duration_seconds=duration,
-            acquire_time=now,
-            renew_time=now,
-        ),
-    )
-
-    try:
-        coord_api.create_namespaced_lease(namespace=namespace, body=lease_body)
-        logger.info("Acquired assignment lease %s (holder=%s)", lease_name, holder_id)
-        return True
-    except ApiException as e:
-        if e.status != 409:
-            raise
-
-    existing = coord_api.read_namespaced_lease(name=lease_name, namespace=namespace)
-    acquire_time = existing.spec.acquire_time
-    lease_dur = existing.spec.lease_duration_seconds or duration
-
-    if acquire_time and (now - acquire_time).total_seconds() > lease_dur:
-        logger.info("Deleting expired lease %s (age > %ds)", lease_name, lease_dur)
-        coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
-        try:
-            coord_api.create_namespaced_lease(namespace=namespace, body=lease_body)
-            logger.info("Re-acquired expired lease %s", lease_name)
-            return True
-        except ApiException as retry_err:
-            if retry_err.status == 409:
-                return False
-            raise
-
-    logger.info(
-        "Lease %s held by %s, not expired",
-        lease_name,
-        existing.spec.holder_identity,
-    )
-    return False
-
-
-def release_assignment_lease(
-    coord_api,
-    assistant_id: str,
-    namespace: str,
-) -> None:
-    """Delete the assignment Lease. Ignores 404 (already released)."""
-    lease_name = f"assistant-claim-{_sanitize_for_k8s(assistant_id)}"
-    try:
-        coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
-        logger.info("Released assignment lease %s", lease_name)
-    except ApiException as e:
-        if e.status != 404:
-            raise
-
-
-def claim_idle_container(
-    batch_api,
-    assistant_id: str,
-    namespace: str,
-    startup_config_json: str,
-) -> str:
-    """Pick an idle container and atomically assign it to *assistant_id*.
-
-    Writes the startup configuration as a Job annotation so the container
-    can read it via polling.  Uses resourceVersion CAS on the label patch
-    to prevent two different assistants from claiming the same idle Job.
-
-    Returns the claimed Job's name, or raises if no idle containers are
-    available.
-    """
-    sanitized_aid = _sanitize_for_k8s(assistant_id)
-
-    idle_jobs = batch_api.list_namespaced_job(
-        namespace=namespace,
-        label_selector="app=unity,unity-status=idle",
-    )
-    candidates = [j for j in idle_jobs.items if j.status.active and j.status.active > 0]
-
-    if not candidates:
-        raise RuntimeError("No idle containers available in the pool")
-
-    for job in candidates:
-        job_name = job.metadata.name
-        rv = job.metadata.resource_version
-        labels = dict(job.metadata.labels or {})
-        labels["assistant-id"] = sanitized_aid
-        labels["unity-status"] = "running"
-
-        body = {
-            "metadata": {
-                "labels": labels,
-                "annotations": {"unity-startup-config": startup_config_json},
-                "resourceVersion": rv,
-            },
-        }
-
-        try:
-            batch_api.patch_namespaced_job(
-                name=job_name,
-                namespace=namespace,
-                body=body,
-            )
-            logger.info(
-                "Claimed container %s for assistant %s (rv=%s)",
-                job_name,
-                assistant_id,
-                rv,
-            )
-            return job_name
-        except ApiException as e:
-            if e.status == 409:
-                logger.info(
-                    "CAS conflict on %s (rv=%s), trying next idle container",
-                    job_name,
-                    rv,
-                )
-                continue
-            raise
-
-    raise RuntimeError(
-        "All idle containers were claimed by concurrent requests; retry later",
-    )

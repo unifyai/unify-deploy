@@ -15,7 +15,8 @@
 #   7. Mark pool VM as idle
 #
 # GCP Metadata Keys (set at pool creation):
-#   hostname, github-token, orchestra-url, comms-url, staging,
+#   hostname, github-token, orchestra-url, comms-url, unity-environment,
+#   staging, preview,
 #   tls-fullchain, tls-privkey, pool-watcher-script
 #
 # GCP Metadata Keys (set at assignment, handled by pool watcher):
@@ -61,6 +62,14 @@ function Get-RemoteCommitHash {
         }
     } catch {}
     return $null
+}
+
+function Get-DeployEnv {
+    $envName = Get-GCPMetadata -Key "unity-environment"
+    if ($envName) { return $envName }
+    if (Get-GCPMetadata -Key "preview") { return "preview" }
+    if (Get-GCPMetadata -Key "staging") { return "staging" }
+    return "production"
 }
 
 function Get-SavedCommitHash {
@@ -120,13 +129,13 @@ Write-Host "Reading GCP metadata..."
 $gcpHostname = Get-GCPMetadata -Key "hostname"
 $gcpGithubToken = (Get-GCPMetadata -Key "github-token")
 if ($gcpGithubToken) { $gcpGithubToken = $gcpGithubToken.Trim() }
-$gcpStaging = Get-GCPMetadata -Key "staging"
+$gcpDeployEnv = Get-DeployEnv
 $gcpTlsFullchain = Get-GCPMetadata -Key "tls-fullchain"
 $gcpTlsPrivkey = Get-GCPMetadata -Key "tls-privkey"
 
 Write-Host "  Hostname:       $(if ($gcpHostname) { $gcpHostname } else { '(not configured)' })"
 Write-Host "  GitHub Token:   $(if ($gcpGithubToken) { '(set)' } else { '(not provided)' })"
-Write-Host "  Staging Branch: $(if ($gcpStaging) { 'yes' } else { 'no' })"
+Write-Host "  Deploy Env:     $gcpDeployEnv"
 Write-Host "  TLS Wildcard:   $(if ($gcpTlsFullchain) { '(set)' } else { '(not provided)' })"
 Write-Host ""
 
@@ -192,7 +201,11 @@ $unityUrl = if ($gcpGithubToken) {
 } else {
     "https://github.com/unifyai/unity.git"
 }
-$unityBranch = if ($gcpStaging) { "staging" } else { "main" }
+$unityBranch = switch ($gcpDeployEnv) {
+    "preview" { "preview" }
+    "staging" { "staging" }
+    default { "main" }
+}
 
 # =============================================================================
 # Update Magnitude

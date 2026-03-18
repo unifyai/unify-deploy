@@ -53,10 +53,10 @@ steps:
   - '--cpu=1'
   - '--timeout=300'
   - '--cpu-boost'
-  - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=staging,PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc'
+  - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=preview,PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc'
   waitFor: ['push-sha-tag']
 
-  # Update Cloud Scheduler: Email Watches Staging
+  # Update Cloud Scheduler: Email Watches Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-email-watches'
   entrypoint: bash
@@ -67,14 +67,14 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "email-watches-staging" \
+    gcloud scheduler jobs update http "email-watches-preview" \
       --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "email-watches-staging" \
+    gcloud scheduler jobs create http "email-watches-preview" \
       --schedule "0 0 * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
       --http-method POST \
@@ -85,7 +85,7 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Jobs Create Staging
+  # Update Cloud Scheduler: Jobs Create Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-jobs-create'
   entrypoint: bash
@@ -96,13 +96,13 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "jobs-create-staging" \
+    gcloud scheduler jobs update http "jobs-create-preview" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "jobs-create-staging" \
+    gcloud scheduler jobs create http "jobs-create-preview" \
       --schedule "0 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
       --http-method POST \
@@ -112,7 +112,7 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Jobs Cleanup Staging
+  # Update Cloud Scheduler: Jobs Cleanup Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-jobs-cleanup'
   entrypoint: bash
@@ -123,13 +123,13 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "jobs-cleanup-staging" \
+    gcloud scheduler jobs update http "jobs-cleanup-preview" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "jobs-cleanup-staging" \
+    gcloud scheduler jobs create http "jobs-cleanup-preview" \
       --schedule "10 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
       --http-method POST \
@@ -139,7 +139,7 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Stale Jobs Expire Staging
+  # Update Cloud Scheduler: Stale Jobs Expire Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-stale-jobs-expire'
   entrypoint: bash
@@ -150,14 +150,14 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "stale-jobs-expire-staging" \
+    gcloud scheduler jobs update http "stale-jobs-expire-preview" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --schedule "0 1,7,13,19 * * *" \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "stale-jobs-expire-staging" \
+    gcloud scheduler jobs create http "stale-jobs-expire-preview" \
       --schedule "0 1,7,13,19 * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
       --http-method POST \
@@ -167,7 +167,7 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Microsoft Token Refresh Staging
+  # Update Cloud Scheduler: Microsoft Token Refresh Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-microsoft-tokens'
   entrypoint: bash
@@ -178,14 +178,14 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "microsoft-tokens-staging" \
+    gcloud scheduler jobs update http "microsoft-tokens-preview" \
       --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "microsoft-tokens-staging" \
+    gcloud scheduler jobs create http "microsoft-tokens-preview" \
       --schedule "*/30 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
       --http-method POST \
@@ -196,7 +196,7 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Teams Chat Watches Staging (runs every 30 mins - subscriptions expire in 60 mins)
+  # Update Cloud Scheduler: Teams Chat Watches Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-teams-watches'
   entrypoint: bash
@@ -207,14 +207,14 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "teams-watches-staging" \
+    gcloud scheduler jobs update http "teams-watches-preview" \
       --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "teams-watches-staging" \
+    gcloud scheduler jobs create http "teams-watches-preview" \
       --schedule "*/30 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
       --http-method POST \
@@ -225,7 +225,7 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Cert Renewal (Staging)
+  # Update Cloud Scheduler: Cert Renewal Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-cert-renewal'
   entrypoint: bash
@@ -236,13 +236,13 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "cert-renewal-staging" \
+    gcloud scheduler jobs update http "cert-renewal-preview" \
       --uri "$${CLOUD_RUN_URL}/scheduled/cert-renewal" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "cert-renewal-staging" \
+    gcloud scheduler jobs create http "cert-renewal-preview" \
       --schedule "0 3 1 * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/cert-renewal" \
       --http-method POST \
@@ -253,27 +253,22 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-# Options
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 
-# Substitution variables
 substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'unity-adapters-repo'
-  _SERVICE_NAME: 'unity-adapters-staging'
+  _SERVICE_NAME: 'unity-adapters-preview'
 
-# Secrets from Secret Manager
 availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
     env: 'ORCHESTRA_ADMIN_KEY'
 
-# Timeout
 timeout: '1200s'
 
-# Images to be pushed
 images:
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'

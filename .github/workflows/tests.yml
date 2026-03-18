@@ -125,7 +125,7 @@ jobs:
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
         UNITY_COMMS_URL: ${{ secrets.UNITY_COMMS_URL }}
         UNITY_ADAPTERS_URL: ${{ secrets.UNITY_ADAPTERS_URL }}
-        STAGING: true
+        DEPLOY_ENV: staging
         GCP_PROJECT_ID: gcp-project-runtime
 
     - name: Run unify attachment tests

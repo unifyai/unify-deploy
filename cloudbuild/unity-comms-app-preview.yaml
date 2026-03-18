@@ -18,7 +18,7 @@ steps:
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-comms \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
-      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN --build-arg BRANCH_NAME=staging \
+      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN --build-arg BRANCH_NAME=preview \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
   secretEnv: ['GITHUB_TOKEN']
@@ -47,33 +47,28 @@ steps:
   - >-
     --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}
   - '--region=${_REGION}'
-  - '--update-env-vars=DEPLOY_ENV=staging'
+  - '--update-env-vars=DEPLOY_ENV=preview'
   - '--quiet'
   id: Deploy Unity Comms App
   entrypoint: gcloud
   waitFor: ['push-sha-tag']
 
-# Options
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 
-# Substitution variables
 substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'unity-comms-app-repo'
-  _SERVICE_NAME: 'unity-comms-app-staging'
+  _SERVICE_NAME: 'unity-comms-app-preview'
 
-# Available secrets
 availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
     env: 'GITHUB_TOKEN'
 
-# Timeout
-timeout: '1200s'  # 20 minutes
+timeout: '1200s'
 
-# Images to be pushed (for Cloud Build history)
 images:
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'

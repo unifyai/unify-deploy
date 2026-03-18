@@ -217,7 +217,7 @@ export ORCHESTRA_URL="http://127.0.0.1:8000/v0"
 | `TEST_ASSISTANT_ID` | default-test-assistant | Assistant ID for test topics |
 | `ORCHESTRA_URL` | (staging/prod URL) | Orchestra URL (for local orchestra) |
 | `ORCHESTRA_ADMIN_KEY` | — | Admin key for Orchestra auth |
-| `STAGING` | true | Set topic suffix (-staging) |
+| `DEPLOY_ENV` | staging | Deploy environment: `production`, `staging`, or `preview` |
 
 > **Important: `GCP_SA_KEY` vs `GOOGLE_APPLICATION_CREDENTIALS`**
 >
