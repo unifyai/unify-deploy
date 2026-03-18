@@ -1,13 +1,16 @@
 """
 Integration tests for duplicate startup prevention.
 
-Verifies that publishing multiple startup events for the same assistant
-results in at most one container serving that assistant.
+Verifies that the K8s Lease-based atomic assignment in /infra/job/start
+prevents multiple containers from being assigned to the same assistant,
+even under concurrent requests.
 
-Invariants covered: INV-1, INV-13
+Invariants covered: INV-1, INV-2
 """
 
+import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -30,24 +33,36 @@ def test_concurrent_startups_produce_at_most_one_container(
     real_assistant_data,
     poll,
 ):
-    """Calling /infra/job/start twice for the same assistant within 1 second
-    results in at most one container serving that assistant.
+    """Two concurrent /infra/job/start calls for the same assistant must
+    result in at most one container being assigned.
 
-    This tests the competing-consumer semantics of Pub/Sub (only one subscriber
-    per subscription gets each message) combined with the _startup_lock guard
-    in CommsManager.
+    The Lease-based lock in /infra/job/start serializes concurrent callers:
+    only the Lease holder proceeds to claim an idle container. The second
+    caller gets 409 on Lease creation and returns early.
     """
     assistant_id = test_id
 
     try:
-        start_real_job(comms, real_assistant_data)
-        time.sleep(0.5)
-        start_real_job(comms, real_assistant_data)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(start_real_job, comms, real_assistant_data)
+            f2 = pool.submit(start_real_job, comms, real_assistant_data)
+            r1 = f1.result()
+            r2 = f2.result()
 
-        time.sleep(30)
+        responses = [r1.json(), r2.json()]
+        print(f"\n[Dedup] Response 1: {responses[0]}")
+        print(f"[Dedup] Response 2: {responses[1]}")
+
+        job_names = {r.get("job_name") for r in responses if r.get("job_name")}
+        assert len(job_names) <= 1, (
+            f"Expected at most 1 unique job_name across both responses, "
+            f"got {len(job_names)}: {job_names}. "
+            f"The Lease failed to prevent duplicate assignment."
+        )
+
+        time.sleep(5)
 
         matching_jobs = list_jobs_with_assistant_id(batch_api, assistant_id)
-
         for job in matching_jobs:
             job_tracker.track(job.metadata.name)
 
@@ -83,37 +98,42 @@ def test_container_labels_set_after_startup(
     real_assistant_data,
     poll,
 ):
-    """After a container claims a startup event and goes live, its K8s Job
-    labels are set correctly (assistant-id + unity-status=running).
+    """After /infra/job/start assigns a container, its K8s Job labels
+    are set correctly (assistant-id + unity-status=running) and the
+    startup config is written as an annotation.
 
-    Uses real assistant data from Orchestra for a fully representative test.
+    The labels and annotation are written atomically by the comms app
+    (not by the container itself), so they are visible immediately.
     """
     assistant_id = test_id
 
     try:
-        start_real_job(comms, real_assistant_data)
+        resp = start_real_job(comms, real_assistant_data)
+        data = resp.json()
+        assert data.get("job_name"), f"Expected job_name in response, got: {data}"
 
-        matching_jobs = poll(
-            lambda: list_jobs_with_assistant_id(batch_api, assistant_id),
-            timeout=180,
-            interval=10,
-            description=f"Job with assistant-id={assistant_id}",
-        )
+        job_name = data["job_name"]
+        job_tracker.track(job_name)
 
-        assert (
-            len(matching_jobs) >= 1
-        ), f"No container claimed assistant-id={assistant_id}"
-
-        job = matching_jobs[0]
-        job_tracker.track(job.metadata.name)
-
+        job = batch_api.read_namespaced_job(name=job_name, namespace=NAMESPACE)
         labels = dict(job.metadata.labels or {})
+        annotations = dict(job.metadata.annotations or {})
+
         assert (
             labels.get("unity-status") == "running"
         ), f"Expected unity-status=running, got {labels.get('unity-status')}"
-        assert labels.get("assistant-id") == str(
+        sanitized = str(assistant_id).lower().replace("_", "-")
+        assert (
+            labels.get("assistant-id") == sanitized
+        ), f"Expected assistant-id={sanitized}, got {labels.get('assistant-id')}"
+        assert (
+            "unity-startup-config" in annotations
+        ), f"Expected unity-startup-config annotation, got keys: {list(annotations.keys())}"
+
+        config = json.loads(annotations["unity-startup-config"])
+        assert config["assistant_id"] == str(
             assistant_id,
-        ), f"Expected assistant-id={assistant_id}, got {labels.get('assistant-id')}"
+        ), f"Startup config assistant_id mismatch: {config.get('assistant_id')}"
 
     finally:
         expire_test_assistant_records(assistant_id)

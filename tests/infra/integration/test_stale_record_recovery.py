@@ -1,15 +1,18 @@
 """
 Integration test for stale AssistantJobs record recovery.
 
-Reproduces the exact production outage Dan reported on 2026-03-17:
-a timed-out /infra/job/start leaves a running=True record in
-AssistantJobs with no corresponding K8s pod. Subsequent messages
-go through the adapter's build_webhook_context → is_job_running
-path and are silently dropped because is_job_running returns True.
+Reproduces the production outage scenario where a timed-out
+/infra/job/start leaves a running=True record in AssistantJobs
+with no corresponding K8s pod. The adapter must start a new
+container regardless, because the startup flow bypasses
+AssistantJobs entirely — build_webhook_context unconditionally
+calls start_unity_job → /infra/job/start, which checks K8s
+labels (ground truth) for deduplication.
 
 The test exercises the FULL production code path — no mocks, no
 reimplementation. It calls the real adapter webhook endpoint and
-checks whether the system recovers.
+verifies that stale Orchestra records have no influence on the
+startup decision.
 
 Invariants covered: INV-13 (no orphaned AssistantJobs records)
 """
@@ -41,13 +44,9 @@ def _create_stale_running_record(
 ) -> str:
     """Insert a running=True record into AssistantJobs with no corresponding pod.
 
-    This simulates the end state of a failed /infra/job/start call:
-    mark_job_running wrote the record, but the startup timed out and
-    no container was ever created.
-
-    The record is backdated by age_seconds (default 300s = 5 minutes)
-    so it appears old enough to exceed the 120s TTL in the two-phase
-    is_job_running check. In the real outage, the record was hours old.
+    Simulates the residue of a failed startup: the record exists in
+    Orchestra but no K8s container was ever created. Backdated by
+    age_seconds (default 300s) to represent a realistically stale state.
     """
     from datetime import timedelta
 
@@ -84,29 +83,24 @@ def test_stale_record_does_not_block_new_startup(
     real_assistant_data,
     poll,
 ):
-    """A stale running=True record older than 120 seconds with no K8s
-    pod must NOT prevent new messages from starting a container.
+    """A stale running=True record in AssistantJobs must NOT prevent
+    new messages from starting a container.
 
-    This reproduces the exact scenario that caused a 7+ hour outage
-    on 2026-03-17: a timed-out startup left a stale record, and every
-    subsequent message was silently dropped because is_job_running
-    returned True based on the stale record.
+    The adapter's build_webhook_context unconditionally calls
+    start_unity_job → /infra/job/start for every valid message.
+    The /infra/job/start endpoint checks K8s labels (ground truth)
+    for deduplication — AssistantJobs records are never consulted
+    on the startup path.
 
-    The two-phase is_job_running check handles this via:
-      Phase 1: K8s query finds no active pod → returns False
-      Phase 2: AssistantJobs record is >120s old → treated as stale
-
-    Both phases independently reject the stale record, so the adapter
-    proceeds to start a new container.
-
-    The record is backdated to 5 minutes ago (well past the 120s TTL)
-    to simulate the production scenario where minutes or hours pass
-    between the failed startup and the next user message.
+    This means stale records are architecturally irrelevant to the
+    startup decision. The test confirms this by creating a stale
+    record and verifying that a message still triggers container
+    creation.
 
     Test sequence:
     1. Create a stale running=True record backdated to 5 min ago
     2. Send a real message via the adapter's /unify/message endpoint
-    3. Verify: a new container starts (the stale record was bypassed)
+    3. Verify: a new container starts (stale record is irrelevant)
     """
     assistant_id = str(real_assistant_data["assistant_id"])
     user_id = real_assistant_data["user_id"]
@@ -150,9 +144,9 @@ def test_stale_record_does_not_block_new_startup(
 
         assert len(started) >= 1, (
             f"No container started for assistant {assistant_id}. "
-            f"The stale running=True record blocked the startup. "
-            f"is_job_running returned True despite no K8s pod existing. "
-            f"This is the exact failure mode that caused the ClientGamma outage."
+            f"The stale running=True record in AssistantJobs somehow "
+            f"blocked the startup, even though the adapter bypasses "
+            f"AssistantJobs entirely and delegates to /infra/job/start."
         )
 
         print(f"[Stale Record] Container started: {started[0].metadata.name}")
