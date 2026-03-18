@@ -702,17 +702,22 @@ def process_pending_startups(
     from google.cloud import pubsub_v1
     from google.oauth2.service_account import Credentials
 
+    from google.api_core.exceptions import DeadlineExceeded
+
     creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
     creds = Credentials.from_service_account_info(creds_json)
     subscriber = pubsub_v1.SubscriberClient(credentials=creds)
     sub_path = subscriber.subscription_path(GCP_PROJECT_ID, _PENDING_SUB)
 
-    response = subscriber.pull(
-        request={"subscription": sub_path, "max_messages": 10},
-        timeout=10,
-    )
+    try:
+        response = subscriber.pull(
+            request={"subscription": sub_path, "max_messages": 10},
+            timeout=10,
+        )
+        messages = response.received_messages
+    except DeadlineExceeded:
+        messages = []
 
-    messages = response.received_messages
     if not messages:
         return {"pulled": 0, "acked": 0, "nacked": 0}
 
