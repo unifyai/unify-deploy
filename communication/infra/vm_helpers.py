@@ -318,49 +318,6 @@ def store_ssh_private_key(
         return False
 
 
-def _fetch_existing_ssh_key(assistant_id: str) -> Optional[str]:
-    """Fetch the assistant's existing SSH private key from Orchestra.
-
-    Returns the PEM-encoded private key string, or None if not found.
-    """
-    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
-    if not admin_key:
-        return None
-
-    url = f"{ORCHESTRA_URL}/admin/assistant"
-    try:
-        response = requests.get(
-            url,
-            params={"agent_id": str(assistant_id)},
-            headers={"Authorization": f"Bearer {admin_key}"},
-            timeout=30,
-        )
-        if response.status_code == 200:
-            assistants = response.json().get("info", [])
-            if assistants:
-                return assistants[0].get("desktop_filesync_sshkey")
-    except Exception as e:
-        logger.warning(f"Failed to fetch existing SSH key for {assistant_id}: {e}")
-    return None
-
-
-def _derive_public_key(private_key_pem: str) -> str:
-    """Derive the OpenSSH public key from a PEM-encoded Ed25519 private key."""
-    private_key = serialization.load_ssh_private_key(
-        private_key_pem.encode("utf-8"),
-        password=None,
-    )
-    public_key_openssh = (
-        private_key.public_key()
-        .public_bytes(
-            encoding=serialization.Encoding.OpenSSH,
-            format=serialization.PublicFormat.OpenSSH,
-        )
-        .decode("utf-8")
-    )
-    return f"{public_key_openssh} unity-file-sync"
-
-
 # =============================================================================
 # VM Pool Management
 # =============================================================================
@@ -991,13 +948,8 @@ def assign_pool_vm(
     vm_name = claimed["vm_name"]
     create_assistant_disk(assistant_id)
     device_name = attach_assistant_disk(vm_name, assistant_id)
-    existing_key = _fetch_existing_ssh_key(assistant_id)
-    if existing_key:
-        private_key = existing_key
-        public_key = _derive_public_key(existing_key)
-    else:
-        private_key, public_key = generate_ssh_keypair()
-        store_ssh_private_key(assistant_id, private_key)
+    private_key, public_key = generate_ssh_keypair()
+    store_ssh_private_key(assistant_id, private_key)
 
     metadata = {
         "unify-key": unify_apikey,

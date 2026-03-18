@@ -642,22 +642,6 @@ async def start_job(
         message_id = await asyncio.to_thread(future.result)
         print(f"Job start request published for assistant {assistant_id}")
 
-        # ── Assign pool VM if desktop_mode requires it (fire-and-forget) ──
-        if desktop_mode in ("windows", "ubuntu"):
-            asyncio.get_running_loop().run_in_executor(
-                ASSIGN_EXECUTOR,
-                partial(
-                    assign_pool_vm,
-                    assistant_id=assistant_id,
-                    unify_apikey=api_key,
-                    vm_type=desktop_mode,
-                ),
-            )
-            asyncio.get_running_loop().run_in_executor(
-                POOL_MAINTENANCE_EXECUTOR,
-                partial(replenish_pool, desktop_mode),
-            )
-
         return {
             "success": True,
             "message": "Job start request published to Pub/Sub successfully",
