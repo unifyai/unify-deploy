@@ -134,35 +134,7 @@ def real_assistant_data():
     ), f"Failed to fetch assistant {assistant_id}: {resp.status_code} {resp.text}"
     a = resp.json()["info"][0]
 
-    return {
-        "assistant_id": a["agent_id"],
-        "user_id": a["user_id"],
-        "api_key": a["api_key"],
-        "user_first_name": a["user_first_name"],
-        "user_surname": a.get("user_last_name", ""),
-        "user_email": a["user_email"],
-        "assistant_first_name": a["first_name"],
-        "assistant_surname": a["surname"],
-        "assistant_age": str(a.get("age", "")),
-        "assistant_nationality": a["nationality"],
-        "assistant_about": a["about"],
-        "assistant_timezone": a.get("timezone", "UTC"),
-        "assistant_number": a.get("phone") or "",
-        "assistant_email": a.get("email") or "",
-        "user_number": a.get("user_phone") or "",
-        "user_whatsapp_number": a.get("user_whatsapp_number") or "",
-        "voice_provider": a["voice_provider"],
-        "voice_id": a["voice_id"],
-        "desktop_mode": a.get("desktop_mode", "ubuntu"),
-        "user_desktop_mode": a.get("user_desktop_mode") or "",
-        "user_desktop_filesys_sync": str(
-            a.get("user_desktop_filesys_sync", False),
-        ).lower(),
-        "user_desktop_url": a.get("user_desktop_url") or "",
-        "demo_id": "",
-        "team_ids": json.dumps(a.get("team_ids", [])),
-        "org_id": str(a.get("organization_id", "")) if a.get("organization_id") else "",
-    }
+    return _admin_record_to_data(a)
 
 
 @pytest.fixture
@@ -557,6 +529,321 @@ def expire_test_assistant_records(assistant_id: str):
             )
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Assistant cleanup (shared across test modules)
+# ---------------------------------------------------------------------------
+
+
+def cleanup_assistant_jobs(batch_api, assistant_ids: list[str]):
+    """Delete all Jobs and expire all records for a list of assistant IDs."""
+    for aid in assistant_ids:
+        expire_test_assistant_records(str(aid))
+        sanitized = str(aid).lower().replace("_", "-")
+        try:
+            jobs = batch_api.list_namespaced_job(
+                namespace=NAMESPACE,
+                label_selector=f"app=unity,assistant-id={sanitized}",
+            )
+            for job in jobs.items:
+                try:
+                    batch_api.delete_namespaced_job(
+                        name=job.metadata.name,
+                        namespace=NAMESPACE,
+                        propagation_policy="Foreground",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Credits helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_user_id_from_key() -> str:
+    """Resolve the user_id for the current UNIFY_KEY."""
+    resp = requests.get(
+        f"{ORCHESTRA_URL}/user/basic-info",
+        headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+        timeout=10,
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        info = data.get("info", data) if isinstance(data, dict) else data
+        if isinstance(info, dict):
+            return info.get("user_id", info.get("id", ""))
+        if isinstance(info, list) and info:
+            return info[0].get("user_id", info[0].get("id", ""))
+    return ""
+
+
+def _ensure_credits(min_credits: float):
+    """Top up credits if the current balance is below *min_credits*.
+
+    Staging Orchestra skips credit checks entirely, so this is a safety net
+    for non-staging environments only.  Uses the admin create_recharge
+    endpoint with type="promo".
+    """
+    if not UNIFY_KEY or not ADMIN_KEY:
+        return
+
+    try:
+        resp = requests.get(
+            f"{ORCHESTRA_URL}/credits",
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            print(f"[Credits] Could not check balance: {resp.status_code}")
+            return
+
+        balance = float(resp.json().get("credits", 0))
+        if balance >= min_credits:
+            print(f"[Credits] Balance {balance:.1f} >= {min_credits:.1f}, OK")
+            return
+
+        shortfall = min_credits - balance
+        user_id = _get_user_id_from_key()
+        if not user_id:
+            print("[Credits] Could not resolve user_id for top-up")
+            return
+
+        top_up = requests.post(
+            f"{ORCHESTRA_URL}/admin/create_recharge",
+            json={
+                "user_id": user_id,
+                "quantity": shortfall,
+                "type": "promo",
+            },
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=10,
+        )
+        if top_up.status_code in (200, 201):
+            print(
+                f"[Credits] Topped up {shortfall:.1f} credits "
+                f"(was {balance:.1f}, need {min_credits:.1f})",
+            )
+        else:
+            print(
+                f"[Credits] Top-up failed: {top_up.status_code} {top_up.text}",
+            )
+    except Exception as e:
+        print(f"[Credits] Error during credit check/top-up: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Assistant factory helpers
+# ---------------------------------------------------------------------------
+
+ASSISTANT_CREATION_COST = 10.0
+
+
+def _admin_record_to_data(a: dict) -> dict:
+    """Convert an admin assistant record to the dict shape expected by
+    start_real_job and other test helpers.
+
+    This is the canonical mapping used by both real_assistant_data and
+    the test assistant factory.
+    """
+    return {
+        "assistant_id": a["agent_id"],
+        "user_id": a["user_id"],
+        "api_key": a["api_key"],
+        "user_first_name": a["user_first_name"],
+        "user_surname": a.get("user_last_name", ""),
+        "user_email": a["user_email"],
+        "assistant_first_name": a["first_name"],
+        "assistant_surname": a["surname"],
+        "assistant_age": str(a.get("age", "")),
+        "assistant_nationality": a["nationality"],
+        "assistant_about": a["about"],
+        "assistant_timezone": a.get("timezone", "UTC"),
+        "assistant_number": a.get("phone") or "",
+        "assistant_email": a.get("email") or "",
+        "user_number": a.get("user_phone") or "",
+        "user_whatsapp_number": a.get("user_whatsapp_number") or "",
+        "voice_provider": a["voice_provider"],
+        "voice_id": a["voice_id"],
+        "desktop_mode": a.get("desktop_mode", "ubuntu"),
+        "user_desktop_mode": a.get("user_desktop_mode") or "",
+        "user_desktop_filesys_sync": str(
+            a.get("user_desktop_filesys_sync", False),
+        ).lower(),
+        "user_desktop_url": a.get("user_desktop_url") or "",
+        "demo_id": "",
+        "team_ids": json.dumps(a.get("team_ids", [])),
+        "org_id": (
+            str(a.get("organization_id", "")) if a.get("organization_id") else ""
+        ),
+    }
+
+
+def _create_test_assistant(index: int) -> dict:
+    """Create a test assistant on staging Orchestra and return its full data.
+
+    Calls POST /v0/assistant with is_local=True (skips wakeup) and
+    create_infra=True (provisions Pub/Sub topic).  Then fetches the full
+    admin record to get api_key and user fields.
+    """
+    assert UNIFY_KEY, "UNIFY_KEY required to create test assistants"
+    assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
+
+    create_resp = requests.post(
+        f"{ORCHESTRA_URL}/assistant",
+        json={
+            "first_name": "InfraTest",
+            "surname": f"{index:03d}",
+            "age": 25,
+            "nationality": "North America",
+            "about": "Stress test assistant (auto-created by integration tests)",
+            "desktop_mode": "ubuntu",
+            "is_local": True,
+            "create_infra": True,
+            "timezone": "UTC",
+        },
+        headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+        timeout=30,
+    )
+    assert create_resp.status_code == 200, (
+        f"Failed to create test assistant {index}: "
+        f"{create_resp.status_code} {create_resp.text}"
+    )
+
+    info = create_resp.json().get("info", {})
+    agent_id = str(info.get("agent_id", ""))
+    assert agent_id, (
+        f"No agent_id in create response for assistant {index}: " f"{create_resp.text}"
+    )
+
+    admin_resp = requests.get(
+        f"{ORCHESTRA_URL}/admin/assistant",
+        params={"agent_id": agent_id},
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=10,
+    )
+    assert admin_resp.status_code == 200, (
+        f"Failed to fetch admin record for {agent_id}: "
+        f"{admin_resp.status_code} {admin_resp.text}"
+    )
+
+    admin_info = admin_resp.json()["info"]
+    a = admin_info[0] if isinstance(admin_info, list) else admin_info
+    return _admin_record_to_data(a)
+
+
+def _delete_test_assistant(agent_id: str, batch_api=None):
+    """Delete a test assistant from Orchestra and clean up infra resources.
+
+    Calls DELETE /v0/assistant/{id} which handles Pub/Sub, disks, phones,
+    emails, and DB cleanup.  Also expires any AssistantJobs records and
+    deletes K8s Jobs.
+
+    Swallows all exceptions so teardown never aborts mid-way.
+    """
+    int_id = str(agent_id).split(".")[0]
+
+    try:
+        resp = requests.delete(
+            f"{ORCHESTRA_URL}/assistant/{int_id}",
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            print(f"[Teardown] Deleted assistant {agent_id}")
+        else:
+            print(
+                f"[Teardown] DELETE assistant {agent_id}: "
+                f"{resp.status_code} {resp.text}",
+            )
+    except Exception as e:
+        print(f"[Teardown] Error deleting assistant {agent_id}: {e}")
+
+    try:
+        expire_test_assistant_records(str(agent_id))
+    except Exception:
+        pass
+
+    if batch_api is not None:
+        sanitized = str(agent_id).lower().replace("_", "-")
+        try:
+            jobs = batch_api.list_namespaced_job(
+                namespace=NAMESPACE,
+                label_selector=f"app=unity,assistant-id={sanitized}",
+            )
+            for job in jobs.items:
+                try:
+                    batch_api.delete_namespaced_job(
+                        name=job.metadata.name,
+                        namespace=NAMESPACE,
+                        propagation_policy="Foreground",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Test assistant factory fixture
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def test_assistants(k8s_clients):
+    """Create N test assistants on staging Orchestra for stress testing.
+
+    Controlled by TEST_CREATE_ASSISTANT_COUNT env var (default 0 = skip).
+    Assistants are created with is_local=True (no wakeup / auto-start)
+    and create_infra=True (Pub/Sub topics provisioned).
+
+    Yields a list of dicts in the same shape as real_assistant_data.
+    On teardown, all assistants are deleted via DELETE /v0/assistant/{id}.
+    """
+    count = int(os.getenv("TEST_CREATE_ASSISTANT_COUNT", "0"))
+    if count == 0:
+        yield []
+        return
+
+    assert UNIFY_KEY, (
+        "UNIFY_KEY required to create test assistants "
+        "(set TEST_CREATE_ASSISTANT_COUNT=0 to skip)"
+    )
+    assert ADMIN_KEY, (
+        "ORCHESTRA_ADMIN_KEY required to create test assistants "
+        "(set TEST_CREATE_ASSISTANT_COUNT=0 to skip)"
+    )
+
+    _ensure_credits(min_credits=count * (ASSISTANT_CREATION_COST + 5))
+
+    created: list[dict] = []
+    for i in range(count):
+        try:
+            data = _create_test_assistant(i)
+            created.append(data)
+            print(
+                f"[Factory] Created assistant {i + 1}/{count}: "
+                f"{data['assistant_first_name']} {data['assistant_surname']} "
+                f"(ID {data['assistant_id']})",
+            )
+            if i < count - 1:
+                time.sleep(0.5)
+        except Exception as e:
+            print(f"[Factory] Failed to create assistant {i}: {e}")
+
+    print(f"\n[Factory] Created {len(created)}/{count} test assistants")
+    yield created
+
+    batch_api = k8s_clients[0]
+    print(f"\n[Teardown] Deleting {len(created)} test assistants...")
+    for a in created:
+        _delete_test_assistant(a["assistant_id"], batch_api)
+    if created:
+        replenish_staging_pool()
+    print(f"[Teardown] Done")
 
 
 # ---------------------------------------------------------------------------

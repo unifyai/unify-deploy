@@ -25,8 +25,8 @@ from .conftest import (
     NAMESPACE,
     ORCHESTRA_URL,
     UNIFY_KEY,
+    cleanup_assistant_jobs,
     count_idle_jobs,
-    expire_test_assistant_records,
     list_jobs_with_assistant_id,
     poll_until,
     replenish_staging_pool,
@@ -108,29 +108,6 @@ def _fetch_user_assistants(max_count: int = 5) -> list[dict]:
     return results
 
 
-def _cleanup_assistant_jobs(batch_api, assistant_ids: list[str]):
-    """Delete all Jobs and expire all records for a list of assistant IDs."""
-    for aid in assistant_ids:
-        expire_test_assistant_records(str(aid))
-        sanitized = str(aid).lower().replace("_", "-")
-        try:
-            jobs = batch_api.list_namespaced_job(
-                namespace=NAMESPACE,
-                label_selector=f"app=unity,assistant-id={sanitized}",
-            )
-            for job in jobs.items:
-                try:
-                    batch_api.delete_namespaced_job(
-                        name=job.metadata.name,
-                        namespace=NAMESPACE,
-                        propagation_policy="Foreground",
-                    )
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-
 # ---------------------------------------------------------------------------
 # Scenario: 5 rapid startup calls for the SAME assistant
 # ---------------------------------------------------------------------------
@@ -180,7 +157,7 @@ def test_burst_startups_same_assistant(
         )
 
     finally:
-        _cleanup_assistant_jobs(batch_api, [assistant_id])
+        cleanup_assistant_jobs(batch_api, [assistant_id])
         replenish_staging_pool()
 
 
@@ -237,7 +214,7 @@ def test_simultaneous_startups_different_assistants(comms, batch_api, poll):
             )
 
     finally:
-        _cleanup_assistant_jobs(batch_api, used_ids)
+        cleanup_assistant_jobs(batch_api, used_ids)
         replenish_staging_pool()
 
 
@@ -284,7 +261,7 @@ def test_cleanup_during_idle_to_live_transition(
         )
 
     finally:
-        _cleanup_assistant_jobs(batch_api, [assistant_id])
+        cleanup_assistant_jobs(batch_api, [assistant_id])
         replenish_staging_pool()
 
 
@@ -350,7 +327,7 @@ def test_rapid_restart_same_assistant(
         )
 
     finally:
-        _cleanup_assistant_jobs(batch_api, [assistant_id])
+        cleanup_assistant_jobs(batch_api, [assistant_id])
         replenish_staging_pool()
 
 
@@ -429,7 +406,7 @@ def test_pool_exhaustion_under_burst(comms, batch_api):
             )
 
     finally:
-        _cleanup_assistant_jobs(batch_api, used_ids)
+        cleanup_assistant_jobs(batch_api, used_ids)
         replenish_staging_pool()
 
 
@@ -575,5 +552,5 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
         )
 
     finally:
-        _cleanup_assistant_jobs(batch_api, used_ids)
+        cleanup_assistant_jobs(batch_api, used_ids)
         replenish_staging_pool()
