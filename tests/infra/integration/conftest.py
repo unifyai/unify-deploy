@@ -42,7 +42,6 @@ VM_PROJECT_ID = os.getenv("TEST_VM_PROJECT_ID", "gcp-project-vms")
 GKE_CLUSTER = os.getenv("TEST_GKE_CLUSTER", "unity")
 GKE_REGION = os.getenv("TEST_GKE_REGION", "us-central1")
 NAMESPACE = os.getenv("TEST_NAMESPACE", "staging")
-PUBSUB_STARTUP_TOPIC = os.getenv("TEST_PUBSUB_STARTUP_TOPIC", "unity-startup-staging")
 VM_ZONE = os.getenv("TEST_VM_ZONE", "us-central1-a")
 
 COMMS_APP_URL = os.getenv(

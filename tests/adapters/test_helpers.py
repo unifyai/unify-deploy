@@ -272,16 +272,13 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.is_job_running", return_value=False)
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
 def test_build_webhook_context_skips_job_start_for_local_assistant(
     _mock_check,
-    _mock_running,
     mock_start,
     _mock_replenish,
 ):
-    """When is_local=True in assistant data, job start should be skipped
-    even though the job is not running and the contact is valid."""
+    """When is_local=True in assistant data, job start should be skipped."""
     assistant_data = {
         **_create_mock_assistant_data(),
         "is_local": True,
@@ -298,15 +295,18 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.is_job_running", return_value=False)
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
 def test_build_webhook_context_starts_job_for_non_local_assistant(
     _mock_check,
-    _mock_running,
     mock_start,
     _mock_replenish,
 ):
-    """When is_local=False, job start should proceed normally."""
+    """When is_local=False, job start should proceed normally.
+
+    The adapter unconditionally calls start_unity_job (which hits
+    /infra/job/start). Deduplication is handled atomically by the
+    comms app via K8s Leases, not by the adapter.
+    """
     assistant_data = _create_mock_assistant_data()
     ctx = build_webhook_context(
         channel="whatsapp",
@@ -315,83 +315,6 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
         assistant_data=assistant_data,
     )
     mock_start.assert_called_once()
-
-
-# --- K8s live status regression tests ---
-
-
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.requests.get")
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_build_webhook_context_starts_job_when_k8s_has_no_pods(
-    _mock_check,
-    mock_requests_get,
-    mock_start,
-    _mock_replenish,
-):
-    """A new job must start when K8s reports no active pods.
-
-    is_job_running relies solely on K8s labels. When no pods are
-    labeled with the assistant-id, the job should be started.
-    """
-
-    def mock_get(url, **kwargs):
-        resp = MagicMock()
-        if "/infra/jobs" in url:
-            resp.status_code = 200
-            resp.json.return_value = {"jobs": []}
-        else:
-            resp.status_code = 404
-        return resp
-
-    mock_requests_get.side_effect = mock_get
-
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="unify_message",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-    )
-    mock_start.assert_called_once()
-    assert ctx["job_started"] is True
-
-
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.requests.get")
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_build_webhook_context_skips_job_when_k8s_has_active_pod(
-    _mock_check,
-    mock_requests_get,
-    mock_start,
-    _mock_replenish,
-):
-    """If K8s shows an active pod for this assistant, skip job start."""
-
-    def mock_get(url, **kwargs):
-        resp = MagicMock()
-        if "/infra/jobs" in url:
-            resp.status_code = 200
-            resp.json.return_value = {
-                "jobs": [{"status": "Running", "assistant_id": "test-assistant"}],
-            }
-        else:
-            resp.status_code = 404
-        return resp
-
-    mock_requests_get.side_effect = mock_get
-
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="unify_message",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-    )
-    mock_start.assert_not_called()
-    assert ctx["job_started"] is False
 
 
 # --- Wakeup endpoint dedup tests ---
