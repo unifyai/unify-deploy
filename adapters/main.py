@@ -24,7 +24,7 @@ from fastapi import (
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from google.cloud import pubsub_v1, storage
+from google.cloud import storage
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 from twilio.request_validator import RequestValidator
@@ -71,7 +71,6 @@ from .helpers import (
     get_outlook_thread_id,
     get_pubsub_client,
     get_thread_id,
-    is_job_running,
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
@@ -219,7 +218,10 @@ async def twilio_call_webhook(request: Request):
 
     # shared context
     context = await asyncio.to_thread(
-        build_webhook_context, "phone", to_number, from_number
+        build_webhook_context,
+        "phone",
+        to_number,
+        from_number,
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
@@ -509,7 +511,10 @@ async def twilio_sms_webhook(request: Request):
 
     # shared context
     context = await asyncio.to_thread(
-        build_webhook_context, "msg", to_number, from_number
+        build_webhook_context,
+        "msg",
+        to_number,
+        from_number,
     )
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
@@ -578,7 +583,10 @@ async def twilio_whatsapp_webhook(request: Request):
 
     # shared context
     context = await asyncio.to_thread(
-        build_webhook_context, "whatsapp", to_number, from_number
+        build_webhook_context,
+        "whatsapp",
+        to_number,
+        from_number,
     )
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
@@ -1722,15 +1730,13 @@ async def outlook_notification_processor(request: Request):
                 )
                 return Response(content=error_message, status_code=500)
 
-            # Start job if not already running
-            running = is_job_running(user_id, assistant_id)
+            # Start a container (endpoint handles deduplication atomically)
             is_default = "default" in assistant_id
-            if not running and not is_default:
+            if not is_default:
                 start_unity_job(assistant_data, "email")
                 replenish_idle_pool(refresh=False)
-                running = True
 
-            logger.info(f"Job running: {running}")
+            logger.info("Job start requested for email handler")
 
             logger.info(
                 f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
@@ -1937,14 +1943,12 @@ async def teams_notification_processor(request: Request):
                 logger.info(f"Invalid contact: {_redact_email(sender_email)}")
                 return None, False
 
-            # Start job if needed
-            running = is_job_running(user_id, assistant_id)
+            # Start a container (endpoint handles deduplication atomically)
             is_default = assistant_id and "default" in assistant_id
-            if not running and not is_default:
+            if not is_default:
                 start_unity_job(assistant_data, "teams")
                 replenish_idle_pool(refresh=False)
-                running = True
-            logger.info(f"Job running: {running}")
+            logger.info("Job start requested for teams handler")
             return contacts, True
 
         contacts, valid = await asyncio.to_thread(_validate_and_start)
