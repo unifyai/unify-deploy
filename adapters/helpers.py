@@ -1271,7 +1271,9 @@ def build_webhook_context(
             user_email,
             assistant_data,
         )
+        running_future = pool.submit(is_job_running, user_id, assistant_id)
     contacts, is_valid_contact = contacts_future.result()
+    is_running = running_future.result()
     logger.info(f"contacts: {contacts}")
 
     # check contact validity
@@ -1279,19 +1281,15 @@ def build_webhook_context(
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_local_assistant
 
-    # Start a container if needed. The /infra/job/start endpoint handles
-    # deduplication atomically via K8s labels — if a container is already
-    # serving this assistant, the endpoint returns early without publishing.
-    # This replaces the previous is_job_running() + mark_job_running() flow
-    # which was non-atomic and could leave stale records.
+    # ensure job is running (skip for local/test assistants)
     job_started = False
-    is_running = False
-    skip_auto_start = is_test_assistant or is_local_assistant
+    skip_auto_start = is_test_assistant or is_local_assistant or is_running
     should_start_job = (
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
+        mark_job_running(assistant_data, channel)
         with ThreadPoolExecutor(max_workers=2) as pool:
             pool.submit(start_unity_job, assistant_data, channel)
             pool.submit(replenish_idle_pool, False)
