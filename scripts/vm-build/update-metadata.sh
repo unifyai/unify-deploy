@@ -126,7 +126,8 @@ while [[ $# -gt 0 ]]; do
             TARGET_ENV="$2"
             case "$TARGET_ENV" in
                 production) ZONE="${GCP_ZONE:-us-central1-f}" ;;
-                staging|preview) ZONE="${GCP_ZONE:-us-central1-a}" ;;
+                staging) ZONE="${GCP_ZONE:-us-central1-a}" ;;
+                preview) ZONE="${GCP_ZONE:-us-central1-b}" ;;
                 *) die "Invalid --env value: $TARGET_ENV (expected production, staging, or preview)" ;;
             esac
             shift 2

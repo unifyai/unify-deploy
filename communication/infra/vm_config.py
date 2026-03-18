@@ -31,7 +31,8 @@ DNS_PROJECT_ID = "gcp-project-dns"
 # Region/Zone Configuration
 # =============================================================================
 REGION = "us-central1"
-ZONE = "us-central1-a" if DEPLOY_ENV != "production" else "us-central1-f"
+_ZONE_MAP = {"production": "us-central1-f", "staging": "us-central1-a", "preview": "us-central1-b"}
+ZONE = _ZONE_MAP.get(DEPLOY_ENV, "us-central1-f")
 
 # =============================================================================
 # DNS Configuration (Managed in Project A)
