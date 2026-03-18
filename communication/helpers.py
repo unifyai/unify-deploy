@@ -10,7 +10,11 @@ from msgraph import GraphServiceClient
 
 def _get_deploy_env() -> str:
     deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
-    return deploy_env if deploy_env in {"production", "staging", "preview"} else "production"
+    return (
+        deploy_env
+        if deploy_env in {"production", "staging", "preview"}
+        else "production"
+    )
 
 
 DEPLOY_ENV = _get_deploy_env()

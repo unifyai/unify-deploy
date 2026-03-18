@@ -34,7 +34,11 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
 
 def _get_deploy_env() -> str:
     deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
-    return deploy_env if deploy_env in {"production", "staging", "preview"} else "production"
+    return (
+        deploy_env
+        if deploy_env in {"production", "staging", "preview"}
+        else "production"
+    )
 
 
 DEPLOY_ENV = _get_deploy_env()
@@ -913,9 +917,13 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
 
         for job in all_jobs:
             # Filter by environment-specific job name suffix.
-            is_env_match = job["job_name"].endswith(ENV_SUFFIX) if ENV_SUFFIX else (
-                not job["job_name"].endswith("-staging")
-                and not job["job_name"].endswith("-preview")
+            is_env_match = (
+                job["job_name"].endswith(ENV_SUFFIX)
+                if ENV_SUFFIX
+                else (
+                    not job["job_name"].endswith("-staging")
+                    and not job["job_name"].endswith("-preview")
+                )
             )
             if not is_env_match:
                 continue
