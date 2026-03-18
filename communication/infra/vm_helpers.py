@@ -1128,13 +1128,16 @@ def _start_one_stopped_vm(client, vm) -> bool:
         return False
 
 
-def replenish_pool(vm_type: str) -> Dict[str, Any]:
+def replenish_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     """Start or provision VMs to meet current demand.
 
     Demand-aware: computes deficit from the number of threads currently
     waiting in claim_idle_vm, not just POOL_TARGET_IDLE.  Subtracts VMs
     already booting (in-flight) to avoid runaway over-provisioning across
     sequential replenish cycles.
+
+    extra_demand compensates for VMs just claimed whose label change may
+    not yet be reflected in the eventually-consistent GCE instances.list.
 
     Uses a non-blocking per-vm_type lock so concurrent callers (fire-and-
     forget from assign_pool_endpoint, poll-driven from claim_idle_vm) don't
@@ -1145,12 +1148,12 @@ def replenish_pool(vm_type: str) -> Dict[str, Any]:
         return {"vm_type": vm_type, "actions": [], "skipped": True}
 
     try:
-        return _replenish_pool_inner(vm_type)
+        return _replenish_pool_inner(vm_type, extra_demand)
     finally:
         lock.release()
 
 
-def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
+def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
         vm_type
     )
@@ -1159,13 +1162,13 @@ def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
         pending = _pending_claims.get(vm_type, 0)
 
     target = max(POOL_TARGET_IDLE, pending)
-    deficit = target - len(idle_vms) - len(in_flight_vms)
+    deficit = target - len(idle_vms) - len(in_flight_vms) + extra_demand
     actions: list[str] = []
 
     logger.info(
         f"Replenish {vm_type}: target={target} idle={len(idle_vms)} "
         f"in_flight={len(in_flight_vms)} stopped={len(stopped_vms)} "
-        f"deficit={deficit}"
+        f"extra_demand={extra_demand} deficit={deficit}"
     )
 
     if deficit <= 0:
