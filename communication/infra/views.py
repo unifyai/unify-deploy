@@ -50,7 +50,6 @@ from .models import (
     PoolAssignRequest,
     PoolAssignResponse,
     PoolReleaseRequest,
-    PoolDiskDeleteRequest,
     PoolStatusResponse,
     PoolVMStatus,
 )
@@ -61,7 +60,8 @@ logger = logging.getLogger(__name__)
 
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
 POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
-    max_workers=4, thread_name_prefix="pool-maint"
+    max_workers=4,
+    thread_name_prefix="pool-maint",
 )
 
 
@@ -400,7 +400,11 @@ async def delete_kubernetes_job(
         batch_api, core_api, networking_api = await _get_k8s_clients()
 
         success = await asyncio.to_thread(
-            delete_job, batch_api, job_name, namespace, resource_version
+            delete_job,
+            batch_api,
+            job_name,
+            namespace,
+            resource_version,
         )
 
         if success:
@@ -447,7 +451,11 @@ async def patch_kubernetes_job_labels(
         batch_api, core_api, networking_api = await _get_k8s_clients()
 
         success = await asyncio.to_thread(
-            patch_job_labels, batch_api, job_name, parsed_labels, namespace
+            patch_job_labels,
+            batch_api,
+            job_name,
+            parsed_labels,
+            namespace,
         )
 
         if success:
@@ -542,6 +550,52 @@ async def start_job(
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
     try:
+        # ── Atomic duplicate prevention ──────────────────────────────
+        # Check if a container is already serving this assistant.
+        # If so, skip the Pub/Sub publish to prevent split-brain.
+        # Label an idle Job with the assistant-id BEFORE publishing,
+        # so any concurrent call sees it immediately via the K8s query.
+        batch_api, _, _ = await _get_k8s_clients()
+        sanitized_aid = str(assistant_id).lower().replace("_", "-")
+
+        existing = await asyncio.to_thread(
+            batch_api.list_namespaced_job,
+            namespace=DEFAULT_NAMESPACE,
+            label_selector=f"app=unity,assistant-id={sanitized_aid}",
+        )
+        already_running = [
+            j for j in existing.items if j.status.active and j.status.active > 0
+        ]
+        if already_running:
+            return {
+                "success": True,
+                "message": "Assistant already has a running container",
+                "job_name": already_running[0].metadata.name,
+            }
+
+        # Claim an idle Job by labeling it with this assistant-id.
+        # This makes the assistant visible to concurrent is_job_running checks
+        # BEFORE the Pub/Sub message is published.
+        idle_jobs = await asyncio.to_thread(
+            batch_api.list_namespaced_job,
+            namespace=DEFAULT_NAMESPACE,
+            label_selector="app=unity,unity-status=idle",
+        )
+        idle_running = [
+            j for j in idle_jobs.items if j.status.active and j.status.active > 0
+        ]
+        if idle_running:
+            target = idle_running[0]
+            labels = dict(target.metadata.labels or {})
+            labels["assistant-id"] = sanitized_aid
+            await asyncio.to_thread(
+                batch_api.patch_namespaced_job,
+                name=target.metadata.name,
+                namespace=DEFAULT_NAMESPACE,
+                body={"metadata": {"labels": labels}},
+            )
+
+        # ── Publish startup event ────────────────────────────────────
         publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
 
         topic_path = publisher.topic_path(
@@ -657,7 +711,7 @@ async def list_kubernetes_jobs(
             {
                 cutoff.strftime("%Y-%m-%d"),
                 now.strftime("%Y-%m-%d"),
-            }
+            },
         )
         date_filter = f"unity-date in ({','.join(relevant_dates)})"
         full_selector = (
@@ -678,7 +732,7 @@ async def list_kubernetes_jobs(
                             filter(
                                 lambda part: part.isdigit() and len(part) in [2, 4],
                                 job.metadata.name.split("-"),
-                            )
+                            ),
                         ),
                         "%Y-%m-%d-%H-%M-%S",
                     ).replace(tzinfo=timezone.utc)
@@ -1024,7 +1078,8 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
         )
 
         asyncio.get_running_loop().run_in_executor(
-            POOL_MAINTENANCE_EXECUTOR, partial(replenish_pool, request.vm_type)
+            POOL_MAINTENANCE_EXECUTOR,
+            partial(replenish_pool, request.vm_type),
         )
 
         return PoolAssignResponse(**result)
@@ -1048,7 +1103,8 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
         # Trim: stop excess idle VMs now that one was returned (fire-and-forget)
         vm_type = result.get("vm_type", "ubuntu")
         asyncio.get_running_loop().run_in_executor(
-            POOL_MAINTENANCE_EXECUTOR, partial(trim_pool, vm_type)
+            POOL_MAINTENANCE_EXECUTOR,
+            partial(trim_pool, vm_type),
         )
 
         return result
