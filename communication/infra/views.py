@@ -542,10 +542,7 @@ async def start_job(
     try:
         publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
 
-        topic_path = publisher.topic_path(
-            GCP_PROJECT_ID,
-            "unity-startup" if not STAGING else "unity-startup-staging",
-        )
+        topic_path = publisher.topic_path(GCP_PROJECT_ID, "unity-startup" + ENV_SUFFIX)
 
         job_data = {
             "thread": "startup",
@@ -594,7 +591,7 @@ async def start_job(
             "message_id": message_id,
             "topic_path": topic_path,
             "assistant_id": assistant_id,
-            "is_staging": bool(STAGING),
+            "deploy_env": DEPLOY_ENV,
             "project_id": GCP_PROJECT_ID,
         }
 
