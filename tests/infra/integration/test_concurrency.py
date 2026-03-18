@@ -430,3 +430,122 @@ def test_pool_exhaustion_under_burst(comms, batch_api):
     finally:
         _cleanup_assistant_jobs(batch_api, used_ids)
         replenish_staging_pool()
+
+
+# ---------------------------------------------------------------------------
+# Scenario: More simultaneous startups than idle containers (pool overflow)
+# ---------------------------------------------------------------------------
+
+
+def _start_job_tolerant(
+    comms_client,
+    assistant_data: dict,
+    medium: str = "unify_message",
+):
+    """Like start_real_job but returns (status_code, body) instead of asserting.
+
+    Allows the caller to observe 503 / timeout failures without aborting
+    the concurrent burst.
+    """
+    try:
+        resp = comms_client.post(
+            "/infra/job/start",
+            data={
+                "api_key": assistant_data["api_key"],
+                "medium": medium,
+                **{k: v for k, v in assistant_data.items() if k != "api_key"},
+            },
+        )
+        return resp.status_code, resp.text
+    except Exception as e:
+        return 0, str(e)
+
+
+@pytest.mark.invariant("INV-5")
+def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
+    """Fire MORE /infra/job/start requests than idle containers exist.
+
+    Every assistant must eventually get a container — none should be
+    permanently lost due to transient pool exhaustion. The system should
+    either queue the overflow requests or retry until new idle containers
+    become available via replenishment.
+
+    Reproduces a regression in the K8s Lease-based assignment flow: when
+    the pool has N idle containers and N+M requests arrive concurrently,
+    M requests get 503 and their startup configs are permanently lost.
+    No retry or queuing mechanism exists to fulfil them when new idle
+    containers appear via replenishment.
+    """
+    assistants = _fetch_user_assistants(max_count=10)
+    idle_before = count_idle_jobs(batch_api)
+
+    overflow = 2
+    burst_size = idle_before + overflow
+    if len(assistants) < burst_size:
+        pytest.skip(
+            f"Need {burst_size} assistants (pool={idle_before} + {overflow} overflow), "
+            f"only have {len(assistants)}. Hire more on staging.",
+        )
+
+    to_start = assistants[:burst_size]
+    used_ids = [a["assistant_id"] for a in to_start]
+
+    print(
+        f"\n[Overflow] {burst_size} concurrent requests vs {idle_before} idle containers "
+        f"({overflow} will overflow)",
+    )
+
+    try:
+        # Fire all requests concurrently — some will get 503 or timeout.
+        with ThreadPoolExecutor(max_workers=burst_size) as pool:
+            futures = {
+                pool.submit(_start_job_tolerant, comms, a): a["assistant_id"]
+                for a in to_start
+            }
+            results = {}
+            for f in as_completed(futures):
+                aid = futures[f]
+                status, body = f.result()
+                results[aid] = (status, body)
+                print(f"  assistant {aid}: HTTP {status}")
+
+        succeeded = [aid for aid, (s, _) in results.items() if s == 200]
+        failed = [aid for aid, (s, _) in results.items() if s != 200]
+        print(
+            f"[Overflow] Immediate results: {len(succeeded)} succeeded, "
+            f"{len(failed)} failed",
+        )
+
+        # Trigger replenishment and wait for new containers to come online.
+        replenish_staging_pool()
+        time.sleep(120)
+
+        # The ground truth: check K8s for which assistants actually got
+        # containers, regardless of what the HTTP responses said.
+        served = []
+        lost = []
+        for aid in used_ids:
+            matching = list_jobs_with_assistant_id(batch_api, str(aid))
+            if matching:
+                served.append(aid)
+            else:
+                lost.append(aid)
+
+        print(
+            f"[Overflow] Final: {len(served)} served, {len(lost)} lost\n"
+            f"  Served: {served}\n"
+            f"  Lost:   {lost}",
+        )
+
+        assert not lost, (
+            f"STARTUP REQUESTS LOST: {len(lost)} of {burst_size} assistants "
+            f"never got a container after pool exhaustion.\n"
+            f"  Lost assistant IDs: {lost}\n"
+            f"  Pool had {idle_before} idle containers for {burst_size} requests.\n"
+            f"  The overflow requests were permanently dropped — the system has "
+            f"no retry or queuing mechanism for when the pool is exhausted."
+        )
+
+    finally:
+        _cleanup_assistant_jobs(batch_api, used_ids)
+        replenish_staging_pool()
