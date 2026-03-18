@@ -600,12 +600,23 @@ def start_unity_job(assistant: dict, medium: str):
             },
             timeout=0.1,
         )
-        if response.status_code != 200:
-            logger.info(f"Failed to start job for assistant {assistant_id}")
-        else:
+        if response.status_code == 200:
             logger.info(f"Job started for assistant {assistant_id}")
+        elif response.status_code == 202:
+            logger.info(
+                f"Job start queued for assistant {assistant_id} (pool exhausted)",
+            )
+        else:
+            logger.warning(
+                f"Job start failed for assistant {assistant_id}: "
+                f"{response.status_code} {response.text}",
+            )
     except requests.exceptions.Timeout:
-        logger.info(f"Job started for assistant {assistant_id} (timeout)")
+        logger.info(
+            f"Job start dispatched for assistant {assistant_id} (fire-and-forget)",
+        )
+    except requests.RequestException as e:
+        logger.error(f"Job start request failed for assistant {assistant_id}: {e}")
 
     # Assign a pool VM if desktop_mode requires it
     if desktop_mode in ("windows", "ubuntu"):
@@ -718,6 +729,20 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         return {"running": [], "idle": []}
 
 
+def _trigger_pending_reconciliation():
+    """Fire-and-forget call to the comms app to process any pending startup
+    requests that were queued when the pool was exhausted.
+    """
+    try:
+        requests.post(
+            f"{COMMS_URL}/infra/pending/process",
+            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
 def replenish_idle_pool(refresh: bool = False) -> dict:
     """Core logic for idle job pool replenishment.
 
@@ -792,6 +817,7 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
 
     UNITY_JOBS_RUNNING.set(running_count)
     UNITY_JOBS_IDLE.set(current_idle_count + len(created_jobs))
+    _trigger_pending_reconciliation()
 
     return {
         "mode": mode,

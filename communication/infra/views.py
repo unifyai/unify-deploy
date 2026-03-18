@@ -2,6 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from starlette.responses import JSONResponse
 from functools import partial
 from google.api_core.exceptions import Conflict
 from google.cloud import compute_v1, pubsub_v1, storage
@@ -12,6 +13,7 @@ import logging
 import os
 import time
 import uuid
+from kubernetes.client.rest import ApiException
 from .helpers import (
     setup_kubernetes_client,
     create_unity_job,
@@ -20,6 +22,11 @@ from .helpers import (
     patch_job_labels,
     read_job,
     suspend_job,
+    acquire_assignment_lease,
+    release_assignment_lease,
+    claim_idle_container,
+    publish_pending_startup,
+    process_pending_startups,
 )
 from .vm_helpers import (
     get_dns_hostname,
@@ -82,7 +89,7 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
     Returns the Pub/Sub message ID.
     """
     publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
-    topic_name = f"unity-{assistant_id}{ENV_SUFFIX}"
+    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
     topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
 
     message_data = json.dumps(
@@ -111,15 +118,13 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
 async def _get_k8s_clients():
     """Return cached K8s API clients, running the (potentially blocking)
     setup in a thread so the event loop is never stalled."""
-    batch_api, core_api, networking_api = await asyncio.to_thread(
-        setup_kubernetes_client,
-    )
-    if not batch_api or not core_api or not networking_api:
+    result = await asyncio.to_thread(setup_kubernetes_client)
+    if not result[0]:
         raise HTTPException(
             status_code=500,
             detail="Failed to connect to Kubernetes cluster",
         )
-    return batch_api, core_api, networking_api
+    return result
 
 
 router = APIRouter()
@@ -129,12 +134,7 @@ GCP_PROJECT_ID = "gcp-project-runtime"
 # Default region for Cloud Run jobs
 DEFAULT_REGION = "us-central1"
 # Namespace based on environment
-DEFAULT_NAMESPACE = DEPLOY_ENV
-DEFAULT_IMAGE_NAME = "unity" if DEPLOY_ENV == "production" else f"unity-{DEPLOY_ENV}"
-DEFAULT_UNITY_IMAGE = (
-    "us-central1-docker.pkg.dev/gcp-project-runtime/unity/"
-    f"{DEFAULT_IMAGE_NAME}:latest"
-)
+DEFAULT_NAMESPACE = "staging" if STAGING else "production"
 
 _pubsub_publisher: pubsub_v1.PublisherClient | None = None
 _pubsub_subscriber: pubsub_v1.SubscriberClient | None = None
@@ -345,21 +345,27 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 @router.post("/job/create")
 async def create_kubernetes_job(
     namespace: str = Form(DEFAULT_NAMESPACE),
-    image: str = Form(DEFAULT_UNITY_IMAGE),
+    image: str = Form(
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
+    ),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
 
     Args:
-        namespace: Kubernetes namespace (optional, defaults to the current environment)
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
         image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
-        batch_api, core_api, networking_api = await _get_k8s_clients()
+        batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        job_name = f"unity-{timestamp_str}-{random_id}{ENV_SUFFIX}"
+        job_name = (
+            f"unity-{timestamp_str}-{random_id}"
+            if not STAGING
+            else f"unity-{timestamp_str}-{random_id}-staging"
+        )
 
         job = await asyncio.to_thread(
             create_unity_job,
@@ -367,6 +373,7 @@ async def create_kubernetes_job(
             job_name=job_name,
             namespace=namespace,
             image=image,
+            is_staging=bool(STAGING),
         )
 
         if job:
@@ -428,12 +435,12 @@ async def delete_kubernetes_job(
 
     Args:
         job_name: Name of the job (required)
-        namespace: Kubernetes namespace (optional, defaults to the current environment)
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
         resource_version: The specific resource version of the job to delete
             (optional, provides optimistic locking)
     """
     try:
-        batch_api, core_api, networking_api = await _get_k8s_clients()
+        batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         success = await asyncio.to_thread(
             delete_job,
@@ -479,12 +486,12 @@ async def patch_kubernetes_job_labels(
     Args:
         job_name: Name of the job (required)
         labels: JSON-encoded dict of labels to set (required)
-        namespace: Kubernetes namespace (optional, defaults to the current environment)
+        namespace: Kubernetes namespace (optional, defaults to production/staging)
     """
     try:
         parsed_labels = json.loads(labels)
 
-        batch_api, core_api, networking_api = await _get_k8s_clients()
+        batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         success = await asyncio.to_thread(
             patch_job_labels,
@@ -522,7 +529,35 @@ async def patch_kubernetes_job_labels(
         )
 
 
-# start job via pubsub
+@router.get("/job/{job_name}")
+async def read_job(job_name: str, namespace: str = DEFAULT_NAMESPACE):
+    """Read a single Job's labels, annotations, and status by name.
+
+    Used by idle containers to poll their own assignment state.
+    """
+    try:
+        batch_api, _, _, _coord = await _get_k8s_clients()
+        job = await asyncio.to_thread(
+            batch_api.read_namespaced_job,
+            name=job_name,
+            namespace=namespace,
+        )
+        labels = dict(job.metadata.labels or {})
+        annotations = dict(job.metadata.annotations or {})
+        return {
+            "success": True,
+            "job_name": job.metadata.name,
+            "labels": labels,
+            "annotations": annotations,
+            "resource_version": job.metadata.resource_version,
+            "active": job.status.active or 0,
+        }
+    except ApiException as e:
+        if e.status == 404:
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/job/start")
 async def start_job(
     api_key: str = Form(...),
@@ -554,7 +589,12 @@ async def start_job(
     org_id: str = Form(""),
 ):
     """
-    Start a Unity assistant job by publishing job parameters to Pub/Sub topic.
+    Assign an idle container to serve a Unity assistant.
+
+    Uses a K8s Lease for atomic distributed locking: only one concurrent
+    caller can assign a container for a given assistant. The startup
+    configuration is written to the claimed Job's annotations; the
+    container detects the assignment by polling its own Job state.
 
     Args:
         api_key: API key for authentication (required)
@@ -586,14 +626,10 @@ async def start_job(
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
     try:
-        # ── Atomic duplicate prevention ──────────────────────────────
-        # Check if a container is already serving this assistant.
-        # If so, skip the Pub/Sub publish to prevent split-brain.
-        # Label an idle Job with the assistant-id BEFORE publishing,
-        # so any concurrent call sees it immediately via the K8s query.
-        batch_api, _, _ = await _get_k8s_clients()
+        batch_api, _, _, coord_api = await _get_k8s_clients()
         sanitized_aid = str(assistant_id).lower().replace("_", "-")
 
+        # ── Check if a container already serves this assistant ────────
         existing = await asyncio.to_thread(
             batch_api.list_namespaced_job,
             namespace=DEFAULT_NAMESPACE,
@@ -609,38 +645,26 @@ async def start_job(
                 "job_name": already_running[0].metadata.name,
             }
 
-        # Claim an idle Job by labeling it with this assistant-id.
-        # This makes the assistant visible to concurrent is_job_running checks
-        # BEFORE the Pub/Sub message is published.
-        idle_jobs = await asyncio.to_thread(
-            batch_api.list_namespaced_job,
-            namespace=DEFAULT_NAMESPACE,
-            label_selector="app=unity,unity-status=idle",
+        # ── Acquire assignment Lease (atomic distributed lock) ────────
+        holder_id = f"start-job-{uuid.uuid4().hex[:8]}"
+        acquired = await asyncio.to_thread(
+            acquire_assignment_lease,
+            coord_api,
+            assistant_id,
+            DEFAULT_NAMESPACE,
+            holder_id,
         )
-        idle_running = [
-            j for j in idle_jobs.items if j.status.active and j.status.active > 0
-        ]
-        if idle_running:
-            target = idle_running[0]
-            labels = dict(target.metadata.labels or {})
-            labels["assistant-id"] = sanitized_aid
-            labels["unity-status"] = "starting"
-            await asyncio.to_thread(
-                batch_api.patch_namespaced_job,
-                name=target.metadata.name,
-                namespace=DEFAULT_NAMESPACE,
-                body={"metadata": {"labels": labels}},
-            )
+        if not acquired:
+            return {
+                "success": True,
+                "message": "Assistant is already being assigned by another request",
+                "assistant_id": assistant_id,
+            }
 
-        # ── Publish startup event ────────────────────────────────────
-        publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
-
-        topic_path = publisher.topic_path(GCP_PROJECT_ID, "unity-startup" + ENV_SUFFIX)
-
-        job_data = {
-            "thread": "startup",
-            "publish_timestamp": time.time(),
-            "event": {
+        # ── Build startup config (before claim so it's available for
+        #    both the immediate and overflow paths) ─────────────────
+        startup_config = json.dumps(
+            {
                 "api_key": api_key,
                 "medium": medium,
                 "assistant_id": assistant_id,
@@ -662,7 +686,7 @@ async def start_job(
                 "voice_id": voice_id,
                 "desktop_mode": desktop_mode,
                 "desktop_url": desktop_url if desktop_url else None,
-                "user_desktop_mode": user_desktop_mode if user_desktop_mode else None,
+                "user_desktop_mode": (user_desktop_mode if user_desktop_mode else None),
                 "user_desktop_filesys_sync": user_desktop_filesys_sync.lower()
                 == "true",
                 "user_desktop_url": user_desktop_url if user_desktop_url else None,
@@ -670,28 +694,101 @@ async def start_job(
                 "team_ids": json.loads(team_ids) if team_ids else [],
                 "org_id": int(org_id) if org_id else None,
             },
-        }
+        )
 
-        message_data = json.dumps(job_data).encode("utf-8")
+        # ── Claim an idle container (labels + startup config) ─────────
+        try:
+            job_name = await asyncio.to_thread(
+                claim_idle_container,
+                batch_api,
+                assistant_id,
+                DEFAULT_NAMESPACE,
+                startup_config,
+            )
 
-        future = publisher.publish(topic_path, data=message_data, thread="inbound")
-        message_id = await asyncio.to_thread(future.result)
-        print(f"Job start request published for assistant {assistant_id}")
+            # Assign pool VM after container claim, then replenish (fire-and-forget).
+            if desktop_mode in ("windows", "ubuntu"):
 
-        return {
-            "success": True,
-            "message": "Job start request published to Pub/Sub successfully",
-            "message_id": message_id,
-            "topic_path": topic_path,
-            "assistant_id": assistant_id,
-            "deploy_env": DEPLOY_ENV,
-            "project_id": GCP_PROJECT_ID,
-        }
+                async def _assign_then_replenish(
+                    _aid=assistant_id,
+                    _key=api_key,
+                    _vt=desktop_mode,
+                ):
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        ASSIGN_EXECUTOR,
+                        partial(
+                            assign_pool_vm,
+                            assistant_id=_aid,
+                            unify_apikey=_key,
+                            vm_type=_vt,
+                        ),
+                    )
+                    loop.run_in_executor(
+                        POOL_MAINTENANCE_EXECUTOR,
+                        partial(replenish_pool, _vt, extra_demand=1),
+                    )
 
+                asyncio.create_task(_assign_then_replenish())
+
+            return {
+                "success": True,
+                "message": "Container assigned to assistant",
+                "job_name": job_name,
+                "assistant_id": assistant_id,
+            }
+        finally:
+            await asyncio.to_thread(
+                release_assignment_lease,
+                coord_api,
+                assistant_id,
+                DEFAULT_NAMESPACE,
+            )
+
+    except RuntimeError:
+        # Pool exhausted — publish to the durable pending queue so the
+        # reconciler can assign a container when capacity is available.
+        await asyncio.to_thread(publish_pending_startup, startup_config)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "success": True,
+                "status": "queued",
+                "message": "Startup request queued — pool temporarily exhausted",
+                "assistant_id": assistant_id,
+            },
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to publish job start request: {str(e)}",
+            detail=f"Failed to assign container: {str(e)}",
+        )
+
+
+@router.post("/pending/process")
+async def process_pending():
+    """Process pending startup requests from the durable Pub/Sub queue.
+
+    Pulls messages published by /infra/job/start when the pool was
+    exhausted, and assigns them to idle containers using the same
+    Lease + CAS mechanism.  Stateless and idempotent — triggered by
+    the 1-minute Cloud Scheduler cron and reactively after pool
+    replenishment.
+    """
+    try:
+        batch_api, _, _, coord_api = await _get_k8s_clients()
+        result = await asyncio.to_thread(
+            process_pending_startups,
+            batch_api,
+            coord_api,
+            DEFAULT_NAMESPACE,
+        )
+        return {"success": True, **result}
+    except Exception as e:
+        logger.exception("Error processing pending startups")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process pending startups: {str(e)}",
         )
 
 
@@ -702,7 +799,7 @@ async def stop_job(job_name: str = Form(...), namespace: str = Form(DEFAULT_NAME
     Stop a Kubernetes Job for a Unity assistant.
     """
     try:
-        batch_api, core_api, networking_api = await _get_k8s_clients()
+        batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         success = await asyncio.to_thread(suspend_job, batch_api, job_name, namespace)
         if success:
@@ -737,7 +834,7 @@ async def list_kubernetes_jobs(
         label_selector: K8s label selector (optional, defaults to "app=unity")
     """
     try:
-        batch_api, core_api, networking_api = await _get_k8s_clients()
+        batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=hours)
@@ -835,7 +932,7 @@ async def get_job_logs_endpoint(
         tail_lines: Number of lines to tail (optional, defaults to 10)
     """
     try:
-        batch_api, core_api, networking_api = await _get_k8s_clients()
+        batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         result = await asyncio.to_thread(
             get_job_logs,
@@ -875,11 +972,7 @@ async def get_latest_unity_image_commit():
 
         # Define the bucket and file path
         bucket_name = "unity-image-hash"
-        blob_name = (
-            "image_hash.txt"
-            if DEPLOY_ENV == "production"
-            else f"image_hash_{DEPLOY_ENV}.txt"
-        )
+        blob_name = "image_hash.txt" if not STAGING else "image_hash_staging.txt"
 
         try:
             # Get the bucket
@@ -1147,7 +1240,7 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
 
         asyncio.get_running_loop().run_in_executor(
             POOL_MAINTENANCE_EXECUTOR,
-            partial(replenish_pool, request.vm_type),
+            partial(replenish_pool, request.vm_type, extra_demand=1),
         )
 
         return PoolAssignResponse(**result)

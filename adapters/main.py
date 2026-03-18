@@ -60,6 +60,7 @@ from common.livekit import (
 from .helpers import (
     cleanup_idle_pool,
     replenish_idle_pool,
+    _trigger_pending_reconciliation,
     add_user_to_conference,
     build_webhook_context,
     check_valid_contact,
@@ -2681,6 +2682,19 @@ def scheduled_jobs_expire_stale():
         content=json.dumps(result),
         status_code=200,
     )
+
+
+@app.post("/scheduled/pending-startups", dependencies=[Depends(require_admin_key)])
+def scheduled_pending_startups():
+    """Process pending startup requests from the durable Pub/Sub queue.
+
+    Forwards to the comms app's /infra/pending/process endpoint which
+    pulls queued messages and assigns them to idle containers using the
+    Lease + CAS mechanism.  Triggered every minute by Cloud Scheduler
+    and reactively after pool replenishment.
+    """
+    _trigger_pending_reconciliation()
+    return {"status": "dispatched"}
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
