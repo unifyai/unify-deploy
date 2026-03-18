@@ -21,6 +21,7 @@ import requests
 
 from .conftest import (
     ADMIN_KEY,
+    COMMS_APP_URL,
     NAMESPACE,
     ORCHESTRA_URL,
     UNIFY_KEY,
@@ -437,6 +438,18 @@ def test_pool_exhaustion_under_burst(comms, batch_api):
 # ---------------------------------------------------------------------------
 
 
+def _trigger_reconciliation(comms_client):
+    """Trigger the pending-startup reconciler on the comms app."""
+    try:
+        requests.post(
+            f"{COMMS_APP_URL}/infra/pending/process",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=30,
+        )
+    except Exception:
+        pass
+
+
 def _start_job_tolerant(
     comms_client,
     assistant_data: dict,
@@ -516,9 +529,24 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
             f"{len(failed)} failed",
         )
 
-        # Trigger replenishment and wait for new containers to come online.
-        replenish_staging_pool()
-        time.sleep(120)
+        # Simulate the production behavior where each webhook triggers
+        # replenishment.  In floor regime each call creates 1 container,
+        # so we call once per overflow request to ensure enough capacity.
+        for _ in range(overflow):
+            replenish_staging_pool()
+
+        # Wait for newly created containers to become idle (image pull +
+        # boot takes 25-60s), then explicitly trigger reconciliation so
+        # the pending messages are assigned.  The 1-minute cron would do
+        # this in production, but we don't want the test to depend on
+        # wall-clock alignment with the cron schedule.
+        poll_until(
+            lambda: count_idle_jobs(batch_api) >= overflow,
+            timeout=120,
+            interval=10,
+            description=f"At least {overflow} idle containers for overflow",
+        )
+        _trigger_reconciliation(comms)
 
         # The ground truth: check K8s for which assistants actually got
         # containers, regardless of what the HTTP responses said.
