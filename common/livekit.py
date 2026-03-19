@@ -116,9 +116,11 @@ async def _start_room_egress(
     gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
     adapters_url = os.getenv("UNITY_ADAPTERS_URL", "")
     api_key = os.getenv("LIVEKIT_API_KEY", "")
-    is_staging = bool(os.getenv("STAGING"))
+    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
+    if deploy_env not in {"production", "staging", "preview"}:
+        deploy_env = "production"
 
-    prefix = "staging" if is_staging else "production"
+    prefix = deploy_env
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
     filepath = f"{prefix}/{assistant_id}/{room_name}_{timestamp}.mp3"
 

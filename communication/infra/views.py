@@ -54,7 +54,7 @@ from .models import (
     PoolStatusResponse,
     PoolVMStatus,
 )
-from communication.helpers import STAGING
+from communication.helpers import DEPLOY_ENV, ENV_SUFFIX
 from communication.dependencies import authenticate_user_api_key, extract_api_key
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
     Returns the Pub/Sub message ID.
     """
     publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
-    topic_name = f"unity-{assistant_id}" + ("-staging" if STAGING else "")
+    topic_name = f"unity-{assistant_id}{ENV_SUFFIX}"
     topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
 
     message_data = json.dumps(
@@ -118,7 +118,12 @@ GCP_PROJECT_ID = "gcp-project-runtime"
 # Default region for Cloud Run jobs
 DEFAULT_REGION = "us-central1"
 # Namespace based on environment
-DEFAULT_NAMESPACE = "staging" if STAGING else "production"
+DEFAULT_NAMESPACE = DEPLOY_ENV
+DEFAULT_IMAGE_NAME = "unity" if DEPLOY_ENV == "production" else f"unity-{DEPLOY_ENV}"
+DEFAULT_UNITY_IMAGE = (
+    "us-central1-docker.pkg.dev/gcp-project-runtime/unity/"
+    f"{DEFAULT_IMAGE_NAME}:latest"
+)
 
 _pubsub_publisher: pubsub_v1.PublisherClient | None = None
 _pubsub_subscriber: pubsub_v1.SubscriberClient | None = None
@@ -320,15 +325,13 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 @router.post("/job/create")
 async def create_kubernetes_job(
     namespace: str = Form(DEFAULT_NAMESPACE),
-    image: str = Form(
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
-    ),
+    image: str = Form(DEFAULT_UNITY_IMAGE),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
 
     Args:
-        namespace: Kubernetes namespace (optional, defaults to production/staging)
+        namespace: Kubernetes namespace (optional, defaults to the current environment)
         image: Docker image to use (optional, defaults to latest unity image)
     """
     try:
@@ -336,11 +339,7 @@ async def create_kubernetes_job(
 
         random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        job_name = (
-            f"unity-{timestamp_str}-{random_id}"
-            if not STAGING
-            else f"unity-{timestamp_str}-{random_id}-staging"
-        )
+        job_name = f"unity-{timestamp_str}-{random_id}{ENV_SUFFIX}"
 
         job = await asyncio.to_thread(
             create_unity_job,
@@ -348,7 +347,6 @@ async def create_kubernetes_job(
             job_name=job_name,
             namespace=namespace,
             image=image,
-            is_staging=bool(STAGING),
         )
 
         if job:
@@ -392,7 +390,7 @@ async def delete_kubernetes_job(
 
     Args:
         job_name: Name of the job (required)
-        namespace: Kubernetes namespace (optional, defaults to production/staging)
+        namespace: Kubernetes namespace (optional, defaults to the current environment)
         resource_version: The specific resource version of the job to delete
             (optional, provides optimistic locking)
     """
@@ -439,7 +437,7 @@ async def patch_kubernetes_job_labels(
     Args:
         job_name: Name of the job (required)
         labels: JSON-encoded dict of labels to set (required)
-        namespace: Kubernetes namespace (optional, defaults to production/staging)
+        namespace: Kubernetes namespace (optional, defaults to the current environment)
     """
     try:
         parsed_labels = json.loads(labels)
@@ -544,10 +542,7 @@ async def start_job(
     try:
         publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
 
-        topic_path = publisher.topic_path(
-            GCP_PROJECT_ID,
-            "unity-startup" if not STAGING else "unity-startup-staging",
-        )
+        topic_path = publisher.topic_path(GCP_PROJECT_ID, "unity-startup" + ENV_SUFFIX)
 
         job_data = {
             "thread": "startup",
@@ -596,7 +591,7 @@ async def start_job(
             "message_id": message_id,
             "topic_path": topic_path,
             "assistant_id": assistant_id,
-            "is_staging": bool(STAGING),
+            "deploy_env": DEPLOY_ENV,
             "project_id": GCP_PROJECT_ID,
         }
 
@@ -787,7 +782,11 @@ async def get_latest_unity_image_commit():
 
         # Define the bucket and file path
         bucket_name = "unity-image-hash"
-        blob_name = "image_hash.txt" if not STAGING else "image_hash_staging.txt"
+        blob_name = (
+            "image_hash.txt"
+            if DEPLOY_ENV == "production"
+            else f"image_hash_{DEPLOY_ENV}.txt"
+        )
 
         try:
             # Get the bucket

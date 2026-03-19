@@ -87,19 +87,10 @@ ORCHESTRA_GET_ASSISTANT_DURATION = Histogram(
     registry=REGISTRY,
 )
 
-MARK_JOB_RUNNING_DURATION = Histogram(
-    "mark_job_running_duration_seconds",
-    "Time spent marking an AssistantJob as running via Orchestra /logs. "
-    "Use status='success' to filter to healthy requests only.",
-    labelnames=["status"],  # success | error
-    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
-    registry=REGISTRY,
-)
-
 BUILD_WEBHOOK_CONTEXT_DURATION = Histogram(
     "build_webhook_context_duration_seconds",
     "Total time from inbound adapter request to webhook context built. "
-    "job_started='true' includes mark_job_running + start_unity_job + create_job; "
+    "job_started='true' includes start_unity_job + replenish_idle_pool; "
     "job_started='false' is just get_assistant + contact validation. "
     "Use status='success' to filter to healthy requests only.",
     labelnames=[
@@ -111,13 +102,20 @@ BUILD_WEBHOOK_CONTEXT_DURATION = Histogram(
     registry=REGISTRY,
 )
 
-JOB_DEMAND_TOTAL = Gauge(
-    "adapter_job_demand",
-    "Monotonically increasing count of job start requests. Typed as Gauge "
-    "to avoid increase() extrapolation; query with max_over_time - min_over_time.",
-    labelnames=["channel"],
+UNITY_JOBS_RUNNING = Gauge(
+    "unity_jobs_running",
+    "Number of Unity K8s jobs with unity-status=running, "
+    "sampled on every inventory call (webhook + scheduled).",
     registry=REGISTRY,
-    multiprocess_mode="livesum",
+    multiprocess_mode="livemax",
+)
+
+UNITY_JOBS_IDLE = Gauge(
+    "unity_jobs_idle",
+    "Number of Unity K8s jobs with unity-status=idle, "
+    "sampled on every inventory call (webhook + scheduled).",
+    registry=REGISTRY,
+    multiprocess_mode="livemax",
 )
 
 STALE_JOBS_LAST_SWEEP = Gauge(

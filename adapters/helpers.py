@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 from common.metrics import (
     ORCHESTRA_GET_ASSISTANT_DURATION,
-    MARK_JOB_RUNNING_DURATION,
     BUILD_WEBHOOK_CONTEXT_DURATION,
-    JOB_DEMAND_TOTAL,
+    UNITY_JOBS_RUNNING,
+    UNITY_JOBS_IDLE,
     STALE_JOBS_LAST_SWEEP,
 )
 
@@ -31,17 +31,86 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
     MessageItemRequestBuilder,
 )
 
-STAGING = os.getenv("STAGING")
+
+def _get_deploy_env() -> str:
+    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
+    return (
+        deploy_env
+        if deploy_env in {"production", "staging", "preview"}
+        else "production"
+    )
+
+
+DEPLOY_ENV = _get_deploy_env()
+ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
+GMAIL_NOTIFICATIONS_TOPIC = (
+    "gmail-notifications"
+    if DEPLOY_ENV == "production"
+    else f"gmail-notifications-{DEPLOY_ENV}"
+)
+
+
+def _cloud_run_url(service_name: str) -> str:
+    if service_name.startswith("unity-adapters"):
+        return f"https://{service_name}-ky4ja5fxna-uc.a.run.app"
+    return f"https://{service_name}-000000000000.us-central1.run.app"
+
 
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
-    if not STAGING
+    if DEPLOY_ENV == "production"
     else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.getenv("ORCHESTRA_URL", _default_orchestra_url)
 
-COMMS_URL = os.getenv("UNITY_COMMS_URL")
-ADAPTERS_URL = os.getenv("UNITY_ADAPTERS_URL")
+COMMS_URL = os.getenv(
+    "UNITY_COMMS_URL",
+    _cloud_run_url(f"unity-comms-app{ENV_SUFFIX}"),
+)
+ADAPTERS_URL = os.getenv(
+    "UNITY_ADAPTERS_URL",
+    _cloud_run_url(f"unity-adapters{ENV_SUFFIX}"),
+)
+
+
+def _fetch_infra_jobs(
+    params: dict,
+    *,
+    retries: int = 2,
+    backoff: float = 0.5,
+    caller: str = "",
+) -> requests.Response | None:
+    """GET ``/infra/jobs`` with retries and exponential backoff.
+
+    Returns the ``requests.Response`` on a 200 OK, or ``None`` after all
+    attempts are exhausted.  No timeout is set — the call blocks until
+    the comms service responds or the TCP connection drops.
+    """
+    tag = f"[{caller}] " if caller else ""
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY', '')}"}
+
+    for attempt in range(1 + retries):
+        try:
+            resp = requests.get(
+                f"{COMMS_URL}/infra/jobs",
+                params=params,
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                return resp
+            logger.warning(
+                f"{tag}/infra/jobs returned {resp.status_code} "
+                f"(attempt {attempt + 1}/{1 + retries})",
+            )
+        except Exception as e:
+            logger.error(
+                f"{tag}/infra/jobs error (attempt {attempt + 1}/{1 + retries}): {e}",
+            )
+        if attempt < retries:
+            time.sleep(backoff * (2**attempt))
+
+    return None
+
 
 _pubsub_client = None
 
@@ -107,6 +176,7 @@ def get_assistant(
 
     local_assistant_data = {
         "assistant_id": "local-assistant",
+        "deploy_env": DEPLOY_ENV,
         "user_id": "local-user",
         "voice_provider": "cartesia",
         "voice_id": None,
@@ -181,6 +251,7 @@ def get_assistant(
 
     return {
         "assistant_id": assistants[0]["agent_id"],
+        "deploy_env": assistants[0].get("deploy_env", DEPLOY_ENV),
         "user_id": assistants[0]["user_id"],
         "api_key": assistants[0]["api_key"],
         "user_first_name": assistants[0]["user_first_name"],
@@ -398,169 +469,57 @@ def check_valid_contact(
 def is_job_running(user_id: str, assistant_id: str) -> bool:
     """Check if a K8s job is actively running for this assistant.
 
-    Two-phase check:
-    1. Query K8s via ``/infra/jobs`` for a pod labeled with this
-       ``assistant-id`` (authoritative once the label is set).
-    2. Fall back to Orchestra ``AssistantJobs`` for a *recent*
-       ``running=True`` record (covers the brief window between job
-       start and K8s label propagation).  Records older than 120 s
-       are ignored to prevent stale flags from blocking new jobs.
-
-    Returns ``False`` on any error (fail-open) so the adapter defaults
+    Returns ``False`` on failure (fail-open) so the adapter defaults
     to starting a new job rather than silently dropping messages.
     """
     logger.info(f"Checking job status: assistant_id={assistant_id}")
 
-    # Phase 1: live K8s state (ground truth once label is set)
-    try:
-        resp = requests.get(
-            f"{COMMS_URL}/infra/jobs",
-            params={"label_selector": f"app=unity,assistant-id={assistant_id}"},
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            jobs = resp.json().get("jobs", [])
-            if any(j.get("status") == "Running" for j in jobs):
-                logger.info(f"K8s: active pod found for assistant {assistant_id}")
-                return True
-            logger.info(f"K8s: {len(jobs)} job(s), none active")
-    except Exception as e:
-        logger.info(f"K8s job query error (non-fatal): {e}")
+    resp = _fetch_infra_jobs(
+        {"label_selector": f"app=unity,assistant-id={assistant_id}"},
+        caller="is_job_running",
+    )
+    if resp is None:
+        return False
 
-    # Phase 2: time-bounded Orchestra fallback (startup window)
-    try:
-        resp = requests.get(
-            f"{ORCHESTRA_URL}/logs",
-            params={
-                "project_name": "AssistantJobs",
-                "context": "startup_events",
-                "filter_expr": (
-                    f"assistant_id == '{assistant_id}' and running == 'true'"
-                ),
-                "limit": 1,
-            },
-            headers={"Authorization": f"Bearer {os.getenv('SHARED_UNIFY_KEY')}"},
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            logs = resp.json().get("logs", [])
-            if logs:
-                ts = logs[0].get("entries", {}).get("timestamp", "")
-                if ts:
-                    record_time = datetime.fromisoformat(ts)
-                    age = (datetime.now(tz=timezone.utc) - record_time).total_seconds()
-                    if age < 120:
-                        logger.info(
-                            f"Orchestra: recent running record ({age:.0f}s old) "
-                            f"for assistant {assistant_id}",
-                        )
-                        return True
-                    logger.info(
-                        f"Orchestra: stale running record ({age:.0f}s old), ignoring",
-                    )
-    except Exception as e:
-        logger.info(f"Orchestra fallback error (non-fatal): {e}")
-
+    jobs = resp.json().get("jobs", [])
+    if any(j.get("status") == "Running" for j in jobs):
+        logger.info(f"K8s: active pod found for assistant {assistant_id}")
+        return True
+    logger.info(f"K8s: {len(jobs)} job(s), none active")
     return False
 
 
-def _expire_stale_records(assistant_id: str, shared_key: str) -> None:
-    """Mark all previous running=True records for this assistant as running=False.
-
-    Also releases any pool VM still assigned from a crashed job — prevents
-    leaked VMs from lingering in "assigned" state.
-    """
-    try:
-        resp = requests.get(
-            f"{ORCHESTRA_URL}/logs",
-            params={
-                "project_name": "AssistantJobs",
-                "context": "startup_events",
-                "filter_expr": f"assistant_id == '{assistant_id}' and running == 'true'",
-                "limit": 100,
-            },
-            headers={"Authorization": f"Bearer {shared_key}"},
-        )
-        if resp.status_code != 200:
-            return
-        stale_logs = resp.json().get("logs", [])
-        if not stale_logs:
-            return
-        stale_ids = [log["id"] for log in stale_logs if "id" in log]
-        if not stale_ids:
-            return
-        try:
-            requests.put(
-                f"{ORCHESTRA_URL}/logs",
-                json={
-                    "logs": stale_ids,
-                    "context": "startup_events",
-                    "entries": {"running": False},
-                    "overwrite": True,
-                },
-                headers={"Authorization": f"Bearer {shared_key}"},
-                timeout=0.1,
-            )
-        except requests.exceptions.Timeout:
-            pass
-        logger.info(
-            f"Expired {len(stale_ids)} stale record(s) for assistant {assistant_id}",
-        )
-
-        # Release any leaked pool VM from the crashed job (idempotent)
-        if COMMS_URL:
-            try:
-                requests.post(
-                    f"{COMMS_URL}/infra/vm/pool/release",
-                    headers={
-                        "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}",
-                    },
-                    json={"assistant_id": assistant_id},
-                    timeout=0.1,
-                )
-                print(f"Released leaked pool VM for assistant {assistant_id} (if any)")
-            except Exception as release_err:
-                print(f"[_expire_stale_records] Pool release non-fatal: {release_err}")
-    except Exception as e:
-        logger.info(f"[_expire_stale_records] Non-fatal error: {e}")
-
-
 def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
-    """Sweep all AssistantJobs logs that are still running and older than max_age_hours.
+    """Suspend K8s jobs that have been running longer than *max_age_hours*.
 
-    For each stale log:
-    - Suspends the K8s job if a job_name is present
+    For each stale job:
+    - Suspends the K8s job
     - Releases any leaked pool VM for the assistant
-    - Marks the log entry as running=False
     - Records Prometheus metrics
+
+    Uses K8s as the source of truth (via ``/infra/jobs``).
     """
-    shared_key = os.getenv("SHARED_UNIFY_KEY")
     admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    if not COMMS_URL:
+        return {"total_running": 0, "expired": 0}
+
     cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
 
-    resp = requests.get(
-        f"{ORCHESTRA_URL}/logs",
-        params={
-            "project_name": "AssistantJobs",
-            "context": "startup_events",
-            "filter_expr": "running == 'true'",
-            "limit": 100,
+    resp = _fetch_infra_jobs(
+        {
+            "label_selector": "app=unity,unity-status=running",
+            "hours": max(max_age_hours + 12, 36),
         },
-        headers={"Authorization": f"Bearer {shared_key}"},
-        timeout=30,
+        caller="expire_all_stale_jobs",
     )
-    if resp.status_code != 200:
-        logger.error(
-            f"[expire_all_stale_jobs] Failed to fetch running logs: {resp.text}",
-        )
-        return {"total_running": 0, "expired": 0, "error": resp.text}
+    if resp is None:
+        return {"total_running": 0, "expired": 0, "error": "all retries failed"}
 
-    all_running = resp.json().get("logs", [])
+    all_jobs = resp.json().get("jobs", [])
 
     stale = []
-    for log in all_running:
-        ts_str = log.get("entries", {}).get("timestamp", "")
+    for job in all_jobs:
+        ts_str = job.get("creation_timestamp", "")
         if not ts_str:
             continue
         try:
@@ -568,55 +527,50 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
             if ts < cutoff:
-                stale.append(log)
+                stale.append(job)
         except (ValueError, TypeError):
             continue
 
     STALE_JOBS_LAST_SWEEP.set(len(stale))
 
     logger.info(
-        f"[expire_all_stale_jobs] Found {len(all_running)} running job(s), "
+        f"[expire_all_stale_jobs] Found {len(all_jobs)} running job(s), "
         f"{len(stale)} stale (>{max_age_hours}h old)",
     )
 
     if not stale:
-        return {"total_running": len(all_running), "expired": 0}
+        return {"total_running": len(all_jobs), "expired": 0}
 
     jobs_to_suspend = []
     unique_assistants = set()
-    for log in stale:
-        e = log.get("entries", {})
+    for job in stale:
+        job_name = job.get("job_name")
+        assistant_id = job.get("assistant_id", "unknown")
         logger.info(
-            f"[expire_all_stale_jobs] Stale log id={log.get('id')} "
-            f"assistant_id={e.get('assistant_id')} "
-            f"job_name={e.get('job_name')} "
-            f"medium={e.get('medium')} "
-            f"timestamp={e.get('timestamp')} "
-            f"assistant_name={e.get('assistant_name')} "
-            f"user_email={e.get('user_email')}",
+            f"[expire_all_stale_jobs] Stale job: {job_name} "
+            f"assistant_id={assistant_id} "
+            f"created={job.get('creation_timestamp')}",
         )
-        job_name = e.get("job_name")
-        if job_name and COMMS_URL:
+        if job_name:
             jobs_to_suspend.append(job_name)
-        assistant_id = e.get("assistant_id")
-        if assistant_id:
+        if assistant_id and assistant_id != "unknown":
             unique_assistants.add(assistant_id)
 
     suspended_jobs = []
 
-    def _suspend_job(job_name):
+    def _suspend_job(jn):
         try:
             requests.post(
                 f"{COMMS_URL}/infra/job/stop",
-                data={"job_name": job_name},
+                data={"job_name": jn},
                 headers={"Authorization": f"Bearer {admin_key}"},
                 timeout=10,
             )
-            logger.info(f"[expire_all_stale_jobs] Suspended K8s job: {job_name}")
-            return job_name
+            logger.info(f"[expire_all_stale_jobs] Suspended K8s job: {jn}")
+            return jn
         except Exception as exc:
             logger.info(
-                f"[expire_all_stale_jobs] Job suspend non-fatal for {job_name}: {exc}",
+                f"[expire_all_stale_jobs] Job suspend non-fatal for {jn}: {exc}",
             )
             return None
 
@@ -642,119 +596,17 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             )
             return None
 
-    if COMMS_URL and unique_assistants:
+    if unique_assistants:
         with ThreadPoolExecutor(max_workers=len(unique_assistants)) as pool:
             results = list(pool.map(_release_vm, unique_assistants))
         released_assistants = [r for r in results if r is not None]
 
-    stale_ids = [log["id"] for log in stale if "id" in log]
-    if stale_ids:
-        requests.put(
-            f"{ORCHESTRA_URL}/logs",
-            json={
-                "logs": stale_ids,
-                "context": "startup_events",
-                "entries": {"running": False},
-                "overwrite": True,
-            },
-            headers={"Authorization": f"Bearer {shared_key}"},
-            timeout=30,
-        )
-        logger.info(
-            f"[expire_all_stale_jobs] Marked {len(stale_ids)} stale job(s) as done",
-        )
-
     return {
-        "total_running": len(all_running),
+        "total_running": len(all_jobs),
         "expired": len(stale),
         "suspended_k8s_jobs": suspended_jobs,
         "released_assistants": released_assistants,
     }
-
-
-def mark_job_running(assistant_data: dict, medium: str) -> bool:
-    """Mark a job as running immediately to prevent duplicate startups.
-
-    This creates a record in AssistantJobs with running=True right away,
-    preventing race conditions when multiple adapter requests come in quickly.
-    The Unity container that picks up the startup message will later update this
-    record to add job_name and liveview_url.
-
-    Returns True if successful, False otherwise.
-    """
-    user_id = assistant_data["user_id"]
-    assistant_id = assistant_data["assistant_id"]
-    logger.info(f"Marking job as running for {user_id} --> {assistant_id}")
-
-    shared_key = os.getenv("SHARED_UNIFY_KEY")
-    if not shared_key:
-        logger.info("[mark_job_running] No SHARED_UNIFY_KEY available")
-        return False
-
-    timestamp = datetime.now(tz=timezone.utc).isoformat()
-
-    _t0 = time.perf_counter()
-    _status = "error"
-    try:
-        # First ensure the project exists
-        try:
-            requests.post(
-                f"{ORCHESTRA_URL}/project",
-                json={"name": "AssistantJobs"},
-                headers={"Authorization": f"Bearer {shared_key}"},
-                timeout=0.1,
-            )
-        except Exception:
-            pass  # Project may already exist
-
-        _expire_stale_records(assistant_id, shared_key)
-
-        # Create the running record with all available info
-        # job_name and liveview_url will be added later by the Unity container
-        response = requests.post(
-            f"{ORCHESTRA_URL}/logs",
-            json={
-                "project_name": "AssistantJobs",
-                "context": "startup_events",
-                "entries": [
-                    {
-                        "user_id": user_id,
-                        "assistant_id": assistant_id,
-                        "timestamp": timestamp,
-                        "medium": medium,
-                        "user_name": f"{assistant_data['user_first_name']} {assistant_data['user_surname']}".strip(),
-                        "assistant_name": (
-                            f"{assistant_data['assistant_first_name']} "
-                            f"{assistant_data['assistant_surname']}"
-                        ),
-                        "user_number": assistant_data["user_number"],
-                        "assistant_number": assistant_data["assistant_number"],
-                        "user_email": assistant_data["user_email"],
-                        "assistant_email": assistant_data["assistant_email"],
-                        "running": True,
-                    },
-                ],
-            },
-            headers={"Authorization": f"Bearer {shared_key}"},
-        )
-        if response.status_code in (200, 201):
-            logger.info(f"Marked job as running for {assistant_id}")
-            _status = "success"
-            return True
-        else:
-            logger.info(
-                f"Failed to mark job as running: {response.status_code} "
-                f"{response.text}",
-            )
-            return False
-    except Exception as e:
-        logger.info(f"Error marking job as running: {e}")
-        traceback.print_exc()
-        return False
-    finally:
-        MARK_JOB_RUNNING_DURATION.labels(status=_status).observe(
-            time.perf_counter() - _t0,
-        )
 
 
 def start_unity_job(assistant: dict, medium: str):
@@ -813,6 +665,7 @@ def start_unity_job(assistant: dict, medium: str):
                     if assistant.get("org_id") is not None
                     else ""
                 ),
+                "deploy_env": DEPLOY_ENV,
             },
             timeout=0.1,
         )
@@ -897,49 +750,39 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
 
     Returns:
         A dict with 'running' and 'idle' keys, each containing a list of job dicts
-        filtered by the current environment (staging vs production).
+        filtered by the current deployment environment.
     """
-    try:
-        admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", "")
-        headers = {"Authorization": f"Bearer {admin_key}"} if admin_key else {}
-
-        # Get ALL unity jobs in one go to minimize network roundtrips
-        # We use a specific label selector to avoid fetching 'done' jobs which can be numerous.
-        # Comma-separated labels act as a logical AND.
-        resp = requests.get(
-            f"{COMMS_URL}/infra/jobs",
-            params={"label_selector": "app=unity,unity-status!=done"},
-            headers=headers,
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            logger.error(f"Failed to fetch jobs: {resp.status_code} - {resp.text}")
-            return {"running": [], "idle": []}
-
-        all_jobs = resp.json().get("jobs", [])
-        inventory = {"running": [], "idle": []}
-
-        for job in all_jobs:
-            # Filter by environment
-            is_env_match = (STAGING and "staging" in job["job_name"]) or (
-                not STAGING and "staging" not in job["job_name"]
-            )
-            if not is_env_match:
-                continue
-
-            # Categorize by authoritative labels
-            labels = job.get("labels", {})
-            unity_status = labels.get("unity-status")
-
-            if unity_status == "running":
-                inventory["running"].append(job)
-            elif unity_status == "idle":
-                inventory["idle"].append(job)
-
-        return inventory
-    except Exception as e:
-        logger.error(f"Error fetching unity jobs inventory: {e}")
+    resp = _fetch_infra_jobs(
+        {"label_selector": "app=unity,unity-status!=done"},
+        caller="get_unity_jobs_inventory",
+    )
+    if resp is None:
         return {"running": [], "idle": []}
+
+    all_jobs = resp.json().get("jobs", [])
+    inventory: dict[str, list[dict]] = {"running": [], "idle": []}
+
+    for job in all_jobs:
+        is_env_match = (
+            job["job_name"].endswith(ENV_SUFFIX)
+            if ENV_SUFFIX
+            else (
+                not job["job_name"].endswith("-staging")
+                and not job["job_name"].endswith("-preview")
+            )
+        )
+        if not is_env_match:
+            continue
+
+        labels = job.get("labels", {})
+        unity_status = labels.get("unity-status")
+
+        if unity_status == "running":
+            inventory["running"].append(job)
+        elif unity_status == "idle":
+            inventory["idle"].append(job)
+
+    return inventory
 
 
 def replenish_idle_pool(refresh: bool = False) -> dict:
@@ -959,6 +802,8 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
     current_idle_count = len(inventory["idle"])
+    UNITY_JOBS_RUNNING.set(running_count)
+    UNITY_JOBS_IDLE.set(current_idle_count)
 
     pool_target = get_target_idle_count(running_count)
 
@@ -990,9 +835,10 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = requests.get(f"{COMMS_URL}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
+    image_name = "unity" if DEPLOY_ENV == "production" else f"unity-{DEPLOY_ENV}"
     image = (
         "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if not STAGING else "/unity-staging:")
+        + f"/{image_name}:"
         + commit_hash
     )
 
@@ -1025,40 +871,36 @@ def cleanup_idle_pool() -> dict:
 
     Called by the /scheduled/jobs/cleanup endpoint via run_in_executor.
     """
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY', '')}"}
 
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
+    idle_count = len(inventory["idle"])
+    UNITY_JOBS_RUNNING.set(running_count)
+    UNITY_JOBS_IDLE.set(idle_count)
     target_retain = get_target_idle_count(running_count).target
 
-    # Get all idle jobs via K8s label selector
-    resp = requests.get(
-        f"{COMMS_URL}/infra/jobs",
-        params={"label_selector": "app=unity,unity-status=idle"},
-        headers=headers,
-    )
-    jobs = resp.json()
     idle_jobs = {
-        job["job_name"]: job.get("resource_version")
-        for job in jobs["jobs"]
-        if (STAGING and "staging" in job["job_name"])
-        or (not STAGING and "staging" not in job["job_name"])
+        job["job_name"]: job.get("resource_version") for job in inventory["idle"]
     }
 
     # Classify idle jobs by age into three buckets
     very_new_idle_jobs = []  # < 1 min: always retained, exempt from quota
     new_idle_jobs = []  # 1–11 min: preferred when filling the quota
     old_idle_jobs = []  # >= 11 min: used to fill quota if new ones aren't enough
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     for job_name in idle_jobs:
-        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-staging}
+        # job_name format: unity-{YYYY-MM-DD-HH-MM-SS}-{random_id}{-env_suffix?}
         job_timestamp_str = "-".join(
             filter(
                 lambda part: part.isdigit() and len(part) in [2, 4],
                 job_name.split("-"),
             ),
         )
-        job_timestamp = datetime.strptime(job_timestamp_str, "%Y-%m-%d-%H-%M-%S")
+        job_timestamp = datetime.strptime(
+            job_timestamp_str,
+            "%Y-%m-%d-%H-%M-%S",
+        ).replace(tzinfo=timezone.utc)
         delta = now - job_timestamp
         if delta < timedelta(minutes=1):
             very_new_idle_jobs.append(job_name)
@@ -1244,8 +1086,6 @@ def build_webhook_context(
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
     )
     if should_start_job:
-        JOB_DEMAND_TOTAL.labels(channel=channel).inc()
-        mark_job_running(assistant_data, channel)
         with ThreadPoolExecutor(max_workers=2) as pool:
             pool.submit(start_unity_job, assistant_data, channel)
             pool.submit(replenish_idle_pool, False)
@@ -1669,7 +1509,7 @@ def publish_gmail_thread_id(
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_name = f"unity-{assistant_id}{ENV_SUFFIX}"
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
@@ -1712,7 +1552,7 @@ def publish_outlook_thread_id(
     """Publish the Outlook conversation to pub/sub topic."""
     try:
         publisher = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + ("" if not STAGING else "-staging")
+        topic_name = f"unity-{assistant_id}{ENV_SUFFIX}"
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {

@@ -27,19 +27,35 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 # Environment detection
-STAGING = os.environ.get("STAGING", "false").lower() == "true"
+
+
+def _get_deploy_env() -> str:
+    deploy_env = (os.environ.get("DEPLOY_ENV") or "production").strip().lower()
+    return (
+        deploy_env
+        if deploy_env in {"production", "staging", "preview"}
+        else "production"
+    )
+
+
+DEPLOY_ENV = _get_deploy_env()
+
+
+def _cloud_run_url(service_name: str) -> str:
+    return f"https://{service_name}-000000000000.us-central1.run.app"
+
 
 _default_orchestra_url = (
     "https://api.unify.ai/v0"
-    if not STAGING
+    if DEPLOY_ENV == "production"
     else "https://internal.example.com/v0"
 )
 ORCHESTRA_URL = os.environ.get("ORCHESTRA_URL", _default_orchestra_url)
 
 _default_comms_url = (
-    "https://unity-comms-app-000000000000.us-central1.run.app"
-    if not STAGING
-    else "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+    _cloud_run_url("unity-comms-app")
+    if DEPLOY_ENV == "production"
+    else _cloud_run_url(f"unity-comms-app-{DEPLOY_ENV}")
 )
 COMMS_URL = os.environ.get("UNITY_COMMS_URL", _default_comms_url)
 
@@ -181,7 +197,7 @@ def get_secret(secret_name: str, project_id: str = None) -> Optional[str]:
 def get_dns_hostname(assistant_id: str) -> str:
     """Generate consistent DNS hostname from assistant ID.
 
-    Format: unity-assistant-{id}{-staging}.vm.unify.ai
+    Format: unity-assistant-{id}{-env}.vm.unify.ai for non-production.
 
     NOTE: Same for both Windows and Ubuntu - only one VM per assistant.
     """
@@ -494,8 +510,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     if tls_cert and tls_key:
         metadata_items.append(compute_v1.Items(key="tls-fullchain", value=tls_cert))
         metadata_items.append(compute_v1.Items(key="tls-privkey", value=tls_key))
-    if STAGING:
-        metadata_items.append(compute_v1.Items(key="staging", value="true"))
+    metadata_items.append(compute_v1.Items(key="unity-environment", value=DEPLOY_ENV))
 
     labels = {
         "pool-role": "provisioning",

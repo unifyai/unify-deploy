@@ -6,7 +6,7 @@ import threading
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
 
-from communication.helpers import ADAPTERS_URL, COMMS_URL, ORCHESTRA_URL
+from communication.helpers import ADAPTERS_URL, COMMS_URL, DEPLOY_ENV, ORCHESTRA_URL
 
 _k8s_clients: tuple | None = None
 _k8s_lock = threading.Lock()
@@ -190,7 +190,6 @@ def create_unity_job(
     job_name: str,
     namespace: str = "default",
     image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
-    is_staging: bool = False,
     ttl_seconds_after_finished: int = None,
 ):
     """
@@ -201,13 +200,13 @@ def create_unity_job(
         job_name: Name of the job
         namespace: Kubernetes namespace
         image: Docker image to use
-        is_staging: Whether to use staging image
         ttl_seconds_after_finished: Seconds after job completion before cleanup (None to disable)
     """
     try:
         # Define the assistant-specific environment variables
         env_vars = [
             {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
+            {"name": "DEPLOY_ENV", "value": DEPLOY_ENV},
             {
                 "name": "GOOGLE_APPLICATION_CREDENTIALS",
                 "value": "/secrets/key.json",
@@ -228,8 +227,6 @@ def create_unity_job(
             {"name": "UNITY_ADAPTERS_URL", "value": ADAPTERS_URL},
             {"name": "ORCHESTRA_URL", "value": ORCHESTRA_URL},
         ]
-        if is_staging:
-            env_vars += [{"name": "STAGING", "value": "true"}]
 
         # Define the job manifest
         job_manifest = {

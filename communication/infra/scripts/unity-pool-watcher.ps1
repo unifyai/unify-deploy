@@ -28,6 +28,14 @@ function Get-Metadata($key) {
     }
 }
 
+function Get-DeployEnv {
+    $envName = Get-Metadata "unity-environment"
+    if ($envName) { return $envName }
+    if (Get-Metadata "preview") { return "preview" }
+    if (Get-Metadata "staging") { return "staging" }
+    return "production"
+}
+
 function Write-Log($message) {
     $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     Write-Host "[$ts] $message"
@@ -77,7 +85,7 @@ function Invoke-Update {
     Stop-AgentService
 
     $githubToken = (Get-Metadata "github-token").Trim()
-    $staging = Get-Metadata "staging"
+    $deployEnv = Get-DeployEnv
 
     if ($githubToken) {
         $magnitudeUrl = "https://${githubToken}@github.com/unifyai/magnitude.git"
@@ -86,7 +94,11 @@ function Invoke-Update {
         $magnitudeUrl = "https://github.com/unifyai/magnitude.git"
         $unityUrl = "https://github.com/unifyai/unity.git"
     }
-    $unityBranch = if ($staging) { "staging" } else { "main" }
+    $unityBranch = switch ($deployEnv) {
+        "preview" { "preview" }
+        "staging" { "staging" }
+        default { "main" }
+    }
 
     # ── Magnitude ──
     $magnitudeDir = "C:\magnitude"

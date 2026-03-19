@@ -57,11 +57,11 @@ GCP_PROJECT_ID="${GCP_PROJECT_ID:-local-test-project}"
 # Test assistant ID
 TEST_ASSISTANT_ID="${TEST_ASSISTANT_ID:-default-test-assistant}"
 
-# Staging suffix for topics
-STAGING="${STAGING:-true}"
+# Deployment environment for local topics and URLs
+DEPLOY_ENV="${DEPLOY_ENV:-staging}"
 TOPIC_SUFFIX=""
-if [[ "$STAGING" == "true" ]]; then
-  TOPIC_SUFFIX="-staging"
+if [[ "$DEPLOY_ENV" != "production" ]]; then
+  TOPIC_SUFFIX="-$DEPLOY_ENV"
 fi
 
 # PID and log files
@@ -353,7 +353,7 @@ start_adapters_service() {
   # Set environment for the service
   local env_vars=(
     "GCP_PROJECT_ID=$GCP_PROJECT_ID"
-    "STAGING=$STAGING"
+    "DEPLOY_ENV=$DEPLOY_ENV"
     "UNITY_ADAPTERS_URL=$LOCAL_ADAPTERS_URL"
   )
 
@@ -450,7 +450,7 @@ start_comms_service() {
   # Set environment for the service
   local env_vars=(
     "GCP_PROJECT_ID=$GCP_PROJECT_ID"
-    "STAGING=$STAGING"
+    "DEPLOY_ENV=$DEPLOY_ENV"
     "UNITY_COMMS_URL=$LOCAL_COMMS_URL"
   )
 
@@ -737,7 +737,7 @@ cmd_help() {
   echo "  TEST_ASSISTANT_ID      Test assistant ID (default: default-test-assistant)"
   echo "  ORCHESTRA_URL         Orchestra URL (if using local orchestra)"
   echo "  ORCHESTRA_ADMIN_KEY    Admin key for Orchestra auth"
-  echo "  STAGING                Set to 'true' for staging topics (default: true)"
+  echo "  DEPLOY_ENV             Deployment env for topics/URLs (default: staging)"
   echo ""
   echo "Examples:"
   echo "  $0 start                              # Start with emulator"

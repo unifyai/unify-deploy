@@ -12,7 +12,7 @@
 #   --update-startup-script   Push latest local startup script to the VM
 #   --metadata KEY=VALUE      Add/update a metadata key (repeatable)
 #   --restart                 Stop+start the VM after update (only if RUNNING)
-#   --staging                 Target staging VM (default: production)
+#   --env ENV                 Target environment: production, staging, or preview
 #   --dry-run                 Show what would happen without making changes
 #   -h, --help                Show this help
 #
@@ -20,8 +20,8 @@
 #   # Push latest startup script to production
 #   ./update-metadata.sh --update-startup-script
 #
-#   # Push latest startup script to staging
-#   ./update-metadata.sh --update-startup-script --staging
+#   # Push latest startup script to preview
+#   ./update-metadata.sh --update-startup-script --env preview
 #
 #   # Update the GCS bucket metadata
 #   ./update-metadata.sh --metadata gcs-bucket=unity-tunnel-config-staging
@@ -51,7 +51,7 @@ UPDATE_STARTUP=false
 METADATA_ARGS=()
 RESTART=false
 DRY_RUN=false
-STAGING=false
+TARGET_ENV="production"
 
 # =============================================================================
 # Functions
@@ -72,7 +72,14 @@ while [[ $# -gt 0 ]]; do
         --update-startup-script) UPDATE_STARTUP=true; shift ;;
         --metadata)              METADATA_ARGS+=("$2"); shift 2 ;;
         --restart)               RESTART=true; shift ;;
-        --staging)               STAGING=true; shift ;;
+        --env)
+            TARGET_ENV="$2"
+            case "$TARGET_ENV" in
+                production|staging|preview) ;;
+                *) die "Invalid --env value: $TARGET_ENV (expected production, staging, or preview)" ;;
+            esac
+            shift 2
+            ;;
         --dry-run)               DRY_RUN=true; shift ;;
         -h|--help)               usage; exit 0 ;;
         *)                       die "Unknown argument: $1" ;;
@@ -84,11 +91,11 @@ if [[ "$UPDATE_STARTUP" == false && ${#METADATA_ARGS[@]} -eq 0 ]]; then
 fi
 
 # Resolve VM name based on environment
-if [[ "$STAGING" == true ]]; then
-    VM_NAME="unity-tunnel-server-staging"
-else
-    VM_NAME="unity-tunnel-server"
-fi
+case "$TARGET_ENV" in
+    staging) VM_NAME="unity-tunnel-server-staging" ;;
+    preview) VM_NAME="unity-tunnel-server-preview" ;;
+    *) VM_NAME="unity-tunnel-server" ;;
+esac
 
 command -v gcloud &>/dev/null || die "gcloud not found"
 
@@ -111,7 +118,7 @@ fi
 echo "  Project: $PROJECT"
 echo "  Zone:    $ZONE"
 echo "  VM:      $VM_NAME"
-echo "  Target:  $(if $STAGING; then echo "staging"; else echo "production"; fi)"
+echo "  Target:  $TARGET_ENV"
 echo ""
 
 VM_STATUS=$(gcloud compute instances describe "$VM_NAME" \
