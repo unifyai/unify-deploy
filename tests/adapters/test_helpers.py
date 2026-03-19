@@ -272,13 +272,11 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.mark_job_running")
 @patch("adapters.helpers.is_job_running", return_value=False)
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
 def test_build_webhook_context_skips_job_start_for_local_assistant(
     _mock_check,
     _mock_running,
-    mock_mark,
     mock_start,
     _mock_replenish,
 ):
@@ -294,20 +292,17 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
         sender="whatsapp:+1234567890",
         assistant_data=assistant_data,
     )
-    mock_mark.assert_not_called()
     mock_start.assert_not_called()
     assert ctx["is_valid_contact"] is True
 
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.mark_job_running")
 @patch("adapters.helpers.is_job_running", return_value=False)
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
 def test_build_webhook_context_starts_job_for_non_local_assistant(
     _mock_check,
     _mock_running,
-    mock_mark,
     mock_start,
     _mock_replenish,
 ):
@@ -319,7 +314,6 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
         sender="whatsapp:+1234567890",
         assistant_data=assistant_data,
     )
-    mock_mark.assert_called_once()
     mock_start.assert_called_once()
 
 
@@ -328,37 +322,25 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.mark_job_running")
 @patch("adapters.helpers.requests.get")
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_build_webhook_context_starts_job_when_stale_orchestra_record(
+def test_build_webhook_context_starts_job_when_k8s_has_no_pods(
     _mock_check,
     mock_requests_get,
-    mock_mark,
     mock_start,
     _mock_replenish,
 ):
-    """A new job must start when K8s reports no active pods and the
-    Orchestra running record is older than 120 seconds (stale).
+    """A new job must start when K8s reports no active pods.
 
-    Regression test for the silent message loss bug where a crashed pod
-    left running=True in AssistantJobs, causing all subsequent messages
-    to be published to a Pub/Sub topic nobody was listening to.
+    is_job_running relies solely on K8s labels. When no pods are
+    labeled with the assistant-id, the job should be started.
     """
-    from datetime import datetime, timezone, timedelta
-
-    stale_ts = (datetime.now(tz=timezone.utc) - timedelta(minutes=10)).isoformat()
 
     def mock_get(url, **kwargs):
         resp = MagicMock()
         if "/infra/jobs" in url:
             resp.status_code = 200
             resp.json.return_value = {"jobs": []}
-        elif "/logs" in url:
-            resp.status_code = 200
-            resp.json.return_value = {
-                "logs": [{"entries": {"timestamp": stale_ts, "running": True}}],
-            }
         else:
             resp.status_code = 404
         return resp
@@ -373,38 +355,27 @@ def test_build_webhook_context_starts_job_when_stale_orchestra_record(
         assistant_data=assistant_data,
     )
     mock_start.assert_called_once()
-    mock_mark.assert_called_once()
     assert ctx["job_started"] is True
 
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.mark_job_running")
 @patch("adapters.helpers.requests.get")
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_build_webhook_context_skips_job_when_recent_orchestra_record(
+def test_build_webhook_context_skips_job_when_k8s_has_active_pod(
     _mock_check,
     mock_requests_get,
-    mock_mark,
     mock_start,
     _mock_replenish,
 ):
-    """If K8s shows no labeled pod but Orchestra has a running record
-    from less than 120s ago, skip job start (pod is still initializing).
-    """
-    from datetime import datetime, timezone, timedelta
-
-    recent_ts = (datetime.now(tz=timezone.utc) - timedelta(seconds=30)).isoformat()
+    """If K8s shows an active pod for this assistant, skip job start."""
 
     def mock_get(url, **kwargs):
         resp = MagicMock()
         if "/infra/jobs" in url:
             resp.status_code = 200
-            resp.json.return_value = {"jobs": []}
-        elif "/logs" in url:
-            resp.status_code = 200
             resp.json.return_value = {
-                "logs": [{"entries": {"timestamp": recent_ts, "running": True}}],
+                "jobs": [{"status": "Running", "assistant_id": "test-assistant"}],
             }
         else:
             resp.status_code = 404
