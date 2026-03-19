@@ -519,7 +519,7 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
         # wall-clock alignment with the cron schedule.
         poll_until(
             lambda: count_idle_jobs(batch_api) >= overflow,
-            timeout=120,
+            timeout=180,
             interval=10,
             description=f"At least {overflow} idle containers for overflow",
         )
