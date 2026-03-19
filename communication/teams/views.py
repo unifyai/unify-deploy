@@ -9,7 +9,7 @@ from msgraph.generated.models.body_type import BodyType
 from msgraph.generated.models.subscription import Subscription
 
 from communication.helpers import get_graph_client
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 
 router = APIRouter()
 

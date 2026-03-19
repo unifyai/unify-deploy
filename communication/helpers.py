@@ -7,7 +7,7 @@ from twilio.rest import Client as TwilioClient
 from azure.core.credentials import AccessToken, TokenCredential
 from msgraph import GraphServiceClient
 
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 
 
 class TokenCredentialFromSecret(TokenCredential):

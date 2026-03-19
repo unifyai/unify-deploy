@@ -57,7 +57,7 @@ from common.livekit import (
     verify_livekit_webhook,
 )
 
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 
 from .helpers import (
     cleanup_idle_pool,

@@ -67,7 +67,7 @@ from .models import (
     PoolStatusResponse,
     PoolVMStatus,
 )
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 from communication.dependencies import (
     authenticate_user_api_key,
     authenticate_vm_identity,

@@ -30,7 +30,7 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
     MessageItemRequestBuilder,
 )
 
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 
 _pubsub_client = None
 

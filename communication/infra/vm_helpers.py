@@ -25,7 +25,7 @@ from google.api_core.exceptions import NotFound, Conflict, PreconditionFailed
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 
 
 from .vm_config import (

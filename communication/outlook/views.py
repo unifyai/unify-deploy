@@ -17,7 +17,7 @@ from msgraph.generated.models.subscription import Subscription
 from msgraph.generated.models.message import Message
 
 from communication.helpers import get_graph_client
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 
 router = APIRouter()
 

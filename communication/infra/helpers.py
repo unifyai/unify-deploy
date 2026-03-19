@@ -8,7 +8,7 @@ import uuid
 from kubernetes import client as k8s_client, config
 from kubernetes.client.rest import ApiException
 
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
 

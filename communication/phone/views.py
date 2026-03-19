@@ -16,7 +16,7 @@ from common.livekit import (
     make_sip_uri,
 )
 from communication.helpers import get_twilio_client
-from communication.settings import SETTINGS
+from common.settings import SETTINGS
 from dotenv import load_dotenv
 
 load_dotenv()
