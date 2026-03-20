@@ -1,39 +1,66 @@
 from datetime import datetime, timezone
+import base64
 import json
 import os
-import subprocess
+import tempfile
 import threading
-from kubernetes import client as k8s_client, config
+from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
+from google.oauth2 import service_account as google_sa
+import google.auth.transport.requests
+from googleapiclient.discovery import build as _build_gke_svc
 
 from communication.helpers import ADAPTERS_URL, COMMS_URL, DEPLOY_ENV, ORCHESTRA_URL
 
 _k8s_clients: tuple | None = None
 _k8s_lock = threading.Lock()
 
+_GKE_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+_gke_credentials: google_sa.Credentials | None = None
+_ca_cert_path: str | None = None
+
+
+class _GKEApiClient(k8s_client.ApiClient):
+    """ApiClient subclass that auto-refreshes the GKE access token."""
+
+    def __init__(self, configuration, credentials):
+        super().__init__(configuration)
+        self._gke_creds = credentials
+        self._auth_request = google.auth.transport.requests.Request()
+        self._refresh_lock = threading.Lock()
+
+    def call_api(self, *args, **kwargs):
+        if not self._gke_creds.valid:
+            with self._refresh_lock:
+                if not self._gke_creds.valid:
+                    self._gke_creds.refresh(self._auth_request)
+                    self.configuration.api_key["authorization"] = self._gke_creds.token
+        return super().call_api(*args, **kwargs)
+
 
 def setup_kubernetes_client():
-    """Initialize Kubernetes client using GKE authentication.
+    """Initialize Kubernetes client using programmatic GKE authentication.
 
-    The clients are cached after the first successful setup so that subsequent
-    calls return instantly instead of re-running gcloud auth subprocesses.
+    Uses ``google.oauth2.service_account`` and the GKE REST API to
+    configure the K8s client directly — no ``gcloud`` CLI subprocess
+    needed.  Tokens are auto-refreshed before each API call via a
+    custom ``ApiClient`` subclass.
 
     Returns:
         tuple: (BatchV1Api, CoreV1Api, NetworkingV1Api) - Kubernetes API clients
         tuple: (None, None, None) - If setup fails
     """
-    global _k8s_clients
+    global _k8s_clients, _gke_credentials, _ca_cert_path
 
     if _k8s_clients is not None:
         return _k8s_clients
 
     with _k8s_lock:
-        # Double-check after acquiring lock
         if _k8s_clients is not None:
             return _k8s_clients
 
         try:
-            print("🔧 Starting Kubernetes client setup...")
+            print("🔧 Starting Kubernetes client setup (programmatic)...")
 
             creds_json = os.getenv("GCP_SA_KEY")
             if not creds_json:
@@ -42,64 +69,53 @@ def setup_kubernetes_client():
 
             creds_data = json.loads(creds_json)
             project_id = creds_data.get("project_id", "gcp-project-runtime")
-            service_account_email = creds_data.get("client_email", "unknown")
-
-            print(f"🔑 Using service account: {service_account_email}")
-            print(f"🏗️  Project: {project_id}")
-
             cluster_name = "unity"
             region = "us-central1"
 
-            print("🔐 Setting up GKE authentication...")
-            sa_key_path = "/tmp/gcp-sa-key.json"
-            with open(sa_key_path, "w") as f:
-                f.write(creds_json)
+            print(f"🔑 Using service account: {creds_data.get('client_email', 'unknown')}")
 
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = sa_key_path
+            # Build scoped credentials and fetch an initial token
+            _gke_credentials = google_sa.Credentials.from_service_account_info(
+                creds_data,
+                scopes=_GKE_SCOPES,
+            )
+            auth_request = google.auth.transport.requests.Request()
+            _gke_credentials.refresh(auth_request)
 
-            print("🔑 Authenticating with gcloud...")
-            subprocess.run(
-                [
-                    "gcloud",
-                    "auth",
-                    "activate-service-account",
-                    "--key-file",
-                    sa_key_path,
-                    "--quiet",
-                ],
-                check=True,
-                capture_output=True,
+            # Fetch cluster endpoint and CA cert via the GKE REST API
+            gke_svc = _build_gke_svc(
+                "container", "v1", credentials=_gke_credentials, cache_discovery=False,
+            )
+            cluster = (
+                gke_svc.projects()
+                .locations()
+                .clusters()
+                .get(name=f"projects/{project_id}/locations/{region}/clusters/{cluster_name}")
+                .execute()
             )
 
-            print("🔗 Getting cluster credentials...")
-            subprocess.run(
-                [
-                    "gcloud",
-                    "container",
-                    "clusters",
-                    "get-credentials",
-                    cluster_name,
-                    "--region",
-                    region,
-                    "--project",
-                    project_id,
-                    "--quiet",
-                ],
-                check=True,
-                capture_output=True,
-            )
+            endpoint = cluster["endpoint"]
+            ca_cert_b64 = cluster["masterAuth"]["clusterCaCertificate"]
 
-            print(
-                "✅ Successfully authenticated with gcloud and got cluster credentials",
-            )
+            # Write CA cert to a temp file for the K8s client
+            ca_file = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
+            ca_file.write(base64.b64decode(ca_cert_b64))
+            ca_file.close()
+            _ca_cert_path = ca_file.name
 
-            print("⚙️  Loading kubeconfig...")
-            config.load_kube_config()
+            # Build K8s Configuration
+            configuration = k8s_client.Configuration()
+            configuration.host = f"https://{endpoint}"
+            configuration.ssl_ca_cert = _ca_cert_path
+            configuration.api_key_prefix["authorization"] = "Bearer"
+            configuration.api_key["authorization"] = _gke_credentials.token
+
+            api_client = _GKEApiClient(configuration, _gke_credentials)
 
             print("🔗 Creating API clients...")
-            batch_api = k8s_client.BatchV1Api()
-            core_api = k8s_client.CoreV1Api()
-            networking_api = k8s_client.NetworkingV1Api()
+            batch_api = k8s_client.BatchV1Api(api_client)
+            core_api = k8s_client.CoreV1Api(api_client)
+            networking_api = k8s_client.NetworkingV1Api(api_client)
 
             print("✅ Kubernetes client setup complete!")
 
