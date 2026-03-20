@@ -72,7 +72,9 @@ def setup_kubernetes_client():
             cluster_name = "unity"
             region = "us-central1"
 
-            print(f"🔑 Using service account: {creds_data.get('client_email', 'unknown')}")
+            print(
+                f"🔑 Using service account: {creds_data.get('client_email', 'unknown')}"
+            )
 
             # Build scoped credentials and fetch an initial token
             _gke_credentials = google_sa.Credentials.from_service_account_info(
@@ -84,13 +86,18 @@ def setup_kubernetes_client():
 
             # Fetch cluster endpoint and CA cert via the GKE REST API
             gke_svc = _build_gke_svc(
-                "container", "v1", credentials=_gke_credentials, cache_discovery=False,
+                "container",
+                "v1",
+                credentials=_gke_credentials,
+                cache_discovery=False,
             )
             cluster = (
                 gke_svc.projects()
                 .locations()
                 .clusters()
-                .get(name=f"projects/{project_id}/locations/{region}/clusters/{cluster_name}")
+                .get(
+                    name=f"projects/{project_id}/locations/{region}/clusters/{cluster_name}"
+                )
                 .execute()
             )
 
