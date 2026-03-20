@@ -804,9 +804,6 @@ UNIFY_ATTACHMENTS_BUCKET = os.getenv(
     "assistant-message-attachments",
 )
 
-# Maximum attachments per message
-MAX_ATTACHMENTS_PER_MESSAGE = 10
-
 
 def sanitize_filename(filename: str) -> str:
     """
@@ -966,16 +963,6 @@ async def unify_message_webhook(request: Request):
         logger.info("contact_id is required for unify_message")
         return Response(status_code=400, content="contact_id is required")
 
-    # Validate attachment count limit
-    if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
-        logger.info(
-            f"Too many attachments: {len(attachments)} exceeds limit of {MAX_ATTACHMENTS_PER_MESSAGE}",
-        )
-        return Response(
-            status_code=400,
-            content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
-        )
-
     # Validate attachments format and preserve full metadata
     validated_attachments = []
     for att in attachments:
@@ -1083,12 +1070,6 @@ async def api_message_webhook(request: Request):
         return Response(status_code=400, content="assistant_id is required")
     if not api_message_id:
         return Response(status_code=400, content="api_message_id is required")
-
-    if len(attachments) > MAX_ATTACHMENTS_PER_MESSAGE:
-        return Response(
-            status_code=400,
-            content=f"Maximum {MAX_ATTACHMENTS_PER_MESSAGE} attachments per message allowed",
-        )
 
     validated_attachments = []
     for att in attachments:
