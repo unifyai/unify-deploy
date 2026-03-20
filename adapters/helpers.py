@@ -316,7 +316,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "phone_number": assistant_data["user_number"],
             "bio": "",
             "rolling_summary": "",
-            "should_respond": False,
+            "should_respond": True,
             "response_policy": "",
         },
     ]
