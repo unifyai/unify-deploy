@@ -47,6 +47,7 @@ steps:
   - >-
     --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}
   - '--region=${_REGION}'
+  - '--min-instances=1'
   - '--update-env-vars=DEPLOY_ENV=staging'
   - '--quiet'
   id: Deploy Unity Comms App
