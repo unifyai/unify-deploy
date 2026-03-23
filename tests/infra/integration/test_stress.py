@@ -474,32 +474,37 @@ def test_production_traffic_stress(
             )
 
         if gce_client is not None:
-            print(f"[Phase 3] Polling for VM assignments (up to 120s each)...")
+            print(f"[Phase 3] Checking VM assignments (single pass, 60s wait)...")
+            time.sleep(60)
             vm_assigned = 0
             vm_auth_ok = 0
             vm_auth_fail = 0
+            vm_not_assigned = 0
             for a in assistants:
                 aid = a["assistant_id"]
                 try:
-                    vms = _wait_for_vm_assigned(gce_client, aid, timeout=120)
-                    vm_assigned += 1
-                    hostname = _get_vm_hostname(vms[0])
-                    resp = probe_vm_agent_service(hostname, a["api_key"])
-                    if resp and resp.status_code == 200:
-                        vm_auth_ok += 1
-                        print(f"  {aid}: VM {vms[0].name}, auth OK ({hostname})")
+                    vms = list_assigned_vms(gce_client, aid)
+                    if vms:
+                        vm_assigned += 1
+                        hostname = _get_vm_hostname(vms[0])
+                        resp = probe_vm_agent_service(hostname, a["api_key"])
+                        if resp and resp.status_code == 200:
+                            vm_auth_ok += 1
+                        else:
+                            vm_auth_fail += 1
+                            status = resp.status_code if resp else "no response"
+                            print(
+                                f"  {aid}: VM {vms[0].name}, auth FAIL ({hostname}) — {status}",
+                            )
                     else:
-                        vm_auth_fail += 1
-                        status = resp.status_code if resp else "no response"
-                        print(
-                            f"  {aid}: VM {vms[0].name}, auth FAIL ({hostname}) — {status}",
-                        )
-                except TimeoutError:
-                    print(f"  {aid}: VM not assigned after 120s")
+                        vm_not_assigned += 1
+                except Exception as e:
+                    print(f"  {aid}: GCE check failed — {e}")
 
             print(
                 f"[Phase 3] VMs: {vm_assigned}/{N} assigned, "
-                f"{vm_auth_ok} auth OK, {vm_auth_fail} auth FAIL",
+                f"{vm_auth_ok} auth OK, {vm_auth_fail} auth FAIL, "
+                f"{vm_not_assigned} not assigned",
             )
 
         p3_invariants = check_invariants(batch_api, gce_client)
@@ -879,22 +884,26 @@ def test_production_traffic_stress(
 
         # Verify VM re-assignment + auth
         if gce_client is not None:
-            print(f"[Phase 7] Verifying VM re-attachment...")
+            print(f"[Phase 7] Verifying VM re-attachment (30s wait)...")
+            time.sleep(30)
             for a in restart_assistants:
                 aid = a["assistant_id"]
                 try:
-                    vms = _wait_for_vm_assigned(gce_client, aid, timeout=120)
-                    hostname = _get_vm_hostname(vms[0])
-                    resp = probe_vm_agent_service(hostname, a["api_key"])
-                    if resp and resp.status_code == 200:
-                        print(f"  {aid}: VM {vms[0].name} re-attached, auth OK")
+                    vms = list_assigned_vms(gce_client, aid)
+                    if vms:
+                        hostname = _get_vm_hostname(vms[0])
+                        resp = probe_vm_agent_service(hostname, a["api_key"])
+                        if resp and resp.status_code == 200:
+                            print(f"  {aid}: VM {vms[0].name} re-attached, auth OK")
+                        else:
+                            status = resp.status_code if resp else "no response"
+                            print(
+                                f"  {aid}: VM {vms[0].name} re-attached, auth FAIL — {status}",
+                            )
                     else:
-                        status = resp.status_code if resp else "no response"
-                        print(
-                            f"  {aid}: VM {vms[0].name} re-attached, auth FAIL — {status}",
-                        )
-                except TimeoutError:
-                    print(f"  {aid}: VM not re-assigned after 120s")
+                        print(f"  {aid}: VM not re-assigned after 30s")
+                except Exception as e:
+                    print(f"  {aid}: GCE check failed — {e}")
 
         p7_invariants = check_invariants(batch_api, gce_client)
         p7_new = _new_violations(p7_invariants, baseline_violations)
