@@ -43,6 +43,7 @@ from .conftest import (
     cleanup_assistant_jobs,
     count_idle_jobs,
     list_assigned_vms,
+    list_idle_vms,
     list_jobs_with_assistant_id,
     poll_until,
     probe_vm_agent_service,
@@ -333,6 +334,14 @@ def test_production_traffic_stress(
         print(f"[Setup] Pre-existing invariant violations: {len(baseline_violations)}")
         _print_violations(baseline_violations, "baseline")
 
+    idle_vms_before = 0
+    if gce_client is not None:
+        try:
+            idle_vms_before = len(list_idle_vms(gce_client))
+            print(f"[Setup] Idle VM pool: {idle_vms_before} ubuntu VMs")
+        except Exception:
+            pass
+
     scheduler_noise = _SchedulerNoise(min_interval=20, max_interval=45)
 
     try:
@@ -554,8 +563,23 @@ def test_production_traffic_stress(
             print(
                 f"[Phase 3] VMs: {vm_assigned}/{N} assigned, "
                 f"{vm_auth_ok} auth OK, {vm_auth_fail} auth FAIL, "
-                f"{vm_not_assigned} not assigned",
+                f"{vm_not_assigned} not assigned (pool had {idle_vms_before} idle)",
             )
+
+            assert vm_auth_fail == 0, (
+                f"INV-11: {vm_auth_fail} VMs have auth failures "
+                f"(assigned but agent-service key mismatch)"
+            )
+
+            expected_vms = min(N, idle_vms_before)
+            if vm_assigned < expected_vms:
+                import warnings
+
+                warnings.warn(
+                    f"Only {vm_assigned}/{expected_vms} VMs assigned "
+                    f"(pool had {idle_vms_before} idle). "
+                    f"VM assignment may be slower than 60s for some assistants.",
+                )
 
         p3_invariants = check_invariants(batch_api, gce_client)
         p3_new = _new_violations(p3_invariants, baseline_violations)
@@ -572,16 +596,28 @@ def test_production_traffic_stress(
             subscriber = _pubsub_v1.SubscriberClient()
             delivered_count = 0
             checked_count = 0
-            for a in assistants[: min(3, N)]:
+            check_sample = assistants[: min(3, N)]
+            for a in check_sample:
                 aid = a["assistant_id"]
                 msgs = pull_outbound_messages(subscriber, str(aid), timeout=5)
                 checked_count += 1
                 if msgs:
                     delivered_count += 1
+                    print(f"  {aid}: {len(msgs)} outbound message(s) — delivered")
+                else:
+                    print(f"  {aid}: no outbound messages yet")
             print(
                 f"[Phase 3] Message delivery: {delivered_count}/{checked_count} "
-                f"assistants have outbound messages (Phase 2 traffic was processed)",
+                f"assistants have outbound messages",
             )
+            if delivered_count == 0 and checked_count > 0:
+                import warnings
+
+                warnings.warn(
+                    f"No outbound messages found for any of the {checked_count} "
+                    f"assistants checked. Phase 2 messages may not have been "
+                    f"processed yet (containers still initializing).",
+                )
         except Exception as e:
             print(f"[Phase 3] Message delivery check skipped: {e}")
 

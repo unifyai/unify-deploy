@@ -850,7 +850,7 @@ def test_assistants(k8s_clients):
 # Stress test helpers: adapter callers
 # ---------------------------------------------------------------------------
 
-_STAGING_SUFFIX = "-staging" if NAMESPACE == "staging" else ""
+_ENV_SUFFIX = f"-{NAMESPACE}" if NAMESPACE != "production" else ""
 
 
 def send_test_message(assistant_data: dict, body: str = "Integration test message"):
@@ -920,7 +920,7 @@ def publish_to_assistant_topic(
     Bypasses the adapter entirely — used to simulate SMS, email, Teams
     inbound without external service credentials.
     """
-    topic_name = f"unity-{assistant_id}{_STAGING_SUFFIX}"
+    topic_name = f"unity-{assistant_id}{_ENV_SUFFIX}"
     topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
     data = json.dumps(
         {
@@ -946,7 +946,7 @@ def pull_outbound_messages(
     """
     from google.api_core.exceptions import DeadlineExceeded
 
-    sub_name = f"unity-{assistant_id}{_STAGING_SUFFIX}-outbound-sub"
+    sub_name = f"unity-{assistant_id}{_ENV_SUFFIX}-outbound-sub"
     sub_path = subscriber.subscription_path(GCP_PROJECT_ID, sub_name)
     try:
         response = subscriber.pull(
