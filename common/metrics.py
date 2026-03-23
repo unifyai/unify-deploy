@@ -126,6 +126,13 @@ STALE_JOBS_LAST_SWEEP = Gauge(
     multiprocess_mode="max",
 )
 
+JOB_DEMAND_TOTAL = Counter(
+    "job_demand_total",
+    "Total /infra/job/start requests submitted by the adapter, by channel.",
+    ["channel"],
+    registry=REGISTRY,
+)
+
 
 # ---------------------------------------------------------------------------
 # FastAPI middleware
