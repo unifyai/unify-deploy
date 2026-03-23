@@ -593,6 +593,20 @@ def claim_idle_container(
     if not candidates:
         raise RuntimeError("No idle containers available in the pool")
 
+    logger.info(
+        "claim_idle_container(%s): %d candidates: %s",
+        assistant_id,
+        len(candidates),
+        [
+            (
+                j.metadata.name,
+                j.metadata.resource_version,
+                dict(j.metadata.labels or {}),
+            )
+            for j in candidates
+        ],
+    )
+
     for job in candidates:
         job_name = job.metadata.name
         rv = job.metadata.resource_version
@@ -735,6 +749,13 @@ def process_pending_startups(
         already_running = [
             j for j in existing.items if j.status.active and j.status.active > 0
         ]
+        logger.info(
+            "Reconciler checking assistant %s: %d existing jobs (%d active), names=%s",
+            assistant_id,
+            len(existing.items),
+            len(already_running),
+            [(j.metadata.name, j.status.active) for j in existing.items],
+        )
         if already_running:
             logger.info(
                 "Assistant %s already has container %s, acking pending message",
