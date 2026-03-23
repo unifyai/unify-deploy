@@ -221,6 +221,10 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             GCP_PROJECT_ID,
             f"{topic_name}-actions-sub",
         )
+        system_error_subscription_path = subscriber.subscription_path(
+            GCP_PROJECT_ID,
+            f"{topic_name}-system-error-sub",
+        )
 
         # Create topic (idempotent)
         try:
@@ -257,6 +261,13 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
                 enable_message_ordering=True,
                 message_retention_seconds=1800,
             ),
+            asyncio.to_thread(
+                _ensure_subscription,
+                subscriber,
+                topic_path,
+                system_error_subscription_path,
+                'attributes.thread = "system_error"',
+            ),
         )
 
         return {
@@ -265,6 +276,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             "topic_name": topic_path,
             "subscription_name": subscription_path,
             "actions_subscription_name": actions_subscription_path,
+            "system_error_subscription_name": system_error_subscription_path,
             "project_id": GCP_PROJECT_ID,
         }
     except Exception as e:

@@ -18,6 +18,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
+import communication.infra.views as _views_mod
+
 GCP_SA_KEY_JSON = json.dumps(
     {
         "type": "service_account",
@@ -57,6 +59,9 @@ def _setup_pubsub_mocks(mock_publisher_class, mock_subscriber_class, mock_creds)
     We install a ``side_effect`` that shallow-copies each request dict at
     call time so individual assertions work correctly.
     """
+    _views_mod._pubsub_publisher = None
+    _views_mod._pubsub_subscriber = None
+
     mock_creds.return_value = MagicMock()
 
     publisher = MagicMock()
@@ -94,14 +99,14 @@ class TestCreatePubSubTopic:
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
-    def test_creates_all_three_subscriptions(
+    def test_creates_all_four_subscriptions(
         self,
         mock_pub_cls,
         mock_sub_cls,
         mock_creds,
         client,
     ):
-        """All three subscriptions should be created on a fresh topic."""
+        """All four subscriptions should be created on a fresh topic."""
         publisher, subscriber, captured = _setup_pubsub_mocks(
             mock_pub_cls,
             mock_sub_cls,
@@ -114,7 +119,7 @@ class TestCreatePubSubTopic:
         )
 
         assert response.status_code == 200
-        assert len(captured) == 3
+        assert len(captured) == 4
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
@@ -243,6 +248,58 @@ class TestCreatePubSubTopic:
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")
     @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
+    def test_system_error_sub_has_correct_filter(
+        self,
+        mock_pub_cls,
+        mock_sub_cls,
+        mock_creds,
+        client,
+    ):
+        """The -system-error-sub should filter FOR system_error messages."""
+        publisher, subscriber, captured = _setup_pubsub_mocks(
+            mock_pub_cls,
+            mock_sub_cls,
+            mock_creds,
+        )
+
+        client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
+
+        req = captured[3]
+        assert req["filter"] == 'attributes.thread = "system_error"'
+        assert req["name"].endswith("-system-error-sub")
+
+    @patch("communication.infra.views.Credentials.from_service_account_info")
+    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
+    @patch("communication.infra.views.pubsub_v1.PublisherClient")
+    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
+    def test_response_includes_system_error_subscription_name(
+        self,
+        mock_pub_cls,
+        mock_sub_cls,
+        mock_creds,
+        client,
+    ):
+        """The response body should include the system error subscription path."""
+        publisher, subscriber, captured = _setup_pubsub_mocks(
+            mock_pub_cls,
+            mock_sub_cls,
+            mock_creds,
+        )
+
+        response = client.post(
+            "/infra/pubsub/topic",
+            data={"topic_name": "unity-test-staging"},
+        )
+
+        data = response.json()
+        assert data["success"] is True
+        assert "system_error_subscription_name" in data
+        assert data["system_error_subscription_name"].endswith("-system-error-sub")
+
+    @patch("communication.infra.views.Credentials.from_service_account_info")
+    @patch("communication.infra.views.pubsub_v1.SubscriberClient")
+    @patch("communication.infra.views.pubsub_v1.PublisherClient")
+    @patch.dict("os.environ", {"GCP_SA_KEY": GCP_SA_KEY_JSON})
     def test_response_includes_actions_subscription_name(
         self,
         mock_pub_cls,
@@ -292,7 +349,7 @@ class TestCreatePubSubTopic:
         )
 
         assert response.status_code == 200
-        assert len(captured) == 3
+        assert len(captured) == 4
 
 
 # =========================================================================
@@ -339,8 +396,8 @@ class TestCreatePubSubTopicAlreadyExists:
         )
 
         assert response.status_code == 200
-        # 2 updates for main + outbound, 1 update for actions (expiration only)
-        assert subscriber.update_subscription.call_count == 3
+        # 4 updates: main + outbound + actions (expiration only) + system-error
+        assert subscriber.update_subscription.call_count == 4
         subscriber.delete_subscription.assert_not_called()
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
@@ -363,14 +420,15 @@ class TestCreatePubSubTopicAlreadyExists:
             mock_creds,
         )
 
-        create_call_count = {"n": 0}
+        seen_names = set()
 
         def create_side_effect(*, request):
-            create_call_count["n"] += 1
-            if create_call_count["n"] <= 2:
-                # First two calls (main-sub in try, actions-sub in except) fail
+            name = request.get("name", "")
+            if name not in seen_names:
+                # First attempt for every subscription — already exists
+                seen_names.add(name)
                 raise Exception("Resource already exists")
-            # Third call is the recreated actions-sub — succeeds
+            # Second attempt (recreate after delete) — succeeds
             return MagicMock()
 
         subscriber.create_subscription.side_effect = create_side_effect
@@ -386,11 +444,11 @@ class TestCreatePubSubTopicAlreadyExists:
         )
 
         assert response.status_code == 200
-        # main + outbound updated (actions was recreated, not updated)
-        assert subscriber.update_subscription.call_count == 2
+        # main + outbound + system-error updated (actions was recreated, not updated)
+        assert subscriber.update_subscription.call_count == 3
         subscriber.delete_subscription.assert_called_once()
-        # 3 total creates: main-sub (failed), actions-sub (failed), actions-sub (recreated)
-        assert subscriber.create_subscription.call_count == 3
+        # 5 total creates: 4 initial (all failed) + 1 actions-sub recreate (succeeded)
+        assert subscriber.create_subscription.call_count == 5
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
@@ -417,9 +475,9 @@ class TestCreatePubSubTopicAlreadyExists:
         def create_sub_side_effect(*, request):
             call_count["n"] += 1
             if call_count["n"] == 1:
-                # First call (main-sub in try block) — already exists
+                # First call (main-sub) — already exists
                 raise Exception("Resource already exists")
-            # Second call (actions-sub in except block) — succeeds
+            # Remaining calls (outbound, actions, system-error) — succeed
             return MagicMock()
 
         subscriber.create_subscription.side_effect = create_sub_side_effect
@@ -430,10 +488,10 @@ class TestCreatePubSubTopicAlreadyExists:
         )
 
         assert response.status_code == 200
-        # main + outbound updated, actions created (not updated)
-        assert subscriber.update_subscription.call_count == 2
-        # 2 total create_subscription calls: first (failed) + actions (succeeded)
-        assert subscriber.create_subscription.call_count == 2
+        # Only the main-sub triggered the "already exists" path → 1 update
+        assert subscriber.update_subscription.call_count == 1
+        # 4 total create_subscription calls: 1 failed + 3 succeeded
+        assert subscriber.create_subscription.call_count == 4
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.SubscriberClient")
@@ -493,6 +551,9 @@ class TestDeletePubSubTopic:
     ):
         """All subscriptions (including actions-sub) should be deleted
         before the topic itself is deleted."""
+        _views_mod._pubsub_publisher = None
+        _views_mod._pubsub_subscriber = None
+
         mock_creds.return_value = MagicMock()
 
         publisher = MagicMock()
@@ -533,6 +594,9 @@ class TestDeletePubSubTopic:
         client,
     ):
         """If a subscription was already deleted, deletion should continue."""
+        _views_mod._pubsub_publisher = None
+        _views_mod._pubsub_subscriber = None
+
         mock_creds.return_value = MagicMock()
 
         publisher = MagicMock()
