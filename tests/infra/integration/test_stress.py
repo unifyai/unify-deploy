@@ -275,8 +275,58 @@ def test_production_traffic_stress(
     print(f"  STRESS TEST: {N} assistants, 8 phases")
     print(f"{'=' * 70}")
 
+    # ------------------------------------------------------------------
+    # Clean slate: delete all existing jobs, release orphaned VMs, then
+    # create exactly MIN_IDLE fresh containers with the latest image.
+    # ------------------------------------------------------------------
+    TARGET_IDLE = 3
+
+    print(f"[Setup] Cleaning previous state...")
+    existing_jobs = batch_api.list_namespaced_job(
+        namespace=NAMESPACE,
+        label_selector="app=unity",
+    )
+    for job in existing_jobs.items:
+        aid = (job.metadata.labels or {}).get("assistant-id", "")
+        try:
+            batch_api.delete_namespaced_job(
+                name=job.metadata.name,
+                namespace=NAMESPACE,
+                propagation_policy="Foreground",
+            )
+        except Exception:
+            pass
+        if aid and gce_client is not None:
+            try:
+                requests.post(
+                    f"{COMMS_APP_URL}/infra/vm/pool/release",
+                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                    json={"assistant_id": aid},
+                    timeout=15,
+                )
+            except Exception:
+                pass
+    if existing_jobs.items:
+        print(f"[Setup] Deleted {len(existing_jobs.items)} leftover jobs")
+        time.sleep(10)
+
+    print(f"[Setup] Creating {TARGET_IDLE} fresh idle containers...")
+    for _ in range(TARGET_IDLE):
+        replenish_staging_pool()
+        time.sleep(2)
+
+    try:
+        poll_until(
+            lambda: count_idle_jobs(batch_api) >= TARGET_IDLE,
+            timeout=120,
+            interval=10,
+            description=f"Fresh idle pool ({TARGET_IDLE} containers)",
+        )
+    except TimeoutError:
+        pass
+
     idle_before = count_idle_jobs(batch_api)
-    print(f"[Setup] Idle pool: {idle_before} containers")
+    print(f"[Setup] Idle pool: {idle_before} containers (target: {TARGET_IDLE})")
 
     baseline_violations = check_invariants(batch_api, gce_client)
     if baseline_violations:
