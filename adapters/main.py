@@ -280,6 +280,7 @@ async def twilio_call_webhook(request: Request):
         publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(pubsub_message).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
@@ -381,6 +382,7 @@ async def twilio_call_status_webhook(request: Request):
                         },
                     },
                 ).encode("utf-8"),
+                thread="inbound",
             )
             if "test" in assistant_id:
                 status_id = publish_future.result(timeout=10)
@@ -485,6 +487,7 @@ async def livekit_recording_complete(request: Request):
                     },
                 },
             ).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in str(assistant_id):
             publish_future.result(timeout=10)
@@ -555,6 +558,7 @@ async def twilio_sms_webhook(request: Request):
                     },
                 },
             ).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
@@ -624,6 +628,7 @@ async def twilio_whatsapp_webhook(request: Request):
                     },
                 },
             ).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
@@ -758,6 +763,7 @@ async def teams_call_webhook(request: Request):
         publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(pubsub_message).encode("utf-8"),
+            thread="inbound",
         )
         # Don't wait for result - fire and forget for speed
         logger.info("Teams call published to Pub/Sub successfully")
@@ -1035,6 +1041,7 @@ async def unify_message_webhook(request: Request):
                     },
                 },
             ).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
@@ -1128,6 +1135,7 @@ async def api_message_webhook(request: Request):
                     "event": event_data,
                 },
             ).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in assistant_id:
             publish_future.result(timeout=10)
@@ -1202,6 +1210,7 @@ async def unify_meet_webhook(request: Request):
                     },
                 },
             ).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
@@ -1286,6 +1295,7 @@ async def unity_system_event_webhook(request: Request):
                     },
                 },
             ).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
@@ -1379,6 +1389,7 @@ async def unity_pre_hire_webhook(request: Request):
                     },
                 },
             ).encode("utf-8"),
+            thread="inbound",
         )
         if "test" in assistant_id:
             message_id = publish_future.result(timeout=10)
@@ -1466,6 +1477,7 @@ async def assistant_update_webhook(request: Request):
         publish_future = pubsub_client.publish(
             topic_path,
             json.dumps(message_data).encode("utf-8"),
+            thread="inbound",
         )
 
         if "test" in assistant_id:
@@ -1988,6 +2000,7 @@ async def teams_notification_processor(request: Request):
             publish_future = pubsub_client.publish(
                 topic_path,
                 json.dumps(pubsub_message).encode("utf-8"),
+                thread="inbound",
             )
             publish_future.result(timeout=5)
         except Exception as e:

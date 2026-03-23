@@ -88,7 +88,7 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
         },
     ).encode("utf-8")
 
-    future = publisher.publish(topic_path, data=message_data)
+    future = publisher.publish(topic_path, data=message_data, thread="inbound")
     message_id = await asyncio.to_thread(future.result)
     logger.info(
         f"Published assistant_desktop_ready for assistant {assistant_id} "
@@ -232,17 +232,14 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             if "already exists" not in str(e).lower():
                 raise
 
-        # Create/update all three subscriptions in parallel
+        # Create/update all subscriptions in parallel
         await asyncio.gather(
             asyncio.to_thread(
                 _ensure_subscription,
                 subscriber,
                 topic_path,
                 subscription_path,
-                (
-                    'NOT attributes.thread = "unify_message_outbound"'
-                    ' AND NOT attributes.thread = "action_event"'
-                ),
+                'attributes.thread = "inbound"',
             ),
             asyncio.to_thread(
                 _ensure_subscription,
@@ -581,7 +578,7 @@ async def start_job(
 
         message_data = json.dumps(job_data).encode("utf-8")
 
-        future = publisher.publish(topic_path, data=message_data)
+        future = publisher.publish(topic_path, data=message_data, thread="inbound")
         message_id = await asyncio.to_thread(future.result)
         print(f"Job start request published for assistant {assistant_id}")
 

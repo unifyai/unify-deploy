@@ -1532,7 +1532,7 @@ def publish_gmail_thread_id(
         data = json.dumps(message_dict).encode("utf-8")
 
         # Publish asynchronously
-        publish_future = publisher.publish(topic_path, data=data)
+        publish_future = publisher.publish(topic_path, data=data, thread="inbound")
         if "test" in assistant_id:
             pubsub_message_id = publish_future.result(timeout=10)
             print(f"Message ID: {pubsub_message_id}")
@@ -1573,7 +1573,7 @@ def publish_outlook_thread_id(
         }
         data = json.dumps(message_dict).encode("utf-8")
 
-        publish_future = publisher.publish(topic_path, data=data)
+        publish_future = publisher.publish(topic_path, data=data, thread="inbound")
         if "test" in assistant_id:
             msg_id = publish_future.result(timeout=10)
             logger.info(f"Message ID: {msg_id}")

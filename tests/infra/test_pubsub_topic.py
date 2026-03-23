@@ -127,7 +127,7 @@ class TestCreatePubSubTopic:
         mock_creds,
         client,
     ):
-        """The main -sub should filter OUT both outbound and action_event messages."""
+        """The main -sub should filter FOR inbound messages."""
         publisher, subscriber, captured = _setup_pubsub_mocks(
             mock_pub_cls,
             mock_sub_cls,
@@ -137,11 +137,7 @@ class TestCreatePubSubTopic:
         client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
 
         req = captured[0]
-        expected_filter = (
-            'NOT attributes.thread = "unify_message_outbound"'
-            ' AND NOT attributes.thread = "action_event"'
-        )
-        assert req["filter"] == expected_filter
+        assert req["filter"] == 'attributes.thread = "inbound"'
         assert req["name"].endswith("-sub")
         assert not req["name"].endswith("-outbound-sub")
 
