@@ -63,7 +63,11 @@ class Settings:
             staging_url="https://unity-comms-app-staging-000000000000.us-central1.run.app",
             prod_url="https://unity-comms-app-000000000000.us-central1.run.app",
         )
-        self.adapters_url: str = os.environ.get("UNITY_ADAPTERS_URL", "")
+        self.adapters_url: str = _service_url(
+            "UNITY_ADAPTERS_URL",
+            staging_url="https://service.a.run.app",
+            prod_url="https://service.a.run.app",
+        )
 
         # Auth keys (read at access time via properties if needed, but
         # most callers already read them from os.getenv at call sites)

@@ -76,6 +76,12 @@ from communication.dependencies import (
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_IMAGE_NAME = "unity-staging" if SETTINGS.staging else "unity"
+DEFAULT_UNITY_IMAGE = (
+    "us-central1-docker.pkg.dev/gcp-project-runtime/unity/"
+    f"{DEFAULT_IMAGE_NAME}:latest"
+)
+
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
 POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
@@ -339,9 +345,7 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
 @router.post("/job/create")
 async def create_kubernetes_job(
     namespace: str = Form(SETTINGS.default_namespace),
-    image: str = Form(
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
-    ),
+    image: str = Form(DEFAULT_UNITY_IMAGE),
 ):
     """
     Create a Kubernetes Job for a Unity assistant.

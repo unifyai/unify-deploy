@@ -60,7 +60,11 @@ class TestPoolVmWildcardCert:
     @patch(_COMMON_PATCHES[2])
     @patch(_COMMON_PATCHES[3])
     def test_ubuntu_includes_tls_when_available(
-        self, mock_get_secret, mock_client_cls, mock_dns, mock_addr
+        self,
+        mock_get_secret,
+        mock_client_cls,
+        mock_dns,
+        mock_addr,
     ):
         def _secret(name, **kw):
             return {
@@ -71,7 +75,11 @@ class TestPoolVmWildcardCert:
 
         mock_get_secret.side_effect = _secret
         meta = _mock_provision(
-            "ubuntu", mock_client_cls, mock_get_secret, mock_dns, mock_addr
+            "ubuntu",
+            mock_client_cls,
+            mock_get_secret,
+            mock_dns,
+            mock_addr,
         )
 
         assert meta.get("tls-fullchain") == _FAKE_CERT
@@ -82,7 +90,11 @@ class TestPoolVmWildcardCert:
     @patch(_COMMON_PATCHES[2])
     @patch(_COMMON_PATCHES[3])
     def test_ubuntu_no_tls_when_absent(
-        self, mock_get_secret, mock_client_cls, mock_dns, mock_addr
+        self,
+        mock_get_secret,
+        mock_client_cls,
+        mock_dns,
+        mock_addr,
     ):
         def _secret(name, **kw):
             if name == "DEVBOT_GITHUB_TOKEN":
@@ -91,7 +103,11 @@ class TestPoolVmWildcardCert:
 
         mock_get_secret.side_effect = _secret
         meta = _mock_provision(
-            "ubuntu", mock_client_cls, mock_get_secret, mock_dns, mock_addr
+            "ubuntu",
+            mock_client_cls,
+            mock_get_secret,
+            mock_dns,
+            mock_addr,
         )
 
         assert "tls-fullchain" not in meta
@@ -102,7 +118,11 @@ class TestPoolVmWildcardCert:
     @patch(_COMMON_PATCHES[2])
     @patch(_COMMON_PATCHES[3])
     def test_windows_includes_tls_when_available(
-        self, mock_get_secret, mock_client_cls, mock_dns, mock_addr
+        self,
+        mock_get_secret,
+        mock_client_cls,
+        mock_dns,
+        mock_addr,
     ):
         def _secret(name, **kw):
             return {
@@ -113,7 +133,11 @@ class TestPoolVmWildcardCert:
 
         mock_get_secret.side_effect = _secret
         meta = _mock_provision(
-            "windows", mock_client_cls, mock_get_secret, mock_dns, mock_addr
+            "windows",
+            mock_client_cls,
+            mock_get_secret,
+            mock_dns,
+            mock_addr,
         )
 
         assert meta.get("tls-fullchain") == _FAKE_CERT
@@ -124,7 +148,11 @@ class TestPoolVmWildcardCert:
     @patch(_COMMON_PATCHES[2])
     @patch(_COMMON_PATCHES[3])
     def test_windows_no_tls_when_absent(
-        self, mock_get_secret, mock_client_cls, mock_dns, mock_addr
+        self,
+        mock_get_secret,
+        mock_client_cls,
+        mock_dns,
+        mock_addr,
     ):
         def _secret(name, **kw):
             if name == "DEVBOT_GITHUB_TOKEN":
@@ -133,7 +161,11 @@ class TestPoolVmWildcardCert:
 
         mock_get_secret.side_effect = _secret
         meta = _mock_provision(
-            "windows", mock_client_cls, mock_get_secret, mock_dns, mock_addr
+            "windows",
+            mock_client_cls,
+            mock_get_secret,
+            mock_dns,
+            mock_addr,
         )
 
         assert "tls-fullchain" not in meta
