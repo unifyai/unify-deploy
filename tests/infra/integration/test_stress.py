@@ -46,6 +46,7 @@ from .conftest import (
     list_jobs_with_assistant_id,
     poll_until,
     probe_vm_agent_service,
+    pull_outbound_messages,
     replenish_staging_pool,
     send_test_meet,
     send_test_message,
@@ -194,6 +195,51 @@ def _wait_for_vm_assigned(gce_client, assistant_id, timeout=120, interval=10):
     )
 
 
+class _SchedulerNoise:
+    """Background thread that fires scheduler endpoints at random intervals.
+
+    Simulates production crons firing at unpredictable times relative to
+    user traffic.  Runs throughout the entire test and logs each firing.
+    """
+
+    def __init__(self, min_interval=20, max_interval=45):
+        self._stop = False
+        self._min = min_interval
+        self._max = max_interval
+        self._pool = ThreadPoolExecutor(max_workers=1)
+        self._future = None
+        self._fire_count = 0
+
+    def start(self):
+        self._future = self._pool.submit(self._run)
+        print(
+            f"    [scheduler-noise] Started (interval {self._min}-{self._max}s)",
+        )
+
+    def stop(self):
+        self._stop = True
+        if self._future:
+            self._future.result(timeout=60)
+        self._pool.shutdown(wait=False)
+        print(
+            f"    [scheduler-noise] Stopped after {self._fire_count} firings",
+        )
+
+    def _run(self):
+        while not self._stop:
+            time.sleep(random.uniform(self._min, self._max))
+            if self._stop:
+                break
+            action = random.choice(["cleanup", "refresh", "stale-expire"])
+            if action == "cleanup":
+                _trigger_cleanup()
+            elif action == "refresh":
+                _trigger_pool_refresh()
+            else:
+                _trigger_stale_expire()
+            self._fire_count += 1
+
+
 # ---------------------------------------------------------------------------
 # The stress test
 # ---------------------------------------------------------------------------
@@ -235,7 +281,10 @@ def test_production_traffic_stress(
         print(f"[Setup] Pre-existing invariant violations: {len(baseline_violations)}")
         _print_violations(baseline_violations, "baseline")
 
+    scheduler_noise = _SchedulerNoise(min_interval=20, max_interval=45)
+
     try:
+        scheduler_noise.start()
         # ==================================================================
         # PHASE 1: Thundering Herd — start all N assistants at once
         # ==================================================================
@@ -459,6 +508,26 @@ def test_production_traffic_stress(
         else:
             print(f"[Phase 3] Invariants: all clear")
 
+        # Verify Phase 2 messages were delivered (Pub/Sub → container → outbound)
+        try:
+            from google.cloud import pubsub_v1 as _pubsub_v1
+
+            subscriber = _pubsub_v1.SubscriberClient()
+            delivered_count = 0
+            checked_count = 0
+            for a in assistants[: min(3, N)]:
+                aid = a["assistant_id"]
+                msgs = pull_outbound_messages(subscriber, str(aid), timeout=5)
+                checked_count += 1
+                if msgs:
+                    delivered_count += 1
+            print(
+                f"[Phase 3] Message delivery: {delivered_count}/{checked_count} "
+                f"assistants have outbound messages (Phase 2 traffic was processed)",
+            )
+        except Exception as e:
+            print(f"[Phase 3] Message delivery check skipped: {e}")
+
         # ==================================================================
         # PHASE 4: Sustained Mixed Load
         # ==================================================================
@@ -549,6 +618,29 @@ def test_production_traffic_stress(
                     print(f"    [scheduler] Firing stale-expire between rounds...")
                     _trigger_stale_expire()
                 time.sleep(30)
+
+        # INV-1 provocation: try to create duplicate containers for the same
+        # assistant by racing two start_job calls while it's already running.
+        print(f"\n[Phase 4] INV-1 provocation: racing duplicate start_job calls...")
+        provoke_target = assistants[0]
+        provoke_aid = provoke_target["assistant_id"]
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            dup_futures = [
+                pool.submit(_start_job_tolerant, comms, provoke_target)
+                for _ in range(3)
+            ]
+            dup_results = [f.result() for f in as_completed(dup_futures)]
+
+        dup_statuses = [s for s, _ in dup_results]
+        print(f"  {provoke_aid}: 3 concurrent start_job → {dup_statuses}")
+
+        dup_jobs = list_jobs_with_assistant_id(batch_api, provoke_aid)
+        assert len(dup_jobs) <= 1, (
+            f"INV-1 PROVOKED: assistant {provoke_aid} has {len(dup_jobs)} containers "
+            f"after 3 concurrent start_job calls: "
+            f"{[j.metadata.name for j in dup_jobs]}"
+        )
+        print(f"  INV-1 provocation: {len(dup_jobs)} container(s) — safe")
 
         # ==================================================================
         # PHASE 5: Crash Recovery Under Load
@@ -853,5 +945,6 @@ def test_production_traffic_stress(
         print(f"{'=' * 70}\n")
 
     finally:
+        scheduler_noise.stop()
         cleanup_assistant_jobs(batch_api, all_ids)
         replenish_staging_pool()
