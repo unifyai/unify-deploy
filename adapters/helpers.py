@@ -176,7 +176,7 @@ def get_assistant(
 
     local_assistant_data = {
         "assistant_id": "local-assistant",
-        "deploy_env": DEPLOY_ENV,
+        "deploy_env": None,
         "user_id": "local-user",
         "voice_provider": "cartesia",
         "voice_id": None,
