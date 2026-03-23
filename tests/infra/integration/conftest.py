@@ -847,6 +847,217 @@ def test_assistants(k8s_clients):
 
 
 # ---------------------------------------------------------------------------
+# Stress test helpers: adapter callers
+# ---------------------------------------------------------------------------
+
+_STAGING_SUFFIX = "-staging" if NAMESPACE == "staging" else ""
+
+
+def send_test_message(assistant_data: dict, body: str = "Integration test message"):
+    """Send a message via the adapter's /unify/message endpoint."""
+    resp = requests.post(
+        f"{ADAPTERS_URL}/unify/message",
+        json={
+            "assistant_id": str(assistant_data["assistant_id"]),
+            "contact_id": 1,
+            "body": body,
+        },
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=30,
+    )
+    return resp
+
+
+def send_test_meet(assistant_data: dict, room_name: str | None = None):
+    """Send a meet invite via the adapter's /unify/meet endpoint."""
+    aid = str(assistant_data["assistant_id"])
+    room = room_name or f"stress-test-meet-{aid}-{int(time.time())}"
+    resp = requests.post(
+        f"{ADAPTERS_URL}/unify/meet",
+        json={
+            "assistant_id": aid,
+            "room_name": room,
+            "livekit_agent_name": f"unity_{aid}",
+        },
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=30,
+    )
+    return resp
+
+
+def send_test_system_event(
+    assistant_data: dict,
+    event_type: str,
+    message: str = "",
+):
+    """Send a system event via the adapter's /unity/system-event endpoint."""
+    resp = requests.post(
+        f"{ADAPTERS_URL}/unity/system-event",
+        json={
+            "assistant_id": str(assistant_data["assistant_id"]),
+            "event_type": event_type,
+            "message": message or f"Stress test: {event_type}",
+        },
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=30,
+    )
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Stress test helpers: direct Pub/Sub
+# ---------------------------------------------------------------------------
+
+
+def publish_to_assistant_topic(
+    publisher,
+    assistant_id: str,
+    thread: str,
+    event: dict,
+):
+    """Publish a message directly to an assistant's Pub/Sub topic.
+
+    Bypasses the adapter entirely — used to simulate SMS, email, Teams
+    inbound without external service credentials.
+    """
+    topic_name = f"unity-{assistant_id}{_STAGING_SUFFIX}"
+    topic_path = publisher.topic_path(GCP_PROJECT_ID, topic_name)
+    data = json.dumps(
+        {
+            "thread": thread,
+            "publish_timestamp": time.time(),
+            "event": event,
+        },
+    ).encode("utf-8")
+    future = publisher.publish(topic_path, data=data)
+    return future.result(timeout=10)
+
+
+def pull_outbound_messages(
+    subscriber,
+    assistant_id: str,
+    max_messages: int = 10,
+    timeout: float = 10,
+) -> list[dict]:
+    """Pull messages from an assistant's outbound Pub/Sub subscription.
+
+    Returns a list of parsed event dicts (may be empty if no messages).
+    Acknowledges all pulled messages.
+    """
+    from google.api_core.exceptions import DeadlineExceeded
+
+    sub_name = f"unity-{assistant_id}{_STAGING_SUFFIX}-outbound-sub"
+    sub_path = subscriber.subscription_path(GCP_PROJECT_ID, sub_name)
+    try:
+        response = subscriber.pull(
+            request={"subscription": sub_path, "max_messages": max_messages},
+            timeout=timeout,
+        )
+    except DeadlineExceeded:
+        return []
+
+    messages = response.received_messages
+    if not messages:
+        return []
+
+    ack_ids = [m.ack_id for m in messages]
+    subscriber.acknowledge(
+        request={"subscription": sub_path, "ack_ids": ack_ids},
+    )
+
+    results = []
+    for m in messages:
+        try:
+            results.append(json.loads(m.message.data.decode("utf-8")))
+        except Exception:
+            pass
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Stress test helpers: K8s container polling
+# ---------------------------------------------------------------------------
+
+
+def wait_for_container_running(
+    batch_api,
+    assistant_id: str,
+    timeout: float = 180,
+    interval: float = 10,
+) -> list:
+    """Poll until a Job with assistant-id={id} and active pods appears."""
+    return poll_until(
+        lambda: list_jobs_with_assistant_id(batch_api, str(assistant_id)),
+        timeout=timeout,
+        interval=interval,
+        description=f"Container for assistant {assistant_id} to start",
+    )
+
+
+def wait_for_container_done(
+    batch_api,
+    assistant_id: str,
+    timeout: float = 540,
+    interval: float = 15,
+):
+    """Poll until no active Jobs exist for this assistant."""
+
+    def _check():
+        jobs = list_jobs_with_assistant_id(batch_api, str(assistant_id))
+        return len(jobs) == 0
+
+    poll_until(
+        _check,
+        timeout=timeout,
+        interval=interval,
+        description=f"Container for assistant {assistant_id} to shut down",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stress test helpers: VM probes
+# ---------------------------------------------------------------------------
+
+
+def probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
+    """Check if Caddy TLS is up on the VM (HEAD https://{hostname}/)."""
+    try:
+        r = requests.head(f"https://{hostname}/", timeout=timeout, verify=False)
+        return r.status_code < 500
+    except requests.RequestException:
+        return False
+
+
+def probe_vm_agent_service(
+    hostname: str,
+    api_key: str,
+    command: str = "echo ok",
+) -> requests.Response | None:
+    """Call /api/exec on the VM's agent-service. Returns the response or None."""
+    try:
+        return requests.post(
+            f"https://{hostname}/api/exec",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"command": command, "timeout": 5000},
+            timeout=10,
+            verify=False,
+        )
+    except requests.RequestException:
+        return None
+
+
+def probe_vm_ssh_port(hostname: str, port: int = 2222, timeout: float = 5.0) -> bool:
+    """Check if the SSH sync port is open on the VM."""
+    import socket
+
+    try:
+        with socket.create_connection((hostname, port), timeout=timeout):
+            return True
+    except (OSError, socket.timeout):
+        return False
+
+
+# ---------------------------------------------------------------------------
 # GCE VM helpers
 # ---------------------------------------------------------------------------
 
