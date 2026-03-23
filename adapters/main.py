@@ -249,7 +249,7 @@ async def twilio_call_webhook(request: Request):
 
     # publish to Pub/Sub
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
@@ -358,9 +358,7 @@ async def twilio_call_status_webhook(request: Request):
 
         # publish to pubsub
         pubsub_client = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + (
-            "" if not SETTINGS.staging else "-staging"
-        )
+        topic_name = SETTINGS.assistant_topic(assistant_id)
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
         logger.info(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
         try:
@@ -467,7 +465,7 @@ async def livekit_recording_complete(request: Request):
     )
 
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing recording_ready to Pub/Sub at path: {topic_path}")
     try:
@@ -541,7 +539,7 @@ async def twilio_sms_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
@@ -614,7 +612,7 @@ async def twilio_whatsapp_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
@@ -737,7 +735,7 @@ async def teams_call_webhook(request: Request):
 
     # Publish to Pub/Sub (same format as Twilio webhook)
     pubsub_client = get_pubsub_client()
-    # topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    # topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_name = "test"
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing Teams call to Pub/Sub at path: {topic_path}")
@@ -1026,7 +1024,7 @@ async def unify_message_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
     try:
@@ -1117,7 +1115,7 @@ async def api_message_webhook(request: Request):
     assistant_id = context["assistant"]["assistant_id"]
 
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     try:
         event_data = {
@@ -1195,7 +1193,7 @@ async def unify_meet_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
     try:
@@ -1281,7 +1279,7 @@ async def unity_system_event_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
     try:
@@ -1376,7 +1374,7 @@ async def unity_pre_hire_webhook(request: Request):
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
-    topic_name = f"unity-{assistant_id}" + ("" if not SETTINGS.staging else "-staging")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
     logger.info(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
     try:
@@ -1466,9 +1464,7 @@ async def assistant_update_webhook(request: Request):
 
         # Job is running, publish to assistant topic
         pubsub_client = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + (
-            "" if not SETTINGS.staging else "-staging"
-        )
+        topic_name = SETTINGS.assistant_topic(assistant_id)
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         # Prepare message in the same format as startup event
@@ -1987,9 +1983,7 @@ async def teams_notification_processor(request: Request):
 
         # Publish to Pub/Sub
         pubsub_client = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + (
-            "" if not SETTINGS.staging else "-staging"
-        )
+        topic_name = SETTINGS.assistant_topic(assistant_id)
         topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         pubsub_message = {
@@ -2301,11 +2295,7 @@ def scheduled_email_watches(payload: ScheduledPayload):
                     f"{SETTINGS.comms_url}/gmail/watch",
                     json={
                         "primary_email": email,
-                        "topic_name": (
-                            "gmail-notifications"
-                            if not SETTINGS.staging
-                            else "gmail-notifications-staging"
-                        ),
+                        "topic_name": SETTINGS.gmail_topic,
                     },
                     headers={"Authorization": f"Bearer {admin_key}"},
                     timeout=30,

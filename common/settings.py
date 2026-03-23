@@ -92,9 +92,22 @@ class Settings:
         # K8s Lease-based assignment
         self.lease_duration_seconds: int = 60
 
+        # Derived names used across the codebase
+        self.unity_image_name: str = f"unity{self.env_suffix}"
+        self.gmail_topic: str = f"gmail-notifications{self.env_suffix}"
+        self.image_hash_blob: str = (
+            "image_hash.txt"
+            if not self.env_suffix
+            else f"image_hash_{self.deploy_env}.txt"
+        )
+
         # Pending-startup Pub/Sub queue (overflow when pool is exhausted)
         self.pending_topic: str = "unity-pending-startups" + self.env_suffix
         self.pending_sub: str = self.pending_topic + "-sub"
+
+    def assistant_topic(self, assistant_id: str) -> str:
+        """Pub/Sub topic name for a specific assistant."""
+        return f"unity-{assistant_id}{self.env_suffix}"
 
 
 SETTINGS = Settings()

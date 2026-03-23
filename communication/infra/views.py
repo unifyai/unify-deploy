@@ -76,10 +76,9 @@ from communication.dependencies import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_IMAGE_NAME = "unity-staging" if SETTINGS.staging else "unity"
 DEFAULT_UNITY_IMAGE = (
     "us-central1-docker.pkg.dev/gcp-project-runtime/unity/"
-    f"{DEFAULT_IMAGE_NAME}:latest"
+    f"{SETTINGS.unity_image_name}:latest"
 )
 
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
@@ -95,7 +94,7 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
     Returns the Pub/Sub message ID.
     """
     publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
-    topic_name = f"unity-{assistant_id}" + ("-staging" if SETTINGS.staging else "")
+    topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
 
     message_data = json.dumps(
@@ -359,11 +358,7 @@ async def create_kubernetes_job(
 
         random_id = f"u{uuid.uuid4().hex[:4]}"
         timestamp_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        job_name = (
-            f"unity-{timestamp_str}-{random_id}"
-            if not SETTINGS.staging
-            else f"unity-{timestamp_str}-{random_id}-staging"
-        )
+        job_name = f"unity-{timestamp_str}-{random_id}{SETTINGS.env_suffix}"
 
         job = await asyncio.to_thread(
             create_unity_job,
@@ -973,9 +968,7 @@ async def get_latest_unity_image_commit():
 
         # Define the bucket and file path
         bucket_name = "unity-image-hash"
-        blob_name = (
-            "image_hash.txt" if not SETTINGS.staging else "image_hash_staging.txt"
-        )
+        blob_name = SETTINGS.image_hash_blob
 
         try:
             # Get the bucket

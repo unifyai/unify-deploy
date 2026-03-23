@@ -796,9 +796,8 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     response = requests.get(f"{SETTINGS.comms_url}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
     image = (
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity"
-        + ("/unity:" if not SETTINGS.staging else "/unity-staging:")
-        + commit_hash
+        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/"
+        + f"{SETTINGS.unity_image_name}:{commit_hash}"
     )
 
     def _create_single_job():
@@ -853,8 +852,11 @@ def cleanup_idle_pool() -> dict:
     idle_jobs = {
         job["job_name"]: job.get("resource_version")
         for job in jobs["jobs"]
-        if (SETTINGS.staging and "staging" in job["job_name"])
-        or (not SETTINGS.staging and "staging" not in job["job_name"])
+        if (
+            job["job_name"].endswith(SETTINGS.env_suffix)
+            if SETTINGS.env_suffix
+            else not any(job["job_name"].endswith(s) for s in ("-staging", "-preview"))
+        )
     }
 
     # Classify idle jobs by age into three buckets
@@ -1489,9 +1491,7 @@ def publish_gmail_thread_id(
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
         publisher = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + (
-            "" if not SETTINGS.staging else "-staging"
-        )
+        topic_name = SETTINGS.assistant_topic(assistant_id)
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
@@ -1534,9 +1534,7 @@ def publish_outlook_thread_id(
     """Publish the Outlook conversation to pub/sub topic."""
     try:
         publisher = get_pubsub_client()
-        topic_name = f"unity-{assistant_id}" + (
-            "" if not SETTINGS.staging else "-staging"
-        )
+        topic_name = SETTINGS.assistant_topic(assistant_id)
         topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
 
         message_dict = {
