@@ -1007,13 +1007,27 @@ def test_production_traffic_stress(
         print(f"{'—' * 70}")
 
         cleanup_assistant_jobs(batch_api, all_ids)
-        print(f"[Phase 8] Jobs deleted, waiting 30s for watcher processing...")
-        time.sleep(30)
+        print(f"[Phase 8] Jobs deleted, releasing VMs...")
+        for aid in all_ids:
+            try:
+                requests.post(
+                    f"{COMMS_APP_URL}/infra/vm/pool/release",
+                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                    json={"assistant_id": str(aid)},
+                    timeout=15,
+                )
+            except Exception:
+                pass
+        print(f"[Phase 8] Waiting 15s for cleanup to propagate...")
+        time.sleep(15)
 
         if gce_client is not None:
             orphaned_vms = []
             for aid in all_ids:
-                vms = list_assigned_vms(gce_client, aid)
+                try:
+                    vms = list_assigned_vms(gce_client, aid)
+                except Exception:
+                    vms = []
                 if vms:
                     orphaned_vms.append((aid, [vm.name for vm in vms]))
 
@@ -1049,4 +1063,14 @@ def test_production_traffic_stress(
     finally:
         scheduler_noise.stop()
         cleanup_assistant_jobs(batch_api, all_ids)
+        for aid in all_ids:
+            try:
+                requests.post(
+                    f"{COMMS_APP_URL}/infra/vm/pool/release",
+                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                    json={"assistant_id": str(aid)},
+                    timeout=15,
+                )
+            except Exception:
+                raise
         replenish_staging_pool()
