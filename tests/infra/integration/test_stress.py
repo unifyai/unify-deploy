@@ -162,10 +162,12 @@ def _print_violations(violations, label=""):
         print(f"  [{v.invariant_id}]{tag} {v.message}")
 
 
-def _get_hostname(assistant_id):
-    """Derive the VM hostname for a preview/staging assistant."""
-    suffix = "-preview" if NAMESPACE == "preview" else "-staging"
-    return f"unity-assistant-{assistant_id}{suffix}.vm.unify.ai"
+def _get_vm_hostname(vm_instance):
+    """Extract the hostname from a GCE VM instance's metadata."""
+    for item in vm_instance.metadata.items or []:
+        if item.key == "hostname":
+            return item.value
+    return f"{vm_instance.name}.vm.unify.ai"
 
 
 def _kill_pod(core_api, job_name, namespace=NAMESPACE):
@@ -481,16 +483,16 @@ def test_production_traffic_stress(
                 try:
                     vms = _wait_for_vm_assigned(gce_client, aid, timeout=120)
                     vm_assigned += 1
-                    hostname = _get_hostname(aid)
+                    hostname = _get_vm_hostname(vms[0])
                     resp = probe_vm_agent_service(hostname, a["api_key"])
                     if resp and resp.status_code == 200:
                         vm_auth_ok += 1
-                        print(f"  {aid}: VM assigned, auth OK ({hostname})")
+                        print(f"  {aid}: VM {vms[0].name}, auth OK ({hostname})")
                     else:
                         vm_auth_fail += 1
                         status = resp.status_code if resp else "no response"
                         print(
-                            f"  {aid}: VM assigned, auth FAIL ({hostname}) — {status}",
+                            f"  {aid}: VM {vms[0].name}, auth FAIL ({hostname}) — {status}",
                         )
                 except TimeoutError:
                     print(f"  {aid}: VM not assigned after 120s")
@@ -882,13 +884,15 @@ def test_production_traffic_stress(
                 aid = a["assistant_id"]
                 try:
                     vms = _wait_for_vm_assigned(gce_client, aid, timeout=120)
-                    hostname = _get_hostname(aid)
+                    hostname = _get_vm_hostname(vms[0])
                     resp = probe_vm_agent_service(hostname, a["api_key"])
                     if resp and resp.status_code == 200:
-                        print(f"  {aid}: VM re-attached, auth OK")
+                        print(f"  {aid}: VM {vms[0].name} re-attached, auth OK")
                     else:
                         status = resp.status_code if resp else "no response"
-                        print(f"  {aid}: VM re-attached, auth FAIL — {status}")
+                        print(
+                            f"  {aid}: VM {vms[0].name} re-attached, auth FAIL — {status}",
+                        )
                 except TimeoutError:
                     print(f"  {aid}: VM not re-assigned after 120s")
 
