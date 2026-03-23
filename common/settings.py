@@ -23,12 +23,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _is_staging() -> bool:
-    return os.environ.get("STAGING", "false").lower() == "true"
+def _get_deploy_env() -> str:
+    """Resolve the deployment environment.
+
+    Checks ``DEPLOY_ENV`` first (set by Cloud Run env vars on all
+    deployments), then falls back to ``STAGING=true`` (legacy).
+    Returns one of ``"production"``, ``"staging"``, or ``"preview"``.
+    """
+    deploy_env = (os.environ.get("DEPLOY_ENV") or "").strip().lower()
+    if deploy_env in ("staging", "preview"):
+        return deploy_env
+    if os.environ.get("STAGING", "false").lower() == "true":
+        return "staging"
+    return "production"
 
 
 def _service_url(env_var: str, staging_url: str, prod_url: str) -> str:
-    return os.environ.get(env_var, staging_url if _is_staging() else prod_url)
+    env = _get_deploy_env()
+    return os.environ.get(env_var, staging_url if env != "production" else prod_url)
 
 
 class Settings:
@@ -41,8 +53,11 @@ class Settings:
     """
 
     def __init__(self) -> None:
-        self.staging: bool = _is_staging()
-        self.env_suffix: str = "-staging" if self.staging else ""
+        self.deploy_env: str = _get_deploy_env()
+        self.staging: bool = self.deploy_env != "production"
+        self.env_suffix: str = (
+            f"-{self.deploy_env}" if self.deploy_env != "production" else ""
+        )
 
         # GCP identifiers
         self.gcp_project_id: str = os.environ.get(
@@ -50,7 +65,7 @@ class Settings:
             "gcp-project-runtime",
         )
         self.default_region: str = "us-central1"
-        self.default_namespace: str = "staging" if self.staging else "production"
+        self.default_namespace: str = self.deploy_env
 
         # Service URLs
         self.orchestra_url: str = _service_url(
