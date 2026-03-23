@@ -92,9 +92,14 @@ class Settings:
         # K8s Lease-based assignment
         self.lease_duration_seconds: int = 60
 
+        # Pub/Sub suffix: Orchestra creates all non-production topics with
+        # "-staging" regardless of whether the deployment is staging or preview.
+        # This must match Orchestra's naming or publishes will 404.
+        self.pubsub_suffix: str = "-staging" if self.staging else ""
+
         # Derived names used across the codebase
         self.unity_image_name: str = f"unity{self.env_suffix}"
-        self.gmail_topic: str = f"gmail-notifications{self.env_suffix}"
+        self.gmail_topic: str = f"gmail-notifications{self.pubsub_suffix}"
         self.image_hash_blob: str = (
             "image_hash.txt"
             if not self.env_suffix
@@ -106,8 +111,12 @@ class Settings:
         self.pending_sub: str = self.pending_topic + "-sub"
 
     def assistant_topic(self, assistant_id: str) -> str:
-        """Pub/Sub topic name for a specific assistant."""
-        return f"unity-{assistant_id}{self.env_suffix}"
+        """Pub/Sub topic name for a specific assistant.
+
+        Uses pubsub_suffix (always -staging for non-production) to match
+        the topic name created by Orchestra.
+        """
+        return f"unity-{assistant_id}{self.pubsub_suffix}"
 
 
 SETTINGS = Settings()
