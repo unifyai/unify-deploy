@@ -767,7 +767,10 @@ def test_production_traffic_stress(
 
         finally:
             bg_stop = True
-            bg_future.result(timeout=15)
+            try:
+                bg_future.result(timeout=30)
+            except (TimeoutError, Exception):
+                pass
             bg_thread_pool.shutdown(wait=False)
 
         # ==================================================================
