@@ -101,6 +101,52 @@ def _trigger_cleanup():
         pass
 
 
+def _trigger_pool_refresh():
+    """Trigger a pool refresh (same call as the hourly cron / post-deploy).
+
+    Creates new idle containers with the latest image regardless of current
+    pool size.  The cleanup cron (10 min later) would normally delete the
+    old ones.
+    """
+    try:
+        resp = requests.post(
+            f"{ADAPTERS_URL}/scheduled/jobs/create",
+            params={"refresh": "true"},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            print(
+                f"    [scheduler] Pool refresh: created {data.get('created', '?')} containers",
+            )
+    except Exception:
+        pass
+
+
+def _trigger_stale_expire():
+    """Trigger the stale jobs sweep (same call as the 6-hourly cron).
+
+    Suspends K8s jobs running >12h and releases their VMs.  Our test
+    containers are minutes old so they won't be affected, but the sweep
+    mechanism still executes and can race with other operations.
+    """
+    try:
+        resp = requests.post(
+            f"{ADAPTERS_URL}/scheduled/jobs/expire-stale",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            print(
+                f"    [scheduler] Stale sweep: {data.get('total_running', '?')} running, "
+                f"{data.get('expired', '?')} expired",
+            )
+    except Exception:
+        pass
+
+
 def _new_violations(current, baseline):
     """Return violations in *current* that were not in *baseline*."""
     baseline_keys = {(v.invariant_id, v.message) for v in baseline}
@@ -199,13 +245,18 @@ def test_production_traffic_stress(
         print(f"{'—' * 70}")
 
         t0 = time.monotonic()
-        with ThreadPoolExecutor(max_workers=N) as pool:
+        with ThreadPoolExecutor(max_workers=N + 1) as pool:
             futures = {
                 pool.submit(_start_job_tolerant, comms, a): a["assistant_id"]
                 for a in assistants
             }
+            # Fire pool refresh concurrently (simulates hourly cron / post-deploy)
+            refresh_future = pool.submit(_trigger_pool_refresh)
+
             results = {}
             for f in as_completed(futures):
+                if f is refresh_future:
+                    continue
                 aid = futures[f]
                 status, body = f.result()
                 results[aid] = (status, body)
@@ -489,6 +540,14 @@ def test_production_traffic_stress(
             )
 
             if round_num < 3:
+                # Fire scheduler endpoints between rounds (concurrent with
+                # any in-flight request processing inside containers)
+                if round_num == 1:
+                    print(f"    [scheduler] Firing cleanup between rounds...")
+                    _trigger_cleanup()
+                elif round_num == 2:
+                    print(f"    [scheduler] Firing stale-expire between rounds...")
+                    _trigger_stale_expire()
                 time.sleep(30)
 
         # ==================================================================
@@ -533,6 +592,11 @@ def test_production_traffic_stress(
                     print(f"  {aid}: killed pod {killed}")
                 else:
                     print(f"  {aid}: no running pod found for {job_name}")
+
+            # Fire stale-expire while watcher is processing crashes — tests
+            # whether the sweep races with the watcher on VM release / job suspend
+            print(f"    [scheduler] Firing stale-expire during crash recovery...")
+            _trigger_stale_expire()
 
             # Wait for jobs to reach terminal state
             print(f"[Phase 5] Waiting for crashed jobs to terminate...")
