@@ -3,16 +3,14 @@ Integration test for stale AssistantJobs record recovery.
 
 Reproduces the production outage scenario where a timed-out
 /infra/job/start leaves a running=True record in AssistantJobs
-with no corresponding K8s pod. The adapter must start a new
-container regardless, because the startup flow bypasses
-AssistantJobs entirely — build_webhook_context unconditionally
-calls start_unity_job → /infra/job/start, which checks K8s
-labels (ground truth) for deduplication.
+with no corresponding K8s pod. The comms app's /infra/job/start
+must start a new container regardless, because it checks K8s
+labels (ground truth) for deduplication — AssistantJobs records
+are never consulted on the startup path.
 
-The test exercises the FULL production code path — no mocks, no
-reimplementation. It calls the real adapter webhook endpoint and
-verifies that stale Orchestra records have no influence on the
-startup decision.
+The test calls /infra/job/start directly on the comms app (not
+through the adapter, since is_local=True assistants skip
+auto-start in the adapter routing layer).
 
 Invariants covered: INV-13 (no orphaned AssistantJobs records)
 """
@@ -23,8 +21,6 @@ import pytest
 import requests
 
 from .conftest import (
-    ADAPTERS_URL,
-    ADMIN_KEY,
     NAMESPACE,
     ORCHESTRA_URL,
     SHARED_KEY,
@@ -33,6 +29,7 @@ from .conftest import (
     list_jobs_with_assistant_id,
     poll_until,
     replenish_staging_pool,
+    start_real_job,
     wait_for_idle_pool,
 )
 
@@ -82,26 +79,25 @@ def _create_stale_running_record(
 @pytest.mark.invariant("INV-13")
 def test_stale_record_does_not_block_new_startup(
     batch_api,
+    comms,
     real_assistant_data,
     poll,
 ):
     """A stale running=True record in AssistantJobs must NOT prevent
-    new messages from starting a container.
+    /infra/job/start from creating a container.
 
-    The adapter's build_webhook_context unconditionally calls
-    start_unity_job → /infra/job/start for every valid message.
     The /infra/job/start endpoint checks K8s labels (ground truth)
     for deduplication — AssistantJobs records are never consulted
     on the startup path.
 
-    This means stale records are architecturally irrelevant to the
-    startup decision. The test confirms this by creating a stale
-    record and verifying that a message still triggers container
-    creation.
+    We call /infra/job/start directly (not the adapter) because
+    is_local=True test assistants skip auto-start in the adapter.
+    The invariant under test is the comms app's startup logic, not
+    the adapter routing.
 
     Test sequence:
     1. Create a stale running=True record backdated to 5 min ago
-    2. Send a real message via the adapter's /unify/message endpoint
+    2. Call /infra/job/start directly on the comms app
     3. Verify: a new container starts (stale record is irrelevant)
     """
     assistant_id = str(real_assistant_data["assistant_id"])
@@ -124,19 +120,7 @@ def test_stale_record_does_not_block_new_startup(
             replenish_staging_pool()
             wait_for_idle_pool(batch_api, min_idle=1, timeout=120)
 
-        resp = requests.post(
-            f"{ADAPTERS_URL}/unify/message",
-            json={
-                "assistant_id": assistant_id,
-                "contact_id": 1,
-                "body": "Integration test: message sent with stale record present",
-            },
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=30,
-        )
-        assert (
-            resp.status_code == 200
-        ), f"Adapter rejected message: {resp.status_code} {resp.text}"
+        resp = start_real_job(comms, real_assistant_data)
 
         started = poll_until(
             lambda: list_jobs_with_assistant_id(batch_api, assistant_id),
@@ -150,9 +134,8 @@ def test_stale_record_does_not_block_new_startup(
 
         assert len(started) >= 1, (
             f"No container started for assistant {assistant_id}. "
-            f"The stale running=True record in AssistantJobs somehow "
-            f"blocked the startup, even though the adapter bypasses "
-            f"AssistantJobs entirely and delegates to /infra/job/start."
+            f"The stale running=True record in AssistantJobs blocked "
+            f"the /infra/job/start endpoint."
         )
 
         print(f"[Stale Record] Container started: {started[0].metadata.name}")
