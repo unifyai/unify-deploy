@@ -95,7 +95,7 @@ The SBC proxy at `sbc.unify.ai` uses TLS 1.2 with certificate verification enabl
 The following infrastructure settings are configured directly in GCP (`gcp-project-runtime`):
 
 - **Cloud Scheduler**: All scheduler jobs (both staging and production) include `Authorization: Bearer {admin_key}` headers for all 10 adapter scheduled endpoints.
-- **Firewall rules**: All remote-access rules (`default-allow-ssh`, `default-allow-rdp`, `allow-winrm`, `allow-2222`, `allow-6080`, `allow-8080`) are restricted to the IAP tunnel range (`35.235.240.0/20`). Direct SSH/RDP from the internet is blocked; use `gcloud compute ssh --tunnel-through-iap` instead.
+- **Firewall rules**: Remote-access rules (`default-allow-ssh`, `default-allow-rdp`, `allow-winrm`) are restricted to the IAP tunnel range (`35.235.240.0/20`). Direct SSH/RDP from the internet is blocked; use `gcloud compute ssh --tunnel-through-iap` instead. Pool VMs expose only port 443 (HTTPS via Caddy) and 2222 (SFTP file sync) publicly. Ports 6080 (noVNC) and 3000 (Agent Service) are **not** directly accessible — they are behind Caddy's reverse proxy.
 - **VMs**: Terminated VMs are deleted promptly to release external IPs and reduce attack surface. No idle VMs with external IPs should remain in the project.
 
 ### GitHub Repository Settings (not tracked in code)

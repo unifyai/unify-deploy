@@ -6,7 +6,7 @@ This folder contains Hashicorp Packer configuration for building a custom Window
 
 | Layer | Tool | What's Included |
 |-------|------|-----------------|
-| **Base Image** | Packer | Office, Git, Python, Node.js, noVNC, Caddy, Firewall rules |
+| **Base Image** | Packer | Office, Git, Python, Node.js, noVNC, Caddy, Firewall (443 only) |
 | **Startup Script** | GCP metadata | TightVNC, repos, user setup, passwords, services |
 
 ## Access Methods
@@ -14,9 +14,7 @@ This folder contains Hashicorp Packer configuration for building a custom Window
 | Method | Port | Status |
 |--------|------|--------|
 | **RDP** | 3389 | ✅ Inherited from GCP Windows (untouched) |
-| **noVNC** | 6080 | Configured by startup script |
-| **HTTPS** | 443 | Configured by startup script (if hostname provided) |
-| **Agent API** | 3000 | Configured by startup script |
+| **HTTPS** | 443 | Caddy reverse proxy (noVNC + Agent API behind it) |
 
 ## Prerequisites
 
@@ -72,7 +70,7 @@ gcloud compute instances create my-windows-vm \
 - Bun
 - noVNC + websockify
 - Caddy (binary only, no config)
-- Firewall rules for ports 80, 443, 3000, 6080
+- Firewall rules (port 443 only — 6080/3000 behind Caddy)
 
 ## What Startup Script Configures
 
