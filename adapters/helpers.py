@@ -594,42 +594,6 @@ def start_unity_job(assistant: dict, medium: str):
     except requests.RequestException as e:
         logger.error(f"Job start request failed for assistant {assistant_id}: {e}")
 
-    # Assign a pool VM if desktop_mode requires it
-    if desktop_mode in ("windows", "ubuntu"):
-        vm_type = desktop_mode
-        try:
-            vm_response = requests.post(
-                f"{SETTINGS.comms_url}/infra/vm/pool/assign",
-                headers=headers,
-                json={
-                    "assistant_id": assistant_id,
-                    "unify_apikey": api_key,
-                    "vm_type": vm_type,
-                },
-                timeout=0.1,
-            )
-            if vm_response.status_code == 200:
-                result = vm_response.json()
-                desktop_url = result.get("desktop_url", "")
-                logger.info(
-                    f"Pool VM assigned for assistant {assistant_id}: {desktop_url}",
-                )
-            elif vm_response.status_code == 503:
-                logger.info(
-                    f"No idle {vm_type} pool VMs available for assistant {assistant_id}",
-                )
-            else:
-                logger.info(
-                    f"Failed to assign pool VM for {assistant_id}: "
-                    f"{vm_response.status_code} - {vm_response.text}",
-                )
-        except requests.exceptions.Timeout:
-            logger.info(
-                f"Pool VM assigned to assistant {assistant_id} (timeout)",
-            )
-        except Exception as e:
-            logger.info(f"Error assigning pool VM for assistant {assistant_id}: {e}")
-
 
 class IdlePoolTarget:
     __slots__ = ("target", "min_floor", "demand_buffer")
