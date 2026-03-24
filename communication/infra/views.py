@@ -632,6 +632,26 @@ async def start_job(
             j for j in existing.items if j.status.active and j.status.active > 0
         ]
         if already_running:
+            if desktop_mode in ("windows", "ubuntu"):
+
+                async def _ensure_vm(
+                    _aid=assistant_id,
+                    _key=api_key,
+                    _vt=desktop_mode,
+                ):
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        ASSIGN_EXECUTOR,
+                        partial(
+                            assign_pool_vm,
+                            assistant_id=_aid,
+                            unify_apikey=_key,
+                            vm_type=_vt,
+                        ),
+                    )
+
+                asyncio.create_task(_ensure_vm())
+
             return {
                 "success": True,
                 "message": "Assistant already has a running container",
