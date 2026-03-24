@@ -506,27 +506,31 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
             f"{len(failed)} failed",
         )
 
-        # Simulate the production behavior where each webhook triggers
-        # replenishment.  In floor regime each call creates 1 container,
-        # so we call once per overflow request to ensure enough capacity.
+        # Replenish the pool so new idle containers appear for pending
+        # startups.  The background 1-minute scheduler OR our explicit
+        # reconciliation call will claim them for the queued assistants.
         for _ in range(overflow):
             replenish_staging_pool()
 
-        # Wait for newly created containers to become idle (image pull +
-        # boot takes 25-60s), then explicitly trigger reconciliation so
-        # the pending messages are assigned.  The 1-minute cron would do
-        # this in production, but we don't want the test to depend on
-        # wall-clock alignment with the cron schedule.
-        poll_until(
-            lambda: count_idle_jobs(batch_api) >= overflow,
-            timeout=180,
-            interval=10,
-            description=f"At least {overflow} idle containers for overflow",
-        )
-        _trigger_reconciliation(comms)
+        # Poll on the actual goal: every overflow assistant gets a
+        # container.  The idle containers created above may be claimed by
+        # the background scheduler before we ever observe them as idle,
+        # so polling on idle count is racy.  Instead, replenish +
+        # reconcile each iteration and check ground truth directly.
+        def _all_overflow_served():
+            _trigger_reconciliation(comms)
+            for aid in used_ids:
+                if not list_jobs_with_assistant_id(batch_api, str(aid)):
+                    return False
+            return True
 
-        # The ground truth: check K8s for which assistants actually got
-        # containers, regardless of what the HTTP responses said.
+        poll_until(
+            _all_overflow_served,
+            timeout=300,
+            interval=15,
+            description="All overflow assistants to have containers",
+        )
+
         served = []
         lost = []
         for aid in used_ids:
