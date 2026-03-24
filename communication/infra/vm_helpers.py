@@ -524,9 +524,8 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     if tls_cert and tls_key:
         metadata_items.append(compute_v1.Items(key="tls-fullchain", value=tls_cert))
         metadata_items.append(compute_v1.Items(key="tls-privkey", value=tls_key))
-    deploy_env = "staging" if SETTINGS.staging else "production"
     metadata_items.append(
-        compute_v1.Items(key="unity-environment", value=deploy_env),
+        compute_v1.Items(key="unity-environment", value=SETTINGS.deploy_env),
     )
 
     labels = {

@@ -693,18 +693,29 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
     return inventory
 
 
-def _trigger_pending_reconciliation():
-    """Fire-and-forget call to the comms app to process any pending startup
-    requests that were queued when the pool was exhausted.
+def _trigger_pending_reconciliation() -> dict:
+    """Call the comms app to process pending startup requests.
+
+    Returns the JSON response from the reconciler, or an error dict.
+    Logs failures so the caller (and Cloud Scheduler) can observe them.
     """
     try:
-        requests.post(
+        resp = requests.post(
             f"{SETTINGS.comms_url}/infra/pending/process",
             headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
-            timeout=10,
+            timeout=30,
         )
-    except Exception:
-        pass
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning(
+            "Pending reconciliation returned %s: %s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        return {"error": resp.status_code}
+    except Exception as e:
+        logger.error("Pending reconciliation failed: %s", e)
+        return {"error": str(e)}
 
 
 def replenish_idle_pool(refresh: bool = False) -> dict:

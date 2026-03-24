@@ -366,7 +366,7 @@ async def create_kubernetes_job(
             job_name=job_name,
             namespace=namespace,
             image=image,
-            is_staging=bool(SETTINGS.staging),
+            deploy_env=SETTINGS.deploy_env,
         )
 
         if job:

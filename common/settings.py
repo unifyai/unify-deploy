@@ -23,6 +23,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+_SERVICE_URLS: dict[str, dict[str, str]] = {
+    "orchestra": {
+        "production": "https://api.unify.ai/v0",
+        "staging": "https://internal.example.com/v0",
+        "preview": "https://internal.example.com/v0",
+    },
+    "comms": {
+        "production": "https://unity-comms-app-000000000000.us-central1.run.app",
+        "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
+        "preview": "https://service.a.run.app",
+    },
+    "adapters": {
+        "production": "https://service.a.run.app",
+        "staging": "https://service.a.run.app",
+        "preview": "https://service.a.run.app",
+    },
+}
+
+
 def _get_deploy_env() -> str:
     """Resolve the deployment environment.
 
@@ -38,26 +57,29 @@ def _get_deploy_env() -> str:
     return "production"
 
 
-def _service_url(env_var: str, staging_url: str, prod_url: str) -> str:
-    env = _get_deploy_env()
-    return os.environ.get(env_var, staging_url if env != "production" else prod_url)
+def _service_url(env_var: str, service: str) -> str:
+    """Resolve a service URL: env var override > deploy_env-specific default."""
+    urls = _SERVICE_URLS[service]
+    return os.environ.get(env_var, urls.get(_get_deploy_env(), urls["production"]))
 
 
 class Settings:
     """Read-only configuration populated from environment variables.
 
-    Replaces the scattered ``STAGING``, ``GCP_PROJECT_ID``,
-    ``ORCHESTRA_URL``, etc. that were duplicated across
-    ``communication/helpers.py``, ``infra/helpers.py``,
-    ``infra/views.py``, and ``infra/vm_helpers.py``.
+    ``deploy_env`` is the canonical environment identifier:
+    ``"production"``, ``"staging"``, or ``"preview"``.  Use it
+    everywhere instead of the legacy ``is_staging`` boolean.
     """
 
     def __init__(self) -> None:
         self.deploy_env: str = _get_deploy_env()
-        self.staging: bool = self.deploy_env != "production"
         self.env_suffix: str = (
             f"-{self.deploy_env}" if self.deploy_env != "production" else ""
         )
+
+        # Backward compatibility: True for any non-production environment.
+        # Prefer checking deploy_env directly for environment-specific logic.
+        self.staging: bool = self.deploy_env != "production"
 
         # GCP identifiers
         self.gcp_project_id: str = os.environ.get(
@@ -67,25 +89,12 @@ class Settings:
         self.default_region: str = "us-central1"
         self.default_namespace: str = self.deploy_env
 
-        # Service URLs
-        self.orchestra_url: str = _service_url(
-            "ORCHESTRA_URL",
-            staging_url="https://internal.example.com/v0",
-            prod_url="https://api.unify.ai/v0",
-        )
-        self.comms_url: str = _service_url(
-            "UNITY_COMMS_URL",
-            staging_url="https://unity-comms-app-staging-000000000000.us-central1.run.app",
-            prod_url="https://unity-comms-app-000000000000.us-central1.run.app",
-        )
-        self.adapters_url: str = _service_url(
-            "UNITY_ADAPTERS_URL",
-            staging_url="https://service.a.run.app",
-            prod_url="https://service.a.run.app",
-        )
+        # Service URLs (3-way: production / staging / preview)
+        self.orchestra_url: str = _service_url("ORCHESTRA_URL", "orchestra")
+        self.comms_url: str = _service_url("UNITY_COMMS_URL", "comms")
+        self.adapters_url: str = _service_url("UNITY_ADAPTERS_URL", "adapters")
 
-        # Auth keys (read at access time via properties if needed, but
-        # most callers already read them from os.getenv at call sites)
+        # Auth keys
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         self.shared_unify_key: str = os.environ.get("SHARED_UNIFY_KEY", "")
 

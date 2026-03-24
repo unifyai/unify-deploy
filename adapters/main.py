@@ -2682,8 +2682,8 @@ def scheduled_pending_startups():
     Lease + CAS mechanism.  Triggered every minute by Cloud Scheduler
     and reactively after pool replenishment.
     """
-    _trigger_pending_reconciliation()
-    return {"status": "dispatched"}
+    result = _trigger_pending_reconciliation()
+    return {"status": "ok", **result}
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])

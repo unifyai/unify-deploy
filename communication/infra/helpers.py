@@ -235,7 +235,7 @@ def create_unity_job(
     job_name: str,
     namespace: str = "default",
     image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
-    is_staging: bool = False,
+    deploy_env: str = "production",
     ttl_seconds_after_finished: int = None,
 ):
     """
@@ -246,12 +246,10 @@ def create_unity_job(
         job_name: Name of the job
         namespace: Kubernetes namespace
         image: Docker image to use
-        is_staging: Whether to use staging image
+        deploy_env: Deployment environment ("production", "staging", or "preview")
         ttl_seconds_after_finished: Seconds after job completion before cleanup (None to disable)
     """
     try:
-        # Define the assistant-specific environment variables
-        deploy_env = "staging" if is_staging else "production"
         env_vars = [
             {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
             {"name": "DEPLOY_ENV", "value": deploy_env},
@@ -274,7 +272,7 @@ def create_unity_job(
             {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
             {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
         ]
-        if is_staging:
+        if deploy_env != "production":
             env_vars += [{"name": "STAGING", "value": "true"}]
 
         # Define the job manifest
@@ -804,6 +802,24 @@ def process_pending_startups(
                 request={"subscription": sub_path, "ack_ids": [ack_id]},
             )
             acked += 1
+
+            desktop_mode = config.get("desktop_mode", "")
+            if desktop_mode in ("windows", "ubuntu"):
+                from .vm_helpers import assign_pool_vm, replenish_pool
+
+                try:
+                    assign_pool_vm(
+                        assistant_id=assistant_id,
+                        unify_apikey=config.get("api_key", ""),
+                        vm_type=desktop_mode,
+                    )
+                    replenish_pool(desktop_mode, extra_demand=1)
+                except Exception as vm_err:
+                    logger.warning(
+                        "Reconciler VM assignment failed for %s: %s",
+                        assistant_id,
+                        vm_err,
+                    )
         except RuntimeError:
             logger.info(
                 "No idle container for assistant %s, nacking for retry",
