@@ -28,10 +28,12 @@ from .conftest import (
     NAMESPACE,
     ORCHESTRA_URL,
     SHARED_KEY,
+    count_idle_jobs,
     expire_test_assistant_records,
     list_jobs_with_assistant_id,
     poll_until,
     replenish_staging_pool,
+    wait_for_idle_pool,
 )
 
 pytestmark = [pytest.mark.staging]
@@ -117,6 +119,10 @@ def test_stale_record_does_not_block_new_startup(
             f"\n[Stale Record] Created running=True record {record_id} "
             f"for assistant {assistant_id} (no pod exists)",
         )
+
+        if count_idle_jobs(batch_api) == 0:
+            replenish_staging_pool()
+            wait_for_idle_pool(batch_api, min_idle=1, timeout=120)
 
         resp = requests.post(
             f"{ADAPTERS_URL}/unify/message",
