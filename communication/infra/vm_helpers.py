@@ -1009,6 +1009,21 @@ def assign_pool_vm(
     }
 
 
+def has_assigned_vm(assistant_id: str) -> bool:
+    """Check whether an assigned VM exists for this assistant.
+
+    Lightweight read-only check — does not modify any state.
+    """
+    client = compute_v1.InstancesClient()
+    sanitized = assistant_id.lower().replace("_", "-")
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=f"labels.pool-role=assigned AND labels.assistant-id={sanitized}",
+    )
+    return len(list(client.list(request=request))) > 0
+
+
 def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     """Release a pool VM: clear metadata, detach disk, reset labels.
 
