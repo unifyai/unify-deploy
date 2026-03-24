@@ -211,8 +211,25 @@ def patch_job_labels(
     labels: dict,
     namespace: str = "default",
 ):
-    """Patch labels on an existing Unity job."""
+    """Patch labels on an existing Unity job.
+
+    Includes a server-side guard: if the job already has an assistant-id
+    assigned and the patch tries to set unity-status back to idle, the
+    patch is rejected.  This prevents a delayed boot-time "I'm idle"
+    label from overwriting a valid container assignment.
+    """
     try:
+        if labels.get("unity-status") == "idle":
+            job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
+            current_labels = job.metadata.labels or {}
+            if current_labels.get("assistant-id"):
+                logger.warning(
+                    "Rejected idle label patch on %s: assistant-id=%s already set",
+                    job_name,
+                    current_labels.get("assistant-id"),
+                )
+                return True
+
         body = {"metadata": {"labels": labels}}
         batch_api.patch_namespaced_job(
             name=job_name,
