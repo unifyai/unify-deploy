@@ -125,25 +125,43 @@ check_pubsub_emulator() {
     return 1
   fi
 
-  # Check if pubsub-emulator component is installed
-  if ! gcloud components list 2>/dev/null | grep -q "pubsub-emulator.*Installed"; then
-    log_warn "Pub/Sub emulator not installed"
-    log_info "Installing with: gcloud components install pubsub-emulator"
-    if ! gcloud components install pubsub-emulator --quiet; then
-      log_error "Failed to install Pub/Sub emulator"
+  # The emulator JAR can live in different locations depending on how gcloud
+  # was installed.  Check for the files directly before falling back to
+  # `gcloud components`, which doesn't work on apt-managed installs and is
+  # slow even when it does work.
+  local sdk_root
+  sdk_root="$(gcloud info --format='value(installation.sdk_root)' 2>/dev/null || echo "")"
+
+  local emulator_found=false
+
+  # Check well-known locations
+  for candidate in \
+    "${sdk_root:+$sdk_root/platform/pubsub-emulator}" \
+    "/usr/lib/google-cloud-sdk/platform/pubsub-emulator" \
+    "$HOME/google-cloud-sdk/platform/pubsub-emulator"; do
+    if [[ -n "$candidate" && -d "$candidate" ]]; then
+      emulator_found=true
+      break
+    fi
+  done
+
+  if [[ "$emulator_found" == "false" ]]; then
+    # Last resort: try installing via gcloud components (standalone installs only)
+    log_warn "Pub/Sub emulator not found"
+    if gcloud components install pubsub-emulator --quiet 2>/dev/null; then
+      emulator_found=true
+    else
+      log_error "Pub/Sub emulator is not installed"
+      log_info "Install with one of:"
+      log_info "  apt:    sudo apt-get install google-cloud-cli-pubsub-emulator"
+      log_info "  gcloud: gcloud components install pubsub-emulator"
       return 1
     fi
   fi
 
-  # Check if beta commands are installed (needed for emulators command)
-  if ! gcloud components list 2>/dev/null | grep -q "gcloud Beta Commands.*Installed"; then
-    log_warn "gcloud beta commands not installed"
-    log_info "Installing with: gcloud components install beta"
-    if ! gcloud components install beta --quiet; then
-      log_error "Failed to install gcloud beta commands"
-      return 1
-    fi
-  fi
+  # Ensure gcloud config directories exist (needed for emulator data/logs)
+  mkdir -p "$HOME/.config/gcloud/emulators/pubsub" 2>/dev/null || true
+  mkdir -p "$HOME/.config/gcloud/logs" 2>/dev/null || true
 
   log_success "Pub/Sub emulator is available"
   return 0
