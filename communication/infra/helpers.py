@@ -785,6 +785,7 @@ def process_pending_startups(
             nacked += 1
             continue
 
+        claimed = False
         try:
             startup_config_json = json.dumps(config)
             job_name = claim_idle_container(
@@ -802,7 +803,29 @@ def process_pending_startups(
                 request={"subscription": sub_path, "ack_ids": [ack_id]},
             )
             acked += 1
+            claimed = True
+        except RuntimeError:
+            logger.info(
+                "No idle container for assistant %s, nacking for retry",
+                assistant_id,
+            )
+            subscriber.modify_ack_deadline(
+                request={
+                    "subscription": sub_path,
+                    "ack_ids": [ack_id],
+                    "ack_deadline_seconds": 0,
+                },
+            )
+            nacked += 1
+        finally:
+            release_assignment_lease(coord_api, assistant_id, namespace)
 
+        # VM assignment runs OUTSIDE the Lease so the lease duration
+        # (60s) only covers the container claim, not the potentially
+        # slow VM provisioning (up to 180s).  Best-effort: if this
+        # fails, the next inbound message retriggers VM assignment
+        # via start_job's "already running" path.
+        if claimed:
             desktop_mode = config.get("desktop_mode", "")
             if desktop_mode in ("windows", "ubuntu"):
                 from .vm_helpers import assign_pool_vm, replenish_pool
@@ -820,20 +843,5 @@ def process_pending_startups(
                         assistant_id,
                         vm_err,
                     )
-        except RuntimeError:
-            logger.info(
-                "No idle container for assistant %s, nacking for retry",
-                assistant_id,
-            )
-            subscriber.modify_ack_deadline(
-                request={
-                    "subscription": sub_path,
-                    "ack_ids": [ack_id],
-                    "ack_deadline_seconds": 0,
-                },
-            )
-            nacked += 1
-        finally:
-            release_assignment_lease(coord_api, assistant_id, namespace)
 
     return {"pulled": len(messages), "acked": acked, "nacked": nacked}

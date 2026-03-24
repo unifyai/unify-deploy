@@ -793,7 +793,12 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
 
     UNITY_JOBS_RUNNING.set(running_count)
     UNITY_JOBS_IDLE.set(current_idle_count + len(created_jobs))
-    _trigger_pending_reconciliation()
+    reconcile_result = _trigger_pending_reconciliation()
+    if "error" in reconcile_result:
+        logger.warning(
+            "Reactive reconciliation after replenish failed: %s",
+            reconcile_result,
+        )
 
     return {
         "mode": mode,
