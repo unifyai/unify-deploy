@@ -2681,9 +2681,17 @@ def scheduled_pending_startups():
     pulls queued messages and assigns them to idle containers using the
     Lease + CAS mechanism.  Triggered every minute by Cloud Scheduler
     and reactively after pool replenishment.
+
+    Returns non-200 on failure so Cloud Scheduler retries.
     """
     result = _trigger_pending_reconciliation()
-    return {"status": "ok", **result}
+    if "error" in result:
+        return Response(
+            content=json.dumps(result),
+            status_code=502,
+            media_type="application/json",
+        )
+    return result
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])

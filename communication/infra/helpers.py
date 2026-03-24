@@ -272,7 +272,7 @@ def create_unity_job(
             {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
             {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
         ]
-        if deploy_env != "production":
+        if deploy_env == "staging":
             env_vars += [{"name": "STAGING", "value": "true"}]
 
         # Define the job manifest
