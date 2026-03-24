@@ -692,19 +692,23 @@ def _create_test_assistant(index: int) -> dict:
     assert UNIFY_KEY, "UNIFY_KEY required to create test assistants"
     assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
 
+    payload = {
+        "first_name": "InfraTest",
+        "surname": f"{index:03d}",
+        "age": 25,
+        "nationality": "North America",
+        "about": "Stress test assistant (auto-created by integration tests)",
+        "desktop_mode": "ubuntu",
+        "is_local": True,
+        "create_infra": True,
+        "timezone": "UTC",
+    }
+    if NAMESPACE == "preview":
+        payload["deploy_env"] = "preview"
+
     create_resp = requests.post(
         f"{ORCHESTRA_URL}/assistant",
-        json={
-            "first_name": "InfraTest",
-            "surname": f"{index:03d}",
-            "age": 25,
-            "nationality": "North America",
-            "about": "Stress test assistant (auto-created by integration tests)",
-            "desktop_mode": "ubuntu",
-            "is_local": True,
-            "create_infra": True,
-            "timezone": "UTC",
-        },
+        json=payload,
         headers={"Authorization": f"Bearer {UNIFY_KEY}"},
         timeout=30,
     )
