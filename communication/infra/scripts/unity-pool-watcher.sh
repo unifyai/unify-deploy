@@ -67,6 +67,50 @@ save_commit_hash() {
     fi
 }
 
+scrub_git_tokens() {
+    for repo_dir in /magnitude /agent-service; do
+        if [[ -d "$repo_dir/.git" ]]; then
+            local url
+            url=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
+            if [[ "$url" == *"@github.com"* ]]; then
+                git -C "$repo_dir" remote set-url origin "$(echo "$url" | sed 's|https://[^@]*@|https://|')" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+wipe_metadata_key() {
+    local key=$1
+    local sa_token project zone instance api_base info meta_fp meta_items
+    sa_token=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null || true)
+    [[ -z "$sa_token" ]] && return
+    project=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/project/project-id")
+    zone=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{print $NF}')
+    instance=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/name")
+    api_base="https://compute.googleapis.com/compute/v1/projects/$project/zones/$zone/instances/$instance"
+    info=$(curl -sf -H "Authorization: Bearer $sa_token" "$api_base")
+    meta_fp=$(echo "$info" | python3 -c "import sys,json; print(json.load(sys.stdin)['metadata']['fingerprint'])" 2>/dev/null || true)
+    [[ -z "$meta_fp" ]] && return
+    meta_items=$(echo "$info" | python3 -c "
+import sys, json
+meta = json.load(sys.stdin).get('metadata', {})
+items = [{'key': i['key'], 'value': '' if i['key'] == '$key' else i['value']} for i in meta.get('items', [])]
+print(json.dumps(items))
+" 2>/dev/null || true)
+    [[ -z "$meta_items" ]] && return
+    curl -sf -X POST \
+        -H "Authorization: Bearer $sa_token" \
+        -H "Content-Type: application/json" \
+        "$api_base/setMetadata" \
+        -d "{\"items\": $meta_items, \"fingerprint\": \"$meta_fp\"}" >/dev/null 2>&1
+    log "Wiped metadata key: $key"
+}
+
 kill_agent_service() {
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
     pkill -f "node" 2>/dev/null || true
@@ -187,6 +231,7 @@ do_update() {
         log "Agent Service updated ($commit)"
     fi
 
+    scrub_git_tokens
     log "UPDATE complete"
 }
 
@@ -399,6 +444,8 @@ PYSCRIPT
 
     # Update code while VM is idle so next assignment starts with latest
     do_update
+
+    wipe_metadata_key "github-token"
 
     log "RELEASE complete"
 }

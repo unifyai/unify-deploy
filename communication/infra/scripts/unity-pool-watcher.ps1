@@ -61,6 +61,52 @@ function Save-CommitHash($dir, $hash) {
     if ($hash) { $hash | Out-File -FilePath (Join-Path $dir ".commit-hash") -Encoding UTF8 -NoNewline }
 }
 
+function Scrub-GitTokens {
+    foreach ($dir in @('C:\magnitude', 'C:\agent-service')) {
+        if (Test-Path "$dir\.git") {
+            try {
+                $url = git -C $dir remote get-url origin 2>$null
+                if ($url -match '@github\.com') {
+                    $clean = $url -replace 'https://[^@]+@', 'https://'
+                    git -C $dir remote set-url origin $clean 2>$null
+                }
+            } catch {}
+        }
+    }
+}
+
+function Wipe-MetadataKey($key) {
+    try {
+        $metaHeaders = @{ "Metadata-Flavor" = "Google" }
+        $tokenResponse = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" -Headers $metaHeaders -TimeoutSec 5
+        $saToken = $tokenResponse.access_token
+
+        $project = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/project/project-id" -Headers $metaHeaders -TimeoutSec 5
+        $zoneUri = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/zone" -Headers $metaHeaders -TimeoutSec 5
+        $zone = ($zoneUri -split '/')[-1]
+        $instance = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/name" -Headers $metaHeaders -TimeoutSec 5
+
+        $apiBase = "https://compute.googleapis.com/compute/v1/projects/$project/zones/$zone/instances/$instance"
+        $info = Invoke-RestMethod -Uri $apiBase -Headers @{ Authorization = "Bearer $saToken" }
+
+        $metaItems = @()
+        foreach ($item in $info.metadata.items) {
+            $metaItems += @{
+                key   = $item.key
+                value = if ($item.key -eq $key) { '' } else { $item.value }
+            }
+        }
+        $body = @{ items = $metaItems; fingerprint = $info.metadata.fingerprint } | ConvertTo-Json -Depth 3
+        Invoke-RestMethod -Uri "$apiBase/setMetadata" `
+            -Method POST -ContentType "application/json" `
+            -Headers @{ Authorization = "Bearer $saToken" } `
+            -Body $body | Out-Null
+        Write-Log "Wiped metadata key: $key"
+    } catch {
+        Write-Log "WARNING: failed to wipe metadata key $key - $_"
+    }
+}
+
 function Stop-AgentService {
     Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
     Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -247,6 +293,7 @@ function Invoke-Update {
         Write-Log "Agent Service updated"
     }
 
+    Scrub-GitTokens
     Write-Log "UPDATE complete"
 }
 
@@ -538,6 +585,8 @@ function Invoke-Release {
 
     # Update code while VM is idle so next assignment starts with latest
     Invoke-Update
+
+    Wipe-MetadataKey "github-token"
 
     Write-Log "RELEASE complete"
 }

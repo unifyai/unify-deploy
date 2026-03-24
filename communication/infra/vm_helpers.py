@@ -951,12 +951,14 @@ def assign_pool_vm(
     private_key, public_key = generate_ssh_keypair()
     store_ssh_private_key(assistant_id, private_key)
 
+    github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
     metadata = {
         "unify-key": unify_apikey,
         "vnc-password": unify_apikey,
         "ssh-public-key": public_key,
         "disk-device": device_name,
         "assistant-id": assistant_id,
+        "github-token": github_token,
     }
     if vm_type == "windows" and MAK_KEY:
         metadata["office-mak-key"] = MAK_KEY

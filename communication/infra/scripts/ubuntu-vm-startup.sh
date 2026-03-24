@@ -76,6 +76,18 @@ get_saved_commit_hash() {
     cat "$1/.commit-hash" 2>/dev/null || echo ""
 }
 
+scrub_git_tokens() {
+    for repo_dir in /magnitude /agent-service; do
+        if [[ -d "$repo_dir/.git" ]]; then
+            local url
+            url=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
+            if [[ "$url" == *"@github.com"* ]]; then
+                git -C "$repo_dir" remote set-url origin "$(echo "$url" | sed 's|https://[^@]*@|https://|')" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
 # =============================================================================
 # Runtime dependencies not baked into image
 # =============================================================================
@@ -227,6 +239,8 @@ echo "  Installing dependencies..."
 cd /agent-service
 npm install 2>&1
 
+scrub_git_tokens
+
 # =============================================================================
 # Configure Caddy
 # =============================================================================
@@ -351,6 +365,23 @@ print(json.dumps(labels))
             "https://compute.googleapis.com/compute/v1/projects/$GCP_PROJECT/zones/$GCP_ZONE/instances/$GCP_INSTANCE/setLabels" \
             -d "{\"labels\": $NEW_LABELS, \"labelFingerprint\": \"$FINGERPRINT\"}"
         echo "Pool VM marked as idle"
+    fi
+
+    # Wipe github-token from metadata (no longer needed after initial clone)
+    META_FP=$(echo "$INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['metadata']['fingerprint'])" 2>/dev/null || true)
+    if [[ -n "$META_FP" ]]; then
+        META_ITEMS=$(echo "$INFO" | python3 -c "
+import sys, json
+meta = json.load(sys.stdin).get('metadata', {})
+items = [{'key': i['key'], 'value': '' if i['key'] == 'github-token' else i['value']} for i in meta.get('items', [])]
+print(json.dumps(items))
+")
+        curl -sf -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://compute.googleapis.com/compute/v1/projects/$GCP_PROJECT/zones/$GCP_ZONE/instances/$GCP_INSTANCE/setMetadata" \
+            -d "{\"items\": $META_ITEMS, \"fingerprint\": \"$META_FP\"}" >/dev/null 2>&1
+        echo "Wiped github-token from metadata"
     fi
 fi
 

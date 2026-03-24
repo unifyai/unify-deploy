@@ -122,6 +122,20 @@ function Update-GitRepo {
     }
 }
 
+function Scrub-GitTokens {
+    foreach ($dir in @('C:\magnitude', 'C:\agent-service')) {
+        if (Test-Path "$dir\.git") {
+            try {
+                $url = (& $script:CmdExe /c "`"$script:GitExe`" -C `"$dir`" remote get-url origin 2>&1")
+                if ($url -match '@github\.com') {
+                    $clean = $url -replace 'https://[^@]+@', 'https://'
+                    & $script:CmdExe /c "`"$script:GitExe`" -C `"$dir`" remote set-url origin $clean 2>&1" | Out-Null
+                }
+            } catch {}
+        }
+    }
+}
+
 # =============================================================================
 # Read Configuration
 # =============================================================================
@@ -339,6 +353,8 @@ if ($envBackup -and (Test-Path $agentServiceDir)) {
     $envBackup | Out-File -FilePath $envFile -Encoding UTF8 -NoNewline
 }
 
+Scrub-GitTokens
+
 # =============================================================================
 # Configure Caddy
 # =============================================================================
@@ -538,6 +554,24 @@ try {
             -Headers @{ Authorization = "Bearer $token" } `
             -Body $body
         Write-Host "Pool VM marked as idle" -ForegroundColor Green
+    }
+
+    # Wipe github-token from metadata (no longer needed after initial clone)
+    $metaFingerprint = $info.metadata.fingerprint
+    if ($metaFingerprint) {
+        $metaItems = @()
+        foreach ($item in $info.metadata.items) {
+            $metaItems += @{
+                key   = $item.key
+                value = if ($item.key -eq 'github-token') { '' } else { $item.value }
+            }
+        }
+        $metaBody = @{ items = $metaItems; fingerprint = $metaFingerprint } | ConvertTo-Json -Depth 3
+        Invoke-RestMethod -Uri "$apiBase/setMetadata" `
+            -Method POST -ContentType "application/json" `
+            -Headers @{ Authorization = "Bearer $token" } `
+            -Body $metaBody | Out-Null
+        Write-Host "Wiped github-token from metadata" -ForegroundColor Green
     }
 } catch {
     Write-Host "Pool VM label update skipped: $_" -ForegroundColor Gray
