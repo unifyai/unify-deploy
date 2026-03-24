@@ -852,7 +852,7 @@ def test_assistants(k8s_clients):
 
 _PUBSUB_SUFFIX = os.getenv(
     "TEST_PUBSUB_SUFFIX",
-    "-staging" if NAMESPACE != "production" else "",
+    f"-{NAMESPACE}" if NAMESPACE != "production" else "",
 )
 
 

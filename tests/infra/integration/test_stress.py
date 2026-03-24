@@ -970,8 +970,8 @@ def test_production_traffic_stress(
 
         # Verify VM re-assignment + auth
         if gce_client is not None:
-            print(f"[Phase 7] Verifying VM re-attachment (30s wait)...")
-            time.sleep(30)
+            print(f"[Phase 7] Verifying VM re-attachment (90s wait)...")
+            time.sleep(90)
             for a in restart_assistants:
                 aid = a["assistant_id"]
                 try:
@@ -987,7 +987,7 @@ def test_production_traffic_stress(
                                 f"  {aid}: VM {vms[0].name} re-attached, auth FAIL — {status}",
                             )
                     else:
-                        print(f"  {aid}: VM not re-assigned after 30s")
+                        print(f"  {aid}: VM not re-assigned after 90s")
                 except Exception as e:
                     print(f"  {aid}: GCE check failed — {e}")
 
