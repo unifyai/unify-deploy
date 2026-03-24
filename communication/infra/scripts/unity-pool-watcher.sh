@@ -79,6 +79,37 @@ scrub_git_tokens() {
     done
 }
 
+scrub_filesystem() {
+    log "SCRUB: cleaning session artifacts from filesystem"
+
+    # /root/ — preserve shell config, package manager caches, browser binaries
+    find /root -mindepth 1 -maxdepth 1 \
+        ! -name '.bashrc' ! -name '.profile' ! -name '.bash_logout' \
+        ! -name '.npm' ! -name '.bun' ! -name '.cache' \
+        -exec rm -rf {} + 2>/dev/null || true
+    # Within .cache, keep only browser binaries and node cache
+    if [[ -d /root/.cache ]]; then
+        find /root/.cache -mindepth 1 -maxdepth 1 \
+            ! -name 'ms-playwright' ! -name 'node' \
+            -exec rm -rf {} + 2>/dev/null || true
+    fi
+
+    # /Unity/ — preserve structural dirs only
+    find /Unity -mindepth 1 -maxdepth 1 \
+        ! -name '.ssh' ! -name 'Local' \
+        -exec rm -rf {} + 2>/dev/null || true
+
+    # Application logs
+    rm -f /var/log/agent-service.log
+    : > /var/log/caddy/access.log 2>/dev/null || true
+    find /var/log/supervisor -name '*.log' -exec truncate -s 0 {} \; 2>/dev/null || true
+
+    # Temp files
+    find /tmp -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+
+    log "SCRUB complete"
+}
+
 wipe_metadata_key() {
     local key=$1
     local sa_token project zone instance api_base info meta_fp meta_items
@@ -441,6 +472,8 @@ PYSCRIPT
             log "Unmounted /Unity/Local"
         fi
     fi
+
+    scrub_filesystem
 
     # Update code while VM is idle so next assignment starts with latest
     do_update

@@ -75,6 +75,63 @@ function Scrub-GitTokens {
     }
 }
 
+function Scrub-Filesystem {
+    Write-Log "SCRUB: cleaning session artifacts from filesystem"
+
+    # C:\Unity\ — remove everything except structural dirs
+    if (Test-Path "C:\Unity") {
+        Get-ChildItem "C:\Unity" -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notin @('.ssh', 'Local') } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # unityuser profile — wipe session data from known directories
+    $userProfile = "C:\Users\unityuser"
+    if (Test-Path $userProfile) {
+        foreach ($subdir in @('Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'Favorites', '.cache')) {
+            $path = Join-Path $userProfile $subdir
+            if (Test-Path $path) {
+                Get-ChildItem $path -Force -ErrorAction SilentlyContinue |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        # User temp
+        $userTemp = Join-Path $userProfile "AppData\Local\Temp"
+        if (Test-Path $userTemp) {
+            Get-ChildItem $userTemp -Force -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # SYSTEM profile — preserve .bun and .npm, wipe the rest
+    $sysProfile = "C:\Windows\System32\config\systemprofile"
+    if (Test-Path $sysProfile) {
+        Get-ChildItem $sysProfile -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notin @('.bun', '.npm', 'AppData') } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # Application logs
+    Remove-Item "C:\agent-service\agent.log" -Force -ErrorAction SilentlyContinue
+    if (Test-Path "C:\caddy\access.log") {
+        Clear-Content "C:\caddy\access.log" -ErrorAction SilentlyContinue
+    }
+
+    # SYSTEM temp
+    Get-ChildItem $env:TEMP -Force -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+    # PowerShell history
+    foreach ($histPath in @(
+        "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt",
+        "C:\Users\unityuser\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
+    )) {
+        Remove-Item $histPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Log "SCRUB complete"
+}
+
 function Wipe-MetadataKey($key) {
     try {
         $metaHeaders = @{ "Metadata-Flavor" = "Google" }
@@ -582,6 +639,8 @@ function Invoke-Release {
             Set-Disk -IsOffline $true -ErrorAction SilentlyContinue
         Write-Log "Unmounted persistent disk"
     }
+
+    Scrub-Filesystem
 
     # Update code while VM is idle so next assignment starts with latest
     Invoke-Update
