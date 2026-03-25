@@ -469,6 +469,32 @@ cd /d C:\novnc
 }
 
 # =============================================================================
+# Enforce Firewall Rules (converge on every boot)
+# =============================================================================
+Write-Host ""
+Write-Host "=== Enforcing firewall rules ===" -ForegroundColor Cyan
+
+# Remove all Unity-* rules to ensure clean slate
+Get-NetFirewallRule -DisplayName "Unity-*" -ErrorAction SilentlyContinue |
+    Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+# Inbound: HTTPS only (6080/3000 behind Caddy, RDP handled by Windows/GCP defaults)
+New-NetFirewallRule -DisplayName "Unity-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any | Out-Null
+Write-Host "  Inbound: port 443 allowed" -ForegroundColor Green
+
+# Outbound: block metadata server (169.254.169.254) for unityuser
+try {
+    $sid = (New-Object System.Security.Principal.NTAccount("unityuser")).Translate(
+        [System.Security.Principal.SecurityIdentifier]).Value
+    New-NetFirewallRule -DisplayName "Unity-BlockMetadata" -Direction Outbound `
+        -RemoteAddress 169.254.169.254 -Action Block `
+        -LocalUser "D:(A;;CC;;;$sid)" -Profile Any | Out-Null
+    Write-Host "  Outbound: metadata server blocked for unityuser" -ForegroundColor Green
+} catch {
+    Write-Host "  WARNING: could not create metadata block rule: $_" -ForegroundColor Yellow
+}
+
+# =============================================================================
 # Start Services (TightVNC, websockify, Caddy - NOT Agent Service)
 # =============================================================================
 Write-Host ""

@@ -308,6 +308,29 @@ else
 fi
 
 # =============================================================================
+# Enforce Firewall Rules (converge on every boot)
+# =============================================================================
+echo ""
+echo "=== Enforcing firewall rules ==="
+
+for chain in UNITY-INBOUND UNITY-OUTBOUND; do
+    iptables -N $chain 2>/dev/null || iptables -F $chain
+done
+# Wire custom chains into main chains (idempotent)
+iptables -C INPUT -j UNITY-INBOUND 2>/dev/null || iptables -I INPUT -j UNITY-INBOUND
+iptables -C OUTPUT -j UNITY-OUTBOUND 2>/dev/null || iptables -I OUTPUT -j UNITY-OUTBOUND
+
+# Inbound: block direct access to internal service ports (6080/3000 behind Caddy)
+iptables -A UNITY-INBOUND -p tcp --dport 6080 ! -i lo -j DROP
+iptables -A UNITY-INBOUND -p tcp --dport 3000 ! -i lo -j DROP
+
+# Outbound: block metadata server for unityuser (prevents reading secrets/tokens)
+iptables -A UNITY-OUTBOUND -d 169.254.169.254 -m owner --uid-owner unityuser -j DROP
+
+echo "  Inbound: ports 6080/3000 blocked (behind Caddy)"
+echo "  Outbound: metadata server blocked for unityuser"
+
+# =============================================================================
 # Start Services (before marking idle, so Caddy is ready before VM is claimable)
 # =============================================================================
 ELAPSED=$(( $(date +%s) - START_TIME ))
