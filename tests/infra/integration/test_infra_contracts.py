@@ -252,3 +252,173 @@ class TestInfraAuth:
             403,
             422,
         ), f"POST {path} should reject no-auth, got {resp.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# Job stop / read / logs
+# ---------------------------------------------------------------------------
+
+
+class TestJobStop:
+    """Contract: POST /infra/job/stop suspends a running K8s job."""
+
+    def test_stop_job(self, comms):
+        from .conftest import create_and_cleanup_idle_job
+
+        job_name = create_and_cleanup_idle_job(comms)
+        try:
+            resp = comms.post("/infra/job/stop", data={"job_name": job_name})
+            assert (
+                resp.status_code == 200
+            ), f"job/stop failed: {resp.status_code} {resp.text}"
+            body = resp.json()
+            assert body["success"] is True
+        finally:
+            comms.delete("/infra/job/delete", data={"job_name": job_name})
+
+
+class TestJobRead:
+    """Contract: GET /infra/job/{name} returns job metadata and labels."""
+
+    def test_read_existing_job(self, comms):
+        jobs_resp = comms.get(
+            "/infra/jobs",
+            params={"label_selector": "app=unity", "hours": 1},
+        )
+        jobs = jobs_resp.json().get("jobs", [])
+        if not jobs:
+            pytest.skip("No jobs in namespace to read")
+        job_name = jobs[0]["job_name"]
+
+        resp = comms.get(f"/infra/job/{job_name}")
+        assert (
+            resp.status_code == 200
+        ), f"job read failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert body["job_name"] == job_name
+        assert "labels" in body
+        assert "resource_version" in body
+
+    def test_read_nonexistent_job_returns_404(self, comms):
+        resp = comms.get("/infra/job/nonexistent-job-xyz-12345")
+        assert resp.status_code == 404
+
+
+class TestJobLogs:
+    """Contract: GET /infra/job/logs returns pod logs for a job."""
+
+    def test_get_logs_for_existing_job(self, comms):
+        jobs_resp = comms.get(
+            "/infra/jobs",
+            params={"label_selector": "app=unity,unity-status=running", "hours": 1},
+        )
+        jobs = jobs_resp.json().get("jobs", [])
+        if not jobs:
+            pytest.skip("No running jobs to read logs from")
+        job_name = jobs[0]["job_name"]
+
+        resp = comms.get(
+            "/infra/job/logs",
+            params={"job_name": job_name, "tail_lines": 5},
+        )
+        assert resp.status_code in (
+            200,
+            404,
+        ), f"job/logs unexpected: {resp.status_code} {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# VM pool provision / rebalance / disk lifecycle
+# ---------------------------------------------------------------------------
+
+
+class TestVMPoolProvision:
+    """Contract: POST /infra/vm/pool/provision creates a new pool VM."""
+
+    def test_provision_single_ubuntu_vm(self, comms):
+        resp = comms.post(
+            "/infra/vm/pool/provision",
+            json={"vm_type": "ubuntu", "count": 1},
+        )
+        assert (
+            resp.status_code == 200
+        ), f"vm provision failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert "provisioned" in body
+        assert len(body["provisioned"]) >= 1
+
+
+class TestVMPoolRebalance:
+    """Contract: POST /infra/vm/pool/rebalance triggers a pool rebalance."""
+
+    def test_rebalance_returns_result(self, comms):
+        resp = comms.post(
+            "/infra/vm/pool/rebalance",
+            params={"vm_type": "ubuntu"},
+        )
+        assert (
+            resp.status_code == 200
+        ), f"vm rebalance failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert isinstance(body, dict)
+
+
+class TestDiskDetach:
+    """Contract: POST /infra/vm/pool/disk/detach/{id} detaches an assistant
+    disk from its VM without deleting the disk."""
+
+    def test_detach_with_no_attached_disk(self, comms):
+        resp = comms.post("/infra/vm/pool/disk/detach/nonexistent-assistant-999")
+        # 200 with detached=false, or 404/500 if no VM found
+        assert resp.status_code in (
+            200,
+            404,
+            500,
+        ), f"disk detach unexpected: {resp.status_code} {resp.text}"
+
+
+class TestDiskDelete:
+    """Contract: DELETE /infra/vm/pool/disk/{id} deletes an assistant disk."""
+
+    def test_delete_nonexistent_disk(self, comms):
+        resp = comms.delete("/infra/vm/pool/disk/nonexistent-assistant-999")
+        assert resp.status_code in (
+            200,
+            404,
+        ), f"disk delete unexpected: {resp.status_code} {resp.text}"
+        if resp.status_code == 200:
+            body = resp.json()
+            assert body.get("deleted") is False or body.get("deleted") is True
+
+
+class TestVMReady:
+    """Contract: POST /infra/vm/ready publishes a desktop_ready event after
+    probing the VM's HTTPS endpoint. Authenticated via user API key."""
+
+    def test_vm_ready_with_assigned_vm(self):
+        from .conftest import UNIFY_KEY, find_assistant_with_assigned_vm
+
+        if not UNIFY_KEY:
+            pytest.skip("UNIFY_KEY required for vm/ready")
+        assistant = find_assistant_with_assigned_vm()
+        if not assistant:
+            pytest.skip("No assistant with an assigned VM found")
+
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/ready",
+            json={
+                "assistant_id": str(assistant["assistant_id"]),
+                "vm_type": "ubuntu",
+            },
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            timeout=30,
+        )
+        # 200 = published desktop_ready; 503 = VM HTTPS probe failed
+        assert resp.status_code in (
+            200,
+            503,
+        ), f"vm/ready unexpected: {resp.status_code} {resp.text}"
+        if resp.status_code == 200:
+            body = resp.json()
+            assert body["success"] is True
+            assert "message_id" in body

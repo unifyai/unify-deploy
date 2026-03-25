@@ -183,3 +183,48 @@ class TestStaleJobsExpireScheduler:
         assert (
             "total_running" in body or "expired" in body
         ), f"Unexpected response shape: {body}"
+
+
+# ---------------------------------------------------------------------------
+# Microsoft router (Graph subscription validation handshake)
+# ---------------------------------------------------------------------------
+
+
+class TestMicrosoftRouter:
+    """Contract: POST /microsoft/router with a validationToken query param
+    echoes the token back as plain text (Graph subscription setup)."""
+
+    def test_validation_token_echoed(self):
+        resp = requests.post(
+            f"{ADAPTERS_URL}/microsoft/router",
+            params={"validationToken": "contract-test-validation-12345"},
+            timeout=15,
+        )
+        assert (
+            resp.status_code == 200
+        ), f"microsoft/router validation failed: {resp.status_code} {resp.text}"
+        assert resp.text.strip() == "contract-test-validation-12345"
+
+
+# ---------------------------------------------------------------------------
+# Phone conference status (unauthenticated Twilio callback)
+# ---------------------------------------------------------------------------
+
+
+class TestPhoneConferenceStatus:
+    """Contract: POST /phone/conference-status handles Twilio conference
+    status callbacks. Unauthenticated (Twilio calls this directly)."""
+
+    def test_participant_join_returns_200(self):
+        resp = requests.post(
+            f"{COMMS_APP_URL}/phone/conference-status",
+            data={
+                "StatusCallbackEvent": "participant-join",
+                "ConferenceSid": "CFcontract_test_sid",
+                "FriendlyName": "contract-test-conference",
+            },
+            timeout=15,
+        )
+        assert (
+            resp.status_code == 200
+        ), f"conference-status failed: {resp.status_code} {resp.text}"

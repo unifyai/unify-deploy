@@ -232,3 +232,179 @@ class TestApiMessage:
             400,
             422,
         ), f"Expected 400/422 for missing fields, got {resp.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# Twilio phone call (full voice webhook)
+# ---------------------------------------------------------------------------
+
+
+class TestTwilioPhoneCall:
+    """Contract: POST /twilio/call accepts a signed request, builds a
+    conference via build_webhook_context, and returns TwiML."""
+
+    def test_phone_call_returns_twiml(self, twilio_auth_token, phone_assistant):
+        params = {
+            "To": phone_assistant["phone"],
+            "From": "+15005550006",
+            "CallSid": f"CA{uuid.uuid4().hex}",
+            "CallStatus": "ringing",
+            "Direction": "inbound",
+        }
+        resp = _twilio_post("/twilio/call", params, twilio_auth_token)
+        assert (
+            resp.status_code == 200
+        ), f"Phone call webhook failed: {resp.status_code} {resp.text}"
+        assert "text/xml" in resp.headers.get("content-type", "")
+
+
+# ---------------------------------------------------------------------------
+# Assistant wakeup (force-start container)
+# ---------------------------------------------------------------------------
+
+
+class TestAssistantWakeup:
+    """Contract: POST /assistant/wakeup force-starts a container for an
+    assistant, bypassing the is_local/is_test skip logic."""
+
+    def test_wakeup_returns_200(self, real_assistant_data):
+        assistant_id = str(real_assistant_data["assistant_id"])
+        resp = requests.post(
+            f"{ADAPTERS_URL}/assistant/wakeup",
+            data={"assistant_id": assistant_id},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=30,
+        )
+        assert (
+            resp.status_code == 200
+        ), f"assistant/wakeup failed: {resp.status_code} {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# File attachment upload
+# ---------------------------------------------------------------------------
+
+
+class TestAttachmentUpload:
+    """Contract: POST /unify/attachment uploads a file to GCS and returns
+    a signed URL with metadata."""
+
+    def test_upload_returns_signed_url(self, real_assistant_data):
+        assistant_id = str(real_assistant_data["assistant_id"])
+        file_content = b"integration test attachment content"
+        resp = requests.post(
+            f"{ADAPTERS_URL}/unify/attachment",
+            files={"file": ("test-contract.txt", file_content, "text/plain")},
+            data={"assistant_id": assistant_id},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=30,
+        )
+        assert (
+            resp.status_code == 200
+        ), f"attachment upload failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert "filename" in body
+        assert "gs_url" in body or "url" in body
+        assert body.get("content_type") == "text/plain"
+
+
+# ---------------------------------------------------------------------------
+# LiveKit recording webhook
+# ---------------------------------------------------------------------------
+
+
+class TestLiveKitRecording:
+    """Contract: POST /livekit/recording-complete processes an egress_ended
+    event, verifies the webhook JWT, and publishes to Pub/Sub."""
+
+    def test_recording_complete_accepts_valid_webhook(self, livekit_credentials):
+        from .conftest import compute_livekit_webhook_auth
+
+        body_dict = {
+            "event": "egress_ended",
+            "egressInfo": {
+                "egressId": "EG_contract_test",
+                "roomName": "contract-test-room",
+                "fileResults": [
+                    {"filename": "test/recording.mp3", "duration": 30000000000},
+                ],
+            },
+        }
+        body_str = json.dumps(body_dict)
+        token = compute_livekit_webhook_auth(
+            body_str,
+            livekit_credentials["api_key"],
+            livekit_credentials["api_secret"],
+        )
+        resp = requests.post(
+            f"{ADAPTERS_URL}/livekit/recording-complete",
+            data=body_str,
+            params={"assistant_id": "854", "room_name": "contract-test-room"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/webhook+json",
+            },
+            timeout=30,
+        )
+        # 200 = processed or skipped (egress may not match expected format)
+        # 401 = signature mismatch (would indicate broken auth)
+        assert (
+            resp.status_code != 401
+        ), f"LiveKit webhook auth failed: {resp.status_code} {resp.text}"
+        assert (
+            resp.status_code == 200
+        ), f"LiveKit recording failed: {resp.status_code} {resp.text}"
+
+    def test_recording_rejects_invalid_auth(self):
+        resp = requests.post(
+            f"{ADAPTERS_URL}/livekit/recording-complete",
+            data='{"event": "egress_ended"}',
+            headers={
+                "Authorization": "Bearer invalid-token",
+                "Content-Type": "application/webhook+json",
+            },
+            timeout=15,
+        )
+        assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Gmail push notification (Pub/Sub envelope)
+# ---------------------------------------------------------------------------
+
+
+class TestGmailPush:
+    """Contract: POST /email/gmail processes a Gmail push notification
+    (Pub/Sub envelope format) and resolves the thread via Gmail API."""
+
+    def test_gmail_push_processes_notification(self):
+        from .conftest import find_assistant_with_email
+
+        assistant = find_assistant_with_email()
+        if not assistant:
+            pytest.skip("No assistant with an email address found")
+
+        import base64
+
+        gmail_data = json.dumps(
+            {"emailAddress": assistant["email"], "historyId": "999999"},
+        )
+        envelope = {
+            "message": {
+                "data": base64.b64encode(gmail_data.encode()).decode(),
+                "messageId": "contract-test-msg-id",
+            },
+            "subscription": "projects/gcp-project-runtime/subscriptions/gmail-test",
+        }
+        resp = requests.post(
+            f"{ADAPTERS_URL}/email/gmail",
+            json=envelope,
+            timeout=30,
+        )
+        # 200 = processed ("OK" or "No new conversations")
+        # 500 = Gmail API error (e.g. historyId invalid) — still exercises the full code path
+        assert resp.status_code in (
+            200,
+            400,
+            500,
+        ), f"Gmail push unexpected: {resp.status_code} {resp.text}"

@@ -984,6 +984,64 @@ def find_assistant_with_email() -> dict | None:
     return None
 
 
+def create_and_cleanup_idle_job(comms_client) -> str:
+    """Create an idle job and return its name. Caller must delete it."""
+    resp = comms_client.post("/infra/job/create")
+    assert resp.status_code == 200, f"job/create failed: {resp.status_code} {resp.text}"
+    return resp.json()["job_name"]
+
+
+def find_assistant_with_assigned_vm() -> dict | None:
+    """Find a user assistant that has a running container and an assigned VM."""
+    try:
+        from google.cloud import compute_v1
+
+        client = compute_v1.InstancesClient()
+        from common.settings import SETTINGS
+
+        request = compute_v1.ListInstancesRequest(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            filter="labels.pool-role=assigned",
+        )
+        vms = list(client.list(request=request))
+        if not vms:
+            return None
+        aid = vms[0].labels.get("assistant-id")
+        if not aid:
+            return None
+        resp = requests.get(
+            f"{ORCHESTRA_URL}/admin/assistant",
+            params={"agent_id": aid},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=10,
+        )
+        assistants = resp.json().get("info", [])
+        if assistants:
+            return {
+                "assistant_id": assistants[0]["agent_id"],
+                "vm_name": vms[0].name,
+                **{k: v for k, v in assistants[0].items() if k not in ("agent_id",)},
+            }
+    except Exception:
+        pass
+    return None
+
+
+def compute_livekit_webhook_auth(body: str, api_key: str, api_secret: str) -> str:
+    """Compute a LiveKit webhook Authorization header (Bearer JWT)."""
+    import hashlib
+    import jwt as pyjwt
+
+    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    token = pyjwt.encode(
+        {"sha256": body_hash, "sub": api_key},
+        api_secret,
+        algorithm="HS256",
+    )
+    return token
+
+
 # ---------------------------------------------------------------------------
 # Stress test helpers: direct Pub/Sub
 # ---------------------------------------------------------------------------
