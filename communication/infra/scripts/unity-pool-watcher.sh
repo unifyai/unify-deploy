@@ -82,17 +82,13 @@ scrub_git_tokens() {
 scrub_filesystem() {
     log "SCRUB: cleaning session artifacts from filesystem"
 
-    # /root/ — preserve shell config, package manager caches, browser binaries
+    # /root/ — preserve shell config, package manager caches, and all of .cache
+    # (.cache contains browser binaries, shader caches, fontconfig, etc. that are
+    # expensive to rebuild and safe to keep across assignments)
     find /root -mindepth 1 -maxdepth 1 \
         ! -name '.bashrc' ! -name '.profile' ! -name '.bash_logout' \
         ! -name '.npm' ! -name '.bun' ! -name '.cache' \
         -exec rm -rf {} + 2>/dev/null || true
-    # Within .cache, keep only browser binaries and node cache
-    if [[ -d /root/.cache ]]; then
-        find /root/.cache -mindepth 1 -maxdepth 1 \
-            ! -name 'ms-playwright' ! -name 'node' \
-            -exec rm -rf {} + 2>/dev/null || true
-    fi
 
     # /Unity/ — preserve structural dirs only
     find /Unity -mindepth 1 -maxdepth 1 \
