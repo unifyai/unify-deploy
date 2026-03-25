@@ -10,7 +10,6 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 """
 
 import logging
-import os
 import random
 import threading
 import time
@@ -29,15 +28,10 @@ from common.settings import SETTINGS
 
 
 from .vm_config import (
-    VM_PROJECT_ID,
-    DNS_PROJECT_ID,
-    REGION,
-    ZONE,
     DNS_ZONE_NAME,
     DOMAIN_SUFFIX,
     VM_DISK_TYPE,
     VM_NETWORK,
-    ENV_SUFFIX,
     MAK_KEY,
     SSH_SYNC_PORT,
     VM_WILDCARD_CERT_SECRET,
@@ -145,13 +139,13 @@ def get_secret(secret_name: str, project_id: str = None) -> Optional[str]:
 
     Args:
         secret_name: The name of the secret
-        project_id: The GCP project ID (defaults to VM_PROJECT_ID)
+        project_id: The GCP project ID (defaults to SETTINGS.vm_project_id)
 
     Returns:
         The secret value as a string, or None if not found.
     """
     if project_id is None:
-        project_id = VM_PROJECT_ID
+        project_id = SETTINGS.vm_project_id
 
     try:
         client = secretmanager.SecretManagerServiceClient()
@@ -170,7 +164,7 @@ def get_dns_hostname(assistant_id: str) -> str:
 
     NOTE: Same for both Windows and Ubuntu - only one VM per assistant.
     """
-    return f"unity-assistant-{assistant_id}{ENV_SUFFIX}.{DOMAIN_SUFFIX}"
+    return f"unity-assistant-{assistant_id}{SETTINGS.env_suffix}.{DOMAIN_SUFFIX}"
 
 
 # =============================================================================
@@ -264,7 +258,7 @@ def store_ssh_private_key(
     Returns:
         True if stored successfully, False otherwise
     """
-    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
+    admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
         logger.error("ORCHESTRA_ADMIN_KEY not configured, cannot store SSH key")
         return False
@@ -292,7 +286,7 @@ def _fetch_existing_ssh_key(assistant_id: str) -> Optional[str]:
 
     Returns the PEM-encoded private key string, or None if not found.
     """
-    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
+    admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
         return None
 
@@ -368,20 +362,20 @@ def _pool_vm_config(vm_type: str) -> Dict[str, Any]:
 
 
 def _pool_vm_name(vm_type: str, n: int) -> str:
-    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{ENV_SUFFIX}"
+    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{SETTINGS.env_suffix}"
 
 
 def _pool_ip_name(vm_type: str, n: int) -> str:
-    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-ip-{n}{ENV_SUFFIX}"
+    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-ip-{n}{SETTINGS.env_suffix}"
 
 
 def _pool_hostname(vm_type: str, n: int) -> str:
-    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{ENV_SUFFIX}.{DOMAIN_SUFFIX}"
+    return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{SETTINGS.env_suffix}.{DOMAIN_SUFFIX}"
 
 
 def _assistant_disk_name(assistant_id: str) -> str:
     sanitized = assistant_id.lower().replace("_", "-")
-    return f"unity-disk-{sanitized}{ENV_SUFFIX}"
+    return f"unity-disk-{sanitized}{SETTINGS.env_suffix}"
 
 
 def find_vm_with_disk(assistant_id: str) -> Optional[str]:
@@ -394,8 +388,8 @@ def find_vm_with_disk(assistant_id: str) -> Optional[str]:
     disk_suffix = f"/disks/{disk_name}"
 
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
     )
     for instance in client.list(request=request):
         if instance.disks:
@@ -414,8 +408,8 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
         label_filter += f" AND labels.vm-type={vm_type}"
 
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
         filter=label_filter,
     )
     results = []
@@ -463,8 +457,8 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     )
     try:
         op = ip_client.insert(
-            project=VM_PROJECT_ID,
-            region=REGION,
+            project=SETTINGS.vm_project_id,
+            region=SETTINGS.vm_region,
             address_resource=address,
         )
         op.result()
@@ -472,11 +466,15 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     except Conflict:
         logger.info(f"Static IP {ip_name} already exists, reusing")
 
-    ip_result = ip_client.get(project=VM_PROJECT_ID, region=REGION, address=ip_name)
+    ip_result = ip_client.get(
+        project=SETTINGS.vm_project_id,
+        region=SETTINGS.vm_region,
+        address=ip_name,
+    )
     static_ip = ip_result.address
 
     # Create DNS A record
-    dns_client = dns.Client(project=DNS_PROJECT_ID)
+    dns_client = dns.Client(project=SETTINGS.dns_project_id)
     zone = dns_client.zone(DNS_ZONE_NAME)
     fqdn = f"{hostname}."
     try:
@@ -537,7 +535,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
 
     instance_kwargs = dict(
         name=vm_name,
-        machine_type=f"zones/{ZONE}/machineTypes/{cfg['machine_type']}",
+        machine_type=f"zones/{SETTINGS.vm_zone}/machineTypes/{cfg['machine_type']}",
         description=f"Unity pool VM ({vm_type}) #{n}",
         labels=labels,
         tags=compute_v1.Tags(items=cfg["tags"]),
@@ -547,7 +545,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
                 auto_delete=True,
                 initialize_params=compute_v1.AttachedDiskInitializeParams(
                     disk_size_gb=cfg["disk_size_gb"],
-                    disk_type=f"zones/{ZONE}/diskTypes/{VM_DISK_TYPE}",
+                    disk_type=f"zones/{SETTINGS.vm_zone}/diskTypes/{VM_DISK_TYPE}",
                     source_image=f"projects/{cfg['image_project']}/global/images/family/{cfg['image_family']}",
                 ),
             ),
@@ -572,7 +570,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         ),
         service_accounts=[
             compute_v1.ServiceAccount(
-                email=f"pool-vm-sa@{VM_PROJECT_ID}.iam.gserviceaccount.com",
+                email=f"pool-vm-sa@{SETTINGS.vm_project_id}.iam.gserviceaccount.com",
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             ),
         ],
@@ -584,7 +582,11 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
 
     instance = compute_v1.Instance(**instance_kwargs)
     client = compute_v1.InstancesClient()
-    op = client.insert(project=VM_PROJECT_ID, zone=ZONE, instance_resource=instance)
+    op = client.insert(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance_resource=instance,
+    )
     op.result()
 
     logger.info(f"Provisioned pool VM: {vm_name} ({vm_type}) with IP {static_ip}")
@@ -617,7 +619,11 @@ def _set_pool_labels(
     VM concurrently).  Returns True on successful update.
     """
     for attempt in range(max_retries):
-        fresh = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+        fresh = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
         labels = dict(fresh.labels) if fresh.labels else {}
         if expected_role is not None and labels.get("pool-role") != expected_role:
             logger.info(
@@ -629,8 +635,8 @@ def _set_pool_labels(
         labels.update(label_overrides)
         try:
             client.set_labels(
-                project=VM_PROJECT_ID,
-                zone=ZONE,
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
                 instance=vm_name,
                 instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
                     labels=labels,
@@ -696,8 +702,8 @@ def _claim_idle_vm_inner(
 ) -> Dict[str, Any]:
     while True:
         request = compute_v1.ListInstancesRequest(
-            project=VM_PROJECT_ID,
-            zone=ZONE,
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
             filter=label_filter,
         )
         idle_vms = list(client.list(request=request))
@@ -736,8 +742,8 @@ def _claim_idle_vm_inner(
             # be stale, allowing two concurrent setLabels calls to both pass
             # the CAS check.  GET is strongly consistent per GCE docs.
             fresh = client.get(
-                project=VM_PROJECT_ID,
-                zone=ZONE,
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
                 instance=candidate_name,
             )
             if fresh.labels.get("pool-role") != "idle":
@@ -754,8 +760,8 @@ def _claim_idle_vm_inner(
 
             try:
                 op = client.set_labels(
-                    project=VM_PROJECT_ID,
-                    zone=ZONE,
+                    project=SETTINGS.vm_project_id,
+                    zone=SETTINGS.vm_zone,
                     instance=candidate_name,
                     instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
                         labels=new_labels,
@@ -819,12 +825,16 @@ def create_assistant_disk(assistant_id: str) -> str:
     disk = compute_v1.Disk(
         name=disk_name,
         size_gb=POOL_ASSISTANT_DISK_SIZE_GB,
-        type_=f"zones/{ZONE}/diskTypes/{POOL_ASSISTANT_DISK_TYPE}",
+        type_=f"zones/{SETTINGS.vm_zone}/diskTypes/{POOL_ASSISTANT_DISK_TYPE}",
         description=f"Persistent storage for assistant {assistant_id}",
     )
 
     try:
-        op = client.insert(project=VM_PROJECT_ID, zone=ZONE, disk_resource=disk)
+        op = client.insert(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            disk_resource=disk,
+        )
         op.result()
         logger.info(
             f"Created assistant disk: {disk_name} ({POOL_ASSISTANT_DISK_SIZE_GB} GB)",
@@ -832,7 +842,11 @@ def create_assistant_disk(assistant_id: str) -> str:
     except Conflict:
         logger.info(f"Assistant disk {disk_name} already exists")
 
-    result = client.get(project=VM_PROJECT_ID, zone=ZONE, disk=disk_name)
+    result = client.get(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        disk=disk_name,
+    )
     return result.self_link
 
 
@@ -843,7 +857,9 @@ def attach_assistant_disk(vm_name: str, assistant_id: str) -> str:
     """
     client = compute_v1.InstancesClient()
     disk_name = _assistant_disk_name(assistant_id)
-    disk_source = f"projects/{VM_PROJECT_ID}/zones/{ZONE}/disks/{disk_name}"
+    disk_source = (
+        f"projects/{SETTINGS.vm_project_id}/zones/{SETTINGS.vm_zone}/disks/{disk_name}"
+    )
 
     attached_disk = compute_v1.AttachedDisk(
         source=disk_source,
@@ -853,8 +869,8 @@ def attach_assistant_disk(vm_name: str, assistant_id: str) -> str:
     )
 
     op = client.attach_disk(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
         instance=vm_name,
         attached_disk_resource=attached_disk,
     )
@@ -872,7 +888,11 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
     disk_name = _assistant_disk_name(assistant_id)
     disk_suffix = f"/disks/{disk_name}"
 
-    vm = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+    vm = client.get(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
     actual_device_name = None
     if vm.disks:
         for d in vm.disks:
@@ -885,8 +905,8 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
         return False
 
     op = client.detach_disk(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
         instance=vm_name,
         device_name=actual_device_name,
     )
@@ -903,7 +923,11 @@ def delete_assistant_disk(assistant_id: str) -> bool:
     disk_name = _assistant_disk_name(assistant_id)
 
     try:
-        op = client.delete(project=VM_PROJECT_ID, zone=ZONE, disk=disk_name)
+        op = client.delete(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            disk=disk_name,
+        )
         op.result()
         logger.info(f"Deleted assistant disk: {disk_name}")
         return True
@@ -925,7 +949,11 @@ def _update_instance_metadata(
     client = compute_v1.InstancesClient()
 
     for attempt in range(max_retries + 1):
-        instance = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+        instance = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
 
         existing = {}
         if instance.metadata and instance.metadata.items:
@@ -940,8 +968,8 @@ def _update_instance_metadata(
         )
         try:
             op = client.set_metadata(
-                project=VM_PROJECT_ID,
-                zone=ZONE,
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
                 instance=vm_name,
                 metadata_resource=metadata,
             )
@@ -1017,8 +1045,8 @@ def has_assigned_vm(assistant_id: str) -> bool:
     client = compute_v1.InstancesClient()
     sanitized = assistant_id.lower().replace("_", "-")
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
         filter=f"labels.pool-role=assigned AND labels.assistant-id={sanitized}",
     )
     return len(list(client.list(request=request))) > 0
@@ -1034,8 +1062,8 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     label_filter = f"labels.pool-role=assigned AND labels.assistant-id={sanitized}"
 
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
         filter=label_filter,
     )
     vms = list(client.list(request=request))
@@ -1090,8 +1118,8 @@ def _list_pool_state(vm_type: str):
     client = compute_v1.InstancesClient()
     type_filter = f"labels.vm-type={vm_type}"
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
         filter=type_filter,
     )
     all_vms = list(client.list(request=request))
@@ -1128,7 +1156,11 @@ def _start_one_stopped_vm(client, vm) -> bool:
         if github_token:
             _update_instance_metadata(vm.name, {"github-token": github_token})
 
-        op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
+        op = client.start(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm.name,
+        )
         op.result()
         logger.info(f"Replenish: started stopped VM {vm.name}")
         return True
@@ -1327,8 +1359,8 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
 
             try:
                 client.stop(
-                    project=VM_PROJECT_ID,
-                    zone=ZONE,
+                    project=SETTINGS.vm_project_id,
+                    zone=SETTINGS.vm_zone,
                     instance=candidate.name,
                 ).result()
             except Exception as e:
@@ -1339,8 +1371,8 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
                 continue
 
             fresh = client.get(
-                project=VM_PROJECT_ID,
-                zone=ZONE,
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
                 instance=candidate.name,
             )
             if fresh.status == "RUNNING":
@@ -1349,8 +1381,8 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
                 )
                 try:
                     client.stop(
-                        project=VM_PROJECT_ID,
-                        zone=ZONE,
+                        project=SETTINGS.vm_project_id,
+                        zone=SETTINGS.vm_zone,
                         instance=candidate.name,
                     ).result()
                 except Exception as e:
@@ -1378,8 +1410,8 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
     """
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
         filter=f"labels.pool-role=stopped AND labels.vm-type={vm_type} AND status=RUNNING",
     )
     ghosts = list(client.list(request=request))
@@ -1395,7 +1427,11 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
     actions: list[str] = []
     for vm in ghosts:
         try:
-            client.stop(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name).result()
+            client.stop(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                instance=vm.name,
+            ).result()
             actions.append(f"Scrubbed ghost VM {vm.name} (stopped)")
             logger.info(f"Scrub: stopped ghost VM {vm.name}")
         except Exception as e:
@@ -1435,8 +1471,8 @@ def push_cert_to_pool_vms() -> Dict[str, Any]:
 
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
-        project=VM_PROJECT_ID,
-        zone=ZONE,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
         filter="labels.pool-role:*",
     )
     pool_vms = list(client.list(request=request))

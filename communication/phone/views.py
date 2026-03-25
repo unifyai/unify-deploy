@@ -1,5 +1,6 @@
 import os
 from fastapi import APIRouter, Response, Request, HTTPException
+from common.settings import SETTINGS
 from twilio.twiml.voice_response import VoiceResponse
 from livekit.api import (
     LiveKitAPI,
@@ -31,7 +32,7 @@ def create_conference_response(conference_name, sip_uri, with_status=False):
     dial_user = resp_user.dial()
     dial_user.sip(
         sip_uri,
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/phone/sip-status",
+        status_callback=f"{SETTINGS.comms_url}/phone/sip-status",
         status_callback_event="initiated ringing answered completed",
     )
     return resp_user
@@ -104,7 +105,7 @@ async def send_call(request: Request):
     call = twilio_client.calls.create(
         to=sip_uri,
         from_=twilio_number,
-        url=f"{os.getenv('UNITY_COMMS_URL')}/phone/twiml?phone_number={phone_number}",
+        url=f"{SETTINGS.comms_url}/phone/twiml?phone_number={phone_number}",
     )
     return {"success": True, "call_sid": call.sid}
 

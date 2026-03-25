@@ -26,7 +26,7 @@ class TokenCredentialFromSecret(TokenCredential):
 
 async def get_graph_client(user_email: str) -> GraphServiceClient:
     """Get Graph client using stored access token for the given assistant email."""
-    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
         raise HTTPException(
             status_code=500,

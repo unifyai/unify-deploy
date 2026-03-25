@@ -72,7 +72,7 @@ def setup_kubernetes_client():
                 return None, None, None, None
 
             creds_data = json.loads(creds_json)
-            project_id = creds_data.get("project_id", "gcp-project-runtime")
+            project_id = creds_data.get("project_id", SETTINGS.gcp_project_id)
             cluster_name = "unity"
             region = "us-central1"
 
@@ -251,8 +251,8 @@ def create_unity_job(
     batch_api,
     job_name: str,
     namespace: str = "default",
-    image: str = "us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest",
-    deploy_env: str = "production",
+    image: str = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest",
+    deploy_env: str = SETTINGS.deploy_env,
     ttl_seconds_after_finished: int = None,
 ):
     """

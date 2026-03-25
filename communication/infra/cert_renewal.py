@@ -19,9 +19,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from google.cloud import dns, secretmanager
 from google.api_core.exceptions import NotFound
 
+from common.settings import SETTINGS
 from .vm_config import (
-    VM_PROJECT_ID,
-    DNS_PROJECT_ID,
     DNS_ZONE_NAME,
     VM_WILDCARD_CERT_SECRET,
     VM_WILDCARD_KEY_SECRET,
@@ -44,7 +43,7 @@ def check_cert_expiry() -> int:
     try:
         client = secretmanager.SecretManagerServiceClient()
         name = (
-            f"projects/{VM_PROJECT_ID}/secrets/"
+            f"projects/{SETTINGS.vm_project_id}/secrets/"
             f"{VM_WILDCARD_CERT_SECRET}/versions/latest"
         )
         response = client.access_secret_version(request={"name": name})
@@ -86,7 +85,7 @@ def _create_acme_client():
 
 def _set_dns_txt_record(value: str) -> None:
     """Create the _acme-challenge TXT record in Cloud DNS."""
-    client = dns.Client(project=DNS_PROJECT_ID)
+    client = dns.Client(project=SETTINGS.dns_project_id)
     zone = client.zone(DNS_ZONE_NAME)
 
     # Delete existing TXT record if present
@@ -116,7 +115,7 @@ def _set_dns_txt_record(value: str) -> None:
 def _delete_dns_txt_record() -> None:
     """Remove the _acme-challenge TXT record after validation."""
     try:
-        client = dns.Client(project=DNS_PROJECT_ID)
+        client = dns.Client(project=SETTINGS.dns_project_id)
         zone = client.zone(DNS_ZONE_NAME)
         for record in zone.list_resource_record_sets():
             if record.name == CHALLENGE_RECORD_NAME and record.record_type == "TXT":
@@ -199,7 +198,7 @@ def update_secrets(fullchain: str, privkey: str) -> None:
         (VM_WILDCARD_CERT_SECRET, fullchain),
         (VM_WILDCARD_KEY_SECRET, privkey),
     ]:
-        parent = f"projects/{VM_PROJECT_ID}/secrets/{secret_name}"
+        parent = f"projects/{SETTINGS.vm_project_id}/secrets/{secret_name}"
         client.add_secret_version(
             request={
                 "parent": parent,

@@ -22,15 +22,14 @@ from typing import Any, Dict, Optional
 from google.cloud import storage
 from google.oauth2.service_account import Credentials
 
+from common.settings import SETTINGS
 from .tunnel_config import (
-    TUNNEL_GCS_BUCKET,
     TUNNEL_REGISTRY_BLOB,
     TUNNEL_SERVER_CONFIG_BLOB,
     TUNNEL_PORT_MAP_BLOB,
     TUNNEL_CONTROL_PORT,
     TUNNEL_PORT_RANGE_START,
     TUNNEL_PORT_RANGE_END,
-    TUNNEL_SUBDOMAIN,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,7 @@ def _load_registry() -> Dict[str, Any]:
         Dict mapping tunnel_id → tunnel metadata.
     """
     client = _get_storage_client()
-    bucket = client.bucket(TUNNEL_GCS_BUCKET)
+    bucket = client.bucket(SETTINGS.tunnel_gcs_bucket)
     blob = bucket.blob(TUNNEL_REGISTRY_BLOB)
 
     try:
@@ -79,7 +78,7 @@ def _load_registry() -> Dict[str, Any]:
 def _save_registry(registry: Dict[str, Any]) -> None:
     """Save the tunnel registry to GCS."""
     client = _get_storage_client()
-    bucket = client.bucket(TUNNEL_GCS_BUCKET)
+    bucket = client.bucket(SETTINGS.tunnel_gcs_bucket)
     blob = bucket.blob(TUNNEL_REGISTRY_BLOB)
     blob.upload_from_string(
         json.dumps(registry, indent=2, default=str),
@@ -100,7 +99,7 @@ def _push_server_config(registry: Dict[str, Any]) -> None:
     hot-reloads rathole + Caddy when they change.
     """
     client = _get_storage_client()
-    bucket = client.bucket(TUNNEL_GCS_BUCKET)
+    bucket = client.bucket(SETTINGS.tunnel_gcs_bucket)
 
     # Build server.toml
     lines = [
@@ -182,7 +181,7 @@ def allocate_port(registry: Dict[str, Any]) -> int:
 
 def get_tunnel_hostname(tunnel_id: str) -> str:
     """Get the public hostname for a tunnel."""
-    return f"{tunnel_id}.{TUNNEL_SUBDOMAIN}"
+    return f"{tunnel_id}.{SETTINGS.tunnel_subdomain}"
 
 
 def get_tunnel_url(tunnel_id: str) -> str:
@@ -206,7 +205,7 @@ def generate_client_config(
         f"# Save as client.toml and run: rathole client.toml\n"
         f"\n"
         f"[client]\n"
-        f'remote_addr = "{TUNNEL_SUBDOMAIN}:{TUNNEL_CONTROL_PORT}"\n'
+        f'remote_addr = "{SETTINGS.tunnel_subdomain}:{TUNNEL_CONTROL_PORT}"\n'
         f'default_token = "{token}"\n'
         f"heartbeat_timeout = 40\n"
         f"retry_interval = 5\n"
@@ -223,13 +222,13 @@ def generate_setup_commands(
 ) -> Dict[str, str]:
     """Generate per-OS one-liner install + start commands."""
     bash_cmd = (
-        f"curl -sSL https://{TUNNEL_SUBDOMAIN}/install.sh | bash -s -- "
+        f"curl -sSL https://{SETTINGS.tunnel_subdomain}/install.sh | bash -s -- "
         f'--token "{token}" '
         f'--tunnel-id "{tunnel_id}" '
         f"--local-port {local_port}"
     )
     ps_cmd = (
-        f"irm https://{TUNNEL_SUBDOMAIN}/install.ps1 -OutFile install.ps1; "
+        f"irm https://{SETTINGS.tunnel_subdomain}/install.ps1 -OutFile install.ps1; "
         f'.\\install.ps1 -Token "{token}" '
         f'-TunnelId "{tunnel_id}" '
         f"-LocalPort {local_port}; "

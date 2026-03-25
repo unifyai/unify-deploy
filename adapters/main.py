@@ -142,7 +142,7 @@ async def require_admin_key(request: Request):
     import secrets as _secrets
 
     token = auth_header[len("Bearer ") :]
-    admin_key = os.environ.get("ORCHESTRA_ADMIN_KEY")
+    admin_key = SETTINGS.orchestra_admin_key
     if not admin_key or not _secrets.compare_digest(token, admin_key):
         raise HTTPException(status_code=403, detail="Invalid admin key")
 
@@ -250,7 +250,7 @@ async def twilio_call_webhook(request: Request):
     # publish to Pub/Sub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing call to Pub/Sub at path: {topic_path}")
     try:
         pubsub_message = {
@@ -359,7 +359,7 @@ async def twilio_call_status_webhook(request: Request):
         # publish to pubsub
         pubsub_client = get_pubsub_client()
         topic_name = SETTINGS.assistant_topic(assistant_id)
-        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+        topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
         logger.info(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
         try:
             publish_future = pubsub_client.publish(
@@ -466,7 +466,7 @@ async def livekit_recording_complete(request: Request):
 
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing recording_ready to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -540,7 +540,7 @@ async def twilio_sms_webhook(request: Request):
     # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -613,7 +613,7 @@ async def twilio_whatsapp_webhook(request: Request):
     # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -670,7 +670,7 @@ async def teams_call_webhook(request: Request):
     import secrets as _secrets
 
     body_key = data.pop("admin_key", "")
-    expected_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    expected_key = SETTINGS.orchestra_admin_key
     if (
         not expected_key
         or not body_key
@@ -737,7 +737,7 @@ async def teams_call_webhook(request: Request):
     pubsub_client = get_pubsub_client()
     # topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_name = "test"
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing Teams call to Pub/Sub at path: {topic_path}")
 
     try:
@@ -1025,7 +1025,7 @@ async def unify_message_webhook(request: Request):
     # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing unify_message to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -1116,7 +1116,7 @@ async def api_message_webhook(request: Request):
 
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     try:
         event_data = {
             "api_message_id": api_message_id,
@@ -1194,7 +1194,7 @@ async def unify_meet_webhook(request: Request):
     # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -1280,7 +1280,7 @@ async def unity_system_event_webhook(request: Request):
     # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -1375,7 +1375,7 @@ async def unity_pre_hire_webhook(request: Request):
     # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing log_pre_hire_chats to Pub/Sub at path: {topic_path}")
     try:
         publish_future = pubsub_client.publish(
@@ -1465,7 +1465,7 @@ async def assistant_update_webhook(request: Request):
         # Job is running, publish to assistant topic
         pubsub_client = get_pubsub_client()
         topic_name = SETTINGS.assistant_topic(assistant_id)
-        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+        topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
 
         # Prepare message in the same format as startup event
         message_data = {
@@ -1984,7 +1984,7 @@ async def teams_notification_processor(request: Request):
         # Publish to Pub/Sub
         pubsub_client = get_pubsub_client()
         topic_name = SETTINGS.assistant_topic(assistant_id)
-        topic_path = pubsub_client.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+        topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
 
         pubsub_message = {
             "thread": "teams_channel" if is_channel_message else "teams_chat",
@@ -2233,7 +2233,7 @@ def scheduled_email_watches(payload: ScheduledPayload):
     - If MICROSOFT_ACCESS_TOKEN exists -> Outlook watch
     - Otherwise -> Gmail watch
     """
-    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
 
@@ -2353,7 +2353,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
     Fetches all assistants in a single call and only processes those with
     Microsoft tokens configured in their secrets.
     """
-    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
 
@@ -2483,7 +2483,7 @@ def scheduled_teams_watches(payload: ScheduledPayload):
     For chats: Creates/renews /me/chats/getAllMessages subscription
     For channels: Finds and renews any existing channel subscriptions
     """
-    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
 

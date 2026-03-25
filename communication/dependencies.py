@@ -1,5 +1,4 @@
 import logging
-import os
 import secrets
 
 import httpx
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 security = HTTPBearer()
 
 VM_IDENTITY_AUDIENCE = "unity-comms-vm"
-VM_SA_EMAIL = f"pool-vm-sa@{os.environ.get('VM_PROJECT_ID', 'gcp-project-vms')}.iam.gserviceaccount.com"
+VM_SA_EMAIL = f"pool-vm-sa@{SETTINGS.vm_project_id}.iam.gserviceaccount.com"
 
 
 def auth_admin_key(
@@ -25,7 +24,7 @@ def auth_admin_key(
 ) -> None:
     admin_key = credentials.credentials
 
-    expected_key = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
+    expected_key = SETTINGS.orchestra_admin_key
     if expected_key and secrets.compare_digest(admin_key, expected_key):
         return
 

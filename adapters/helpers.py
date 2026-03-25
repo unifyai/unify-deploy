@@ -151,7 +151,7 @@ def get_assistant(
         response = requests.get(
             f"{SETTINGS.orchestra_url}/admin/assistant",
             params=params,
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
         ).json()
         _status = "error" if "detail" in response else "success"
     except Exception:
@@ -397,7 +397,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
 
     Uses K8s as the source of truth (via /infra/jobs).
     """
-    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY")
+    admin_key = SETTINGS.orchestra_admin_key
     if not SETTINGS.comms_url:
         return {"total_running": 0, "expired": 0}
 
@@ -533,7 +533,7 @@ def start_unity_job(assistant: dict, medium: str):
     demo_id = assistant.get("demo_id", None)
 
     # start job
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     try:
         response = requests.post(
             f"{SETTINGS.comms_url}/infra/job/start",
@@ -639,7 +639,7 @@ def _fetch_infra_jobs(
     Returns the Response on 200, or None after all attempts are exhausted.
     """
     tag = f"[{caller}] " if caller else ""
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY', '')}"}
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
 
     for attempt in range(1 + retries):
         try:
@@ -702,7 +702,7 @@ def _trigger_pending_reconciliation() -> dict:
     try:
         resp = requests.post(
             f"{SETTINGS.comms_url}/infra/pending/process",
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
             timeout=30,
         )
         if resp.status_code == 200:
@@ -767,13 +767,10 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     logger.info(
         f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {pool_target.target})...",
     )
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     response = requests.get(f"{SETTINGS.comms_url}/infra/image", headers=headers)
     commit_hash = response.json()["commit_hash"]
-    image = (
-        "us-central1-docker.pkg.dev/gcp-project-runtime/unity/"
-        + f"{SETTINGS.unity_image_name}:{commit_hash}"
-    )
+    image = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:{commit_hash}"
 
     def _create_single_job():
         try:
@@ -813,7 +810,7 @@ def cleanup_idle_pool() -> dict:
 
     Called by the /scheduled/jobs/cleanup endpoint via run_in_executor.
     """
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
 
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
@@ -1472,7 +1469,7 @@ def publish_gmail_thread_id(
     try:
         publisher = get_pubsub_client()
         topic_name = SETTINGS.assistant_topic(assistant_id)
-        topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+        topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
 
         message_dict = {
             "thread": "email",
@@ -1515,7 +1512,7 @@ def publish_outlook_thread_id(
     try:
         publisher = get_pubsub_client()
         topic_name = SETTINGS.assistant_topic(assistant_id)
-        topic_path = publisher.topic_path(os.getenv("GCP_PROJECT_ID"), topic_name)
+        topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
 
         message_dict = {
             "thread": "email",
@@ -1551,7 +1548,7 @@ def publish_outlook_thread_id(
 def dispatch_livekit_agent(room_name: str):
     response = requests.post(
         f"{SETTINGS.comms_url}/phone/dispatch-livekit-agent",
-        headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
         json={"room_name": room_name},
     )
     if response.status_code != 200:

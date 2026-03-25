@@ -76,10 +76,7 @@ from communication.dependencies import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_UNITY_IMAGE = (
-    "us-central1-docker.pkg.dev/gcp-project-runtime/unity/"
-    f"{SETTINGS.unity_image_name}:latest"
-)
+DEFAULT_UNITY_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest"
 
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
 POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
@@ -232,7 +229,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             f"{topic_name}-actions-sub",
         )
         system_error_subscription_path = subscriber.subscription_path(
-            GCP_PROJECT_ID,
+            SETTINGS.gcp_project_id,
             f"{topic_name}-system-error-sub",
         )
 
@@ -1197,9 +1194,9 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
     consecutive_failures = 0
     max_failures = 3
     while provisioned < request.count:
-        from .vm_config import POOL_VM_NAME_PREFIX, ENV_SUFFIX
+        from .vm_config import POOL_VM_NAME_PREFIX
 
-        candidate = f"{POOL_VM_NAME_PREFIX}-{request.vm_type}-{n}{ENV_SUFFIX}"
+        candidate = f"{POOL_VM_NAME_PREFIX}-{request.vm_type}-{n}{SETTINGS.env_suffix}"
         if candidate not in existing_names:
             try:
                 result = await asyncio.to_thread(provision_pool_vm, request.vm_type, n)

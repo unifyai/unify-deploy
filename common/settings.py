@@ -114,6 +114,31 @@ class Settings:
         self.pending_topic: str = "unity-pending-startups" + self.env_suffix
         self.pending_sub: str = self.pending_topic + "-sub"
 
+        # Container image registry (Artifact Registry)
+        self.image_registry: str = (
+            f"us-central1-docker.pkg.dev/{self.gcp_project_id}/unity"
+        )
+
+        # VM infrastructure (dedicated GCP project, separate from GKE)
+        self.vm_project_id: str = "gcp-project-vms"
+        self.dns_project_id: str = "gcp-project-dns"
+        self.vm_region: str = "us-central1"
+        _zone_map = {
+            "production": "us-central1-f",
+            "staging": "us-central1-a",
+            "preview": "us-central1-b",
+        }
+        self.vm_zone: str = _zone_map.get(self.deploy_env, "us-central1-f")
+
+        # Tunnel relay service
+        self.tunnel_subdomain: str = (
+            "tunnel.unify.ai"
+            if self.deploy_env == "production"
+            else f"{self.deploy_env}.tunnel.unify.ai"
+        )
+        self.tunnel_vm_name: str = f"unity-tunnel-server{self.env_suffix}"
+        self.tunnel_gcs_bucket: str = f"unity-tunnel-config{self.env_suffix}"
+
     def assistant_topic(self, assistant_id: str) -> str:
         """Pub/Sub topic name for a specific assistant.
 

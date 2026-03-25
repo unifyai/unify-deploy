@@ -6,6 +6,8 @@ import string
 from fastapi import APIRouter, HTTPException, Request, Response
 from dotenv import load_dotenv
 import httpx
+
+from common.settings import SETTINGS
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from email.mime.text import MIMEText
@@ -77,7 +79,7 @@ async def create_email_user(request: Request):
         # optional watch call
         async with httpx.AsyncClient() as client_http:
             watch_res = await client_http.post(
-                f"{os.getenv('UNITY_COMMS_URL')}/gmail/watch",
+                f"{SETTINGS.comms_url}/gmail/watch",
                 json={"primary_email": primary_email},
             )
         return {"success": True, "user": res}
@@ -183,9 +185,9 @@ async def watch_email(request: Request):
         subject=user_email,
     )
     gmail_service = build("gmail", "v1", credentials=creds)
-    topic_name = "projects/gcp-project-runtime/topics/" + data.get(
+    topic_name = f"projects/{SETTINGS.gcp_project_id}/topics/" + data.get(
         "topic_name",
-        "gmail-notifications",
+        SETTINGS.gmail_topic,
     )
     watch_request = {"labelIds": ["INBOX"], "topicName": topic_name}
     watch_resp = (

@@ -1,59 +1,24 @@
 """
 VM Configuration
 
-Centralized configuration for GCP VM lifecycle management (Windows and Ubuntu).
+Static constants for GCP VM lifecycle management (Windows and Ubuntu).
+Environment-derived values (project IDs, zones, suffixes) live in
+``common.settings.SETTINGS``.
 """
 
 import os
-
-# =============================================================================
-# Environment
-# =============================================================================
-
-
-def _get_deploy_env() -> str:
-    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
-    return (
-        deploy_env
-        if deploy_env in {"production", "staging", "preview"}
-        else "production"
-    )
-
-
-DEPLOY_ENV = _get_deploy_env()
-ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
-
-# =============================================================================
-# GCP Project Configuration
-# =============================================================================
-# Dedicated project for assistant VMs and static IPs (isolated from GKE cluster)
-VM_PROJECT_ID = "gcp-project-vms"
-
-# DNS Project: Where DNS zone is managed (gcp-project-dns)
-DNS_PROJECT_ID = "gcp-project-dns"
-
-# =============================================================================
-# Region/Zone Configuration
-# =============================================================================
-REGION = "us-central1"
-_ZONE_MAP = {
-    "production": "us-central1-f",
-    "staging": "us-central1-a",
-    "preview": "us-central1-b",
-}
-ZONE = _ZONE_MAP.get(DEPLOY_ENV, "us-central1-f")
-
-# =============================================================================
-# DNS Configuration (Managed in Project A)
-# =============================================================================
-DNS_ZONE_NAME = "unifyai"  # Existing Cloud DNS managed zone
-DOMAIN_SUFFIX = "vm.unify.ai"  # Subdomain for VMs
 
 # =============================================================================
 # Shared VM Configuration
 # =============================================================================
 VM_DISK_TYPE = "pd-ssd"
 VM_NETWORK = "default"
+
+# =============================================================================
+# DNS Configuration (Managed in gcp-project-dns project)
+# =============================================================================
+DNS_ZONE_NAME = "unifyai"  # Existing Cloud DNS managed zone
+DOMAIN_SUFFIX = "vm.unify.ai"  # Subdomain for VMs
 
 # =============================================================================
 # Windows VM Configuration
@@ -97,7 +62,7 @@ UBUNTU_INIT_SCRIPT_PATH = os.path.join(
 UBUNTU_POOL_WATCHER_PATH = os.path.join(
     os.path.dirname(__file__),
     "scripts",
-    "unity-pool-watcher.sh",
+    "ubuntu-pool-watcher.sh",
 )
 UBUNTU_SUPERVISORD_CONF_PATH = os.path.join(
     os.path.dirname(__file__),

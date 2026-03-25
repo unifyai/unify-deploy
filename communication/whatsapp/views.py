@@ -43,7 +43,7 @@ async def send_text(request: Request):
         to=f"whatsapp:{receiver_number}",
         from_=f"whatsapp:{twilio_number}",
         body=body,
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/status",
+        status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
     )
     return {"success": True}
 
@@ -69,7 +69,7 @@ async def send_greeting(request: Request):
                 "message": body,
             },
         ),
-        status_callback=f"{os.getenv('UNITY_COMMS_URL')}/whatsapp/status",
+        status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
     )
     return {"success": True}
 
@@ -137,7 +137,7 @@ async def assign_whatsapp_sender(request: Request):
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{SETTINGS.orchestra_url}/admin/assistant?user_whatsapp_number={user_whatsapp_number}",
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
         )
     if resp.status_code >= 400:
         raise HTTPException(
@@ -180,7 +180,7 @@ async def get_conflict_whatsapp_number(request: Request):
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{SETTINGS.orchestra_url}/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}",
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
         )
     if resp.status_code >= 400:
         raise HTTPException(
@@ -196,7 +196,7 @@ async def get_conflict_whatsapp_number(request: Request):
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{SETTINGS.orchestra_url}/admin/contacts?whatsapp_number={target_whatsapp_number}",
-            headers={"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
         )
     if resp.status_code >= 400:
         raise HTTPException(
@@ -214,7 +214,7 @@ async def get_conflict_whatsapp_number(request: Request):
                 resp = await client.get(
                     f"{SETTINGS.orchestra_url}/admin/assistant/user/{uid}&assistant_whatsapp_number={assistant_whatsapp_number}",
                     headers={
-                        "Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}",
+                        "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
                     },
                 )
             if resp.status_code >= 400:

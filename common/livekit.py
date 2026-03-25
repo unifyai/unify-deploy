@@ -5,6 +5,8 @@ import os
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
+from common.settings import SETTINGS
+
 from livekit.api import (
     CreateAgentDispatchRequest,
     CreateSIPDispatchRuleRequest,
@@ -116,11 +118,7 @@ async def _start_room_egress(
     gcs_bucket = os.getenv("LIVEKIT_EGRESS_GCS_BUCKET", "unity-call-recordings")
     adapters_url = os.getenv("UNITY_ADAPTERS_URL", "")
     api_key = os.getenv("LIVEKIT_API_KEY", "")
-    deploy_env = (os.getenv("DEPLOY_ENV") or "production").strip().lower()
-    if deploy_env not in {"production", "staging", "preview"}:
-        deploy_env = "production"
-
-    prefix = deploy_env
+    prefix = SETTINGS.deploy_env
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
     filepath = f"{prefix}/{assistant_id}/{room_name}_{timestamp}.mp3"
 
