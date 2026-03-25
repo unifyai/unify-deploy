@@ -135,17 +135,28 @@ else
 fi
 
 # =============================================================================
+# Service User Hardening (converge on every boot)
+# =============================================================================
+setcap CAP_NET_BIND_SERVICE=+ep /usr/local/bin/caddy 2>/dev/null || true
+echo "Caddy: CAP_NET_BIND_SERVICE set"
+
+# Ensure unityuser cannot escalate to root
+deluser unityuser sudo 2>/dev/null || true
+rm -f /etc/sudoers.d/*unityuser* 2>/dev/null || true
+
+# =============================================================================
 # VNC Default Password (so supervisord can start TigerVNC)
 # =============================================================================
-mkdir -p /root/.vnc
+mkdir -p /etc/vnc
 VNC_PASSWORD="unify123" python3 << 'PYSCRIPT'
 import os
 from Crypto.Cipher import DES
 key = bytes([0xe8, 0x4a, 0xd6, 0x60, 0xc4, 0x72, 0x1a, 0xe0])
 pw = (os.environ.get('VNC_PASSWORD', 'unify123') + '\x00' * 8)[:8].encode('latin-1')
-with open('/root/.vnc/passwd', 'wb') as f:
+with open('/etc/vnc/passwd', 'wb') as f:
     f.write(DES.new(key, DES.MODE_ECB).encrypt(pw))
-os.chmod('/root/.vnc/passwd', 0o600)
+os.chmod('/etc/vnc/passwd', 0o640)
+os.system('chgrp unityuser /etc/vnc/passwd')
 PYSCRIPT
 echo "VNC default password configured"
 
@@ -248,13 +259,15 @@ echo ""
 echo "=== Configuring Caddy ==="
 
 mkdir -p /etc/caddy /var/log/caddy
+chown unityuser:unityuser /var/log/caddy
 
 TLS_DIRECTIVE=""
 if [[ -n "$TLS_FULLCHAIN" && -n "$TLS_PRIVKEY" ]]; then
     mkdir -p /etc/caddy/certs
     echo "$TLS_FULLCHAIN" > /etc/caddy/certs/fullchain.pem
     echo "$TLS_PRIVKEY" > /etc/caddy/certs/privkey.pem
-    chmod 600 /etc/caddy/certs/privkey.pem
+    chgrp unityuser /etc/caddy/certs/privkey.pem
+    chmod 640 /etc/caddy/certs/privkey.pem
     TLS_DIRECTIVE="    tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem"
     echo "  TLS cert written"
 fi
@@ -336,6 +349,10 @@ echo "  Outbound: metadata server blocked for unityuser"
 ELAPSED=$(( $(date +%s) - START_TIME ))
 echo ""
 echo "Setup complete in ${ELAPSED}s - launching supervisord"
+
+# Ensure service logs are writable by unityuser
+touch /var/log/agent-service.log
+chown unityuser:unityuser /var/log/agent-service.log
 
 export VNC_GEOMETRY=${VNC_GEOMETRY:-1920x1080}
 export VNC_DEPTH=${VNC_DEPTH:-24}

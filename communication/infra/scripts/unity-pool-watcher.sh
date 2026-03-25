@@ -315,6 +315,7 @@ do_assign() {
 
     # VNC password
     if [[ -n "$vnc_password" ]]; then
+        mkdir -p /etc/vnc
         VNC_PASSWORD="$vnc_password" python3 << 'PYSCRIPT'
 import os
 from Crypto.Cipher import DES
@@ -324,14 +325,15 @@ def vnc_encrypt(password):
     cipher = DES.new(key, DES.MODE_ECB)
     return cipher.encrypt(pw)
 password = os.environ.get('VNC_PASSWORD', 'unify123')
-with open('/root/.vnc/passwd', 'wb') as f:
+with open('/etc/vnc/passwd', 'wb') as f:
     f.write(vnc_encrypt(password))
-os.chmod('/root/.vnc/passwd', 0o600)
+os.chmod('/etc/vnc/passwd', 0o640)
+os.system('chgrp unityuser /etc/vnc/passwd')
 PYSCRIPT
         log "VNC password updated (takes effect on next client connection)"
     fi
 
-    # Agent Service .env
+    # Agent Service .env (owned by unityuser so the process can read it)
     cat > /agent-service/.env << EOF
 PORT=3000
 NODE_ENV=production
@@ -341,14 +343,14 @@ UNITY_COMMS_URL=$comms_url
 PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 DISPLAY=:1
 EOF
+    chown unityuser:unityuser /agent-service/.env
+    chmod 600 /agent-service/.env
     log "Agent Service .env configured"
 
-    # Start Agent Service
+    # Start Agent Service as unityuser
     kill_agent_service
-    cd /agent-service
-    DISPLAY=":1" nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
-    cd /
-    log "Agent Service started"
+    su -s /bin/bash unityuser -c "cd /agent-service && nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &"
+    log "Agent Service started (as unityuser)"
 
     log "Waiting for Agent Service on port 3000..."
     for i in $(seq 1 60); do

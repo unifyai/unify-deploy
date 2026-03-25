@@ -464,6 +464,7 @@ PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 DISPLAY=:1
 "@
         Set-Content -Path "$agentServiceDir\.env" -Value $envContent -Encoding UTF8
+        icacls "$agentServiceDir\.env" /inheritance:r /grant "unityuser:R" /grant "SYSTEM:F" /grant "Administrators:F" 2>$null
         Write-Log "Agent Service .env configured"
 
         $startBat = @"

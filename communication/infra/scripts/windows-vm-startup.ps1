@@ -529,20 +529,35 @@ if ($port6080) {
     Write-Host "  Websockify: Starting..." -ForegroundColor Yellow
 }
 
-# Caddy
+# Caddy (runs as unityuser via scheduled task)
 if ($caddyConfigured) {
     $caddyExe = "C:\caddy\caddy.exe"
     $caddyfileConfig = "C:\caddy\Caddyfile"
-    $caddyProcess = Get-Process -Name "caddy" -ErrorAction SilentlyContinue
 
-    if (-not $caddyProcess -and (Test-Path $caddyExe) -and (Test-Path $caddyfileConfig)) {
-        $psCommand = "Set-Location 'C:\caddy'; & '$caddyExe' run --config '$caddyfileConfig'"
-        Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory "C:\caddy"
+    # Grant unityuser read access to Caddy config + TLS certs
+    icacls "C:\caddy" /grant "unityuser:R" /T /Q 2>$null
+
+    # Ensure scheduled task exists to run Caddy as unityuser
+    $taskName = "StartCaddy"
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if (-not $existingTask -and (Test-Path $caddyExe) -and (Test-Path $caddyfileConfig)) {
+        $action = New-ScheduledTaskAction -Execute $caddyExe `
+            -Argument "run --config $caddyfileConfig" `
+            -WorkingDirectory "C:\caddy"
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType S4U -RunLevel Limited
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+            -Principal $principal -Force | Out-Null
+    }
+
+    $caddyProcess = Get-Process -Name "caddy" -ErrorAction SilentlyContinue
+    if (-not $caddyProcess) {
+        Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 1000
     }
 
     if (Get-Process -Name "caddy" -ErrorAction SilentlyContinue) {
-        Write-Host "  Caddy: Running" -ForegroundColor Green
+        Write-Host "  Caddy: Running (as unityuser)" -ForegroundColor Green
     } else {
         Write-Host "  Caddy: Starting..." -ForegroundColor Yellow
     }
