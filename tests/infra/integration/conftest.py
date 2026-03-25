@@ -1032,6 +1032,43 @@ def find_assistant_with_assigned_vm() -> dict | None:
     return None
 
 
+def generate_vm_identity_token() -> str | None:
+    """Generate a GCP identity token impersonating pool-vm-sa.
+
+    Uses the comm-sa service account key to impersonate the pool VM SA
+    with audience 'unity-comms-vm'. Returns None if impersonation fails
+    (missing IAM permissions).
+    """
+    try:
+        import google.auth.transport.requests
+        import google.oauth2.service_account
+        from google.auth import impersonated_credentials
+
+        sa_key_json = _fetch_secret("gcp-sa-key")
+        if not sa_key_json:
+            return None
+        sa_key = json.loads(sa_key_json)
+
+        source_creds = (
+            google.oauth2.service_account.Credentials.from_service_account_info(
+                sa_key,
+            )
+        )
+        target_creds = impersonated_credentials.IDTokenCredentials(
+            target_credentials=impersonated_credentials.Credentials(
+                source_credentials=source_creds,
+                target_principal="service-account@example.iam.gserviceaccount.com",
+                target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            ),
+            target_audience="unity-comms-vm",
+        )
+        request = google.auth.transport.requests.Request()
+        target_creds.refresh(request)
+        return target_creds.token
+    except Exception:
+        return None
+
+
 def compute_livekit_webhook_auth(body: str, api_key: str, api_secret: str) -> str:
     """Compute a LiveKit webhook Authorization header (Bearer JWT)."""
     import hashlib

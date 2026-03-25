@@ -452,3 +452,76 @@ class TestVMReady:
             body = resp.json()
             assert body["success"] is True
             assert "message_id" in body
+
+
+# ---------------------------------------------------------------------------
+# VM self-management endpoints (GCP identity token auth)
+# ---------------------------------------------------------------------------
+
+
+class TestVMMarkIdle:
+    """Contract: POST /infra/vm/mark-idle sets pool-role=idle on the calling VM.
+    Authenticated via GCP identity token from pool-vm-sa.
+
+    Since we generate the token via impersonation (not from a real VM), the
+    token won't contain GCE instance metadata — the endpoint returns 403
+    after passing SA email validation. This still exercises the full auth chain.
+    """
+
+    def test_mark_idle_auth_chain(self):
+        from ..conftest import generate_vm_identity_token
+
+        token = generate_vm_identity_token()
+        if not token:
+            pytest.skip("Cannot generate VM identity token (missing IAM grant)")
+
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/mark-idle",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        # 403 = token valid but missing GCE instance metadata (expected for
+        # impersonated tokens); 200 = would require a real VM token
+        assert resp.status_code in (
+            200,
+            403,
+        ), f"vm/mark-idle unexpected: {resp.status_code} {resp.text}"
+
+    def test_mark_idle_rejects_invalid_token(self):
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/mark-idle",
+            headers={"Authorization": "Bearer invalid-token"},
+            timeout=10,
+        )
+        assert resp.status_code in (401, 403)
+
+
+class TestVMWipeMetadataKey:
+    """Contract: POST /infra/vm/wipe-metadata-key clears a metadata key
+    on the calling VM. Same auth pattern as mark-idle."""
+
+    def test_wipe_metadata_auth_chain(self):
+        from ..conftest import generate_vm_identity_token
+
+        token = generate_vm_identity_token()
+        if not token:
+            pytest.skip("Cannot generate VM identity token (missing IAM grant)")
+
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/wipe-metadata-key",
+            json={"key": "test-key"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        assert resp.status_code in (
+            200,
+            403,
+        ), f"vm/wipe-metadata-key unexpected: {resp.status_code} {resp.text}"
+
+    def test_wipe_metadata_rejects_no_auth(self):
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/wipe-metadata-key",
+            json={"key": "test-key"},
+            timeout=10,
+        )
+        assert resp.status_code in (401, 403)

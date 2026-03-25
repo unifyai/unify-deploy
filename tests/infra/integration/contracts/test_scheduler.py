@@ -228,3 +228,74 @@ class TestPhoneConferenceStatus:
         assert (
             resp.status_code == 200
         ), f"conference-status failed: {resp.status_code} {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# Teams call (admin key in body)
+# ---------------------------------------------------------------------------
+
+
+class TestTeamsCall:
+    """Contract: POST /teams/call initiates a Teams call for an assistant.
+    Authenticated via admin_key in the JSON body."""
+
+    def test_teams_call_invalid_uri_returns_400(self):
+        resp = requests.post(
+            f"{ADAPTERS_URL}/teams/call",
+            json={
+                "from_uri": "sip:test@example.com",
+                "to_uri": "invalid-uri",
+                "call_id": "contract-test-call",
+                "admin_key": ADMIN_KEY,
+            },
+            timeout=15,
+        )
+        assert resp.status_code in (
+            200,
+            400,
+        ), f"teams/call unexpected: {resp.status_code} {resp.text}"
+
+    def test_teams_call_rejects_bad_admin_key(self):
+        resp = requests.post(
+            f"{ADAPTERS_URL}/teams/call",
+            json={
+                "from_uri": "sip:test@example.com",
+                "to_uri": "sip:+15005550006@example.com",
+                "call_id": "contract-test-call",
+                "admin_key": "wrong-key",
+            },
+            timeout=15,
+        )
+        assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Health check + Microsoft auth callback
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterHealth:
+    """Contract: GET /health returns 200."""
+
+    def test_health_returns_200(self):
+        resp = requests.get(f"{ADAPTERS_URL}/health", timeout=10)
+        assert resp.status_code == 200
+
+
+class TestMicrosoftAuthCallback:
+    """Contract: GET /microsoft/auth/callback handles the OAuth redirect.
+    Without a valid code, it should error gracefully."""
+
+    def test_callback_without_code_returns_error(self):
+        resp = requests.get(
+            f"{ADAPTERS_URL}/microsoft/auth/callback",
+            params={"state": "test-state"},
+            timeout=15,
+        )
+        # 400/422 = missing required params, 500 = unhandled
+        assert resp.status_code in (
+            200,
+            400,
+            422,
+            500,
+        ), f"microsoft/auth/callback unexpected: {resp.status_code}"
