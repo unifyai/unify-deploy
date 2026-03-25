@@ -74,6 +74,10 @@ class PoolStatusResponse(BaseModel):
 # =============================================================================
 
 
+class VMWipeMetadataKeyRequest(BaseModel):
+    key: str
+
+
 class TunnelRegisterRequest(BaseModel):
     """Request to register a new tunnel for a user's local application."""
 

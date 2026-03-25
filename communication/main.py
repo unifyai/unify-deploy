@@ -13,6 +13,7 @@ from communication.teams.views import router as teams_router
 from communication.infra.views import (
     router as infra_router,
     tunnel_router,
+    vm_self_router,
     _get_pubsub_clients,
 )
 from communication.infra.helpers import setup_kubernetes_client
@@ -46,6 +47,7 @@ app.include_router(outlook_router, prefix="/outlook", dependencies=admin_auth)
 app.include_router(teams_router, prefix="/teams", dependencies=admin_auth)
 app.include_router(infra_router, prefix="/infra", dependencies=admin_auth)
 app.include_router(tunnel_router, prefix="/infra")
+app.include_router(vm_self_router, prefix="/infra")
 app.include_router(social_router, prefix="/social", dependencies=admin_auth)
 app.include_router(sharepoint_router, prefix="/sharepoint", dependencies=admin_auth)
 app.include_router(unillm_router, prefix="/unillm")
