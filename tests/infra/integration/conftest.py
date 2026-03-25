@@ -912,6 +912,79 @@ def send_test_system_event(
 
 
 # ---------------------------------------------------------------------------
+# Channel test helpers: Twilio signature, assistant lookups
+# ---------------------------------------------------------------------------
+
+
+def _fetch_secret(secret_name: str) -> str | None:
+    """Fetch a secret from GCP Secret Manager. Returns None on failure."""
+    try:
+        from google.cloud import secretmanager
+
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{GCP_PROJECT_ID}/secrets/{secret_name}/versions/latest"
+        return client.access_secret_version(
+            request={"name": name},
+        ).payload.data.decode("utf-8")
+    except Exception:
+        return None
+
+
+@pytest.fixture(scope="session")
+def twilio_auth_token():
+    """Fetch TWILIO_AUTH_TOKEN from Secret Manager for signature computation."""
+    token = os.getenv("TWILIO_AUTH_TOKEN") or _fetch_secret("TWILIO_AUTH_TOKEN")
+    if not token:
+        pytest.skip("TWILIO_AUTH_TOKEN not available")
+    return token
+
+
+@pytest.fixture(scope="session")
+def livekit_credentials():
+    """Fetch LiveKit API credentials for webhook signature computation."""
+    api_key = os.getenv("LIVEKIT_API_KEY") or _fetch_secret("LIVEKIT_API_KEY")
+    api_secret = os.getenv("LIVEKIT_API_SECRET") or _fetch_secret("LIVEKIT_API_SECRET")
+    if not api_key or not api_secret:
+        pytest.skip("LIVEKIT_API_KEY / LIVEKIT_API_SECRET not available")
+    return {"api_key": api_key, "api_secret": api_secret}
+
+
+def compute_twilio_signature(url: str, params: dict, auth_token: str) -> str:
+    """Compute a valid X-Twilio-Signature for the given URL and form params."""
+    from twilio.request_validator import RequestValidator
+
+    return RequestValidator(auth_token).compute_signature(url, params)
+
+
+def _fetch_all_user_assistants() -> list[dict]:
+    """Fetch all assistants for the current user via Orchestra."""
+    resp = requests.get(
+        f"{ORCHESTRA_URL}/assistant",
+        headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        return []
+    return resp.json().get("info", [])
+
+
+def find_assistant_with_phone() -> dict | None:
+    """Find a user assistant that has a Twilio phone number assigned."""
+    for a in _fetch_all_user_assistants():
+        if a.get("phone"):
+            return a
+    return None
+
+
+def find_assistant_with_email() -> dict | None:
+    """Find a user assistant that has an email address assigned."""
+    for a in _fetch_all_user_assistants():
+        if a.get("email"):
+            return a
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Stress test helpers: direct Pub/Sub
 # ---------------------------------------------------------------------------
 
