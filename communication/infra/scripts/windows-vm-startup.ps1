@@ -137,6 +137,12 @@ function Scrub-GitTokens {
 }
 
 # =============================================================================
+# Service User Hardening (converge on every boot)
+# =============================================================================
+Remove-LocalGroupMember -Group "Administrators" -Member "unityuser" -ErrorAction SilentlyContinue
+Write-Host "Ensured unityuser is not in Administrators group" -ForegroundColor Green
+
+# =============================================================================
 # Read Configuration
 # =============================================================================
 Write-Host "Reading GCP metadata..."
@@ -355,6 +361,14 @@ if ($envBackup -and (Test-Path $agentServiceDir)) {
 
 Scrub-GitTokens
 
+# Grant unityuser read+execute on code directories (installed by SYSTEM above)
+foreach ($dir in @("C:\agent-service", "C:\magnitude", "C:\ms-playwright")) {
+    if (Test-Path $dir) {
+        C:\Windows\System32\icacls.exe $dir /grant "unityuser:(OI)(CI)RX" /T /Q 2>$null
+    }
+}
+Write-Host "  unityuser ACLs set on service directories" -ForegroundColor Green
+
 # =============================================================================
 # Configure Caddy
 # =============================================================================
@@ -458,7 +472,7 @@ cd /d C:\novnc
         if (-not $existingTask) {
             $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$websockifyBat'`"" -WorkingDirectory $novncDir
             $trigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
-            $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Highest
+            $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Limited
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
             Register-ScheduledTask -TaskName $websockifyTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
         }
@@ -535,7 +549,7 @@ if ($caddyConfigured) {
     $caddyfileConfig = "C:\caddy\Caddyfile"
 
     # Grant unityuser read access to Caddy config + TLS certs
-    icacls "C:\caddy" /grant "unityuser:R" /T /Q 2>$null
+    C:\Windows\System32\icacls.exe "C:\caddy" /grant "unityuser:R" /T /Q 2>$null
 
     # Ensure scheduled task exists to run Caddy as unityuser
     $taskName = "StartCaddy"

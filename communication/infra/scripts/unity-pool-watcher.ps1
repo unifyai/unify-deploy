@@ -471,7 +471,7 @@ DISPLAY=:1
 @echo off
 set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 cd /d C:\agent-service
-npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
+npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
 "@
         Set-Content -Path "$agentServiceDir\start-agent.bat" -Value $startBat -Encoding ASCII
 
