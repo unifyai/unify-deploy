@@ -6,7 +6,7 @@ Each test verifies that an endpoint:
 2. Returns the expected response shape
 3. Produces the correct Pub/Sub side effect (where verifiable)
 
-These are integration tests that hit the real deployed preview services
+These are integration tests that hit the real deployed services
 with real credentials. No mocks or stubs — every assertion exercises
 production code paths end-to-end.
 
@@ -26,14 +26,14 @@ import uuid
 import pytest
 import requests
 
-from .conftest import (
+from ..conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
     compute_twilio_signature,
     find_assistant_with_phone,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ class TestTwilioWhatsApp:
     publishes to Pub/Sub, and returns TwiML XML."""
 
     def test_whatsapp_returns_twiml(self, twilio_auth_token):
-        from .conftest import _fetch_all_user_assistants
+        from ..conftest import _fetch_all_user_assistants
 
         wa_assistant = None
         for a in _fetch_all_user_assistants():
@@ -356,7 +356,7 @@ class TestLiveKitRecording:
         strict=False,
     )
     def test_recording_complete_accepts_valid_webhook(self, livekit_credentials):
-        from .conftest import compute_livekit_webhook_auth
+        from ..conftest import compute_livekit_webhook_auth
 
         body_dict = {
             "event": "egress_ended",
@@ -416,7 +416,7 @@ class TestGmailPush:
     (Pub/Sub envelope format) and resolves the thread via Gmail API."""
 
     def test_gmail_push_processes_notification(self):
-        from .conftest import find_assistant_with_email
+        from ..conftest import find_assistant_with_email
 
         assistant = find_assistant_with_email()
         if not assistant:

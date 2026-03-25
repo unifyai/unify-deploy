@@ -17,13 +17,13 @@ Endpoints covered:
 import pytest
 import requests
 
-from .conftest import (
+from ..conftest import (
     ADAPTERS_URL,
     _fetch_secret,
     find_assistant_with_email,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.fixture(scope="module")

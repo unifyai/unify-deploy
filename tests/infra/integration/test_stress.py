@@ -48,14 +48,14 @@ from .conftest import (
     poll_until,
     probe_vm_agent_service,
     pull_outbound_messages,
-    replenish_staging_pool,
+    replenish_pool,
     send_test_meet,
     send_test_message,
     send_test_system_event,
     wait_for_container_running,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +313,7 @@ def test_production_traffic_stress(
 
     print(f"[Setup] Creating {TARGET_IDLE} fresh idle containers...")
     for _ in range(TARGET_IDLE):
-        replenish_staging_pool()
+        replenish_pool()
         time.sleep(2)
 
     try:
@@ -406,7 +406,7 @@ def test_production_traffic_stress(
         if queued:
             print(f"[Phase 1] Replenishing pool for {len(queued)} queued startups...")
             for _ in range(len(queued)):
-                replenish_staging_pool()
+                replenish_pool()
             try:
                 poll_until(
                     lambda: count_idle_jobs(batch_api) >= min(len(queued), 2),
@@ -825,7 +825,7 @@ def test_production_traffic_stress(
             if queued_restart := [
                 a for a in crash_assistants if _start_job_tolerant(comms, a)[0] == 202
             ]:
-                replenish_staging_pool()
+                replenish_pool()
                 _trigger_reconciliation()
 
             # Wait for new containers
@@ -890,7 +890,7 @@ def test_production_traffic_stress(
             start_status, start_body = start_future.result()
 
             if start_status == 202:
-                replenish_staging_pool()
+                replenish_pool()
                 time.sleep(10)
                 _trigger_reconciliation()
 
@@ -950,7 +950,7 @@ def test_production_traffic_stress(
             status, body = _start_job_tolerant(comms, a)
             print(f"  {aid}: re-start → HTTP {status}")
             if status == 202:
-                replenish_staging_pool()
+                replenish_pool()
                 _trigger_reconciliation()
 
         # Wait for new containers
@@ -1041,7 +1041,7 @@ def test_production_traffic_stress(
             else:
                 print(f"[Phase 8] No orphaned VMs — clean")
 
-        replenish_staging_pool()
+        replenish_pool()
 
         final_invariants = check_invariants(batch_api, gce_client)
         final_new = _new_violations(final_invariants, baseline_violations)
@@ -1073,4 +1073,4 @@ def test_production_traffic_stress(
                 )
             except Exception:
                 pass
-        replenish_staging_pool()
+        replenish_pool()

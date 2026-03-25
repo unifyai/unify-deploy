@@ -1,7 +1,7 @@
 """
 Integration tests for VM pool lifecycle: assign, probe, release, idempotency.
 
-Tests run against real staging GCE VMs.
+Tests run against real deployed GCE VMs.
 
 Invariants covered: INV-9, INV-10, INV-11, INV-12
 """
@@ -16,7 +16,7 @@ from .conftest import (
     require_gce,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.mark.invariant("INV-9", "INV-10")
@@ -181,7 +181,7 @@ def test_vm_release_resets_labels(comms, gce_client, test_id, poll):
 
 @pytest.mark.invariant("INV-12")
 def test_vm_idle_pool_has_capacity(gce_client):
-    """The staging VM pool must have at least one idle VM.
+    """The VM pool must have at least one idle VM.
 
     If this fails, new sessions can't get a desktop VM and
     browser/desktop features will be unavailable.

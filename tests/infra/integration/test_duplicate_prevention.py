@@ -21,7 +21,7 @@ from .conftest import (
     start_real_job,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.mark.invariant("INV-1")

@@ -3,7 +3,7 @@ Integration tests for cleanup safety: verifying that the resource_version
 guard prevents deletion of containers that changed state since the inventory
 was fetched.
 
-Tests run against real staging K8s.
+Tests run against real deployed K8s.
 
 Invariants covered: INV-7, INV-8
 """
@@ -19,7 +19,7 @@ from .conftest import (
     get_job_resource_version,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.mark.invariant("INV-8")

@@ -1,7 +1,7 @@
 """
 Integration tests for the container lifecycle: idle -> live -> done.
 
-Tests run against real staging K8s. Each test creates its own Job and cleans
+Tests run against real deployed K8s. Each test creates its own Job and cleans
 up afterward, even on failure.
 
 Invariants covered: INV-1, INV-2, INV-3, INV-5, INV-6
@@ -18,7 +18,7 @@ from .conftest import (
     start_real_job,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.mark.invariant("INV-3", "INV-5")
@@ -106,9 +106,9 @@ def test_startup_transition_sets_labels(
 
 @pytest.mark.invariant("INV-5")
 def test_idle_pool_has_capacity(batch_api):
-    """The staging idle pool must always have at least one idle container.
+    """The idle pool must always have at least one idle container.
 
-    This is a basic health check — if this fails, the staging pool
+    This is a basic health check — if this fails, the idle pool
     is exhausted and no new assistant sessions can start.
     """
     idle = count_idle_jobs(batch_api)

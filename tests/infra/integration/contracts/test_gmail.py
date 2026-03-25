@@ -13,13 +13,13 @@ Endpoints covered:
 import pytest
 import requests
 
-from .conftest import (
+from ..conftest import (
     ADMIN_KEY,
     COMMS_APP_URL,
     find_assistant_with_email,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 _ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
 

@@ -28,12 +28,12 @@ from .conftest import (
     expire_test_assistant_records,
     list_jobs_with_assistant_id,
     poll_until,
-    replenish_staging_pool,
+    replenish_pool,
     start_real_job,
     wait_for_idle_pool,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 def _create_stale_running_record(
@@ -107,7 +107,7 @@ def test_stale_record_does_not_block_new_startup(
         existing = list_jobs_with_assistant_id(batch_api, assistant_id)
         assert not existing, (
             f"Precondition failed: {len(existing)} active Job(s) already "
-            f"exist for assistant {assistant_id}. Clean up staging first."
+            f"exist for assistant {assistant_id}. Clean up the target environment first."
         )
 
         record_id = _create_stale_running_record(assistant_id, user_id)
@@ -117,7 +117,7 @@ def test_stale_record_does_not_block_new_startup(
         )
 
         if count_idle_jobs(batch_api) == 0:
-            replenish_staging_pool()
+            replenish_pool()
             wait_for_idle_pool(batch_api, min_idle=1, timeout=120)
 
         resp = start_real_job(comms, real_assistant_data)
@@ -155,4 +155,4 @@ def test_stale_record_does_not_block_new_startup(
                 )
             except Exception:
                 pass
-        replenish_staging_pool()
+        replenish_pool()

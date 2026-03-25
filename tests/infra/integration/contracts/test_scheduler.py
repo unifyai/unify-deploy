@@ -6,7 +6,7 @@ Each test verifies that a scheduler endpoint:
 2. Executes its production logic (test=true mode where available)
 3. Returns the expected response shape
 
-These hit the real deployed preview services with real credentials.
+These hit the real deployed services with real credentials.
 
 Endpoints covered:
 - POST /scheduled/email-watches
@@ -22,9 +22,9 @@ Endpoints covered:
 import pytest
 import requests
 
-from .conftest import ADAPTERS_URL, ADMIN_KEY, COMMS_APP_URL
+from ..conftest import ADAPTERS_URL, ADMIN_KEY, COMMS_APP_URL
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 _ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
 

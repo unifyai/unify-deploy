@@ -2,7 +2,7 @@
 Integration tests for crash recovery: verifying the job-watcher catches
 pod terminations and runs cleanup.
 
-Tests run against real staging K8s. Simulates a crash by deleting a pod
+Tests run against real deployed K8s. Simulates a crash by deleting a pod
 directly, then verifies the job-watcher cleans up.
 
 Invariants covered: INV-13, INV-14
@@ -18,7 +18,7 @@ from .conftest import (
     start_real_job,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.mark.invariant("INV-13", "INV-14")

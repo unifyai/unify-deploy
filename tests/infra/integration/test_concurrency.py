@@ -29,11 +29,11 @@ from .conftest import (
     count_idle_jobs,
     list_jobs_with_assistant_id,
     poll_until,
-    replenish_staging_pool,
+    replenish_pool,
     start_real_job,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 def _fetch_user_assistants(max_count: int = 5) -> list[dict]:
@@ -158,7 +158,7 @@ def test_burst_startups_same_assistant(
 
     finally:
         cleanup_assistant_jobs(batch_api, [assistant_id])
-        replenish_staging_pool()
+        replenish_pool()
 
 
 # ---------------------------------------------------------------------------
@@ -175,13 +175,13 @@ def test_simultaneous_startups_different_assistants(comms, batch_api, poll):
     the same time, each messaging a different assistant. The idle pool must
     serve all of them without split-brain or starvation.
 
-    Dynamically discovers the user's staging assistants so this test works
+    Dynamically discovers the user's assistants so this test works
     for any team member.
     """
     assistants = _fetch_user_assistants(max_count=5)
     assert len(assistants) >= 3, (
-        f"Need at least 3 staging assistants, got {len(assistants)}. "
-        "Hire more assistants on staging to run this test."
+        f"Need at least 3 assistants, got {len(assistants)}. "
+        "Hire more assistants to run this test."
     )
     assistants = assistants[:3]
     used_ids = [a["assistant_id"] for a in assistants]
@@ -215,7 +215,7 @@ def test_simultaneous_startups_different_assistants(comms, batch_api, poll):
 
     finally:
         cleanup_assistant_jobs(batch_api, used_ids)
-        replenish_staging_pool()
+        replenish_pool()
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ def test_cleanup_during_idle_to_live_transition(
 
     finally:
         cleanup_assistant_jobs(batch_api, [assistant_id])
-        replenish_staging_pool()
+        replenish_pool()
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +328,7 @@ def test_rapid_restart_same_assistant(
 
     finally:
         cleanup_assistant_jobs(batch_api, [assistant_id])
-        replenish_staging_pool()
+        replenish_pool()
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +382,7 @@ def test_pool_exhaustion_under_burst(comms, batch_api):
                 "next user waits 25-30s for a new container",
             )
             t0 = time.monotonic()
-            replenish_staging_pool()
+            replenish_pool()
             try:
                 poll_until(
                     lambda: count_idle_jobs(batch_api) >= 1,
@@ -407,7 +407,7 @@ def test_pool_exhaustion_under_burst(comms, batch_api):
 
     finally:
         cleanup_assistant_jobs(batch_api, used_ids)
-        replenish_staging_pool()
+        replenish_pool()
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +474,7 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
     if len(assistants) < burst_size:
         pytest.skip(
             f"Need {burst_size} assistants (pool={idle_before} + {overflow} overflow), "
-            f"only have {len(assistants)}. Hire more on staging.",
+            f"only have {len(assistants)}. Hire more assistants.",
         )
 
     to_start = assistants[:burst_size]
@@ -510,7 +510,7 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
         # startups.  The background 1-minute scheduler OR our explicit
         # reconciliation call will claim them for the queued assistants.
         for _ in range(overflow):
-            replenish_staging_pool()
+            replenish_pool()
 
         # Poll on the actual goal: every overflow assistant gets a
         # container.  The idle containers created above may be claimed by
@@ -557,4 +557,4 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
 
     finally:
         cleanup_assistant_jobs(batch_api, used_ids)
-        replenish_staging_pool()
+        replenish_pool()

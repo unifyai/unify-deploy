@@ -1,6 +1,6 @@
 """
 Full invariant checker: runs all 14 invariant checks against the current
-staging state and reports violations.
+deployed state and reports violations.
 
 This is the "are we clean right now?" test. Run it after all other tests
 to confirm nothing was leaked, or run it standalone as a health check.
@@ -18,12 +18,12 @@ from .conftest import (
     require_gce,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.mark.invariant(*[f"INV-{i}" for i in range(1, 15)])
-def test_staging_invariant_health(k8s_clients, gce_client):
-    """Run all invariant checks and report the staging health.
+def test_invariant_health(k8s_clients, gce_client):
+    """Run all invariant checks and report the deployment health.
 
     This test does NOT fail on violations -- it reports them as warnings.
     This establishes the baseline. Over time, as issues are fixed, the

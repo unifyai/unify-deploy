@@ -17,9 +17,9 @@ Exercises:
 import pytest
 import requests
 
-from .conftest import COMMS_APP_URL, UNIFY_KEY
+from ..conftest import COMMS_APP_URL, UNIFY_KEY
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.fixture(scope="module")

@@ -1,7 +1,7 @@
 """
 Shared fixtures for infrastructure integration tests.
 
-These tests run against real staging K8s and GCE infrastructure.
+These tests run against real deployed K8s and GCE infrastructure.
 Every test creates its own resources and cleans up in finally blocks.
 
 Configuration:
@@ -34,7 +34,7 @@ elif _unity_env.is_file():
 load_dotenv()  # shell env overrides
 
 # ---------------------------------------------------------------------------
-# Staging configuration (all overridable via env vars)
+# Deployment configuration (all overridable via env vars)
 # ---------------------------------------------------------------------------
 
 GCP_PROJECT_ID = os.getenv("TEST_GCP_PROJECT_ID", "gcp-project-runtime")
@@ -73,7 +73,7 @@ TEST_ASSISTANT_ID = os.getenv("TEST_ASSISTANT_ID", "")
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
-        "staging: tests that run against real staging infrastructure",
+        "integration: tests that run against real deployed infrastructure",
     )
     config.addinivalue_line(
         "markers",
@@ -92,7 +92,7 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def real_assistant_data():
-    """Fetch a real staging assistant's full data from Orchestra.
+    """Fetch a real assistant's full data from Orchestra.
 
     Uses the same admin endpoint the adapter uses (GET /admin/assistant),
     so the data is identical to what flows through production.
@@ -120,7 +120,7 @@ def real_assistant_data():
         assistants = data.get("info", data) if isinstance(data, dict) else data
         assert (
             assistants
-        ), "No assistants found for this user. Hire one on staging first."
+        ), "No assistants found for this user. Hire one on the target environment first."
         assistant_id = str(assistants[0]["agent_id"])
         print(
             f"\n[Setup] Auto-detected assistant: {assistants[0].get('first_name', '')} "
@@ -143,7 +143,7 @@ def real_assistant_data():
 
 @pytest.fixture
 def test_id(real_assistant_data):
-    """The real assistant ID from staging Orchestra."""
+    """The real assistant ID from Orchestra."""
     return real_assistant_data["assistant_id"]
 
 
@@ -171,7 +171,7 @@ def shared_headers():
 
 @pytest.fixture(scope="session")
 def k8s_clients():
-    """Authenticated K8s BatchV1Api and CoreV1Api for the staging cluster."""
+    """Authenticated K8s BatchV1Api and CoreV1Api for the target cluster."""
     from kubernetes import client, config
 
     try:
@@ -292,7 +292,7 @@ def poll():
 
 @dataclass
 class CommsClient:
-    """HTTP client for the staging Comms App."""
+    """HTTP client for the deployed Comms App."""
 
     base_url: str = COMMS_APP_URL
     headers: dict = field(
@@ -314,7 +314,7 @@ class CommsClient:
 
 @dataclass
 class AdaptersClient:
-    """HTTP client for the staging Adapters service."""
+    """HTTP client for the deployed Adapters service."""
 
     base_url: str = ADAPTERS_URL
     headers: dict = field(
@@ -361,8 +361,8 @@ def start_real_job(comms_client, assistant_data: dict, medium: str = "unify_mess
     return resp
 
 
-def replenish_staging_pool():
-    """Trigger idle pool replenishment on staging adapters.
+def replenish_pool():
+    """Trigger idle pool replenishment on the deployed adapters.
 
     Call this after tests that consume idle containers to ensure the pool
     is refilled for subsequent tests.
@@ -416,7 +416,7 @@ class JobTracker:
             except Exception:
                 pass
         if self.jobs:
-            replenish_staging_pool()
+            replenish_pool()
 
 
 @pytest.fixture
@@ -438,7 +438,7 @@ def ensure_pool_capacity(request, k8s_clients):
     idle = count_idle_jobs(batch_api)
     if idle < 1:
         print(f"\n[Pool] Only {idle} idle containers, triggering replenishment...")
-        replenish_staging_pool()
+        replenish_pool()
         try:
             wait_for_idle_pool(batch_api, min_idle=1, timeout=90)
         except TimeoutError:
@@ -588,8 +588,8 @@ def _get_user_id_from_key() -> str:
 def _ensure_credits(min_credits: float):
     """Top up credits if the current balance is below *min_credits*.
 
-    Staging Orchestra skips credit checks entirely, so this is a safety net
-    for non-staging environments only.  Uses the admin create_recharge
+    Non-production Orchestra may skip credit checks, so this is a safety net
+    for production environments only.  Uses the admin create_recharge
     endpoint with type="promo".
     """
     if not UNIFY_KEY or not ADMIN_KEY:
@@ -687,7 +687,7 @@ def _admin_record_to_data(a: dict) -> dict:
 
 
 def _create_test_assistant(index: int) -> dict:
-    """Create a test assistant on staging Orchestra and return its full data.
+    """Create a test assistant on Orchestra and return its full data.
 
     Calls POST /v0/assistant with is_local=True (skips wakeup) and
     create_infra=True (provisions Pub/Sub topic).  Then fetches the full
@@ -802,7 +802,7 @@ def _delete_test_assistant(agent_id: str, batch_api=None):
 
 @pytest.fixture(scope="session")
 def test_assistants(k8s_clients):
-    """Create N test assistants on staging Orchestra for stress testing.
+    """Create N test assistants on Orchestra for stress testing.
 
     Controlled by TEST_CREATE_ASSISTANT_COUNT env var (default 0 = skip).
     Assistants are created with is_local=True (no wakeup / auto-start)
@@ -850,7 +850,7 @@ def test_assistants(k8s_clients):
     for a in created:
         _delete_test_assistant(a["assistant_id"], batch_api)
     if created:
-        replenish_staging_pool()
+        replenish_pool()
     print(f"[Teardown] Done")
 
 
@@ -1241,7 +1241,7 @@ class InvariantViolation:
 
 
 def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
-    """Run invariant checks against current staging state.
+    """Run invariant checks against current deployed state.
 
     Returns a list of violations (empty = all clear).
     GCE checks are skipped if gce_client is None.

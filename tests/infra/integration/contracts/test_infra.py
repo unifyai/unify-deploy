@@ -5,7 +5,7 @@ Covers Pub/Sub topic CRUD, VM pool status, image hash resolution, and
 Gmail watch — endpoints that underpin the infrastructure but aren't
 exercised by the existing container-lifecycle or stress tests.
 
-All tests hit the real deployed preview comms app with real credentials.
+All tests hit the real deployed comms app with real credentials.
 
 Endpoints covered:
 - POST /infra/pubsub/topic + DELETE /infra/pubsub/topic
@@ -20,7 +20,7 @@ import uuid
 import pytest
 import requests
 
-from .conftest import (
+from ..conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
     COMMS_APP_URL,
@@ -28,7 +28,7 @@ from .conftest import (
     find_assistant_with_email,
 )
 
-pytestmark = [pytest.mark.staging]
+pytestmark = [pytest.mark.integration]
 
 _ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
 
@@ -263,7 +263,7 @@ class TestJobStop:
     """Contract: POST /infra/job/stop suspends a running K8s job."""
 
     def test_stop_job(self, comms):
-        from .conftest import create_and_cleanup_idle_job
+        from ..conftest import create_and_cleanup_idle_job
 
         job_name = create_and_cleanup_idle_job(comms)
         try:
@@ -426,7 +426,7 @@ class TestVMReady:
     probing the VM's HTTPS endpoint. Authenticated via user API key."""
 
     def test_vm_ready_with_assigned_vm(self):
-        from .conftest import UNIFY_KEY, find_assistant_with_assigned_vm
+        from ..conftest import UNIFY_KEY, find_assistant_with_assigned_vm
 
         if not UNIFY_KEY:
             pytest.skip("UNIFY_KEY required for vm/ready")
