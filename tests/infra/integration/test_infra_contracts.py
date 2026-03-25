@@ -333,12 +333,19 @@ class TestJobLogs:
 
 
 class TestVMPoolProvision:
-    """Contract: POST /infra/vm/pool/provision creates a new pool VM."""
+    """Contract: POST /infra/vm/pool/provision creates a new pool VM.
 
+    VM provisioning takes 2-5 minutes (IP reservation, DNS, instance
+    creation, startup). Use @pytest.mark.slow to opt in.
+    """
+
+    @pytest.mark.slow
     def test_provision_single_ubuntu_vm(self, comms):
-        resp = comms.post(
-            "/infra/vm/pool/provision",
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/pool/provision",
             json={"vm_type": "ubuntu", "count": 1},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=300,
         )
         assert (
             resp.status_code == 200
@@ -349,12 +356,17 @@ class TestVMPoolProvision:
 
 
 class TestVMPoolRebalance:
-    """Contract: POST /infra/vm/pool/rebalance triggers a pool rebalance."""
+    """Contract: POST /infra/vm/pool/rebalance triggers a pool rebalance.
+
+    Rebalance may start/stop VMs, so allow a longer timeout.
+    """
 
     def test_rebalance_returns_result(self, comms):
-        resp = comms.post(
-            "/infra/vm/pool/rebalance",
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/pool/rebalance",
             params={"vm_type": "ubuntu"},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=120,
         )
         assert (
             resp.status_code == 200

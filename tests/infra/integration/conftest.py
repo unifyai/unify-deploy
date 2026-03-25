@@ -79,6 +79,10 @@ def pytest_configure(config):
         "markers",
         "invariant: which INV-N invariant(s) the test covers",
     )
+    config.addinivalue_line(
+        "markers",
+        "slow: long-running tests (VM provision, etc.) — deselect with -m 'not slow'",
+    )
 
 
 # ---------------------------------------------------------------------------
