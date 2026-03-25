@@ -1266,9 +1266,7 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
                         project=VM_PROJECT_ID, zone=ZONE, instance=candidate.name
                     ).result()
                 except Exception as e:
-                    logger.error(
-                        f"Trim: retry stop failed for {candidate.name}: {e}"
-                    )
+                    logger.error(f"Trim: retry stop failed for {candidate.name}: {e}")
 
             actions.append(f"Stopped excess VM {candidate.name}")
             logger.info(f"Trim: stopped excess VM {candidate.name}")
@@ -1309,9 +1307,7 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
     actions: list[str] = []
     for vm in ghosts:
         try:
-            client.stop(
-                project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
-            ).result()
+            client.stop(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name).result()
             actions.append(f"Scrubbed ghost VM {vm.name} (stopped)")
             logger.info(f"Scrub: stopped ghost VM {vm.name}")
         except Exception as e:
@@ -1326,9 +1322,7 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
     trim_result = trim_pool(vm_type)
     return {
         "vm_type": vm_type,
-        "actions": scrub_actions
-        + replenish_result["actions"]
-        + trim_result["actions"],
+        "actions": scrub_actions + replenish_result["actions"] + trim_result["actions"],
     }
 
 
