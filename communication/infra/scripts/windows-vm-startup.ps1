@@ -551,17 +551,18 @@ if ($caddyConfigured) {
     # Grant unityuser read access to Caddy config + TLS certs
     C:\Windows\System32\icacls.exe "C:\caddy" /grant "unityuser:R" /T /Q 2>$null
 
-    # Ensure scheduled task exists to run Caddy as unityuser
+    # Ensure scheduled task exists to run Caddy as unityuser (AtLogOn — auto-logon fires immediately)
     $taskName = "StartCaddy"
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if (-not $existingTask -and (Test-Path $caddyExe) -and (Test-Path $caddyfileConfig)) {
         $action = New-ScheduledTaskAction -Execute $caddyExe `
             -Argument "run --config $caddyfileConfig" `
             -WorkingDirectory "C:\caddy"
-        $trigger = New-ScheduledTaskTrigger -AtStartup
-        $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType S4U -RunLevel Limited
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
+        $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Limited
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-            -Principal $principal -Force | Out-Null
+            -Principal $principal -Settings $settings -Force | Out-Null
     }
 
     $caddyProcess = Get-Process -Name "caddy" -ErrorAction SilentlyContinue
