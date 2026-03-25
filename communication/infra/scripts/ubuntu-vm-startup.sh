@@ -195,6 +195,7 @@ EOF
 
 cat > /etc/xdg/xfce4/helpers.rc << 'EOF'
 WebBrowser=chromium-browser
+FileManager=thunar
 TerminalEmulator=xfce4-terminal
 EOF
 echo "  XFCE config written to /etc/xdg/xfce4/"
