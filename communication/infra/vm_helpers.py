@@ -1105,6 +1105,8 @@ def replenish_pool(vm_type: str) -> Dict[str, Any]:
 
 
 def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
+    _scrub_inconsistent_vms(vm_type)
+
     client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
         vm_type
     )
@@ -1252,6 +1254,22 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
                 _set_pool_labels(client, candidate.name, {"pool-role": "idle"})
                 continue
 
+            fresh = client.get(
+                project=VM_PROJECT_ID, zone=ZONE, instance=candidate.name
+            )
+            if fresh.status == "RUNNING":
+                logger.warning(
+                    f"Trim: {candidate.name} still RUNNING after stop, retrying"
+                )
+                try:
+                    client.stop(
+                        project=VM_PROJECT_ID, zone=ZONE, instance=candidate.name
+                    ).result()
+                except Exception as e:
+                    logger.error(
+                        f"Trim: retry stop failed for {candidate.name}: {e}"
+                    )
+
             actions.append(f"Stopped excess VM {candidate.name}")
             logger.info(f"Trim: stopped excess VM {candidate.name}")
         except Exception as e:
@@ -1264,13 +1282,53 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
     return {"vm_type": vm_type, "idle_count": len(final_idle), "actions": actions}
 
 
+def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
+    """Stop VMs labeled pool-role=stopped that are still RUNNING.
+
+    This state arises when trim's client.stop() call succeeds from the API's
+    perspective but the VM doesn't actually reach TERMINATED (e.g. transient
+    GCE issue, manual restart via console).  These ghost VMs are invisible to
+    all pool logic and just waste resources.
+    """
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=ZONE,
+        filter=f"labels.pool-role=stopped AND labels.vm-type={vm_type} AND status=RUNNING",
+    )
+    ghosts = list(client.list(request=request))
+    if not ghosts:
+        return []
+
+    logger.info(
+        f"Scrub {vm_type}: found {len(ghosts)} ghost VMs "
+        f"(pool-role=stopped but RUNNING): "
+        f"{[vm.name for vm in ghosts]}"
+    )
+
+    actions: list[str] = []
+    for vm in ghosts:
+        try:
+            client.stop(
+                project=VM_PROJECT_ID, zone=ZONE, instance=vm.name
+            ).result()
+            actions.append(f"Scrubbed ghost VM {vm.name} (stopped)")
+            logger.info(f"Scrub: stopped ghost VM {vm.name}")
+        except Exception as e:
+            logger.error(f"Scrub: failed to stop ghost VM {vm.name}: {e}")
+    return actions
+
+
 def rebalance_pool(vm_type: str) -> Dict[str, Any]:
-    """Full rebalance: replenish then trim. For manual use."""
+    """Full rebalance: scrub ghosts, replenish, then trim. For manual use."""
+    scrub_actions = _scrub_inconsistent_vms(vm_type)
     replenish_result = replenish_pool(vm_type)
     trim_result = trim_pool(vm_type)
     return {
         "vm_type": vm_type,
-        "actions": replenish_result["actions"] + trim_result["actions"],
+        "actions": scrub_actions
+        + replenish_result["actions"]
+        + trim_result["actions"],
     }
 
 
