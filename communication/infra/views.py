@@ -1373,6 +1373,20 @@ async def rebalance_pool_endpoint(vm_type: str = "ubuntu"):
     return result
 
 
+@router.post("/cert-renewal")
+async def cert_renewal_endpoint():
+    """Renew the *.vm.unify.ai wildcard TLS cert if within 30 days of expiry.
+
+    Triggered monthly by Cloud Scheduler. Checks the current cert in
+    Secret Manager; if it expires within 30 days (or is missing),
+    performs a DNS-01 challenge via Let's Encrypt and updates the secrets.
+    """
+    from .cert_renewal import renew_if_needed
+
+    result = await asyncio.to_thread(renew_if_needed, days_threshold=30)
+    return result
+
+
 # =============================================================================
 # VM Self-Management Endpoints (GCP identity token auth, not admin key)
 # =============================================================================

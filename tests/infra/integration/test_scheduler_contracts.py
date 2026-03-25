@@ -22,7 +22,7 @@ Endpoints covered:
 import pytest
 import requests
 
-from .conftest import ADAPTERS_URL, ADMIN_KEY
+from .conftest import ADAPTERS_URL, ADMIN_KEY, COMMS_APP_URL
 
 pytestmark = [pytest.mark.staging]
 
@@ -86,28 +86,30 @@ class TestTeamsWatchesScheduler:
 
 
 class TestCertRenewalScheduler:
-    """Contract: POST /scheduled/cert-renewal checks the wildcard TLS cert
-    expiry and renews if needed. In normal conditions returns a no-op result.
+    """Contract: POST /infra/cert-renewal on the comms app checks the wildcard
+    TLS cert expiry and renews if needed. The adapter proxies to this endpoint."""
 
-    Known issue: The adapters container does not include the communication/
-    package, so `from communication.infra.cert_renewal import renew_if_needed`
-    fails with ModuleNotFoundError. This needs a cloudbuild fix to include
-    cert_renewal in the adapters image, or move the endpoint to the comms app.
-    """
-
-    @pytest.mark.xfail(
-        reason="Adapters image missing communication/ package (ModuleNotFoundError)",
-        strict=False,
-    )
-    def test_cert_renewal_check(self):
+    def test_cert_renewal_via_comms(self):
         resp = requests.post(
-            f"{ADAPTERS_URL}/scheduled/cert-renewal",
+            f"{COMMS_APP_URL}/infra/cert-renewal",
             headers=_ADMIN_HEADERS,
-            timeout=60,
+            timeout=120,
         )
         assert (
             resp.status_code == 200
-        ), f"cert-renewal failed: {resp.status_code} {resp.text}"
+        ), f"cert-renewal (comms) failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert isinstance(body, dict)
+
+    def test_cert_renewal_via_adapter_proxy(self):
+        resp = requests.post(
+            f"{ADAPTERS_URL}/scheduled/cert-renewal",
+            headers=_ADMIN_HEADERS,
+            timeout=120,
+        )
+        assert (
+            resp.status_code == 200
+        ), f"cert-renewal (adapter proxy) failed: {resp.status_code} {resp.text}"
         body = resp.json()
         assert isinstance(body, dict)
 

@@ -2696,16 +2696,17 @@ def scheduled_pending_startups():
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
 def scheduled_cert_renewal():
-    """Renew the *.vm.unify.ai wildcard TLS cert if within 30 days of expiry.
+    """Proxy cert-renewal to the comms app where the module is available.
 
-    Triggered monthly by Cloud Scheduler. Checks the current cert in Secret
-    Manager; if it expires within 30 days (or is missing), performs a DNS-01
-    challenge via Let's Encrypt and updates the secrets.
+    The cert_renewal module lives in communication/infra/ which is only
+    packaged in the comms Docker image, not the adapters image.
     """
-    from communication.infra.cert_renewal import renew_if_needed
-
-    result = renew_if_needed(days_threshold=30)
-    return result
+    resp = requests.post(
+        f"{SETTINGS.comms_url}/infra/cert-renewal",
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=120,
+    )
+    return resp.json()
 
 
 # =============================================================================
