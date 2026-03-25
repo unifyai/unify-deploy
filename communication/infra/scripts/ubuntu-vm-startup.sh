@@ -145,6 +145,81 @@ deluser unityuser sudo 2>/dev/null || true
 rm -f /etc/sudoers.d/*unityuser* 2>/dev/null || true
 
 # =============================================================================
+# Desktop as unityuser: converge filesystem for non-root desktop
+# =============================================================================
+echo ""
+echo "=== Converging desktop for unityuser ==="
+
+# Make /root traversable so unityuser can reach Playwright browsers at /root/.cache/ms-playwright
+chmod 711 /root
+chmod 711 /root/.cache 2>/dev/null || true
+echo "  /root made traversable (711)"
+
+# Fix system-wide profile: remove HOME=/root override that breaks unityuser shell sessions
+cat > /etc/profile.d/unity-vm.sh << 'EOF'
+export DISPLAY=:1
+export VNC_GEOMETRY=1920x1080
+export VNC_DEPTH=24
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+EOF
+chmod +x /etc/profile.d/unity-vm.sh
+echo "  /etc/profile.d/unity-vm.sh updated (removed HOME=/root)"
+
+# XFCE config via system-wide XDG fallback (read by any user, not just root)
+mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml
+
+cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-power-manager" version="1.0">
+  <property name="xfce4-power-manager" type="empty">
+    <property name="dpms-enabled" type="bool" value="false"/>
+    <property name="blank-on-ac" type="int" value="0"/>
+    <property name="dpms-on-ac-sleep" type="uint" value="0"/>
+    <property name="dpms-on-ac-off" type="uint" value="0"/>
+  </property>
+</channel>
+EOF
+
+cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-screensaver" version="1.0">
+  <property name="saver" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+  <property name="lock" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+</channel>
+EOF
+
+cat > /etc/xdg/xfce4/helpers.rc << 'EOF'
+WebBrowser=chromium-browser
+TerminalEmulator=xfce4-terminal
+EOF
+echo "  XFCE config written to /etc/xdg/xfce4/"
+
+# Pre-create writable dirs in /Unity for XFCE desktop session
+# /Unity itself is root:root 755 (required by SSHD ChrootDirectory)
+for dir in .config .local .cache; do
+    mkdir -p "/Unity/$dir"
+    chown unityuser:unityuser "/Unity/$dir"
+done
+echo "  /Unity/.config, .local, .cache created for unityuser"
+
+# Shell config for unityuser desktop terminal sessions
+cat > /Unity/.bashrc << 'BASHRC'
+if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
+    export UNITY_SHELL_INIT=1
+    cd /Unity
+fi
+BASHRC
+chown unityuser:unityuser /Unity/.bashrc
+echo "  /Unity/.bashrc configured"
+
+echo "Desktop convergence complete"
+
+# =============================================================================
 # VNC Default Password (so supervisord can start TigerVNC)
 # =============================================================================
 mkdir -p /etc/vnc

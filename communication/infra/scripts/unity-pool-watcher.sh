@@ -90,10 +90,16 @@ scrub_filesystem() {
         ! -name '.npm' ! -name '.bun' ! -name '.cache' \
         -exec rm -rf {} + 2>/dev/null || true
 
-    # /Unity/ — preserve structural dirs only
+    # /Unity/ — preserve structural dirs and desktop session dirs (wipe contents of session dirs)
     find /Unity -mindepth 1 -maxdepth 1 \
         ! -name '.ssh' ! -name 'Local' \
+        ! -name '.bashrc' ! -name '.config' ! -name '.local' ! -name '.cache' \
         -exec rm -rf {} + 2>/dev/null || true
+    for dir in .config .local .cache; do
+        if [[ -d "/Unity/$dir" ]]; then
+            find "/Unity/$dir" -mindepth 1 -exec rm -rf {} + 2>/dev/null || true
+        fi
+    done
 
     # Application logs
     rm -f /var/log/agent-service.log
@@ -263,6 +269,12 @@ do_assign() {
 
     # Update code before configuring (skips quickly if already up-to-date)
     do_update
+
+    # Ensure desktop session dirs exist (may have been wiped by scrub_filesystem)
+    for dir in .config .local .cache; do
+        mkdir -p "/Unity/$dir"
+        chown unityuser:unityuser "/Unity/$dir"
+    done
 
     local vnc_password
     local ssh_public_key
@@ -438,9 +450,10 @@ def vnc_encrypt(password):
     cipher = DES.new(key, DES.MODE_ECB)
     return cipher.encrypt(pw)
 password = os.environ.get('VNC_PASSWORD', 'disabled')
-with open('/root/.vnc/passwd', 'wb') as f:
+with open('/etc/vnc/passwd', 'wb') as f:
     f.write(vnc_encrypt(password))
-os.chmod('/root/.vnc/passwd', 0o600)
+os.chmod('/etc/vnc/passwd', 0o640)
+os.system('chgrp unityuser /etc/vnc/passwd')
 PYSCRIPT
     log "VNC password reset"
 

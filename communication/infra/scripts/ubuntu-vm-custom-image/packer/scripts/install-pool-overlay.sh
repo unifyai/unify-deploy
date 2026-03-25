@@ -28,14 +28,24 @@ else
     echo "  User unityuser already exists"
 fi
 
-mkdir -p /Unity/.ssh /Unity/Local
+mkdir -p /Unity/.ssh /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
 # /Unity must be root-owned for SSHD ChrootDirectory; subdirectories are user-owned
 chown root:root /Unity
 chmod 755 /Unity
-chown -R unityuser:unityuser /Unity/.ssh /Unity/Local
+chown -R unityuser:unityuser /Unity/.ssh /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
 chmod 700 /Unity/.ssh
 chmod 755 /Unity/Local
-echo "  Created /Unity/.ssh and /Unity/Local"
+echo "  Created /Unity/.ssh, /Unity/Local, /Unity/.config, /Unity/.local, /Unity/.cache"
+
+# Shell config for unityuser desktop terminal sessions
+cat > /Unity/.bashrc << 'BASHRC'
+if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
+    export UNITY_SHELL_INIT=1
+    cd /Unity
+fi
+BASHRC
+chown unityuser:unityuser /Unity/.bashrc
+echo "  /Unity/.bashrc configured"
 
 # =============================================================================
 # SSHD: file sync on port 2222

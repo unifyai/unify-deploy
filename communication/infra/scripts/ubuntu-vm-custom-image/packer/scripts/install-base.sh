@@ -231,13 +231,15 @@ echo "Chromium configured as default browser"
 echo ""
 echo "=== Creating directories ==="
 
-mkdir -p /root/.vnc
 mkdir -p /etc/caddy
 mkdir -p /var/log/caddy
 mkdir -p /var/log/supervisor
 mkdir -p /magnitude
 mkdir -p /agent-service
 mkdir -p /Unity
+
+# Make /root traversable so non-root users can reach Playwright browsers at /root/.cache/ms-playwright
+chmod 711 /root
 
 # =============================================================================
 # supervisord configuration
@@ -258,11 +260,10 @@ fi
 echo ""
 echo "=== Configuring XFCE ==="
 
-# Create default XFCE config to suppress first-run dialogs
-mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml
+# System-wide XDG config (fallback for all users, not tied to /root)
+mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml
 
-# Disable screensaver and power management (important for VNC)
-cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml << 'EOF'
+cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-power-manager" version="1.0">
   <property name="xfce4-power-manager" type="empty">
@@ -274,8 +275,7 @@ cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml << 
 </channel>
 EOF
 
-# Disable screensaver
-cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml << 'EOF'
+cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfce4-screensaver" version="1.0">
   <property name="saver" type="empty">
@@ -287,15 +287,12 @@ cat > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml << 'E
 </channel>
 EOF
 
-# Configure XFCE preferred applications (helpers.rc)
-cat > /root/.config/xfce4/helpers.rc << 'EOF'
+cat > /etc/xdg/xfce4/helpers.rc << 'EOF'
 WebBrowser=chromium-browser
 TerminalEmulator=xfce4-terminal
 EOF
 
-echo "  Configured XFCE preferred applications"
-
-echo "XFCE configured"
+echo "XFCE configured (system-wide XDG)"
 
 # =============================================================================
 # Environment variables
@@ -308,7 +305,6 @@ cat > /etc/profile.d/unity-vm.sh << 'EOF'
 export DISPLAY=:1
 export VNC_GEOMETRY=1920x1080
 export VNC_DEPTH=24
-export HOME=/root
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 EOF
