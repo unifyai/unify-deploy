@@ -205,6 +205,8 @@ for dir in .config .local .cache; do
     mkdir -p "/Unity/$dir"
     chown unityuser:unityuser "/Unity/$dir"
 done
+# Symlink Playwright browser cache so $HOME/.cache/ms-playwright resolves to the actual install location
+ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
 echo "  /Unity/.config, .local, .cache created for unityuser"
 
 # Shell config for unityuser desktop terminal sessions

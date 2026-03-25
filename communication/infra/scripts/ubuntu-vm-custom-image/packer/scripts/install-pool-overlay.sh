@@ -35,6 +35,7 @@ chmod 755 /Unity
 chown -R unityuser:unityuser /Unity/.ssh /Unity/Local /Unity/.config /Unity/.local /Unity/.cache
 chmod 700 /Unity/.ssh
 chmod 755 /Unity/Local
+ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
 echo "  Created /Unity/.ssh, /Unity/Local, /Unity/.config, /Unity/.local, /Unity/.cache"
 
 # Shell config for unityuser desktop terminal sessions

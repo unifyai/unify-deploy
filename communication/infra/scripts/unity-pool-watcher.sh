@@ -95,11 +95,15 @@ scrub_filesystem() {
         ! -name '.ssh' ! -name 'Local' \
         ! -name '.bashrc' ! -name '.config' ! -name '.local' ! -name '.cache' \
         -exec rm -rf {} + 2>/dev/null || true
-    for dir in .config .local .cache; do
+    for dir in .config .local; do
         if [[ -d "/Unity/$dir" ]]; then
             find "/Unity/$dir" -mindepth 1 -exec rm -rf {} + 2>/dev/null || true
         fi
     done
+    # Wipe .cache contents but preserve the ms-playwright symlink
+    if [[ -d /Unity/.cache ]]; then
+        find /Unity/.cache -mindepth 1 ! -name 'ms-playwright' -exec rm -rf {} + 2>/dev/null || true
+    fi
 
     # Application logs
     rm -f /var/log/agent-service.log
@@ -275,6 +279,7 @@ do_assign() {
         mkdir -p "/Unity/$dir"
         chown unityuser:unityuser "/Unity/$dir"
     done
+    ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
 
     local vnc_password
     local ssh_public_key
