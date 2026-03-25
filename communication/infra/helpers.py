@@ -281,7 +281,11 @@ def create_unity_job(
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
                         "terminationGracePeriodSeconds": 30,  # Faster termination
-                        "priorityClassName": "unity-critical",
+                        "priorityClassName": (
+                            "unity-critical"
+                            if DEPLOY_ENV == "production"
+                            else "unity-high"
+                        ),
                         "containers": [
                             {
                                 "name": "unity-assistant",

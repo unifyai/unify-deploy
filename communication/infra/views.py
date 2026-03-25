@@ -1,9 +1,9 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from functools import partial
-from google.cloud import pubsub_v1, storage
+from google.cloud import compute_v1, pubsub_v1, storage
 from google.oauth2.service_account import Credentials
 from google.protobuf import duration_pb2
 import json
@@ -22,6 +22,8 @@ from .helpers import (
 from .vm_helpers import (
     get_dns_hostname,
     _probe_vm_https,
+    _set_pool_labels,
+    _update_instance_metadata,
     provision_pool_vm,
     assign_pool_vm,
     release_pool_vm,
@@ -41,6 +43,7 @@ from .tunnel_helpers import (
 )
 from .models import (
     VMReadyRequest,
+    VMWipeMetadataKeyRequest,
     TunnelRegisterRequest,
     TunnelRegisterResponse,
     TunnelStatusResponse,
@@ -55,7 +58,11 @@ from .models import (
     PoolVMStatus,
 )
 from communication.helpers import DEPLOY_ENV, ENV_SUFFIX
-from communication.dependencies import authenticate_user_api_key, extract_api_key
+from communication.dependencies import (
+    authenticate_user_api_key,
+    authenticate_vm_identity,
+    extract_api_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +95,7 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
         },
     ).encode("utf-8")
 
-    future = publisher.publish(topic_path, data=message_data)
+    future = publisher.publish(topic_path, data=message_data, thread="inbound")
     message_id = await asyncio.to_thread(future.result)
     logger.info(
         f"Published assistant_desktop_ready for assistant {assistant_id} "
@@ -221,6 +228,10 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             GCP_PROJECT_ID,
             f"{topic_name}-actions-sub",
         )
+        system_error_subscription_path = subscriber.subscription_path(
+            GCP_PROJECT_ID,
+            f"{topic_name}-system-error-sub",
+        )
 
         # Create topic (idempotent)
         try:
@@ -232,17 +243,14 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             if "already exists" not in str(e).lower():
                 raise
 
-        # Create/update all three subscriptions in parallel
+        # Create/update all subscriptions in parallel
         await asyncio.gather(
             asyncio.to_thread(
                 _ensure_subscription,
                 subscriber,
                 topic_path,
                 subscription_path,
-                (
-                    'NOT attributes.thread = "unify_message_outbound"'
-                    ' AND NOT attributes.thread = "action_event"'
-                ),
+                'attributes.thread = "inbound"',
             ),
             asyncio.to_thread(
                 _ensure_subscription,
@@ -260,6 +268,13 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
                 enable_message_ordering=True,
                 message_retention_seconds=1800,
             ),
+            asyncio.to_thread(
+                _ensure_subscription,
+                subscriber,
+                topic_path,
+                system_error_subscription_path,
+                'attributes.thread = "system_error"',
+            ),
         )
 
         return {
@@ -268,6 +283,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             "topic_name": topic_path,
             "subscription_name": subscription_path,
             "actions_subscription_name": actions_subscription_path,
+            "system_error_subscription_name": system_error_subscription_path,
             "project_id": GCP_PROJECT_ID,
         }
     except Exception as e:
@@ -581,7 +597,7 @@ async def start_job(
 
         message_data = json.dumps(job_data).encode("utf-8")
 
-        future = publisher.publish(topic_path, data=message_data)
+        future = publisher.publish(topic_path, data=message_data, thread="inbound")
         message_id = await asyncio.to_thread(future.result)
         print(f"Job start request published for assistant {assistant_id}")
 
@@ -1132,3 +1148,38 @@ async def rebalance_pool_endpoint(vm_type: str = "ubuntu"):
     """Manually trigger pool rebalance for a VM type."""
     result = await asyncio.to_thread(rebalance_pool, vm_type)
     return result
+
+
+# =============================================================================
+# VM Self-Management Endpoints (GCP identity token auth, not admin key)
+# =============================================================================
+
+vm_self_router = APIRouter()
+
+
+@vm_self_router.post("/vm/mark-idle")
+async def vm_mark_idle_endpoint(
+    claims: dict = Depends(authenticate_vm_identity),
+):
+    """Mark the calling VM as idle. Authenticated via GCP identity token."""
+    gce = claims["google"]["compute_engine"]
+    vm_name = gce["instance_name"]
+
+    client = compute_v1.InstancesClient()
+    await asyncio.to_thread(_set_pool_labels, client, vm_name, {"pool-role": "idle"})
+    logger.info(f"VM {vm_name} marked itself as idle via identity token")
+    return {"vm_name": vm_name, "pool_role": "idle"}
+
+
+@vm_self_router.post("/vm/wipe-metadata-key")
+async def vm_wipe_metadata_key_endpoint(
+    body: VMWipeMetadataKeyRequest,
+    claims: dict = Depends(authenticate_vm_identity),
+):
+    """Wipe a metadata key on the calling VM. Authenticated via GCP identity token."""
+    gce = claims["google"]["compute_engine"]
+    vm_name = gce["instance_name"]
+
+    await asyncio.to_thread(_update_instance_metadata, vm_name, {body.key: ""})
+    logger.info(f"VM {vm_name} wiped metadata key '{body.key}' via identity token")
+    return {"vm_name": vm_name, "key": body.key, "wiped": True}

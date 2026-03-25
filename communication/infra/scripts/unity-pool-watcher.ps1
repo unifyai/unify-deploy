@@ -61,6 +61,95 @@ function Save-CommitHash($dir, $hash) {
     if ($hash) { $hash | Out-File -FilePath (Join-Path $dir ".commit-hash") -Encoding UTF8 -NoNewline }
 }
 
+function Scrub-GitTokens {
+    foreach ($dir in @('C:\magnitude', 'C:\agent-service')) {
+        if (Test-Path "$dir\.git") {
+            try {
+                $url = git -C $dir remote get-url origin 2>$null
+                if ($url -match '@github\.com') {
+                    $clean = $url -replace 'https://[^@]+@', 'https://'
+                    git -C $dir remote set-url origin $clean 2>$null
+                }
+            } catch {}
+        }
+    }
+}
+
+function Scrub-Filesystem {
+    Write-Log "SCRUB: cleaning session artifacts from filesystem"
+
+    # C:\Unity\ — remove everything except structural dirs
+    if (Test-Path "C:\Unity") {
+        Get-ChildItem "C:\Unity" -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notin @('.ssh', 'Local') } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # unityuser profile — wipe session data from known directories
+    $userProfile = "C:\Users\unityuser"
+    if (Test-Path $userProfile) {
+        foreach ($subdir in @('Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'Favorites', '.cache')) {
+            $path = Join-Path $userProfile $subdir
+            if (Test-Path $path) {
+                Get-ChildItem $path -Force -ErrorAction SilentlyContinue |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        # User temp
+        $userTemp = Join-Path $userProfile "AppData\Local\Temp"
+        if (Test-Path $userTemp) {
+            Get-ChildItem $userTemp -Force -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # SYSTEM profile — preserve .bun and .npm, wipe the rest
+    $sysProfile = "C:\Windows\System32\config\systemprofile"
+    if (Test-Path $sysProfile) {
+        Get-ChildItem $sysProfile -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notin @('.bun', '.npm', 'AppData') } |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # Application logs
+    Remove-Item "C:\agent-service\agent.log" -Force -ErrorAction SilentlyContinue
+    if (Test-Path "C:\caddy\access.log") {
+        Clear-Content "C:\caddy\access.log" -ErrorAction SilentlyContinue
+    }
+
+    # SYSTEM temp
+    Get-ChildItem $env:TEMP -Force -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+    # PowerShell history
+    foreach ($histPath in @(
+        "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt",
+        "C:\Users\unityuser\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
+    )) {
+        Remove-Item $histPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Log "SCRUB complete"
+}
+
+function Wipe-MetadataKey($key) {
+    try {
+        $metaHeaders = @{ "Metadata-Flavor" = "Google" }
+        $commsUrl = Get-Metadata "comms-url"
+        $idToken = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" -Headers $metaHeaders -TimeoutSec 5
+        if (-not $commsUrl -or -not $idToken) { return }
+
+        $body = @{ key = $key } | ConvertTo-Json
+        Invoke-RestMethod -Uri "$commsUrl/infra/vm/wipe-metadata-key" `
+            -Method POST -ContentType "application/json" `
+            -Headers @{ Authorization = "Bearer $idToken" } `
+            -Body $body -TimeoutSec 10 | Out-Null
+        Write-Log "Wiped metadata key: $key"
+    } catch {
+        Write-Log "WARNING: failed to wipe metadata key $key via Comms API - $_"
+    }
+}
+
 function Stop-AgentService {
     Stop-ScheduledTask -TaskName "StartAgentService" -ErrorAction SilentlyContinue
     Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -247,6 +336,7 @@ function Invoke-Update {
         Write-Log "Agent Service updated"
     }
 
+    Scrub-GitTokens
     Write-Log "UPDATE complete"
 }
 
@@ -371,6 +461,7 @@ UNIFY_KEY=$unifyKey
 ORCHESTRA_URL=$orchestraUrl
 UNITY_COMMS_URL=$commsUrl
 PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
+DISPLAY=:1
 "@
         Set-Content -Path "$agentServiceDir\.env" -Value $envContent -Encoding UTF8
         Write-Log "Agent Service .env configured"
@@ -536,8 +627,12 @@ function Invoke-Release {
         Write-Log "Unmounted persistent disk"
     }
 
+    Scrub-Filesystem
+
     # Update code while VM is idle so next assignment starts with latest
     Invoke-Update
+
+    Wipe-MetadataKey "github-token"
 
     Write-Log "RELEASE complete"
 }

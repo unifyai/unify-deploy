@@ -529,10 +529,9 @@ function Configure-Firewall-Base {
     Write-Host "=== Configuring Firewall (base) ===" -ForegroundColor Cyan
 
     # ==========================================================================
-    # IMPORTANT: RDP (port 3389) is already configured by Windows/GCP
-    # DO NOT create or modify any RDP firewall rules
-    # The default Windows firewall rules for Remote Desktop are preserved
-    # GCP's default network also has a firewall rule allowing RDP
+    # RDP (port 3389) is already configured by Windows/GCP — untouched.
+    # Ports 6080 (noVNC) and 3000 (Agent Service) are NOT exposed directly;
+    # they are only reachable via Caddy's reverse proxy on port 443.
     # ==========================================================================
 
     # Remove old Unity rules if they exist (to update them)
@@ -542,18 +541,8 @@ function Configure-Firewall-Base {
     Remove-NetFirewallRule -DisplayName "Unity-VNC-Local" -ErrorAction SilentlyContinue
     Remove-NetFirewallRule -DisplayName "Unity-AgentService" -ErrorAction SilentlyContinue
 
-    # Unity-specific firewall rules (RDP is untouched)
     New-NetFirewallRule -DisplayName "Unity-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any
     Write-Host "Firewall rule created: Allow HTTPS (443)" -ForegroundColor Green
-
-    New-NetFirewallRule -DisplayName "Unity-HTTP" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Allow -Profile Any
-    Write-Host "Firewall rule created: Allow HTTP (80)" -ForegroundColor Green
-
-    New-NetFirewallRule -DisplayName "Unity-noVNC" -Direction Inbound -LocalPort 6080 -Protocol TCP -Action Allow -Profile Any
-    Write-Host "Firewall rule created: Allow noVNC (6080)" -ForegroundColor Green
-
-    New-NetFirewallRule -DisplayName "Unity-AgentService" -Direction Inbound -LocalPort 3000 -Protocol TCP -Action Allow -Profile Any
-    Write-Host "Firewall rule created: Allow Agent Service (3000)" -ForegroundColor Green
 
     Write-Host ""
     Write-Host "RDP (3389): Preserved from Windows/GCP defaults (not modified)" -ForegroundColor Cyan
@@ -598,7 +587,7 @@ Write-Host "  - Bun"
 Write-Host "  - noVNC + websockify"
 Write-Host "  - Caddy (binary only)"
 Write-Host "  - Microsoft Office LTSC 2024 (Word, Excel, PowerPoint) - NOT activated"
-Write-Host "  - Firewall rules (ports 80, 443, 3000, 6080)"
+Write-Host "  - Firewall rules (port 443 only — 6080/3000 behind Caddy)"
 Write-Host "  - Server Manager auto-start disabled"
 Write-Host ""
 Write-Host "Preserved from GCP Windows image:" -ForegroundColor Cyan

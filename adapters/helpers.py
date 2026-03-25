@@ -176,7 +176,7 @@ def get_assistant(
 
     local_assistant_data = {
         "assistant_id": "local-assistant",
-        "deploy_env": DEPLOY_ENV,
+        "deploy_env": None,
         "user_id": "local-user",
         "voice_provider": "cartesia",
         "voice_id": None,
@@ -802,8 +802,6 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
     current_idle_count = len(inventory["idle"])
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(current_idle_count)
 
     pool_target = get_target_idle_count(running_count)
 
@@ -815,6 +813,8 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
         num_to_create = max(0, pool_target.target - current_idle_count)
 
     if num_to_create == 0:
+        UNITY_JOBS_RUNNING.set(running_count)
+        UNITY_JOBS_IDLE.set(current_idle_count)
         logger.info(
             f"Idle pool is healthy (current: {current_idle_count}, target: {pool_target.target}). No jobs created.",
         )
@@ -858,6 +858,9 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
         futures = [pool.submit(_create_single_job) for _ in range(num_to_create)]
         created_jobs = [f.result() for f in as_completed(futures)]
 
+    UNITY_JOBS_RUNNING.set(running_count)
+    UNITY_JOBS_IDLE.set(current_idle_count + len(created_jobs))
+
     return {
         "mode": mode,
         "created": len(created_jobs),
@@ -876,8 +879,6 @@ def cleanup_idle_pool() -> dict:
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
     idle_count = len(inventory["idle"])
-    UNITY_JOBS_RUNNING.set(running_count)
-    UNITY_JOBS_IDLE.set(idle_count)
     target_retain = get_target_idle_count(running_count).target
 
     idle_jobs = {
@@ -955,6 +956,9 @@ def cleanup_idle_pool() -> dict:
             ]
             for f in as_completed(futures):
                 f.result()
+
+    UNITY_JOBS_RUNNING.set(running_count)
+    UNITY_JOBS_IDLE.set(len(retain))
 
     return {
         "retained": len(retain),
@@ -1532,7 +1536,7 @@ def publish_gmail_thread_id(
         data = json.dumps(message_dict).encode("utf-8")
 
         # Publish asynchronously
-        publish_future = publisher.publish(topic_path, data=data)
+        publish_future = publisher.publish(topic_path, data=data, thread="inbound")
         if "test" in assistant_id:
             pubsub_message_id = publish_future.result(timeout=10)
             print(f"Message ID: {pubsub_message_id}")
@@ -1573,7 +1577,7 @@ def publish_outlook_thread_id(
         }
         data = json.dumps(message_dict).encode("utf-8")
 
-        publish_future = publisher.publish(topic_path, data=data)
+        publish_future = publisher.publish(topic_path, data=data, thread="inbound")
         if "test" in assistant_id:
             msg_id = publish_future.result(timeout=10)
             logger.info(f"Message ID: {msg_id}")

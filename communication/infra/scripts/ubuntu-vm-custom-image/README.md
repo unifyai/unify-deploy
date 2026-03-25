@@ -162,16 +162,14 @@ ubuntu-vm-custom-image/
 Ensure these firewall rules exist in your project:
 
 ```bash
-# Allow HTTP/HTTPS
-gcloud compute firewall-rules create allow-http --allow=tcp:80 --target-tags=http-server
+# Allow HTTPS (Caddy reverse proxy — the only public-facing port)
 gcloud compute firewall-rules create allow-https --allow=tcp:443 --target-tags=https-server
 
-# Allow noVNC direct access (for testing)
-gcloud compute firewall-rules create allow-novnc --allow=tcp:6080 --target-tags=http-server
-
-# Allow Agent Service (for testing)
-gcloud compute firewall-rules create allow-agent-service --allow=tcp:3000 --target-tags=http-server
+# Allow SFTP file sync
+gcloud compute firewall-rules create allow-2222 --allow=tcp:2222 --target-tags=allow-2222
 ```
+
+Ports 6080 (noVNC) and 3000 (Agent Service) are **not** exposed directly — they are only reachable via Caddy's reverse proxy on port 443. Port 80 is not needed since VMs use a pre-provisioned wildcard TLS cert.
 
 ## Logs
 

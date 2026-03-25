@@ -5,6 +5,8 @@ import secrets
 import httpx
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from starlette import status
 
 from communication.helpers import ORCHESTRA_URL
@@ -12,6 +14,9 @@ from communication.helpers import ORCHESTRA_URL
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
+
+VM_IDENTITY_AUDIENCE = "unity-comms-vm"
+VM_SA_EMAIL = f"pool-vm-sa@{os.environ.get('VM_PROJECT_ID', 'gcp-project-vms')}.iam.gserviceaccount.com"
 
 
 def auth_admin_key(
@@ -57,3 +62,40 @@ def extract_api_key(request: Request) -> str:
     if auth_header.startswith("Bearer "):
         return auth_header[7:]
     raise HTTPException(status_code=401, detail="Missing API key.")
+
+
+def authenticate_vm_identity(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
+    """Verify a GCP identity token from a pool VM.
+
+    Returns the verified claims dict containing:
+      - email: service account email
+      - google.compute_engine.instance_name
+      - google.compute_engine.project_id
+      - google.compute_engine.zone
+    """
+    token = credentials.credentials
+    try:
+        claims = google_id_token.verify_token(
+            token,
+            google_requests.Request(),
+            audience=VM_IDENTITY_AUDIENCE,
+        )
+    except Exception:
+        raise HTTPException(status_code=403, detail="Invalid VM identity token.")
+
+    if claims.get("email") != VM_SA_EMAIL:
+        raise HTTPException(
+            status_code=403,
+            detail="Token is not from an authorized pool VM service account.",
+        )
+
+    gce = claims.get("google", {}).get("compute_engine", {})
+    if not gce.get("instance_name"):
+        raise HTTPException(
+            status_code=403,
+            detail="Token missing compute engine identity claims.",
+        )
+
+    return claims

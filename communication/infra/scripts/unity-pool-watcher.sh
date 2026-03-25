@@ -67,6 +67,61 @@ save_commit_hash() {
     fi
 }
 
+scrub_git_tokens() {
+    for repo_dir in /magnitude /agent-service; do
+        if [[ -d "$repo_dir/.git" ]]; then
+            local url
+            url=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || true)
+            if [[ "$url" == *"@github.com"* ]]; then
+                git -C "$repo_dir" remote set-url origin "$(echo "$url" | sed 's|https://[^@]*@|https://|')" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+scrub_filesystem() {
+    log "SCRUB: cleaning session artifacts from filesystem"
+
+    # /root/ — preserve shell config, package manager caches, and all of .cache
+    # (.cache contains browser binaries, shader caches, fontconfig, etc. that are
+    # expensive to rebuild and safe to keep across assignments)
+    find /root -mindepth 1 -maxdepth 1 \
+        ! -name '.bashrc' ! -name '.profile' ! -name '.bash_logout' \
+        ! -name '.npm' ! -name '.bun' ! -name '.cache' \
+        -exec rm -rf {} + 2>/dev/null || true
+
+    # /Unity/ — preserve structural dirs only
+    find /Unity -mindepth 1 -maxdepth 1 \
+        ! -name '.ssh' ! -name 'Local' \
+        -exec rm -rf {} + 2>/dev/null || true
+
+    # Application logs
+    rm -f /var/log/agent-service.log
+    : > /var/log/caddy/access.log 2>/dev/null || true
+    find /var/log/supervisor -name '*.log' -exec truncate -s 0 {} \; 2>/dev/null || true
+
+    # Temp files
+    find /tmp -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+
+    log "SCRUB complete"
+}
+
+wipe_metadata_key() {
+    local key=$1
+    local comms_url id_token
+    comms_url=$(get_metadata "comms-url")
+    id_token=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
+        2>/dev/null || true)
+    [[ -z "$comms_url" || -z "$id_token" ]] && return
+    curl -sf -X POST "$comms_url/infra/vm/wipe-metadata-key" \
+        -H "Authorization: Bearer $id_token" \
+        -H "Content-Type: application/json" \
+        -d "{\"key\": \"$key\"}" >/dev/null 2>&1 \
+        && log "Wiped metadata key: $key" \
+        || log "WARNING: failed to wipe metadata key $key via Comms API"
+}
+
 kill_agent_service() {
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
     pkill -f "node" 2>/dev/null || true
@@ -187,6 +242,7 @@ do_update() {
         log "Agent Service updated ($commit)"
     fi
 
+    scrub_git_tokens
     log "UPDATE complete"
 }
 
@@ -283,13 +339,14 @@ UNIFY_KEY=$unify_key
 ORCHESTRA_URL=$orchestra_url
 UNITY_COMMS_URL=$comms_url
 PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+DISPLAY=:1
 EOF
     log "Agent Service .env configured"
 
     # Start Agent Service
     kill_agent_service
     cd /agent-service
-    nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
+    DISPLAY=":1" nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
     cd /
     log "Agent Service started"
 
@@ -397,8 +454,12 @@ PYSCRIPT
         fi
     fi
 
+    scrub_filesystem
+
     # Update code while VM is idle so next assignment starts with latest
     do_update
+
+    wipe_metadata_key "github-token"
 
     log "RELEASE complete"
 }

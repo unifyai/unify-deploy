@@ -29,8 +29,10 @@ else
 fi
 
 mkdir -p /Unity/.ssh /Unity/Local
-chown -R unityuser:unityuser /Unity
+# /Unity must be root-owned for SSHD ChrootDirectory; subdirectories are user-owned
+chown root:root /Unity
 chmod 755 /Unity
+chown -R unityuser:unityuser /Unity/.ssh /Unity/Local
 chmod 700 /Unity/.ssh
 chmod 755 /Unity/Local
 echo "  Created /Unity/.ssh and /Unity/Local"
@@ -52,7 +54,7 @@ Port 2222
 
 Match User unityuser
     ForceCommand internal-sftp
-    ChrootDirectory /
+    ChrootDirectory /Unity
     AllowTcpForwarding no
     X11Forwarding no
 SSHEOF
