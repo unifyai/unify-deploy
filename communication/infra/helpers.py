@@ -284,7 +284,7 @@ def create_unity_job(
                         "priorityClassName": (
                             "unity-critical"
                             if DEPLOY_ENV == "production"
-                            else "unity-normal"
+                            else "unity-high"
                         ),
                         "containers": [
                             {
