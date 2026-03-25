@@ -333,56 +333,26 @@ for i in $(seq 1 30); do
 done
 
 # =============================================================================
-# Mark pool VM as idle (only after Caddy is confirmed ready)
+# Mark pool VM as idle + wipe github-token (via Comms API with GCP identity token)
 # =============================================================================
-TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null || true)
+COMMS_URL=$(get_metadata "comms-url")
+ID_TOKEN=$(curl -sf -H "Metadata-Flavor: Google" \
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
+    2>/dev/null || true)
 
-if [[ -n "$TOKEN" ]]; then
-    GCP_PROJECT=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/project/project-id")
-    GCP_ZONE=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{print $NF}')
-    GCP_INSTANCE=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/name")
+if [[ -n "$COMMS_URL" && -n "$ID_TOKEN" ]]; then
+    curl -sf -X POST "$COMMS_URL/infra/vm/mark-idle" \
+        -H "Authorization: Bearer $ID_TOKEN" \
+        -H "Content-Type: application/json" >/dev/null 2>&1 \
+        && echo "Pool VM marked as idle" \
+        || echo "WARNING: failed to mark VM as idle via Comms API"
 
-    INFO=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-        "https://compute.googleapis.com/compute/v1/projects/$GCP_PROJECT/zones/$GCP_ZONE/instances/$GCP_INSTANCE")
-    POOL_ROLE=$(echo "$INFO" | python3 -c "import sys,json; print(json.load(sys.stdin).get('labels',{}).get('pool-role',''))" 2>/dev/null || true)
-
-    if [[ "$POOL_ROLE" == "provisioning" || "$POOL_ROLE" == "stopped" ]]; then
-        FINGERPRINT=$(echo "$INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['labelFingerprint'])")
-        NEW_LABELS=$(echo "$INFO" | python3 -c "
-import sys, json
-labels = json.load(sys.stdin).get('labels', {})
-labels['pool-role'] = 'idle'
-print(json.dumps(labels))
-")
-        curl -sf -X POST \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://compute.googleapis.com/compute/v1/projects/$GCP_PROJECT/zones/$GCP_ZONE/instances/$GCP_INSTANCE/setLabels" \
-            -d "{\"labels\": $NEW_LABELS, \"labelFingerprint\": \"$FINGERPRINT\"}"
-        echo "Pool VM marked as idle"
-    fi
-
-    # Wipe github-token from metadata (no longer needed after initial clone)
-    META_FP=$(echo "$INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['metadata']['fingerprint'])" 2>/dev/null || true)
-    if [[ -n "$META_FP" ]]; then
-        META_ITEMS=$(echo "$INFO" | python3 -c "
-import sys, json
-meta = json.load(sys.stdin).get('metadata', {})
-items = [{'key': i['key'], 'value': '' if i['key'] == 'github-token' else i['value']} for i in meta.get('items', [])]
-print(json.dumps(items))
-")
-        curl -sf -X POST \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://compute.googleapis.com/compute/v1/projects/$GCP_PROJECT/zones/$GCP_ZONE/instances/$GCP_INSTANCE/setMetadata" \
-            -d "{\"items\": $META_ITEMS, \"fingerprint\": \"$META_FP\"}" >/dev/null 2>&1
-        echo "Wiped github-token from metadata"
-    fi
+    curl -sf -X POST "$COMMS_URL/infra/vm/wipe-metadata-key" \
+        -H "Authorization: Bearer $ID_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{"key": "github-token"}' >/dev/null 2>&1 \
+        && echo "Wiped github-token from metadata" \
+        || echo "WARNING: failed to wipe github-token via Comms API"
 fi
 
 TOTAL_ELAPSED=$(( $(date +%s) - START_TIME ))

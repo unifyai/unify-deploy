@@ -523,58 +523,37 @@ if ($caddyConfigured) {
 }
 
 # =============================================================================
-# Mark pool VM as idle
+# Mark pool VM as idle + wipe github-token (via Comms API with GCP identity token)
 # =============================================================================
+$commsUrl = Get-GCPMetadata -Key "comms-url"
 try {
     $metaHeaders = @{ "Metadata-Flavor" = "Google" }
-    $tokenResponse = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" -Headers $metaHeaders
-    $token = $tokenResponse.access_token
-
-    $gcpProject = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/project/project-id" -Headers $metaHeaders
-    $zoneUri = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/zone" -Headers $metaHeaders
-    $gcpZone = ($zoneUri -split '/')[-1]
-    $gcpInstance = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/name" -Headers $metaHeaders
-
-    $apiBase = "https://compute.googleapis.com/compute/v1/projects/$gcpProject/zones/$gcpZone/instances/$gcpInstance"
-    $info = Invoke-RestMethod -Uri $apiBase -Headers @{ Authorization = "Bearer $token" }
-    $poolRole = $info.labels.'pool-role'
-
-    if ($poolRole -eq "provisioning" -or $poolRole -eq "stopped") {
-        $labels = @{}
-        $info.labels.PSObject.Properties | ForEach-Object { $labels[$_.Name] = $_.Value }
-        $labels['pool-role'] = 'idle'
-
-        $body = @{
-            labels = $labels
-            labelFingerprint = $info.labelFingerprint
-        } | ConvertTo-Json
-
-        Invoke-RestMethod -Uri "$apiBase/setLabels" `
-            -Method POST -ContentType "application/json" `
-            -Headers @{ Authorization = "Bearer $token" } `
-            -Body $body
-        Write-Host "Pool VM marked as idle" -ForegroundColor Green
-    }
-
-    # Wipe github-token from metadata (no longer needed after initial clone)
-    $metaFingerprint = $info.metadata.fingerprint
-    if ($metaFingerprint) {
-        $metaItems = @()
-        foreach ($item in $info.metadata.items) {
-            $metaItems += @{
-                key   = $item.key
-                value = if ($item.key -eq 'github-token') { '' } else { $item.value }
-            }
-        }
-        $metaBody = @{ items = $metaItems; fingerprint = $metaFingerprint } | ConvertTo-Json -Depth 3
-        Invoke-RestMethod -Uri "$apiBase/setMetadata" `
-            -Method POST -ContentType "application/json" `
-            -Headers @{ Authorization = "Bearer $token" } `
-            -Body $metaBody | Out-Null
-        Write-Host "Wiped github-token from metadata" -ForegroundColor Green
-    }
+    $idToken = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" -Headers $metaHeaders -TimeoutSec 5
 } catch {
-    Write-Host "Pool VM label update skipped: $_" -ForegroundColor Gray
+    $idToken = $null
+}
+
+if ($commsUrl -and $idToken) {
+    try {
+        Invoke-RestMethod -Uri "$commsUrl/infra/vm/mark-idle" `
+            -Method POST -ContentType "application/json" `
+            -Headers @{ Authorization = "Bearer $idToken" } `
+            -TimeoutSec 10
+        Write-Host "Pool VM marked as idle" -ForegroundColor Green
+    } catch {
+        Write-Host "WARNING: failed to mark VM as idle via Comms API: $_" -ForegroundColor Yellow
+    }
+
+    try {
+        $wipeBody = @{ key = "github-token" } | ConvertTo-Json
+        Invoke-RestMethod -Uri "$commsUrl/infra/vm/wipe-metadata-key" `
+            -Method POST -ContentType "application/json" `
+            -Headers @{ Authorization = "Bearer $idToken" } `
+            -Body $wipeBody -TimeoutSec 10 | Out-Null
+        Write-Host "Wiped github-token from metadata" -ForegroundColor Green
+    } catch {
+        Write-Host "WARNING: failed to wipe github-token via Comms API: $_" -ForegroundColor Yellow
+    }
 }
 
 # =============================================================================

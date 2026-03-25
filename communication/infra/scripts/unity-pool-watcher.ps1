@@ -135,32 +135,18 @@ function Scrub-Filesystem {
 function Wipe-MetadataKey($key) {
     try {
         $metaHeaders = @{ "Metadata-Flavor" = "Google" }
-        $tokenResponse = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" -Headers $metaHeaders -TimeoutSec 5
-        $saToken = $tokenResponse.access_token
+        $commsUrl = Get-Metadata "comms-url"
+        $idToken = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" -Headers $metaHeaders -TimeoutSec 5
+        if (-not $commsUrl -or -not $idToken) { return }
 
-        $project = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/project/project-id" -Headers $metaHeaders -TimeoutSec 5
-        $zoneUri = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/zone" -Headers $metaHeaders -TimeoutSec 5
-        $zone = ($zoneUri -split '/')[-1]
-        $instance = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/name" -Headers $metaHeaders -TimeoutSec 5
-
-        $apiBase = "https://compute.googleapis.com/compute/v1/projects/$project/zones/$zone/instances/$instance"
-        $info = Invoke-RestMethod -Uri $apiBase -Headers @{ Authorization = "Bearer $saToken" }
-
-        $metaItems = @()
-        foreach ($item in $info.metadata.items) {
-            $metaItems += @{
-                key   = $item.key
-                value = if ($item.key -eq $key) { '' } else { $item.value }
-            }
-        }
-        $body = @{ items = $metaItems; fingerprint = $info.metadata.fingerprint } | ConvertTo-Json -Depth 3
-        Invoke-RestMethod -Uri "$apiBase/setMetadata" `
+        $body = @{ key = $key } | ConvertTo-Json
+        Invoke-RestMethod -Uri "$commsUrl/infra/vm/wipe-metadata-key" `
             -Method POST -ContentType "application/json" `
-            -Headers @{ Authorization = "Bearer $saToken" } `
-            -Body $body | Out-Null
+            -Headers @{ Authorization = "Bearer $idToken" } `
+            -Body $body -TimeoutSec 10 | Out-Null
         Write-Log "Wiped metadata key: $key"
     } catch {
-        Write-Log "WARNING: failed to wipe metadata key $key - $_"
+        Write-Log "WARNING: failed to wipe metadata key $key via Comms API - $_"
     }
 }
 

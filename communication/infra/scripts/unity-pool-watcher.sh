@@ -112,34 +112,18 @@ scrub_filesystem() {
 
 wipe_metadata_key() {
     local key=$1
-    local sa_token project zone instance api_base info meta_fp meta_items
-    sa_token=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
-        | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null || true)
-    [[ -z "$sa_token" ]] && return
-    project=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/project/project-id")
-    zone=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/zone" | awk -F/ '{print $NF}')
-    instance=$(curl -sf -H "Metadata-Flavor: Google" \
-        "http://metadata.google.internal/computeMetadata/v1/instance/name")
-    api_base="https://compute.googleapis.com/compute/v1/projects/$project/zones/$zone/instances/$instance"
-    info=$(curl -sf -H "Authorization: Bearer $sa_token" "$api_base")
-    meta_fp=$(echo "$info" | python3 -c "import sys,json; print(json.load(sys.stdin)['metadata']['fingerprint'])" 2>/dev/null || true)
-    [[ -z "$meta_fp" ]] && return
-    meta_items=$(echo "$info" | python3 -c "
-import sys, json
-meta = json.load(sys.stdin).get('metadata', {})
-items = [{'key': i['key'], 'value': '' if i['key'] == '$key' else i['value']} for i in meta.get('items', [])]
-print(json.dumps(items))
-" 2>/dev/null || true)
-    [[ -z "$meta_items" ]] && return
-    curl -sf -X POST \
-        -H "Authorization: Bearer $sa_token" \
+    local comms_url id_token
+    comms_url=$(get_metadata "comms-url")
+    id_token=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
+        2>/dev/null || true)
+    [[ -z "$comms_url" || -z "$id_token" ]] && return
+    curl -sf -X POST "$comms_url/infra/vm/wipe-metadata-key" \
+        -H "Authorization: Bearer $id_token" \
         -H "Content-Type: application/json" \
-        "$api_base/setMetadata" \
-        -d "{\"items\": $meta_items, \"fingerprint\": \"$meta_fp\"}" >/dev/null 2>&1
-    log "Wiped metadata key: $key"
+        -d "{\"key\": \"$key\"}" >/dev/null 2>&1 \
+        && log "Wiped metadata key: $key" \
+        || log "WARNING: failed to wipe metadata key $key via Comms API"
 }
 
 kill_agent_service() {
