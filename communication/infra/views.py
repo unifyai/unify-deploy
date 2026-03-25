@@ -1166,9 +1166,7 @@ async def vm_mark_idle_endpoint(
     vm_name = gce["instance_name"]
 
     client = compute_v1.InstancesClient()
-    await asyncio.to_thread(
-        _set_pool_labels, client, vm_name, {"pool-role": "idle"}
-    )
+    await asyncio.to_thread(_set_pool_labels, client, vm_name, {"pool-role": "idle"})
     logger.info(f"VM {vm_name} marked itself as idle via identity token")
     return {"vm_name": vm_name, "pool_role": "idle"}
 
@@ -1182,8 +1180,6 @@ async def vm_wipe_metadata_key_endpoint(
     gce = claims["google"]["compute_engine"]
     vm_name = gce["instance_name"]
 
-    await asyncio.to_thread(
-        _update_instance_metadata, vm_name, {body.key: ""}
-    )
+    await asyncio.to_thread(_update_instance_metadata, vm_name, {body.key: ""})
     logger.info(f"VM {vm_name} wiped metadata key '{body.key}' via identity token")
     return {"vm_name": vm_name, "key": body.key, "wiped": True}
