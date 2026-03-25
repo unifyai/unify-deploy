@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from starlette.responses import JSONResponse
 from functools import partial
-from google.api_core.exceptions import Conflict
+from google.api_core.exceptions import Conflict, NotFound as GcpNotFound
 from google.cloud import compute_v1, pubsub_v1, storage
 from google.oauth2.service_account import Credentials
 from google.protobuf import duration_pb2
@@ -313,14 +313,16 @@ async def delete_pubsub_topic(topic_name: str = Form(...)):
                     subscriber.delete_subscription(
                         request={"subscription": subscription_name},
                     )
-                except Exception as sub_err:
-                    if "not found" not in str(sub_err).lower():
-                        raise
-        except Exception as list_err:
-            if "not found" not in str(list_err).lower():
-                raise
+                except GcpNotFound:
+                    pass
+        except GcpNotFound:
+            pass
 
-        publisher.delete_topic(request={"topic": topic_path})
+        try:
+            publisher.delete_topic(request={"topic": topic_path})
+        except GcpNotFound:
+            pass
+
         return topic_path
 
     try:

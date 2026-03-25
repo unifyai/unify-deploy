@@ -70,10 +70,6 @@ class TestPubSubTopicCRUD:
                 timeout=15,
             )
 
-    @pytest.mark.xfail(
-        reason="delete_topic raises unhandled NotFound/RefreshError instead of 200/404",
-        strict=False,
-    )
     def test_delete_nonexistent_topic_is_safe(self):
         resp = requests.delete(
             f"{COMMS_APP_URL}/infra/pubsub/topic",
