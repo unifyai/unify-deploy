@@ -461,6 +461,7 @@ UNIFY_KEY=$unifyKey
 ORCHESTRA_URL=$orchestraUrl
 UNITY_COMMS_URL=$commsUrl
 PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
+DISPLAY=:1
 "@
         Set-Content -Path "$agentServiceDir\.env" -Value $envContent -Encoding UTF8
         Write-Log "Agent Service .env configured"

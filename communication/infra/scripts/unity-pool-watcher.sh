@@ -343,13 +343,14 @@ UNIFY_KEY=$unify_key
 ORCHESTRA_URL=$orchestra_url
 UNITY_COMMS_URL=$comms_url
 PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+DISPLAY=:1
 EOF
     log "Agent Service .env configured"
 
     # Start Agent Service
     kill_agent_service
     cd /agent-service
-    nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
+    DISPLAY=":1" nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &
     cd /
     log "Agent Service started"
 
