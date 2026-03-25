@@ -557,7 +557,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         service_accounts=[
             compute_v1.ServiceAccount(
                 email=f"pool-vm-sa@{VM_PROJECT_ID}.iam.gserviceaccount.com",
-                scopes=["https://www.googleapis.com/auth/compute"],
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
             ),
         ],
     )
