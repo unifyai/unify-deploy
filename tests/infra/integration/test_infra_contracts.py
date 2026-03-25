@@ -341,18 +341,36 @@ class TestVMPoolProvision:
 
     @pytest.mark.slow
     def test_provision_single_ubuntu_vm(self, comms):
-        resp = requests.post(
-            f"{COMMS_APP_URL}/infra/vm/pool/provision",
-            json={"vm_type": "ubuntu", "count": 1},
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=300,
-        )
-        assert (
-            resp.status_code == 200
-        ), f"vm provision failed: {resp.status_code} {resp.text}"
-        body = resp.json()
-        assert "provisioned" in body
-        assert len(body["provisioned"]) >= 1
+        vm_name = None
+        try:
+            resp = requests.post(
+                f"{COMMS_APP_URL}/infra/vm/pool/provision",
+                json={"vm_type": "ubuntu", "count": 1},
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=300,
+            )
+            assert (
+                resp.status_code == 200
+            ), f"vm provision failed: {resp.status_code} {resp.text}"
+            body = resp.json()
+            assert "provisioned" in body
+            assert len(body["provisioned"]) >= 1
+            result = body["provisioned"][0]
+            vm_name = result.get("vm_name") or result.get("name")
+        finally:
+            if vm_name:
+                try:
+                    from google.cloud import compute_v1
+                    from common.settings import SETTINGS
+
+                    client = compute_v1.InstancesClient()
+                    client.stop(
+                        project=SETTINGS.vm_project_id,
+                        zone=SETTINGS.vm_zone,
+                        instance=vm_name,
+                    ).result()
+                except Exception:
+                    pass
 
 
 class TestVMPoolRebalance:

@@ -265,19 +265,37 @@ class TestTwilioPhoneCall:
 
 class TestAssistantWakeup:
     """Contract: POST /assistant/wakeup force-starts a container for an
-    assistant, bypassing the is_local/is_test skip logic."""
+    assistant, bypassing the is_local/is_test skip logic.
 
-    def test_wakeup_returns_200(self, real_assistant_data):
+    Cleanup: the wakeup may claim an idle container. We stop it after
+    the test to avoid consuming pool capacity.
+    """
+
+    def test_wakeup_returns_200(self, real_assistant_data, comms):
         assistant_id = str(real_assistant_data["assistant_id"])
-        resp = requests.post(
-            f"{ADAPTERS_URL}/assistant/wakeup",
-            data={"assistant_id": assistant_id},
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=30,
-        )
-        assert (
-            resp.status_code == 200
-        ), f"assistant/wakeup failed: {resp.status_code} {resp.text}"
+        try:
+            resp = requests.post(
+                f"{ADAPTERS_URL}/assistant/wakeup",
+                data={"assistant_id": assistant_id},
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=30,
+            )
+            assert (
+                resp.status_code == 200
+            ), f"assistant/wakeup failed: {resp.status_code} {resp.text}"
+        finally:
+            jobs_resp = comms.get(
+                "/infra/jobs",
+                params={
+                    "label_selector": f"app=unity,assistant-id={assistant_id}",
+                    "hours": 1,
+                },
+            )
+            for job in jobs_resp.json().get("jobs", []):
+                comms.delete(
+                    "/infra/job/delete",
+                    data={"job_name": job["job_name"]},
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -287,25 +305,40 @@ class TestAssistantWakeup:
 
 class TestAttachmentUpload:
     """Contract: POST /unify/attachment uploads a file to GCS and returns
-    a signed URL with metadata."""
+    a signed URL with metadata. Cleans up the uploaded file after."""
 
     def test_upload_returns_signed_url(self, real_assistant_data):
         assistant_id = str(real_assistant_data["assistant_id"])
         file_content = b"integration test attachment content"
-        resp = requests.post(
-            f"{ADAPTERS_URL}/unify/attachment",
-            files={"file": ("test-contract.txt", file_content, "text/plain")},
-            data={"assistant_id": assistant_id},
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=30,
-        )
-        assert (
-            resp.status_code == 200
-        ), f"attachment upload failed: {resp.status_code} {resp.text}"
-        body = resp.json()
-        assert "filename" in body
-        assert "gs_url" in body or "url" in body
-        assert body.get("content_type") == "text/plain"
+        gs_url = None
+        try:
+            resp = requests.post(
+                f"{ADAPTERS_URL}/unify/attachment",
+                files={
+                    "file": ("test-contract.txt", file_content, "text/plain"),
+                },
+                data={"assistant_id": assistant_id},
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=30,
+            )
+            assert (
+                resp.status_code == 200
+            ), f"attachment upload failed: {resp.status_code} {resp.text}"
+            body = resp.json()
+            assert "filename" in body
+            assert "gs_url" in body or "url" in body
+            assert body.get("content_type") == "text/plain"
+            gs_url = body.get("gs_url")
+        finally:
+            if gs_url:
+                try:
+                    from google.cloud import storage
+
+                    client = storage.Client()
+                    blob = storage.Blob.from_string(gs_url, client=client)
+                    blob.delete()
+                except Exception:
+                    pass
 
 
 # ---------------------------------------------------------------------------
