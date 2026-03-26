@@ -12,7 +12,6 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 import logging
 import random
 import threading
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any, Tuple
@@ -58,8 +57,6 @@ from .vm_config import (
     POOL_VM_NAME_PREFIX,
     POOL_UBUNTU_VM_IMAGE_FAMILY,
     POOL_WINDOWS_VM_IMAGE_FAMILY,
-    POOL_ASSIGN_TIMEOUT,
-    POOL_ASSIGN_POLL_INTERVAL,
 )
 
 logger = logging.getLogger(__name__)
@@ -663,18 +660,16 @@ def claim_idle_vm(
     """Atomically claim an idle pool VM using label fingerprint CAS.
 
     Tracks demand via a process-level counter so that replenish_pool
-    provisions enough VMs for all waiting threads, not just
-    POOL_TARGET_IDLE.  Calls replenish_pool on every poll iteration;
-    the non-blocking lock inside replenish_pool deduplicates work.
+    provisions enough VMs for all waiting callers.
 
-    Raises ValueError if no idle VMs become available within
-    POOL_ASSIGN_TIMEOUT seconds.
+    Raises ValueError immediately if no idle VMs are available (after
+    one replenish attempt).  The caller is expected to publish to the
+    pending-VM queue for deferred retry instead of blocking a thread.
     """
     client = compute_v1.InstancesClient()
     label_filter = (
         f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
     )
-    elapsed = 0
 
     with _pending_lock:
         _pending_claims[vm_type] = _pending_claims.get(vm_type, 0) + 1
@@ -686,7 +681,6 @@ def claim_idle_vm(
             assistant_id,
             vm_type,
             vm_number,
-            elapsed,
         )
     finally:
         with _pending_lock:
@@ -699,7 +693,6 @@ def _claim_idle_vm_inner(
     assistant_id: str,
     vm_type: str,
     vm_number: int | None,
-    elapsed: int,
 ) -> Dict[str, Any]:
     while True:
         request = compute_v1.ListInstancesRequest(
@@ -710,13 +703,10 @@ def _claim_idle_vm_inner(
         idle_vms = list(client.list(request=request))
         if not idle_vms:
             replenish_pool(vm_type)
-            if elapsed >= POOL_ASSIGN_TIMEOUT:
-                raise ValueError(
-                    f"No idle {vm_type} pool VMs available after waiting {elapsed}s",
-                )
-            time.sleep(POOL_ASSIGN_POLL_INTERVAL)
-            elapsed += POOL_ASSIGN_POLL_INTERVAL
-            continue
+            raise ValueError(
+                f"No idle {vm_type} pool VMs available — "
+                f"request queued for deferred retry",
+            )
 
         if vm_number is not None:
             target_name = _pool_vm_name(vm_type, vm_number)
@@ -1080,6 +1070,152 @@ def has_assigned_vm(assistant_id: str) -> bool:
         filter=f"labels.pool-role=assigned AND labels.assistant-id={sanitized}",
     )
     return len(list(client.list(request=request))) > 0
+
+
+def publish_pending_vm_assignment(
+    assistant_id: str,
+    api_key: str,
+    vm_type: str,
+) -> str:
+    """Publish a VM assignment request to the pending queue.
+
+    Called when assign_pool_vm fails because the VM pool is exhausted.
+    The reconciler (process_pending_vm_assignments) retries every minute
+    via Cloud Scheduler.  Returns the Pub/Sub message ID.
+    """
+    import json as _json
+    import os as _os
+
+    from google.cloud import pubsub_v1
+    from google.oauth2.service_account import Credentials
+
+    creds_json = _json.loads(_os.getenv("GCP_SA_KEY", "{}"))
+    creds = Credentials.from_service_account_info(creds_json)
+    publisher = pubsub_v1.PublisherClient(credentials=creds)
+    topic_path = publisher.topic_path(
+        SETTINGS.gcp_project_id,
+        SETTINGS.pending_vm_topic,
+    )
+    payload = _json.dumps(
+        {
+            "assistant_id": str(assistant_id),
+            "api_key": api_key,
+            "vm_type": vm_type,
+        },
+    ).encode("utf-8")
+    future = publisher.publish(topic_path, data=payload)
+    message_id = future.result()
+    logger.info(
+        "Published pending VM assignment for assistant %s to %s (msg_id=%s)",
+        assistant_id,
+        SETTINGS.pending_vm_topic,
+        message_id,
+    )
+    return message_id
+
+
+def process_pending_vm_assignments() -> Dict[str, Any]:
+    """Pull pending VM assignment messages and attempt to fulfil them.
+
+    Mirrors process_pending_startups: stateless, idempotent, safe to call
+    at any frequency.  Each message is independently acked (VM already
+    assigned or successfully claimed) or nacked (pool still exhausted).
+    """
+    import json as _json
+    import os as _os
+
+    from google.api_core.exceptions import DeadlineExceeded
+    from google.cloud import pubsub_v1
+    from google.oauth2.service_account import Credentials
+
+    creds_json = _json.loads(_os.getenv("GCP_SA_KEY", "{}"))
+    creds = Credentials.from_service_account_info(creds_json)
+    subscriber = pubsub_v1.SubscriberClient(credentials=creds)
+    sub_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        SETTINGS.pending_vm_sub,
+    )
+
+    try:
+        response = subscriber.pull(
+            request={"subscription": sub_path, "max_messages": 10},
+            timeout=10,
+        )
+        messages = response.received_messages
+    except DeadlineExceeded:
+        messages = []
+
+    if not messages:
+        return {"pulled": 0, "acked": 0, "nacked": 0}
+
+    logger.info("Pulled %d pending VM assignment message(s)", len(messages))
+
+    acked = 0
+    nacked = 0
+
+    for msg in messages:
+        ack_id = msg.ack_id
+        try:
+            config = _json.loads(msg.message.data.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            logger.warning("Malformed pending VM message, acking to discard")
+            subscriber.acknowledge(
+                request={"subscription": sub_path, "ack_ids": [ack_id]},
+            )
+            acked += 1
+            continue
+
+        assistant_id = config.get("assistant_id", "")
+        api_key = config.get("api_key", "")
+        vm_type = config.get("vm_type", "ubuntu")
+
+        if not assistant_id:
+            subscriber.acknowledge(
+                request={"subscription": sub_path, "ack_ids": [ack_id]},
+            )
+            acked += 1
+            continue
+
+        if has_assigned_vm(assistant_id):
+            logger.info(
+                "Assistant %s already has a VM, acking pending message",
+                assistant_id,
+            )
+            subscriber.acknowledge(
+                request={"subscription": sub_path, "ack_ids": [ack_id]},
+            )
+            acked += 1
+            continue
+
+        try:
+            assign_pool_vm(
+                assistant_id=assistant_id,
+                unify_apikey=api_key,
+                vm_type=vm_type,
+            )
+            logger.info(
+                "Pending VM reconciler assigned VM to assistant %s",
+                assistant_id,
+            )
+            subscriber.acknowledge(
+                request={"subscription": sub_path, "ack_ids": [ack_id]},
+            )
+            acked += 1
+        except (ValueError, RuntimeError):
+            logger.info(
+                "VM pool still exhausted for assistant %s, nacking for retry",
+                assistant_id,
+            )
+            subscriber.modify_ack_deadline(
+                request={
+                    "subscription": sub_path,
+                    "ack_ids": [ack_id],
+                    "ack_deadline_seconds": 0,
+                },
+            )
+            nacked += 1
+
+    return {"pulled": len(messages), "acked": acked, "nacked": nacked}
 
 
 def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]:

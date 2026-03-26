@@ -641,7 +641,8 @@ async def start_job(
                 vm_exists = await asyncio.to_thread(has_assigned_vm, assistant_id)
                 if not vm_exists:
                     logger.info(
-                        "Assistant %s has container but no VM, scheduling assignment",
+                        "Assistant %s has container but no VM "
+                        "(fallback — pending queue should have handled this)",
                         assistant_id,
                     )
 
@@ -650,16 +651,29 @@ async def start_job(
                         _key=api_key,
                         _vt=desktop_mode,
                     ):
+                        from .vm_helpers import publish_pending_vm_assignment
+
                         loop = asyncio.get_running_loop()
-                        await loop.run_in_executor(
-                            ASSIGN_EXECUTOR,
-                            partial(
-                                assign_pool_vm,
-                                assistant_id=_aid,
-                                unify_apikey=_key,
-                                vm_type=_vt,
-                            ),
-                        )
+                        try:
+                            await loop.run_in_executor(
+                                ASSIGN_EXECUTOR,
+                                partial(
+                                    assign_pool_vm,
+                                    assistant_id=_aid,
+                                    unify_apikey=_key,
+                                    vm_type=_vt,
+                                ),
+                            )
+                        except ValueError:
+                            await loop.run_in_executor(
+                                None,
+                                partial(
+                                    publish_pending_vm_assignment,
+                                    _aid,
+                                    _key,
+                                    _vt,
+                                ),
+                            )
 
                     asyncio.create_task(_ensure_vm())
 
@@ -730,7 +744,8 @@ async def start_job(
                 startup_config,
             )
 
-            # Assign pool VM after container claim, then replenish (fire-and-forget).
+            # Assign pool VM after container claim, then replenish.
+            # If the VM pool is exhausted, queue for deferred retry.
             if desktop_mode in ("windows", "ubuntu"):
 
                 async def _assign_then_replenish(
@@ -738,16 +753,33 @@ async def start_job(
                     _key=api_key,
                     _vt=desktop_mode,
                 ):
+                    from .vm_helpers import publish_pending_vm_assignment
+
                     loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(
-                        ASSIGN_EXECUTOR,
-                        partial(
-                            assign_pool_vm,
-                            assistant_id=_aid,
-                            unify_apikey=_key,
-                            vm_type=_vt,
-                        ),
-                    )
+                    try:
+                        await loop.run_in_executor(
+                            ASSIGN_EXECUTOR,
+                            partial(
+                                assign_pool_vm,
+                                assistant_id=_aid,
+                                unify_apikey=_key,
+                                vm_type=_vt,
+                            ),
+                        )
+                    except ValueError:
+                        logger.info(
+                            "VM pool exhausted for %s, queuing for deferred retry",
+                            _aid,
+                        )
+                        await loop.run_in_executor(
+                            None,
+                            partial(
+                                publish_pending_vm_assignment,
+                                _aid,
+                                _key,
+                                _vt,
+                            ),
+                        )
                     loop.run_in_executor(
                         POOL_MAINTENANCE_EXECUTOR,
                         partial(replenish_pool, _vt, extra_demand=1),
@@ -1391,6 +1423,28 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
     batch_api, _, _, _ = await _get_k8s_clients()
     result = await asyncio.to_thread(reconcile_orphaned_vms, batch_api, vm_type)
     return result
+
+
+@router.post("/vm/pending/process")
+async def process_pending_vm_assignments_endpoint():
+    """Process pending VM assignment requests from the durable Pub/Sub queue.
+
+    Pulls messages published when assign_pool_vm fails due to pool
+    exhaustion, and retries assignment.  Stateless and idempotent —
+    triggered every minute by Cloud Scheduler and reactively after
+    VM pool replenishment.
+    """
+    from .vm_helpers import process_pending_vm_assignments
+
+    try:
+        result = await asyncio.to_thread(process_pending_vm_assignments)
+        return {"success": True, **result}
+    except Exception as e:
+        logger.exception("Error processing pending VM assignments")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process pending VM assignments: {str(e)}",
+        )
 
 
 @router.post("/cert-renewal")

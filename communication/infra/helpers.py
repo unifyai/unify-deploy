@@ -922,15 +922,14 @@ def process_pending_startups(
         finally:
             release_assignment_lease(coord_api, assistant_id, namespace)
 
-        # VM assignment runs OUTSIDE the Lease so the lease duration
-        # (60s) only covers the container claim, not the potentially
-        # slow VM provisioning (up to 180s).  Best-effort: if this
-        # fails, the next inbound message retriggers VM assignment
-        # via start_job's "already running" path.
         if claimed:
             desktop_mode = config.get("desktop_mode", "")
             if desktop_mode in ("windows", "ubuntu"):
-                from .vm_helpers import assign_pool_vm, replenish_pool
+                from .vm_helpers import (
+                    assign_pool_vm,
+                    publish_pending_vm_assignment,
+                    replenish_pool,
+                )
 
                 try:
                     assign_pool_vm(
@@ -939,6 +938,16 @@ def process_pending_startups(
                         vm_type=desktop_mode,
                     )
                     replenish_pool(desktop_mode, extra_demand=1)
+                except ValueError:
+                    logger.info(
+                        "VM pool exhausted for %s, queuing for deferred retry",
+                        assistant_id,
+                    )
+                    publish_pending_vm_assignment(
+                        assistant_id,
+                        config.get("api_key", ""),
+                        desktop_mode,
+                    )
                 except Exception as vm_err:
                     logger.warning(
                         "Reconciler VM assignment failed for %s: %s",

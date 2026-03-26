@@ -110,9 +110,13 @@ class Settings:
             else f"image_hash_{self.deploy_env}.txt"
         )
 
-        # Pending-startup Pub/Sub queue (overflow when pool is exhausted)
+        # Pending-startup Pub/Sub queue (overflow when container pool is exhausted)
         self.pending_topic: str = "unity-pending-startups" + self.env_suffix
         self.pending_sub: str = self.pending_topic + "-sub"
+
+        # Pending-VM Pub/Sub queue (overflow when VM pool is exhausted)
+        self.pending_vm_topic: str = "unity-pending-vm-assignments" + self.env_suffix
+        self.pending_vm_sub: str = self.pending_vm_topic + "-sub"
 
         # Container image registry (Artifact Registry)
         self.image_registry: str = (

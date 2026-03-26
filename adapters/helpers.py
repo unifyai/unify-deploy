@@ -718,6 +718,30 @@ def _trigger_pending_reconciliation() -> dict:
         return {"error": str(e)}
 
 
+def _trigger_pending_vm_reconciliation() -> dict:
+    """Call the comms app to process pending VM assignment requests.
+
+    Returns the JSON response from the reconciler, or an error dict.
+    """
+    try:
+        resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/vm/pending/process",
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning(
+            "Pending VM reconciliation returned %s: %s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        return {"error": resp.status_code}
+    except Exception as e:
+        logger.error("Pending VM reconciliation failed: %s", e)
+        return {"error": str(e)}
+
+
 def replenish_idle_pool(refresh: bool = False) -> dict:
     """Core logic for idle job pool replenishment.
 
@@ -793,8 +817,15 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     reconcile_result = _trigger_pending_reconciliation()
     if "error" in reconcile_result:
         logger.warning(
-            "Reactive reconciliation after replenish failed: %s",
+            "Reactive container reconciliation after replenish failed: %s",
             reconcile_result,
+        )
+
+    vm_reconcile_result = _trigger_pending_vm_reconciliation()
+    if "error" in vm_reconcile_result:
+        logger.warning(
+            "Reactive VM reconciliation after replenish failed: %s",
+            vm_reconcile_result,
         )
 
     return {
