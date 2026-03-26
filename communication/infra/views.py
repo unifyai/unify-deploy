@@ -1000,6 +1000,8 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
 
     n = 1
     provisioned = 0
+    consecutive_failures = 0
+    max_failures = 3
     while provisioned < request.count:
         from .vm_config import POOL_VM_NAME_PREFIX, ENV_SUFFIX
 
@@ -1009,9 +1011,17 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
                 result = await asyncio.to_thread(provision_pool_vm, request.vm_type, n)
                 results.append(result)
                 provisioned += 1
+                consecutive_failures = 0
             except Exception as e:
                 logger.error(f"Failed to provision pool VM #{n}: {e}")
                 results.append({"error": str(e), "n": n})
+                consecutive_failures += 1
+                if consecutive_failures >= max_failures:
+                    logger.error(
+                        f"Aborting pool provisioning after {max_failures} "
+                        f"consecutive failures ({provisioned}/{request.count} provisioned)"
+                    )
+                    break
         n += 1
 
     return {"provisioned": results}
@@ -1062,9 +1072,9 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
 
         # Trim: stop excess idle VMs now that one was returned (fire-and-forget)
         vm_type = result.get("vm_type", "ubuntu")
-        asyncio.get_running_loop().run_in_executor(
-            POOL_MAINTENANCE_EXECUTOR, partial(trim_pool, vm_type)
-        )
+        # asyncio.get_running_loop().run_in_executor(
+        #     POOL_MAINTENANCE_EXECUTOR, partial(trim_pool, vm_type)
+        # )
 
         return result
     except Exception as e:
