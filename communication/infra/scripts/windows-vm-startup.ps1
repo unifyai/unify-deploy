@@ -555,8 +555,8 @@ if ($caddyConfigured) {
     $taskName = "StartCaddy"
     $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if (-not $existingTask -and (Test-Path $caddyExe) -and (Test-Path $caddyfileConfig)) {
-        $action = New-ScheduledTaskAction -Execute $caddyExe `
-            -Argument "run --config $caddyfileConfig" `
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+            -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$caddyExe' run --config '$caddyfileConfig'`"" `
             -WorkingDirectory "C:\caddy"
         $trigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
         $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Limited
