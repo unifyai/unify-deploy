@@ -1414,12 +1414,40 @@ vm_self_router = APIRouter()
 async def vm_mark_idle_endpoint(
     claims: dict = Depends(authenticate_vm_identity),
 ):
-    """Mark the calling VM as idle. Authenticated via GCP identity token."""
+    """Mark the calling VM as idle. Authenticated via GCP identity token.
+
+    Only transitions from provisioning or starting — never from assigned
+    (which would steal a VM from an active session).
+    """
     gce = claims["google"]["compute_engine"]
     vm_name = gce["instance_name"]
 
     client = compute_v1.InstancesClient()
-    await asyncio.to_thread(_set_pool_labels, client, vm_name, {"pool-role": "idle"})
+    vm = await asyncio.to_thread(
+        client.get,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
+    current_role = (vm.labels or {}).get("pool-role", "")
+    if current_role not in ("provisioning", "starting"):
+        logger.warning(
+            "VM %s tried to mark idle but pool-role=%s (expected provisioning/starting)",
+            vm_name,
+            current_role,
+        )
+        return {
+            "vm_name": vm_name,
+            "pool_role": current_role,
+            "skipped": True,
+        }
+
+    await asyncio.to_thread(
+        _set_pool_labels,
+        client,
+        vm_name,
+        {"pool-role": "idle"},
+    )
     logger.info(f"VM {vm_name} marked itself as idle via identity token")
     return {"vm_name": vm_name, "pool_role": "idle"}
 

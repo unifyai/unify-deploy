@@ -1230,7 +1230,7 @@ def _list_pool_state(vm_type: str):
         vm
         for vm in pool_vms
         if vm.status in ("STAGING", "RUNNING")
-        and vm.labels.get("pool-role") not in ("idle", "assigned", "stopped")
+        and vm.labels.get("pool-role") in ("provisioning", "starting")
     ]
     existing_names = {vm.name for vm in pool_vms}
     return client, pool_vms, idle_vms, stopped_vms, in_flight_vms, existing_names
@@ -1239,15 +1239,26 @@ def _list_pool_state(vm_type: str):
 def _start_one_stopped_vm(client, vm) -> bool:
     """Start a single stopped VM.
 
-    The startup script handles setting pool-role to idle once boot completes.
-    The stopped_vms filter uses status==TERMINATED, so a started VM naturally
-    drops out of the candidate list without needing a label change here.
+    Sets pool-role=starting BEFORE issuing client.start() so the scrub
+    function (which targets pool-role=stopped + RUNNING) cannot kill a
+    VM that is legitimately booting. The startup script transitions
+    starting → idle via mark-idle once boot completes.
 
     Restores the github-token metadata before starting, because the
     previous boot's startup script wipes it for security. Without it,
     the startup script can't clone private repos and crashes (set -e).
     """
     try:
+        ok = _set_pool_labels(
+            client,
+            vm.name,
+            {"pool-role": "starting"},
+            expected_role="stopped",
+        )
+        if not ok:
+            logger.info(f"Replenish: {vm.name} label CAS failed (already claimed?)")
+            return False
+
         github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
         if github_token:
             _update_instance_metadata(vm.name, {"github-token": github_token})
@@ -1258,10 +1269,11 @@ def _start_one_stopped_vm(client, vm) -> bool:
             instance=vm.name,
         )
         op.result()
-        logger.info(f"Replenish: started stopped VM {vm.name}")
+        logger.info(f"Replenish: started stopped VM {vm.name} (pool-role=starting)")
         return True
     except Exception as e:
         logger.error(f"Replenish: failed to start {vm.name}: {e}")
+        _set_pool_labels(client, vm.name, {"pool-role": "stopped"})
         return False
 
 
