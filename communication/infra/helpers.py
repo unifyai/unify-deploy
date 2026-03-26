@@ -843,7 +843,11 @@ def process_pending_startups(
             label_selector=f"app=unity,assistant-id={sanitized_aid}",
         )
         already_running = [
-            j for j in existing.items if j.status.active and j.status.active > 0
+            j
+            for j in existing.items
+            if j.status.active
+            and j.status.active > 0
+            and not j.metadata.deletion_timestamp
         ]
         logger.info(
             "Reconciler checking assistant %s: %d existing jobs (%d active), names=%s",

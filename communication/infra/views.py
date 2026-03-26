@@ -628,7 +628,11 @@ async def start_job(
             label_selector=f"app=unity,assistant-id={sanitized_aid}",
         )
         already_running = [
-            j for j in existing.items if j.status.active and j.status.active > 0
+            j
+            for j in existing.items
+            if j.status.active
+            and j.status.active > 0
+            and not j.metadata.deletion_timestamp
         ]
         if already_running:
             if desktop_mode in ("windows", "ubuntu"):

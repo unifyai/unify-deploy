@@ -580,6 +580,16 @@ def test_production_traffic_stress(
                 f"(assigned but agent-service key mismatch)"
             )
 
+            if vm_not_assigned > 0:
+                import warnings
+
+                warnings.warn(
+                    f"{vm_not_assigned}/{N} assistants have containers but no VM. "
+                    f"VM pool had {idle_vms_before} idle VMs for {N} assistants. "
+                    f"Desktop mode is silently broken for these assistants until "
+                    f"the next inbound message retriggers VM assignment.",
+                )
+
         p3_invariants = check_invariants(batch_api, gce_client)
         p3_new = _new_violations(p3_invariants, baseline_violations)
         if p3_new:
@@ -943,11 +953,22 @@ def test_production_traffic_stress(
             job_name = containers_up.get(aid, "unknown")
             print(f"  {aid}: current container={job_name}")
 
-        # Delete jobs (triggers VM release + disk detach)
+        # Delete jobs (triggers VM release + disk detach) and wait for
+        # K8s Foreground deletion to complete so start_job doesn't see
+        # the dying container as "already running".
         cleanup_assistant_jobs(batch_api, restart_ids)
-        print(f"[Phase 7] Jobs deleted — immediately re-starting...")
+        for aid in restart_ids:
+            try:
+                poll_until(
+                    lambda _aid=aid: not list_jobs_with_assistant_id(batch_api, _aid),
+                    timeout=60,
+                    interval=5,
+                    description=f"Job for {aid} to fully terminate",
+                )
+            except TimeoutError:
+                print(f"  {aid}: old Job still active after 60s, proceeding anyway")
+        print(f"[Phase 7] Jobs deleted and terminated — re-starting...")
 
-        # Immediately re-start (no sleep — this is the point)
         for a in restart_assistants:
             aid = a["assistant_id"]
             status, body = _start_job_tolerant(comms, a)
