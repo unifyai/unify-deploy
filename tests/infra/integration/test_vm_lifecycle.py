@@ -18,8 +18,10 @@ from .conftest import (
     COMMS_APP_URL,
     NAMESPACE,
     UNIFY_KEY,
+    VM_ZONE,
     list_assigned_vms,
     list_idle_vms,
+    list_stopped_vms,
     require_gce,
     start_real_job,
     wait_for_container_running,
@@ -203,6 +205,82 @@ def test_vm_idle_pool_has_capacity(gce_client):
         f"VM pool exhausted: {len(idle)} idle VMs. "
         "New sessions cannot get a desktop."
     )
+
+
+# ---------------------------------------------------------------------------
+# Scrub must not kill legitimately booting VMs
+# ---------------------------------------------------------------------------
+
+
+def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
+    """A stopped VM started by replenish must survive a subsequent scrub
+    and eventually transition to idle.
+
+    The scrub function targets pool-role=stopped + status=RUNNING (ghost VMs).
+    A VM that was just started by replenish is in that exact state during boot
+    (30-60s). If scrub runs during that window, it kills the VM before the
+    startup script can call mark-idle.
+
+    This test triggers two rebalances in quick succession:
+    - Rebalance #1: starts the stopped VM
+    - Rebalance #2: scrub runs and must NOT kill the booting VM
+    Then waits for the VM to reach idle.
+    """
+    require_gce(gce_client)
+
+    from google.cloud import compute_v1
+
+    stopped = list_stopped_vms(gce_client)
+    if not stopped:
+        pytest.skip("No stopped (TERMINATED) VMs available")
+
+    target_name = stopped[0].name
+    client = compute_v1.InstancesClient()
+
+    def _get_state():
+        vm = client.get(
+            project="gcp-project-vms",
+            zone=VM_ZONE,
+            instance=target_name,
+        )
+        return vm.labels.get("pool-role"), vm.status
+
+    role_before, status_before = _get_state()
+    print(f"  Target: {target_name} (pool-role={role_before}, status={status_before})")
+
+    # Rebalance #1: starts the stopped VM
+    resp1 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
+    assert resp1.status_code == 200, f"Rebalance #1 failed: {resp1.text}"
+    time.sleep(3)
+
+    role_mid, status_mid = _get_state()
+    print(f"  After rebalance #1: pool-role={role_mid}, status={status_mid}")
+
+    # Rebalance #2: scrub runs — must not kill the booting VM
+    resp2 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
+    assert resp2.status_code == 200, f"Rebalance #2 failed: {resp2.text}"
+
+    # Wait for the VM to reach idle (boot takes 30-90s)
+    try:
+        poll(
+            lambda: _get_state()[0] == "idle",
+            timeout=120,
+            interval=10,
+            description=f"{target_name} to reach pool-role=idle",
+        )
+        final_role, final_status = _get_state()
+        print(f"  Final: pool-role={final_role}, status={final_status}")
+        assert (
+            final_role == "idle"
+        ), f"{target_name} should be idle, got pool-role={final_role}"
+    except TimeoutError:
+        final_role, final_status = _get_state()
+        assert False, (
+            f"Scrub killed booting VM: {target_name} is "
+            f"pool-role={final_role}, status={final_status} after 120s. "
+            f"Expected pool-role=idle. The scrub function stopped the VM "
+            f"before the startup script could call mark-idle."
+        )
 
 
 # ---------------------------------------------------------------------------
