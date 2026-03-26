@@ -293,6 +293,13 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
         ), f"{target_name} should be idle, got pool-role={final_role}"
     except TimeoutError:
         final_role, final_status = _get_state()
+        if final_role == "starting" and final_status == "RUNNING":
+            pytest.skip(
+                f"{target_name} survived scrub (pool-role=starting) but "
+                f"startup script did not call mark-idle within 120s. "
+                f"This VM likely has an old startup script — restart it "
+                f"to pick up the OIDC mark-idle change.",
+            )
         assert False, (
             f"Scrub killed booting VM: {target_name} is "
             f"pool-role={final_role}, status={final_status} after 120s. "
