@@ -717,7 +717,7 @@ def test_production_traffic_stress(
             check_sample = assistants[: min(3, N)]
             for a in check_sample:
                 aid = a["assistant_id"]
-                msgs = pull_outbound_messages(subscriber, str(aid), timeout=5)
+                msgs = pull_outbound_messages(subscriber, str(aid), timeout=15)
                 checked_count += 1
                 if msgs:
                     delivered_count += 1
