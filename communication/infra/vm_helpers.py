@@ -13,6 +13,7 @@ import logging
 import random
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, Any, Tuple
 
@@ -996,45 +997,74 @@ def assign_pool_vm(
 
     Always releases the assistant's current VM (if any) before claiming,
     ensuring metadata, disk, and labels are cleanly handed back to the pool.
+
+    Uses a per-assistant K8s Lease to prevent concurrent calls for the
+    same assistant from claiming multiple VMs (RACE-3).
     """
-    release_pool_vm(assistant_id)
+    from .helpers import (
+        acquire_assignment_lease,
+        release_assignment_lease,
+        setup_kubernetes_client,
+    )
 
-    claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
-    vm_name = claimed["vm_name"]
-    create_assistant_disk(assistant_id)
-    device_name = attach_assistant_disk(vm_name, assistant_id)
-    existing_key = _fetch_existing_ssh_key(assistant_id)
-    if existing_key:
-        private_key = existing_key
-        public_key = _derive_public_key(existing_key)
-    else:
-        private_key, public_key = generate_ssh_keypair()
-        store_ssh_private_key(assistant_id, private_key)
+    _, _, _, coord_api = setup_kubernetes_client()
+    holder_id = f"vm-assign-{uuid.uuid4().hex[:8]}"
+    namespace = SETTINGS.default_namespace
 
-    github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
-    metadata = {
-        "unify-key": unify_apikey,
-        "vnc-password": unify_apikey,
-        "ssh-public-key": public_key,
-        "disk-device": device_name,
-        "assistant-id": assistant_id,
-        "github-token": github_token,
-    }
-    if vm_type == "windows" and MAK_KEY:
-        metadata["office-mak-key"] = MAK_KEY
-    _update_instance_metadata(vm_name, metadata)
+    acquired = acquire_assignment_lease(
+        coord_api,
+        f"vm-{assistant_id}",
+        namespace,
+        holder_id,
+        duration=180,
+    )
+    if not acquired:
+        raise RuntimeError(
+            f"Another VM assignment is already in progress for assistant {assistant_id}",
+        )
 
-    logger.info(f"Pool assignment complete: {vm_name} -> assistant {assistant_id}")
-    return {
-        "vm_name": vm_name,
-        "assistant_id": assistant_id,
-        "ip_address": claimed["ip_address"],
-        "hostname": claimed["hostname"],
-        "desktop_url": claimed["desktop_url"],
-        "status": "RUNNING",
-        "ssh_username": POOL_SSH_USERNAME,
-        "ssh_port": SSH_SYNC_PORT,
-    }
+    try:
+        release_pool_vm(assistant_id)
+        claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
+        vm_name = claimed["vm_name"]
+        create_assistant_disk(assistant_id)
+        device_name = attach_assistant_disk(vm_name, assistant_id)
+        existing_key = _fetch_existing_ssh_key(assistant_id)
+        if existing_key:
+            private_key = existing_key
+            public_key = _derive_public_key(existing_key)
+        else:
+            private_key, public_key = generate_ssh_keypair()
+            store_ssh_private_key(assistant_id, private_key)
+
+        github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
+        metadata = {
+            "unify-key": unify_apikey,
+            "vnc-password": unify_apikey,
+            "ssh-public-key": public_key,
+            "disk-device": device_name,
+            "assistant-id": assistant_id,
+            "github-token": github_token,
+        }
+        if vm_type == "windows" and MAK_KEY:
+            metadata["office-mak-key"] = MAK_KEY
+        _update_instance_metadata(vm_name, metadata)
+
+        logger.info(
+            f"Pool assignment complete: {vm_name} -> assistant {assistant_id}",
+        )
+        return {
+            "vm_name": vm_name,
+            "assistant_id": assistant_id,
+            "ip_address": claimed["ip_address"],
+            "hostname": claimed["hostname"],
+            "desktop_url": claimed["desktop_url"],
+            "status": "RUNNING",
+            "ssh_username": POOL_SSH_USERNAME,
+            "ssh_port": SSH_SYNC_PORT,
+        }
+    finally:
+        release_assignment_lease(coord_api, f"vm-{assistant_id}", namespace)
 
 
 def has_assigned_vm(assistant_id: str) -> bool:
@@ -1050,6 +1080,72 @@ def has_assigned_vm(assistant_id: str) -> bool:
         filter=f"labels.pool-role=assigned AND labels.assistant-id={sanitized}",
     )
     return len(list(client.list(request=request))) > 0
+
+
+def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]:
+    """Release VMs assigned to assistants that no longer have running K8s Jobs.
+
+    When a K8s pod crashes or is force-deleted, release_pool_vm is never
+    called, leaving the VM stuck in pool-role=assigned. This reconciler
+    detects such orphans by cross-referencing the K8s Job list and releases
+    them back to the pool.
+
+    Idempotent and safe to call on a cron schedule.
+    """
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        filter=f"labels.pool-role=assigned AND labels.vm-type={vm_type}",
+    )
+    assigned_vms = list(client.list(request=request))
+
+    released = []
+    kept = []
+    for vm in assigned_vms:
+        aid = vm.labels.get("assistant-id", "")
+        if not aid:
+            continue
+
+        try:
+            jobs = batch_api.list_namespaced_job(
+                namespace=SETTINGS.default_namespace,
+                label_selector=f"app=unity,assistant-id={aid}",
+            )
+            active_jobs = [
+                j for j in jobs.items if j.status.active and j.status.active > 0
+            ]
+        except Exception as e:
+            logger.warning(
+                "reconcile_orphaned_vms: failed to check jobs for %s: %s",
+                aid,
+                e,
+            )
+            continue
+
+        if not active_jobs:
+            logger.info(
+                "Orphaned VM %s assigned to %s (no running K8s Job) — releasing",
+                vm.name,
+                aid,
+            )
+            try:
+                release_pool_vm(aid)
+                released.append({"vm_name": vm.name, "assistant_id": aid})
+            except Exception as e:
+                logger.error(
+                    "Failed to release orphaned VM %s: %s",
+                    vm.name,
+                    e,
+                )
+        else:
+            kept.append({"vm_name": vm.name, "assistant_id": aid})
+
+    return {
+        "checked": len(assigned_vms),
+        "released": released,
+        "kept": kept,
+    }
 
 
 def release_pool_vm(assistant_id: str) -> Dict[str, Any]:

@@ -1375,6 +1375,20 @@ async def rebalance_pool_endpoint(vm_type: str = "ubuntu"):
     return result
 
 
+@router.post("/vm/pool/reconcile-orphans")
+async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
+    """Release VMs assigned to assistants that no longer have running K8s Jobs.
+
+    Detects orphaned VMs left behind when pods crash without calling
+    release_pool_vm. Safe to call on a cron schedule.
+    """
+    from .vm_helpers import reconcile_orphaned_vms
+
+    batch_api, _, _, _ = await _get_k8s_clients()
+    result = await asyncio.to_thread(reconcile_orphaned_vms, batch_api, vm_type)
+    return result
+
+
 @router.post("/cert-renewal")
 async def cert_renewal_endpoint():
     """Renew the *.vm.unify.ai wildcard TLS cert if within 30 days of expiry.

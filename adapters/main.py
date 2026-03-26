@@ -2664,9 +2664,22 @@ def scheduled_jobs_cleanup():
 def scheduled_jobs_expire_stale():
     """Suspend K8s jobs running longer than 12h and release leaked VMs.
 
+    Also reconciles orphaned VMs (assigned but no running K8s Job).
     Triggered by Cloud Scheduler every 6 hours.
     """
     result = expire_all_stale_jobs(max_age_hours=12)
+
+    try:
+        orphan_resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=60,
+        )
+        if orphan_resp.status_code == 200:
+            result["orphaned_vms"] = orphan_resp.json()
+    except Exception as e:
+        result["orphaned_vms_error"] = str(e)
+
     return Response(
         content=json.dumps(result),
         status_code=200,
