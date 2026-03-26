@@ -23,8 +23,6 @@ from .conftest import (
     list_idle_vms,
     list_stopped_vms,
     require_gce,
-    start_real_job,
-    wait_for_container_running,
 )
 
 _ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
@@ -438,39 +436,31 @@ def test_concurrent_assign_produces_at_most_one_vm(
 # ---------------------------------------------------------------------------
 
 
-def test_orphaned_vm_detected_after_container_crash(
+def test_orphaned_vm_detected_and_reconciled(
     gce_client,
-    comms,
     batch_api,
-    real_assistant_data,
-    poll,
 ):
-    """When a K8s container is force-deleted (crash, OOM), the VM stays
-    assigned because release_pool_vm is never called. The orphaned VM
-    reconciler must detect and release it.
+    """A VM assigned to an assistant with no running K8s Job is an orphan.
+    The reconciler must detect and release it.
 
-    This test verifies the orphan exists, then triggers the reconciler
-    and confirms the VM is released.
+    Orphans arise when a pod crashes or is force-deleted without calling
+    release_pool_vm. The VM stays in pool-role=assigned indefinitely.
+
+    This test assigns a VM to a dummy assistant that has no container,
+    verifies the orphan exists, triggers the reconciler, and confirms
+    the VM is released. No start_real_job is used (which would trigger
+    a background assign_pool_vm that interferes with the test).
     """
     require_gce(gce_client)
 
-    assistant_id = str(real_assistant_data["assistant_id"])
-    api_key = real_assistant_data.get("api_key", "test-key")
-    job_name = None
+    orphan_aid = f"orphan-test-{int(time.time())}"
 
     try:
-        resp = start_real_job(comms, real_assistant_data)
-        assert resp.status_code == 200
-
-        jobs = wait_for_container_running(batch_api, assistant_id, timeout=120)
-        assert jobs, "Container did not start"
-        job_name = jobs[0].metadata.name
-
         assign_resp = requests.post(
             f"{COMMS_APP_URL}/infra/vm/pool/assign",
             json={
-                "assistant_id": assistant_id,
-                "unify_apikey": api_key,
+                "assistant_id": orphan_aid,
+                "unify_apikey": "orphan-test-key",
                 "vm_type": "ubuntu",
             },
             headers=_ADMIN_HEADERS,
@@ -479,26 +469,24 @@ def test_orphaned_vm_detected_after_container_crash(
         if assign_resp.status_code != 200:
             pytest.skip("VM assign failed — pool may be exhausted")
 
-        poll(
-            lambda: list_assigned_vms(gce_client, assistant_id),
-            timeout=60,
-            interval=5,
-            description=f"VM assignment for {assistant_id}",
-        )
+        vm_name = assign_resp.json().get("vm_name", "")
+        print(f"  Assigned VM {vm_name} to dummy assistant {orphan_aid}")
 
-        batch_api.delete_namespaced_job(
-            name=job_name,
-            namespace=NAMESPACE,
-            propagation_policy="Foreground",
-        )
-        job_name = None
-        time.sleep(15)
-
-        orphaned = list_assigned_vms(gce_client, assistant_id)
+        time.sleep(5)
+        orphaned = list_assigned_vms(gce_client, orphan_aid)
         assert (
             len(orphaned) >= 1
-        ), "VM was released despite container crash — expected orphan"
-        print(f"  Orphaned VM: {orphaned[0].name} (container deleted)")
+        ), f"VM should be assigned to {orphan_aid} but found none"
+
+        jobs = batch_api.list_namespaced_job(
+            namespace=NAMESPACE,
+            label_selector=f"app=unity,assistant-id={orphan_aid}",
+        )
+        active_jobs = [j for j in jobs.items if j.status.active and j.status.active > 0]
+        assert (
+            len(active_jobs) == 0
+        ), f"Dummy assistant {orphan_aid} should have no K8s Jobs"
+        print(f"  Orphan confirmed: VM assigned, no K8s Job")
 
         reconcile_resp = requests.post(
             f"{COMMS_APP_URL}/infra/vm/pool/reconcile-orphans",
@@ -507,23 +495,15 @@ def test_orphaned_vm_detected_after_container_crash(
             timeout=60,
         )
         assert reconcile_resp.status_code == 200
+        result = reconcile_resp.json()
+        print(f"  Reconciler: {result}")
         time.sleep(5)
 
-        after_reconcile = list_assigned_vms(gce_client, assistant_id)
-        assert len(after_reconcile) == 0, (
-            f"Orphan reconciler did not release VM: "
-            f"{[vm.name for vm in after_reconcile]}"
+        after = list_assigned_vms(gce_client, orphan_aid)
+        assert len(after) == 0, (
+            f"Reconciler did not release orphan: " f"{[vm.name for vm in after]}"
         )
         print("  Orphan reconciled — VM released back to pool")
 
     finally:
-        _release_all_vms_for(gce_client, assistant_id)
-        if job_name:
-            try:
-                batch_api.delete_namespaced_job(
-                    name=job_name,
-                    namespace=NAMESPACE,
-                    propagation_policy="Foreground",
-                )
-            except Exception:
-                pass
+        _release_all_vms_for(gce_client, orphan_aid)
