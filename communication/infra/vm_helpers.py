@@ -1215,6 +1215,17 @@ def process_pending_vm_assignments() -> Dict[str, Any]:
             )
             nacked += 1
 
+    if nacked > 0:
+        vm_types_needed = set()
+        for msg in messages:
+            try:
+                config = _json.loads(msg.message.data.decode("utf-8"))
+                vm_types_needed.add(config.get("vm_type", "ubuntu"))
+            except (ValueError, UnicodeDecodeError):
+                pass
+        for vt in vm_types_needed:
+            replenish_pool(vt, extra_demand=nacked)
+
     return {"pulled": len(messages), "acked": acked, "nacked": nacked}
 
 
