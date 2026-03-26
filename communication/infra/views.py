@@ -1072,9 +1072,9 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
 
         # Trim: stop excess idle VMs now that one was returned (fire-and-forget)
         vm_type = result.get("vm_type", "ubuntu")
-        # asyncio.get_running_loop().run_in_executor(
-        #     POOL_MAINTENANCE_EXECUTOR, partial(trim_pool, vm_type)
-        # )
+        asyncio.get_running_loop().run_in_executor(
+            POOL_MAINTENANCE_EXECUTOR, partial(trim_pool, vm_type)
+        )
 
         return result
     except Exception as e:
