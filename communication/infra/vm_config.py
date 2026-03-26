@@ -62,7 +62,7 @@ UBUNTU_INIT_SCRIPT_PATH = os.path.join(
 UBUNTU_POOL_WATCHER_PATH = os.path.join(
     os.path.dirname(__file__),
     "scripts",
-    "ubuntu-pool-watcher.sh",
+    "unity-pool-watcher.sh",
 )
 UBUNTU_SUPERVISORD_CONF_PATH = os.path.join(
     os.path.dirname(__file__),
