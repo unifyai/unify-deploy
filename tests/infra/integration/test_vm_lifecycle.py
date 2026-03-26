@@ -230,12 +230,48 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
 
     from google.cloud import compute_v1
 
+    client = compute_v1.InstancesClient()
+
+    # Clean up stuck starting VMs from previous runs so the deficit
+    # calculation is accurate and rebalance actually starts a VM.
+    stuck_req = compute_v1.ListInstancesRequest(
+        project="gcp-project-vms",
+        zone=VM_ZONE,
+        filter="labels.pool-role=starting AND labels.vm-type=ubuntu",
+    )
+    for stuck in client.list(request=stuck_req):
+        try:
+            if stuck.status == "RUNNING":
+                client.stop(
+                    project="gcp-project-vms",
+                    zone=VM_ZONE,
+                    instance=stuck.name,
+                ).result()
+            fresh = client.get(
+                project="gcp-project-vms",
+                zone=VM_ZONE,
+                instance=stuck.name,
+            )
+            labels = dict(fresh.labels or {})
+            labels["pool-role"] = "stopped"
+            client.set_labels(
+                project="gcp-project-vms",
+                zone=VM_ZONE,
+                instance=stuck.name,
+                instances_set_labels_request_resource=compute_v1.InstancesSetLabelsRequest(
+                    label_fingerprint=fresh.label_fingerprint,
+                    labels=labels,
+                ),
+            ).result()
+            print(f"  Cleaned up stuck starting VM: {stuck.name}")
+        except Exception:
+            pass
+
     stopped = list_stopped_vms(gce_client)
     if not stopped:
         pytest.skip("No stopped (TERMINATED) VMs available")
 
     target_name = stopped[0].name
-    client = compute_v1.InstancesClient()
 
     def _get_state():
         vm = client.get(
