@@ -1266,6 +1266,30 @@ def list_idle_vms(gce_client, vm_type: str = "ubuntu") -> list:
     return list(gce_client.list(request=request))
 
 
+def list_stopped_vms(gce_client, vm_type: str = "ubuntu") -> list:
+    """List stopped (TERMINATED) pool VMs."""
+    from google.cloud import compute_v1
+
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=VM_ZONE,
+        filter=f"labels.pool-role=stopped AND labels.vm-type={vm_type} AND status=TERMINATED",
+    )
+    return list(gce_client.list(request=request))
+
+
+def list_ghost_vms(gce_client, vm_type: str = "ubuntu") -> list:
+    """List ghost VMs: labeled stopped but actually RUNNING."""
+    from google.cloud import compute_v1
+
+    request = compute_v1.ListInstancesRequest(
+        project=VM_PROJECT_ID,
+        zone=VM_ZONE,
+        filter=f"labels.pool-role=stopped AND labels.vm-type={vm_type} AND status=RUNNING",
+    )
+    return list(gce_client.list(request=request))
+
+
 # ---------------------------------------------------------------------------
 # Invariant checker
 # ---------------------------------------------------------------------------
