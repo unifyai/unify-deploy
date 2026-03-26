@@ -248,7 +248,25 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
     role_before, status_before = _get_state()
     print(f"  Target: {target_name} (pool-role={role_before}, status={status_before})")
 
-    # Rebalance #1: starts the stopped VM
+    # Create a deficit so replenish has a reason to start the stopped VM.
+    # Assign an idle VM to a dummy assistant to reduce idle count below target.
+    dummy_aid = f"scrub-test-{int(time.time())}"
+    dummy_resp = requests.post(
+        f"{COMMS_APP_URL}/infra/vm/pool/assign",
+        json={
+            "assistant_id": dummy_aid,
+            "unify_apikey": "test-key",
+            "vm_type": "ubuntu",
+        },
+        headers=_ADMIN_HEADERS,
+        timeout=120,
+    )
+    if dummy_resp.status_code == 200:
+        print(
+            f"  Consumed 1 idle VM ({dummy_resp.json().get('vm_name')}) to create deficit",
+        )
+
+    # Rebalance #1: starts the stopped VM (deficit exists now)
     resp1 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
     assert resp1.status_code == 200, f"Rebalance #1 failed: {resp1.text}"
     time.sleep(3)
@@ -281,6 +299,14 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
             f"Expected pool-role=idle. The scrub function stopped the VM "
             f"before the startup script could call mark-idle."
         )
+    finally:
+        if dummy_resp.status_code == 200:
+            requests.post(
+                f"{COMMS_APP_URL}/infra/vm/pool/release",
+                json={"assistant_id": dummy_aid},
+                headers=_ADMIN_HEADERS,
+                timeout=30,
+            )
 
 
 # ---------------------------------------------------------------------------
