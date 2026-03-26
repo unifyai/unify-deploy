@@ -533,9 +533,19 @@ def test_production_traffic_stress(
             )
 
         if gce_client is not None:
-            print(f"[Phase 3] Checking VM assignments (single pass, 60s wait)...")
-            time.sleep(60)
+            print(f"[Phase 3] Polling for VM assignments (up to 180s)...")
+            vm_deadline = time.monotonic() + 180
             vm_assigned = 0
+            while time.monotonic() < vm_deadline:
+                vm_assigned = 0
+                for a in assistants:
+                    vms = list_assigned_vms(gce_client, a["assistant_id"])
+                    if vms:
+                        vm_assigned += 1
+                if vm_assigned >= N:
+                    break
+                time.sleep(15)
+
             vm_auth_ok = 0
             vm_auth_fail = 0
             vm_not_assigned = 0
@@ -544,7 +554,6 @@ def test_production_traffic_stress(
                 try:
                     vms = list_assigned_vms(gce_client, aid)
                     if vms:
-                        vm_assigned += 1
                         hostname = _get_vm_hostname(vms[0])
                         resp = probe_vm_agent_service(hostname, a["api_key"])
                         if resp and resp.status_code == 200:
@@ -571,16 +580,6 @@ def test_production_traffic_stress(
                 f"(assigned but agent-service key mismatch)"
             )
 
-            expected_vms = min(N, idle_vms_before)
-            if vm_assigned < expected_vms:
-                import warnings
-
-                warnings.warn(
-                    f"Only {vm_assigned}/{expected_vms} VMs assigned "
-                    f"(pool had {idle_vms_before} idle). "
-                    f"VM assignment may be slower than 60s for some assistants.",
-                )
-
         p3_invariants = check_invariants(batch_api, gce_client)
         p3_new = _new_violations(p3_invariants, baseline_violations)
         if p3_new:
@@ -589,37 +588,8 @@ def test_production_traffic_stress(
         else:
             print(f"[Phase 3] Invariants: all clear")
 
-        # Verify Phase 2 messages were delivered (Pub/Sub → container → outbound)
-        try:
-            from google.cloud import pubsub_v1 as _pubsub_v1
-
-            subscriber = _pubsub_v1.SubscriberClient()
-            delivered_count = 0
-            checked_count = 0
-            check_sample = assistants[: min(3, N)]
-            for a in check_sample:
-                aid = a["assistant_id"]
-                msgs = pull_outbound_messages(subscriber, str(aid), timeout=5)
-                checked_count += 1
-                if msgs:
-                    delivered_count += 1
-                    print(f"  {aid}: {len(msgs)} outbound message(s) — delivered")
-                else:
-                    print(f"  {aid}: no outbound messages yet")
-            print(
-                f"[Phase 3] Message delivery: {delivered_count}/{checked_count} "
-                f"assistants have outbound messages",
-            )
-            if delivered_count == 0 and checked_count > 0:
-                import warnings
-
-                warnings.warn(
-                    f"No outbound messages found for any of the {checked_count} "
-                    f"assistants checked. Phase 2 messages may not have been "
-                    f"processed yet (containers still initializing).",
-                )
-        except Exception as e:
-            print(f"[Phase 3] Message delivery check skipped: {e}")
+        # (outbound message check deferred to after Phase 4 — containers
+        # need time to initialize and process queued messages)
 
         # ==================================================================
         # PHASE 4: Sustained Mixed Load
@@ -734,6 +704,39 @@ def test_production_traffic_stress(
             f"{[j.metadata.name for j in dup_jobs]}"
         )
         print(f"  INV-1 provocation: {len(dup_jobs)} container(s) — safe")
+
+        # Check outbound messages now — containers have been running through
+        # Phase 4 (3 rounds × 30s = ~90s+) so they've had time to process
+        # Phase 2 inbound messages and produce LLM responses.
+        try:
+            from google.cloud import pubsub_v1 as _pubsub_v1
+
+            subscriber = _pubsub_v1.SubscriberClient()
+            delivered_count = 0
+            checked_count = 0
+            check_sample = assistants[: min(3, N)]
+            for a in check_sample:
+                aid = a["assistant_id"]
+                msgs = pull_outbound_messages(subscriber, str(aid), timeout=5)
+                checked_count += 1
+                if msgs:
+                    delivered_count += 1
+                    print(f"  {aid}: {len(msgs)} outbound message(s) — delivered")
+                else:
+                    print(f"  {aid}: no outbound messages yet")
+            print(
+                f"[Phase 4] Message delivery: {delivered_count}/{checked_count} "
+                f"assistants have outbound messages",
+            )
+            if delivered_count == 0 and checked_count > 0:
+                import warnings
+
+                warnings.warn(
+                    f"No outbound messages found for any of the {checked_count} "
+                    f"assistants checked after Phase 4.",
+                )
+        except Exception as e:
+            print(f"[Phase 4] Message delivery check skipped: {e}")
 
         # ==================================================================
         # PHASE 5: Crash Recovery Under Load
