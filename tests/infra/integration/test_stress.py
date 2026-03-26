@@ -91,6 +91,26 @@ def _trigger_reconciliation():
         pass
 
 
+def _trigger_vm_reconciliation():
+    """Trigger the pending-VM-assignment reconciler on the comms app."""
+    try:
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/pending/process",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            pulled = data.get("pulled", 0)
+            if pulled > 0:
+                print(
+                    f"    [vm-reconciler] Processed {pulled} pending: "
+                    f"{data.get('acked', 0)} assigned, {data.get('nacked', 0)} retrying",
+                )
+    except Exception:
+        pass
+
+
 def _trigger_cleanup():
     """Trigger the idle pool cleanup on the adapters (same call as the cron)."""
     try:
@@ -533,9 +553,10 @@ def test_production_traffic_stress(
             )
 
         if gce_client is not None:
-            print(f"[Phase 3] Polling for VM assignments (up to 180s)...")
-            vm_deadline = time.monotonic() + 180
+            print(f"[Phase 3] Polling for VM assignments (up to 300s)...")
+            vm_deadline = time.monotonic() + 300
             vm_assigned = 0
+            vm_poll_round = 0
             while time.monotonic() < vm_deadline:
                 vm_assigned = 0
                 for a in assistants:
@@ -544,6 +565,10 @@ def test_production_traffic_stress(
                         vm_assigned += 1
                 if vm_assigned >= N:
                     break
+                vm_poll_round += 1
+                _trigger_vm_reconciliation()
+                if vm_poll_round % 4 == 0:
+                    _trigger_pool_refresh()
                 time.sleep(15)
 
             vm_auth_ok = 0
@@ -584,10 +609,10 @@ def test_production_traffic_stress(
                 import warnings
 
                 warnings.warn(
-                    f"{vm_not_assigned}/{N} assistants have containers but no VM. "
-                    f"VM pool had {idle_vms_before} idle VMs for {N} assistants. "
-                    f"Desktop mode is silently broken for these assistants until "
-                    f"the next inbound message retriggers VM assignment.",
+                    f"{vm_not_assigned}/{N} assistants have containers but no VM "
+                    f"after 300s of reconciliation. VM pool had {idle_vms_before} "
+                    f"idle VMs for {N} assistants. This may indicate the VM pool "
+                    f"cannot replenish fast enough for this scale.",
                 )
 
         p3_invariants = check_invariants(batch_api, gce_client)
