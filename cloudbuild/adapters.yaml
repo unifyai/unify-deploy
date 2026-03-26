@@ -281,6 +281,34 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
+  # Update Cloud Scheduler: Pending VM Assignments Reconciler
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-pending-vm-assignments'
+  entrypoint: bash
+  secretEnv: ['ORCHESTRA_ADMIN_KEY']
+  args:
+  - '-c'
+  - |
+    set -o pipefail
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
+    gcloud scheduler jobs update http "pending-vm-assignments" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/pending-vm-assignments" \
+      --http-method POST \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --schedule "* * * * *" \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "pending-vm-assignments" \
+      --schedule "* * * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/pending-vm-assignments" \
+      --http-method POST \
+      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
+  waitFor: ['deploy']
+
 # Options
 options:
   substitutionOption: ALLOW_LOOSE
