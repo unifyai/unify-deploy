@@ -202,7 +202,7 @@ if (-not (Test-Path $systemBunExe)) {
 $poolWatcherScript = Get-GCPMetadata -Key "pool-watcher-script"
 if ($poolWatcherScript) {
     Set-Content -Path "C:\unity-pool-watcher.ps1" -Value $poolWatcherScript -Encoding UTF8
-    & 'C:\ProgramData\chocolatey\bin\nssm.exe' restart UnityPoolWatcher 2>$null
+    & 'C:\ProgramData\chocolatey\bin\nssm.exe' restart UnityPoolWatcher 2>&1 | Out-Null
     Write-Host "Pool watcher updated from metadata" -ForegroundColor Green
 } else {
     Write-Host "No pool-watcher-script metadata, using baked-in version" -ForegroundColor Yellow
