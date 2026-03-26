@@ -582,6 +582,87 @@ def release_assignment_lease(
             raise
 
 
+# ---------------------------------------------------------------------------
+# Per-VM K8s Leases (coordinate all VM state mutations)
+# ---------------------------------------------------------------------------
+
+
+def acquire_vm_lease(
+    coord_api,
+    vm_name: str,
+    namespace: str,
+    holder_id: str,
+    duration: int = 120,
+) -> bool:
+    """Acquire a K8s Lease for mutating a specific VM's state.
+
+    Every function that changes a VM's labels, metadata, or GCE status
+    must hold this Lease for the duration of the operation. This prevents
+    cross-pod and cross-thread races on the same VM.
+
+    Returns True if acquired, False if held by another caller.
+    Stale Leases (older than *duration* seconds) are cleaned up automatically.
+    """
+    lease_name = f"vm-{_sanitize_for_k8s(vm_name)}"
+    now = datetime.now(timezone.utc)
+
+    lease_body = k8s_client.V1Lease(
+        metadata=k8s_client.V1ObjectMeta(name=lease_name, namespace=namespace),
+        spec=k8s_client.V1LeaseSpec(
+            holder_identity=holder_id,
+            lease_duration_seconds=duration,
+            acquire_time=now,
+            renew_time=now,
+        ),
+    )
+
+    try:
+        coord_api.create_namespaced_lease(namespace=namespace, body=lease_body)
+        logger.info("Acquired VM lease %s (holder=%s)", lease_name, holder_id)
+        return True
+    except ApiException as e:
+        if e.status != 409:
+            raise
+
+    existing = coord_api.read_namespaced_lease(name=lease_name, namespace=namespace)
+    acquire_time = existing.spec.acquire_time
+    lease_dur = existing.spec.lease_duration_seconds or duration
+
+    if acquire_time and (now - acquire_time).total_seconds() > lease_dur:
+        logger.info("Deleting expired VM lease %s (age > %ds)", lease_name, lease_dur)
+        coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
+        try:
+            coord_api.create_namespaced_lease(namespace=namespace, body=lease_body)
+            logger.info("Re-acquired expired VM lease %s", lease_name)
+            return True
+        except ApiException as retry_err:
+            if retry_err.status == 409:
+                return False
+            raise
+
+    logger.info(
+        "VM lease %s held by %s, not expired",
+        lease_name,
+        existing.spec.holder_identity,
+    )
+    return False
+
+
+def release_vm_lease(
+    coord_api,
+    vm_name: str,
+    namespace: str,
+) -> None:
+    """Release a per-VM Lease. Ignores 404 (already released)."""
+    lease_name = f"vm-{_sanitize_for_k8s(vm_name)}"
+    try:
+        coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
+        logger.info("Released VM lease %s", lease_name)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+
+
 def claim_idle_container(
     batch_api,
     assistant_id: str,
