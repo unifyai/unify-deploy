@@ -366,6 +366,8 @@ EOF
 
     # Start Agent Service as unityuser
     kill_agent_service
+    touch /var/log/agent-service.log
+    chown unityuser:unityuser /var/log/agent-service.log
     su -s /bin/bash unityuser -c "cd /agent-service && nohup npx ts-node src/index.ts > /var/log/agent-service.log 2>&1 &"
     log "Agent Service started (as unityuser)"
 
