@@ -1414,7 +1414,12 @@ def _start_one_stopped_vm(client, vm) -> bool:
 
 
 def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
-    """Start a specific stopped pool VM by type and number."""
+    """Start a specific stopped pool VM by type and number.
+
+    Uses the same stopped → starting label transition as
+    _start_one_stopped_vm so the VM is protected from scrub during
+    boot and can legitimately transition to idle via mark-idle.
+    """
     vm_name = _pool_vm_name(vm_type, vm_number)
     client = compute_v1.InstancesClient()
 
@@ -1430,17 +1435,33 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
     if vm.status != "TERMINATED":
         raise Conflict(f"VM {vm_name} is {vm.status}, expected TERMINATED")
 
+    ok = _set_pool_labels(
+        client,
+        vm_name,
+        {"pool-role": "starting"},
+        expected_role="stopped",
+    )
+    if not ok:
+        raise Conflict(
+            f"VM {vm_name} label CAS failed (pool-role is not stopped)",
+        )
+
     github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
     if github_token:
         _update_instance_metadata(vm_name, {"github-token": github_token})
 
-    op = client.start(
-        project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
-        instance=vm_name,
-    )
-    op.result()
-    logger.info(f"Manual start: started VM {vm_name}")
+    try:
+        op = client.start(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
+        op.result()
+    except Exception:
+        _set_pool_labels(client, vm_name, {"pool-role": "stopped"})
+        raise
+
+    logger.info(f"Manual start: started VM {vm_name} (pool-role=starting)")
     return {"vm_name": vm_name, "status": "starting"}
 
 
