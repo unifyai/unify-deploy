@@ -664,7 +664,12 @@ async def start_job(
                                     vm_type=_vt,
                                 ),
                             )
-                        except ValueError:
+                        except Exception as exc:
+                            logger.warning(
+                                "VM assignment failed for %s (%s), queuing for retry",
+                                _aid,
+                                exc,
+                            )
                             await loop.run_in_executor(
                                 None,
                                 partial(
@@ -766,10 +771,11 @@ async def start_job(
                                 vm_type=_vt,
                             ),
                         )
-                    except ValueError:
-                        logger.info(
-                            "VM pool exhausted for %s, queuing for deferred retry",
+                    except Exception as exc:
+                        logger.warning(
+                            "VM assignment failed for %s (%s), queuing for retry",
                             _aid,
+                            exc,
                         )
                         await loop.run_in_executor(
                             None,

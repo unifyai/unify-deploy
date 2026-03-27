@@ -857,21 +857,16 @@ def process_pending_startups(
                         vm_type=desktop_mode,
                     )
                     replenish_pool(desktop_mode, extra_demand=1)
-                except ValueError:
-                    logger.info(
-                        "VM pool exhausted for %s, queuing for deferred retry",
+                except Exception as vm_err:
+                    logger.warning(
+                        "VM assignment failed for %s (%s), queuing for retry",
                         assistant_id,
+                        vm_err,
                     )
                     publish_pending_vm_assignment(
                         assistant_id,
                         config.get("api_key", ""),
                         desktop_mode,
-                    )
-                except Exception as vm_err:
-                    logger.warning(
-                        "Reconciler VM assignment failed for %s: %s",
-                        assistant_id,
-                        vm_err,
                     )
 
     return {"pulled": len(messages), "acked": acked, "nacked": nacked}
