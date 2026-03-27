@@ -97,7 +97,9 @@ scrub_filesystem() {
         -exec rm -rf {} + 2>/dev/null || true
     for dir in .config .local; do
         if [[ -d "/Unity/$dir" ]]; then
-            find "/Unity/$dir" -mindepth 1 -exec rm -rf {} + 2>/dev/null || true
+            find "/Unity/$dir" -mindepth 1 \
+                ! -path "/Unity/.config/xfce4" ! -path "/Unity/.config/xfce4/*" \
+                -exec rm -rf {} + 2>/dev/null || true
         fi
     done
     # Wipe .cache contents but preserve the ms-playwright symlink
