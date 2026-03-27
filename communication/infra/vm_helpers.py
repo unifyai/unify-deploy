@@ -1102,6 +1102,29 @@ def _start_one_stopped_vm(client, vm) -> bool:
         return False
 
 
+def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
+    """Start a specific stopped pool VM by type and number."""
+    vm_name = _pool_vm_name(vm_type, vm_number)
+    client = compute_v1.InstancesClient()
+
+    try:
+        vm = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+    except NotFound:
+        raise ValueError(f"VM {vm_name} not found")
+
+    if vm.status != "TERMINATED":
+        raise Conflict(f"VM {vm_name} is {vm.status}, expected TERMINATED")
+
+    github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
+    if github_token:
+        _update_instance_metadata(vm_name, {"github-token": github_token})
+
+    op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+    op.result()
+    logger.info(f"Manual start: started VM {vm_name}")
+    return {"vm_name": vm_name, "status": "starting"}
+
+
 def replenish_pool(vm_type: str) -> Dict[str, Any]:
     """Start or provision VMs to meet current demand.
 

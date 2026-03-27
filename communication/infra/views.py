@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from functools import partial
+from google.api_core.exceptions import Conflict
 from google.cloud import compute_v1, pubsub_v1, storage
 from google.oauth2.service_account import Credentials
 from google.protobuf import duration_pb2
@@ -25,6 +26,7 @@ from .vm_helpers import (
     _set_pool_labels,
     _update_instance_metadata,
     provision_pool_vm,
+    start_pool_vm,
     assign_pool_vm,
     release_pool_vm,
     replenish_pool,
@@ -50,6 +52,7 @@ from .models import (
     TunnelListResponse,
     TunnelDeleteResponse,
     PoolProvisionRequest,
+    PoolStartVMRequest,
     PoolAssignRequest,
     PoolAssignResponse,
     PoolReleaseRequest,
@@ -1025,6 +1028,24 @@ async def provision_pool_endpoint(request: PoolProvisionRequest):
         n += 1
 
     return {"provisioned": results}
+
+
+@router.post("/vm/pool/start")
+async def start_pool_vm_endpoint(request: PoolStartVMRequest):
+    """Start a specific stopped pool VM by type and number.
+
+    For manual testing — mimics what replenish does for a single VM.
+    Injects github-token and starts the VM; the startup script handles the rest.
+    """
+    try:
+        result = await asyncio.to_thread(
+            start_pool_vm, request.vm_type, request.vm_number
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Conflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/vm/pool/assign", response_model=PoolAssignResponse)
