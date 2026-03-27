@@ -137,6 +137,12 @@ function Scrub-GitTokens {
 }
 
 # =============================================================================
+# Service User Hardening (converge on every boot)
+# =============================================================================
+Remove-LocalGroupMember -Group "Administrators" -Member "unityuser" -ErrorAction SilentlyContinue
+Write-Host "Ensured unityuser is not in Administrators group" -ForegroundColor Green
+
+# =============================================================================
 # Read Configuration
 # =============================================================================
 Write-Host "Reading GCP metadata..."
@@ -196,7 +202,7 @@ if (-not (Test-Path $systemBunExe)) {
 $poolWatcherScript = Get-GCPMetadata -Key "pool-watcher-script"
 if ($poolWatcherScript) {
     Set-Content -Path "C:\unity-pool-watcher.ps1" -Value $poolWatcherScript -Encoding UTF8
-    & 'C:\ProgramData\chocolatey\bin\nssm.exe' restart UnityPoolWatcher 2>$null
+    & 'C:\ProgramData\chocolatey\bin\nssm.exe' restart UnityPoolWatcher 2>&1 | Out-Null
     Write-Host "Pool watcher updated from metadata" -ForegroundColor Green
 } else {
     Write-Host "No pool-watcher-script metadata, using baked-in version" -ForegroundColor Yellow
@@ -355,6 +361,14 @@ if ($envBackup -and (Test-Path $agentServiceDir)) {
 
 Scrub-GitTokens
 
+# Grant unityuser read+execute on code directories (installed by SYSTEM above)
+foreach ($dir in @("C:\agent-service", "C:\magnitude", "C:\ms-playwright")) {
+    if (Test-Path $dir) {
+        C:\Windows\System32\icacls.exe $dir /grant "unityuser:(OI)(CI)RX" /T /Q 2>$null
+    }
+}
+Write-Host "  unityuser ACLs set on service directories" -ForegroundColor Green
+
 # =============================================================================
 # Configure Caddy
 # =============================================================================
@@ -458,7 +472,7 @@ cd /d C:\novnc
         if (-not $existingTask) {
             $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$websockifyBat'`"" -WorkingDirectory $novncDir
             $trigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
-            $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Highest
+            $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Limited
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
             Register-ScheduledTask -TaskName $websockifyTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
         }
@@ -466,6 +480,32 @@ cd /d C:\novnc
     } else {
         Write-Host "  ERROR: Python not found" -ForegroundColor Red
     }
+}
+
+# =============================================================================
+# Enforce Firewall Rules (converge on every boot)
+# =============================================================================
+Write-Host ""
+Write-Host "=== Enforcing firewall rules ===" -ForegroundColor Cyan
+
+# Remove all Unity-* rules to ensure clean slate
+Get-NetFirewallRule -DisplayName "Unity-*" -ErrorAction SilentlyContinue |
+    Remove-NetFirewallRule -ErrorAction SilentlyContinue
+
+# Inbound: HTTPS only (6080/3000 behind Caddy, RDP handled by Windows/GCP defaults)
+New-NetFirewallRule -DisplayName "Unity-HTTPS" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow -Profile Any | Out-Null
+Write-Host "  Inbound: port 443 allowed" -ForegroundColor Green
+
+# Outbound: block metadata server (169.254.169.254) for unityuser
+try {
+    $sid = (New-Object System.Security.Principal.NTAccount("unityuser")).Translate(
+        [System.Security.Principal.SecurityIdentifier]).Value
+    New-NetFirewallRule -DisplayName "Unity-BlockMetadata" -Direction Outbound `
+        -RemoteAddress 169.254.169.254 -Action Block `
+        -LocalUser "D:(A;;CC;;;$sid)" -Profile Any | Out-Null
+    Write-Host "  Outbound: metadata server blocked for unityuser" -ForegroundColor Green
+} catch {
+    Write-Host "  WARNING: could not create metadata block rule: $_" -ForegroundColor Yellow
 }
 
 # =============================================================================
@@ -503,20 +543,36 @@ if ($port6080) {
     Write-Host "  Websockify: Starting..." -ForegroundColor Yellow
 }
 
-# Caddy
+# Caddy (runs as unityuser via scheduled task)
 if ($caddyConfigured) {
     $caddyExe = "C:\caddy\caddy.exe"
     $caddyfileConfig = "C:\caddy\Caddyfile"
-    $caddyProcess = Get-Process -Name "caddy" -ErrorAction SilentlyContinue
 
-    if (-not $caddyProcess -and (Test-Path $caddyExe) -and (Test-Path $caddyfileConfig)) {
-        $psCommand = "Set-Location 'C:\caddy'; & '$caddyExe' run --config '$caddyfileConfig'"
-        Start-Process -FilePath "powershell.exe" -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$psCommand`"" -WorkingDirectory "C:\caddy"
+    # Grant unityuser read access to Caddy config + TLS certs
+    C:\Windows\System32\icacls.exe "C:\caddy" /grant "unityuser:R" /T /Q 2>$null
+
+    # Ensure scheduled task exists to run Caddy as unityuser (AtLogOn — auto-logon fires immediately)
+    $taskName = "StartCaddy"
+    $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if (-not $existingTask -and (Test-Path $caddyExe) -and (Test-Path $caddyfileConfig)) {
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+            -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$caddyExe' run --config '$caddyfileConfig'`"" `
+            -WorkingDirectory "C:\caddy"
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
+        $principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Limited
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+            -Principal $principal -Settings $settings -Force | Out-Null
+    }
+
+    $caddyProcess = Get-Process -Name "caddy" -ErrorAction SilentlyContinue
+    if (-not $caddyProcess) {
+        Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 1000
     }
 
     if (Get-Process -Name "caddy" -ErrorAction SilentlyContinue) {
-        Write-Host "  Caddy: Running" -ForegroundColor Green
+        Write-Host "  Caddy: Running (as unityuser)" -ForegroundColor Green
     } else {
         Write-Host "  Caddy: Starting..." -ForegroundColor Yellow
     }

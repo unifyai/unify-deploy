@@ -1,7 +1,7 @@
 # windows-pool-vm.pkr.hcl - Packer template for Unity Pool Windows VM image
 #
 # Extends the base Windows VM image with pool-specific components:
-# - unityuser (auto-logon Administrator)
+# - unityuser (auto-logon, standard user)
 # - OpenSSH Server (port 2222)
 # - TightVNC Server (dummy password, updated at assignment)
 # - Unity Pool Watcher (NSSM Windows service)

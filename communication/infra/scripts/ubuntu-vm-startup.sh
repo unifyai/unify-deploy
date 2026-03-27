@@ -135,17 +135,106 @@ else
 fi
 
 # =============================================================================
+# Service User Hardening (converge on every boot)
+# =============================================================================
+setcap CAP_NET_BIND_SERVICE=+ep /usr/local/bin/caddy 2>/dev/null || true
+echo "Caddy: CAP_NET_BIND_SERVICE set"
+
+# Ensure unityuser cannot escalate to root
+deluser unityuser sudo 2>/dev/null || true
+rm -f /etc/sudoers.d/*unityuser* 2>/dev/null || true
+
+# =============================================================================
+# Desktop as unityuser: converge filesystem for non-root desktop
+# =============================================================================
+echo ""
+echo "=== Converging desktop for unityuser ==="
+
+# Make /root traversable so unityuser can reach Playwright browsers at /root/.cache/ms-playwright
+chmod 711 /root
+chmod 711 /root/.cache 2>/dev/null || true
+echo "  /root made traversable (711)"
+
+# Fix system-wide profile: remove HOME=/root override that breaks unityuser shell sessions
+cat > /etc/profile.d/unity-vm.sh << 'EOF'
+export DISPLAY=:1
+export VNC_GEOMETRY=1920x1080
+export VNC_DEPTH=24
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+EOF
+chmod +x /etc/profile.d/unity-vm.sh
+echo "  /etc/profile.d/unity-vm.sh updated (removed HOME=/root)"
+
+# XFCE config via system-wide XDG fallback (read by any user, not just root)
+mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml
+
+cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-power-manager" version="1.0">
+  <property name="xfce4-power-manager" type="empty">
+    <property name="dpms-enabled" type="bool" value="false"/>
+    <property name="blank-on-ac" type="int" value="0"/>
+    <property name="dpms-on-ac-sleep" type="uint" value="0"/>
+    <property name="dpms-on-ac-off" type="uint" value="0"/>
+  </property>
+</channel>
+EOF
+
+cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-screensaver" version="1.0">
+  <property name="saver" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+  <property name="lock" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+</channel>
+EOF
+
+cat > /etc/xdg/xfce4/helpers.rc << 'EOF'
+WebBrowser=chromium-browser
+FileManager=thunar
+TerminalEmulator=xfce4-terminal
+EOF
+echo "  XFCE config written to /etc/xdg/xfce4/"
+
+# Pre-create writable dirs in /Unity for XFCE desktop session
+# /Unity itself is root:root 755 (required by SSHD ChrootDirectory)
+for dir in .config .local .cache; do
+    mkdir -p "/Unity/$dir"
+    chown unityuser:unityuser "/Unity/$dir"
+done
+# Symlink Playwright browser cache so $HOME/.cache/ms-playwright resolves to the actual install location
+ln -sfn /root/.cache/ms-playwright /Unity/.cache/ms-playwright
+echo "  /Unity/.config, .local, .cache created for unityuser"
+
+# Shell config for unityuser desktop terminal sessions
+cat > /Unity/.bashrc << 'BASHRC'
+if [[ -d /Unity ]] && [[ $- == *i* ]] && [[ -n "$DISPLAY" ]] && [[ -z "$UNITY_SHELL_INIT" ]]; then
+    export UNITY_SHELL_INIT=1
+    cd /Unity
+fi
+BASHRC
+chown unityuser:unityuser /Unity/.bashrc
+echo "  /Unity/.bashrc configured"
+
+echo "Desktop convergence complete"
+
+# =============================================================================
 # VNC Default Password (so supervisord can start TigerVNC)
 # =============================================================================
-mkdir -p /root/.vnc
+mkdir -p /etc/vnc
 VNC_PASSWORD="unify123" python3 << 'PYSCRIPT'
 import os
 from Crypto.Cipher import DES
 key = bytes([0xe8, 0x4a, 0xd6, 0x60, 0xc4, 0x72, 0x1a, 0xe0])
 pw = (os.environ.get('VNC_PASSWORD', 'unify123') + '\x00' * 8)[:8].encode('latin-1')
-with open('/root/.vnc/passwd', 'wb') as f:
+with open('/etc/vnc/passwd', 'wb') as f:
     f.write(DES.new(key, DES.MODE_ECB).encrypt(pw))
-os.chmod('/root/.vnc/passwd', 0o600)
+os.chmod('/etc/vnc/passwd', 0o640)
+os.system('chgrp unityuser /etc/vnc/passwd')
 PYSCRIPT
 echo "VNC default password configured"
 
@@ -248,13 +337,15 @@ echo ""
 echo "=== Configuring Caddy ==="
 
 mkdir -p /etc/caddy /var/log/caddy
+chown unityuser:unityuser /var/log/caddy
 
 TLS_DIRECTIVE=""
 if [[ -n "$TLS_FULLCHAIN" && -n "$TLS_PRIVKEY" ]]; then
     mkdir -p /etc/caddy/certs
     echo "$TLS_FULLCHAIN" > /etc/caddy/certs/fullchain.pem
     echo "$TLS_PRIVKEY" > /etc/caddy/certs/privkey.pem
-    chmod 600 /etc/caddy/certs/privkey.pem
+    chgrp unityuser /etc/caddy/certs/privkey.pem
+    chmod 640 /etc/caddy/certs/privkey.pem
     TLS_DIRECTIVE="    tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem"
     echo "  TLS cert written"
 fi
@@ -308,11 +399,38 @@ else
 fi
 
 # =============================================================================
+# Enforce Firewall Rules (converge on every boot)
+# =============================================================================
+echo ""
+echo "=== Enforcing firewall rules ==="
+
+for chain in UNITY-INBOUND UNITY-OUTBOUND; do
+    iptables -N $chain 2>/dev/null || iptables -F $chain
+done
+# Wire custom chains into main chains (idempotent)
+iptables -C INPUT -j UNITY-INBOUND 2>/dev/null || iptables -I INPUT -j UNITY-INBOUND
+iptables -C OUTPUT -j UNITY-OUTBOUND 2>/dev/null || iptables -I OUTPUT -j UNITY-OUTBOUND
+
+# Inbound: block direct access to internal service ports (6080/3000 behind Caddy)
+iptables -A UNITY-INBOUND -p tcp --dport 6080 ! -i lo -j DROP
+iptables -A UNITY-INBOUND -p tcp --dport 3000 ! -i lo -j DROP
+
+# Outbound: block metadata server for unityuser (prevents reading secrets/tokens)
+iptables -A UNITY-OUTBOUND -d 169.254.169.254 -m owner --uid-owner unityuser -j DROP
+
+echo "  Inbound: ports 6080/3000 blocked (behind Caddy)"
+echo "  Outbound: metadata server blocked for unityuser"
+
+# =============================================================================
 # Start Services (before marking idle, so Caddy is ready before VM is claimable)
 # =============================================================================
 ELAPSED=$(( $(date +%s) - START_TIME ))
 echo ""
 echo "Setup complete in ${ELAPSED}s - launching supervisord"
+
+# Ensure service logs are writable by unityuser
+touch /var/log/agent-service.log
+chown unityuser:unityuser /var/log/agent-service.log
 
 export VNC_GEOMETRY=${VNC_GEOMETRY:-1920x1080}
 export VNC_DEPTH=${VNC_DEPTH:-24}

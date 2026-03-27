@@ -15,7 +15,6 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple
 
 import requests
@@ -429,7 +428,7 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
                 "hostname": hostname,
                 "status": instance.status,
                 "label_fingerprint": instance.label_fingerprint,
-            }
+            },
         )
     return results
 
@@ -451,7 +450,9 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     )
     try:
         op = ip_client.insert(
-            project=VM_PROJECT_ID, region=REGION, address_resource=address
+            project=VM_PROJECT_ID,
+            region=REGION,
+            address_resource=address,
         )
         op.result()
         logger.info(f"Reserved static IP: {ip_name}")
@@ -497,7 +498,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     supervisord_conf_loader = cfg.get("supervisord_conf_loader")
     if supervisord_conf_loader:
         metadata_items.append(
-            compute_v1.Items(key="supervisord-conf", value=supervisord_conf_loader())
+            compute_v1.Items(key="supervisord-conf", value=supervisord_conf_loader()),
         )
 
     metadata_items += [
@@ -563,7 +564,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     )
     if cfg["enable_display"]:
         instance_kwargs["display_device"] = compute_v1.DisplayDevice(
-            enable_display=True
+            enable_display=True,
         )
 
     instance = compute_v1.Instance(**instance_kwargs)
@@ -607,7 +608,7 @@ def _set_pool_labels(
             logger.info(
                 f"Skipping label update on {vm_name}: "
                 f"expected pool-role={expected_role}, "
-                f"got {labels.get('pool-role')}"
+                f"got {labels.get('pool-role')}",
             )
             return False
         labels.update(label_overrides)
@@ -627,13 +628,15 @@ def _set_pool_labels(
                 raise
             logger.info(
                 f"Label fingerprint conflict on {vm_name}, "
-                f"retrying ({attempt + 1}/{max_retries})"
+                f"retrying ({attempt + 1}/{max_retries})",
             )
     return False
 
 
 def claim_idle_vm(
-    assistant_id: str, vm_type: str, vm_number: int | None = None
+    assistant_id: str,
+    vm_type: str,
+    vm_number: int | None = None,
 ) -> Dict[str, Any]:
     """Atomically claim an idle pool VM using label fingerprint CAS.
 
@@ -656,7 +659,12 @@ def claim_idle_vm(
 
     try:
         return _claim_idle_vm_inner(
-            client, label_filter, assistant_id, vm_type, vm_number, elapsed
+            client,
+            label_filter,
+            assistant_id,
+            vm_type,
+            vm_number,
+            elapsed,
         )
     finally:
         with _pending_lock:
@@ -682,7 +690,7 @@ def _claim_idle_vm_inner(
             replenish_pool(vm_type)
             if elapsed >= POOL_ASSIGN_TIMEOUT:
                 raise ValueError(
-                    f"No idle {vm_type} pool VMs available after waiting {elapsed}s"
+                    f"No idle {vm_type} pool VMs available after waiting {elapsed}s",
                 )
             time.sleep(POOL_ASSIGN_POLL_INTERVAL)
             elapsed += POOL_ASSIGN_POLL_INTERVAL
@@ -694,7 +702,7 @@ def _claim_idle_vm_inner(
             if not matching:
                 idle_names = [vm.name for vm in idle_vms]
                 raise ValueError(
-                    f"VM {target_name} is not idle. Idle VMs: {idle_names}"
+                    f"VM {target_name} is not idle. Idle VMs: {idle_names}",
                 )
             candidate_name = matching[0].name
         else:
@@ -703,7 +711,7 @@ def _claim_idle_vm_inner(
         vm_lock = _get_vm_claim_lock(candidate_name)
         if not vm_lock.acquire(blocking=False):
             logger.info(
-                f"VM {candidate_name} being claimed by another thread, retrying"
+                f"VM {candidate_name} being claimed by another thread, retrying",
             )
             continue
 
@@ -713,12 +721,14 @@ def _claim_idle_vm_inner(
             # be stale, allowing two concurrent setLabels calls to both pass
             # the CAS check.  GET is strongly consistent per GCE docs.
             fresh = client.get(
-                project=VM_PROJECT_ID, zone=ZONE, instance=candidate_name
+                project=VM_PROJECT_ID,
+                zone=ZONE,
+                instance=candidate_name,
             )
             if fresh.labels.get("pool-role") != "idle":
                 logger.info(
                     f"VM {candidate_name} already claimed (pool-role="
-                    f"{fresh.labels.get('pool-role')}), retrying"
+                    f"{fresh.labels.get('pool-role')}), retrying",
                 )
                 continue
 
@@ -739,7 +749,7 @@ def _claim_idle_vm_inner(
                 )
                 op.result()
                 logger.info(
-                    f"Claimed pool VM {candidate_name} for assistant {assistant_id}"
+                    f"Claimed pool VM {candidate_name} for assistant {assistant_id}",
                 )
 
                 external_ip = None
@@ -802,7 +812,7 @@ def create_assistant_disk(assistant_id: str) -> str:
         op = client.insert(project=VM_PROJECT_ID, zone=ZONE, disk_resource=disk)
         op.result()
         logger.info(
-            f"Created assistant disk: {disk_name} ({POOL_ASSISTANT_DISK_SIZE_GB} GB)"
+            f"Created assistant disk: {disk_name} ({POOL_ASSISTANT_DISK_SIZE_GB} GB)",
         )
     except Conflict:
         logger.info(f"Assistant disk {disk_name} already exists")
@@ -867,7 +877,7 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
     )
     op.result()
     logger.info(
-        f"Detached disk {disk_name} from {vm_name} (device: {actual_device_name})"
+        f"Detached disk {disk_name} from {vm_name} (device: {actual_device_name})",
     )
     return True
 
@@ -888,7 +898,9 @@ def delete_assistant_disk(assistant_id: str) -> bool:
 
 
 def _update_instance_metadata(
-    vm_name: str, updates: Dict[str, str], max_retries: int = 3
+    vm_name: str,
+    updates: Dict[str, str],
+    max_retries: int = 3,
 ) -> None:
     """Update metadata on a running instance (merge with existing).
 
@@ -925,7 +937,7 @@ def _update_instance_metadata(
             if attempt < max_retries:
                 logger.info(
                     f"Metadata fingerprint conflict on {vm_name}, "
-                    f"retrying ({attempt + 1}/{max_retries})"
+                    f"retrying ({attempt + 1}/{max_retries})",
                 )
                 continue
             raise
@@ -994,7 +1006,7 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     vms = list(client.list(request=request))
     if not vms:
         logger.info(
-            f"No pool VM assigned to assistant {assistant_id} — nothing to release"
+            f"No pool VM assigned to assistant {assistant_id} — nothing to release",
         )
         return {
             "released": False,
@@ -1071,8 +1083,16 @@ def _start_one_stopped_vm(client, vm) -> bool:
     The startup script handles setting pool-role to idle once boot completes.
     The stopped_vms filter uses status==TERMINATED, so a started VM naturally
     drops out of the candidate list without needing a label change here.
+
+    Restores the github-token metadata before starting, because the
+    previous boot's startup script wipes it for security. Without it,
+    the startup script can't clone private repos and crashes (set -e).
     """
     try:
+        github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
+        if github_token:
+            _update_instance_metadata(vm.name, {"github-token": github_token})
+
         op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm.name)
         op.result()
         logger.info(f"Replenish: started stopped VM {vm.name}")
@@ -1080,6 +1100,29 @@ def _start_one_stopped_vm(client, vm) -> bool:
     except Exception as e:
         logger.error(f"Replenish: failed to start {vm.name}: {e}")
         return False
+
+
+def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
+    """Start a specific stopped pool VM by type and number."""
+    vm_name = _pool_vm_name(vm_type, vm_number)
+    client = compute_v1.InstancesClient()
+
+    try:
+        vm = client.get(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+    except NotFound:
+        raise ValueError(f"VM {vm_name} not found")
+
+    if vm.status != "TERMINATED":
+        raise Conflict(f"VM {vm_name} is {vm.status}, expected TERMINATED")
+
+    github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
+    if github_token:
+        _update_instance_metadata(vm_name, {"github-token": github_token})
+
+    op = client.start(project=VM_PROJECT_ID, zone=ZONE, instance=vm_name)
+    op.result()
+    logger.info(f"Manual start: started VM {vm_name}")
+    return {"vm_name": vm_name, "status": "starting"}
 
 
 def replenish_pool(vm_type: str) -> Dict[str, Any]:
@@ -1108,7 +1151,7 @@ def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
     _scrub_inconsistent_vms(vm_type)
 
     client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
-        vm_type
+        vm_type,
     )
 
     with _pending_lock:
@@ -1121,7 +1164,7 @@ def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
     logger.info(
         f"Replenish {vm_type}: target={target} idle={len(idle_vms)} "
         f"in_flight={len(in_flight_vms)} stopped={len(stopped_vms)} "
-        f"deficit={deficit}"
+        f"deficit={deficit}",
     )
 
     if deficit <= 0:
@@ -1173,7 +1216,8 @@ def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
         reserve_deficit = POOL_TARGET_STOPPED - len(stopped_vms_now)
         if reserve_deficit > 0:
             with ThreadPoolExecutor(
-                max_workers=reserve_deficit, thread_name_prefix="replenish-reserve"
+                max_workers=reserve_deficit,
+                thread_name_prefix="replenish-reserve",
             ) as pool:
                 reserve_futures = {}
                 nr = 1
@@ -1190,11 +1234,11 @@ def _replenish_pool_inner(vm_type: str) -> Dict[str, Any]:
                     try:
                         rf.result()
                         actions.append(
-                            f"Provisioned new pool VM #{num} (stopped reserve)"
+                            f"Provisioned new pool VM #{num} (stopped reserve)",
                         )
                     except Exception as e:
                         logger.error(
-                            f"Replenish: failed to provision reserve VM #{num}: {e}"
+                            f"Replenish: failed to provision reserve VM #{num}: {e}",
                         )
 
     return {"vm_type": vm_type, "idle_count": len(idle_vms), "actions": actions}
@@ -1245,25 +1289,31 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
 
             try:
                 client.stop(
-                    project=VM_PROJECT_ID, zone=ZONE, instance=candidate.name
+                    project=VM_PROJECT_ID,
+                    zone=ZONE,
+                    instance=candidate.name,
                 ).result()
             except Exception as e:
                 logger.error(
-                    f"Trim: stop failed for {candidate.name}, reverting label: {e}"
+                    f"Trim: stop failed for {candidate.name}, reverting label: {e}",
                 )
                 _set_pool_labels(client, candidate.name, {"pool-role": "idle"})
                 continue
 
             fresh = client.get(
-                project=VM_PROJECT_ID, zone=ZONE, instance=candidate.name
+                project=VM_PROJECT_ID,
+                zone=ZONE,
+                instance=candidate.name,
             )
             if fresh.status == "RUNNING":
                 logger.warning(
-                    f"Trim: {candidate.name} still RUNNING after stop, retrying"
+                    f"Trim: {candidate.name} still RUNNING after stop, retrying",
                 )
                 try:
                     client.stop(
-                        project=VM_PROJECT_ID, zone=ZONE, instance=candidate.name
+                        project=VM_PROJECT_ID,
+                        zone=ZONE,
+                        instance=candidate.name,
                     ).result()
                 except Exception as e:
                     logger.error(f"Trim: retry stop failed for {candidate.name}: {e}")
@@ -1301,7 +1351,7 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
     logger.info(
         f"Scrub {vm_type}: found {len(ghosts)} ghost VMs "
         f"(pool-role=stopped but RUNNING): "
-        f"{[vm.name for vm in ghosts]}"
+        f"{[vm.name for vm in ghosts]}",
     )
 
     actions: list[str] = []

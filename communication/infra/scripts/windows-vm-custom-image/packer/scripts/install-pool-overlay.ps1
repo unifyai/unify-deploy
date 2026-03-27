@@ -2,7 +2,7 @@
 # Pool Overlay for Windows VM
 #
 # Runs after install-base.ps1 to add pool-specific components:
-# - unityuser (auto-logon Administrator)
+# - unityuser (auto-logon, standard user)
 # - OpenSSH Server (port 2222 for file sync)
 # - TightVNC Server (dummy password, updated at assignment)
 # - Unity Pool Watcher (NSSM Windows service)
@@ -24,11 +24,11 @@ Write-Host "=== Creating pool user: unityuser ===" -ForegroundColor Cyan
 $poolPassword = ConvertTo-SecureString "UnityPoolDefault1!" -AsPlainText -Force
 if (-not (Get-LocalUser -Name "unityuser" -ErrorAction SilentlyContinue)) {
     New-LocalUser -Name "unityuser" -Password $poolPassword -PasswordNeverExpires -Description "Unity pool VM user"
-    Add-LocalGroupMember -Group "Administrators" -Member "unityuser"
-    Write-Host "  Created user unityuser (Administrator)"
+    Write-Host "  Created user unityuser (standard user)"
 } else {
     Write-Host "  User unityuser already exists"
 }
+Remove-LocalGroupMember -Group "Administrators" -Member "unityuser" -ErrorAction SilentlyContinue
 
 # Configure auto-logon
 Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "AutoAdminLogon" -Value "1"
@@ -41,6 +41,13 @@ New-Item -ItemType Directory -Force -Path "C:\Unity" | Out-Null
 New-Item -ItemType Directory -Force -Path "C:\Unity\Local" | Out-Null
 icacls "C:\Unity" /grant "unityuser:F" /T /Q 2>$null
 Write-Host "  Created C:\Unity and C:\Unity\Local"
+
+# Grant unityuser access to service directories
+foreach ($dir in @("C:\agent-service", "C:\magnitude", "C:\ms-playwright", "C:\novnc")) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    icacls $dir /grant "unityuser:(OI)(CI)RX" /T /Q 2>$null
+}
+Write-Host "  Granted unityuser read+execute on service directories"
 
 # =============================================================================
 # OpenSSH Server (port 2222 for file sync)
@@ -199,7 +206,7 @@ $action = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 3; & 'C:\novnc\set-resolution.ps1'`"" `
     -WorkingDirectory $novncDir
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
-$principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Highest
+$principal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
 Write-Host "  Scheduled task '$taskName' created for unityuser (at logon)"
@@ -311,7 +318,7 @@ $cursorAction = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"Start-Sleep -Seconds 2; & '$cursorScriptPath'`"" `
     -WorkingDirectory $novncDir
 $cursorTrigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
-$cursorPrincipal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Highest
+$cursorPrincipal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Limited
 $cursorSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName $cursorTaskName -Action $cursorAction -Trigger $cursorTrigger -Principal $cursorPrincipal -Settings $cursorSettings | Out-Null
 Write-Host "  Scheduled task '$cursorTaskName' created for unityuser (at logon)"
@@ -327,7 +334,7 @@ $startBat = @"
 @echo off
 set PLAYWRIGHT_BROWSERS_PATH=C:\ms-playwright
 cd /d C:\agent-service
-npx --yes ts-node src/index.ts >> C:\agent-service\agent.log 2>&1
+npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
 "@
 New-Item -ItemType Directory -Force -Path $agentServiceDir | Out-Null
 $startBat | Out-File -FilePath "$agentServiceDir\start-agent.bat" -Encoding ASCII
@@ -337,7 +344,7 @@ $agentAction = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$agentServiceDir\start-agent.bat'`"" `
     -WorkingDirectory $agentServiceDir
 $agentTrigger = New-ScheduledTaskTrigger -AtLogOn -User "unityuser"
-$agentPrincipal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Highest
+$agentPrincipal = New-ScheduledTaskPrincipal -UserId "unityuser" -LogonType Interactive -RunLevel Limited
 $agentSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName $agentTaskName -Action $agentAction -Trigger $agentTrigger -Principal $agentPrincipal -Settings $agentSettings | Out-Null
 Disable-ScheduledTask -TaskName $agentTaskName | Out-Null
@@ -406,7 +413,7 @@ Write-Host "  Pool Overlay: Complete"
 Write-Host "=========================================="
 Write-Host ""
 Write-Host "Added:" -ForegroundColor Cyan
-Write-Host "  - Pool user: unityuser (auto-logon, Administrator)"
+Write-Host "  - Pool user: unityuser (auto-logon, standard user)"
 Write-Host "  - OpenSSH Server (port 2222)"
 Write-Host "  - TightVNC Server (dummy password, updated at assignment)"
 Write-Host "  - Display resolution (1920x1080 at logon)"

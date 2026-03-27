@@ -42,6 +42,11 @@ class PoolAssignResponse(BaseModel):
     ssh_port: int
 
 
+class PoolStartVMRequest(BaseModel):
+    vm_type: Literal["windows", "ubuntu"] = "ubuntu"
+    vm_number: int
+
+
 class PoolReleaseRequest(BaseModel):
     assistant_id: str
 

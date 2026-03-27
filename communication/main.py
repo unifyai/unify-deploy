@@ -22,10 +22,12 @@ from communication.sharepoint.views import router as sharepoint_router
 from communication.unillm import router as unillm_router
 from .dependencies import auth_admin_key
 from common.metrics import setup_metrics
+import logging
 import uvicorn
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
 
 
 @asynccontextmanager
