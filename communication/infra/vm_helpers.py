@@ -1430,7 +1430,11 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
     client = compute_v1.InstancesClient()
 
     try:
-        vm = client.get(project=SETTINGS.vm_project_id, zone=SETTINGS.vm_zone, instance=vm_name)
+        vm = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
     except NotFound:
         raise ValueError(f"VM {vm_name} not found")
 
@@ -1441,7 +1445,11 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
     if github_token:
         _update_instance_metadata(vm_name, {"github-token": github_token})
 
-    op = client.start(project=SETTINGS.vm_project_id, zone=SETTINGS.vm_zone, instance=vm_name)
+    op = client.start(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
     op.result()
     logger.info(f"Manual start: started VM {vm_name}")
     return {"vm_name": vm_name, "status": "starting"}
