@@ -24,7 +24,7 @@ from fastapi import (
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from google.cloud import pubsub_v1, storage
+from google.cloud import storage
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 from twilio.request_validator import RequestValidator
@@ -79,7 +79,6 @@ from .helpers import (
     get_microsoft_user_info,
     start_unity_job,
     store_microsoft_tokens,
-    DEPLOY_ENV,
     ENV_SUFFIX,
     GMAIL_NOTIFICATIONS_TOPIC,
     ORCHESTRA_URL,
@@ -225,7 +224,10 @@ async def twilio_call_webhook(request: Request):
 
     # shared context
     context = await asyncio.to_thread(
-        build_webhook_context, "phone", to_number, from_number
+        build_webhook_context,
+        "phone",
+        to_number,
+        from_number,
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
@@ -518,7 +520,10 @@ async def twilio_sms_webhook(request: Request):
 
     # shared context
     context = await asyncio.to_thread(
-        build_webhook_context, "msg", to_number, from_number
+        build_webhook_context,
+        "msg",
+        to_number,
+        from_number,
     )
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
@@ -588,7 +593,10 @@ async def twilio_whatsapp_webhook(request: Request):
 
     # shared context
     context = await asyncio.to_thread(
-        build_webhook_context, "whatsapp", to_number, from_number
+        build_webhook_context,
+        "whatsapp",
+        to_number,
+        from_number,
     )
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
@@ -1424,7 +1432,6 @@ async def assistant_wakeup_webhook(request: Request):
         assistant_id=assistant_id,
         validate_contact=False,
         ensure_job=True,
-        force_start=True,
     )
 
     return Response(status_code=200)
