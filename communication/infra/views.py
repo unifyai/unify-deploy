@@ -396,7 +396,6 @@ async def create_kubernetes_job(
         )
 
 
-
 # delete kubernetes job
 @router.delete("/job/delete")
 async def delete_kubernetes_job(
