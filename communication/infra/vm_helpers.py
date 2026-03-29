@@ -1201,9 +1201,41 @@ def process_pending_vm_assignments() -> Dict[str, Any]:
                 request={"subscription": sub_path, "ack_ids": [ack_id]},
             )
             acked += 1
-        except (ValueError, RuntimeError):
+        except RuntimeError as e:
+            if "already in progress" in str(e):
+                logger.info(
+                    "VM assignment in progress for %s (Lease held), acking",
+                    assistant_id,
+                )
+                subscriber.acknowledge(
+                    request={"subscription": sub_path, "ack_ids": [ack_id]},
+                )
+                acked += 1
+            elif has_assigned_vm(assistant_id):
+                logger.info(
+                    "VM appeared for %s during retry, acking",
+                    assistant_id,
+                )
+                subscriber.acknowledge(
+                    request={"subscription": sub_path, "ack_ids": [ack_id]},
+                )
+                acked += 1
+            else:
+                logger.info(
+                    "VM pool exhausted for assistant %s, nacking for retry",
+                    assistant_id,
+                )
+                subscriber.modify_ack_deadline(
+                    request={
+                        "subscription": sub_path,
+                        "ack_ids": [ack_id],
+                        "ack_deadline_seconds": 0,
+                    },
+                )
+                nacked += 1
+        except ValueError:
             logger.info(
-                "VM pool still exhausted for assistant %s, nacking for retry",
+                "VM pool exhausted for assistant %s, nacking for retry",
                 assistant_id,
             )
             subscriber.modify_ack_deadline(

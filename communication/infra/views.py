@@ -616,53 +616,6 @@ async def start_job(
             and not j.metadata.deletion_timestamp
         ]
         if already_running:
-            if desktop_mode in ("windows", "ubuntu"):
-                from .vm_helpers import has_assigned_vm
-
-                vm_exists = await asyncio.to_thread(has_assigned_vm, assistant_id)
-                if not vm_exists:
-                    logger.info(
-                        "Assistant %s has container but no VM "
-                        "(fallback — pending queue should have handled this)",
-                        assistant_id,
-                    )
-
-                    async def _ensure_vm(
-                        _aid=assistant_id,
-                        _key=api_key,
-                        _vt=desktop_mode,
-                    ):
-                        from .vm_helpers import publish_pending_vm_assignment
-
-                        loop = asyncio.get_running_loop()
-                        try:
-                            await loop.run_in_executor(
-                                ASSIGN_EXECUTOR,
-                                partial(
-                                    assign_pool_vm,
-                                    assistant_id=_aid,
-                                    unify_apikey=_key,
-                                    vm_type=_vt,
-                                ),
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                "VM assignment failed for %s (%s), queuing for retry",
-                                _aid,
-                                exc,
-                            )
-                            await loop.run_in_executor(
-                                None,
-                                partial(
-                                    publish_pending_vm_assignment,
-                                    _aid,
-                                    _key,
-                                    _vt,
-                                ),
-                            )
-
-                    asyncio.create_task(_ensure_vm())
-
             return {
                 "success": True,
                 "message": "Assistant already has a running container",
