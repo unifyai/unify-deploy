@@ -18,6 +18,7 @@ from .helpers import (
     delete_job,
     get_job_logs,
     patch_job_labels,
+    read_job,
     suspend_job,
 )
 from .vm_helpers import (
@@ -397,6 +398,24 @@ async def create_kubernetes_job(
         )
 
 
+@router.get("/job/{job_name}")
+async def get_kubernetes_job(
+    job_name: str,
+    namespace: str = DEFAULT_NAMESPACE,
+):
+    """Read a single Kubernetes Job's metadata (labels, status)."""
+    try:
+        batch_api, _, _ = await _get_k8s_clients()
+        result = await asyncio.to_thread(read_job, batch_api, job_name, namespace)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read job: {str(e)}")
+
+
 # delete kubernetes job
 @router.delete("/job/delete")
 async def delete_kubernetes_job(
@@ -605,6 +624,7 @@ async def start_job(
             target = idle_running[0]
             labels = dict(target.metadata.labels or {})
             labels["assistant-id"] = sanitized_aid
+            labels["unity-status"] = "starting"
             await asyncio.to_thread(
                 batch_api.patch_namespaced_job,
                 name=target.metadata.name,
