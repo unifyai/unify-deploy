@@ -349,7 +349,14 @@ with open('/etc/vnc/passwd', 'wb') as f:
 os.chmod('/etc/vnc/passwd', 0o640)
 os.system('chgrp unityuser /etc/vnc/passwd')
 PYSCRIPT
-        log "VNC password updated (takes effect on next client connection)"
+        log "VNC password updated, restarting Xvnc to load new password"
+        pkill -9 Xvnc 2>/dev/null || true
+        sleep 2
+        if ss -tlnp | grep -q ':5901 '; then
+            log "Xvnc restarted and listening on port 5901"
+        else
+            log "WARNING: Xvnc not yet listening on port 5901 after restart"
+        fi
     fi
 
     # Agent Service .env (owned by unityuser so the process can read it)
