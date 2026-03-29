@@ -20,7 +20,6 @@ from .helpers import (
     delete_job,
     get_job_logs,
     patch_job_labels,
-    read_job,
     suspend_job,
     acquire_assignment_lease,
     release_assignment_lease,
@@ -396,23 +395,6 @@ async def create_kubernetes_job(
             detail=f"Failed to create Kubernetes job: {str(e)}",
         )
 
-
-@router.get("/job/{job_name}")
-async def get_kubernetes_job(
-    job_name: str,
-    namespace: str = DEFAULT_NAMESPACE,
-):
-    """Read a single Kubernetes Job's metadata (labels, status)."""
-    try:
-        batch_api, _, _ = await _get_k8s_clients()
-        result = await asyncio.to_thread(read_job, batch_api, job_name, namespace)
-        if result is None:
-            raise HTTPException(status_code=404, detail=f"Job not found: {job_name}")
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read job: {str(e)}")
 
 
 # delete kubernetes job
