@@ -93,27 +93,45 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
     topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
 
-    message_data = json.dumps(
+    event_payload = {
+        "assistant_id": assistant_id,
+        "event_type": "assistant_desktop_ready",
+        "desktop_url": f"https://{hostname}",
+        "liveview_url": f"https://{hostname}",
+        "vm_type": vm_type,
+        "message": f"VM ({vm_type}) startup complete",
+    }
+    ts = time.time()
+
+    inbound_data = json.dumps(
         {
             "thread": "unity_system_event",
-            "publish_timestamp": time.time(),
-            "event": {
-                "assistant_id": assistant_id,
-                "event_type": "assistant_desktop_ready",
-                "desktop_url": f"https://{hostname}",
-                "vm_type": vm_type,
-                "message": f"VM ({vm_type}) startup complete",
-            },
+            "publish_timestamp": ts,
+            "event": event_payload,
         },
     ).encode("utf-8")
+    future_inbound = publisher.publish(topic_path, data=inbound_data, thread="inbound")
 
-    future = publisher.publish(topic_path, data=message_data, thread="inbound")
-    message_id = await asyncio.to_thread(future.result)
+    console_data = json.dumps(
+        {
+            "thread": "assistant_desktop_ready",
+            "publish_timestamp": ts,
+            "event": event_payload,
+        },
+    ).encode("utf-8")
+    future_console = publisher.publish(
+        topic_path,
+        data=console_data,
+        thread="assistant_desktop_ready",
+    )
+
+    msg_id_inbound = await asyncio.to_thread(future_inbound.result)
+    msg_id_console = await asyncio.to_thread(future_console.result)
     logger.info(
         f"Published assistant_desktop_ready for assistant {assistant_id} "
-        f"(message_id={message_id})",
+        f"(inbound={msg_id_inbound}, console={msg_id_console})",
     )
-    return message_id
+    return msg_id_console
 
 
 async def _get_k8s_clients():
