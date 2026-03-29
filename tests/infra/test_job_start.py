@@ -9,8 +9,22 @@ These tests verify:
 
 import json
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
+
+
+def _mock_k8s_no_jobs():
+    """Patch _get_k8s_clients to return empty job lists (no duplicates, no idle)."""
+    batch_api = MagicMock()
+    result = MagicMock()
+    result.items = []
+    batch_api.list_namespaced_job.return_value = result
+
+    return patch(
+        "communication.infra.views._get_k8s_clients",
+        new_callable=AsyncMock,
+        return_value=(batch_api, MagicMock(), MagicMock()),
+    )
 
 
 # Create a test client with mocked dependencies
@@ -63,6 +77,20 @@ def _create_job_start_payload(demo_id=""):
 
 class TestJobStartEndpoint:
     """Tests for the /infra/job/start endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_k8s_and_reset_pubsub(self):
+        """start_job calls _get_k8s_clients for duplicate prevention.
+        Also reset the cached pub/sub clients so each test gets fresh mocks.
+        """
+        import communication.infra.views as _views
+
+        _views._pubsub_publisher = None
+        _views._pubsub_subscriber = None
+        with _mock_k8s_no_jobs():
+            yield
+        _views._pubsub_publisher = None
+        _views._pubsub_subscriber = None
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
     @patch("communication.infra.views.pubsub_v1.PublisherClient")

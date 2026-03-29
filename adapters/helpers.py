@@ -777,7 +777,7 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         labels = job.get("labels", {})
         unity_status = labels.get("unity-status")
 
-        if unity_status == "running":
+        if unity_status in ("running", "starting"):
             inventory["running"].append(job)
         elif unity_status == "idle":
             inventory["idle"].append(job)

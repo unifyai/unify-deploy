@@ -73,7 +73,7 @@ def setup_kubernetes_client():
             region = "us-central1"
 
             print(
-                f"🔑 Using service account: {creds_data.get('client_email', 'unknown')}"
+                f"🔑 Using service account: {creds_data.get('client_email', 'unknown')}",
             )
 
             # Build scoped credentials and fetch an initial token
@@ -96,7 +96,7 @@ def setup_kubernetes_client():
                 .locations()
                 .clusters()
                 .get(
-                    name=f"projects/{project_id}/locations/{region}/clusters/{cluster_name}"
+                    name=f"projects/{project_id}/locations/{region}/clusters/{cluster_name}",
                 )
                 .execute()
             )
@@ -181,6 +181,27 @@ def delete_job(
         else:
             print(f"❌ Error deleting job: {e}")
             return False
+
+
+def read_job(
+    batch_api,
+    job_name: str,
+    namespace: str = "default",
+) -> dict | None:
+    """Read a single Unity job's metadata. Returns None if not found."""
+    try:
+        job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
+        return {
+            "job_name": job.metadata.name,
+            "labels": dict(job.metadata.labels or {}),
+            "resource_version": job.metadata.resource_version,
+            "active": job.status.active or 0,
+        }
+    except ApiException as e:
+        if e.status == 404:
+            return None
+        print(f"❌ Error reading job {job_name}: {e}")
+        return None
 
 
 def patch_job_labels(
@@ -281,11 +302,7 @@ def create_unity_job(
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
                         "terminationGracePeriodSeconds": 30,  # Faster termination
-                        "priorityClassName": (
-                            "unity-critical"
-                            if DEPLOY_ENV == "production"
-                            else "unity-high"
-                        ),
+                        "priorityClassName": "unity-idle",
                         "containers": [
                             {
                                 "name": "unity-assistant",
