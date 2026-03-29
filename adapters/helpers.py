@@ -21,6 +21,8 @@ from common.metrics import (
 )
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+_WEBHOOK_BG_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="webhook-bg")
 from google.cloud import pubsub_v1
 
 from twilio.rest import Client as TwilioClient
@@ -1076,10 +1078,8 @@ def build_webhook_context(
     )
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            pool.submit(start_unity_job, assistant_data, channel)
-            pool.submit(replenish_idle_pool, False)
-
+        _WEBHOOK_BG_POOL.submit(start_unity_job, assistant_data, channel)
+        _WEBHOOK_BG_POOL.submit(replenish_idle_pool, False)
         job_started = True
         is_running = True
 
