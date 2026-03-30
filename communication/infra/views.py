@@ -87,51 +87,38 @@ POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
 async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
+    Publishes a single inbound message for Unity. Unity's event handler
+    constructs the correct liveview URL (with ``/desktop/custom.html``)
+    and re-publishes to the ``assistant_desktop_ready`` thread that
+    Console's SSE subscription listens on.
+
     Returns the Pub/Sub message ID.
     """
     publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
     topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
 
-    event_payload = {
-        "assistant_id": assistant_id,
-        "event_type": "assistant_desktop_ready",
-        "desktop_url": f"https://{hostname}",
-        "liveview_url": f"https://{hostname}",
-        "vm_type": vm_type,
-        "message": f"VM ({vm_type}) startup complete",
-    }
-    ts = time.time()
-
-    inbound_data = json.dumps(
+    message_data = json.dumps(
         {
             "thread": "unity_system_event",
-            "publish_timestamp": ts,
-            "event": event_payload,
+            "publish_timestamp": time.time(),
+            "event": {
+                "assistant_id": assistant_id,
+                "event_type": "assistant_desktop_ready",
+                "desktop_url": f"https://{hostname}",
+                "vm_type": vm_type,
+                "message": f"VM ({vm_type}) startup complete",
+            },
         },
     ).encode("utf-8")
-    future_inbound = publisher.publish(topic_path, data=inbound_data, thread="inbound")
 
-    console_data = json.dumps(
-        {
-            "thread": "assistant_desktop_ready",
-            "publish_timestamp": ts,
-            "event": event_payload,
-        },
-    ).encode("utf-8")
-    future_console = publisher.publish(
-        topic_path,
-        data=console_data,
-        thread="assistant_desktop_ready",
-    )
-
-    msg_id_inbound = await asyncio.to_thread(future_inbound.result)
-    msg_id_console = await asyncio.to_thread(future_console.result)
+    future = publisher.publish(topic_path, data=message_data, thread="inbound")
+    message_id = await asyncio.to_thread(future.result)
     logger.info(
         f"Published assistant_desktop_ready for assistant {assistant_id} "
-        f"(inbound={msg_id_inbound}, console={msg_id_console})",
+        f"(message_id={message_id})",
     )
-    return msg_id_console
+    return message_id
 
 
 async def _get_k8s_clients():
