@@ -41,16 +41,30 @@ GCP_PROJECT_ID = os.getenv("TEST_GCP_PROJECT_ID", "gcp-project-runtime")
 VM_PROJECT_ID = os.getenv("TEST_VM_PROJECT_ID", "gcp-project-vms")
 GKE_CLUSTER = os.getenv("TEST_GKE_CLUSTER", "unity")
 GKE_REGION = os.getenv("TEST_GKE_REGION", "us-central1")
-NAMESPACE = os.getenv("TEST_NAMESPACE", "staging")
-VM_ZONE = os.getenv("TEST_VM_ZONE", "us-central1-a")
+
+DEPLOY_ENV = os.getenv("TEST_DEPLOY_ENV", "staging")
+_ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
+_VM_ZONE_MAP = {
+    "production": "us-central1-f",
+    "staging": "us-central1-a",
+    "preview": "us-central1-b",
+}
+_ORCHESTRA_URL_MAP = {
+    "production": "https://api.unify.ai/v0",
+    "staging": "https://internal.example.com/v0",
+    "preview": "https://internal.example.com/v0",
+}
+
+NAMESPACE = os.getenv("TEST_NAMESPACE", DEPLOY_ENV)
+VM_ZONE = os.getenv("TEST_VM_ZONE", _VM_ZONE_MAP.get(DEPLOY_ENV, "us-central1-a"))
 
 COMMS_APP_URL = os.getenv(
     "TEST_COMMS_APP_URL",
-    "https://service.a.run.app",
+    f"https://unity-comms-app{_ENV_SUFFIX}-000000000000.us-central1.run.app",
 )
 ADAPTERS_URL = os.getenv(
     "TEST_ADAPTERS_URL",
-    "https://service.a.run.app",
+    f"https://unity-adapters{_ENV_SUFFIX}-ky4ja5fxna-uc.a.run.app",
 )
 
 ADMIN_KEY = os.getenv("ORCHESTRA_ADMIN_KEY", "")
@@ -59,7 +73,7 @@ UNIFY_KEY = os.getenv("UNIFY_KEY", "")
 
 ORCHESTRA_URL = os.getenv(
     "TEST_ORCHESTRA_URL",
-    "https://internal.example.com/v0",
+    _ORCHESTRA_URL_MAP.get(DEPLOY_ENV, "https://internal.example.com/v0"),
 )
 
 TEST_ASSISTANT_ID = os.getenv("TEST_ASSISTANT_ID", "")
