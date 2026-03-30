@@ -408,7 +408,7 @@ function Invoke-Assign($unifyKey) {
             New-Item -ItemType Directory -Force -Path "C:\Unity" | Out-Null
             cmd /c mklink /J "C:\Unity\Local" "${driveLetter}:\"
             # Grant unityuser full control
-            icacls "C:\Unity\Local" /grant "unityuser:F" /T /Q 2>$null
+            icacls "C:\Unity\Local" /grant "unityuser:(OI)(CI)F" /T /Q 2>$null
             Write-Log "Mounted disk at C:\Unity\Local (drive $driveLetter)"
         } else {
             Write-Log "WARNING: disk device $diskDevice not found after ${maxWait}s"

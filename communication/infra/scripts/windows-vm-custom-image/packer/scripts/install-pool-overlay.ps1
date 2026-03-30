@@ -39,7 +39,7 @@ Write-Host "  Auto-logon configured for unityuser"
 # Create Unity directories
 New-Item -ItemType Directory -Force -Path "C:\Unity" | Out-Null
 New-Item -ItemType Directory -Force -Path "C:\Unity\Local" | Out-Null
-icacls "C:\Unity" /grant "unityuser:F" /T /Q 2>$null
+icacls "C:\Unity" /grant "unityuser:(OI)(CI)F" /T /Q 2>$null
 Write-Host "  Created C:\Unity and C:\Unity\Local"
 
 # Grant unityuser access to service directories
