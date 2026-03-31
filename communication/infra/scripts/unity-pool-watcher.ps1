@@ -407,8 +407,10 @@ function Invoke-Assign($unifyKey) {
             }
             New-Item -ItemType Directory -Force -Path "C:\Unity" | Out-Null
             cmd /c mklink /J "C:\Unity\Local" "${driveLetter}:\"
-            # Grant unityuser full control
-            icacls "C:\Unity\Local" /grant "unityuser:(OI)(CI)F" /T /Q 2>$null
+            # Grant unityuser full control on both the junction and the mounted volume directly
+            # (icacls through a junction modifies the reparse point, not the target)
+            icacls "C:\Unity\Local" /grant "unityuser:(OI)(CI)F" /T /Q
+            icacls "${driveLetter}:\" /grant "unityuser:(OI)(CI)F" /T /Q
             Write-Log "Mounted disk at C:\Unity\Local (drive $driveLetter)"
         } else {
             Write-Log "WARNING: disk device $diskDevice not found after ${maxWait}s"
