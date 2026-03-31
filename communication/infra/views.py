@@ -33,11 +33,13 @@ from .assistant_sessions import (
     merge_conditions,
     patch_assistant_session_status,
     read_bootstrap_secret,
+    vm_refs_match,
 )
 from .vm_helpers import (
     get_dns_hostname,
     _probe_vm_https,
     probe_vm_agent_authenticated,
+    get_assigned_vm_ref,
     _set_pool_labels,
     _update_instance_metadata,
     provision_pool_vm,
@@ -1135,8 +1137,8 @@ async def vm_ready_endpoint(
     assistant_id = request_body.assistant_id
     vm_type = request_body.vm_type
 
-    # Pool VMs pass their own hostname; legacy VMs derive it from assistant_id
-    hostname = request_body.hostname or get_dns_hostname(assistant_id)
+    # Pool VMs pass their own hostname; legacy VMs derive it from assistant_id.
+    requested_hostname = request_body.hostname or get_dns_hostname(assistant_id)
     custom_api = await asyncio.to_thread(get_custom_objects_api)
     if custom_api is None:
         raise HTTPException(
@@ -1188,6 +1190,30 @@ async def vm_ready_endpoint(
             detail="Ready signal API key does not match the active AssistantSession",
         )
 
+    assigned_vm_ref = await asyncio.to_thread(get_assigned_vm_ref, assistant_id)
+    if assigned_vm_ref is None:
+        logger.warning(
+            "Ignoring VM ready from %s for assistant %s: no VM is currently assigned",
+            requested_hostname,
+            assistant_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Ready signal arrived with no assigned VM for this assistant",
+        )
+    if not vm_refs_match({"hostname": requested_hostname}, assigned_vm_ref):
+        logger.warning(
+            "Ignoring stale VM ready from %s for assistant %s; current assigned VM is %s",
+            requested_hostname,
+            assistant_id,
+            assigned_vm_ref.get("hostname"),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Ready signal came from a VM that is no longer assigned to the active AssistantSession",
+        )
+    hostname = str(assigned_vm_ref.get("hostname", requested_hostname))
+
     ready = await asyncio.to_thread(
         probe_vm_agent_authenticated,
         hostname,
@@ -1211,6 +1237,7 @@ async def vm_ready_endpoint(
         SETTINGS.default_namespace,
         assistant_id,
         phase="Active",
+        vm_ref=assigned_vm_ref,
         desktop_url=f"https://{hostname}",
         conditions=merge_conditions(
             existing_conditions,

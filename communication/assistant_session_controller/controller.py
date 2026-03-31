@@ -16,15 +16,17 @@ from communication.infra.assistant_sessions import (
     SESSION_REF_ANNOTATION,
     SESSION_REF_LABEL,
     build_condition,
+    desktop_url_matches_vm_ref,
     get_latest_unity_image,
     merge_conditions,
     patch_assistant_session_status,
     read_bootstrap_secret,
+    vm_refs_match,
 )
 from communication.infra.helpers import create_unity_job
 from communication.infra.vm_helpers import (
     assign_pool_vm,
-    has_assigned_vm,
+    get_assigned_vm_ref,
     release_pool_vm,
     replenish_pool,
 )
@@ -265,6 +267,10 @@ def _update_status_for_session(body: dict) -> None:
             WATCH_NAMESPACE,
             assistant_id,
             phase="Failed",
+            job_ref=None,
+            pod_ref=None,
+            vm_ref=None,
+            desktop_url=None,
             last_error="AssistantSession missing required spec fields",
             conditions=merge_conditions(
                 existing_conditions,
@@ -286,6 +292,10 @@ def _update_status_for_session(body: dict) -> None:
             assistant_id,
             phase="Failed",
             observed_activation_id=activation_id,
+            job_ref=None,
+            pod_ref=None,
+            vm_ref=None,
+            desktop_url=None,
             last_error="Failed to bind a Unity job",
             conditions=merge_conditions(
                 existing_conditions,
@@ -317,6 +327,7 @@ def _update_status_for_session(body: dict) -> None:
             job_ref=job_ref,
             pod_ref=pod_ref,
             vm_ref=None,
+            desktop_url=None,
             conditions=merge_conditions(
                 conditions,
                 build_condition(
@@ -340,6 +351,8 @@ def _update_status_for_session(body: dict) -> None:
             observed_activation_id=activation_id,
             job_ref=job_ref,
             pod_ref=pod_ref,
+            vm_ref=None if new_activation else status.get("vmRef"),
+            desktop_url=None if new_activation else status.get("desktopUrl"),
             last_error="" if new_activation else None,
             conditions=merge_conditions(
                 conditions,
@@ -378,6 +391,8 @@ def _update_status_for_session(body: dict) -> None:
             observed_activation_id=activation_id,
             job_ref=job_ref,
             pod_ref=pod_ref,
+            vm_ref=None,
+            desktop_url=None,
             last_error="" if new_activation else None,
             conditions=merge_conditions(
                 conditions,
@@ -387,8 +402,65 @@ def _update_status_for_session(body: dict) -> None:
         return
 
     vm_ref = None if new_activation else status.get("vmRef")
-    if vm_ref and not has_assigned_vm(assistant_id):
+    desktop_url = None if new_activation else status.get("desktopUrl")
+    assigned_vm_ref = None if new_activation else get_assigned_vm_ref(assistant_id)
+    if assigned_vm_ref is None:
         vm_ref = None
+        desktop_url = None
+        existing_conditions = merge_conditions(
+            existing_conditions,
+            build_condition(
+                "DesktopReady",
+                False,
+                "WaitingForDesktop",
+                "Waiting for authenticated desktop readiness",
+            ),
+            build_condition(
+                "Active",
+                False,
+                "WaitingForDesktop",
+                "Desktop session not ready yet",
+            ),
+        )
+    else:
+        if not vm_refs_match(vm_ref, assigned_vm_ref):
+            vm_ref = assigned_vm_ref
+            desktop_url = None
+            existing_conditions = merge_conditions(
+                existing_conditions,
+                build_condition(
+                    "DesktopReady",
+                    False,
+                    "WaitingForDesktop",
+                    "Waiting for authenticated desktop readiness",
+                ),
+                build_condition(
+                    "Active",
+                    False,
+                    "WaitingForDesktop",
+                    "Desktop session not ready yet",
+                ),
+            )
+        elif desktop_url and not desktop_url_matches_vm_ref(
+            desktop_url,
+            assigned_vm_ref,
+        ):
+            desktop_url = None
+            existing_conditions = merge_conditions(
+                existing_conditions,
+                build_condition(
+                    "DesktopReady",
+                    False,
+                    "WaitingForDesktop",
+                    "Waiting for authenticated desktop readiness",
+                ),
+                build_condition(
+                    "Active",
+                    False,
+                    "WaitingForDesktop",
+                    "Desktop session not ready yet",
+                ),
+            )
 
     if not vm_ref:
         startup_payload = read_bootstrap_secret(_core_api, WATCH_NAMESPACE, secret_name)
@@ -429,6 +501,7 @@ def _update_status_for_session(body: dict) -> None:
                 job_ref=job_ref,
                 pod_ref=pod_ref,
                 vm_ref=vm_ref,
+                desktop_url=None,
                 last_error="",
                 conditions=conditions,
             )
@@ -443,6 +516,8 @@ def _update_status_for_session(body: dict) -> None:
                 observed_activation_id=activation_id,
                 job_ref=job_ref,
                 pod_ref=pod_ref,
+                vm_ref=None,
+                desktop_url=None,
                 last_error=str(exc),
                 conditions=merge_conditions(
                     conditions,
@@ -471,6 +546,8 @@ def _update_status_for_session(body: dict) -> None:
                 observed_activation_id=activation_id,
                 job_ref=job_ref,
                 pod_ref=pod_ref,
+                vm_ref=None,
+                desktop_url=None,
                 last_error=str(exc),
                 conditions=merge_conditions(
                     conditions,
@@ -494,7 +571,7 @@ def _update_status_for_session(body: dict) -> None:
             job_ref=job_ref,
             pod_ref=pod_ref,
             vm_ref=vm_ref,
-            desktop_url=None if new_activation else status.get("desktopUrl"),
+            desktop_url=desktop_url,
             last_error="",
             conditions=merge_conditions(
                 conditions,
@@ -519,7 +596,7 @@ def _update_status_for_session(body: dict) -> None:
         job_ref=job_ref,
         pod_ref=pod_ref,
         vm_ref=vm_ref,
-        desktop_url=None if new_activation else status.get("desktopUrl"),
+        desktop_url=desktop_url,
         last_error="",
         conditions=merge_conditions(
             conditions,

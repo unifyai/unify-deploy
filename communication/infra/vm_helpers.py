@@ -1087,6 +1087,11 @@ def has_assigned_vm(assistant_id: str) -> bool:
 
     Lightweight read-only check — does not modify any state.
     """
+    return get_assigned_vm_ref(assistant_id) is not None
+
+
+def get_assigned_vm_ref(assistant_id: str) -> Optional[Dict[str, Any]]:
+    """Return the currently assigned VM identity for an assistant, if any."""
     client = compute_v1.InstancesClient()
     sanitized = assistant_id.lower().replace("_", "-")
     request = compute_v1.ListInstancesRequest(
@@ -1094,7 +1099,30 @@ def has_assigned_vm(assistant_id: str) -> bool:
         zone=SETTINGS.vm_zone,
         filter=f"labels.pool-role=assigned AND labels.assistant-id={sanitized}",
     )
-    return len(list(client.list(request=request))) > 0
+    assigned = list(client.list(request=request))
+    if not assigned:
+        return None
+    if len(assigned) > 1:
+        logger.warning(
+            "Multiple assigned VMs found for assistant %s: %s",
+            assistant_id,
+            [vm.name for vm in assigned],
+        )
+    vm = assigned[0]
+    labels = dict(vm.labels) if vm.labels else {}
+    hostname = _read_instance_metadata(vm, "hostname")
+    if not hostname:
+        hostname_label = labels.get("pool-hostname", "")
+        hostname = (
+            hostname_label.replace("-", ".")
+            if hostname_label
+            else vm.name + f".{DOMAIN_SUFFIX}"
+        )
+    return {
+        "name": vm.name,
+        "hostname": hostname,
+        "vmType": labels.get("vm-type", "ubuntu"),
+    }
 
 
 def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]:

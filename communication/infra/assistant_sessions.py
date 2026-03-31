@@ -18,6 +18,7 @@ CONTAINER_READY_ANNOTATION = "assistantsession.unify.ai/container-ready"
 
 TERMINAL_PHASES = {"Succeeded", "Failed"}
 ACTIVE_PHASES = {"PendingContainer", "ContainerAssigned", "PendingVM", "Active"}
+_STATUS_UNSET = object()
 
 
 def _sanitize_for_k8s(value: str) -> str:
@@ -188,6 +189,44 @@ def build_condition(
     }
 
 
+def normalize_vm_hostname(value: Any) -> str:
+    hostname = str(value or "").strip()
+    if hostname.startswith("https://"):
+        hostname = hostname.removeprefix("https://")
+    elif hostname.startswith("http://"):
+        hostname = hostname.removeprefix("http://")
+    return hostname.rstrip("/")
+
+
+def vm_refs_match(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> bool:
+    if not left or not right:
+        return False
+
+    left_name = str(left.get("name", "") or "").strip()
+    right_name = str(right.get("name", "") or "").strip()
+    if left_name and right_name and left_name != right_name:
+        return False
+
+    left_hostname = normalize_vm_hostname(left.get("hostname"))
+    right_hostname = normalize_vm_hostname(right.get("hostname"))
+    if left_hostname and right_hostname and left_hostname != right_hostname:
+        return False
+
+    return bool((left_name and right_name) or (left_hostname and right_hostname))
+
+
+def desktop_url_matches_vm_ref(
+    desktop_url: str | None,
+    vm_ref: dict[str, Any] | None,
+) -> bool:
+    if not desktop_url or not vm_ref:
+        return False
+    return vm_refs_match({"hostname": desktop_url}, vm_ref)
+
+
 def merge_conditions(
     existing: list[dict[str, Any]] | None,
     *updates: dict[str, Any],
@@ -211,12 +250,12 @@ def patch_assistant_session_status(
     *,
     phase: str | None = None,
     observed_activation_id: str | None = None,
-    job_ref: dict[str, Any] | None = None,
-    pod_ref: dict[str, Any] | None = None,
-    vm_ref: dict[str, Any] | None = None,
-    desktop_url: str | None = None,
-    last_error: str | None = None,
-    conditions: list[dict[str, Any]] | None = None,
+    job_ref: dict[str, Any] | None | object = _STATUS_UNSET,
+    pod_ref: dict[str, Any] | None | object = _STATUS_UNSET,
+    vm_ref: dict[str, Any] | None | object = _STATUS_UNSET,
+    desktop_url: str | None | object = _STATUS_UNSET,
+    last_error: str | None | object = _STATUS_UNSET,
+    conditions: list[dict[str, Any]] | None | object = _STATUS_UNSET,
 ) -> dict[str, Any]:
     name = assistant_session_name(assistant_id)
     body: dict[str, Any] = {"status": {}}
@@ -225,17 +264,17 @@ def patch_assistant_session_status(
         status["phase"] = phase
     if observed_activation_id is not None:
         status["observedActivationId"] = observed_activation_id
-    if job_ref is not None:
+    if job_ref is not _STATUS_UNSET:
         status["jobRef"] = job_ref
-    if pod_ref is not None:
+    if pod_ref is not _STATUS_UNSET:
         status["podRef"] = pod_ref
-    if vm_ref is not None:
+    if vm_ref is not _STATUS_UNSET:
         status["vmRef"] = vm_ref
-    if desktop_url is not None:
+    if desktop_url is not _STATUS_UNSET:
         status["desktopUrl"] = desktop_url
-    if last_error is not None:
+    if last_error is not _STATUS_UNSET:
         status["lastError"] = last_error
-    if conditions is not None:
+    if conditions is not _STATUS_UNSET:
         status["conditions"] = conditions
 
     current = get_assistant_session(custom_api, namespace, assistant_id) or {}
