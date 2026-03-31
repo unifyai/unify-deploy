@@ -16,14 +16,18 @@ Invariants covered: INV-13 (no orphaned AssistantJobs records)
 """
 
 from datetime import datetime, timezone
+import time
 
 import pytest
 import requests
 
 from .conftest import (
+    _create_test_assistant,
+    _delete_test_assistant,
     NAMESPACE,
     ORCHESTRA_URL,
     SHARED_KEY,
+    cleanup_assistant_jobs,
     count_idle_jobs,
     expire_test_assistant_records,
     list_jobs_with_assistant_id,
@@ -80,7 +84,6 @@ def _create_stale_running_record(
 def test_stale_record_does_not_block_new_startup(
     batch_api,
     comms,
-    real_assistant_data,
     poll,
 ):
     """A stale running=True record in AssistantJobs must NOT prevent
@@ -100,14 +103,17 @@ def test_stale_record_does_not_block_new_startup(
     2. Call /infra/job/start directly on the comms app
     3. Verify: a new container starts (stale record is irrelevant)
     """
-    assistant_id = str(real_assistant_data["assistant_id"])
-    user_id = real_assistant_data["user_id"]
+    test_assistant = _create_test_assistant(int(time.time()) % 100000)
+    assistant_id = str(test_assistant["assistant_id"])
+    user_id = test_assistant["user_id"]
 
     try:
-        existing = list_jobs_with_assistant_id(batch_api, assistant_id)
-        assert not existing, (
-            f"Precondition failed: {len(existing)} active Job(s) already "
-            f"exist for assistant {assistant_id}. Clean up the target environment first."
+        cleanup_assistant_jobs(batch_api, [assistant_id])
+        poll(
+            lambda: len(list_jobs_with_assistant_id(batch_api, assistant_id)) == 0,
+            timeout=180,
+            interval=10,
+            description=f"No running Jobs for assistant {assistant_id} before stale-record test",
         )
 
         record_id = _create_stale_running_record(assistant_id, user_id)
@@ -120,7 +126,7 @@ def test_stale_record_does_not_block_new_startup(
             replenish_pool()
             wait_for_idle_pool(batch_api, min_idle=1, timeout=120)
 
-        resp = start_real_job(comms, real_assistant_data)
+        resp = start_real_job(comms, test_assistant)
 
         started = poll_until(
             lambda: list_jobs_with_assistant_id(batch_api, assistant_id),
@@ -156,3 +162,4 @@ def test_stale_record_does_not_block_new_startup(
             except Exception:
                 pass
         replenish_pool()
+        _delete_test_assistant(assistant_id, batch_api)
