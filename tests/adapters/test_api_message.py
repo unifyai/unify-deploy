@@ -57,8 +57,8 @@ def client(app_module, mock_pubsub, mock_webhook_context):
 
     with (
         patch.object(
-            app_module.pubsub_v1,
-            "PublisherClient",
+            app_module,
+            "get_pubsub_client",
             return_value=mock_pubsub,
         ),
         patch.object(
@@ -272,8 +272,8 @@ class TestApiMessage:
         }
         with (
             patch.object(
-                app_module.pubsub_v1,
-                "PublisherClient",
+                app_module,
+                "get_pubsub_client",
                 return_value=mock_pubsub,
             ),
             patch.object(

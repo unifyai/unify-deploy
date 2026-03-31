@@ -11,6 +11,7 @@ load_dotenv()
 import os
 import base64
 from google.cloud import pubsub_v1
+from twilio.request_validator import RequestValidator
 import json
 
 subscriber = pubsub_v1.SubscriberClient()
@@ -18,6 +19,18 @@ subscription_path = subscriber.subscription_path(
     os.getenv("GCP_PROJECT_ID"),
     "unity-default-test-assistant-staging-sub",
 )
+
+_twilio_validator = RequestValidator(os.getenv("TWILIO_AUTH_TOKEN", ""))
+
+
+def _twilio_headers(base_url: str, endpoint: str, params: dict) -> dict:
+    url = f"{base_url}{endpoint}"
+    sig = _twilio_validator.compute_signature(url, params)
+    return {"X-Twilio-Signature": sig}
+
+
+def _admin_headers() -> dict:
+    return {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
 
 def test_twilio_call_status_webhook(test_client):
@@ -27,7 +40,8 @@ def test_twilio_call_status_webhook(test_client):
     assistant_number = "+0123456789"
     # simulate call status update
     data = {"CallStatus": "in-progress", "From": assistant_number, "To": user_number}
-    response = test_client.make_request("POST", endpoint, data=data)
+    headers = _twilio_headers(test_client.base_url, endpoint, data)
+    response = test_client.make_request("POST", endpoint, data=data, headers=headers)
 
     # endpoint should accept status updates
     assert response.status_code == 200
@@ -62,7 +76,8 @@ def test_twilio_call_webhook(test_client):
     assistant_number = "+0123456789"
     data = {"To": assistant_number, "From": user_number}
 
-    response = test_client.make_request("POST", endpoint, data=data)
+    headers = _twilio_headers(test_client.base_url, endpoint, data)
+    response = test_client.make_request("POST", endpoint, data=data, headers=headers)
 
     print(response.text)
     assert response.status_code == 200
@@ -113,7 +128,8 @@ def test_twilio_sms_webhook(test_client):
         "Body": body,
     }
 
-    response = test_client.make_request("POST", endpoint, data=data)
+    headers = _twilio_headers(test_client.base_url, endpoint, data)
+    response = test_client.make_request("POST", endpoint, data=data, headers=headers)
 
     assert response.status_code == 200
     assert "text/xml" in response.headers.get("content-type", "")
@@ -153,7 +169,8 @@ def test_twilio_whatsapp_webhook(test_client):
         "Body": body,
     }
 
-    response = test_client.make_request("POST", endpoint, data=data)
+    headers = _twilio_headers(test_client.base_url, endpoint, data)
+    response = test_client.make_request("POST", endpoint, data=data, headers=headers)
 
     assert response.status_code == 200
     assert "text/xml" in response.headers.get("content-type", "")
@@ -187,10 +204,11 @@ def test_unify_message_webhook(test_client):
     body = "Hello, this is a unify_message test message"
     json_payload = {
         "assistant_id": "default-test-assistant",
+        "contact_id": 1,
         "body": body,
     }
 
-    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
+    headers = _admin_headers()
     response = test_client.make_request(
         "POST",
         endpoint,
@@ -376,8 +394,9 @@ def test_email_notification_processor(test_client):
 
 def test_idle_job_adapters(test_client):
     """Test successful idle job creation and cleanup."""
+    headers = _admin_headers()
     endpoint = "/scheduled/jobs/create"
-    response = test_client.make_request("POST", endpoint, json={})
+    response = test_client.make_request("POST", endpoint, json={}, headers=headers)
 
     print("Idle job creator:", response.text)
     assert response.status_code == 200
@@ -386,7 +405,7 @@ def test_idle_job_adapters(test_client):
     time.sleep(120)
 
     endpoint = "/scheduled/jobs/cleanup"
-    response = test_client.make_request("POST", endpoint, json={})
+    response = test_client.make_request("POST", endpoint, json={}, headers=headers)
 
     print("Idle job cleaner:", response.text)
     assert response.status_code == 200
@@ -396,7 +415,9 @@ def test_idle_job_adapters(test_client):
 def test_stale_jobs_expire(test_client):
     """Test the daily stale jobs sweep endpoint returns successfully."""
     endpoint = "/scheduled/jobs/expire-stale"
-    response = test_client.make_request("POST", endpoint, json={})
+    response = test_client.make_request(
+        "POST", endpoint, json={}, headers=_admin_headers()
+    )
 
     print("Stale jobs expire:", response.text)
     assert response.status_code == 200
@@ -415,7 +436,9 @@ def test_assistant_update_webhook(test_client):
 
     # Test with form data payload
     data = {"assistant_id": assistant_id}
-    response = test_client.make_request("POST", endpoint, data=data)
+    response = test_client.make_request(
+        "POST", endpoint, data=data, headers=_admin_headers()
+    )
 
     print("Assistant update response:", response.text)
     assert response.status_code == 200
@@ -475,6 +498,7 @@ def test_teams_call_webhook(test_client):
         "to_uri": f"sip:{teams_number}@sbc.unify.ai:5061;user=phone;transport=tls",
         "call_id": call_id,
         "source_ip": "10.0.0.1",
+        "admin_key": os.getenv("ORCHESTRA_ADMIN_KEY"),
     }
 
     response = test_client.make_request("POST", endpoint, json=json_payload)
@@ -494,7 +518,9 @@ def test_assistant_wakeup_webhook(test_client):
     assistant_id = "default-test-assistant"
 
     data = {"assistant_id": assistant_id}
-    response = test_client.make_request("POST", endpoint, data=data)
+    response = test_client.make_request(
+        "POST", endpoint, data=data, headers=_admin_headers()
+    )
 
     print("Assistant wakeup response:", response.text)
     assert response.status_code == 200
@@ -563,7 +589,9 @@ def test_scheduled_email_watches(test_client):
     """Test scheduled email watches endpoint with test mode."""
     endpoint = "/scheduled/email-watches"
 
-    response = test_client.make_request("POST", endpoint, json={"test": True})
+    response = test_client.make_request(
+        "POST", endpoint, json={"test": True}, headers=_admin_headers()
+    )
 
     print("Email watches response:", response.text)
     assert response.status_code == 200
@@ -576,7 +604,9 @@ def test_scheduled_microsoft_tokens(test_client):
     """Test scheduled Microsoft token refresh endpoint with test mode."""
     endpoint = "/scheduled/microsoft-tokens"
 
-    response = test_client.make_request("POST", endpoint, json={"test": True})
+    response = test_client.make_request(
+        "POST", endpoint, json={"test": True}, headers=_admin_headers()
+    )
 
     print("Microsoft tokens response:", response.text)
     assert response.status_code == 200
@@ -590,7 +620,9 @@ def test_scheduled_teams_watches(test_client):
     """Test scheduled Teams watches endpoint with test mode."""
     endpoint = "/scheduled/teams-watches"
 
-    response = test_client.make_request("POST", endpoint, json={"test": True})
+    response = test_client.make_request(
+        "POST", endpoint, json={"test": True}, headers=_admin_headers()
+    )
 
     print("Teams watches response:", response.text)
     assert response.status_code == 200
@@ -758,6 +790,7 @@ def test_teams_call_webhook_invalid_to_uri(test_client):
         "to_uri": "invalid_uri",  # Invalid format - no sip: prefix
         "call_id": "test-call-id",
         "source_ip": "10.0.0.1",
+        "admin_key": os.getenv("ORCHESTRA_ADMIN_KEY"),
     }
 
     response = test_client.make_request("POST", endpoint, json=json_payload)

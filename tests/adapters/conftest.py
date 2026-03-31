@@ -18,6 +18,8 @@ from typing import Generator
 load_dotenv()
 load_dotenv(".env.temp")
 
+os.environ.setdefault("OUTLOOK_WEBHOOK_SECRET", "test-outlook-secret")
+
 # Add the project root to the Python path so tests can import modules
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
