@@ -604,6 +604,7 @@ def claim_idle_container(
         label_selector="app=unity,unity-status=idle",
     )
     candidates = [j for j in idle_jobs.items if j.status.active and j.status.active > 0]
+    candidates.sort(key=lambda j: j.metadata.creation_timestamp, reverse=True)
 
     if not candidates:
         raise RuntimeError("No idle containers available in the pool")

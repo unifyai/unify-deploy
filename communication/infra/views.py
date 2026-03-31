@@ -608,24 +608,56 @@ async def start_job(
         sanitized_aid = str(assistant_id).lower().replace("_", "-")
 
         # ── Check if a container already serves this assistant ────────
+        # Only trust containers that have written a startup-ack label
+        # (proving the container actually initialized). Containers
+        # within the grace period are trusted provisionally. Containers
+        # past the grace period with no ack are zombies — suspend them
+        # and fall through to claim a new one.
+        ACK_GRACE_PERIOD = 90  # seconds
+
         existing = await asyncio.to_thread(
             batch_api.list_namespaced_job,
             namespace=SETTINGS.default_namespace,
             label_selector=f"app=unity,assistant-id={sanitized_aid}",
         )
-        already_running = [
-            j
-            for j in existing.items
-            if j.status.active
-            and j.status.active > 0
-            and not j.metadata.deletion_timestamp
-        ]
-        if already_running:
-            return {
-                "success": True,
-                "message": "Assistant already has a running container",
-                "job_name": already_running[0].metadata.name,
-            }
+        for j in existing.items:
+            if not (j.status.active and j.status.active > 0):
+                continue
+            if j.metadata.deletion_timestamp:
+                continue
+
+            labels = j.metadata.labels or {}
+            has_ack = bool(labels.get("unity-startup-ack"))
+            age = (
+                datetime.now(timezone.utc) - j.metadata.creation_timestamp
+            ).total_seconds()
+
+            if has_ack or age < ACK_GRACE_PERIOD:
+                return {
+                    "success": True,
+                    "message": "Assistant already has a running container",
+                    "job_name": j.metadata.name,
+                }
+
+            logger.warning(
+                "Zombie container %s for assistant %s "
+                "(age=%.0fs, no startup ack). Suspending.",
+                j.metadata.name,
+                assistant_id,
+                age,
+            )
+            try:
+                await asyncio.to_thread(
+                    batch_api.patch_namespaced_job,
+                    name=j.metadata.name,
+                    namespace=SETTINGS.default_namespace,
+                    body={"spec": {"suspend": True}},
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to suspend zombie %s",
+                    j.metadata.name,
+                )
 
         # ── Acquire assignment Lease (atomic distributed lock) ────────
         holder_id = f"start-job-{uuid.uuid4().hex[:8]}"
