@@ -102,7 +102,7 @@ def _active_job_for_session(session_name: str):
             and not job.metadata.deletion_timestamp
         ):
             return job
-    return jobs[0] if jobs else None
+    return None
 
 
 def _current_pod_ref(job_name: str) -> dict | None:
@@ -382,6 +382,9 @@ def _update_status_for_session(body: dict) -> None:
         return
 
     vm_ref = status.get("vmRef")
+    if vm_ref and not has_assigned_vm(assistant_id):
+        vm_ref = None
+
     if not vm_ref:
         startup_payload = read_bootstrap_secret(_core_api, WATCH_NAMESPACE, secret_name)
         api_key = str(startup_payload.get("api_key", ""))

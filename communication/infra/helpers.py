@@ -6,6 +6,7 @@ import os
 import tempfile
 import threading
 from kubernetes import client as k8s_client
+from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
 from google.oauth2 import service_account as google_sa
 import google.auth.transport.requests
@@ -67,8 +68,18 @@ def setup_kubernetes_client():
 
             creds_json = os.getenv("GCP_SA_KEY")
             if not creds_json:
-                print("❌ GCP_SA_KEY environment variable not set")
-                return None, None, None, None
+                try:
+                    k8s_config.load_incluster_config()
+                    batch_api = k8s_client.BatchV1Api()
+                    core_api = k8s_client.CoreV1Api()
+                    networking_api = k8s_client.NetworkingV1Api()
+                    coord_api = k8s_client.CoordinationV1Api()
+                    _k8s_clients = (batch_api, core_api, networking_api, coord_api)
+                    print("✅ Kubernetes client setup complete (in-cluster)!")
+                    return _k8s_clients
+                except Exception:
+                    print("❌ GCP_SA_KEY environment variable not set")
+                    return None, None, None, None
 
             creds_data = json.loads(creds_json)
             project_id = creds_data.get("project_id", SETTINGS.gcp_project_id)
