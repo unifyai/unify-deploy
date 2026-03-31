@@ -16,10 +16,12 @@ import time
 
 import pytest
 import requests
+from kubernetes.client.rest import ApiException
 
 from .conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
+    NAMESPACE,
     cleanup_assistant_jobs,
     expire_test_assistant_records,
     list_assigned_vms,
@@ -27,7 +29,6 @@ from .conftest import (
     pull_outbound_messages,
     replenish_pool,
     send_test_message,
-    wait_for_container_done,
     wait_for_container_running,
 )
 
@@ -44,6 +45,31 @@ def _wakeup(assistant_id: str):
         timeout=30,
     )
     return resp, time.monotonic() - t0
+
+
+def _wait_for_job_inactive(
+    batch_api,
+    job_name: str,
+    timeout: float = 180,
+    interval: float = 10,
+):
+    """Wait for the specific stopped Job to become inactive."""
+
+    def _check():
+        try:
+            job = batch_api.read_namespaced_job(name=job_name, namespace=NAMESPACE)
+        except ApiException as exc:
+            if exc.status == 404:
+                return True
+            raise
+        return not (job.status.active and job.status.active > 0)
+
+    poll_until(
+        _check,
+        timeout=timeout,
+        interval=interval,
+        description=f"Job {job_name} to become inactive",
+    )
 
 
 class TestE2EFlows:
@@ -165,7 +191,7 @@ class TestE2EFlows:
             cleanup_assistant_jobs(batch_api, [assistant_id])
             replenish_pool()
 
-    @pytest.mark.timeout(600)
+    @pytest.mark.timeout(300)
     def test_session_resume_after_container_stop(
         self,
         real_assistant_data,
@@ -212,7 +238,12 @@ class TestE2EFlows:
                 stop_resp.status_code == 200
             ), f"Stop failed: {stop_resp.status_code} {stop_resp.text}"
 
-            wait_for_container_done(batch_api, assistant_id, timeout=180, interval=10)
+            _wait_for_job_inactive(
+                batch_api,
+                first_job_name,
+                timeout=180,
+                interval=10,
+            )
             expire_test_assistant_records(assistant_id)
             print("[Resume] First container stopped")
 
