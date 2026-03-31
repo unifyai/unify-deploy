@@ -9,6 +9,7 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 - SSH key generation for file sync
 """
 
+from datetime import datetime, timezone
 import logging
 import random
 import threading
@@ -52,6 +53,7 @@ from .vm_config import (
     POOL_SSH_USERNAME,
     POOL_TARGET_IDLE,
     POOL_TARGET_STOPPED,
+    POOL_BOOT_TIMEOUT_SECONDS,
     POOL_ASSISTANT_DISK_SIZE_GB,
     POOL_ASSISTANT_DISK_TYPE,
     POOL_VM_NAME_PREFIX,
@@ -96,6 +98,116 @@ def _get_vm_claim_lock(vm_name: str) -> threading.Lock:
         if vm_name not in _vm_claim_locks:
             _vm_claim_locks[vm_name] = threading.Lock()
         return _vm_claim_locks[vm_name]
+
+
+def _parse_gce_timestamp(value: str | None) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _instance_boot_reference_time(instance) -> Optional[datetime]:
+    return _parse_gce_timestamp(
+        getattr(instance, "last_start_timestamp", None)
+        or getattr(instance, "creation_timestamp", None),
+    )
+
+
+def _is_stale_inflight_vm(
+    instance,
+    now: Optional[datetime] = None,
+    timeout_seconds: int = POOL_BOOT_TIMEOUT_SECONDS,
+) -> bool:
+    labels = dict(instance.labels) if instance.labels else {}
+    if labels.get("pool-role") not in ("starting", "provisioning"):
+        return False
+    reference_time = _instance_boot_reference_time(instance)
+    if reference_time is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - reference_time).total_seconds() > timeout_seconds
+
+
+def _quarantine_pool_vm(
+    client: compute_v1.InstancesClient,
+    instance,
+    *,
+    reason: str,
+) -> Optional[str]:
+    labels = dict(instance.labels) if instance.labels else {}
+    current_role = labels.get("pool-role", "")
+    if current_role == "quarantined":
+        return None
+
+    ok = _set_pool_labels(
+        client,
+        instance.name,
+        {
+            "pool-role": "quarantined",
+            "assistant-id": "",
+        },
+        expected_role=current_role or None,
+    )
+    if not ok:
+        logger.warning(
+            "Quarantine: label CAS failed for %s (expected role %s)",
+            instance.name,
+            current_role,
+        )
+        return None
+
+    if instance.status in ("RUNNING", "STAGING"):
+        try:
+            client.stop(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                instance=instance.name,
+            ).result()
+        except Exception as exc:
+            logger.error(
+                "Quarantine: failed stopping %s after quarantine: %s",
+                instance.name,
+                exc,
+            )
+
+    action = f"Quarantined unhealthy VM {instance.name}: {reason}"
+    logger.warning(action)
+    return action
+
+
+def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        filter=f"labels.vm-type={vm_type}",
+    )
+    now = datetime.now(timezone.utc)
+    actions: list[str] = []
+    for instance in client.list(request=request):
+        if not _is_stale_inflight_vm(instance, now=now):
+            continue
+        reference_time = _instance_boot_reference_time(instance)
+        if reference_time is None:
+            continue
+        age_seconds = int((now - reference_time).total_seconds())
+        action = _quarantine_pool_vm(
+            client,
+            instance,
+            reason=(
+                f"pool-role={dict(instance.labels or {}).get('pool-role', '')}, "
+                f"status={instance.status}, age={age_seconds}s"
+            ),
+        )
+        if action:
+            actions.append(action)
+    return actions
 
 
 def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
@@ -1268,7 +1380,11 @@ def _list_pool_state(vm_type: str):
         for vm in pool_vms
         if vm.labels.get("pool-role") == "idle" and vm.status == "RUNNING"
     ]
-    stopped_vms = [vm for vm in pool_vms if vm.status == "TERMINATED"]
+    stopped_vms = [
+        vm
+        for vm in pool_vms
+        if vm.labels.get("pool-role") == "stopped" and vm.status == "TERMINATED"
+    ]
     in_flight_vms = [
         vm
         for vm in pool_vms
@@ -1398,7 +1514,8 @@ def replenish_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
 
 
 def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
-    _scrub_inconsistent_vms(vm_type)
+    actions = _quarantine_stale_inflight_vms(vm_type)
+    actions.extend(_scrub_inconsistent_vms(vm_type))
 
     client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
         vm_type,
@@ -1409,7 +1526,6 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
 
     target = max(POOL_TARGET_IDLE, pending)
     deficit = target - len(idle_vms) - len(in_flight_vms) + extra_demand
-    actions: list[str] = []
 
     logger.info(
         f"Replenish {vm_type}: target={target} idle={len(idle_vms)} "

@@ -12,6 +12,7 @@ Configuration:
 import json
 import os
 import time
+from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -238,18 +239,27 @@ def gce_client():
     Returns None if GCE access fails (VM tests will skip).
     """
     from google.cloud import compute_v1
-    import subprocess
 
     try:
-        token = subprocess.check_output(
-            ["gcloud", "auth", "print-access-token"],
-            text=True,
-            timeout=10,
-        ).strip()
-
         from google.oauth2 import credentials as oauth2_credentials
 
-        creds = oauth2_credentials.Credentials(token=token)
+        def _refresh_access_token(request=None, scopes=None):
+            import subprocess
+
+            token = subprocess.check_output(
+                ["gcloud", "auth", "print-access-token"],
+                text=True,
+                timeout=10,
+            ).strip()
+            expiry = datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=50)
+            return token, expiry
+
+        token, expiry = _refresh_access_token()
+        creds = oauth2_credentials.Credentials(
+            token=token,
+            expiry=expiry,
+            refresh_handler=_refresh_access_token,
+        )
         client = compute_v1.InstancesClient(credentials=creds)
 
         request = compute_v1.ListInstancesRequest(
@@ -594,7 +604,7 @@ def expire_test_assistant_records(assistant_id: str):
 
 
 def cleanup_assistant_jobs(batch_api, assistant_ids: list[str]):
-    """Delete all Jobs and expire all records for a list of assistant IDs."""
+    """Delete Jobs, release VMs, and expire records for assistant IDs."""
     for aid in assistant_ids:
         expire_test_assistant_records(str(aid))
         sanitized = str(aid).lower().replace("_", "-")
@@ -612,6 +622,15 @@ def cleanup_assistant_jobs(batch_api, assistant_ids: list[str]):
                     )
                 except Exception:
                     pass
+        except Exception:
+            pass
+        try:
+            requests.post(
+                f"{COMMS_APP_URL}/infra/vm/pool/release",
+                json={"assistant_id": str(aid)},
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=30,
+            )
         except Exception:
             pass
 
@@ -857,6 +876,16 @@ def _delete_test_assistant(agent_id: str, batch_api=None):
     Swallows all exceptions so teardown never aborts mid-way.
     """
     int_id = str(agent_id).split(".")[0]
+
+    try:
+        requests.post(
+            f"{COMMS_APP_URL}/infra/vm/pool/release",
+            json={"assistant_id": str(agent_id)},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=30,
+        )
+    except Exception:
+        pass
 
     try:
         resp = requests.delete(

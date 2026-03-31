@@ -30,8 +30,12 @@ _ADMIN_HEADERS = {"Authorization": f"Bearer {ADMIN_KEY}"}
 pytestmark = [pytest.mark.integration]
 
 
+def _vm_test_assistant_id(prefix: str) -> str:
+    return f"{prefix}-{int(time.time())}"
+
+
 @pytest.mark.invariant("INV-9", "INV-10")
-def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
+def test_vm_assign_sets_labels_and_metadata(comms, gce_client, poll):
     """Assigning a pool VM sets correct GCE labels and metadata.
 
     Verifies:
@@ -39,7 +43,7 @@ def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
     - VM metadata: unify-key is set (non-empty)
     """
     require_gce(gce_client)
-    assistant_id = test_id
+    assistant_id = _vm_test_assistant_id("vm-assign-test")
 
     try:
         resp = comms.post(
@@ -75,7 +79,7 @@ def test_vm_assign_sets_labels_and_metadata(comms, gce_client, test_id, poll):
 
 
 @pytest.mark.invariant("INV-11")
-def test_vm_auth_key_matches_after_assignment(comms, gce_client, test_id, poll):
+def test_vm_auth_key_matches_after_assignment(comms, gce_client, poll):
     """After VM assignment, the agent-service on the VM should accept the
     expected bearer token.
 
@@ -90,7 +94,7 @@ def test_vm_auth_key_matches_after_assignment(comms, gce_client, test_id, poll):
     """
     require_gce(gce_client)
     assert UNIFY_KEY, "UNIFY_KEY must be set for this test"
-    assistant_id = test_id
+    assistant_id = _vm_test_assistant_id("vm-auth-test")
 
     try:
         resp = comms.post(
@@ -114,7 +118,7 @@ def test_vm_auth_key_matches_after_assignment(comms, gce_client, test_id, poll):
                     timeout=10,
                     verify=False,
                 )
-                return r.status_code != 502
+                return 200 <= r.status_code < 300
             except Exception:
                 return False
 
@@ -133,9 +137,8 @@ def test_vm_auth_key_matches_after_assignment(comms, gce_client, test_id, poll):
             verify=False,
         )
 
-        assert r.status_code != 401, (
-            f"Auth mismatch: agent-service returned 401. "
-            f"The UNIFY_KEY on the VM does not match the key we sent. "
+        assert 200 <= r.status_code < 300, (
+            f"Authenticated agent-service probe failed with {r.status_code}. "
             f"Response: {r.text}"
         )
 
@@ -144,7 +147,7 @@ def test_vm_auth_key_matches_after_assignment(comms, gce_client, test_id, poll):
 
 
 @pytest.mark.invariant("INV-10")
-def test_vm_release_resets_labels(comms, gce_client, test_id, poll):
+def test_vm_release_resets_labels(comms, gce_client, poll):
     """Releasing a VM returns it to idle with correct labels.
 
     Verifies:
@@ -152,7 +155,7 @@ def test_vm_release_resets_labels(comms, gce_client, test_id, poll):
     - Idempotency: releasing again returns success
     """
     require_gce(gce_client)
-    assistant_id = test_id
+    assistant_id = _vm_test_assistant_id("vm-release-test")
 
     resp = comms.post(
         "/infra/vm/pool/assign",
@@ -229,6 +232,7 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
     from google.cloud import compute_v1
 
     client = compute_v1.InstancesClient()
+    cleaned_starting_vms: set[str] = set()
 
     # Clean up stuck starting VMs from previous runs so the deficit
     # calculation is accurate and rebalance actually starts a VM.
@@ -251,7 +255,8 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
                 instance=stuck.name,
             )
             labels = dict(fresh.labels or {})
-            labels["pool-role"] = "stopped"
+            labels["assistant-id"] = ""
+            labels["pool-role"] = "quarantined"
             client.set_labels(
                 project="gcp-project-vms",
                 zone=VM_ZONE,
@@ -261,11 +266,16 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
                     labels=labels,
                 ),
             ).result()
-            print(f"  Cleaned up stuck starting VM: {stuck.name}")
+            cleaned_starting_vms.add(stuck.name)
+            print(f"  Quarantined stuck starting VM: {stuck.name}")
         except Exception:
             pass
 
-    stopped = list_stopped_vms(gce_client)
+    stopped = [
+        vm for vm in list_stopped_vms(gce_client) if vm.name not in cleaned_starting_vms
+    ]
+    if not stopped:
+        stopped = list_stopped_vms(gce_client)
     if not stopped:
         pytest.skip("No stopped (TERMINATED) VMs available")
 
@@ -372,7 +382,6 @@ def _release_all_vms_for(gce_client, assistant_id: str):
 
 def test_concurrent_assign_produces_at_most_one_vm(
     gce_client,
-    real_assistant_data,
 ):
     """Concurrent VM assign calls for the same assistant must produce at
     most one assigned VM. Without serialization, each call would claim a
@@ -383,8 +392,8 @@ def test_concurrent_assign_produces_at_most_one_vm(
     """
     require_gce(gce_client)
 
-    assistant_id = str(real_assistant_data["assistant_id"])
-    api_key = real_assistant_data.get("api_key", "test-key")
+    assistant_id = _vm_test_assistant_id("vm-concurrent-test")
+    api_key = UNIFY_KEY or "test-key"
 
     _release_all_vms_for(gce_client, assistant_id)
     time.sleep(2)
