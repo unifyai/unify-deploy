@@ -257,6 +257,10 @@ def check_contact_details(
     """
     Check if the contact details are valid.
 
+    WhatsApp is handled separately via Orchestra's resolve endpoint and
+    never reaches this function (the adapter passes validate_contact=False
+    for WhatsApp).
+
     Args:
         email_address: The email address of the contact.
         phone_number: The phone number of the contact.
@@ -272,8 +276,6 @@ def check_contact_details(
     if medium == "email" and user_email == email_address:
         return True
     if medium in ["msg", "phone"] and user_number == phone_number:
-        return True
-    if medium == "whatsapp" and user_whatsapp_number == phone_number:
         return True
     return False
 

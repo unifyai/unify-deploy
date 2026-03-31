@@ -2,7 +2,8 @@
 Unit tests for the adapters helper functions.
 
 These tests verify:
-- Contact handling logic after the whatsapp_number field was removed
+- Contact handling logic (WhatsApp is validated via Orchestra's resolve endpoint,
+  not through check_contact_details)
 - Demo ID propagation for demo assistants (passed as string to Comms)
 """
 
@@ -59,24 +60,13 @@ def test_get_default_contacts_includes_phone_number():
 # --- check_contact_details tests ---
 
 
-def test_check_contact_details_whatsapp_uses_user_whatsapp_number():
-    """Verify WhatsApp matching uses user_whatsapp_number parameter."""
+def test_check_contact_details_whatsapp_not_handled():
+    """WhatsApp validation is handled by Orchestra's resolve endpoint, not here."""
     result = check_contact_details(
         phone_number="+1111111111",
         medium="whatsapp",
-        user_number="+2222222222",  # Different from phone_number
-        user_whatsapp_number="+1111111111",  # Matches phone_number
-    )
-    assert result is True
-
-
-def test_check_contact_details_whatsapp_does_not_match_user_number():
-    """Verify WhatsApp doesn't match against user_number."""
-    result = check_contact_details(
-        phone_number="+1111111111",
-        medium="whatsapp",
-        user_number="+1111111111",  # Matches phone_number but shouldn't be used
-        user_whatsapp_number="+2222222222",  # Different
+        user_number="+2222222222",
+        user_whatsapp_number="+1111111111",
     )
     assert result is False
 

@@ -578,7 +578,6 @@ async def twilio_whatsapp_webhook(request: Request):
     logger.info("twilio_whatsapp_webhook function started")
     form_data = await request.form()
 
-    # get twilio number and caller number
     to_number = form_data.get("To", "") or ""
     from_number = form_data.get("From", "") or ""
     body = form_data.get("Body", "") or ""
@@ -586,18 +585,19 @@ async def twilio_whatsapp_webhook(request: Request):
         f"Received WhatsApp message from {_redact_phone(from_number)} to {_redact_phone(to_number)}",
     )
 
-    # shared context
-    context = await asyncio.to_thread(
-        build_webhook_context,
-        "whatsapp",
-        to_number,
-        from_number,
-    )
-    assistant_data = context["assistant"]
-    assistant_id = assistant_data["assistant_id"]
-    contacts = context["contacts"]
+    # Resolve route via Orchestra (handles both user and external contact lookup)
+    pool_number = to_number.replace("whatsapp:", "").strip()
+    sender = from_number.replace("whatsapp:", "").strip()
 
-    if not context["is_valid_contact"]:
+    async with httpx.AsyncClient() as client:
+        resolve_resp = await client.get(
+            f"{SETTINGS.orchestra_url}/admin/whatsapp/resolve",
+            params={"pool_number": pool_number, "sender": sender},
+            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+            timeout=10.0,
+        )
+
+    if resolve_resp.status_code == 404:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -605,13 +605,32 @@ async def twilio_whatsapp_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    if resolve_resp.status_code >= 400:
+        logger.error(
+            f"WhatsApp resolve failed: {resolve_resp.status_code} {resolve_resp.text}",
+        )
+        return Response(content="Error resolving WhatsApp route", status_code=500)
 
-    # set up response
+    resolve_data = resolve_resp.json()
+    resolved_assistant_id = str(resolve_data["assistant_id"])
+    role = resolve_data["role"]
+
+    # Build context using the resolved assistant (skip contact validation —
+    # the resolve endpoint already confirmed this sender is valid).
+    context = await asyncio.to_thread(
+        build_webhook_context,
+        "whatsapp",
+        to_number,
+        from_number,
+        assistant_id=resolved_assistant_id,
+        validate_contact=False,
+    )
+    assistant_data = context["assistant"]
+    assistant_id = assistant_data["assistant_id"]
+    contacts = context["contacts"]
+
     resp_user = MessagingResponse()
 
-    # publish to pubsub
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
@@ -628,6 +647,7 @@ async def twilio_whatsapp_webhook(request: Request):
                         "to_number": to_number,
                         "from_number": from_number,
                         "body": body,
+                        "role": role,
                     },
                 },
             ).encode("utf-8"),

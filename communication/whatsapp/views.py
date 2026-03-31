@@ -1,67 +1,109 @@
-import os
-import json
 import base64
+import json
+import logging
+import os
+
 import httpx
-from fastapi import APIRouter, Form, Request, HTTPException
+from fastapi import APIRouter, Form, HTTPException, Request
+
 from communication.helpers import get_twilio_client
 from common.settings import SETTINGS
-from dotenv import load_dotenv
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
-router = APIRouter()
+auth_router = APIRouter()
+unauth_router = APIRouter()
 
 
-# Endpoints - Form format
-@router.post("/status")
+def _admin_headers() -> dict:
+    return {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+
+
+def _twilio_basic_auth_headers() -> dict:
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    auth_str = f"{account_sid}:{auth_token}"
+    b64_auth = base64.b64encode(auth_str.encode()).decode()
+    return {"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"}
+
+
+async def _resolve_pool_number(assistant_id: int, contact_number: str) -> str:
+    """Get or create a route for an outbound message, returning the pool number."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{SETTINGS.orchestra_url}/admin/whatsapp/route",
+            json={"assistant_id": assistant_id, "contact_number": contact_number},
+            headers=_admin_headers(),
+            timeout=10.0,
+        )
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    return resp.json()["pool_number"]
+
+
+# ---------------------------------------------------------------------------
+# Unauthenticated endpoints (Twilio status callbacks)
+# ---------------------------------------------------------------------------
+
+
+@unauth_router.post("/status")
 async def check_whatsapp_status(
     MessageStatus: str = Form(...),
     To: str = Form(...),
     From: str = Form(...),
 ):
-    to = To or ""
-    frm = From or ""
-    msg_status = MessageStatus or ""
     return {
         "status": True,
-        "message_status": msg_status,
-        "to_number": to,
-        "from_number": frm,
+        "message_status": MessageStatus or "",
+        "to_number": To or "",
+        "from_number": From or "",
     }
 
 
-# Endpoints - JSON format
-@router.post("/send-text")
+# ---------------------------------------------------------------------------
+# Authenticated endpoints (admin API)
+# ---------------------------------------------------------------------------
+
+
+@auth_router.post("/send-text")
 async def send_text(request: Request):
     data = await request.json()
-    receiver_number = data.get("to")
-    twilio_number = data.get("from")
-    body = data.get("body")
+    to = data["to"]
+    body = data["body"]
+    assistant_id = data["assistant_id"]
+
+    pool_number = await _resolve_pool_number(assistant_id, to)
 
     twilio_client = get_twilio_client()
     twilio_client.messages.create(
-        to=f"whatsapp:{receiver_number}",
-        from_=f"whatsapp:{twilio_number}",
+        to=f"whatsapp:{to}",
+        from_=f"whatsapp:{pool_number}",
         body=body,
         status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
     )
     return {"success": True}
 
 
-@router.post("/send-greeting")
+@auth_router.post("/send-greeting")
 async def send_greeting(request: Request):
     data = await request.json()
-    receiver_number = data.get("to")
-    twilio_number = data.get("from")
-    user_name = data.get("user_name")
-    agent_name = data.get("agent_name")
-    body = data.get("body")
+    to = data["to"]
+    assistant_id = data["assistant_id"]
+    user_name = data.get("user_name", "")
+    agent_name = data.get("agent_name", "")
+    body = data.get("body", "")
+
+    pool_number = await _resolve_pool_number(assistant_id, to)
 
     twilio_client = get_twilio_client()
     twilio_client.messages.create(
         content_sid="HX8f626deb83316ab8fd355a2866dddc24",
-        to=f"whatsapp:{receiver_number}",
-        from_=f"whatsapp:{twilio_number}",
+        to=f"whatsapp:{to}",
+        from_=f"whatsapp:{pool_number}",
         content_variables=json.dumps(
             {
                 "user_name": user_name,
@@ -74,14 +116,12 @@ async def send_greeting(request: Request):
     return {"success": True}
 
 
-@router.post("/create")
+@auth_router.post("/create")
 async def create_whatsapp_sender(request: Request):
     data = await request.json()
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
     url = "https://messaging.twilio.com/v2/Channels/Senders"
     payload = {
-        "sender_id": f"whatsapp:{data.get('phone_number')}",
+        "sender_id": f"whatsapp:{data['phone_number']}",
         "profile": {
             "name": "Unify Assistant",
             "logo_url": "https://console.unify.ai/ivy_logo_only.png",
@@ -94,9 +134,7 @@ async def create_whatsapp_sender(request: Request):
             ),
         },
     }
-    auth_str = f"{account_sid}:{auth_token}"
-    b64_auth = base64.b64encode(auth_str.encode()).decode()
-    headers = {"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"}
+    headers = _twilio_basic_auth_headers()
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers)
     if resp.status_code >= 400:
@@ -104,127 +142,43 @@ async def create_whatsapp_sender(request: Request):
             status_code=resp.status_code,
             detail=f"Failed to create WhatsApp sender: {resp.text}",
         )
-    resp_data = resp.json()
-    return {"sid": resp_data.get("sid")}
+    return {"sid": resp.json().get("sid")}
 
 
-@router.delete("/delete")
+@auth_router.delete("/delete")
 async def delete_whatsapp_sender(request: Request):
     data = await request.json()
-    sid = data.get("sid")
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    sid = data["sid"]
     url = f"https://messaging.twilio.com/v2/Channels/Senders/{sid}"
-    auth_str = f"{account_sid}:{auth_token}"
-    b64_auth = base64.b64encode(auth_str.encode()).decode()
-    headers = {"Authorization": f"Bearer {b64_auth}"}
+    headers = _twilio_basic_auth_headers()
     async with httpx.AsyncClient() as client:
         resp = await client.delete(url, headers=headers)
     if resp.status_code >= 400:
-        text = await resp.text()
         raise HTTPException(
             status_code=resp.status_code,
-            detail=f"Failed to delete WhatsApp sender: {text}",
+            detail=f"Failed to delete WhatsApp sender: {resp.text}",
         )
     return {"success": True}
 
 
-@router.post("/assign")
+@auth_router.post("/assign")
 async def assign_whatsapp_sender(request: Request):
+    """Assign a pool number to an assistant via Orchestra."""
     data = await request.json()
-    user_whatsapp_number = data.get("user_whatsapp_number")
-    conflict_whatsapp_number = data.get("conflict_whatsapp_number", None)
+    assistant_id = data["assistant_id"]
+
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{SETTINGS.orchestra_url}/admin/assistant?user_whatsapp_number={user_whatsapp_number}",
-            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        resp = await client.post(
+            f"{SETTINGS.orchestra_url}/admin/whatsapp/assign",
+            json={"assistant_id": assistant_id},
+            headers=_admin_headers(),
+            timeout=15.0,
         )
     if resp.status_code >= 400:
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail=f"Failed to fetch assistants: {resp.text}",
-        )
-    resp_data = resp.json()
-    assistants_whatsapp_numbers = [
-        assistant["whatsapp_number"] for assistant in resp_data["info"]
-    ]
-    if conflict_whatsapp_number:
-        assistants_whatsapp_numbers += [conflict_whatsapp_number]
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        raise HTTPException(status_code=resp.status_code, detail=detail)
 
-    # no twilio api for listing whatsapp numbers, manual for now
-    all_whatsapp_numbers = ["+15550100001", "+15550100002"]
-    available_whatsapp_number = None
-    for number in all_whatsapp_numbers:
-        if number not in assistants_whatsapp_numbers:
-            print(f"Whatsapp number {number} is not assigned to any assistant")
-            available_whatsapp_number = number
-            break
-
-    if not available_whatsapp_number:
-        raise HTTPException(
-            status_code=400,
-            detail="No available WhatsApp number found",
-        )
-
-    return {"whatsapp_number": available_whatsapp_number}
-
-
-@router.get("/conflict")
-async def get_conflict_whatsapp_number(request: Request):
-    data = await request.json()
-    user_id = data.get("user_id")
-    assistant_whatsapp_number = data.get("assistant_whatsapp_number")
-    target_whatsapp_number = data.get("target_whatsapp_number")
-
-    # search if target has an assistant with the same whatsapp number
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{SETTINGS.orchestra_url}/admin/assistant?user_whatsapp_number={target_whatsapp_number}&assistant_whatsapp_number={assistant_whatsapp_number}",
-            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-        )
-    if resp.status_code >= 400:
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail=f"Failed to fetch assistants: {resp.text}",
-        )
-    resp_data = resp.json()
-    found_assistants = resp_data.get("info", [])
-    if found_assistants:
-        return {"conflict": "both"}
-
-    # search if target is in any other user's contact list
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{SETTINGS.orchestra_url}/admin/contacts?whatsapp_number={target_whatsapp_number}",
-            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-        )
-    if resp.status_code >= 400:
-        raise HTTPException(
-            status_code=resp.status_code,
-            detail=f"Failed to fetch assistants: {resp.text}",
-        )
-    found_contacts = resp.json()
-    if found_contacts:
-        found_target_user_ids = set([contact["user_id"] for contact in found_contacts])
-        for uid in found_target_user_ids:
-            if uid == user_id:
-                continue
-            # check if user has an assistant
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(
-                    f"{SETTINGS.orchestra_url}/admin/assistant/user/{uid}&assistant_whatsapp_number={assistant_whatsapp_number}",
-                    headers={
-                        "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
-                    },
-                )
-            if resp.status_code >= 400:
-                raise HTTPException(
-                    status_code=resp.status_code,
-                    detail=f"Failed to fetch assistants: {resp.text}",
-                )
-            resp_data = resp.json()
-            if resp_data.get("info", []):
-                return {"conflict": "single"}
-
-    # no conflict found
-    return {"conflict": "none"}
+    return resp.json()
