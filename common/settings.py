@@ -8,7 +8,6 @@ from here instead of calling ``os.getenv`` directly::
     from common.settings import SETTINGS
 
     namespace = SETTINGS.default_namespace
-    topic = SETTINGS.pending_topic
 
 ``load_dotenv`` is called before ``Settings`` is instantiated so that
 ``.env`` values are available regardless of import order (the app's
@@ -110,14 +109,6 @@ class Settings:
             else f"image_hash_{self.deploy_env}.txt"
         )
 
-        # Pending-startup Pub/Sub queue (overflow when container pool is exhausted)
-        self.pending_topic: str = "unity-pending-startups" + self.env_suffix
-        self.pending_sub: str = self.pending_topic + "-sub"
-
-        # Pending-VM Pub/Sub queue (overflow when VM pool is exhausted)
-        self.pending_vm_topic: str = "unity-pending-vm-assignments" + self.env_suffix
-        self.pending_vm_sub: str = self.pending_vm_topic + "-sub"
-
         # Container image registry (Artifact Registry)
         self.image_registry: str = (
             f"us-central1-docker.pkg.dev/{self.gcp_project_id}/unity"
@@ -142,6 +133,13 @@ class Settings:
         )
         self.tunnel_vm_name: str = f"unity-tunnel-server{self.env_suffix}"
         self.tunnel_gcs_bucket: str = f"unity-tunnel-config{self.env_suffix}"
+
+        # AssistantSession control plane
+        self.assistant_session_group: str = "infra.unify.ai"
+        self.assistant_session_version: str = "v1alpha1"
+        self.assistant_session_plural: str = "assistantsessions"
+        self.assistant_session_kind: str = "AssistantSession"
+        self.assistant_session_protocol_version: str = "v1"
 
     def assistant_topic(self, assistant_id: str) -> str:
         """Pub/Sub topic name for a specific assistant.

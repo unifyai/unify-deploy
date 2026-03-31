@@ -2,7 +2,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from starlette.responses import JSONResponse
 from functools import partial
 from google.api_core.exceptions import Conflict, NotFound as GcpNotFound
 from google.cloud import compute_v1, pubsub_v1, storage
@@ -21,15 +20,24 @@ from .helpers import (
     get_job_logs,
     patch_job_labels,
     suspend_job,
-    acquire_assignment_lease,
-    release_assignment_lease,
-    claim_idle_container,
-    publish_pending_startup,
-    process_pending_startups,
+)
+from .assistant_sessions import (
+    ACTIVE_PHASES,
+    assistant_session_name,
+    build_assistant_session_spec,
+    build_condition,
+    create_or_update_assistant_session,
+    create_or_update_bootstrap_secret,
+    get_assistant_session,
+    get_custom_objects_api,
+    merge_conditions,
+    patch_assistant_session_status,
+    read_bootstrap_secret,
 )
 from .vm_helpers import (
     get_dns_hostname,
     _probe_vm_https,
+    probe_vm_agent_authenticated,
     _set_pool_labels,
     _update_instance_metadata,
     provision_pool_vm,
@@ -151,6 +159,67 @@ def _get_pubsub_clients() -> (
         _pubsub_publisher = pubsub_v1.PublisherClient(credentials=creds)
         _pubsub_subscriber = pubsub_v1.SubscriberClient(credentials=creds)
     return _pubsub_publisher, _pubsub_subscriber
+
+
+def _build_startup_payload(
+    *,
+    api_key: str,
+    medium: str,
+    assistant_id: str,
+    user_id: str,
+    user_first_name: str,
+    user_surname: str,
+    user_email: str,
+    assistant_first_name: str,
+    assistant_surname: str,
+    assistant_age: str,
+    assistant_nationality: str,
+    assistant_about: str,
+    assistant_timezone: str,
+    user_number: str,
+    assistant_number: str,
+    assistant_email: str,
+    user_whatsapp_number: str,
+    voice_provider: str,
+    voice_id: str,
+    desktop_mode: str,
+    desktop_url: str,
+    user_desktop_mode: str,
+    user_desktop_filesys_sync: str,
+    user_desktop_url: str,
+    demo_id: str,
+    team_ids: str,
+    org_id: str,
+) -> dict:
+    return {
+        "api_key": api_key,
+        "medium": medium,
+        "assistant_id": assistant_id,
+        "user_id": user_id,
+        "user_first_name": user_first_name,
+        "user_surname": user_surname,
+        "user_email": user_email,
+        "assistant_first_name": assistant_first_name,
+        "assistant_surname": assistant_surname,
+        "assistant_age": assistant_age,
+        "assistant_nationality": assistant_nationality,
+        "assistant_about": assistant_about,
+        "assistant_timezone": assistant_timezone,
+        "user_number": user_number,
+        "assistant_number": assistant_number,
+        "assistant_email": assistant_email,
+        "user_whatsapp_number": user_whatsapp_number,
+        "voice_provider": voice_provider,
+        "voice_id": voice_id,
+        "desktop_mode": desktop_mode,
+        "desktop_url": desktop_url if desktop_url else None,
+        "user_desktop_mode": user_desktop_mode if user_desktop_mode else None,
+        "user_desktop_filesys_sync": user_desktop_filesys_sync.lower() == "true",
+        "user_desktop_url": user_desktop_url if user_desktop_url else None,
+        "demo_id": int(demo_id) if demo_id else None,
+        "team_ids": json.loads(team_ids) if team_ids else [],
+        "org_id": int(org_id) if org_id else None,
+    }
 
 
 def _ensure_subscription(
@@ -568,12 +637,12 @@ async def start_job(
     org_id: str = Form(""),
 ):
     """
-    Assign an idle container to serve a Unity assistant.
+    Ensure an AssistantSession exists for this assistant activation.
 
-    Uses a K8s Lease for atomic distributed locking: only one concurrent
-    caller can assign a container for a given assistant. The startup
-    configuration is written to the claimed Job's annotations; the
-    container detects the assignment by polling its own Job state.
+    The session controller owns actual container and VM binding. This
+    endpoint creates or updates the durable runtime intent plus the
+    per-session bootstrap Secret, preserving the existing northbound
+    activation contract used by adapters and Orchestra.
 
     Args:
         api_key: API key for authentication (required)
@@ -606,230 +675,125 @@ async def start_job(
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
     try:
-        batch_api, _, _, coord_api = await _get_k8s_clients()
-        sanitized_aid = str(assistant_id).lower().replace("_", "-")
-
-        # ── Check if a container already serves this assistant ────────
-        # Only trust containers that have written a startup-ack label
-        # (proving the container actually initialized). Containers
-        # within the grace period are trusted provisionally. Containers
-        # past the grace period with no ack are zombies — suspend them
-        # and fall through to claim a new one.
-        ACK_GRACE_PERIOD = 90  # seconds
-
-        existing = await asyncio.to_thread(
-            batch_api.list_namespaced_job,
-            namespace=SETTINGS.default_namespace,
-            label_selector=f"app=unity,assistant-id={sanitized_aid}",
-        )
-        for j in existing.items:
-            if not (j.status.active and j.status.active > 0):
-                continue
-            if j.metadata.deletion_timestamp:
-                continue
-
-            labels = j.metadata.labels or {}
-            has_ack = bool(labels.get("unity-startup-ack"))
-            claim_ts = labels.get("unity-claim-ts")
-            if claim_ts:
-                age = time.time() - float(claim_ts)
-            else:
-                age = (
-                    datetime.now(timezone.utc) - j.metadata.creation_timestamp
-                ).total_seconds()
-
-            if has_ack or age < ACK_GRACE_PERIOD:
-                return {
-                    "success": True,
-                    "message": "Assistant already has a running container",
-                    "job_name": j.metadata.name,
-                }
-
-            logger.warning(
-                "Zombie container %s for assistant %s "
-                "(age=%.0fs, no startup ack). Suspending.",
-                j.metadata.name,
-                assistant_id,
-                age,
+        _, core_api, _, _ = await _get_k8s_clients()
+        custom_api = await asyncio.to_thread(get_custom_objects_api)
+        if custom_api is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to initialize AssistantSession API client",
             )
-            try:
-                await asyncio.to_thread(
-                    batch_api.patch_namespaced_job,
-                    name=j.metadata.name,
-                    namespace=SETTINGS.default_namespace,
-                    body={"spec": {"suspend": True}},
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to suspend zombie %s",
-                    j.metadata.name,
-                )
 
-        # ── Acquire assignment Lease (atomic distributed lock) ────────
-        holder_id = f"start-job-{uuid.uuid4().hex[:8]}"
-        acquired = await asyncio.to_thread(
-            acquire_assignment_lease,
-            coord_api,
+        startup_payload = _build_startup_payload(
+            api_key=api_key,
+            medium=medium,
+            assistant_id=assistant_id,
+            user_id=user_id,
+            user_first_name=user_first_name,
+            user_surname=user_surname,
+            user_email=user_email,
+            assistant_first_name=assistant_first_name,
+            assistant_surname=assistant_surname,
+            assistant_age=assistant_age,
+            assistant_nationality=assistant_nationality,
+            assistant_about=assistant_about,
+            assistant_timezone=assistant_timezone,
+            user_number=user_number,
+            assistant_number=assistant_number,
+            assistant_email=assistant_email,
+            user_whatsapp_number=user_whatsapp_number,
+            voice_provider=voice_provider,
+            voice_id=voice_id,
+            desktop_mode=desktop_mode,
+            desktop_url=desktop_url,
+            user_desktop_mode=user_desktop_mode,
+            user_desktop_filesys_sync=user_desktop_filesys_sync,
+            user_desktop_url=user_desktop_url,
+            demo_id=demo_id,
+            team_ids=team_ids,
+            org_id=org_id,
+        )
+        existing_session = await asyncio.to_thread(
+            get_assistant_session,
+            custom_api,
+            SETTINGS.default_namespace,
             assistant_id,
+        )
+        existing_phase = (
+            str(existing_session.get("status", {}).get("phase", ""))
+            if existing_session
+            else ""
+        )
+        existing_activation_id = (
+            str(existing_session.get("spec", {}).get("activationId", ""))
+            if existing_session
+            else ""
+        )
+        activation_id = (
+            existing_activation_id
+            if existing_phase in ACTIVE_PHASES and existing_activation_id
+            else uuid.uuid4().hex
+        )
+
+        secret_name = await asyncio.to_thread(
+            create_or_update_bootstrap_secret,
+            core_api,
             SETTINGS.default_namespace,
-            holder_id,
+            assistant_id,
+            startup_payload,
         )
-        if not acquired:
-            return {
-                "success": True,
-                "message": "Assistant is already being assigned by another request",
-                "assistant_id": assistant_id,
-            }
-
-        # ── Build startup config (before claim so it's available for
-        #    both the immediate and overflow paths) ─────────────────
-        startup_config = json.dumps(
-            {
-                "api_key": api_key,
-                "medium": medium,
-                "assistant_id": assistant_id,
-                "user_id": user_id,
-                "user_first_name": user_first_name,
-                "user_surname": user_surname,
-                "user_email": user_email,
-                "assistant_first_name": assistant_first_name,
-                "assistant_surname": assistant_surname,
-                "assistant_age": assistant_age,
-                "assistant_nationality": assistant_nationality,
-                "assistant_about": assistant_about,
-                "assistant_timezone": assistant_timezone,
-                "user_number": user_number,
-                "assistant_number": assistant_number,
-                "assistant_email": assistant_email,
-                "user_whatsapp_number": user_whatsapp_number,
-                "assistant_whatsapp_number": assistant_whatsapp_number,
-                "voice_provider": voice_provider,
-                "voice_id": voice_id,
-                "desktop_mode": desktop_mode,
-                "desktop_url": desktop_url if desktop_url else None,
-                "user_desktop_mode": (user_desktop_mode if user_desktop_mode else None),
-                "user_desktop_filesys_sync": user_desktop_filesys_sync.lower()
-                == "true",
-                "user_desktop_url": user_desktop_url if user_desktop_url else None,
-                "demo_id": int(demo_id) if demo_id else None,
-                "team_ids": json.loads(team_ids) if team_ids else [],
-                "org_id": int(org_id) if org_id else None,
-            },
+        spec = build_assistant_session_spec(
+            assistant_id=assistant_id,
+            user_id=user_id,
+            medium=medium,
+            desktop_mode=desktop_mode,
+            startup_secret_ref=secret_name,
+            activation_id=activation_id,
         )
-
-        # ── Claim an idle container (labels + startup config) ─────────
-        try:
-            job_name = await asyncio.to_thread(
-                claim_idle_container,
-                batch_api,
-                assistant_id,
-                SETTINGS.default_namespace,
-                startup_config,
-            )
-
-            # Assign pool VM after container claim, then replenish.
-            # If the VM pool is exhausted, queue for deferred retry.
-            if desktop_mode in ("windows", "ubuntu"):
-
-                async def _assign_then_replenish(
-                    _aid=assistant_id,
-                    _key=api_key,
-                    _vt=desktop_mode,
-                ):
-                    from .vm_helpers import publish_pending_vm_assignment
-
-                    loop = asyncio.get_running_loop()
-                    try:
-                        await loop.run_in_executor(
-                            ASSIGN_EXECUTOR,
-                            partial(
-                                assign_pool_vm,
-                                assistant_id=_aid,
-                                unify_apikey=_key,
-                                vm_type=_vt,
-                            ),
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "VM assignment failed for %s (%s), queuing for retry",
-                            _aid,
-                            exc,
-                        )
-                        await loop.run_in_executor(
-                            None,
-                            partial(
-                                publish_pending_vm_assignment,
-                                _aid,
-                                _key,
-                                _vt,
-                            ),
-                        )
-                    loop.run_in_executor(
-                        POOL_MAINTENANCE_EXECUTOR,
-                        partial(replenish_pool, _vt, extra_demand=1),
-                    )
-
-                asyncio.create_task(_assign_then_replenish())
-
-            return {
-                "success": True,
-                "message": "Container assigned to assistant",
-                "job_name": job_name,
-                "assistant_id": assistant_id,
-            }
-        finally:
-            await asyncio.to_thread(
-                release_assignment_lease,
-                coord_api,
-                assistant_id,
-                SETTINGS.default_namespace,
-            )
-
-    except RuntimeError:
-        # Pool exhausted — publish to the durable pending queue so the
-        # reconciler can assign a container when capacity is available.
-        await asyncio.to_thread(publish_pending_startup, startup_config)
-        return JSONResponse(
-            status_code=202,
-            content={
-                "success": True,
-                "status": "queued",
-                "message": "Startup request queued — pool temporarily exhausted",
-                "assistant_id": assistant_id,
-            },
+        session = await asyncio.to_thread(
+            create_or_update_assistant_session,
+            custom_api,
+            SETTINGS.default_namespace,
+            assistant_id,
+            spec,
         )
+        status = session.get("status", {})
+        return {
+            "success": True,
+            "message": "AssistantSession ensured",
+            "assistant_id": assistant_id,
+            "session_name": assistant_session_name(assistant_id),
+            "activation_id": activation_id,
+            "phase": status.get("phase", "PendingContainer"),
+            "job_name": (status.get("jobRef") or {}).get("name"),
+        }
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to assign container: {str(e)}",
+            detail=f"Failed to ensure AssistantSession: {str(e)}",
         )
 
 
-@router.post("/pending/process")
-async def process_pending():
-    """Process pending startup requests from the durable Pub/Sub queue.
-
-    Pulls messages published by /infra/job/start when the pool was
-    exhausted, and assigns them to idle containers using the same
-    Lease + CAS mechanism.  Stateless and idempotent — triggered by
-    the 1-minute Cloud Scheduler cron and reactively after pool
-    replenishment.
-    """
-    try:
-        batch_api, _, _, coord_api = await _get_k8s_clients()
-        result = await asyncio.to_thread(
-            process_pending_startups,
-            batch_api,
-            coord_api,
-            SETTINGS.default_namespace,
-        )
-        return {"success": True, **result}
-    except Exception as e:
-        logger.exception("Error processing pending startups")
+@router.get("/session/{assistant_id}")
+async def read_assistant_session(assistant_id: str):
+    """Read the current AssistantSession for an assistant."""
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to process pending startups: {str(e)}",
+            detail="Failed to initialize AssistantSession API client",
         )
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"AssistantSession not found for assistant {assistant_id}",
+        )
+    return session
 
 
 # stop kubernetes job
@@ -1173,23 +1137,100 @@ async def vm_ready_endpoint(
 
     # Pool VMs pass their own hostname; legacy VMs derive it from assistant_id
     hostname = request_body.hostname or get_dns_hostname(assistant_id)
-    reachable = await asyncio.to_thread(_probe_vm_https, hostname)
-    if not reachable:
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize AssistantSession API client",
+        )
+    _, core_api, _, _ = await _get_k8s_clients()
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+
+    # Legacy compatibility: if no AssistantSession exists, preserve the old
+    # HTTPS reachability contract so already-running legacy sessions are not
+    # broken during rollout.
+    if session is None:
+        reachable = await asyncio.to_thread(_probe_vm_https, hostname)
+        if not reachable:
+            logger.warning(
+                f"VM HTTPS probe failed for {hostname} (assistant {assistant_id}), "
+                "not publishing assistant_desktop_ready",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=f"VM HTTPS not reachable at {hostname}",
+            )
+
+        message_id = await _publish_desktop_ready(assistant_id, hostname, vm_type)
+        return {
+            "success": True,
+            "message_id": message_id,
+            "assistant_id": assistant_id,
+            "mode": "legacy",
+        }
+
+    secret_name = session.get("spec", {}).get("startupSecretRef", "")
+    startup_payload = await asyncio.to_thread(
+        read_bootstrap_secret,
+        core_api,
+        SETTINGS.default_namespace,
+        secret_name,
+    )
+    expected_api_key = str(startup_payload.get("api_key", ""))
+    if expected_api_key and api_key != expected_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Ready signal API key does not match the active AssistantSession",
+        )
+
+    ready = await asyncio.to_thread(
+        probe_vm_agent_authenticated,
+        hostname,
+        expected_api_key or api_key,
+    )
+    if not ready:
         logger.warning(
-            f"VM HTTPS probe failed for {hostname} (assistant {assistant_id}), "
-            "not publishing assistant_desktop_ready",
+            "Authenticated VM readiness probe failed for %s (assistant %s)",
+            hostname,
+            assistant_id,
         )
         raise HTTPException(
             status_code=503,
-            detail=f"VM HTTPS not reachable at {hostname}",
+            detail=f"VM agent not ready at {hostname}",
         )
 
+    existing_conditions = session.get("status", {}).get("conditions", [])
+    await asyncio.to_thread(
+        patch_assistant_session_status,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+        phase="Active",
+        desktop_url=f"https://{hostname}",
+        conditions=merge_conditions(
+            existing_conditions,
+            build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
+            build_condition(
+                "DesktopReady",
+                True,
+                "DesktopReady",
+                "Authenticated desktop readiness complete",
+            ),
+            build_condition("Active", True, "Ready", "Desktop session active"),
+        ),
+    )
     message_id = await _publish_desktop_ready(assistant_id, hostname, vm_type)
 
     return {
         "success": True,
         "message_id": message_id,
         "assistant_id": assistant_id,
+        "mode": "session",
     }
 
 
@@ -1407,28 +1448,6 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
     batch_api, _, _, _ = await _get_k8s_clients()
     result = await asyncio.to_thread(reconcile_orphaned_vms, batch_api, vm_type)
     return result
-
-
-@router.post("/vm/pending/process")
-async def process_pending_vm_assignments_endpoint():
-    """Process pending VM assignment requests from the durable Pub/Sub queue.
-
-    Pulls messages published when assign_pool_vm fails due to pool
-    exhaustion, and retries assignment.  Stateless and idempotent —
-    triggered every minute by Cloud Scheduler and reactively after
-    VM pool replenishment.
-    """
-    from .vm_helpers import process_pending_vm_assignments
-
-    try:
-        result = await asyncio.to_thread(process_pending_vm_assignments)
-        return {"success": True, **result}
-    except Exception as e:
-        logger.exception("Error processing pending VM assignments")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to process pending VM assignments: {str(e)}",
-        )
 
 
 @router.post("/cert-renewal")

@@ -5,8 +5,6 @@ import logging
 import os
 import tempfile
 import threading
-import time
-import uuid
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
 from google.oauth2 import service_account as google_sa
@@ -255,6 +253,10 @@ def create_unity_job(
     image: str = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest",
     deploy_env: str = SETTINGS.deploy_env,
     ttl_seconds_after_finished: int = None,
+    unity_status: str = "idle",
+    priority_class_name: str | None = None,
+    extra_labels: dict | None = None,
+    extra_annotations: dict | None = None,
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
@@ -293,6 +295,26 @@ def create_unity_job(
         if deploy_env == "staging":
             env_vars += [{"name": "STAGING", "value": "true"}]
 
+        metadata_labels = {
+            "app": "unity",
+            "created-by": "create_job_script",
+            "unity-status": unity_status,
+            "unity-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "unity-image-hash": (
+                image.rsplit(":", 1)[-1] if ":" in image else "unknown"
+            ),
+        }
+        if extra_labels:
+            metadata_labels.update(extra_labels)
+
+        pod_annotations = {
+            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+        }
+        if extra_annotations:
+            pod_annotations.update(extra_annotations)
+
+        metadata_annotations = dict(extra_annotations or {})
+
         # Define the job manifest
         job_manifest = {
             "apiVersion": "batch/v1",
@@ -300,30 +322,21 @@ def create_unity_job(
             "metadata": {
                 "name": job_name,
                 "namespace": namespace,
-                "labels": {
-                    "app": "unity",
-                    "created-by": "create_job_script",
-                    "unity-status": "idle",
-                    "unity-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-                    "unity-image-hash": (
-                        image.rsplit(":", 1)[-1] if ":" in image else "unknown"
-                    ),
-                },
+                "labels": metadata_labels,
+                "annotations": metadata_annotations,
             },
             "spec": {
                 "backoffLimit": 0,
                 "template": {
                     "metadata": {
                         "labels": {"app": "unity"},
-                        "annotations": {
-                            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
-                        },
+                        "annotations": pod_annotations,
                     },
                     "spec": {
                         "restartPolicy": "Never",
                         "serviceAccountName": "comm-sa",
                         "terminationGracePeriodSeconds": 30,  # Faster termination
-                        "priorityClassName": "unity-idle",
+                        "priorityClassName": (priority_class_name or "unity-idle"),
                         "containers": [
                             {
                                 "name": "unity-assistant",
@@ -666,210 +679,3 @@ def claim_idle_container(
     raise RuntimeError(
         "All idle containers were claimed by concurrent requests; retry later",
     )
-
-
-# ---------------------------------------------------------------------------
-# Pending-startup reconciliation (Pub/Sub consumer)
-# ---------------------------------------------------------------------------
-
-
-def publish_pending_startup(startup_config_json: str) -> str:
-    """Publish a startup config to the pending-startups topic.
-
-    Called by /infra/job/start when no idle container is available.
-    Returns the Pub/Sub message ID.
-    """
-    from google.cloud import pubsub_v1
-    from google.oauth2.service_account import Credentials
-
-    creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
-    creds = Credentials.from_service_account_info(creds_json)
-    publisher = pubsub_v1.PublisherClient(credentials=creds)
-    topic_path = publisher.topic_path(SETTINGS.gcp_project_id, SETTINGS.pending_topic)
-    future = publisher.publish(topic_path, data=startup_config_json.encode("utf-8"))
-    message_id = future.result()
-    logger.info(
-        "Published pending startup to %s (msg_id=%s)",
-        SETTINGS.pending_topic,
-        message_id,
-    )
-    return message_id
-
-
-def process_pending_startups(
-    batch_api,
-    coord_api,
-    namespace: str,
-) -> dict:
-    """Pull pending startup messages and assign them to idle containers.
-
-    Stateless and idempotent — safe to call from any trigger at any
-    frequency.  Each message is independently acked (assistant already
-    served or successfully claimed) or nacked (no idle container or
-    Lease contention — retried on next trigger).
-    """
-    from google.cloud import pubsub_v1
-    from google.oauth2.service_account import Credentials
-
-    from google.api_core.exceptions import DeadlineExceeded
-
-    creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
-    creds = Credentials.from_service_account_info(creds_json)
-    subscriber = pubsub_v1.SubscriberClient(credentials=creds)
-    sub_path = subscriber.subscription_path(
-        SETTINGS.gcp_project_id,
-        SETTINGS.pending_sub,
-    )
-
-    try:
-        response = subscriber.pull(
-            request={"subscription": sub_path, "max_messages": 10},
-            timeout=10,
-        )
-        messages = response.received_messages
-    except DeadlineExceeded:
-        messages = []
-
-    if not messages:
-        return {"pulled": 0, "acked": 0, "nacked": 0}
-
-    logger.info("Pulled %d pending startup message(s)", len(messages))
-
-    acked = 0
-    nacked = 0
-
-    for msg in messages:
-        ack_id = msg.ack_id
-        try:
-            config = json.loads(msg.message.data.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            logger.warning("Malformed pending startup message, acking to discard")
-            subscriber.acknowledge(
-                request={"subscription": sub_path, "ack_ids": [ack_id]},
-            )
-            acked += 1
-            continue
-
-        assistant_id = str(config.get("assistant_id", ""))
-        if not assistant_id:
-            subscriber.acknowledge(
-                request={"subscription": sub_path, "ack_ids": [ack_id]},
-            )
-            acked += 1
-            continue
-
-        sanitized_aid = _sanitize_for_k8s(assistant_id)
-
-        existing = batch_api.list_namespaced_job(
-            namespace=namespace,
-            label_selector=f"app=unity,assistant-id={sanitized_aid}",
-        )
-        already_running = [
-            j
-            for j in existing.items
-            if j.status.active
-            and j.status.active > 0
-            and not j.metadata.deletion_timestamp
-        ]
-        logger.info(
-            "Reconciler checking assistant %s: %d existing jobs (%d active), names=%s",
-            assistant_id,
-            len(existing.items),
-            len(already_running),
-            [(j.metadata.name, j.status.active) for j in existing.items],
-        )
-        if already_running:
-            logger.info(
-                "Assistant %s already has container %s, acking pending message",
-                assistant_id,
-                already_running[0].metadata.name,
-            )
-            subscriber.acknowledge(
-                request={"subscription": sub_path, "ack_ids": [ack_id]},
-            )
-            acked += 1
-            continue
-
-        holder_id = f"reconcile-{uuid.uuid4().hex[:8]}"
-        acquired = acquire_assignment_lease(
-            coord_api,
-            assistant_id,
-            namespace,
-            holder_id,
-        )
-        if not acquired:
-            logger.info("Lease held for assistant %s, nacking for retry", assistant_id)
-            subscriber.modify_ack_deadline(
-                request={
-                    "subscription": sub_path,
-                    "ack_ids": [ack_id],
-                    "ack_deadline_seconds": 0,
-                },
-            )
-            nacked += 1
-            continue
-
-        claimed = False
-        try:
-            startup_config_json = json.dumps(config)
-            job_name = claim_idle_container(
-                batch_api,
-                assistant_id,
-                namespace,
-                startup_config_json,
-            )
-            logger.info(
-                "Reconciler assigned container %s to assistant %s",
-                job_name,
-                assistant_id,
-            )
-            subscriber.acknowledge(
-                request={"subscription": sub_path, "ack_ids": [ack_id]},
-            )
-            acked += 1
-            claimed = True
-        except RuntimeError:
-            logger.info(
-                "No idle container for assistant %s, nacking for retry",
-                assistant_id,
-            )
-            subscriber.modify_ack_deadline(
-                request={
-                    "subscription": sub_path,
-                    "ack_ids": [ack_id],
-                    "ack_deadline_seconds": 0,
-                },
-            )
-            nacked += 1
-        finally:
-            release_assignment_lease(coord_api, assistant_id, namespace)
-
-        if claimed:
-            desktop_mode = config.get("desktop_mode", "")
-            if desktop_mode in ("windows", "ubuntu"):
-                from .vm_helpers import (
-                    assign_pool_vm,
-                    publish_pending_vm_assignment,
-                    replenish_pool,
-                )
-
-                try:
-                    assign_pool_vm(
-                        assistant_id=assistant_id,
-                        unify_apikey=config.get("api_key", ""),
-                        vm_type=desktop_mode,
-                    )
-                    replenish_pool(desktop_mode, extra_demand=1)
-                except Exception as vm_err:
-                    logger.warning(
-                        "VM assignment failed for %s (%s), queuing for retry",
-                        assistant_id,
-                        vm_err,
-                    )
-                    publish_pending_vm_assignment(
-                        assistant_id,
-                        config.get("api_key", ""),
-                        desktop_mode,
-                    )
-
-    return {"pulled": len(messages), "acked": acked, "nacked": nacked}
