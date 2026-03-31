@@ -8,6 +8,8 @@ to confirm nothing was leaked, or run it standalone as a health check.
 Invariants covered: all (INV-1 through INV-14)
 """
 
+import time
+
 import pytest
 
 from .conftest import (
@@ -53,10 +55,23 @@ def test_container_pool_health(k8s_clients):
 
 
 def test_vm_pool_health(gce_client):
-    """Basic health: the VM pool has idle capacity."""
+    """Basic health: the VM pool has idle capacity.
+
+    Polls for up to 90s because earlier tests may have consumed idle VMs
+    whose release operations (label flip, disk detach, metadata wipe) are
+    still in flight when this test runs.
+    """
     require_gce(gce_client)
-    idle = list_idle_vms(gce_client)
-    assert len(idle) >= 1, f"VM pool exhausted: {len(idle)} idle VMs"
+    deadline = time.monotonic() + 90
+    idle = []
+    while time.monotonic() < deadline:
+        idle = list_idle_vms(gce_client)
+        if len(idle) >= 1:
+            return
+        time.sleep(10)
+    assert (
+        len(idle) >= 1
+    ), f"VM pool still exhausted after 90s recovery window: {len(idle)} idle VMs"
 
 
 def test_no_stale_test_records():
