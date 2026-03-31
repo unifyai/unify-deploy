@@ -1189,7 +1189,7 @@ def _create_test_assistant(index: int) -> dict:
         f"{ORCHESTRA_URL}/assistant",
         json=payload,
         headers={"Authorization": f"Bearer {UNIFY_KEY}"},
-        timeout=30,
+        timeout=90,
     )
     assert create_resp.status_code == 200, (
         f"Failed to create test assistant {index}: "
@@ -1240,7 +1240,7 @@ def _create_preview_managed_assistant() -> dict:
         f"{ORCHESTRA_URL}/assistant",
         json=payload,
         headers={"Authorization": f"Bearer {UNIFY_KEY}"},
-        timeout=30,
+        timeout=90,
     )
     assert (
         create_resp.status_code == 200
