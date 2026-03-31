@@ -80,6 +80,7 @@ from .helpers import (
     publish_outlook_thread_id,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
+    resolve_whatsapp_route,
     start_unity_job,
     store_microsoft_tokens,
 )
@@ -585,19 +586,12 @@ async def twilio_whatsapp_webhook(request: Request):
         f"Received WhatsApp message from {_redact_phone(from_number)} to {_redact_phone(to_number)}",
     )
 
-    # Resolve route via Orchestra (handles both user and external contact lookup)
     pool_number = to_number.replace("whatsapp:", "").strip()
     sender = from_number.replace("whatsapp:", "").strip()
 
-    async with httpx.AsyncClient() as client:
-        resolve_resp = await client.get(
-            f"{SETTINGS.orchestra_url}/admin/whatsapp/resolve",
-            params={"pool_number": pool_number, "sender": sender},
-            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-            timeout=10.0,
-        )
+    resolve_data = await asyncio.to_thread(resolve_whatsapp_route, pool_number, sender)
 
-    if resolve_resp.status_code == 404:
+    if resolve_data is None:
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -605,13 +599,6 @@ async def twilio_whatsapp_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
-    if resolve_resp.status_code >= 400:
-        logger.error(
-            f"WhatsApp resolve failed: {resolve_resp.status_code} {resolve_resp.text}",
-        )
-        return Response(content="Error resolving WhatsApp route", status_code=500)
-
-    resolve_data = resolve_resp.json()
     resolved_assistant_id = str(resolve_data["assistant_id"])
     role = resolve_data["role"]
 

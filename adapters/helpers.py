@@ -246,6 +246,28 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
     ]
 
 
+def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
+    """Resolve an inbound WhatsApp message to an assistant via Orchestra.
+
+    Returns {"assistant_id": int, "role": str} on success, or None if no
+    route exists (404). Raises on unexpected errors.
+    """
+    resp = requests.get(
+        f"{SETTINGS.orchestra_url}/admin/whatsapp/resolve",
+        params={"pool_number": pool_number, "sender": sender},
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"WhatsApp resolve failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"WhatsApp resolve error: {resp.status_code}")
+    return resp.json()
+
+
 def check_contact_details(
     email_address: str = None,
     phone_number: str = None,
