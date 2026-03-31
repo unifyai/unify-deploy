@@ -80,35 +80,13 @@ def _start_job_tolerant(comms_client, assistant_data, medium="unify_message"):
 
 
 def _trigger_reconciliation():
-    """Trigger the pending-startup reconciler on the comms app."""
-    try:
-        requests.post(
-            f"{COMMS_APP_URL}/infra/pending/process",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=30,
-        )
-    except Exception:
-        pass
+    """No-op for AssistantSession v1 session-backed reconciliation."""
+    return None
 
 
 def _trigger_vm_reconciliation():
-    """Trigger the pending-VM-assignment reconciler on the comms app."""
-    try:
-        resp = requests.post(
-            f"{COMMS_APP_URL}/infra/vm/pending/process",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=60,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            pulled = data.get("pulled", 0)
-            if pulled > 0:
-                print(
-                    f"    [vm-reconciler] Processed {pulled} pending: "
-                    f"{data.get('acked', 0)} assigned, {data.get('nacked', 0)} retrying",
-                )
-    except Exception:
-        pass
+    """No-op for AssistantSession v1 session-backed reconciliation."""
+    return None
 
 
 def _trigger_cleanup():
@@ -392,21 +370,21 @@ def test_production_traffic_stress(
                 results[aid] = (status, body)
 
         immediate = [aid for aid, (s, _) in results.items() if s == 200]
-        queued = [aid for aid, (s, _) in results.items() if s == 202]
-        errors = [aid for aid, (s, _) in results.items() if s not in (200, 202)]
+        queued = []
+        errors = [aid for aid, (s, _) in results.items() if s != 200]
         elapsed_p1 = time.monotonic() - t0
 
         print(f"[Phase 1] Results ({elapsed_p1:.1f}s):")
         print(f"  Immediate (200): {len(immediate)}")
-        print(f"  Queued    (202): {len(queued)}")
         print(f"  Errors:          {len(errors)}")
         for aid in errors:
             s, body = results[aid]
             print(f"    assistant {aid}: HTTP {s} — {body[:200]}")
 
-        assert not errors, (
-            f"{len(errors)} startup requests failed (expected 200 or 202): "
-            + ", ".join(f"{aid}={results[aid][0]}" for aid in errors)
+        assert (
+            not errors
+        ), f"{len(errors)} startup requests failed (expected 200): " + ", ".join(
+            f"{aid}={results[aid][0]}" for aid in errors
         )
 
         p1_invariants = check_invariants(batch_api, gce_client)
@@ -424,21 +402,7 @@ def test_production_traffic_stress(
         )
 
         if queued:
-            print(f"[Phase 1] Replenishing pool for {len(queued)} queued startups...")
-            for _ in range(len(queued)):
-                replenish_pool()
-            try:
-                poll_until(
-                    lambda: count_idle_jobs(batch_api) >= min(len(queued), 2),
-                    timeout=180,
-                    interval=10,
-                    description="Idle containers for overflow reconciliation",
-                )
-            except TimeoutError:
-                print(f"[Phase 1] Warning: idle pool slow to replenish")
-            _trigger_reconciliation()
-            time.sleep(5)
-            _trigger_reconciliation()
+            print(f"[Phase 1] Unexpected queued startups under AssistantSession v1")
 
         # ==================================================================
         # PHASE 2: Traffic Firehose — blast traffic before containers ready
@@ -860,12 +824,6 @@ def test_production_traffic_stress(
                 status, body = _start_job_tolerant(comms, a)
                 print(f"  {aid}: re-start → HTTP {status}")
 
-            if queued_restart := [
-                a for a in crash_assistants if _start_job_tolerant(comms, a)[0] == 202
-            ]:
-                replenish_pool()
-                _trigger_reconciliation()
-
             # Wait for new containers
             for a in crash_assistants:
                 aid = a["assistant_id"]
@@ -926,11 +884,6 @@ def test_production_traffic_stress(
 
             cleanup_future.result()
             start_status, start_body = start_future.result()
-
-            if start_status == 202:
-                replenish_pool()
-                time.sleep(10)
-                _trigger_reconciliation()
 
             # Verify the assistant got a container
             try:
@@ -998,10 +951,6 @@ def test_production_traffic_stress(
             aid = a["assistant_id"]
             status, body = _start_job_tolerant(comms, a)
             print(f"  {aid}: re-start → HTTP {status}")
-            if status == 202:
-                replenish_pool()
-                _trigger_reconciliation()
-
         # Wait for new containers
         for a in restart_assistants:
             aid = a["assistant_id"]
@@ -1103,7 +1052,6 @@ def test_production_traffic_stress(
         print(f"\n{'=' * 70}")
         print(f"  STRESS TEST COMPLETE: {N} assistants, 8 phases")
         print(f"  Immediate starts: {len(immediate)}")
-        print(f"  Queued starts:    {len(queued)}")
         print(f"  All served:       {len(containers_up)}/{N}")
         pool_after = count_idle_jobs(batch_api)
         print(f"  Idle pool now:    {pool_after}")

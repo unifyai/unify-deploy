@@ -13,7 +13,6 @@ Endpoints covered:
 - POST /scheduled/microsoft-tokens
 - POST /scheduled/teams-watches
 - POST /scheduled/cert-renewal
-- POST /scheduled/pending-startups
 - POST /scheduled/jobs/create
 - POST /scheduled/jobs/cleanup
 - POST /scheduled/jobs/expire-stale
@@ -110,24 +109,6 @@ class TestCertRenewalScheduler:
         assert (
             resp.status_code == 200
         ), f"cert-renewal (adapter proxy) failed: {resp.status_code} {resp.text}"
-        body = resp.json()
-        assert isinstance(body, dict)
-
-
-class TestPendingStartupsScheduler:
-    """Contract: POST /scheduled/pending-startups forwards to the comms app's
-    /infra/pending/process and returns success or a 502 on failure."""
-
-    def test_pending_startups_returns_json(self):
-        resp = requests.post(
-            f"{ADAPTERS_URL}/scheduled/pending-startups",
-            headers=_ADMIN_HEADERS,
-            timeout=30,
-        )
-        assert resp.status_code in (
-            200,
-            502,
-        ), f"pending-startups unexpected status: {resp.status_code} {resp.text}"
         body = resp.json()
         assert isinstance(body, dict)
 

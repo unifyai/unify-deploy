@@ -242,7 +242,6 @@ class TestInfraAuth:
         [
             "/scheduled/jobs/create",
             "/scheduled/jobs/cleanup",
-            "/scheduled/pending-startups",
         ],
     )
     def test_adapter_scheduler_rejects_no_auth(self, path):
@@ -302,6 +301,30 @@ class TestJobRead:
     def test_read_nonexistent_job_returns_404(self, comms):
         resp = comms.get("/infra/job/nonexistent-job-xyz-12345")
         assert resp.status_code == 404
+
+
+class TestAssistantSessionRead:
+    """Contract: GET /infra/session/{assistant_id} returns the current runtime session."""
+
+    def test_read_existing_session(self, comms):
+        jobs_resp = comms.get(
+            "/infra/jobs",
+            params={"label_selector": "app=unity,unity-status=running", "hours": 1},
+        )
+        jobs = jobs_resp.json().get("jobs", [])
+        if not jobs:
+            pytest.skip("No running jobs to resolve a session from")
+        assistant_id = jobs[0].get("assistant_id")
+        if not assistant_id or assistant_id == "unknown":
+            pytest.skip("Running job has no assistant-id")
+
+        resp = comms.get(f"/infra/session/{assistant_id}")
+        assert (
+            resp.status_code == 200
+        ), f"session read failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert body.get("spec", {}).get("assistantId") == str(assistant_id)
+        assert "status" in body
 
 
 class TestJobLogs:
@@ -422,8 +445,8 @@ class TestDiskDelete:
 
 
 class TestVMReady:
-    """Contract: POST /infra/vm/ready publishes a desktop_ready event after
-    probing the VM's HTTPS endpoint. Authenticated via user API key."""
+    """Contract: POST /infra/vm/ready only succeeds once desktop readiness
+    is verified for the active AssistantSession."""
 
     def test_vm_ready_with_assigned_vm(self):
         from ..conftest import UNIFY_KEY, find_assistant_with_assigned_vm
@@ -443,9 +466,10 @@ class TestVMReady:
             headers={"Authorization": f"Bearer {UNIFY_KEY}"},
             timeout=30,
         )
-        # 200 = published desktop_ready; 503 = VM HTTPS probe failed
+        # 200 = authenticated readiness confirmed; 401/503 reflect session/key mismatch
         assert resp.status_code in (
             200,
+            401,
             503,
         ), f"vm/ready unexpected: {resp.status_code} {resp.text}"
         if resp.status_code == 200:

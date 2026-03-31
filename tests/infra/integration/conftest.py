@@ -375,6 +375,17 @@ def start_real_job(comms_client, assistant_data: dict, medium: str = "unify_mess
     return resp
 
 
+def get_assistant_session(comms_client, assistant_id: str) -> dict | None:
+    """Read the AssistantSession for an assistant from the Comms app."""
+    resp = comms_client.get(f"/infra/session/{assistant_id}")
+    if resp.status_code == 404:
+        return None
+    assert (
+        resp.status_code == 200
+    ), f"session read failed: {resp.status_code} {resp.text}"
+    return resp.json()
+
+
 def replenish_pool():
     """Trigger idle pool replenishment on the deployed adapters.
 
@@ -486,6 +497,18 @@ def list_jobs_with_assistant_id(
     jobs = batch_api.list_namespaced_job(
         namespace=namespace,
         label_selector=f"app=unity,assistant-id={sanitized}",
+    )
+    return [j for j in jobs.items if j.status.active and j.status.active > 0]
+
+
+def list_jobs_with_session_ref(
+    batch_api,
+    session_name: str,
+    namespace: str = NAMESPACE,
+) -> list:
+    jobs = batch_api.list_namespaced_job(
+        namespace=namespace,
+        label_selector=f"assistantsession.unify.ai/name={session_name}",
     )
     return [j for j in jobs.items if j.status.active and j.status.active > 0]
 

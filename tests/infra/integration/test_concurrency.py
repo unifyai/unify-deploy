@@ -21,7 +21,6 @@ import requests
 
 from .conftest import (
     ADMIN_KEY,
-    COMMS_APP_URL,
     NAMESPACE,
     ORCHESTRA_URL,
     UNIFY_KEY,
@@ -417,15 +416,13 @@ def test_pool_exhaustion_under_burst(comms, batch_api):
 
 
 def _trigger_reconciliation(comms_client):
-    """Trigger the pending-startup reconciler on the comms app."""
-    try:
-        requests.post(
-            f"{COMMS_APP_URL}/infra/pending/process",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=30,
-        )
-    except Exception:
-        pass
+    """No-op for AssistantSession v1.
+
+    Session backlog is now represented by durable AssistantSession state and
+    reconciled by the in-cluster controller rather than a pending-startups
+    HTTP endpoint.
+    """
+    return None
 
 
 def _start_job_tolerant(
@@ -458,8 +455,8 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
 
     Every assistant must eventually get a container — none should be
     permanently lost due to transient pool exhaustion. The system should
-    either queue the overflow requests or retry until new idle containers
-    become available via replenishment.
+    retain overflow as durable session intent and reconcile it once
+    capacity becomes available.
 
     Reproduces a regression in the K8s Lease-based assignment flow: when
     the pool has N idle containers and N+M requests arrive concurrently,
@@ -487,7 +484,8 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
     )
 
     try:
-        # Fire all requests concurrently — some will get 503 or timeout.
+        # Fire all requests concurrently — all requests should be accepted
+        # even if some sessions must wait on new container capacity.
         with ThreadPoolExecutor(max_workers=burst_size) as pool:
             futures = {
                 pool.submit(_start_job_tolerant, comms, a): a["assistant_id"]
@@ -507,19 +505,14 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
             f"{len(failed)} failed",
         )
 
-        # Replenish the pool so new idle containers appear for pending
-        # startups.  The background 1-minute scheduler OR our explicit
-        # reconciliation call will claim them for the queued assistants.
+        # Replenish the pool so new idle containers appear for any pending
+        # AssistantSessions waiting on capacity.
         for _ in range(overflow):
             replenish_pool()
 
         # Poll on the actual goal: every overflow assistant gets a
-        # container.  The idle containers created above may be claimed by
-        # the background scheduler before we ever observe them as idle,
-        # so polling on idle count is racy.  Instead, replenish +
-        # reconcile each iteration and check ground truth directly.
+        # container. Poll ground truth directly rather than idle counts.
         def _all_overflow_served():
-            _trigger_reconciliation(comms)
             for aid in used_ids:
                 if not list_jobs_with_assistant_id(batch_api, str(aid)):
                     return False

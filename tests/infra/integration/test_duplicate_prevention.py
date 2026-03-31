@@ -8,7 +8,6 @@ even under concurrent requests.
 Invariants covered: INV-1, INV-2
 """
 
-import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,7 +16,9 @@ import pytest
 from .conftest import (
     NAMESPACE,
     expire_test_assistant_records,
+    get_assistant_session,
     list_jobs_with_assistant_id,
+    list_jobs_with_session_ref,
     start_real_job,
 )
 
@@ -53,14 +54,29 @@ def test_concurrent_startups_produce_at_most_one_container(
         print(f"\n[Dedup] Response 1: {responses[0]}")
         print(f"[Dedup] Response 2: {responses[1]}")
 
-        job_names = {r.get("job_name") for r in responses if r.get("job_name")}
-        assert len(job_names) <= 1, (
-            f"Expected at most 1 unique job_name across both responses, "
-            f"got {len(job_names)}: {job_names}. "
-            f"The Lease failed to prevent duplicate assignment."
+        session_names = {
+            r.get("session_name") for r in responses if r.get("session_name")
+        }
+        assert len(session_names) == 1, (
+            f"Expected exactly 1 session_name across both responses, "
+            f"got {len(session_names)}: {session_names}. "
+            f"Duplicate session intent was created."
         )
 
         time.sleep(5)
+
+        session = get_assistant_session(comms, assistant_id)
+        assert session is not None
+        session_name = session["metadata"]["name"]
+        bound_jobs = list_jobs_with_session_ref(batch_api, session_name)
+        for job in bound_jobs:
+            job_tracker.track(job.metadata.name)
+
+        assert len(bound_jobs) <= 1, (
+            f"Expected at most 1 Job with session ref {session_name}, "
+            f"got {len(bound_jobs)}: {[j.metadata.name for j in bound_jobs]}. "
+            f"Split-brain: two containers serving the same session."
+        )
 
         matching_jobs = list_jobs_with_assistant_id(batch_api, assistant_id)
         for job in matching_jobs:
@@ -108,11 +124,16 @@ def test_container_labels_set_after_startup(
     assistant_id = test_id
 
     try:
-        resp = start_real_job(comms, real_assistant_data)
-        data = resp.json()
-        assert data.get("job_name"), f"Expected job_name in response, got: {data}"
-
-        job_name = data["job_name"]
+        start_real_job(comms, real_assistant_data)
+        session = poll(
+            lambda: get_assistant_session(comms, assistant_id),
+            timeout=120,
+            interval=5,
+            description=f"AssistantSession for {assistant_id}",
+        )
+        data = session
+        job_name = ((session.get("status") or {}).get("jobRef") or {}).get("name")
+        assert job_name, f"Expected jobRef in session status, got: {data}"
         job_tracker.track(job_name)
 
         job = batch_api.read_namespaced_job(name=job_name, namespace=NAMESPACE)
@@ -127,13 +148,12 @@ def test_container_labels_set_after_startup(
             labels.get("assistant-id") == sanitized
         ), f"Expected assistant-id={sanitized}, got {labels.get('assistant-id')}"
         assert (
-            "unity-startup-config" in annotations
-        ), f"Expected unity-startup-config annotation, got keys: {list(annotations.keys())}"
-
-        config = json.loads(annotations["unity-startup-config"])
-        assert config["assistant_id"] == str(
-            assistant_id,
-        ), f"Startup config assistant_id mismatch: {config.get('assistant_id')}"
+            labels.get("assistantsession.unify.ai/name") == session["metadata"]["name"]
+        ), f"Expected assistantsession label, got labels: {labels}"
+        assert (
+            annotations.get("assistantsession.unify.ai/name")
+            == session["metadata"]["name"]
+        ), f"Expected assistantsession annotation, got annotations: {annotations}"
 
     finally:
         expire_test_assistant_records(assistant_id)
