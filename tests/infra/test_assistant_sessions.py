@@ -1,6 +1,7 @@
 from communication.infra import assistant_sessions as assistant_sessions_module
 from communication.infra.assistant_sessions import (
     assistant_session_name,
+    assistant_session_observability_fields,
     assistant_session_secret_name,
     build_assistant_session_spec,
     build_condition,
@@ -88,6 +89,39 @@ def test_desktop_url_matches_vm_ref_normalizes_scheme():
         "https://unity-pool-ubuntu-14-preview.vm.unify.ai",
         vm_ref,
     )
+
+
+def test_assistant_session_observability_fields_summarize_runtime_state():
+    session = {
+        "metadata": {"name": "assistant-session-1207"},
+        "spec": {"assistantId": "1207", "activationId": "act-1"},
+        "status": {
+            "phase": "PendingVM",
+            "observedActivationId": "act-1",
+            "jobRef": {"name": "unity-job-1"},
+            "podRef": {"name": "unity-pod-1"},
+            "vmRef": {
+                "name": "unity-pool-ubuntu-10-preview",
+                "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+            },
+            "desktopUrl": "https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+            "lastError": "waiting",
+            "conditions": [
+                build_condition("ContainerAssigned", True, "Bound"),
+                build_condition("DesktopReady", False, "WaitingForDesktop"),
+            ],
+        },
+    }
+
+    summary = assistant_session_observability_fields(session)
+
+    assert summary["assistant_id"] == "1207"
+    assert summary["session_name"] == "assistant-session-1207"
+    assert summary["activation_id"] == "act-1"
+    assert summary["job_name"] == "unity-job-1"
+    assert summary["vm_name"] == "unity-pool-ubuntu-10-preview"
+    assert summary["vm_hostname"] == "unity-pool-ubuntu-10-preview.vm.unify.ai"
+    assert summary["condition_states"]["ContainerAssigned"].startswith("True:")
 
 
 def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):

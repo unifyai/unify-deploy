@@ -11,11 +11,14 @@ Configuration:
 
 import json
 import os
+import re
+import subprocess
 import time
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -98,6 +101,13 @@ def pytest_configure(config):
         "markers",
         "slow: long-running tests (VM provision, etc.) — deselect with -m 'not slow'",
     )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    setattr(item, f"rep_{report.when}", report)
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +314,7 @@ def poll_until(
     timeout: float = 120,
     interval: float = 5,
     description: str = "condition",
+    failure_snapshot: Callable[[], Any] | None = None,
 ) -> Any:
     """Poll until condition() returns a truthy value, or raise on timeout."""
     deadline = time.monotonic() + timeout
@@ -313,9 +324,23 @@ def poll_until(
         if last_result:
             return last_result
         time.sleep(interval)
+    snapshot_text = ""
+    if failure_snapshot is not None:
+        try:
+            snapshot = failure_snapshot()
+            snapshot_text = "\nFailure snapshot:\n" + json.dumps(
+                snapshot,
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        except Exception as exc:
+            snapshot_text = (
+                f"\nFailure snapshot unavailable: {type(exc).__name__}: {exc}"
+            )
     raise TimeoutError(
         f"Timed out after {timeout}s waiting for {description}. "
-        f"Last result: {last_result}",
+        f"Last result: {last_result}.{snapshot_text}",
     )
 
 
@@ -323,6 +348,368 @@ def poll_until(
 def poll():
     """Polling helper fixture."""
     return poll_until
+
+
+def _sanitize_artifact_name(nodeid: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", nodeid).strip("_")
+
+
+def _cloud_run_service_name(service_url: str) -> str | None:
+    hostname = urlparse(service_url).hostname or ""
+    if not hostname:
+        return None
+    first_label = hostname.split(".")[0]
+    parts = first_label.split("-")
+    if len(parts) >= 3:
+        return "-".join(parts[:-2])
+    return first_label
+
+
+def _assistant_ids_from_violation_messages(new_violations) -> list[str]:
+    assistant_ids = set()
+    patterns = [
+        r"assistant-id=([A-Za-z0-9._-]+)",
+        r"assistant ([A-Za-z0-9._-]+)",
+        r"assigned to ([A-Za-z0-9._-]+)",
+    ]
+    for violation in new_violations:
+        message = getattr(violation, "message", "")
+        for pattern in patterns:
+            assistant_ids.update(re.findall(pattern, message))
+    return sorted(assistant_ids)
+
+
+def _assistant_ids_from_request(request, batch_api) -> list[str]:
+    assistant_ids = set()
+    funcargs = getattr(request.node, "funcargs", {})
+
+    real_assistant = funcargs.get("real_assistant_data")
+    if isinstance(real_assistant, dict) and real_assistant.get("assistant_id"):
+        assistant_ids.add(str(real_assistant["assistant_id"]))
+
+    test_id = funcargs.get("test_id")
+    if test_id:
+        assistant_ids.add(str(test_id))
+
+    test_assistants = funcargs.get("test_assistants") or []
+    for assistant in test_assistants:
+        if isinstance(assistant, dict) and assistant.get("assistant_id"):
+            assistant_ids.add(str(assistant["assistant_id"]))
+
+    job_tracker = funcargs.get("job_tracker")
+    if job_tracker is not None:
+        for job_name in getattr(job_tracker, "jobs", []):
+            try:
+                job = batch_api.read_namespaced_job(name=job_name, namespace=NAMESPACE)
+            except Exception:
+                continue
+            labels = dict(job.metadata.labels or {})
+            if labels.get("assistant-id"):
+                assistant_ids.add(str(labels["assistant-id"]))
+
+    return sorted(assistant_ids)
+
+
+def _session_snapshot(assistant_id: str) -> dict[str, Any]:
+    try:
+        resp = requests.get(
+            f"{COMMS_APP_URL}/infra/session/{assistant_id}",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        return {"assistant_id": str(assistant_id), "error": str(exc)}
+    if resp.status_code == 404:
+        return {"assistant_id": str(assistant_id), "session": None}
+    if resp.status_code != 200:
+        return {
+            "assistant_id": str(assistant_id),
+            "error": f"session HTTP {resp.status_code}: {resp.text[:500]}",
+        }
+    return {"assistant_id": str(assistant_id), "session": resp.json()}
+
+
+def _job_summaries(batch_api, assistant_id: str) -> list[dict[str, Any]]:
+    sanitized = str(assistant_id).lower().replace("_", "-")
+    jobs = batch_api.list_namespaced_job(
+        namespace=NAMESPACE,
+        label_selector=f"app=unity,assistant-id={sanitized}",
+    )
+    results = []
+    for job in jobs.items:
+        labels = dict(job.metadata.labels or {})
+        annotations = dict(job.metadata.annotations or {})
+        results.append(
+            {
+                "job_name": job.metadata.name,
+                "active": job.status.active or 0,
+                "succeeded": job.status.succeeded or 0,
+                "failed": job.status.failed or 0,
+                "labels": labels,
+                "annotations": {
+                    key: value
+                    for key, value in annotations.items()
+                    if key.startswith("assistantsession.")
+                },
+                "creation_timestamp": (
+                    job.metadata.creation_timestamp.isoformat()
+                    if job.metadata.creation_timestamp
+                    else None
+                ),
+            },
+        )
+    return results
+
+
+def _pod_summaries(core_api, job_names: list[str]) -> list[dict[str, Any]]:
+    pods = []
+    if core_api is None:
+        return pods
+    for job_name in job_names:
+        try:
+            pod_list = core_api.list_namespaced_pod(
+                namespace=NAMESPACE,
+                label_selector=f"job-name={job_name}",
+            )
+        except Exception:
+            continue
+        for pod in pod_list.items:
+            pods.append(
+                {
+                    "pod_name": pod.metadata.name,
+                    "job_name": job_name,
+                    "phase": pod.status.phase,
+                    "node_name": pod.spec.node_name,
+                },
+            )
+    return pods
+
+
+def describe_pool_state(gce_client, vm_type: str = "ubuntu") -> dict[str, Any]:
+    from communication.infra.vm_helpers import list_pool_vms
+
+    try:
+        pool_vms = list_pool_vms(vm_type)
+    except Exception as exc:
+        return {"vm_type": vm_type, "error": str(exc)}
+
+    grouped = {
+        "idle": [],
+        "assigned": [],
+        "stopped": [],
+        "provisioning": [],
+        "starting": [],
+        "quarantined": [],
+        "other": [],
+    }
+    for vm in pool_vms:
+        role = vm.get("pool_role") or "other"
+        grouped.setdefault(role, []).append(vm)
+
+    return {
+        "vm_type": vm_type,
+        "counts": {role: len(vms) for role, vms in grouped.items()},
+        "vm_names": {
+            role: [vm.get("vm_name") for vm in vms]
+            for role, vms in grouped.items()
+            if vms
+        },
+    }
+
+
+def describe_runtime_state(
+    batch_api,
+    core_api,
+    gce_client,
+    assistant_id: str,
+) -> dict[str, Any]:
+    session_snapshot = _session_snapshot(str(assistant_id))
+    jobs = _job_summaries(batch_api, str(assistant_id))
+    job_names = [job["job_name"] for job in jobs]
+    pods = _pod_summaries(core_api, job_names)
+    assigned_vms = (
+        list_assigned_vms(gce_client, str(assistant_id)) if gce_client else []
+    )
+    records = get_assistant_jobs_records(str(assistant_id), running_only=False)
+    return {
+        "assistant_id": str(assistant_id),
+        "session": session_snapshot.get("session"),
+        "session_error": session_snapshot.get("error"),
+        "jobs": jobs,
+        "pods": pods,
+        "assigned_vms": [
+            {
+                "vm_name": vm.name,
+                "labels": dict(vm.labels or {}),
+                "status": vm.status,
+            }
+            for vm in assigned_vms
+        ],
+        "assistant_job_records": records,
+    }
+
+
+def _recent_cloud_run_logs(
+    service_url: str,
+    assistant_ids: list[str],
+    session_names: list[str],
+) -> list[str]:
+    service_name = _cloud_run_service_name(service_url)
+    if not service_name:
+        return []
+    since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        output = subprocess.check_output(
+            [
+                "gcloud",
+                "logging",
+                "read",
+                (
+                    f'resource.type="cloud_run_revision" AND '
+                    f'resource.labels.service_name="{service_name}" AND '
+                    f'timestamp >= "{since}"'
+                ),
+                "--project=gcp-project-runtime",
+                "--limit=200",
+                "--format=value(timestamp,textPayload)",
+            ],
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return [f"log collection failed for {service_name}: {exc}"]
+
+    terms = [str(term) for term in assistant_ids + session_names if term]
+    lines = [
+        line for line in output.splitlines() if any(term in line for term in terms)
+    ]
+    return lines[-80:]
+
+
+def _recent_controller_logs(
+    assistant_ids: list[str],
+    session_names: list[str],
+) -> list[str]:
+    try:
+        pods_output = subprocess.check_output(
+            ["kubectl", "get", "pods", "-n", NAMESPACE, "-o", "name"],
+            text=True,
+            timeout=20,
+        )
+    except Exception as exc:
+        return [f"controller pod lookup failed: {exc}"]
+
+    controller_pod = next(
+        (
+            line.split("/", 1)[1]
+            for line in pods_output.splitlines()
+            if "assistant-session-controller" in line
+        ),
+        None,
+    )
+    if controller_pod is None:
+        return []
+
+    try:
+        output = subprocess.check_output(
+            [
+                "kubectl",
+                "logs",
+                "-n",
+                NAMESPACE,
+                f"pod/{controller_pod}",
+                "--since=10m",
+            ],
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return [f"controller log collection failed: {exc}"]
+
+    terms = [str(term) for term in assistant_ids + session_names if term]
+    lines = [
+        line for line in output.splitlines() if any(term in line for term in terms)
+    ]
+    return lines[-80:]
+
+
+def _write_failure_artifact(bundle: dict[str, Any]) -> str:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
+    artifact_dir = Path("logs/pytest/integration-failures")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = (
+        artifact_dir
+        / f"{timestamp}_{_sanitize_artifact_name(bundle['test_nodeid'])}.json"
+    )
+    artifact_path.write_text(json.dumps(bundle, indent=2, sort_keys=True, default=str))
+    return str(artifact_path)
+
+
+def _build_failure_artifact(
+    request,
+    batch_api,
+    core_api,
+    gce_client,
+    new_violations,
+) -> str:
+    assistant_ids = sorted(
+        set(_assistant_ids_from_request(request, batch_api))
+        | set(_assistant_ids_from_violation_messages(new_violations)),
+    )
+    runtime = {
+        assistant_id: describe_runtime_state(
+            batch_api,
+            core_api,
+            gce_client,
+            assistant_id,
+        )
+        for assistant_id in assistant_ids
+    }
+    session_names = [
+        ((state.get("session") or {}).get("metadata") or {}).get("name")
+        for state in runtime.values()
+        if state.get("session")
+    ]
+    bundle = {
+        "test_nodeid": request.node.nodeid,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "assistant_ids": assistant_ids,
+        "runtime": runtime,
+        "pool_state": describe_pool_state(gce_client),
+        "new_invariant_violations": [
+            {
+                "invariant_id": v.invariant_id,
+                "message": v.message,
+            }
+            for v in new_violations
+        ],
+        "recent_logs": {
+            "controller": _recent_controller_logs(assistant_ids, session_names),
+            "comms": _recent_cloud_run_logs(
+                COMMS_APP_URL,
+                assistant_ids,
+                session_names,
+            ),
+            "adapters": _recent_cloud_run_logs(
+                ADAPTERS_URL,
+                assistant_ids,
+                session_names,
+            ),
+        },
+        "active_jobs_overview": [
+            {
+                "job_name": job.metadata.name,
+                "assistant_id": (job.metadata.labels or {}).get("assistant-id"),
+                "unity_status": (job.metadata.labels or {}).get("unity-status"),
+            }
+            for job in batch_api.list_namespaced_job(
+                namespace=NAMESPACE,
+                label_selector="app=unity",
+            ).items
+            if job.status.active and job.status.active > 0
+        ],
+    }
+    return _write_failure_artifact(bundle)
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +827,21 @@ def wait_for_idle_pool(batch_api, min_idle: int = 1, timeout: float = 90):
         timeout=timeout,
         interval=10,
         description=f"Idle pool to have >= {min_idle} containers",
+        failure_snapshot=lambda: {
+            "idle_count": count_idle_jobs(batch_api),
+            "active_jobs": [
+                {
+                    "job_name": job.metadata.name,
+                    "assistant_id": (job.metadata.labels or {}).get("assistant-id"),
+                    "unity_status": (job.metadata.labels or {}).get("unity-status"),
+                }
+                for job in batch_api.list_namespaced_job(
+                    namespace=NAMESPACE,
+                    label_selector="app=unity",
+                ).items
+                if job.status.active and job.status.active > 0
+            ],
+        },
     )
 
 
@@ -1303,6 +1705,12 @@ def wait_for_container_running(
         timeout=timeout,
         interval=interval,
         description=f"Container for assistant {assistant_id} to start",
+        failure_snapshot=lambda: describe_runtime_state(
+            batch_api,
+            None,
+            None,
+            str(assistant_id),
+        ),
     )
 
 
@@ -1323,6 +1731,12 @@ def wait_for_container_done(
         timeout=timeout,
         interval=interval,
         description=f"Container for assistant {assistant_id} to shut down",
+        failure_snapshot=lambda: describe_runtime_state(
+            batch_api,
+            None,
+            None,
+            str(assistant_id),
+        ),
     )
 
 
@@ -1550,15 +1964,58 @@ def check_invariants_after_test(request, k8s_clients, gce_client, invariant_base
     """
     yield
     batch_api = k8s_clients[0]
+    core_api = k8s_clients[1]
     current = check_invariants(batch_api, gce_client)
     baseline_ids = {(v.invariant_id, v.message) for v in invariant_baseline}
     new_violations = [
         v for v in current if (v.invariant_id, v.message) not in baseline_ids
     ]
+    failed = bool(
+        getattr(request.node, "rep_call", None) and request.node.rep_call.failed,
+    )
+    artifact_path = None
+    if failed or new_violations:
+        try:
+            artifact_path = _build_failure_artifact(
+                request,
+                batch_api,
+                core_api,
+                gce_client,
+                new_violations,
+            )
+            print(f"\n[Failure Artifact] {artifact_path}")
+        except Exception as exc:
+            artifact_path = f"artifact generation failed: {type(exc).__name__}: {exc}"
     if new_violations:
         msg = "New invariant violations after test:\n"
         for v in new_violations:
             msg += f"  [{v.invariant_id}] {v.message}\n"
+        assistant_ids = sorted(
+            set(_assistant_ids_from_request(request, batch_api))
+            | set(_assistant_ids_from_violation_messages(new_violations)),
+        )
+        for assistant_id in assistant_ids:
+            runtime = describe_runtime_state(
+                batch_api,
+                core_api,
+                gce_client,
+                assistant_id,
+            )
+            session = runtime.get("session") or {}
+            status = session.get("status") or {}
+            spec = session.get("spec") or {}
+            msg += (
+                "  [SESSION] "
+                f"assistant={assistant_id} "
+                f"session={(session.get('metadata') or {}).get('name')} "
+                f"activation={spec.get('activationId')} "
+                f"phase={status.get('phase')} "
+                f"jobRef={(status.get('jobRef') or {}).get('name')} "
+                f"vmRef={(status.get('vmRef') or {}).get('name')} "
+                f"lastError={status.get('lastError')}\n"
+            )
+        if artifact_path:
+            msg += f"  [ARTIFACT] {artifact_path}\n"
         import warnings
 
         warnings.warn(msg)

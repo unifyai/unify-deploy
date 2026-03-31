@@ -12,11 +12,13 @@ from kubernetes.client.rest import ApiException
 from common.settings import SETTINGS
 from communication.infra.assistant_sessions import (
     ACTIVE_PHASES,
+    assistant_session_observability_fields,
     CONTAINER_READY_ANNOTATION,
     SESSION_REF_ANNOTATION,
     SESSION_REF_LABEL,
     build_condition,
     desktop_url_matches_vm_ref,
+    emit_observability_event,
     get_latest_unity_image,
     merge_conditions,
     patch_assistant_session_status,
@@ -158,6 +160,13 @@ def _claim_idle_job(assistant_id: str, session_name: str):
                 assistant_id,
                 session_name,
             )
+            emit_observability_event(
+                "controller.job_claimed",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                job_name=job.metadata.name,
+                source="controller.reconcile",
+            )
             return _batch_api.read_namespaced_job(
                 name=job.metadata.name,
                 namespace=WATCH_NAMESPACE,
@@ -235,6 +244,13 @@ def _ensure_job_binding(assistant_id: str, session_name: str):
             namespace=WATCH_NAMESPACE,
             body=body,
         )
+        emit_observability_event(
+            "controller.legacy_job_adopted",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            job_name=job.metadata.name,
+            source="controller.reconcile",
+        )
         return _batch_api.read_namespaced_job(
             name=job.metadata.name,
             namespace=WATCH_NAMESPACE,
@@ -260,6 +276,15 @@ def _update_status_for_session(body: dict) -> None:
     observed_activation_id = str(status.get("observedActivationId", ""))
     new_activation = observed_activation_id != activation_id
     existing_conditions = [] if new_activation else status.get("conditions", [])
+    emit_observability_event(
+        "controller.session_reconcile",
+        **assistant_session_observability_fields(
+            body,
+            source="controller.reconcile",
+            new_activation=new_activation,
+            observed_activation_id=observed_activation_id,
+        ),
+    )
 
     if not assistant_id or not activation_id or not secret_name:
         patch_assistant_session_status(
@@ -272,6 +297,7 @@ def _update_status_for_session(body: dict) -> None:
             vm_ref=None,
             desktop_url=None,
             last_error="AssistantSession missing required spec fields",
+            source="controller.reconcile",
             conditions=merge_conditions(
                 existing_conditions,
                 build_condition(
@@ -297,6 +323,7 @@ def _update_status_for_session(body: dict) -> None:
             vm_ref=None,
             desktop_url=None,
             last_error="Failed to bind a Unity job",
+            source="controller.reconcile",
             conditions=merge_conditions(
                 existing_conditions,
                 build_condition(
@@ -328,6 +355,7 @@ def _update_status_for_session(body: dict) -> None:
             pod_ref=pod_ref,
             vm_ref=None,
             desktop_url=None,
+            source="controller.reconcile",
             conditions=merge_conditions(
                 conditions,
                 build_condition(
@@ -354,6 +382,7 @@ def _update_status_for_session(body: dict) -> None:
             vm_ref=None if new_activation else status.get("vmRef"),
             desktop_url=None if new_activation else status.get("desktopUrl"),
             last_error="" if new_activation else None,
+            source="controller.reconcile",
             conditions=merge_conditions(
                 conditions,
                 build_condition(
@@ -394,6 +423,7 @@ def _update_status_for_session(body: dict) -> None:
             vm_ref=None,
             desktop_url=None,
             last_error="" if new_activation else None,
+            source="controller.reconcile",
             conditions=merge_conditions(
                 conditions,
                 build_condition("Active", True, "Ready", "Container session active"),
@@ -503,6 +533,7 @@ def _update_status_for_session(body: dict) -> None:
                 vm_ref=vm_ref,
                 desktop_url=None,
                 last_error="",
+                source="controller.reconcile",
                 conditions=conditions,
             )
             return
@@ -519,6 +550,7 @@ def _update_status_for_session(body: dict) -> None:
                 vm_ref=None,
                 desktop_url=None,
                 last_error=str(exc),
+                source="controller.reconcile",
                 conditions=merge_conditions(
                     conditions,
                     build_condition(
@@ -538,6 +570,14 @@ def _update_status_for_session(body: dict) -> None:
             return
         except Exception as exc:  # pragma: no cover - defensive reconcile
             logger.exception("AssistantSession VM assignment failed")
+            emit_observability_event(
+                "controller.vm_assignment_failed",
+                **assistant_session_observability_fields(
+                    body,
+                    source="controller.reconcile",
+                    error=str(exc),
+                ),
+            )
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
@@ -549,6 +589,7 @@ def _update_status_for_session(body: dict) -> None:
                 vm_ref=None,
                 desktop_url=None,
                 last_error=str(exc),
+                source="controller.reconcile",
                 conditions=merge_conditions(
                     conditions,
                     build_condition(
@@ -573,6 +614,7 @@ def _update_status_for_session(body: dict) -> None:
             vm_ref=vm_ref,
             desktop_url=desktop_url,
             last_error="",
+            source="controller.reconcile",
             conditions=merge_conditions(
                 conditions,
                 build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
@@ -598,6 +640,7 @@ def _update_status_for_session(body: dict) -> None:
         vm_ref=vm_ref,
         desktop_url=desktop_url,
         last_error="",
+        source="controller.reconcile",
         conditions=merge_conditions(
             conditions,
             build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),

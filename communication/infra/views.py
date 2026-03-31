@@ -23,11 +23,13 @@ from .helpers import (
 )
 from .assistant_sessions import (
     ACTIVE_PHASES,
+    assistant_session_observability_fields,
     assistant_session_name,
     build_assistant_session_spec,
     build_condition,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
+    emit_observability_event,
     get_assistant_session,
     get_custom_objects_api,
     merge_conditions,
@@ -676,6 +678,11 @@ async def start_job(
         team_ids: JSON-encoded list of team IDs the user belongs to (optional, defaults to empty)
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
+    session_name = assistant_session_name(assistant_id)
+    activation_id = None
+    existing_phase = None
+    reused_active_session = False
+
     try:
         _, core_api, _, _ = await _get_k8s_clients()
         custom_api = await asyncio.to_thread(get_custom_objects_api)
@@ -730,10 +737,21 @@ async def start_job(
             if existing_session
             else ""
         )
+        reused_active_session = bool(
+            existing_phase in ACTIVE_PHASES and existing_activation_id,
+        )
         activation_id = (
-            existing_activation_id
-            if existing_phase in ACTIVE_PHASES and existing_activation_id
-            else uuid.uuid4().hex
+            existing_activation_id if reused_active_session else uuid.uuid4().hex
+        )
+        emit_observability_event(
+            "infra.job_start.request",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            activation_id=activation_id,
+            existing_phase=existing_phase,
+            reused_active_session=reused_active_session,
+            medium=medium,
+            desktop_mode=desktop_mode,
         )
 
         secret_name = await asyncio.to_thread(
@@ -760,16 +778,33 @@ async def start_job(
         )
         activation_id = str(session.get("spec", {}).get("activationId", activation_id))
         status = session.get("status", {})
+        emit_observability_event(
+            "infra.job_start.ensured",
+            **assistant_session_observability_fields(
+                session,
+                reused_active_session=reused_active_session,
+                startup_secret_ref=secret_name,
+            ),
+        )
         return {
             "success": True,
             "message": "AssistantSession ensured",
             "assistant_id": assistant_id,
-            "session_name": assistant_session_name(assistant_id),
+            "session_name": session_name,
             "activation_id": activation_id,
             "phase": status.get("phase", "PendingContainer"),
             "job_name": (status.get("jobRef") or {}).get("name"),
         }
     except Exception as e:
+        emit_observability_event(
+            "infra.job_start.failed",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            activation_id=activation_id,
+            existing_phase=existing_phase,
+            reused_active_session=reused_active_session,
+            error=str(e),
+        )
         raise HTTPException(
             status_code=500,
             detail=f"Failed to ensure AssistantSession: {str(e)}",
@@ -1158,8 +1193,16 @@ async def vm_ready_endpoint(
     # HTTPS reachability contract so already-running legacy sessions are not
     # broken during rollout.
     if session is None:
+        hostname = requested_hostname
         reachable = await asyncio.to_thread(_probe_vm_https, hostname)
         if not reachable:
+            emit_observability_event(
+                "infra.vm_ready.legacy_rejected",
+                assistant_id=assistant_id,
+                requested_hostname=requested_hostname,
+                reason="https_probe_failed",
+                mode="legacy",
+            )
             logger.warning(
                 f"VM HTTPS probe failed for {hostname} (assistant {assistant_id}), "
                 "not publishing assistant_desktop_ready",
@@ -1170,6 +1213,15 @@ async def vm_ready_endpoint(
             )
 
         message_id = await _publish_desktop_ready(assistant_id, hostname, vm_type)
+        emit_observability_event(
+            "infra.vm_ready.legacy_accepted",
+            assistant_id=assistant_id,
+            requested_hostname=requested_hostname,
+            assigned_hostname=hostname,
+            vm_type=vm_type,
+            mode="legacy",
+            message_id=message_id,
+        )
         return {
             "success": True,
             "message_id": message_id,
@@ -1186,6 +1238,15 @@ async def vm_ready_endpoint(
     )
     expected_api_key = str(startup_payload.get("api_key", ""))
     if expected_api_key and api_key != expected_api_key:
+        emit_observability_event(
+            "infra.vm_ready.rejected",
+            **assistant_session_observability_fields(
+                session,
+                requested_hostname=requested_hostname,
+                reason="api_key_mismatch",
+                vm_type=vm_type,
+            ),
+        )
         raise HTTPException(
             status_code=401,
             detail="Ready signal API key does not match the active AssistantSession",
@@ -1193,6 +1254,15 @@ async def vm_ready_endpoint(
 
     assigned_vm_ref = await asyncio.to_thread(get_assigned_vm_ref, assistant_id)
     if assigned_vm_ref is None:
+        emit_observability_event(
+            "infra.vm_ready.rejected",
+            **assistant_session_observability_fields(
+                session,
+                requested_hostname=requested_hostname,
+                reason="no_assigned_vm",
+                vm_type=vm_type,
+            ),
+        )
         logger.warning(
             "Ignoring VM ready from %s for assistant %s: no VM is currently assigned",
             requested_hostname,
@@ -1203,6 +1273,17 @@ async def vm_ready_endpoint(
             detail="Ready signal arrived with no assigned VM for this assistant",
         )
     if not vm_refs_match({"hostname": requested_hostname}, assigned_vm_ref):
+        emit_observability_event(
+            "infra.vm_ready.rejected",
+            **assistant_session_observability_fields(
+                session,
+                requested_hostname=requested_hostname,
+                assigned_hostname=assigned_vm_ref.get("hostname"),
+                assigned_vm_name=assigned_vm_ref.get("name"),
+                reason="stale_vm_ready",
+                vm_type=vm_type,
+            ),
+        )
         logger.warning(
             "Ignoring stale VM ready from %s for assistant %s; current assigned VM is %s",
             requested_hostname,
@@ -1221,6 +1302,17 @@ async def vm_ready_endpoint(
         expected_api_key or api_key,
     )
     if not ready:
+        emit_observability_event(
+            "infra.vm_ready.rejected",
+            **assistant_session_observability_fields(
+                session,
+                requested_hostname=requested_hostname,
+                assigned_hostname=hostname,
+                assigned_vm_name=assigned_vm_ref.get("name"),
+                reason="authenticated_probe_failed",
+                vm_type=vm_type,
+            ),
+        )
         logger.warning(
             "Authenticated VM readiness probe failed for %s (assistant %s)",
             hostname,
@@ -1240,6 +1332,7 @@ async def vm_ready_endpoint(
         phase="Active",
         vm_ref=assigned_vm_ref,
         desktop_url=f"https://{hostname}",
+        source="views.vm_ready",
         conditions=merge_conditions(
             existing_conditions,
             build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
@@ -1253,6 +1346,17 @@ async def vm_ready_endpoint(
         ),
     )
     message_id = await _publish_desktop_ready(assistant_id, hostname, vm_type)
+    emit_observability_event(
+        "infra.vm_ready.accepted",
+        **assistant_session_observability_fields(
+            session,
+            assigned_hostname=hostname,
+            assigned_vm_name=assigned_vm_ref.get("name"),
+            requested_hostname=requested_hostname,
+            vm_type=vm_type,
+            message_id=message_id,
+        ),
+    )
 
     return {
         "success": True,

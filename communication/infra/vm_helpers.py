@@ -10,6 +10,7 @@ This module provides functions for managing VMs on GCP (Windows and Ubuntu), inc
 """
 
 from datetime import datetime, timezone
+import json
 import logging
 import random
 import threading
@@ -62,6 +63,29 @@ from .vm_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _compact_vm_log_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in fields.items()
+        if value not in (None, "", [], {}, ())
+    }
+
+
+def _log_vm_pool_event(event: str, **fields: Any) -> None:
+    logger.info(
+        "OBS_EVENT %s",
+        json.dumps(
+            {
+                "event": f"vm_pool.{event}",
+                **_compact_vm_log_fields(fields),
+            },
+            sort_keys=True,
+            default=str,
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Demand tracking for pool replenishment
@@ -160,6 +184,12 @@ def _quarantine_pool_vm(
             instance.name,
             current_role,
         )
+        _log_vm_pool_event(
+            "quarantine_skipped",
+            vm_name=instance.name,
+            expected_role=current_role,
+            reason=reason,
+        )
         return None
 
     if instance.status in ("RUNNING", "STAGING"):
@@ -178,6 +208,12 @@ def _quarantine_pool_vm(
 
     action = f"Quarantined unhealthy VM {instance.name}: {reason}"
     logger.warning(action)
+    _log_vm_pool_event(
+        "quarantine",
+        vm_name=instance.name,
+        status=instance.status,
+        reason=reason,
+    )
     return action
 
 
@@ -725,6 +761,13 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     op.result()
 
     logger.info(f"Provisioned pool VM: {vm_name} ({vm_type}) with IP {static_ip}")
+    _log_vm_pool_event(
+        "provision",
+        vm_name=vm_name,
+        vm_type=vm_type,
+        hostname=hostname,
+        ip_address=static_ip,
+    )
     return {
         "vm_name": vm_name,
         "ip_address": static_ip,
@@ -919,6 +962,14 @@ def _claim_idle_vm_inner(
                         else candidate_name + f".{DOMAIN_SUFFIX}"
                     )
 
+                _log_vm_pool_event(
+                    "claim",
+                    assistant_id=assistant_id,
+                    vm_name=candidate_name,
+                    vm_type=vm_type,
+                    hostname=hostname,
+                )
+
                 return {
                     "vm_name": candidate_name,
                     "assistant_id": assistant_id,
@@ -967,6 +1018,12 @@ def create_assistant_disk(assistant_id: str) -> str:
         logger.info(
             f"Created assistant disk: {disk_name} ({POOL_ASSISTANT_DISK_SIZE_GB} GB)",
         )
+        _log_vm_pool_event(
+            "create_disk",
+            assistant_id=assistant_id,
+            disk_name=disk_name,
+            disk_size_gb=POOL_ASSISTANT_DISK_SIZE_GB,
+        )
     except Conflict:
         logger.info(f"Assistant disk {disk_name} already exists")
 
@@ -1007,6 +1064,13 @@ def attach_assistant_disk(vm_name: str, assistant_id: str) -> str:
     # The device name defaults to the disk name
     device_name = disk_name
     logger.info(f"Attached disk {disk_name} to {vm_name} (device: {device_name})")
+    _log_vm_pool_event(
+        "attach_disk",
+        assistant_id=assistant_id,
+        vm_name=vm_name,
+        disk_name=disk_name,
+        device_name=device_name,
+    )
     return device_name
 
 
@@ -1030,6 +1094,12 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
 
     if not actual_device_name:
         logger.warning(f"Disk {disk_name} not attached to {vm_name}, skipping detach")
+        _log_vm_pool_event(
+            "detach_disk_skipped",
+            assistant_id=assistant_id,
+            vm_name=vm_name,
+            disk_name=disk_name,
+        )
         return False
 
     op = client.detach_disk(
@@ -1041,6 +1111,13 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
     op.result()
     logger.info(
         f"Detached disk {disk_name} from {vm_name} (device: {actual_device_name})",
+    )
+    _log_vm_pool_event(
+        "detach_disk",
+        assistant_id=assistant_id,
+        vm_name=vm_name,
+        disk_name=disk_name,
+        device_name=actual_device_name,
     )
     return True
 
@@ -1103,6 +1180,11 @@ def _update_instance_metadata(
             )
             op.result()
             logger.info(f"Updated metadata on {vm_name}: {list(updates.keys())}")
+            _log_vm_pool_event(
+                "metadata_update",
+                vm_name=vm_name,
+                metadata_keys=sorted(updates.keys()),
+            )
             return
         except PreconditionFailed:
             if attempt < max_retries:
@@ -1180,6 +1262,14 @@ def assign_pool_vm(
         logger.info(
             f"Pool assignment complete: {vm_name} -> assistant {assistant_id}",
         )
+        _log_vm_pool_event(
+            "assign_complete",
+            assistant_id=assistant_id,
+            vm_name=vm_name,
+            vm_type=vm_type,
+            hostname=claimed["hostname"],
+            disk_device=device_name,
+        )
         return {
             "vm_name": vm_name,
             "assistant_id": assistant_id,
@@ -1219,6 +1309,11 @@ def get_assigned_vm_ref(assistant_id: str) -> Optional[Dict[str, Any]]:
             "Multiple assigned VMs found for assistant %s: %s",
             assistant_id,
             [vm.name for vm in assigned],
+        )
+        _log_vm_pool_event(
+            "multiple_assigned_vms",
+            assistant_id=assistant_id,
+            vm_names=[vm.name for vm in assigned],
         )
     vm = assigned[0]
     labels = dict(vm.labels) if vm.labels else {}
@@ -1322,6 +1417,11 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
         logger.info(
             f"No pool VM assigned to assistant {assistant_id} — nothing to release",
         )
+        _log_vm_pool_event(
+            "release_skipped",
+            assistant_id=assistant_id,
+            reason="no_assigned_vm",
+        )
         return {
             "released": False,
             "assistant_id": assistant_id,
@@ -1349,6 +1449,11 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     _set_pool_labels(client, vm_name, {"pool-role": "idle", "assistant-id": ""})
 
     logger.info(f"Released pool VM {vm_name} from assistant {assistant_id}")
+    _log_vm_pool_event(
+        "release",
+        assistant_id=assistant_id,
+        vm_name=vm_name,
+    )
 
     vm_type = (dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu")
     return {
@@ -1416,6 +1521,12 @@ def _start_one_stopped_vm(client, vm) -> bool:
         )
         if not ok:
             logger.info(f"Replenish: {vm.name} label CAS failed (already claimed?)")
+            _log_vm_pool_event(
+                "replenish_start_skipped",
+                vm_name=vm.name,
+                vm_type=(dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu"),
+                reason="label_cas_failed",
+            )
             return False
 
         github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
@@ -1429,10 +1540,21 @@ def _start_one_stopped_vm(client, vm) -> bool:
         )
         op.result()
         logger.info(f"Replenish: started stopped VM {vm.name} (pool-role=starting)")
+        _log_vm_pool_event(
+            "replenish_start",
+            vm_name=vm.name,
+            vm_type=(dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu"),
+        )
         return True
     except Exception as e:
         logger.error(f"Replenish: failed to start {vm.name}: {e}")
         _set_pool_labels(client, vm.name, {"pool-role": "stopped"})
+        _log_vm_pool_event(
+            "replenish_start_failed",
+            vm_name=vm.name,
+            vm_type=(dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu"),
+            error=str(e),
+        )
         return False
 
 
@@ -1485,6 +1607,11 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
         raise
 
     logger.info(f"Manual start: started VM {vm_name} (pool-role=starting)")
+    _log_vm_pool_event(
+        "manual_start",
+        vm_name=vm_name,
+        vm_type=vm_type,
+    )
     return {"vm_name": vm_name, "status": "starting"}
 
 
@@ -1531,6 +1658,16 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
         f"Replenish {vm_type}: target={target} idle={len(idle_vms)} "
         f"in_flight={len(in_flight_vms)} stopped={len(stopped_vms)} "
         f"extra_demand={extra_demand} deficit={deficit}",
+    )
+    _log_vm_pool_event(
+        "replenish_decision",
+        vm_type=vm_type,
+        target=target,
+        idle=len(idle_vms),
+        in_flight=len(in_flight_vms),
+        stopped=len(stopped_vms),
+        extra_demand=extra_demand,
+        deficit=deficit,
     )
 
     if deficit <= 0:
@@ -1601,6 +1738,11 @@ def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]
                         rf.result()
                         actions.append(
                             f"Provisioned new pool VM #{num} (stopped reserve)",
+                        )
+                        _log_vm_pool_event(
+                            "replenish_provision_reserve",
+                            vm_type=vm_type,
+                            vm_name=_pool_vm_name(vm_type, num),
                         )
                     except Exception as e:
                         logger.error(
@@ -1686,6 +1828,11 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
 
             actions.append(f"Stopped excess VM {candidate.name}")
             logger.info(f"Trim: stopped excess VM {candidate.name}")
+            _log_vm_pool_event(
+                "trim_stop",
+                vm_name=candidate.name,
+                vm_type=vm_type,
+            )
         except Exception as e:
             # Per-VM errors (e.g. CAS exhausting retries, or a failed
             # label revert after a failed stop) must not abort the loop
@@ -1719,6 +1866,11 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
         f"(pool-role=stopped but RUNNING): "
         f"{[vm.name for vm in ghosts]}",
     )
+    _log_vm_pool_event(
+        "scrub_detected",
+        vm_type=vm_type,
+        ghost_vm_names=[vm.name for vm in ghosts],
+    )
 
     actions: list[str] = []
     for vm in ghosts:
@@ -1730,6 +1882,11 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
             ).result()
             actions.append(f"Scrubbed ghost VM {vm.name} (stopped)")
             logger.info(f"Scrub: stopped ghost VM {vm.name}")
+            _log_vm_pool_event(
+                "scrub_stop",
+                vm_name=vm.name,
+                vm_type=vm_type,
+            )
         except Exception as e:
             logger.error(f"Scrub: failed to stop ghost VM {vm.name}: {e}")
     return actions

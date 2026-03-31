@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import base64
 import json
+import logging
 import os
 from typing import Any
 
@@ -11,6 +12,8 @@ from kubernetes.client.rest import ApiException
 
 from common.settings import SETTINGS
 from .helpers import setup_kubernetes_client
+
+logger = logging.getLogger(__name__)
 
 SESSION_REF_LABEL = "assistantsession.unify.ai/name"
 SESSION_REF_ANNOTATION = "assistantsession.unify.ai/name"
@@ -31,6 +34,75 @@ def assistant_session_name(assistant_id: str) -> str:
 
 def assistant_session_secret_name(assistant_id: str) -> str:
     return f"assistant-session-bootstrap-{_sanitize_for_k8s(assistant_id)}"
+
+
+def _compact_observability_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in fields.items()
+        if value not in (None, "", [], {}, ())
+    }
+
+
+def _condition_states(conditions: list[dict[str, Any]] | None) -> dict[str, str]:
+    result = {}
+    for condition in conditions or []:
+        condition_type = str(condition.get("type", "") or "")
+        if not condition_type:
+            continue
+        status = str(condition.get("status", "") or "")
+        reason = str(condition.get("reason", "") or "")
+        result[condition_type] = f"{status}:{reason}" if reason else status
+    return result
+
+
+def assistant_session_observability_fields(
+    session: dict[str, Any] | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
+    metadata = session.get("metadata", {}) if session else {}
+    spec = session.get("spec", {}) if session else {}
+    status = session.get("status", {}) if session else {}
+
+    fields = {
+        "assistant_id": overrides.pop("assistant_id", spec.get("assistantId")),
+        "session_name": overrides.pop("session_name", metadata.get("name")),
+        "activation_id": overrides.pop("activation_id", spec.get("activationId")),
+        "observed_activation_id": overrides.pop(
+            "observed_activation_id",
+            status.get("observedActivationId"),
+        ),
+        "phase": overrides.pop("phase", status.get("phase")),
+        "job_name": overrides.pop("job_name", (status.get("jobRef") or {}).get("name")),
+        "pod_name": overrides.pop("pod_name", (status.get("podRef") or {}).get("name")),
+        "vm_name": overrides.pop("vm_name", (status.get("vmRef") or {}).get("name")),
+        "vm_hostname": overrides.pop(
+            "vm_hostname",
+            (status.get("vmRef") or {}).get("hostname"),
+        ),
+        "desktop_url": overrides.pop("desktop_url", status.get("desktopUrl")),
+        "last_error": overrides.pop("last_error", status.get("lastError")),
+        "condition_states": overrides.pop(
+            "condition_states",
+            _condition_states(status.get("conditions")),
+        ),
+    }
+    fields.update(overrides)
+    return _compact_observability_fields(fields)
+
+
+def emit_observability_event(event: str, **fields: Any) -> None:
+    logger.info(
+        "OBS_EVENT %s",
+        json.dumps(
+            {
+                "event": event,
+                **_compact_observability_fields(fields),
+            },
+            sort_keys=True,
+            default=str,
+        ),
+    )
 
 
 def get_latest_unity_image() -> str:
@@ -97,10 +169,21 @@ def create_or_update_bootstrap_secret(
     if existing_secret is None:
         try:
             core_api.create_namespaced_secret(namespace=namespace, body=body)
+            emit_observability_event(
+                "assistantsession.bootstrap_secret_created",
+                assistant_id=assistant_id,
+                secret_name=secret_name,
+            )
             return secret_name
         except ApiException as e:
             if e.status != 409:
                 raise
+            emit_observability_event(
+                "assistantsession.bootstrap_secret_create_conflict",
+                assistant_id=assistant_id,
+                secret_name=secret_name,
+                error=str(e),
+            )
             return secret_name
 
     body.metadata.resource_version = existing_secret.metadata.resource_version
@@ -108,6 +191,12 @@ def create_or_update_bootstrap_secret(
         name=secret_name,
         namespace=namespace,
         body=body,
+    )
+    emit_observability_event(
+        "assistantsession.bootstrap_secret_replaced",
+        assistant_id=assistant_id,
+        secret_name=secret_name,
+        resource_version=body.metadata.resource_version,
     )
     return secret_name
 
@@ -179,6 +268,13 @@ def create_or_update_assistant_session(
         except ApiException as e:
             if e.status != 409:
                 raise
+            emit_observability_event(
+                "assistantsession.create_conflict",
+                assistant_id=assistant_id,
+                session_name=name,
+                activation_id=spec.get("activationId"),
+                error=str(e),
+            )
             existing = get_assistant_session(custom_api, namespace, assistant_id)
             if existing is not None:
                 return existing
@@ -277,6 +373,7 @@ def patch_assistant_session_status(
     desktop_url: str | None | object = _STATUS_UNSET,
     last_error: str | None | object = _STATUS_UNSET,
     conditions: list[dict[str, Any]] | None | object = _STATUS_UNSET,
+    source: str | None = None,
 ) -> dict[str, Any]:
     name = assistant_session_name(assistant_id)
     body: dict[str, Any] = {"status": {}}
@@ -303,7 +400,7 @@ def patch_assistant_session_status(
     if all(current_status.get(key) == value for key, value in status.items()):
         return current
 
-    return custom_api.patch_namespaced_custom_object_status(
+    result = custom_api.patch_namespaced_custom_object_status(
         group=SETTINGS.assistant_session_group,
         version=SETTINGS.assistant_session_version,
         namespace=namespace,
@@ -311,6 +408,25 @@ def patch_assistant_session_status(
         name=name,
         body=body,
     )
+
+    previous_fields = assistant_session_observability_fields(current, source=source)
+    current_fields = assistant_session_observability_fields(result, source=source)
+    changed_fields = {
+        key: {
+            "before": previous_fields.get(key),
+            "after": current_fields.get(key),
+        }
+        for key in sorted(set(previous_fields) | set(current_fields))
+        if previous_fields.get(key) != current_fields.get(key)
+    }
+    if changed_fields:
+        emit_observability_event(
+            "assistantsession.status_patch",
+            **current_fields,
+            changed_fields=changed_fields,
+        )
+
+    return result
 
 
 def get_phase(session: dict[str, Any] | None) -> str:
