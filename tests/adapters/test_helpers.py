@@ -272,9 +272,11 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
+@patch("adapters.helpers.get_contacts", return_value=({"logs": []}, 200))
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
 def test_build_webhook_context_skips_job_start_for_local_assistant(
     _mock_check,
+    _mock_contacts,
     mock_start,
     _mock_replenish,
 ):
@@ -295,9 +297,11 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
+@patch("adapters.helpers.get_contacts", return_value=({"logs": []}, 200))
 @patch("adapters.helpers.check_valid_contact", return_value=([], True))
 def test_build_webhook_context_starts_job_for_non_local_assistant(
     _mock_check,
+    _mock_contacts,
     mock_start,
     _mock_replenish,
 ):
@@ -317,122 +321,5 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
     mock_start.assert_called_once()
 
 
-# --- Wakeup endpoint dedup tests ---
-#
-# The wakeup channel must respect is_job_running() to prevent split-brain:
-# two pods serving the same assistant after duplicate /assistant/wakeup calls.
-
-
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.is_job_running", return_value=True)
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_wakeup_skips_job_start_when_already_running(
-    _mock_check,
-    _mock_running,
-    mock_start,
-    _mock_replenish,
-):
-    """Duplicate wakeup for an already-running assistant must not start a
-    second container. This prevents the split-brain scenario where two pods
-    serve the same assistant (voice on one, desktop on the other)."""
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="wakeup",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    mock_start.assert_not_called()
-    assert ctx["job_started"] is False
-    assert ctx["is_job_running"] is True
-
-
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.is_job_running", return_value=False)
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_wakeup_starts_job_when_not_running(
-    _mock_check,
-    _mock_running,
-    mock_start,
-    _mock_replenish,
-):
-    """First wakeup (no running pod) must start a container."""
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="wakeup",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    mock_start.assert_called_once()
-    assert ctx["job_started"] is True
-
-
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.is_job_running", return_value=False)
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_wakeup_starts_job_when_k8s_check_fails(
-    _mock_check,
-    _mock_running,
-    mock_start,
-    _mock_replenish,
-):
-    """When is_job_running returns False (fail-open on K8s query failure),
-    wakeup must still start a job so hiring is not silently blocked."""
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="wakeup",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    mock_start.assert_called_once()
-    assert ctx["job_started"] is True
-
-
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.requests.get")
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_wakeup_skips_when_k8s_reports_active_pod(
-    _mock_check,
-    mock_requests_get,
-    mock_start,
-    _mock_replenish,
-):
-    """End-to-end: wakeup with a real K8s response showing an active pod
-    must not start a second container."""
-
-    def mock_get(url, **kwargs):
-        resp = MagicMock()
-        if "/infra/jobs" in url:
-            resp.status_code = 200
-            resp.json.return_value = {
-                "jobs": [{"status": "Running", "assistant_id": "12345"}],
-            }
-        else:
-            resp.status_code = 404
-        return resp
-
-    mock_requests_get.side_effect = mock_get
-
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="wakeup",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    mock_start.assert_not_called()
-    assert ctx["job_started"] is False
+# Wakeup dedup is now handled atomically by /infra/job/start.
+# The previous is_job_running() check-then-act flow was removed as non-atomic.

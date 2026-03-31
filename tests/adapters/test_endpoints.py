@@ -875,22 +875,27 @@ def test_microsoft_router_routes_teams_notification(test_client):
 def _sign_livekit_webhook(body: str) -> str:
     """Generate a valid LiveKit webhook Authorization token for a given body.
 
-    Uses the same signing mechanism that LiveKit Egress uses: SHA256 of the
-    body placed in a JWT claim, signed with LIVEKIT_API_SECRET.
+    Uses PyJWT directly to avoid interference from the livekit module-level
+    mock installed by test_api_message.py (which poisons sys.modules for the
+    whole pytest session).
     """
     import hashlib
-    from livekit.api import AccessToken
+
+    import jwt
 
     body_hash = hashlib.sha256(body.encode()).digest()
     sha256_b64 = base64.b64encode(body_hash).decode()
 
-    token = (
-        AccessToken(
-            api_key=os.getenv("LIVEKIT_API_KEY"),
-            api_secret=os.getenv("LIVEKIT_API_SECRET"),
-        )
-        .with_sha256(sha256_b64)
-        .to_jwt()
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": os.getenv("LIVEKIT_API_KEY"),
+            "nbf": now,
+            "exp": now + 300,
+            "sha256": sha256_b64,
+        },
+        os.getenv("LIVEKIT_API_SECRET"),
+        algorithm="HS256",
     )
     return token
 
