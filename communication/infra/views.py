@@ -555,6 +555,7 @@ async def start_job(
     assistant_number: str = Form(""),
     assistant_email: str = Form(""),
     user_whatsapp_number: str = Form(""),
+    assistant_whatsapp_number: str = Form(""),
     voice_provider: str = Form(""),
     voice_id: str = Form(""),
     desktop_mode: str = Form("ubuntu"),
@@ -592,6 +593,7 @@ async def start_job(
         assistant_number: Assistant's phone number (optional, defaults to empty string)
         assistant_email: Assistant's email (optional, defaults to empty string)
         user_whatsapp_number: User's whatsapp number (optional, defaults to empty string)
+        assistant_whatsapp_number: Assistant's WhatsApp pool number (optional, defaults to empty string)
         voice_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
         desktop_mode: Desktop mode - ubuntu/windows/macos (optional, defaults to "ubuntu")
@@ -700,6 +702,7 @@ async def start_job(
                 "assistant_number": assistant_number,
                 "assistant_email": assistant_email,
                 "user_whatsapp_number": user_whatsapp_number,
+                "assistant_whatsapp_number": assistant_whatsapp_number,
                 "voice_provider": voice_provider,
                 "voice_id": voice_id,
                 "desktop_mode": desktop_mode,

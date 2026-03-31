@@ -150,6 +150,7 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "assistant_number": "+0987654321",
         "assistant_email": "assistant@example.com",
         "user_whatsapp_number": "+1234567890",
+        "assistant_whatsapp_number": "+18501234567",
         "voice_provider": "elevenlabs",
         "voice_id": "voice-123",
         "desktop_mode": desktop_mode,  # Use "none" to skip VM start
@@ -255,6 +256,34 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 
         assert data["demo_id"] == "99", f"Expected demo_id='99' for medium={medium}"
         assert data["medium"] == medium, f"Expected medium={medium}"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_passes_whatsapp_numbers(mock_post):
+    """Both user_whatsapp_number and assistant_whatsapp_number are forwarded."""
+    mock_post.return_value = MagicMock(status_code=200)
+
+    assistant_data = _create_mock_assistant_data()
+    start_unity_job(assistant_data, "whatsapp")
+
+    data = mock_post.call_args.kwargs.get("data") or mock_post.call_args[1]["data"]
+    assert data["user_whatsapp_number"] == "+1234567890"
+    assert data["assistant_whatsapp_number"] == "+18501234567"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_defaults_missing_assistant_whatsapp(mock_post):
+    """assistant_whatsapp_number defaults to empty when absent from assistant data."""
+    mock_post.return_value = MagicMock(status_code=200)
+
+    assistant_data = _create_mock_assistant_data()
+    del assistant_data["assistant_whatsapp_number"]
+    start_unity_job(assistant_data, "phone")
+
+    data = mock_post.call_args.kwargs.get("data") or mock_post.call_args[1]["data"]
+    assert data["assistant_whatsapp_number"] == ""
 
 
 # --- build_webhook_context local assistant tests ---

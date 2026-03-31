@@ -684,6 +684,7 @@ def _admin_record_to_data(a: dict) -> dict:
         "assistant_email": a.get("email") or "",
         "user_number": a.get("user_phone") or "",
         "user_whatsapp_number": a.get("user_whatsapp_number") or "",
+        "assistant_whatsapp_number": a.get("assistant_whatsapp_number") or "",
         "voice_provider": a["voice_provider"],
         "voice_id": a["voice_id"],
         "desktop_mode": a.get("desktop_mode", "ubuntu"),
