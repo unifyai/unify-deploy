@@ -63,8 +63,6 @@ from common.settings import SETTINGS
 from .helpers import (
     cleanup_idle_pool,
     replenish_idle_pool,
-    _trigger_pending_reconciliation,
-    _trigger_pending_vm_reconciliation,
     add_user_to_conference,
     build_webhook_context,
     check_valid_contact,
@@ -3138,50 +3136,6 @@ def scheduled_jobs_expire_stale():
         content=json.dumps(result),
         status_code=200,
     )
-
-
-@app.post("/scheduled/pending-startups", dependencies=[Depends(require_admin_key)])
-def scheduled_pending_startups():
-    """Process pending startup requests from the durable Pub/Sub queue.
-
-    Forwards to the comms app's /infra/pending/process endpoint which
-    pulls queued messages and assigns them to idle containers using the
-    Lease + CAS mechanism.  Triggered every minute by Cloud Scheduler
-    and reactively after pool replenishment.
-
-    Returns non-200 on failure so Cloud Scheduler retries.
-    """
-    result = _trigger_pending_reconciliation()
-    if "error" in result:
-        return Response(
-            content=json.dumps(result),
-            status_code=502,
-            media_type="application/json",
-        )
-    return result
-
-
-@app.post(
-    "/scheduled/pending-vm-assignments",
-    dependencies=[Depends(require_admin_key)],
-)
-def scheduled_pending_vm_assignments():
-    """Process pending VM assignment requests from the durable Pub/Sub queue.
-
-    Forwards to the comms app's /infra/vm/pending/process endpoint which
-    pulls queued messages and retries VM assignment.  Triggered every minute
-    by Cloud Scheduler and reactively after pool replenishment.
-
-    Returns non-200 on failure so Cloud Scheduler retries.
-    """
-    result = _trigger_pending_vm_reconciliation()
-    if "error" in result:
-        return Response(
-            content=json.dumps(result),
-            status_code=502,
-            media_type="application/json",
-        )
-    return result
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
