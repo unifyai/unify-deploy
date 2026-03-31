@@ -1,0 +1,146 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: assistant-session-controller
+  namespace: staging
+rules:
+- apiGroups: ["infra.unify.ai"]
+  resources: ["assistantsessions"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["infra.unify.ai"]
+  resources: ["assistantsessions/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "patch", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: assistant-session-runtime
+  namespace: staging
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: ["infra.unify.ai"]
+  resources: ["assistantsessions"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: assistant-session-controller
+  namespace: staging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: assistant-session-controller
+  namespace: staging
+subjects:
+- kind: ServiceAccount
+  name: assistant-session-controller
+  namespace: staging
+roleRef:
+  kind: Role
+  name: assistant-session-controller
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: assistant-session-runtime
+  namespace: staging
+subjects:
+- kind: ServiceAccount
+  name: comm-sa
+  namespace: staging
+roleRef:
+  kind: Role
+  name: assistant-session-runtime
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assistant-session-controller-staging
+  namespace: staging
+  labels:
+    app: assistant-session-controller-staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: assistant-session-controller-staging
+  template:
+    metadata:
+      labels:
+        app: assistant-session-controller-staging
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      serviceAccountName: assistant-session-controller
+      containers:
+      - name: assistant-session-controller-staging
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity-comms-app-repo/assistant-session-controller-staging:latest
+        command:
+        - kopf
+        - run
+        - -m
+        - communication.assistant_session_controller.controller
+        - --liveness=http://0.0.0.0:8080/healthz
+        - --namespace=staging
+        - --standalone
+        ports:
+        - containerPort: 8080
+          name: health
+        envFrom:
+        - configMapRef:
+            name: unity-config
+        - secretRef:
+            name: unity-secrets
+        env:
+        - name: WATCH_NAMESPACE
+          value: staging
+        - name: DEPLOY_ENV
+          value: staging
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /secrets/key.json
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 250m
+            memory: 256Mi
+        volumeMounts:
+        - name: sa-key
+          mountPath: /secrets
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+      volumes:
+      - name: sa-key
+        secret:
+          secretName: comm-sa-key
