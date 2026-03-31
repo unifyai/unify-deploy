@@ -506,13 +506,29 @@ def describe_pool_state(gce_client, vm_type: str = "ubuntu") -> dict[str, Any]:
         role = vm.get("pool_role") or "other"
         grouped.setdefault(role, []).append(vm)
 
+    DETAIL_ROLES = {"starting", "provisioning", "assigned"}
+
+    def _vm_summary(vm: dict) -> dict:
+        entry: dict[str, Any] = {"name": vm.get("vm_name")}
+        for ts_field in ("last_start_timestamp", "last_stop_timestamp"):
+            if vm.get(ts_field):
+                entry[ts_field] = vm[ts_field]
+        if vm.get("assistant_id"):
+            entry["assistant_id"] = vm["assistant_id"]
+        return entry
+
     return {
         "vm_type": vm_type,
         "counts": {role: len(vms) for role, vms in grouped.items()},
         "vm_names": {
             role: [vm.get("vm_name") for vm in vms]
             for role, vms in grouped.items()
-            if vms
+            if vms and role not in DETAIL_ROLES
+        },
+        "vm_detail": {
+            role: [_vm_summary(vm) for vm in vms]
+            for role, vms in grouped.items()
+            if vms and role in DETAIL_ROLES
         },
     }
 
@@ -579,10 +595,17 @@ def _recent_cloud_run_logs(
     except Exception as exc:
         return [f"log collection failed for {service_name}: {exc}"]
 
+    noise_markers = ("_bio_emb", "_emb", "embedding", "derived_entries")
     terms = [str(term) for term in assistant_ids + session_names if term]
-    lines = [
-        line for line in output.splitlines() if any(term in line for term in terms)
-    ]
+    lines = []
+    for line in output.splitlines():
+        if not any(term in line for term in terms):
+            continue
+        if any(marker in line for marker in noise_markers):
+            continue
+        if len(line) > 2000:
+            line = line[:2000] + "... [truncated]"
+        lines.append(line)
     return lines[-80:]
 
 

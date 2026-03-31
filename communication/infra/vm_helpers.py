@@ -596,18 +596,21 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
                             break
 
         hostname = labels.get("pool-hostname", instance.name + f".{DOMAIN_SUFFIX}")
-        results.append(
-            {
-                "vm_name": instance.name,
-                "pool_role": labels.get("pool-role", "unknown"),
-                "assistant_id": labels.get("assistant-id", "") or None,
-                "vm_type": labels.get("vm-type", "unknown"),
-                "ip_address": external_ip,
-                "hostname": hostname,
-                "status": instance.status,
-                "label_fingerprint": instance.label_fingerprint,
-            },
-        )
+        entry: Dict[str, Any] = {
+            "vm_name": instance.name,
+            "pool_role": labels.get("pool-role", "unknown"),
+            "assistant_id": labels.get("assistant-id", "") or None,
+            "vm_type": labels.get("vm-type", "unknown"),
+            "ip_address": external_ip,
+            "hostname": hostname,
+            "status": instance.status,
+            "label_fingerprint": instance.label_fingerprint,
+        }
+        if instance.last_start_timestamp:
+            entry["last_start_timestamp"] = instance.last_start_timestamp
+        if instance.last_stop_timestamp:
+            entry["last_stop_timestamp"] = instance.last_stop_timestamp
+        results.append(entry)
     return results
 
 
