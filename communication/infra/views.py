@@ -628,9 +628,13 @@ async def start_job(
 
             labels = j.metadata.labels or {}
             has_ack = bool(labels.get("unity-startup-ack"))
-            age = (
-                datetime.now(timezone.utc) - j.metadata.creation_timestamp
-            ).total_seconds()
+            claim_ts = labels.get("unity-claim-ts")
+            if claim_ts:
+                age = time.time() - float(claim_ts)
+            else:
+                age = (
+                    datetime.now(timezone.utc) - j.metadata.creation_timestamp
+                ).total_seconds()
 
             if has_ack or age < ACK_GRACE_PERIOD:
                 return {

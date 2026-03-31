@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 import uuid
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
@@ -629,6 +630,7 @@ def claim_idle_container(
         labels = dict(job.metadata.labels or {})
         labels["assistant-id"] = sanitized_aid
         labels["unity-status"] = "running"
+        labels["unity-claim-ts"] = str(int(time.time()))
 
         body = {
             "metadata": {
