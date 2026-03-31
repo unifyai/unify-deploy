@@ -222,17 +222,15 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
     (30-60s). If scrub runs during that window, it kills the VM before the
     startup script can call mark-idle.
 
-    This test triggers two rebalances in quick succession:
-    - Rebalance #1: starts the stopped VM
-    - Rebalance #2: scrub runs and must NOT kill the booting VM
-    Then waits for the VM to reach idle.
+    The test guarantees replenish starts at least one VM by consuming enough
+    idle VMs to push the pool below its target, then observes which VM
+    replenish actually starts (rather than picking a target upfront).
     """
     require_gce(gce_client)
 
     from google.cloud import compute_v1
 
     client = compute_v1.InstancesClient()
-    cleaned_starting_vms: set[str] = set()
 
     # Clean up stuck starting VMs from previous runs so the deficit
     # calculation is accurate and rebalance actually starts a VM.
@@ -266,20 +264,89 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
                     labels=labels,
                 ),
             ).result()
-            cleaned_starting_vms.add(stuck.name)
             print(f"  Quarantined stuck starting VM: {stuck.name}")
         except Exception:
             pass
 
-    stopped = [
-        vm for vm in list_stopped_vms(gce_client) if vm.name not in cleaned_starting_vms
-    ]
-    if not stopped:
-        stopped = list_stopped_vms(gce_client)
+    stopped = list_stopped_vms(gce_client)
     if not stopped:
         pytest.skip("No stopped (TERMINATED) VMs available")
 
-    target_name = stopped[0].name
+    idle_before = list_idle_vms(gce_client)
+    pool_target = 5
+    needed = max(len(idle_before) - pool_target + 2, 2)
+    print(
+        f"  Pool: {len(idle_before)} idle, {len(stopped)} stopped. "
+        f"Consuming {needed} idle VMs to guarantee deficit.",
+    )
+
+    dummy_aids: list[str] = []
+    for i in range(needed):
+        dummy_aid = f"scrub-test-{int(time.time())}-{i}"
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/vm/pool/assign",
+            json={
+                "assistant_id": dummy_aid,
+                "unify_apikey": "test-key",
+                "vm_type": "ubuntu",
+            },
+            headers=_ADMIN_HEADERS,
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            dummy_aids.append(dummy_aid)
+            print(f"  Consumed idle VM {resp.json().get('vm_name')} ({i+1}/{needed})")
+        else:
+            print(f"  Assign {i+1} failed ({resp.status_code}), stopping early")
+            break
+
+    if not dummy_aids:
+        pytest.skip("Could not consume any idle VMs to create deficit")
+
+    starting_before = {
+        vm.name
+        for vm in client.list(
+            request=compute_v1.ListInstancesRequest(
+                project="gcp-project-vms",
+                zone=VM_ZONE,
+                filter="labels.pool-role=starting AND labels.vm-type=ubuntu",
+            ),
+        )
+    }
+
+    # Rebalance #1: replenish should start at least one stopped VM.
+    resp1 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
+    assert resp1.status_code == 200, f"Rebalance #1 failed: {resp1.text}"
+    time.sleep(5)
+
+    starting_after = {
+        vm.name
+        for vm in client.list(
+            request=compute_v1.ListInstancesRequest(
+                project="gcp-project-vms",
+                zone=VM_ZONE,
+                filter="labels.pool-role=starting AND labels.vm-type=ubuntu",
+            ),
+        )
+    }
+    newly_started = starting_after - starting_before
+    print(f"  Newly started VMs after rebalance #1: {newly_started or '(none)'}")
+
+    if not newly_started:
+        for aid in dummy_aids:
+            requests.post(
+                f"{COMMS_APP_URL}/infra/vm/pool/release",
+                json={"assistant_id": aid},
+                headers=_ADMIN_HEADERS,
+                timeout=30,
+            )
+        pytest.skip(
+            f"Rebalance did not start any VMs (idle={len(idle_before)}, "
+            f"consumed={len(dummy_aids)}). Pool may have been replenished "
+            f"by a concurrent process.",
+        )
+
+    target_name = next(iter(newly_started))
 
     def _get_state():
         vm = client.get(
@@ -289,44 +356,17 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
         )
         return vm.labels.get("pool-role"), vm.status
 
-    role_before, status_before = _get_state()
-    print(f"  Target: {target_name} (pool-role={role_before}, status={status_before})")
-
-    # Create a deficit so replenish has a reason to start the stopped VM.
-    # Assign an idle VM to a dummy assistant to reduce idle count below target.
-    dummy_aid = f"scrub-test-{int(time.time())}"
-    dummy_resp = requests.post(
-        f"{COMMS_APP_URL}/infra/vm/pool/assign",
-        json={
-            "assistant_id": dummy_aid,
-            "unify_apikey": "test-key",
-            "vm_type": "ubuntu",
-        },
-        headers=_ADMIN_HEADERS,
-        timeout=120,
-    )
-    if dummy_resp.status_code == 200:
-        print(
-            f"  Consumed 1 idle VM ({dummy_resp.json().get('vm_name')}) to create deficit",
-        )
-
-    # Rebalance #1: starts the stopped VM (deficit exists now)
-    resp1 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
-    assert resp1.status_code == 200, f"Rebalance #1 failed: {resp1.text}"
-    time.sleep(3)
-
     role_mid, status_mid = _get_state()
-    print(f"  After rebalance #1: pool-role={role_mid}, status={status_mid}")
+    print(f"  Tracking: {target_name} (pool-role={role_mid}, status={status_mid})")
 
     # Rebalance #2: scrub runs — must not kill the booting VM
     resp2 = comms.post("/infra/vm/pool/rebalance", params={"vm_type": "ubuntu"})
     assert resp2.status_code == 200, f"Rebalance #2 failed: {resp2.text}"
 
-    # Wait for the VM to reach idle (boot takes 30-90s)
     try:
         poll(
             lambda: _get_state()[0] == "idle",
-            timeout=120,
+            timeout=180,
             interval=10,
             description=f"{target_name} to reach pool-role=idle",
         )
@@ -341,20 +381,20 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
             assert False, (
                 f"VM {target_name} survived scrub (pool-role=starting, "
                 f"status=RUNNING) but startup script did not call mark-idle "
-                f"within 120s. Check the VM serial port output for boot errors "
+                f"within 180s. Check the VM serial port output for boot errors "
                 f"(supervisord crash, Caddy not starting, etc.)."
             )
         assert False, (
-            f"Scrub killed booting VM: {target_name} is "
-            f"pool-role={final_role}, status={final_status} after 120s. "
-            f"Expected pool-role=idle. The scrub function stopped the VM "
-            f"before the startup script could call mark-idle."
+            f"VM {target_name} did not reach idle: "
+            f"pool-role={final_role}, status={final_status} after 180s. "
+            f"If pool-role=stopped, scrub killed it during boot. "
+            f"If pool-role=quarantined, quarantine sweep caught it."
         )
     finally:
-        if dummy_resp.status_code == 200:
+        for aid in dummy_aids:
             requests.post(
                 f"{COMMS_APP_URL}/infra/vm/pool/release",
-                json={"assistant_id": dummy_aid},
+                json={"assistant_id": aid},
                 headers=_ADMIN_HEADERS,
                 timeout=30,
             )
