@@ -186,18 +186,34 @@ def create_or_update_bootstrap_secret(
             )
             return secret_name
 
-    body.metadata.resource_version = existing_secret.metadata.resource_version
-    core_api.replace_namespaced_secret(
-        name=secret_name,
-        namespace=namespace,
-        body=body,
-    )
-    emit_observability_event(
-        "assistantsession.bootstrap_secret_replaced",
-        assistant_id=assistant_id,
-        secret_name=secret_name,
-        resource_version=body.metadata.resource_version,
-    )
+    for _attempt in range(3):
+        body.metadata.resource_version = existing_secret.metadata.resource_version
+        try:
+            core_api.replace_namespaced_secret(
+                name=secret_name,
+                namespace=namespace,
+                body=body,
+            )
+            emit_observability_event(
+                "assistantsession.bootstrap_secret_replaced",
+                assistant_id=assistant_id,
+                secret_name=secret_name,
+                resource_version=body.metadata.resource_version,
+            )
+            return secret_name
+        except ApiException as e:
+            if e.status != 409:
+                raise
+            emit_observability_event(
+                "assistantsession.bootstrap_secret_replace_conflict",
+                assistant_id=assistant_id,
+                secret_name=secret_name,
+                attempt=_attempt + 1,
+            )
+            existing_secret = core_api.read_namespaced_secret(
+                name=secret_name,
+                namespace=namespace,
+            )
     return secret_name
 
 

@@ -173,6 +173,35 @@ def test_create_or_update_bootstrap_secret_treats_create_conflict_as_success():
     assert secret_name == "assistant-session-bootstrap-1207"
 
 
+def test_create_or_update_bootstrap_secret_retries_replace_conflict():
+    call_log = []
+
+    class FakeSecret:
+        class metadata:
+            resource_version = "1"
+
+    class FakeCoreApi:
+        def read_namespaced_secret(self, **_kwargs):
+            call_log.append("read")
+            return FakeSecret()
+
+        def replace_namespaced_secret(self, **_kwargs):
+            call_log.append("replace")
+            if call_log.count("replace") < 3:
+                raise ApiException(status=409)
+
+    secret_name = create_or_update_bootstrap_secret(
+        FakeCoreApi(),
+        "preview",
+        "1207",
+        {"api_key": "secret"},
+    )
+
+    assert secret_name == "assistant-session-bootstrap-1207"
+    assert call_log.count("replace") == 3
+    assert call_log.count("read") == 3
+
+
 def test_create_or_update_assistant_session_returns_existing_on_create_conflict(
     monkeypatch,
 ):
