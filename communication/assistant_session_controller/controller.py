@@ -24,6 +24,7 @@ from communication.infra.assistant_sessions import (
 from communication.infra.helpers import create_unity_job
 from communication.infra.vm_helpers import (
     assign_pool_vm,
+    has_assigned_vm,
     release_pool_vm,
     replenish_pool,
 )
