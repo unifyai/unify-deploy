@@ -255,7 +255,9 @@ def _update_status_for_session(body: dict) -> None:
     desktop_required = bool(spec.get("desktopRequired", False))
     desktop_mode = str(spec.get("desktopMode", ""))
     secret_name = str(spec.get("startupSecretRef", ""))
-    existing_conditions = status.get("conditions", [])
+    observed_activation_id = str(status.get("observedActivationId", ""))
+    new_activation = observed_activation_id != activation_id
+    existing_conditions = [] if new_activation else status.get("conditions", [])
 
     if not assistant_id or not activation_id or not secret_name:
         patch_assistant_session_status(
@@ -338,6 +340,7 @@ def _update_status_for_session(body: dict) -> None:
             observed_activation_id=activation_id,
             job_ref=job_ref,
             pod_ref=pod_ref,
+            last_error="" if new_activation else None,
             conditions=merge_conditions(
                 conditions,
                 build_condition(
@@ -375,6 +378,7 @@ def _update_status_for_session(body: dict) -> None:
             observed_activation_id=activation_id,
             job_ref=job_ref,
             pod_ref=pod_ref,
+            last_error="" if new_activation else None,
             conditions=merge_conditions(
                 conditions,
                 build_condition("Active", True, "Ready", "Container session active"),
@@ -382,7 +386,7 @@ def _update_status_for_session(body: dict) -> None:
         )
         return
 
-    vm_ref = status.get("vmRef")
+    vm_ref = None if new_activation else status.get("vmRef")
     if vm_ref and not has_assigned_vm(assistant_id):
         vm_ref = None
 
@@ -425,6 +429,7 @@ def _update_status_for_session(body: dict) -> None:
                 job_ref=job_ref,
                 pod_ref=pod_ref,
                 vm_ref=vm_ref,
+                last_error="",
                 conditions=conditions,
             )
             return
@@ -489,7 +494,8 @@ def _update_status_for_session(body: dict) -> None:
             job_ref=job_ref,
             pod_ref=pod_ref,
             vm_ref=vm_ref,
-            desktop_url=status.get("desktopUrl"),
+            desktop_url=None if new_activation else status.get("desktopUrl"),
+            last_error="",
             conditions=merge_conditions(
                 conditions,
                 build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
@@ -513,6 +519,8 @@ def _update_status_for_session(body: dict) -> None:
         job_ref=job_ref,
         pod_ref=pod_ref,
         vm_ref=vm_ref,
+        desktop_url=None if new_activation else status.get("desktopUrl"),
+        last_error="",
         conditions=merge_conditions(
             conditions,
             build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
