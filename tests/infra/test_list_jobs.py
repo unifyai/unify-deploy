@@ -68,11 +68,12 @@ def _mock_k8s_returning(jobs: list):
 
     core_api = MagicMock()
     networking_api = MagicMock()
+    coord_api = MagicMock()
 
     return patch(
         "communication.infra.views._get_k8s_clients",
         new_callable=AsyncMock,
-        return_value=(batch_api, core_api, networking_api),
+        return_value=(batch_api, core_api, networking_api, coord_api),
     )
 
 
