@@ -1468,7 +1468,7 @@ async def assistant_update_webhook(request: Request):
         )
 
         # Prepare assistant_data for the PubSub message
-        assistant_data.pop("assistant_whatsapp_number")
+        assistant_data.pop("assistant_whatsapp_number", None)
 
         # Job is running, publish to assistant topic
         pubsub_client = get_pubsub_client()
