@@ -4,11 +4,14 @@ from communication.infra.assistant_sessions import (
     assistant_session_secret_name,
     build_assistant_session_spec,
     build_condition,
+    create_or_update_assistant_session,
+    create_or_update_bootstrap_secret,
     desktop_url_matches_vm_ref,
     merge_conditions,
     patch_assistant_session_status,
     vm_refs_match,
 )
+from kubernetes.client.rest import ApiException
 
 
 def test_assistant_session_names_are_sanitized():
@@ -116,3 +119,56 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
 
     assert captured["body"]["status"]["vmRef"] is None
     assert captured["body"]["status"]["desktopUrl"] is None
+
+
+def test_create_or_update_bootstrap_secret_treats_create_conflict_as_success():
+    class FakeCoreApi:
+        def read_namespaced_secret(self, **_kwargs):
+            raise ApiException(status=404)
+
+        def create_namespaced_secret(self, **_kwargs):
+            raise ApiException(status=409)
+
+    secret_name = create_or_update_bootstrap_secret(
+        FakeCoreApi(),
+        "preview",
+        "1207",
+        {"api_key": "secret"},
+    )
+
+    assert secret_name == "assistant-session-bootstrap-1207"
+
+
+def test_create_or_update_assistant_session_returns_existing_on_create_conflict(
+    monkeypatch,
+):
+    existing_session = {
+        "metadata": {"name": "assistant-session-1207"},
+        "spec": {"activationId": "canonical-activation"},
+    }
+    calls = {"count": 0}
+
+    def _get_session(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return None
+        return existing_session
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        _get_session,
+    )
+
+    class FakeCustomApi:
+        def create_namespaced_custom_object(self, **_kwargs):
+            raise ApiException(status=409)
+
+    session = create_or_update_assistant_session(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        {"assistantId": "1207", "activationId": "racing-activation"},
+    )
+
+    assert session is existing_session

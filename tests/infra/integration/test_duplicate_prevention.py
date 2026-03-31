@@ -14,11 +14,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from .conftest import (
-    NAMESPACE,
-    expire_test_assistant_records,
+    _create_test_assistant,
+    _delete_test_assistant,
     get_assistant_session,
     list_jobs_with_assistant_id,
     list_jobs_with_session_ref,
+    replenish_pool,
     start_real_job,
 )
 
@@ -41,12 +42,13 @@ def test_concurrent_startups_produce_at_most_one_container(
     only the Lease holder proceeds to claim an idle container. The second
     caller gets 409 on Lease creation and returns early.
     """
-    assistant_id = test_id
+    test_assistant = _create_test_assistant(int(time.time() * 1000) % 1000000)
+    assistant_id = str(test_assistant["assistant_id"])
 
     try:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            f1 = pool.submit(start_real_job, comms, real_assistant_data)
-            f2 = pool.submit(start_real_job, comms, real_assistant_data)
+            f1 = pool.submit(start_real_job, comms, test_assistant)
+            f2 = pool.submit(start_real_job, comms, test_assistant)
             r1 = f1.result()
             r2 = f2.result()
 
@@ -89,20 +91,8 @@ def test_concurrent_startups_produce_at_most_one_container(
         )
 
     finally:
-        expire_test_assistant_records(assistant_id)
-        all_jobs = batch_api.list_namespaced_job(
-            namespace=NAMESPACE,
-            label_selector=f"app=unity,assistant-id={assistant_id}",
-        )
-        for job in all_jobs.items:
-            try:
-                batch_api.delete_namespaced_job(
-                    name=job.metadata.name,
-                    namespace=NAMESPACE,
-                    propagation_policy="Foreground",
-                )
-            except Exception:
-                pass
+        _delete_test_assistant(assistant_id, batch_api)
+        replenish_pool()
 
 
 @pytest.mark.invariant("INV-2")
@@ -121,10 +111,26 @@ def test_container_labels_set_after_startup(
     The labels and annotation are written atomically by the comms app
     (not by the container itself), so they are visible immediately.
     """
-    assistant_id = test_id
+    test_assistant = _create_test_assistant(int(time.time() * 1000) % 1000000)
+    assistant_id = str(test_assistant["assistant_id"])
 
     try:
-        start_real_job(comms, real_assistant_data)
+        start_real_job(comms, test_assistant)
+        matching_jobs = poll(
+            lambda: list_jobs_with_assistant_id(batch_api, assistant_id),
+            timeout=180,
+            interval=10,
+            description=f"Job with assistant-id={assistant_id}",
+        )
+        assert len(matching_jobs) == 1, (
+            f"Expected exactly 1 active Job with assistant-id={assistant_id}, "
+            f"got {len(matching_jobs)}: {[j.metadata.name for j in matching_jobs]}"
+        )
+
+        job = matching_jobs[0]
+        job_name = job.metadata.name
+        job_tracker.track(job_name)
+
         session = poll(
             lambda: get_assistant_session(comms, assistant_id),
             timeout=120,
@@ -132,11 +138,14 @@ def test_container_labels_set_after_startup(
             description=f"AssistantSession for {assistant_id}",
         )
         data = session
-        job_name = ((session.get("status") or {}).get("jobRef") or {}).get("name")
-        assert job_name, f"Expected jobRef in session status, got: {data}"
-        job_tracker.track(job_name)
+        session_job_name = ((session.get("status") or {}).get("jobRef") or {}).get(
+            "name",
+        )
+        assert session_job_name == job_name, (
+            f"Expected session jobRef to point to {job_name}, got {session_job_name}. "
+            f"Session data: {data}"
+        )
 
-        job = batch_api.read_namespaced_job(name=job_name, namespace=NAMESPACE)
         labels = dict(job.metadata.labels or {})
         annotations = dict(job.metadata.annotations or {})
 
@@ -156,4 +165,5 @@ def test_container_labels_set_after_startup(
         ), f"Expected assistantsession annotation, got annotations: {annotations}"
 
     finally:
-        expire_test_assistant_records(assistant_id)
+        _delete_test_assistant(assistant_id, batch_api)
+        replenish_pool()

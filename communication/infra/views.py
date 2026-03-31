@@ -758,6 +758,7 @@ async def start_job(
             assistant_id,
             spec,
         )
+        activation_id = str(session.get("spec", {}).get("activationId", activation_id))
         status = session.get("status", {})
         return {
             "success": True,

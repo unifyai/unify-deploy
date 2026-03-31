@@ -85,17 +85,30 @@ def create_or_update_bootstrap_secret(
         type="Opaque",
         string_data={"startup.json": json.dumps(payload)},
     )
+    existing_secret = None
     try:
-        core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
-        core_api.replace_namespaced_secret(
+        existing_secret = core_api.read_namespaced_secret(
             name=secret_name,
             namespace=namespace,
-            body=body,
         )
     except ApiException as e:
         if e.status != 404:
             raise
-        core_api.create_namespaced_secret(namespace=namespace, body=body)
+    if existing_secret is None:
+        try:
+            core_api.create_namespaced_secret(namespace=namespace, body=body)
+            return secret_name
+        except ApiException as e:
+            if e.status != 409:
+                raise
+            return secret_name
+
+    body.metadata.resource_version = existing_secret.metadata.resource_version
+    core_api.replace_namespaced_secret(
+        name=secret_name,
+        namespace=namespace,
+        body=body,
+    )
     return secret_name
 
 
@@ -155,13 +168,21 @@ def create_or_update_assistant_session(
     }
 
     if existing is None:
-        return custom_api.create_namespaced_custom_object(
-            group=SETTINGS.assistant_session_group,
-            version=SETTINGS.assistant_session_version,
-            namespace=namespace,
-            plural=SETTINGS.assistant_session_plural,
-            body=body,
-        )
+        try:
+            return custom_api.create_namespaced_custom_object(
+                group=SETTINGS.assistant_session_group,
+                version=SETTINGS.assistant_session_version,
+                namespace=namespace,
+                plural=SETTINGS.assistant_session_plural,
+                body=body,
+            )
+        except ApiException as e:
+            if e.status != 409:
+                raise
+            existing = get_assistant_session(custom_api, namespace, assistant_id)
+            if existing is not None:
+                return existing
+            raise
 
     patch = {"spec": spec}
     return custom_api.patch_namespaced_custom_object(
