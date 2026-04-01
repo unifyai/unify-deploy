@@ -1679,9 +1679,59 @@ def replenish_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
         lock.release()
 
 
+def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
+    """Probe idle VMs with a lightweight HTTPS check and quarantine failures.
+
+    Runs alongside quarantine/scrub in the replenish cycle so that broken
+    idle VMs (e.g. Caddy crashed, agent OOM'd after reaching idle) are
+    removed from the claimable pool before any session can pick them up.
+    """
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        filter=f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING",
+    )
+    idle_vms = list(client.list(request=request))
+    if not idle_vms:
+        return []
+
+    actions: list[str] = []
+
+    def _check_one(vm) -> Optional[str]:
+        ref = _vm_ref_from_instance(vm)
+        hostname = ref.get("hostname", "")
+        if not hostname:
+            return None
+        if _probe_vm_https(hostname, timeout=2.0):
+            return None
+        _log_vm_pool_event(
+            "idle_probe_failed",
+            vm_name=vm.name,
+            vm_type=vm_type,
+            hostname=hostname,
+        )
+        return _quarantine_pool_vm(
+            client,
+            vm,
+            reason=f"idle health probe failed ({hostname})",
+        )
+
+    with ThreadPoolExecutor(
+        max_workers=min(len(idle_vms), 5),
+        thread_name_prefix="idle-probe",
+    ) as pool:
+        for result in pool.map(_check_one, idle_vms):
+            if result:
+                actions.append(result)
+
+    return actions
+
+
 def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     actions = _quarantine_stale_inflight_vms(vm_type)
     actions.extend(_scrub_inconsistent_vms(vm_type))
+    actions.extend(_probe_and_quarantine_unhealthy_idle_vms(vm_type))
 
     client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
         vm_type,
