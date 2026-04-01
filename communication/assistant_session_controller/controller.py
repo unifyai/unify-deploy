@@ -260,22 +260,34 @@ def _ensure_job_binding(assistant_id: str, session_name: str):
                 "resourceVersion": job.metadata.resource_version,
             },
         }
-        _batch_api.patch_namespaced_job(
-            name=job.metadata.name,
-            namespace=WATCH_NAMESPACE,
-            body=body,
-        )
-        emit_observability_event(
-            "controller.legacy_job_adopted",
-            assistant_id=assistant_id,
-            session_name=session_name,
-            job_name=job.metadata.name,
-            source="controller.reconcile",
-        )
-        return _batch_api.read_namespaced_job(
-            name=job.metadata.name,
-            namespace=WATCH_NAMESPACE,
-        )
+        try:
+            _batch_api.patch_namespaced_job(
+                name=job.metadata.name,
+                namespace=WATCH_NAMESPACE,
+                body=body,
+            )
+        except ApiException as exc:
+            if exc.status == 409:
+                logger.info(
+                    "Legacy adoption conflict for %s — "
+                    "another reconcile likely adopted it first, "
+                    "falling through to idle claim",
+                    job.metadata.name,
+                )
+            else:
+                raise
+        else:
+            emit_observability_event(
+                "controller.legacy_job_adopted",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                job_name=job.metadata.name,
+                source="controller.reconcile",
+            )
+            return _batch_api.read_namespaced_job(
+                name=job.metadata.name,
+                namespace=WATCH_NAMESPACE,
+            )
 
     job = _claim_idle_job(assistant_id, session_name)
     if job is not None:
