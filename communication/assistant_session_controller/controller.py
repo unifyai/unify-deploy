@@ -103,15 +103,24 @@ def _session_jobs(label_selector: str) -> list:
     return list(jobs.items)
 
 
-def _active_job_for_session(session_name: str):
+def _bound_job_for_session(session_name: str):
+    """Return the non-terminal Job bound to this session, if any.
+
+    Unlike the previous ``_active_job_for_session`` which required
+    ``active > 0``, this returns a Job as long as it is not terminal
+    and not being deleted.  A pod in restart-backoff temporarily has
+    ``active == 0`` without any terminal condition; treating that as
+    "no bound Job" caused the controller to claim a second container
+    for the same session.  The bootstrap deadline (fix 1) handles the
+    case where the pod never recovers.
+    """
     jobs = _session_jobs(f"{SESSION_REF_LABEL}={session_name}")
     for job in jobs:
-        if (
-            job.status.active
-            and job.status.active > 0
-            and not job.metadata.deletion_timestamp
-        ):
-            return job
+        if job.metadata.deletion_timestamp:
+            continue
+        if _job_terminal_phase(job) is not None:
+            continue
+        return job
     return None
 
 
@@ -222,7 +231,7 @@ def _create_session_bound_job(assistant_id: str, session_name: str):
 
 
 def _ensure_job_binding(assistant_id: str, session_name: str):
-    job = _active_job_for_session(session_name)
+    job = _bound_job_for_session(session_name)
     if job is not None:
         return job
 
