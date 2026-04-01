@@ -206,6 +206,13 @@ def _create_session_bound_job(assistant_id: str, session_name: str):
     )
     if not created:
         return None
+    emit_observability_event(
+        "controller.session_bound_job_created",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        job_name=job_name,
+        source="controller.reconcile",
+    )
     return _batch_api.read_namespaced_job(name=job_name, namespace=WATCH_NAMESPACE)
 
 
