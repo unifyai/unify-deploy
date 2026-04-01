@@ -486,12 +486,31 @@ def _pod_summaries(core_api, job_names: list[str]) -> list[dict[str, Any]]:
 
 
 def describe_pool_state(gce_client, vm_type: str = "ubuntu") -> dict[str, Any]:
-    from communication.infra.vm_helpers import list_pool_vms
+    from google.cloud import compute_v1
 
     try:
-        pool_vms = list_pool_vms(vm_type)
+        client = compute_v1.InstancesClient()
+        request = compute_v1.ListInstancesRequest(
+            project=VM_PROJECT_ID,
+            zone=VM_ZONE,
+            filter=f"labels.pool-role:* AND labels.vm-type={vm_type}",
+        )
+        pool_vms = []
+        for instance in client.list(request=request):
+            labels = dict(instance.labels) if instance.labels else {}
+            entry: dict[str, Any] = {
+                "vm_name": instance.name,
+                "pool_role": labels.get("pool-role", "unknown"),
+                "assistant_id": labels.get("assistant-id", "") or None,
+                "status": instance.status,
+            }
+            if instance.last_start_timestamp:
+                entry["last_start_timestamp"] = instance.last_start_timestamp
+            if instance.last_stop_timestamp:
+                entry["last_stop_timestamp"] = instance.last_stop_timestamp
+            pool_vms.append(entry)
     except Exception as exc:
-        return {"vm_type": vm_type, "error": str(exc)}
+        return {"vm_type": vm_type, "zone": VM_ZONE, "error": str(exc)}
 
     grouped = {
         "idle": [],
@@ -519,6 +538,7 @@ def describe_pool_state(gce_client, vm_type: str = "ubuntu") -> dict[str, Any]:
 
     return {
         "vm_type": vm_type,
+        "zone": VM_ZONE,
         "counts": {role: len(vms) for role, vms in grouped.items()},
         "vm_names": {
             role: [vm.get("vm_name") for vm in vms]
