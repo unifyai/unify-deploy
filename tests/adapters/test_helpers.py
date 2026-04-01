@@ -18,24 +18,24 @@ from adapters.helpers import (
 # --- get_default_contacts tests ---
 
 
-def test_get_default_contacts_does_not_include_whatsapp_number():
-    """Verify contacts returned don't include whatsapp_number field."""
+def test_get_default_contacts_includes_whatsapp_number():
+    """Verify contacts include whatsapp_number field from assistant data."""
     assistant_data = {
         "assistant_first_name": "Test",
         "assistant_surname": "Assistant",
         "assistant_email": "test@example.com",
         "assistant_number": "+1234567890",
+        "assistant_whatsapp_number": "+1112223333",
         "user_first_name": "Test",
         "user_surname": "User",
         "user_email": "user@example.com",
         "user_number": "+0987654321",
+        "user_whatsapp_number": "+4445556666",
     }
     contacts = get_default_contacts(assistant_data)
 
-    for contact in contacts:
-        assert (
-            "whatsapp_number" not in contact
-        ), f"Contact should not have whatsapp_number field: {contact}"
+    assert contacts[0]["whatsapp_number"] == "+1112223333"  # assistant
+    assert contacts[1]["whatsapp_number"] == "+4445556666"  # user
 
 
 def test_get_default_contacts_includes_phone_number():
