@@ -605,5 +605,3 @@ def release_assignment_lease(
     except ApiException as e:
         if e.status != 404:
             raise
-
-

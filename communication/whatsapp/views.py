@@ -79,7 +79,7 @@ async def check_whatsapp_status(
     logger.info(
         f"[WhatsApp Status Callback] MessageStatus: {MessageStatus}, "
         f"To: {To}, From: {From}, MessageSid: {MessageSid}, "
-        f"callback_id: {callback_id}",
+        f"callback_id: {callback_id}"
     )
 
     if callback_id:

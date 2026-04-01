@@ -588,7 +588,8 @@ def start_unity_job(assistant: dict, medium: str):
                 "assistant_email": assistant["assistant_email"],
                 "user_whatsapp_number": assistant["user_whatsapp_number"],
                 "assistant_whatsapp_number": assistant.get(
-                    "assistant_whatsapp_number", ""
+                    "assistant_whatsapp_number",
+                    "",
                 ),
                 "voice_provider": assistant["voice_provider"],
                 "voice_id": assistant["voice_id"],

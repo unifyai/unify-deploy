@@ -5,9 +5,6 @@ from X-Forwarded-Proto/Host headers, because Cloud Run rewrites the Host
 header internally.
 """
 
-import os
-from unittest.mock import patch
-
 from fastapi import FastAPI, Depends, Request
 from fastapi.testclient import TestClient
 from twilio.request_validator import RequestValidator
