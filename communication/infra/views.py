@@ -1295,7 +1295,9 @@ async def vm_ready_endpoint(
     existing_vm_name = existing_vm_ref.get("name", "")
     if existing_vm_name:
         assigned_vm_ref = await asyncio.to_thread(
-            verify_vm_assignment, existing_vm_name, assistant_id,
+            verify_vm_assignment,
+            existing_vm_name,
+            assistant_id,
         )
     else:
         assigned_vm_ref = await asyncio.to_thread(get_assigned_vm_ref, assistant_id)
@@ -1371,10 +1373,18 @@ async def vm_ready_endpoint(
         )
 
     fresh_session = await asyncio.to_thread(
-        get_assistant_session, custom_api, SETTINGS.default_namespace, assistant_id,
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
     )
-    fresh_conditions = (fresh_session or session).get("status", {}).get(
-        "conditions", [],
+    fresh_conditions = (
+        (fresh_session or session)
+        .get("status", {})
+        .get(
+            "conditions",
+            [],
+        )
     )
     await asyncio.to_thread(
         patch_assistant_session_status,

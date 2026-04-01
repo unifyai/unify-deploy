@@ -3091,8 +3091,9 @@ def scheduled_infra_maintenance():
 
     Runs hourly via Cloud Scheduler.  Consolidates container pool
     replenishment, excess-idle cleanup, stale-job expiry, orphaned-VM
-    reconciliation and quarantined-VM purge into a single scheduled
-    endpoint so the pool-health concern lives in one place.
+    reconciliation, quarantined-VM purge, and VM pool health (scrub +
+    probe + replenish) into a single scheduled endpoint so pool-health
+    concerns live in one place.
     """
     results: dict = {}
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
@@ -3143,6 +3144,23 @@ def scheduled_infra_maintenance():
     except Exception as exc:
         logger.exception("maintenance: quarantined VM purge failed")
         results["quarantined_vms_error"] = str(exc)
+
+    # 6 — VM pool health: scrub inconsistent labels, probe idle VMs,
+    #     quarantine unhealthy ones, and replenish to target capacity.
+    for vm_type in ("ubuntu",):
+        key = f"vm_rebalance_{vm_type}"
+        try:
+            resp = requests.post(
+                f"{SETTINGS.comms_url}/infra/vm/pool/rebalance",
+                params={"vm_type": vm_type},
+                headers=headers,
+                timeout=120,
+            )
+            if resp.status_code == 200:
+                results[key] = resp.json()
+        except Exception as exc:
+            logger.exception("maintenance: VM rebalance failed for %s", vm_type)
+            results[f"{key}_error"] = str(exc)
 
     return results
 

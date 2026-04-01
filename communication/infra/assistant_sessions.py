@@ -443,8 +443,7 @@ def patch_assistant_session_status(
         current = get_assistant_session(custom_api, namespace, assistant_id) or {}
         current_status = current.get("status", {})
         if all(
-            current_status.get(key) == value
-            for key, value in status_fields.items()
+            current_status.get(key) == value for key, value in status_fields.items()
         ):
             return current
 
@@ -474,10 +473,12 @@ def patch_assistant_session_status(
             continue
 
         previous_fields = assistant_session_observability_fields(
-            current, source=source,
+            current,
+            source=source,
         )
         current_fields = assistant_session_observability_fields(
-            result, source=source,
+            result,
+            source=source,
         )
         changed_fields = {
             key: {
