@@ -1878,15 +1878,36 @@ def list_stopped_vms(gce_client, vm_type: str = "ubuntu") -> list:
 
 
 def list_ghost_vms(gce_client, vm_type: str = "ubuntu") -> list:
-    """List ghost VMs: labeled stopped but actually RUNNING."""
+    """List VMs with label/status mismatches that the scrub function fixes.
+
+    Returns VMs matching any of the anomaly patterns:
+      stopped + RUNNING, idle + TERMINATED, idle + SUSPENDED,
+      starting + TERMINATED, provisioning + TERMINATED,
+      assigned + TERMINATED, quarantined + RUNNING.
+    """
     from google.cloud import compute_v1
+
+    _ANOMALIES = {
+        ("stopped", "RUNNING"),
+        ("idle", "TERMINATED"),
+        ("idle", "SUSPENDED"),
+        ("starting", "TERMINATED"),
+        ("provisioning", "TERMINATED"),
+        ("assigned", "TERMINATED"),
+        ("quarantined", "RUNNING"),
+    }
 
     request = compute_v1.ListInstancesRequest(
         project=VM_PROJECT_ID,
         zone=VM_ZONE,
-        filter=f"labels.pool-role=stopped AND labels.vm-type={vm_type} AND status=RUNNING",
+        filter=f"labels.vm-type={vm_type}",
     )
-    return list(gce_client.list(request=request))
+    return [
+        vm
+        for vm in gce_client.list(request=request)
+        if vm.labels
+        and (vm.labels.get("pool-role", ""), vm.status) in _ANOMALIES
+    ]
 
 
 # ---------------------------------------------------------------------------

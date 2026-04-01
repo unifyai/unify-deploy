@@ -965,9 +965,7 @@ def _update_status_for_session(body: dict) -> None:
     if vm_assigned_time_str and not new_activation:
         try:
             vm_assigned_time = datetime.fromisoformat(vm_assigned_time_str)
-            vm_elapsed = (
-                datetime.now(timezone.utc) - vm_assigned_time
-            ).total_seconds()
+            vm_elapsed = (datetime.now(timezone.utc) - vm_assigned_time).total_seconds()
             vm_timed_out = vm_elapsed > VM_READINESS_DEADLINE_SECONDS
         except (ValueError, TypeError):
             pass

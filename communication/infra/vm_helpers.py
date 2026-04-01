@@ -2005,51 +2005,120 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
 
 
 def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
-    """Stop VMs labeled pool-role=stopped that are still RUNNING.
+    """Detect and fix label/status mismatches across all pool VMs.
 
-    This state arises when trim's client.stop() call succeeds from the API's
-    perspective but the VM doesn't actually reach TERMINATED (e.g. transient
-    GCE issue, manual restart via console).  These ghost VMs are invisible to
-    all pool logic and just waste resources.
+    Fetches every pool VM of *vm_type* in a single GCE list call, then
+    classifies each into one of seven anomaly categories:
+
+      1. stopped  + RUNNING      → stop   (ghost from failed trim)
+      2. idle     + TERMINATED   → relabel stopped  (late mark-idle race)
+      3. idle     + SUSPENDED    → relabel stopped   (GCE auto-suspend)
+      4. starting + TERMINATED   → relabel stopped   (boot failed)
+      5. provisioning + TERMINATED → relabel stopped (setup died)
+      6. assigned + TERMINATED   → quarantine         (session's VM died)
+      7. quarantined + RUNNING   → stop               (should not run)
+
+    VMs that don't match any anomaly pattern are left untouched.
     """
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
         zone=SETTINGS.vm_zone,
-        filter=f"labels.pool-role=stopped AND labels.vm-type={vm_type} AND status=RUNNING",
+        filter=f"labels.vm-type={vm_type}",
     )
-    ghosts = list(client.list(request=request))
-    if not ghosts:
-        return []
+    all_vms = list(client.list(request=request))
 
-    logger.info(
-        f"Scrub {vm_type}: found {len(ghosts)} ghost VMs "
-        f"(pool-role=stopped but RUNNING): "
-        f"{[vm.name for vm in ghosts]}",
-    )
-    _log_vm_pool_event(
-        "scrub_detected",
-        vm_type=vm_type,
-        ghost_vm_names=[vm.name for vm in ghosts],
-    )
+    _STOP_ANOMALIES = {
+        ("stopped", "RUNNING"),
+        ("quarantined", "RUNNING"),
+    }
+    _RELABEL_STOPPED_ANOMALIES = {
+        ("idle", "TERMINATED"),
+        ("idle", "SUSPENDED"),
+        ("starting", "TERMINATED"),
+        ("provisioning", "TERMINATED"),
+    }
+    _QUARANTINE_ANOMALIES = {
+        ("assigned", "TERMINATED"),
+    }
 
     actions: list[str] = []
-    for vm in ghosts:
+
+    for vm in all_vms:
+        labels = dict(vm.labels) if vm.labels else {}
+        role = labels.get("pool-role", "")
+        if not role:
+            continue
+
+        key = (role, vm.status)
+
+        if key in _STOP_ANOMALIES:
+            anomaly = f"{role}_but_{vm.status.lower()}"
+        elif key in _RELABEL_STOPPED_ANOMALIES:
+            anomaly = f"{role}_but_{vm.status.lower()}"
+        elif key in _QUARANTINE_ANOMALIES:
+            anomaly = f"{role}_but_{vm.status.lower()}"
+        else:
+            continue
+
+        logger.info(
+            "Scrub %s: %s anomaly=%s (pool-role=%s, status=%s)",
+            vm_type,
+            vm.name,
+            anomaly,
+            role,
+            vm.status,
+        )
+        _log_vm_pool_event(
+            "scrub_anomaly",
+            vm_type=vm_type,
+            vm_name=vm.name,
+            anomaly=anomaly,
+            pool_role=role,
+            gce_status=vm.status,
+        )
+
         try:
-            client.stop(
-                project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
-                instance=vm.name,
-            ).result()
-            actions.append(f"Scrubbed ghost VM {vm.name} (stopped)")
-            logger.info(f"Scrub: stopped ghost VM {vm.name}")
-            _log_vm_pool_event(
-                "scrub_stop",
-                vm_name=vm.name,
-                vm_type=vm_type,
-            )
+            if key in _STOP_ANOMALIES:
+                client.stop(
+                    project=SETTINGS.vm_project_id,
+                    zone=SETTINGS.vm_zone,
+                    instance=vm.name,
+                ).result()
+                msg = f"Scrub: stopped {vm.name} ({anomaly})"
+                actions.append(msg)
+                logger.info(msg)
+                _log_vm_pool_event(
+                    "scrub_stop",
+                    vm_name=vm.name,
+                    vm_type=vm_type,
+                    anomaly=anomaly,
+                )
+
+            elif key in _RELABEL_STOPPED_ANOMALIES:
+                _set_pool_labels(client, vm.name, {"pool-role": "stopped"})
+                msg = f"Scrub: relabeled {vm.name} → stopped ({anomaly})"
+                actions.append(msg)
+                logger.info(msg)
+                _log_vm_pool_event(
+                    "scrub_relabel",
+                    vm_name=vm.name,
+                    vm_type=vm_type,
+                    anomaly=anomaly,
+                )
+
+            elif key in _QUARANTINE_ANOMALIES:
+                action = _quarantine_pool_vm(
+                    client,
+                    vm,
+                    reason=f"scrub: {anomaly}",
+                )
+                if action:
+                    actions.append(action)
+
         except Exception as e:
-            logger.error(f"Scrub: failed to stop ghost VM {vm.name}: {e}")
+            logger.error("Scrub: failed to fix %s (%s): %s", vm.name, anomaly, e)
+
     return actions
 
 

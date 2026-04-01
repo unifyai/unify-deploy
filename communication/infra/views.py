@@ -1638,7 +1638,10 @@ async def vm_mark_idle_endpoint(
     """Mark the calling VM as idle. Authenticated via GCP identity token.
 
     Only transitions from provisioning or starting — never from assigned
-    (which would steal a VM from an active session).
+    (which would steal a VM from an active session).  Also rejects the
+    request when the VM's GCE status is not RUNNING, which prevents a
+    late-arriving mark-idle call from labeling an already-stopped VM as
+    idle.
     """
     gce = claims["google"]["compute_engine"]
     vm_name = gce["instance_name"]
@@ -1650,6 +1653,20 @@ async def vm_mark_idle_endpoint(
         zone=SETTINGS.vm_zone,
         instance=vm_name,
     )
+
+    if vm.status != "RUNNING":
+        logger.warning(
+            "VM %s tried to mark idle but GCE status=%s (expected RUNNING)",
+            vm_name,
+            vm.status,
+        )
+        return {
+            "vm_name": vm_name,
+            "status": vm.status,
+            "skipped": True,
+            "reason": "vm_not_running",
+        }
+
     current_role = (vm.labels or {}).get("pool-role", "")
     if current_role not in ("provisioning", "starting"):
         logger.warning(
