@@ -305,10 +305,12 @@ def _ensure_job_binding(assistant_id: str, session_name: str):
 
 
 def _unbind_job(job, session_name: str) -> None:
-    """Remove session binding from a job that failed to bootstrap in time.
+    """Remove session binding and stop a job that failed to bootstrap.
 
-    Marks the job as done so it is excluded from future idle-pool claims
-    and cleaned up by the stale-job expiry path.
+    Marks the job as done so it is excluded from future idle-pool claims,
+    then suspends it so the underlying pod is terminated rather than left
+    running indefinitely.  The stale-job expiry path acts as a secondary
+    cleanup for any historical done-labeled jobs that predate this fix.
     """
     assert _batch_api is not None
     labels = dict(job.metadata.labels or {})
@@ -318,7 +320,10 @@ def _unbind_job(job, session_name: str) -> None:
     annotations = dict(job.metadata.annotations or {})
     annotations.pop(SESSION_REF_ANNOTATION, None)
     annotations.pop(CONTAINER_READY_ANNOTATION, None)
-    body = {"metadata": {"labels": labels, "annotations": annotations}}
+    body = {
+        "metadata": {"labels": labels, "annotations": annotations},
+        "spec": {"suspend": True},
+    }
     try:
         _batch_api.patch_namespaced_job(
             name=job.metadata.name,
@@ -326,7 +331,7 @@ def _unbind_job(job, session_name: str) -> None:
             body=body,
         )
         logger.info(
-            "Unbound stale job %s from session %s",
+            "Unbound and suspended stale job %s from session %s",
             job.metadata.name,
             session_name,
         )
@@ -334,6 +339,7 @@ def _unbind_job(job, session_name: str) -> None:
             "controller.job_unbound",
             session_name=session_name,
             job_name=job.metadata.name,
+            suspended=True,
             source="controller.bootstrap_timeout",
         )
     except ApiException:

@@ -422,6 +422,9 @@ def check_valid_contact(
 def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     """Suspend K8s jobs that have been running longer than *max_age_hours*.
 
+    Also sweeps ``unity-status=done`` jobs that were unbound by the
+    controller but may predate the suspend-on-unbind fix.
+
     For each stale job:
     - Suspends the K8s job
     - Releases any leaked pool VM for the assistant
@@ -439,7 +442,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         resp = requests.get(
             f"{SETTINGS.comms_url}/infra/jobs",
             params={
-                "label_selector": "app=unity,unity-status=running",
+                "label_selector": "app=unity,unity-status in (running,done)",
                 "hours": max(max_age_hours + 12, 36),
             },
             headers=headers,
