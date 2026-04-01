@@ -1,3 +1,8 @@
+from copy import deepcopy
+from pathlib import Path
+
+import yaml
+
 from communication.infra import assistant_sessions as assistant_sessions_module
 from communication.infra.assistant_sessions import (
     assistant_session_name,
@@ -7,6 +12,7 @@ from communication.infra.assistant_sessions import (
     build_condition,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
+    delete_assistant_session,
     desktop_url_matches_vm_ref,
     merge_conditions,
     patch_assistant_session_status,
@@ -153,6 +159,93 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
 
     assert captured["body"]["status"]["vmRef"] is None
     assert captured["body"]["status"]["desktopUrl"] is None
+
+
+def test_patch_assistant_session_status_preserves_retry_counters(monkeypatch):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "status": {},
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def patch_namespaced_custom_object_status(self, **kwargs):
+            session["status"].update(kwargs["body"]["status"])
+            session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            return deepcopy(session)
+
+    custom_api = FakeCustomApi()
+    patch_assistant_session_status(
+        custom_api,
+        "preview",
+        "1207",
+        bootstrap_retries=2,
+        vm_retries=3,
+        desktop_probe_failures=1,
+    )
+
+    patch_assistant_session_status(
+        custom_api,
+        "preview",
+        "1207",
+        phase="PendingVM",
+        observed_activation_id="act-2",
+    )
+
+    assert session["status"]["bootstrapRetries"] == 2
+    assert session["status"]["vmRetries"] == 3
+    assert session["status"]["desktopProbeFailures"] == 1
+    assert session["status"]["phase"] == "PendingVM"
+    assert session["status"]["observedActivationId"] == "act-2"
+
+
+def test_crd_status_schema_covers_all_persisted_status_fields():
+    crd_path = (
+        Path(__file__).resolve().parents[2]
+        / "k8s"
+        / "assistant-session-controller"
+        / "crd.yaml"
+    )
+    crd = yaml.safe_load(crd_path.read_text())
+    status_properties = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"][
+        "properties"
+    ]["status"]["properties"]
+
+    expected_fields = {
+        "phase",
+        "observedActivationId",
+        "jobRef",
+        "podRef",
+        "vmRef",
+        "desktopUrl",
+        "lastError",
+        "conditions",
+        "bootstrapRetries",
+        "vmRetries",
+        "desktopProbeFailures",
+    }
+    assert expected_fields.issubset(status_properties.keys())
+
+
+def test_delete_assistant_session_treats_missing_session_as_absent():
+    class FakeCustomApi:
+        def delete_namespaced_custom_object(self, **_kwargs):
+            raise ApiException(status=404)
+
+    deleted = delete_assistant_session(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+    )
+
+    assert deleted is False
 
 
 def test_create_or_update_bootstrap_secret_treats_create_conflict_as_success():
