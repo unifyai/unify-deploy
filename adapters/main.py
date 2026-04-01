@@ -59,7 +59,11 @@ from common.livekit import (
 )
 
 from common.settings import SETTINGS
-from communication.infra.vm_config import SUPPORTED_POOL_VM_TYPES
+
+# Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
+# Duplicated here because the adapters container does not include the
+# communication package at runtime.
+SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
 from .helpers import (
     cleanup_idle_pool,
