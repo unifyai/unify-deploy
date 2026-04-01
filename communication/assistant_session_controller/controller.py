@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 
 WATCH_NAMESPACE = os.environ.get("WATCH_NAMESPACE", SETTINGS.default_namespace)
 RECONCILE_INTERVAL_SECONDS = float(os.environ.get("SESSION_RECONCILE_INTERVAL", "5"))
+CONTAINER_BOOTSTRAP_DEADLINE_SECONDS = float(
+    os.environ.get("CONTAINER_BOOTSTRAP_DEADLINE_SECONDS", "120"),
+)
+MAX_BOOTSTRAP_RETRIES = int(os.environ.get("MAX_BOOTSTRAP_RETRIES", "2"))
 
 _batch_api: k8s_client.BatchV1Api | None = None
 _core_api: k8s_client.CoreV1Api | None = None
@@ -270,6 +274,46 @@ def _ensure_job_binding(assistant_id: str, session_name: str):
     return _create_session_bound_job(assistant_id, session_name)
 
 
+def _unbind_job(job, session_name: str) -> None:
+    """Remove session binding from a job that failed to bootstrap in time.
+
+    Marks the job as done so it is excluded from future idle-pool claims
+    and cleaned up by the stale-job expiry path.
+    """
+    assert _batch_api is not None
+    labels = dict(job.metadata.labels or {})
+    labels.pop(SESSION_REF_LABEL, None)
+    labels.pop("assistant-id", None)
+    labels["unity-status"] = "done"
+    annotations = dict(job.metadata.annotations or {})
+    annotations.pop(SESSION_REF_ANNOTATION, None)
+    annotations.pop(CONTAINER_READY_ANNOTATION, None)
+    body = {"metadata": {"labels": labels, "annotations": annotations}}
+    try:
+        _batch_api.patch_namespaced_job(
+            name=job.metadata.name,
+            namespace=WATCH_NAMESPACE,
+            body=body,
+        )
+        logger.info(
+            "Unbound stale job %s from session %s",
+            job.metadata.name,
+            session_name,
+        )
+        emit_observability_event(
+            "controller.job_unbound",
+            session_name=session_name,
+            job_name=job.metadata.name,
+            source="controller.bootstrap_timeout",
+        )
+    except ApiException:
+        logger.exception(
+            "Failed to unbind job %s from session %s",
+            job.metadata.name,
+            session_name,
+        )
+
+
 def _update_status_for_session(body: dict) -> None:
     assert _custom_api is not None
     session_name = body["metadata"]["name"]
@@ -396,6 +440,94 @@ def _update_status_for_session(body: dict) -> None:
     annotations = job.metadata.annotations or {}
     container_ready = annotations.get(CONTAINER_READY_ANNOTATION) == "true"
     if not container_ready:
+        bootstrap_retries = int(status.get("bootstrapRetries", 0))
+        ready_condition = _conditions_map(existing_conditions).get(
+            "ContainerReady",
+            {},
+        )
+        transition_time_str = ready_condition.get("lastTransitionTime", "")
+
+        timed_out = False
+        if transition_time_str and not new_activation:
+            try:
+                transition_time = datetime.fromisoformat(transition_time_str)
+                elapsed = (
+                    datetime.now(timezone.utc) - transition_time
+                ).total_seconds()
+                timed_out = elapsed > CONTAINER_BOOTSTRAP_DEADLINE_SECONDS
+            except (ValueError, TypeError):
+                pass
+
+        if timed_out:
+            emit_observability_event(
+                "controller.bootstrap_timeout",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                job_name=job.metadata.name,
+                bootstrap_retries=bootstrap_retries,
+                source="controller.reconcile",
+            )
+            _unbind_job(job, session_name)
+
+            if bootstrap_retries >= MAX_BOOTSTRAP_RETRIES:
+                patch_assistant_session_status(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    phase="Failed",
+                    observed_activation_id=activation_id,
+                    job_ref=None,
+                    pod_ref=None,
+                    vm_ref=None,
+                    desktop_url=None,
+                    last_error=(
+                        f"Container failed to become ready after "
+                        f"{bootstrap_retries + 1} attempts"
+                    ),
+                    source="controller.reconcile",
+                    bootstrap_retries=bootstrap_retries + 1,
+                    conditions=merge_conditions(
+                        conditions,
+                        build_condition(
+                            "ContainerReady",
+                            False,
+                            "BootstrapFailed",
+                            f"Exhausted {bootstrap_retries + 1} bootstrap attempts",
+                        ),
+                    ),
+                )
+                return
+
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase="PendingContainer",
+                observed_activation_id=activation_id,
+                job_ref=None,
+                pod_ref=None,
+                vm_ref=None,
+                desktop_url=None,
+                last_error=(
+                    f"Bootstrap timeout on attempt {bootstrap_retries + 1}, retrying"
+                ),
+                source="controller.reconcile",
+                bootstrap_retries=bootstrap_retries + 1,
+                conditions=merge_conditions(
+                    existing_conditions,
+                    build_condition(
+                        "ContainerReady",
+                        False,
+                        "BootstrapTimeout",
+                        (
+                            f"Container did not become ready within "
+                            f"{int(CONTAINER_BOOTSTRAP_DEADLINE_SECONDS)}s"
+                        ),
+                    ),
+                ),
+            )
+            return
+
         patch_assistant_session_status(
             _custom_api,
             WATCH_NAMESPACE,
