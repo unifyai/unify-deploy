@@ -114,6 +114,20 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
+  # Remove legacy infra schedulers (replaced by infra-maintenance-preview)
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'remove-legacy-infra-schedulers'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    for job in jobs-create-preview jobs-cleanup-preview stale-jobs-expire-preview; do
+      gcloud scheduler jobs delete "$job" --location="${_REGION}" --quiet 2>/dev/null \
+        && echo "Deleted legacy scheduler: $job" \
+        || echo "Legacy scheduler $job already removed or not found"
+    done
+  waitFor: ['update-scheduler-infra-maintenance']
+
   # Update Cloud Scheduler: Microsoft Token Refresh Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-microsoft-tokens'

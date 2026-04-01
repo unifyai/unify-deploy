@@ -85,9 +85,11 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Jobs Create
+  # Update Cloud Scheduler: Infra Maintenance
+  # Unified sweep: pool replenish + cleanup + stale-job expiry +
+  # orphaned-VM reconciliation + quarantined-VM purge.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-jobs-create'
+  id: 'update-scheduler-infra-maintenance'
   entrypoint: bash
   secretEnv: ['ORCHESTRA_ADMIN_KEY']
   args:
@@ -96,15 +98,15 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "jobs-create" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
+    gcloud scheduler jobs update http "infra-maintenance" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/infra/maintenance" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "jobs-create" \
+    gcloud scheduler jobs create http "infra-maintenance" \
       --schedule "0 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/infra/maintenance" \
       --http-method POST \
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --time-zone "UTC" \
@@ -112,60 +114,19 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Jobs Cleanup
+  # Remove legacy infra schedulers (replaced by infra-maintenance)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-jobs-cleanup'
+  id: 'remove-legacy-infra-schedulers'
   entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
   args:
   - '-c'
   - |
-    set -o pipefail
-    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-    {
-    gcloud scheduler jobs update http "jobs-cleanup" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
-      --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --location="${_REGION}" \
-    || \
-    gcloud scheduler jobs create http "jobs-cleanup" \
-      --schedule "10 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
-      --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --time-zone "UTC" \
-      --location="${_REGION}"
-    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
-  waitFor: ['deploy']
-
-  # Update Cloud Scheduler: Stale Jobs Expire
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-stale-jobs-expire'
-  entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  args:
-  - '-c'
-  - |
-    set -o pipefail
-    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-    {
-    gcloud scheduler jobs update http "stale-jobs-expire" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
-      --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --schedule "0 1,7,13,19 * * *" \
-      --location="${_REGION}" \
-    || \
-    gcloud scheduler jobs create http "stale-jobs-expire" \
-      --schedule "0 1,7,13,19 * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
-      --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --time-zone "UTC" \
-      --location="${_REGION}"
-    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
-  waitFor: ['deploy']
+    for job in jobs-create jobs-cleanup stale-jobs-expire; do
+      gcloud scheduler jobs delete "$job" --location="${_REGION}" --quiet 2>/dev/null \
+        && echo "Deleted legacy scheduler: $job" \
+        || echo "Legacy scheduler $job already removed or not found"
+    done
+  waitFor: ['update-scheduler-infra-maintenance']
 
   # Update Cloud Scheduler: Microsoft Token Refresh
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'

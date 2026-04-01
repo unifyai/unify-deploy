@@ -730,7 +730,7 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
 def replenish_idle_pool(refresh: bool = False) -> dict:
     """Core logic for idle job pool replenishment.
 
-    Called by build_webhook_context() and by the /scheduled/jobs/create endpoint.
+    Called by build_webhook_context() and by /scheduled/infra/maintenance.
 
     Fill mode has two regimes:
     - Floor regime (demand_buffer <= min_idle_floor): Creates exactly 1 job per
@@ -811,7 +811,7 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
 def cleanup_idle_pool() -> dict:
     """Core logic for idle job pool cleanup.
 
-    Called by the /scheduled/jobs/cleanup endpoint via run_in_executor.
+    Called by /scheduled/infra/maintenance.
     """
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
 

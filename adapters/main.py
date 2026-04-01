@@ -3147,23 +3147,27 @@ def scheduled_infra_maintenance():
     return results
 
 
-# Legacy endpoints kept for backward compatibility / manual invocation.
+# ---------------------------------------------------------------------------
+# Individual infra utilities — NOT wired to Cloud Scheduler.
+# Kept for manual invocation, debugging, and integration test helpers.
+# ---------------------------------------------------------------------------
+
 
 @app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_create(refresh: bool = False):
-    """Replenish idle container pool.  Prefer /scheduled/infra/maintenance."""
+    """Replenish idle container pool (utility — use /scheduled/infra/maintenance for cron)."""
     return replenish_idle_pool(refresh=refresh)
 
 
 @app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_cleanup():
-    """Delete excess idle containers.  Prefer /scheduled/infra/maintenance."""
+    """Delete excess idle containers (utility — use /scheduled/infra/maintenance for cron)."""
     return cleanup_idle_pool()
 
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_expire_stale():
-    """Expire stale jobs.  Prefer /scheduled/infra/maintenance."""
+    """Expire stale jobs (utility — use /scheduled/infra/maintenance for cron)."""
     result = expire_all_stale_jobs(max_age_hours=12)
     try:
         orphan_resp = requests.post(
@@ -3225,11 +3229,8 @@ if __name__ == "__main__":
     logger.info("    - POST /microsoft/router")
     logger.info("    - GET  /microsoft/auth/callback")
     logger.info("  Scheduled:")
-    logger.info("    - POST /scheduled/infra/maintenance  (unified sweep)")
+    logger.info("    - POST /scheduled/infra/maintenance")
     logger.info("    - POST /scheduled/email-watches")
-    logger.info("    - POST /scheduled/jobs/create        (legacy)")
-    logger.info("    - POST /scheduled/jobs/cleanup        (legacy)")
-    logger.info("    - POST /scheduled/jobs/expire-stale   (legacy)")
     logger.info("    - POST /scheduled/cert-renewal")
     logger.info("Server running at: http://localhost:8080")
 

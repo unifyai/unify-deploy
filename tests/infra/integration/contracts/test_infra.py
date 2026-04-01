@@ -237,20 +237,16 @@ class TestInfraAuth:
             422,
         ), f"{method} {path} should reject no-auth, got {resp.status_code}"
 
-    @pytest.mark.parametrize(
-        "path",
-        [
-            "/scheduled/jobs/create",
-            "/scheduled/jobs/cleanup",
-        ],
-    )
-    def test_adapter_scheduler_rejects_no_auth(self, path):
-        resp = requests.post(f"{ADAPTERS_URL}{path}", timeout=10)
+    def test_adapter_scheduler_rejects_no_auth(self):
+        resp = requests.post(
+            f"{ADAPTERS_URL}/scheduled/infra/maintenance",
+            timeout=10,
+        )
         assert resp.status_code in (
             401,
             403,
             422,
-        ), f"POST {path} should reject no-auth, got {resp.status_code}"
+        ), f"POST /scheduled/infra/maintenance should reject no-auth, got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
