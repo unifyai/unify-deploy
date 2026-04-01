@@ -1384,13 +1384,39 @@ def _vm_ref_from_instance(vm) -> Dict[str, Any]:
     }
 
 
+def _is_job_non_terminal(job) -> bool:
+    """Return True if the Job is still alive (non-terminal, not being deleted).
+
+    Mirrors the controller's ``_bound_job_for_session`` semantics: a pod
+    in restart-backoff temporarily has ``active == 0`` without any
+    terminal condition.  Treating that as "no live job" would cause the
+    orphan sweep to prematurely release the VM while the controller
+    still considers the Job bound.
+    """
+    if job.metadata.deletion_timestamp:
+        return False
+    labels = job.metadata.labels or {}
+    if labels.get("unity-status") == "done":
+        return False
+    for condition in job.status.conditions or []:
+        if condition.type == "Failed" and condition.status == "True":
+            return False
+        if condition.type == "Complete" and condition.status == "True":
+            return False
+    return True
+
+
 def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]:
-    """Release VMs assigned to assistants that no longer have running K8s Jobs.
+    """Release VMs assigned to assistants that no longer have live K8s Jobs.
 
     When a K8s pod crashes or is force-deleted, release_pool_vm is never
     called, leaving the VM stuck in pool-role=assigned. This reconciler
     detects such orphans by cross-referencing the K8s Job list and releases
     them back to the pool.
+
+    Uses the same non-terminal job semantics as the AssistantSession
+    controller so that pods in restart-backoff are not mistaken for
+    dead jobs.
 
     Idempotent and safe to call on a cron schedule.
     """
@@ -1414,9 +1440,7 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
                 namespace=SETTINGS.default_namespace,
                 label_selector=f"app=unity,assistant-id={aid}",
             )
-            active_jobs = [
-                j for j in jobs.items if j.status.active and j.status.active > 0
-            ]
+            live_jobs = [j for j in jobs.items if _is_job_non_terminal(j)]
         except Exception as e:
             logger.warning(
                 "reconcile_orphaned_vms: failed to check jobs for %s: %s",
@@ -1425,9 +1449,9 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
             )
             continue
 
-        if not active_jobs:
+        if not live_jobs:
             logger.info(
-                "Orphaned VM %s assigned to %s (no running K8s Job) — releasing",
+                "Orphaned VM %s assigned to %s (no live K8s Job) — releasing",
                 vm.name,
                 aid,
             )
