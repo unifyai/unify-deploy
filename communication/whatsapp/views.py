@@ -56,7 +56,9 @@ async def check_whatsapp_status(
     To: str = Form(...),
     From: str = Form(...),
 ):
-    print(f"[WhatsApp Status Callback] MessageStatus: {MessageStatus}, To: {To}, From: {From}")
+    print(
+        f"[WhatsApp Status Callback] MessageStatus: {MessageStatus}, To: {To}, From: {From}"
+    )
     return {
         "status": True,
         "message_status": MessageStatus or "",
