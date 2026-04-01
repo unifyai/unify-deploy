@@ -42,6 +42,10 @@ CONTAINER_BOOTSTRAP_DEADLINE_SECONDS = float(
     os.environ.get("CONTAINER_BOOTSTRAP_DEADLINE_SECONDS", "120"),
 )
 MAX_BOOTSTRAP_RETRIES = int(os.environ.get("MAX_BOOTSTRAP_RETRIES", "2"))
+VM_READINESS_DEADLINE_SECONDS = float(
+    os.environ.get("VM_READINESS_DEADLINE_SECONDS", "300"),
+)
+MAX_VM_READINESS_RETRIES = int(os.environ.get("MAX_VM_READINESS_RETRIES", "2"))
 
 _batch_api: k8s_client.BatchV1Api | None = None
 _core_api: k8s_client.CoreV1Api | None = None
@@ -472,9 +476,7 @@ def _update_status_for_session(body: dict) -> None:
         if transition_time_str and not new_activation:
             try:
                 transition_time = datetime.fromisoformat(transition_time_str)
-                elapsed = (
-                    datetime.now(timezone.utc) - transition_time
-                ).total_seconds()
+                elapsed = (datetime.now(timezone.utc) - transition_time).total_seconds()
                 timed_out = elapsed > CONTAINER_BOOTSTRAP_DEADLINE_SECONDS
             except (ValueError, TypeError):
                 pass
@@ -676,6 +678,42 @@ def _update_status_for_session(body: dict) -> None:
             )
 
     if not vm_ref:
+        vm_retries_count = int(status.get("vmRetries", 0))
+        if vm_retries_count > MAX_VM_READINESS_RETRIES:
+            replenish_pool(desktop_mode or "ubuntu")
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase="PendingVM",
+                observed_activation_id=activation_id,
+                job_ref=job_ref,
+                pod_ref=pod_ref,
+                vm_ref=None,
+                desktop_url=None,
+                last_error=(
+                    f"VM readiness exhausted after {vm_retries_count} attempts; "
+                    f"waiting for pool replenishment"
+                ),
+                source="controller.reconcile",
+                conditions=merge_conditions(
+                    conditions,
+                    build_condition(
+                        "VMAssigned",
+                        False,
+                        "RetriesExhausted",
+                        f"Exhausted {vm_retries_count} VM readiness attempts",
+                    ),
+                    build_condition(
+                        "DesktopReady",
+                        False,
+                        "RetriesExhausted",
+                        "Waiting for pool replenishment",
+                    ),
+                ),
+            )
+            return
+
         startup_payload = read_bootstrap_secret(_core_api, WATCH_NAMESPACE, secret_name)
         api_key = str(startup_payload.get("api_key", ""))
         try:
@@ -798,6 +836,7 @@ def _update_status_for_session(body: dict) -> None:
             desktop_url=desktop_url,
             last_error="",
             source="controller.reconcile",
+            desktop_probe_failures=0,
             conditions=merge_conditions(
                 conditions,
                 build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
@@ -808,6 +847,75 @@ def _update_status_for_session(body: dict) -> None:
                     "Authenticated desktop readiness complete",
                 ),
                 build_condition("Active", True, "Ready", "Desktop session active"),
+            ),
+        )
+        return
+
+    vm_assigned_condition = _conditions_map(existing_conditions).get(
+        "VMAssigned",
+        {},
+    )
+    vm_assigned_time_str = vm_assigned_condition.get("lastTransitionTime", "")
+    vm_timed_out = False
+    if vm_assigned_time_str and not new_activation:
+        try:
+            vm_assigned_time = datetime.fromisoformat(vm_assigned_time_str)
+            vm_elapsed = (
+                datetime.now(timezone.utc) - vm_assigned_time
+            ).total_seconds()
+            vm_timed_out = vm_elapsed > VM_READINESS_DEADLINE_SECONDS
+        except (ValueError, TypeError):
+            pass
+
+    if vm_timed_out:
+        vm_retries_count = int(status.get("vmRetries", 0))
+        emit_observability_event(
+            "controller.vm_readiness_timeout",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            vm_name=(vm_ref or {}).get("name"),
+            vm_retries=vm_retries_count,
+            source="controller.reconcile",
+        )
+        try:
+            release_pool_vm(assistant_id)
+        except Exception:
+            logger.exception(
+                "Failed to release timed-out VM for %s",
+                assistant_id,
+            )
+        patch_assistant_session_status(
+            _custom_api,
+            WATCH_NAMESPACE,
+            assistant_id,
+            phase="PendingVM",
+            observed_activation_id=activation_id,
+            job_ref=job_ref,
+            pod_ref=pod_ref,
+            vm_ref=None,
+            desktop_url=None,
+            last_error=(
+                f"VM readiness timeout on attempt {vm_retries_count + 1}, retrying"
+            ),
+            source="controller.reconcile",
+            vm_retries=vm_retries_count + 1,
+            conditions=merge_conditions(
+                conditions,
+                build_condition(
+                    "VMAssigned",
+                    False,
+                    "ReadinessTimeout",
+                    (
+                        f"VM did not become ready within "
+                        f"{int(VM_READINESS_DEADLINE_SECONDS)}s"
+                    ),
+                ),
+                build_condition(
+                    "DesktopReady",
+                    False,
+                    "ReadinessTimeout",
+                    "Released VM after readiness timeout",
+                ),
             ),
         )
         return

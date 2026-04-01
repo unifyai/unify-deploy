@@ -391,6 +391,8 @@ def patch_assistant_session_status(
     conditions: list[dict[str, Any]] | None | object = _STATUS_UNSET,
     source: str | None = None,
     bootstrap_retries: int | None | object = _STATUS_UNSET,
+    vm_retries: int | None | object = _STATUS_UNSET,
+    desktop_probe_failures: int | None | object = _STATUS_UNSET,
 ) -> dict[str, Any]:
     name = assistant_session_name(assistant_id)
     body: dict[str, Any] = {"status": {}}
@@ -413,6 +415,10 @@ def patch_assistant_session_status(
         status["conditions"] = conditions
     if bootstrap_retries is not _STATUS_UNSET:
         status["bootstrapRetries"] = bootstrap_retries
+    if vm_retries is not _STATUS_UNSET:
+        status["vmRetries"] = vm_retries
+    if desktop_probe_failures is not _STATUS_UNSET:
+        status["desktopProbeFailures"] = desktop_probe_failures
 
     current = get_assistant_session(custom_api, namespace, assistant_id) or {}
     current_status = current.get("status", {})
