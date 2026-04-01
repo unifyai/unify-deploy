@@ -74,6 +74,12 @@ spec:
                 type: string
               lastError:
                 type: string
+              bootstrapRetries:
+                type: integer
+              vmRetries:
+                type: integer
+              desktopProbeFailures:
+                type: integer
               jobRef:
                 type: object
                 properties:

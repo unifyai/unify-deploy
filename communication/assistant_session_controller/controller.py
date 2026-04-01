@@ -133,6 +133,36 @@ def _bound_job_for_session(session_name: str):
     return None
 
 
+def _job_matches_session(job, session_name: str) -> bool:
+    labels = job.metadata.labels or {}
+    if labels.get(SESSION_REF_LABEL) == session_name:
+        return True
+    annotations = job.metadata.annotations or {}
+    return annotations.get(SESSION_REF_ANNOTATION) == session_name
+
+
+def _job_for_session_delete(session_name: str, job_ref: dict | None):
+    assert _batch_api is not None
+    job_name = str((job_ref or {}).get("name", ""))
+    if job_name:
+        try:
+            job = _batch_api.read_namespaced_job(
+                name=job_name,
+                namespace=WATCH_NAMESPACE,
+            )
+        except ApiException as e:
+            if e.status != 404:
+                raise
+        else:
+            if (
+                not job.metadata.deletion_timestamp
+                and _job_terminal_phase(job) is None
+                and _job_matches_session(job, session_name)
+            ):
+                return job
+    return _bound_job_for_session(session_name)
+
+
 def _current_pod_ref(job_name: str) -> dict | None:
     assert _core_api is not None
     pods = _core_api.list_namespaced_pod(
@@ -304,7 +334,12 @@ def _ensure_job_binding(assistant_id: str, session_name: str):
     return _create_session_bound_job(assistant_id, session_name)
 
 
-def _unbind_job(job, session_name: str) -> None:
+def _unbind_job(
+    job,
+    session_name: str,
+    *,
+    source: str = "controller.bootstrap_timeout",
+) -> None:
     """Remove session binding and stop a job that failed to bootstrap.
 
     Marks the job as done so it is excluded from future idle-pool claims,
@@ -340,7 +375,7 @@ def _unbind_job(job, session_name: str) -> None:
             session_name=session_name,
             job_name=job.metadata.name,
             suspended=True,
-            source="controller.bootstrap_timeout",
+            source=source,
         )
     except ApiException:
         logger.exception(
@@ -364,6 +399,15 @@ def _update_status_for_session(body: dict) -> None:
     observed_activation_id = str(status.get("observedActivationId", ""))
     new_activation = observed_activation_id != activation_id
     existing_conditions = [] if new_activation else status.get("conditions", [])
+    activation_rollover_status = (
+        {
+            "bootstrap_retries": 0,
+            "vm_retries": 0,
+            "desktop_probe_failures": 0,
+        }
+        if new_activation
+        else {}
+    )
     emit_observability_event(
         "controller.session_reconcile",
         **assistant_session_observability_fields(
@@ -395,6 +439,7 @@ def _update_status_for_session(body: dict) -> None:
                     "Missing required spec",
                 ),
             ),
+            **activation_rollover_status,
         )
         return
 
@@ -421,6 +466,7 @@ def _update_status_for_session(body: dict) -> None:
                     "No Unity job could be bound",
                 ),
             ),
+            **activation_rollover_status,
         )
         return
 
@@ -470,13 +516,16 @@ def _update_status_for_session(body: dict) -> None:
                     f"Job reached terminal phase {terminal_phase}",
                 ),
             ),
+            **activation_rollover_status,
         )
         return
 
     annotations = job.metadata.annotations or {}
     container_ready = annotations.get(CONTAINER_READY_ANNOTATION) == "true"
     if not container_ready:
-        bootstrap_retries = int(status.get("bootstrapRetries", 0))
+        bootstrap_retries = (
+            0 if new_activation else int(status.get("bootstrapRetries", 0))
+        )
         ready_condition = _conditions_map(existing_conditions).get(
             "ContainerReady",
             {},
@@ -589,6 +638,7 @@ def _update_status_for_session(body: dict) -> None:
                     "Waiting for Unity bootstrap",
                 ),
             ),
+            **activation_rollover_status,
         )
         return
 
@@ -619,6 +669,7 @@ def _update_status_for_session(body: dict) -> None:
                 conditions,
                 build_condition("Active", True, "Ready", "Container session active"),
             ),
+            **activation_rollover_status,
         )
         return
 
@@ -689,7 +740,7 @@ def _update_status_for_session(body: dict) -> None:
             )
 
     if not vm_ref:
-        vm_retries_count = int(status.get("vmRetries", 0))
+        vm_retries_count = 0 if new_activation else int(status.get("vmRetries", 0))
         if vm_retries_count > MAX_VM_READINESS_RETRIES:
             replenish_pool(desktop_mode or "ubuntu")
             patch_assistant_session_status(
@@ -722,6 +773,7 @@ def _update_status_for_session(body: dict) -> None:
                         "Waiting for pool replenishment",
                     ),
                 ),
+                **activation_rollover_status,
             )
             return
 
@@ -767,6 +819,7 @@ def _update_status_for_session(body: dict) -> None:
                 last_error="",
                 source="controller.reconcile",
                 conditions=conditions,
+                **activation_rollover_status,
             )
             return
         except ValueError as exc:
@@ -798,6 +851,7 @@ def _update_status_for_session(body: dict) -> None:
                         "Waiting for VM capacity",
                     ),
                 ),
+                **activation_rollover_status,
             )
             return
         except Exception as exc:  # pragma: no cover - defensive reconcile
@@ -831,12 +885,15 @@ def _update_status_for_session(body: dict) -> None:
                         str(exc),
                     ),
                 ),
+                **activation_rollover_status,
             )
             return
 
     if _condition_is_true(existing_conditions, "DesktopReady"):
         vm_hostname = (vm_ref or {}).get("hostname", "")
-        probe_failures = int(status.get("desktopProbeFailures", 0))
+        probe_failures = (
+            0 if new_activation else int(status.get("desktopProbeFailures", 0))
+        )
 
         if vm_hostname:
             alive = probe_vm_https(vm_hostname, timeout=3.0)
@@ -1057,6 +1114,7 @@ def _update_status_for_session(body: dict) -> None:
                 "Desktop session not ready yet",
             ),
         ),
+        **activation_rollover_status,
     )
 
 
@@ -1099,11 +1157,27 @@ def reconcile_session(body, **_):
     SETTINGS.assistant_session_plural,
 )
 def delete_session(body, **_):
+    assert _batch_api is not None
     assert _core_api is not None
+    session_name = str(body.get("metadata", {}).get("name", ""))
     spec = body.get("spec", {})
     status = body.get("status", {})
     assistant_id = str(spec.get("assistantId", ""))
     secret_name = spec.get("startupSecretRef")
+    try:
+        job = _job_for_session_delete(session_name, status.get("jobRef"))
+    except Exception:  # pragma: no cover - best effort cleanup
+        logger.exception("Failed to load bound job for deleted AssistantSession")
+        job = None
+    if job is not None:
+        try:
+            _unbind_job(
+                job,
+                session_name,
+                source="controller.session_delete",
+            )
+        except Exception:  # pragma: no cover - best effort cleanup
+            logger.exception("Failed to unbind job for deleted AssistantSession")
     if secret_name:
         try:
             _core_api.delete_namespaced_secret(
@@ -1112,8 +1186,10 @@ def delete_session(body, **_):
             )
         except ApiException as e:
             if e.status != 404:
-                raise
-    if assistant_id and status.get("vmRef"):
+                logger.exception(
+                    "Failed deleting bootstrap secret for deleted AssistantSession",
+                )
+    if assistant_id:
         try:
             release_pool_vm(assistant_id)
         except Exception:  # pragma: no cover - best effort cleanup

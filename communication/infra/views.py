@@ -27,6 +27,7 @@ from .assistant_sessions import (
     assistant_session_name,
     build_assistant_session_spec,
     build_condition,
+    delete_assistant_session,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
     emit_observability_event,
@@ -851,6 +852,29 @@ async def read_assistant_session(assistant_id: str):
             detail=f"AssistantSession not found for assistant {assistant_id}",
         )
     return session
+
+
+@router.delete("/session/{assistant_id}")
+async def delete_current_assistant_session(assistant_id: str):
+    """Delete the current AssistantSession for an assistant."""
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize AssistantSession API client",
+        )
+
+    deleted = await asyncio.to_thread(
+        delete_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+    return {
+        "success": True,
+        "assistant_id": assistant_id,
+        "deleted": deleted,
+    }
 
 
 # stop kubernetes job
@@ -1748,12 +1772,31 @@ async def vm_mark_idle_endpoint(
             "skipped": True,
         }
 
-    await asyncio.to_thread(
+    updated = await asyncio.to_thread(
         _set_pool_labels,
         client,
         vm_name,
         {"pool-role": "idle"},
+        expected_role=current_role,
     )
+    if not updated:
+        logger.warning(
+            "VM %s skipped mark-idle because pool-role changed from %s",
+            vm_name,
+            current_role,
+        )
+        refreshed_vm = await asyncio.to_thread(
+            client.get,
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
+        return {
+            "vm_name": vm_name,
+            "pool_role": (refreshed_vm.labels or {}).get("pool-role", ""),
+            "skipped": True,
+            "reason": "role_changed",
+        }
     logger.info(f"VM {vm_name} marked itself as idle via identity token")
     return {"vm_name": vm_name, "pool_role": "idle"}
 

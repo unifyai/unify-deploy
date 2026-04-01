@@ -146,6 +146,32 @@ def get_assistant_session(
         raise
 
 
+def delete_assistant_session(
+    custom_api: k8s_client.CustomObjectsApi,
+    namespace: str,
+    assistant_id: str,
+) -> bool:
+    name = assistant_session_name(assistant_id)
+    try:
+        custom_api.delete_namespaced_custom_object(
+            group=SETTINGS.assistant_session_group,
+            version=SETTINGS.assistant_session_version,
+            namespace=namespace,
+            plural=SETTINGS.assistant_session_plural,
+            name=name,
+        )
+        emit_observability_event(
+            "assistantsession.deleted",
+            assistant_id=assistant_id,
+            session_name=name,
+        )
+        return True
+    except ApiException as e:
+        if e.status == 404:
+            return False
+        raise
+
+
 def create_or_update_bootstrap_secret(
     core_api,
     namespace: str,
