@@ -1597,6 +1597,19 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
     return result
 
 
+@router.post("/vm/pool/purge-quarantined")
+async def purge_quarantined_vms_endpoint(vm_type: str = "ubuntu"):
+    """Delete quarantined VMs that are consuming quota without serving traffic.
+
+    Quarantined VMs are already stopped and excluded from pool operations.
+    This endpoint deletes them so replenish_pool can create fresh replacements.
+    """
+    from .vm_helpers import purge_quarantined_vms
+
+    result = await asyncio.to_thread(purge_quarantined_vms, vm_type)
+    return result
+
+
 @router.post("/cert-renewal")
 async def cert_renewal_endpoint():
     """Renew the *.vm.unify.ai wildcard TLS cert if within 30 days of expiry.

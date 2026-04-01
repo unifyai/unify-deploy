@@ -85,9 +85,11 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Jobs Create Staging
+  # Update Cloud Scheduler: Infra Maintenance Staging
+  # Unified sweep: pool replenish + cleanup + stale-job expiry +
+  # orphaned-VM reconciliation + quarantined-VM purge.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-jobs-create'
+  id: 'update-scheduler-infra-maintenance'
   entrypoint: bash
   secretEnv: ['ORCHESTRA_ADMIN_KEY']
   args:
@@ -96,70 +98,15 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "jobs-create-staging" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
+    gcloud scheduler jobs update http "infra-maintenance-staging" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/infra/maintenance" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "jobs-create-staging" \
+    gcloud scheduler jobs create http "infra-maintenance-staging" \
       --schedule "0 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
-      --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --time-zone "UTC" \
-      --location="${_REGION}"
-    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
-  waitFor: ['deploy']
-
-  # Update Cloud Scheduler: Jobs Cleanup Staging
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-jobs-cleanup'
-  entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  args:
-  - '-c'
-  - |
-    set -o pipefail
-    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-    {
-    gcloud scheduler jobs update http "jobs-cleanup-staging" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
-      --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --location="${_REGION}" \
-    || \
-    gcloud scheduler jobs create http "jobs-cleanup-staging" \
-      --schedule "10 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
-      --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --time-zone "UTC" \
-      --location="${_REGION}"
-    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
-  waitFor: ['deploy']
-
-  # Update Cloud Scheduler: Stale Jobs Expire Staging
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-stale-jobs-expire'
-  entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  args:
-  - '-c'
-  - |
-    set -o pipefail
-    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-    {
-    gcloud scheduler jobs update http "stale-jobs-expire-staging" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
-      --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --schedule "0 1,7,13,19 * * *" \
-      --location="${_REGION}" \
-    || \
-    gcloud scheduler jobs create http "stale-jobs-expire-staging" \
-      --schedule "0 1,7,13,19 * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/infra/maintenance" \
       --http-method POST \
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --time-zone "UTC" \

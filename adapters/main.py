@@ -3085,42 +3085,86 @@ def scheduled_teams_watches(payload: ScheduledPayload):
     return results
 
 
+@app.post("/scheduled/infra/maintenance", dependencies=[Depends(require_admin_key)])
+def scheduled_infra_maintenance():
+    """Unified infrastructure maintenance sweep.
+
+    Runs hourly via Cloud Scheduler.  Consolidates container pool
+    replenishment, excess-idle cleanup, stale-job expiry, orphaned-VM
+    reconciliation and quarantined-VM purge into a single scheduled
+    endpoint so the pool-health concern lives in one place.
+    """
+    results: dict = {}
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+
+    # 1 — Replenish idle container pool (refresh=True rotates to latest image)
+    try:
+        results["pool_replenish"] = replenish_idle_pool(refresh=True)
+    except Exception as exc:
+        logger.exception("maintenance: pool replenish failed")
+        results["pool_replenish_error"] = str(exc)
+
+    # 2 — Delete excess idle containers
+    try:
+        results["pool_cleanup"] = cleanup_idle_pool()
+    except Exception as exc:
+        logger.exception("maintenance: pool cleanup failed")
+        results["pool_cleanup_error"] = str(exc)
+
+    # 3 — Expire stale jobs (running >12 h) and release leaked VMs
+    try:
+        results["stale_jobs"] = expire_all_stale_jobs(max_age_hours=12)
+    except Exception as exc:
+        logger.exception("maintenance: stale job expiry failed")
+        results["stale_jobs_error"] = str(exc)
+
+    # 4 — Release VMs assigned to assistants that no longer have running jobs
+    try:
+        resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",
+            headers=headers,
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            results["orphaned_vms"] = resp.json()
+    except Exception as exc:
+        logger.exception("maintenance: orphan VM reconcile failed")
+        results["orphaned_vms_error"] = str(exc)
+
+    # 5 — Delete quarantined VMs so replenish_pool can create fresh replacements
+    try:
+        resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/vm/pool/purge-quarantined",
+            headers=headers,
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            results["quarantined_vms"] = resp.json()
+    except Exception as exc:
+        logger.exception("maintenance: quarantined VM purge failed")
+        results["quarantined_vms_error"] = str(exc)
+
+    return results
+
+
+# Legacy endpoints kept for backward compatibility / manual invocation.
+
 @app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_create(refresh: bool = False):
-    """Cloud Run endpoint that creates idle jobs.
-
-    Two modes of operation:
-    - **Fill mode** (default): Only creates jobs if the pool is below the target.
-      Used by reactive replenishment from build_webhook_context.
-    - **Refresh mode** (?refresh=true): Always creates `target` new jobs regardless
-      of current pool size. The cleanup endpoint (10 min later) will delete the
-      older containers, effectively rotating the pool to the latest image.
-      Used by the hourly cron and CloudBuild deployments.
-    """
+    """Replenish idle container pool.  Prefer /scheduled/infra/maintenance."""
     return replenish_idle_pool(refresh=refresh)
 
 
 @app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_cleanup():
-    """Clean up old idle jobs, retaining the newest up to the target count.
-
-    Runs 10 minutes after /scheduled/jobs/create. Keeps recently-created idle
-    jobs (< 11 min old) up to the demand-aware target and deletes the rest.
-    Uses required_labels to guard against race conditions where a job
-    transitions to live between the fetch and the delete.
-    """
+    """Delete excess idle containers.  Prefer /scheduled/infra/maintenance."""
     return cleanup_idle_pool()
 
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_expire_stale():
-    """Suspend K8s jobs running longer than 12h and release leaked VMs.
-
-    Also reconciles orphaned VMs (assigned but no running K8s Job).
-    Triggered by Cloud Scheduler every 6 hours.
-    """
+    """Expire stale jobs.  Prefer /scheduled/infra/maintenance."""
     result = expire_all_stale_jobs(max_age_hours=12)
-
     try:
         orphan_resp = requests.post(
             f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",
@@ -3131,11 +3175,7 @@ def scheduled_jobs_expire_stale():
             result["orphaned_vms"] = orphan_resp.json()
     except Exception as e:
         result["orphaned_vms_error"] = str(e)
-
-    return Response(
-        content=json.dumps(result),
-        status_code=200,
-    )
+    return Response(content=json.dumps(result), status_code=200)
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
@@ -3185,10 +3225,11 @@ if __name__ == "__main__":
     logger.info("    - POST /microsoft/router")
     logger.info("    - GET  /microsoft/auth/callback")
     logger.info("  Scheduled:")
+    logger.info("    - POST /scheduled/infra/maintenance  (unified sweep)")
     logger.info("    - POST /scheduled/email-watches")
-    logger.info("    - POST /scheduled/jobs/create")
-    logger.info("    - POST /scheduled/jobs/cleanup")
-    logger.info("    - POST /scheduled/jobs/expire-stale")
+    logger.info("    - POST /scheduled/jobs/create        (legacy)")
+    logger.info("    - POST /scheduled/jobs/cleanup        (legacy)")
+    logger.info("    - POST /scheduled/jobs/expire-stale   (legacy)")
     logger.info("    - POST /scheduled/cert-renewal")
     logger.info("Server running at: http://localhost:8080")
 

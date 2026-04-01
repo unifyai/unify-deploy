@@ -1442,6 +1442,53 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
     }
 
 
+def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
+    """Delete quarantined VMs that are consuming resources without serving traffic.
+
+    Quarantined VMs are already stopped (by _quarantine_pool_vm) and
+    excluded from all pool operations. Without this purge they accumulate
+    indefinitely, wasting GCE instance quota and boot-disk storage.
+
+    Deleting a quarantined VM auto-deletes its boot disk. Any attached
+    persistent disk (auto_delete=false) survives as an unattached disk and
+    will be re-attached when the assistant's next session claims a fresh VM.
+
+    Idempotent and safe to call on a cron schedule.
+    """
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        filter=f"labels.pool-role=quarantined AND labels.vm-type={vm_type}",
+    )
+    quarantined = list(client.list(request=request))
+    if not quarantined:
+        return {"found": 0, "deleted": [], "errors": []}
+
+    deleted: list[str] = []
+    errors: list[dict] = []
+    for vm in quarantined:
+        try:
+            client.delete(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                instance=vm.name,
+            ).result()
+            deleted.append(vm.name)
+            _log_vm_pool_event(
+                "quarantined_purged",
+                vm_name=vm.name,
+                vm_type=vm_type,
+                status=vm.status,
+            )
+            logger.info("Purged quarantined VM %s", vm.name)
+        except Exception as exc:
+            logger.error("Failed to delete quarantined VM %s: %s", vm.name, exc)
+            errors.append({"vm_name": vm.name, "error": str(exc)})
+
+    return {"found": len(quarantined), "deleted": deleted, "errors": errors}
+
+
 def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     """Release a pool VM: clear metadata, detach disk, reset labels.
 
