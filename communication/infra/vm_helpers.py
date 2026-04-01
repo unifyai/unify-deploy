@@ -1467,14 +1467,14 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
 
     deleted: list[str] = []
     errors: list[dict] = []
-    for vm in quarantined:
+
+    def _delete_one(vm) -> Optional[str]:
         try:
             client.delete(
                 project=SETTINGS.vm_project_id,
                 zone=SETTINGS.vm_zone,
                 instance=vm.name,
             ).result()
-            deleted.append(vm.name)
             _log_vm_pool_event(
                 "quarantined_purged",
                 vm_name=vm.name,
@@ -1482,9 +1482,19 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
                 status=vm.status,
             )
             logger.info("Purged quarantined VM %s", vm.name)
+            return vm.name
         except Exception as exc:
             logger.error("Failed to delete quarantined VM %s: %s", vm.name, exc)
             errors.append({"vm_name": vm.name, "error": str(exc)})
+            return None
+
+    with ThreadPoolExecutor(
+        max_workers=min(len(quarantined), 5),
+        thread_name_prefix="quarantine-purge",
+    ) as pool:
+        for result in pool.map(_delete_one, quarantined):
+            if result:
+                deleted.append(result)
 
     return {"found": len(quarantined), "deleted": deleted, "errors": errors}
 
