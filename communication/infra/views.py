@@ -754,28 +754,43 @@ async def start_job(
             desktop_mode=desktop_mode,
         )
 
-        secret_name = await asyncio.to_thread(
-            create_or_update_bootstrap_secret,
-            core_api,
-            SETTINGS.default_namespace,
-            assistant_id,
-            startup_payload,
-        )
-        spec = build_assistant_session_spec(
-            assistant_id=assistant_id,
-            user_id=user_id,
-            medium=medium,
-            desktop_mode=desktop_mode,
-            startup_secret_ref=secret_name,
-            activation_id=activation_id,
-        )
-        session = await asyncio.to_thread(
-            create_or_update_assistant_session,
-            custom_api,
-            SETTINGS.default_namespace,
-            assistant_id,
-            spec,
-        )
+        if reused_active_session:
+            session = existing_session
+            secret_name = str(
+                existing_session.get("spec", {}).get("startupSecretRef", ""),
+            )
+            emit_observability_event(
+                "infra.job_start.reused",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                activation_id=activation_id,
+                existing_phase=existing_phase,
+                startup_secret_ref=secret_name,
+            )
+        else:
+            secret_name = await asyncio.to_thread(
+                create_or_update_bootstrap_secret,
+                core_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+                startup_payload,
+            )
+            spec = build_assistant_session_spec(
+                assistant_id=assistant_id,
+                user_id=user_id,
+                medium=medium,
+                desktop_mode=desktop_mode,
+                startup_secret_ref=secret_name,
+                activation_id=activation_id,
+            )
+            session = await asyncio.to_thread(
+                create_or_update_assistant_session,
+                custom_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+                spec,
+            )
+
         activation_id = str(session.get("spec", {}).get("activationId", activation_id))
         status = session.get("status", {})
         emit_observability_event(
