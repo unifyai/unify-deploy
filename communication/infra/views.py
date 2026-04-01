@@ -1271,16 +1271,47 @@ async def vm_ready_endpoint(
             detail="Ready signal API key does not match the active AssistantSession",
         )
 
-    session_conditions = session.get("status", {}).get("conditions", [])
+    # ── Fresh read: all readiness decisions use the latest session state ──
+    fresh = await asyncio.to_thread(
+        get_assistant_session, custom_api, SETTINGS.default_namespace, assistant_id,
+    )
+    if fresh is None:
+        raise HTTPException(status_code=409, detail="AssistantSession disappeared")
+    fresh_spec = fresh.get("spec", {})
+    fresh_status = fresh.get("status", {})
+
+    activation_id = fresh_spec.get("activationId", "")
+    observed_id = fresh_status.get("observedActivationId", "")
+    if activation_id and observed_id != activation_id:
+        emit_observability_event(
+            "infra.vm_ready.rejected",
+            **assistant_session_observability_fields(
+                fresh,
+                requested_hostname=requested_hostname,
+                reason="activation_rollover",
+                vm_type=vm_type,
+                activation_id=activation_id,
+                observed_activation_id=observed_id,
+            ),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "VM ready signal rejected: activation rollover in progress "
+                f"(spec={activation_id}, observed={observed_id})"
+            ),
+        )
+
+    fresh_conditions = fresh_status.get("conditions", [])
     container_ready = any(
         c.get("type") == "ContainerReady" and c.get("status") == "True"
-        for c in session_conditions
+        for c in fresh_conditions
     )
     if not container_ready:
         emit_observability_event(
             "infra.vm_ready.rejected",
             **assistant_session_observability_fields(
-                session,
+                fresh,
                 requested_hostname=requested_hostname,
                 reason="container_not_ready",
                 vm_type=vm_type,
@@ -1291,13 +1322,11 @@ async def vm_ready_endpoint(
             detail="VM ready signal rejected: container is not yet ready",
         )
 
-    existing_vm_ref = session.get("status", {}).get("vmRef") or {}
+    existing_vm_ref = fresh_status.get("vmRef") or {}
     existing_vm_name = existing_vm_ref.get("name", "")
     if existing_vm_name:
         assigned_vm_ref = await asyncio.to_thread(
-            verify_vm_assignment,
-            existing_vm_name,
-            assistant_id,
+            verify_vm_assignment, existing_vm_name, assistant_id,
         )
     else:
         assigned_vm_ref = await asyncio.to_thread(get_assigned_vm_ref, assistant_id)
@@ -1306,7 +1335,7 @@ async def vm_ready_endpoint(
         emit_observability_event(
             "infra.vm_ready.rejected",
             **assistant_session_observability_fields(
-                session,
+                fresh,
                 requested_hostname=requested_hostname,
                 reason="no_assigned_vm",
                 vm_type=vm_type,
@@ -1325,7 +1354,7 @@ async def vm_ready_endpoint(
         emit_observability_event(
             "infra.vm_ready.rejected",
             **assistant_session_observability_fields(
-                session,
+                fresh,
                 requested_hostname=requested_hostname,
                 assigned_hostname=assigned_vm_ref.get("hostname"),
                 assigned_vm_name=assigned_vm_ref.get("name"),
@@ -1354,7 +1383,7 @@ async def vm_ready_endpoint(
         emit_observability_event(
             "infra.vm_ready.rejected",
             **assistant_session_observability_fields(
-                session,
+                fresh,
                 requested_hostname=requested_hostname,
                 assigned_hostname=hostname,
                 assigned_vm_name=assigned_vm_ref.get("name"),
@@ -1372,26 +1401,13 @@ async def vm_ready_endpoint(
             detail=f"VM agent not ready at {hostname}",
         )
 
-    fresh_session = await asyncio.to_thread(
-        get_assistant_session,
-        custom_api,
-        SETTINGS.default_namespace,
-        assistant_id,
-    )
-    fresh_conditions = (
-        (fresh_session or session)
-        .get("status", {})
-        .get(
-            "conditions",
-            [],
-        )
-    )
     await asyncio.to_thread(
         patch_assistant_session_status,
         custom_api,
         SETTINGS.default_namespace,
         assistant_id,
         phase="Active",
+        observed_activation_id=activation_id,
         vm_ref=assigned_vm_ref,
         desktop_url=f"https://{hostname}",
         source="views.vm_ready",
@@ -1411,7 +1427,7 @@ async def vm_ready_endpoint(
     emit_observability_event(
         "infra.vm_ready.accepted",
         **assistant_session_observability_fields(
-            session,
+            fresh,
             assigned_hostname=hostname,
             assigned_vm_name=assigned_vm_ref.get("name"),
             requested_hostname=requested_hostname,
