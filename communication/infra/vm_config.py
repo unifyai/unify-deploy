@@ -95,6 +95,8 @@ POOL_ASSISTANT_DISK_SIZE_GB = 64
 POOL_ASSISTANT_DISK_TYPE = "pd-standard"
 POOL_VM_NAME_PREFIX = "unity-pool"
 
+SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
+
 # Pool image families (separate from legacy to avoid affecting existing VMs)
 POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"
 POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"

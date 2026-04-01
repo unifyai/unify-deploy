@@ -1273,7 +1273,10 @@ async def vm_ready_endpoint(
 
     # ── Fresh read: all readiness decisions use the latest session state ──
     fresh = await asyncio.to_thread(
-        get_assistant_session, custom_api, SETTINGS.default_namespace, assistant_id,
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
     )
     if fresh is None:
         raise HTTPException(status_code=409, detail="AssistantSession disappeared")
@@ -1326,7 +1329,9 @@ async def vm_ready_endpoint(
     existing_vm_name = existing_vm_ref.get("name", "")
     if existing_vm_name:
         assigned_vm_ref = await asyncio.to_thread(
-            verify_vm_assignment, existing_vm_name, assistant_id,
+            verify_vm_assignment,
+            existing_vm_name,
+            assistant_id,
         )
     else:
         assigned_vm_ref = await asyncio.to_thread(get_assigned_vm_ref, assistant_id)

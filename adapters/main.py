@@ -59,6 +59,7 @@ from common.livekit import (
 )
 
 from common.settings import SETTINGS
+from communication.infra.vm_config import SUPPORTED_POOL_VM_TYPES
 
 from .helpers import (
     cleanup_idle_pool,
@@ -3120,34 +3121,40 @@ def scheduled_infra_maintenance():
         results["stale_jobs_error"] = str(exc)
 
     # 4 — Release VMs assigned to assistants that no longer have running jobs
-    try:
-        resp = requests.post(
-            f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",
-            headers=headers,
-            timeout=60,
-        )
-        if resp.status_code == 200:
-            results["orphaned_vms"] = resp.json()
-    except Exception as exc:
-        logger.exception("maintenance: orphan VM reconcile failed")
-        results["orphaned_vms_error"] = str(exc)
+    for vm_type in SUPPORTED_POOL_VM_TYPES:
+        key = f"orphaned_vms_{vm_type}"
+        try:
+            resp = requests.post(
+                f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",
+                params={"vm_type": vm_type},
+                headers=headers,
+                timeout=60,
+            )
+            if resp.status_code == 200:
+                results[key] = resp.json()
+        except Exception as exc:
+            logger.exception("maintenance: orphan VM reconcile failed for %s", vm_type)
+            results[f"{key}_error"] = str(exc)
 
     # 5 — Delete quarantined VMs so replenish_pool can create fresh replacements
-    try:
-        resp = requests.post(
-            f"{SETTINGS.comms_url}/infra/vm/pool/purge-quarantined",
-            headers=headers,
-            timeout=60,
-        )
-        if resp.status_code == 200:
-            results["quarantined_vms"] = resp.json()
-    except Exception as exc:
-        logger.exception("maintenance: quarantined VM purge failed")
-        results["quarantined_vms_error"] = str(exc)
+    for vm_type in SUPPORTED_POOL_VM_TYPES:
+        key = f"quarantined_vms_{vm_type}"
+        try:
+            resp = requests.post(
+                f"{SETTINGS.comms_url}/infra/vm/pool/purge-quarantined",
+                params={"vm_type": vm_type},
+                headers=headers,
+                timeout=60,
+            )
+            if resp.status_code == 200:
+                results[key] = resp.json()
+        except Exception as exc:
+            logger.exception("maintenance: quarantine purge failed for %s", vm_type)
+            results[f"{key}_error"] = str(exc)
 
     # 6 — VM pool health: scrub inconsistent labels, probe idle VMs,
     #     quarantine unhealthy ones, and replenish to target capacity.
-    for vm_type in ("ubuntu",):
+    for vm_type in SUPPORTED_POOL_VM_TYPES:
         key = f"vm_rebalance_{vm_type}"
         try:
             resp = requests.post(
