@@ -272,11 +272,9 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.get_contacts", return_value=({"logs": []}, 200))
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
+@patch("adapters.helpers._resolve_contacts", return_value=([], True))
 def test_build_webhook_context_skips_job_start_for_local_assistant(
-    _mock_check,
-    _mock_contacts,
+    _mock_resolve,
     mock_start,
     _mock_replenish,
 ):
@@ -297,11 +295,9 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.get_contacts", return_value=({"logs": []}, 200))
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
+@patch("adapters.helpers._resolve_contacts", return_value=([], True))
 def test_build_webhook_context_starts_job_for_non_local_assistant(
-    _mock_check,
-    _mock_contacts,
+    _mock_resolve,
     mock_start,
     _mock_replenish,
 ):
