@@ -1296,7 +1296,12 @@ def has_assigned_vm(assistant_id: str) -> bool:
 
 
 def get_assigned_vm_ref(assistant_id: str) -> Optional[Dict[str, Any]]:
-    """Return the currently assigned VM identity for an assistant, if any."""
+    """Return the currently assigned VM identity for an assistant, if any.
+
+    Uses a label-filtered LIST which is eventually consistent. For
+    correctness-critical decisions where the session already knows its
+    vmRef, prefer ``verify_vm_assignment`` (strongly consistent GET).
+    """
     client = compute_v1.InstancesClient()
     sanitized = assistant_id.lower().replace("_", "-")
     request = compute_v1.ListInstancesRequest(
@@ -1319,6 +1324,37 @@ def get_assigned_vm_ref(assistant_id: str) -> Optional[Dict[str, Any]]:
             vm_names=[vm.name for vm in assigned],
         )
     vm = assigned[0]
+    return _vm_ref_from_instance(vm)
+
+
+def verify_vm_assignment(
+    vm_name: str,
+    assistant_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Strongly consistent check: GET the named VM and verify its labels.
+
+    Returns a vm_ref dict if the instance exists with pool-role=assigned
+    and the expected assistant-id. Returns None otherwise.
+    """
+    client = compute_v1.InstancesClient()
+    sanitized = assistant_id.lower().replace("_", "-")
+    try:
+        vm = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
+    except Exception:
+        return None
+    labels = dict(vm.labels) if vm.labels else {}
+    if labels.get("pool-role") != "assigned":
+        return None
+    if labels.get("assistant-id") != sanitized:
+        return None
+    return _vm_ref_from_instance(vm)
+
+
+def _vm_ref_from_instance(vm) -> Dict[str, Any]:
     labels = dict(vm.labels) if vm.labels else {}
     hostname = _read_instance_metadata(vm, "hostname")
     if not hostname:
