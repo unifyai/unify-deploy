@@ -29,9 +29,14 @@ from communication.infra.helpers import create_unity_job
 from communication.infra.vm_helpers import (
     assign_pool_vm,
     get_assigned_vm_ref,
+    probe_vm_https,
     release_pool_vm,
     replenish_pool,
     verify_vm_assignment,
+)
+
+DESKTOP_LIVENESS_FAILURE_THRESHOLD = int(
+    os.environ.get("DESKTOP_LIVENESS_FAILURE_THRESHOLD", "3"),
 )
 
 logger = logging.getLogger(__name__)
@@ -824,6 +829,106 @@ def _update_status_for_session(body: dict) -> None:
             return
 
     if _condition_is_true(existing_conditions, "DesktopReady"):
+        vm_hostname = (vm_ref or {}).get("hostname", "")
+        probe_failures = int(status.get("desktopProbeFailures", 0))
+
+        if vm_hostname:
+            alive = probe_vm_https(vm_hostname, timeout=3.0)
+            if not alive:
+                probe_failures += 1
+                if probe_failures >= DESKTOP_LIVENESS_FAILURE_THRESHOLD:
+                    emit_observability_event(
+                        "controller.desktop_liveness_failed",
+                        assistant_id=assistant_id,
+                        session_name=session_name,
+                        vm_name=(vm_ref or {}).get("name"),
+                        consecutive_failures=probe_failures,
+                        source="controller.reconcile",
+                    )
+                    try:
+                        release_pool_vm(assistant_id)
+                    except Exception:
+                        logger.exception(
+                            "Failed to release dead VM for %s",
+                            assistant_id,
+                        )
+                    patch_assistant_session_status(
+                        _custom_api,
+                        WATCH_NAMESPACE,
+                        assistant_id,
+                        phase="PendingVM",
+                        observed_activation_id=activation_id,
+                        job_ref=job_ref,
+                        pod_ref=pod_ref,
+                        vm_ref=None,
+                        desktop_url=None,
+                        last_error=(
+                            f"Desktop VM unreachable after "
+                            f"{probe_failures} consecutive probes"
+                        ),
+                        source="controller.reconcile",
+                        desktop_probe_failures=0,
+                        conditions=merge_conditions(
+                            conditions,
+                            build_condition(
+                                "VMAssigned",
+                                False,
+                                "LivenessFailed",
+                                f"VM unreachable after {probe_failures} probes",
+                            ),
+                            build_condition(
+                                "DesktopReady",
+                                False,
+                                "LivenessFailed",
+                                "Released VM after liveness failure",
+                            ),
+                            build_condition(
+                                "Active",
+                                False,
+                                "LivenessFailed",
+                                "Desktop lost; re-assigning VM",
+                            ),
+                        ),
+                    )
+                    return
+
+                patch_assistant_session_status(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    phase="Active",
+                    observed_activation_id=activation_id,
+                    job_ref=job_ref,
+                    pod_ref=pod_ref,
+                    vm_ref=vm_ref,
+                    desktop_url=desktop_url,
+                    last_error="",
+                    source="controller.reconcile",
+                    desktop_probe_failures=probe_failures,
+                    conditions=merge_conditions(
+                        conditions,
+                        build_condition(
+                            "VMAssigned",
+                            True,
+                            "Assigned",
+                            "Managed VM assigned",
+                        ),
+                        build_condition(
+                            "DesktopReady",
+                            True,
+                            "DesktopReady",
+                            "Authenticated desktop readiness complete",
+                        ),
+                        build_condition(
+                            "Active",
+                            True,
+                            "Ready",
+                            "Desktop session active",
+                        ),
+                    ),
+                )
+                return
+
         patch_assistant_session_status(
             _custom_api,
             WATCH_NAMESPACE,

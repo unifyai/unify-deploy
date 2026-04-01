@@ -274,6 +274,11 @@ def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
         return False
 
 
+def probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
+    """Public wrapper — check if a VM's HTTPS endpoint is reachable."""
+    return _probe_vm_https(hostname, timeout)
+
+
 def probe_vm_agent_authenticated(
     hostname: str,
     api_key: str,
