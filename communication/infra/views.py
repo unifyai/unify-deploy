@@ -42,6 +42,7 @@ from .vm_helpers import (
     _probe_vm_https,
     probe_vm_agent_authenticated,
     get_assigned_vm_ref,
+    verify_vm_assignment,
     _set_pool_labels,
     _update_instance_metadata,
     provision_pool_vm,
@@ -1270,7 +1271,35 @@ async def vm_ready_endpoint(
             detail="Ready signal API key does not match the active AssistantSession",
         )
 
-    assigned_vm_ref = await asyncio.to_thread(get_assigned_vm_ref, assistant_id)
+    session_conditions = session.get("status", {}).get("conditions", [])
+    container_ready = any(
+        c.get("type") == "ContainerReady" and c.get("status") == "True"
+        for c in session_conditions
+    )
+    if not container_ready:
+        emit_observability_event(
+            "infra.vm_ready.rejected",
+            **assistant_session_observability_fields(
+                session,
+                requested_hostname=requested_hostname,
+                reason="container_not_ready",
+                vm_type=vm_type,
+            ),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="VM ready signal rejected: container is not yet ready",
+        )
+
+    existing_vm_ref = session.get("status", {}).get("vmRef") or {}
+    existing_vm_name = existing_vm_ref.get("name", "")
+    if existing_vm_name:
+        assigned_vm_ref = await asyncio.to_thread(
+            verify_vm_assignment, existing_vm_name, assistant_id,
+        )
+    else:
+        assigned_vm_ref = await asyncio.to_thread(get_assigned_vm_ref, assistant_id)
+
     if assigned_vm_ref is None:
         emit_observability_event(
             "infra.vm_ready.rejected",
@@ -1341,7 +1370,12 @@ async def vm_ready_endpoint(
             detail=f"VM agent not ready at {hostname}",
         )
 
-    existing_conditions = session.get("status", {}).get("conditions", [])
+    fresh_session = await asyncio.to_thread(
+        get_assistant_session, custom_api, SETTINGS.default_namespace, assistant_id,
+    )
+    fresh_conditions = (fresh_session or session).get("status", {}).get(
+        "conditions", [],
+    )
     await asyncio.to_thread(
         patch_assistant_session_status,
         custom_api,
@@ -1352,7 +1386,7 @@ async def vm_ready_endpoint(
         desktop_url=f"https://{hostname}",
         source="views.vm_ready",
         conditions=merge_conditions(
-            existing_conditions,
+            fresh_conditions,
             build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
             build_condition(
                 "DesktopReady",
