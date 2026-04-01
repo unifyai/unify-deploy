@@ -1905,8 +1905,7 @@ def list_ghost_vms(gce_client, vm_type: str = "ubuntu") -> list:
     return [
         vm
         for vm in gce_client.list(request=request)
-        if vm.labels
-        and (vm.labels.get("pool-role", ""), vm.status) in _ANOMALIES
+        if vm.labels and (vm.labels.get("pool-role", ""), vm.status) in _ANOMALIES
     ]
 
 
