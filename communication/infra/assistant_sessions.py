@@ -22,6 +22,7 @@ CONTAINER_READY_ANNOTATION = "assistantsession.unify.ai/container-ready"
 TERMINAL_PHASES = {"Succeeded", "Failed"}
 ACTIVE_PHASES = {"PendingContainer", "ContainerAssigned", "PendingVM", "Active"}
 _STATUS_UNSET = object()
+_MAX_CAS_RETRIES = 3
 
 
 def _sanitize_for_k8s(value: str) -> str:
@@ -296,15 +297,33 @@ def create_or_update_assistant_session(
                 return existing
             raise
 
-    patch = {"spec": spec}
-    return custom_api.patch_namespaced_custom_object(
-        group=SETTINGS.assistant_session_group,
-        version=SETTINGS.assistant_session_version,
-        namespace=namespace,
-        plural=SETTINGS.assistant_session_plural,
-        name=name,
-        body=patch,
-    )
+    for _attempt in range(_MAX_CAS_RETRIES):
+        rv = existing.get("metadata", {}).get("resourceVersion")
+        patch: dict[str, Any] = {"spec": spec}
+        if rv:
+            patch["metadata"] = {"resourceVersion": rv}
+        try:
+            return custom_api.patch_namespaced_custom_object(
+                group=SETTINGS.assistant_session_group,
+                version=SETTINGS.assistant_session_version,
+                namespace=namespace,
+                plural=SETTINGS.assistant_session_plural,
+                name=name,
+                body=patch,
+            )
+        except ApiException as e:
+            if e.status != 409 or _attempt >= _MAX_CAS_RETRIES - 1:
+                raise
+            emit_observability_event(
+                "assistantsession.spec_update_conflict",
+                assistant_id=assistant_id,
+                session_name=name,
+                attempt=_attempt + 1,
+            )
+            existing = get_assistant_session(custom_api, namespace, assistant_id)
+            if existing is None:
+                raise
+    return existing
 
 
 def build_condition(
@@ -395,63 +414,88 @@ def patch_assistant_session_status(
     desktop_probe_failures: int | None | object = _STATUS_UNSET,
 ) -> dict[str, Any]:
     name = assistant_session_name(assistant_id)
-    body: dict[str, Any] = {"status": {}}
-    status = body["status"]
+    status_fields: dict[str, Any] = {}
     if phase is not None:
-        status["phase"] = phase
+        status_fields["phase"] = phase
     if observed_activation_id is not None:
-        status["observedActivationId"] = observed_activation_id
+        status_fields["observedActivationId"] = observed_activation_id
     if job_ref is not _STATUS_UNSET:
-        status["jobRef"] = job_ref
+        status_fields["jobRef"] = job_ref
     if pod_ref is not _STATUS_UNSET:
-        status["podRef"] = pod_ref
+        status_fields["podRef"] = pod_ref
     if vm_ref is not _STATUS_UNSET:
-        status["vmRef"] = vm_ref
+        status_fields["vmRef"] = vm_ref
     if desktop_url is not _STATUS_UNSET:
-        status["desktopUrl"] = desktop_url
+        status_fields["desktopUrl"] = desktop_url
     if last_error is not _STATUS_UNSET:
-        status["lastError"] = last_error
+        status_fields["lastError"] = last_error
     if conditions is not _STATUS_UNSET:
-        status["conditions"] = conditions
+        status_fields["conditions"] = conditions
     if bootstrap_retries is not _STATUS_UNSET:
-        status["bootstrapRetries"] = bootstrap_retries
+        status_fields["bootstrapRetries"] = bootstrap_retries
     if vm_retries is not _STATUS_UNSET:
-        status["vmRetries"] = vm_retries
+        status_fields["vmRetries"] = vm_retries
     if desktop_probe_failures is not _STATUS_UNSET:
-        status["desktopProbeFailures"] = desktop_probe_failures
+        status_fields["desktopProbeFailures"] = desktop_probe_failures
 
-    current = get_assistant_session(custom_api, namespace, assistant_id) or {}
-    current_status = current.get("status", {})
-    if all(current_status.get(key) == value for key, value in status.items()):
-        return current
+    current: dict[str, Any] = {}
+    for _attempt in range(_MAX_CAS_RETRIES):
+        current = get_assistant_session(custom_api, namespace, assistant_id) or {}
+        current_status = current.get("status", {})
+        if all(
+            current_status.get(key) == value
+            for key, value in status_fields.items()
+        ):
+            return current
 
-    result = custom_api.patch_namespaced_custom_object_status(
-        group=SETTINGS.assistant_session_group,
-        version=SETTINGS.assistant_session_version,
-        namespace=namespace,
-        plural=SETTINGS.assistant_session_plural,
-        name=name,
-        body=body,
-    )
+        rv = current.get("metadata", {}).get("resourceVersion")
+        body: dict[str, Any] = {"status": status_fields}
+        if rv:
+            body["metadata"] = {"resourceVersion": rv}
+        try:
+            result = custom_api.patch_namespaced_custom_object_status(
+                group=SETTINGS.assistant_session_group,
+                version=SETTINGS.assistant_session_version,
+                namespace=namespace,
+                plural=SETTINGS.assistant_session_plural,
+                name=name,
+                body=body,
+            )
+        except ApiException as e:
+            if e.status != 409 or _attempt >= _MAX_CAS_RETRIES - 1:
+                raise
+            emit_observability_event(
+                "assistantsession.status_patch_conflict",
+                assistant_id=assistant_id,
+                session_name=name,
+                source=source,
+                attempt=_attempt + 1,
+            )
+            continue
 
-    previous_fields = assistant_session_observability_fields(current, source=source)
-    current_fields = assistant_session_observability_fields(result, source=source)
-    changed_fields = {
-        key: {
-            "before": previous_fields.get(key),
-            "after": current_fields.get(key),
-        }
-        for key in sorted(set(previous_fields) | set(current_fields))
-        if previous_fields.get(key) != current_fields.get(key)
-    }
-    if changed_fields:
-        emit_observability_event(
-            "assistantsession.status_patch",
-            **current_fields,
-            changed_fields=changed_fields,
+        previous_fields = assistant_session_observability_fields(
+            current, source=source,
         )
+        current_fields = assistant_session_observability_fields(
+            result, source=source,
+        )
+        changed_fields = {
+            key: {
+                "before": previous_fields.get(key),
+                "after": current_fields.get(key),
+            }
+            for key in sorted(set(previous_fields) | set(current_fields))
+            if previous_fields.get(key) != current_fields.get(key)
+        }
+        if changed_fields:
+            emit_observability_event(
+                "assistantsession.status_patch",
+                **current_fields,
+                changed_fields=changed_fields,
+            )
+        return result
 
-    return result
+    return current
 
 
 def get_phase(session: dict[str, Any] | None) -> str:
