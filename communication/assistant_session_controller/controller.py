@@ -31,6 +31,7 @@ from communication.infra.vm_helpers import (
     get_assigned_vm_ref,
     release_pool_vm,
     replenish_pool,
+    verify_vm_assignment,
 )
 
 logger = logging.getLogger(__name__)
@@ -352,6 +353,23 @@ def _update_status_for_session(body: dict) -> None:
     )
 
     if terminal_phase:
+        current_vm_ref = status.get("vmRef")
+        if current_vm_ref and assistant_id:
+            try:
+                release_pool_vm(assistant_id)
+                emit_observability_event(
+                    "controller.terminal_vm_released",
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    vm_name=current_vm_ref.get("name"),
+                    terminal_phase=terminal_phase,
+                    source="controller.reconcile",
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to release VM on terminal transition for %s",
+                    assistant_id,
+                )
         patch_assistant_session_status(
             _custom_api,
             WATCH_NAMESPACE,
@@ -440,7 +458,12 @@ def _update_status_for_session(body: dict) -> None:
 
     vm_ref = None if new_activation else status.get("vmRef")
     desktop_url = None if new_activation else status.get("desktopUrl")
-    assigned_vm_ref = None if new_activation else get_assigned_vm_ref(assistant_id)
+    if new_activation:
+        assigned_vm_ref = None
+    elif vm_ref and vm_ref.get("name"):
+        assigned_vm_ref = verify_vm_assignment(vm_ref["name"], assistant_id)
+    else:
+        assigned_vm_ref = get_assigned_vm_ref(assistant_id)
     if assigned_vm_ref is None:
         vm_ref = None
         desktop_url = None
