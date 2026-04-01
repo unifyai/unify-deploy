@@ -10,7 +10,6 @@ load_dotenv()
 import os
 import base64
 from google.cloud import pubsub_v1
-from twilio.request_validator import RequestValidator
 import json
 
 subscriber = pubsub_v1.SubscriberClient()
@@ -18,18 +17,6 @@ subscription_path = subscriber.subscription_path(
     os.getenv("GCP_PROJECT_ID"),
     "unity-default-test-assistant-staging-sub",
 )
-
-_twilio_validator = RequestValidator(os.getenv("TWILIO_AUTH_TOKEN", ""))
-
-
-def _twilio_headers(base_url: str, endpoint: str, params: dict) -> dict:
-    url = f"{base_url}{endpoint}"
-    sig = _twilio_validator.compute_signature(url, params)
-    return {"X-Twilio-Signature": sig}
-
-
-def _admin_headers() -> dict:
-    return {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
 
 
 def test_twilio_call_status_webhook(test_client):
@@ -39,8 +26,7 @@ def test_twilio_call_status_webhook(test_client):
     assistant_number = "+0123456789"
     # simulate call status update
     data = {"CallStatus": "in-progress", "From": assistant_number, "To": user_number}
-    headers = _twilio_headers(test_client.base_url, endpoint, data)
-    response = test_client.make_request("POST", endpoint, data=data, headers=headers)
+    response = test_client.make_request("POST", endpoint, data=data)
 
     # endpoint should accept status updates
     assert response.status_code == 200
@@ -75,8 +61,7 @@ def test_twilio_call_webhook(test_client):
     assistant_number = "+0123456789"
     data = {"To": assistant_number, "From": user_number}
 
-    headers = _twilio_headers(test_client.base_url, endpoint, data)
-    response = test_client.make_request("POST", endpoint, data=data, headers=headers)
+    response = test_client.make_request("POST", endpoint, data=data)
 
     print(response.text)
     assert response.status_code == 200
@@ -127,8 +112,7 @@ def test_twilio_sms_webhook(test_client):
         "Body": body,
     }
 
-    headers = _twilio_headers(test_client.base_url, endpoint, data)
-    response = test_client.make_request("POST", endpoint, data=data, headers=headers)
+    response = test_client.make_request("POST", endpoint, data=data)
 
     assert response.status_code == 200
     assert "text/xml" in response.headers.get("content-type", "")
@@ -156,21 +140,44 @@ def test_twilio_sms_webhook(test_client):
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
-def test_twilio_whatsapp_webhook_unresolved(test_client):
-    """WhatsApp webhook returns TwiML when no route is found in Orchestra."""
+def test_twilio_whatsapp_webhook(test_client):
+    """Test successful WhatsApp webhook processing."""
     endpoint = "/twilio/whatsapp"
+    user_number = "+9876543210"
+    assistant_number = "+0123456789"
+    body = "Hello, this is a test message"
     data = {
-        "To": "whatsapp:+10000000000",
-        "From": "whatsapp:+19999999999",
-        "Body": "Hello from unknown sender",
+        "To": assistant_number,
+        "From": user_number,
+        "Body": body,
     }
 
-    headers = _twilio_headers(test_client.base_url, endpoint, data)
-    response = test_client.make_request("POST", endpoint, data=data, headers=headers)
+    response = test_client.make_request("POST", endpoint, data=data)
 
     assert response.status_code == 200
     assert "text/xml" in response.headers.get("content-type", "")
-    assert "no longer active" in response.text
+
+    # Check that the message was published to Pub/Sub
+    message = subscriber.pull(
+        subscription=subscription_path,
+        max_messages=1,
+    ).received_messages[0]
+    ack_id = message.ack_id
+    message = message.message
+    try:
+        data = json.loads(message.data.decode("utf-8"))
+    except json.JSONDecodeError:
+        assert False, "Failed to decode message data"
+    try:
+        assert data is not None
+        assert "thread" in data and data["thread"] == "whatsapp"
+        assert "event" in data and data["event"] is not None
+        assert data["event"]["to_number"] == assistant_number
+        assert data["event"]["from_number"] == user_number
+        assert data["event"]["body"] == body
+    except AssertionError as e:
+        print(e)
+    subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 
 def test_unify_message_webhook(test_client):
@@ -179,11 +186,10 @@ def test_unify_message_webhook(test_client):
     body = "Hello, this is a unify_message test message"
     json_payload = {
         "assistant_id": "default-test-assistant",
-        "contact_id": 1,
         "body": body,
     }
 
-    headers = _admin_headers()
+    headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
     response = test_client.make_request(
         "POST",
         endpoint,
@@ -387,9 +393,7 @@ def test_assistant_update_webhook(test_client):
 
     # Test with form data payload
     data = {"assistant_id": assistant_id}
-    response = test_client.make_request(
-        "POST", endpoint, data=data, headers=_admin_headers()
-    )
+    response = test_client.make_request("POST", endpoint, data=data)
 
     print("Assistant update response:", response.text)
     assert response.status_code == 200
@@ -449,7 +453,6 @@ def test_teams_call_webhook(test_client):
         "to_uri": f"sip:{teams_number}@sbc.unify.ai:5061;user=phone;transport=tls",
         "call_id": call_id,
         "source_ip": "10.0.0.1",
-        "admin_key": os.getenv("ORCHESTRA_ADMIN_KEY"),
     }
 
     response = test_client.make_request("POST", endpoint, json=json_payload)
@@ -469,9 +472,7 @@ def test_assistant_wakeup_webhook(test_client):
     assistant_id = "default-test-assistant"
 
     data = {"assistant_id": assistant_id}
-    response = test_client.make_request(
-        "POST", endpoint, data=data, headers=_admin_headers()
-    )
+    response = test_client.make_request("POST", endpoint, data=data)
 
     print("Assistant wakeup response:", response.text)
     assert response.status_code == 200
@@ -540,9 +541,7 @@ def test_scheduled_email_watches(test_client):
     """Test scheduled email watches endpoint with test mode."""
     endpoint = "/scheduled/email-watches"
 
-    response = test_client.make_request(
-        "POST", endpoint, json={"test": True}, headers=_admin_headers()
-    )
+    response = test_client.make_request("POST", endpoint, json={"test": True})
 
     print("Email watches response:", response.text)
     assert response.status_code == 200
@@ -555,9 +554,7 @@ def test_scheduled_microsoft_tokens(test_client):
     """Test scheduled Microsoft token refresh endpoint with test mode."""
     endpoint = "/scheduled/microsoft-tokens"
 
-    response = test_client.make_request(
-        "POST", endpoint, json={"test": True}, headers=_admin_headers()
-    )
+    response = test_client.make_request("POST", endpoint, json={"test": True})
 
     print("Microsoft tokens response:", response.text)
     assert response.status_code == 200
@@ -571,9 +568,7 @@ def test_scheduled_teams_watches(test_client):
     """Test scheduled Teams watches endpoint with test mode."""
     endpoint = "/scheduled/teams-watches"
 
-    response = test_client.make_request(
-        "POST", endpoint, json={"test": True}, headers=_admin_headers()
-    )
+    response = test_client.make_request("POST", endpoint, json={"test": True})
 
     print("Teams watches response:", response.text)
     assert response.status_code == 200
@@ -741,7 +736,6 @@ def test_teams_call_webhook_invalid_to_uri(test_client):
         "to_uri": "invalid_uri",  # Invalid format - no sip: prefix
         "call_id": "test-call-id",
         "source_ip": "10.0.0.1",
-        "admin_key": os.getenv("ORCHESTRA_ADMIN_KEY"),
     }
 
     response = test_client.make_request("POST", endpoint, json=json_payload)
@@ -826,27 +820,22 @@ def test_microsoft_router_routes_teams_notification(test_client):
 def _sign_livekit_webhook(body: str) -> str:
     """Generate a valid LiveKit webhook Authorization token for a given body.
 
-    Uses PyJWT directly to avoid interference from the livekit module-level
-    mock installed by test_api_message.py (which poisons sys.modules for the
-    whole pytest session).
+    Uses the same signing mechanism that LiveKit Egress uses: SHA256 of the
+    body placed in a JWT claim, signed with LIVEKIT_API_SECRET.
     """
     import hashlib
-
-    import jwt
+    from livekit.api import AccessToken
 
     body_hash = hashlib.sha256(body.encode()).digest()
     sha256_b64 = base64.b64encode(body_hash).decode()
 
-    now = int(time.time())
-    token = jwt.encode(
-        {
-            "iss": os.getenv("LIVEKIT_API_KEY"),
-            "nbf": now,
-            "exp": now + 300,
-            "sha256": sha256_b64,
-        },
-        os.getenv("LIVEKIT_API_SECRET"),
-        algorithm="HS256",
+    token = (
+        AccessToken(
+            api_key=os.getenv("LIVEKIT_API_KEY"),
+            api_secret=os.getenv("LIVEKIT_API_SECRET"),
+        )
+        .with_sha256(sha256_b64)
+        .to_jwt()
     )
     return token
 

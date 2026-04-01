@@ -104,30 +104,11 @@ class TestTwilioSMS:
 
 
 class TestTwilioWhatsApp:
-    """Contract: POST /twilio/whatsapp accepts a signed request and returns
-    TwiML XML.  Routing is resolved via Orchestra's /admin/whatsapp/resolve
-    endpoint.  When the sender has no route, the webhook returns a TwiML
-    'no longer active' message."""
+    """Contract: POST /twilio/whatsapp accepts a signed request,
+    publishes to Pub/Sub, and returns TwiML XML."""
 
-    def test_whatsapp_unresolved_returns_twiml(self, twilio_auth_token):
-        """An unknown sender hitting a pool number gets a polite TwiML reply."""
-        params = {
-            "To": "whatsapp:+10000000000",
-            "From": "whatsapp:+19999999999",
-            "Body": f"Contract test WhatsApp {int(time.time())}",
-            "MessageSid": f"SM{uuid.uuid4().hex}",
-        }
-        resp = _twilio_post("/twilio/whatsapp", params, twilio_auth_token)
-        assert (
-            resp.status_code == 200
-        ), f"WhatsApp webhook failed: {resp.status_code} {resp.text}"
-        assert "text/xml" in resp.headers.get("content-type", "")
-        assert "no longer active" in resp.text
-
-    def test_whatsapp_resolved_returns_twiml(self, twilio_auth_token):
-        """When a WhatsApp-enabled assistant exists and the sender resolves,
-        the webhook returns 200 with TwiML."""
-        from ..conftest import ORCHESTRA_URL, ADMIN_KEY, _fetch_all_user_assistants
+    def test_whatsapp_returns_twiml(self, twilio_auth_token):
+        from ..conftest import _fetch_all_user_assistants
 
         wa_assistant = None
         for a in _fetch_all_user_assistants():
@@ -136,16 +117,13 @@ class TestTwilioWhatsApp:
                 break
         if not wa_assistant:
             pytest.skip(
-                "No assistant with an assigned WhatsApp pool number",
+                "No assistant with a WhatsApp number — "
+                "WhatsApp lookup requires assistant_whatsapp_number in Orchestra",
             )
         wa_number = wa_assistant["assistant_whatsapp_number"]
-        user_wa = wa_assistant.get("user_whatsapp_number")
-        if not user_wa:
-            pytest.skip("Owner has no whatsapp_number on profile")
-
         params = {
             "To": f"whatsapp:{wa_number}",
-            "From": f"whatsapp:{user_wa}",
+            "From": "whatsapp:+15005550006",
             "Body": f"Contract test WhatsApp {int(time.time())}",
             "MessageSid": f"SM{uuid.uuid4().hex}",
         }
