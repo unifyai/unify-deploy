@@ -27,8 +27,11 @@ def _twilio_basic_auth_headers() -> dict:
     return {"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"}
 
 
-async def _resolve_pool_number(assistant_id: int, contact_number: str) -> str:
-    """Get or create a route for an outbound message, returning the pool number."""
+async def _resolve_route(assistant_id: int, contact_number: str) -> dict:
+    """Get or create a route for an outbound message.
+
+    Returns {"pool_number": str, "window_open": bool}.
+    """
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             f"{SETTINGS.orchestra_url}/admin/whatsapp/route",
@@ -42,7 +45,11 @@ async def _resolve_pool_number(assistant_id: int, contact_number: str) -> str:
         except Exception:
             detail = resp.text
         raise HTTPException(status_code=resp.status_code, detail=detail)
-    return resp.json()["pool_number"]
+    data = resp.json()
+    return {
+        "pool_number": data["pool_number"],
+        "window_open": data.get("window_open", True),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -72,51 +79,48 @@ async def check_whatsapp_status(
 # ---------------------------------------------------------------------------
 
 
-@auth_router.post("/send-text")
-async def send_text(request: Request):
+GREETING_TEMPLATE_SID = "HX8f626deb83316ab8fd355a2866dddc24"
+
+
+@auth_router.post("/send")
+async def send(request: Request):
     data = await request.json()
     to = data["to"]
     body = data["body"]
     assistant_id = data["assistant_id"]
-
-    pool_number = await _resolve_pool_number(assistant_id, to)
-
-    twilio_client = get_twilio_client()
-    twilio_client.messages.create(
-        to=f"whatsapp:{to}",
-        from_=f"whatsapp:{pool_number}",
-        body=body,
-        status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
-    )
-    return {"success": True}
-
-
-@auth_router.post("/send-greeting")
-async def send_greeting(request: Request):
-    data = await request.json()
-    to = data["to"]
-    assistant_id = data["assistant_id"]
     user_name = data.get("user_name", "")
     agent_name = data.get("agent_name", "")
-    body = data.get("body", "")
 
-    pool_number = await _resolve_pool_number(assistant_id, to)
+    route = await _resolve_route(assistant_id, to)
+    pool_number = route["pool_number"]
+    window_open = route["window_open"]
 
     twilio_client = get_twilio_client()
-    twilio_client.messages.create(
-        content_sid="HX8f626deb83316ab8fd355a2866dddc24",
-        to=f"whatsapp:{to}",
-        from_=f"whatsapp:{pool_number}",
-        content_variables=json.dumps(
-            {
-                "user_name": user_name,
-                "agent_name": agent_name,
-                "message": body,
-            },
-        ),
-        status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
-    )
-    return {"success": True}
+    if window_open:
+        twilio_client.messages.create(
+            to=f"whatsapp:{to}",
+            from_=f"whatsapp:{pool_number}",
+            body=body,
+            status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
+        )
+        method = "freeform"
+    else:
+        twilio_client.messages.create(
+            content_sid=GREETING_TEMPLATE_SID,
+            to=f"whatsapp:{to}",
+            from_=f"whatsapp:{pool_number}",
+            content_variables=json.dumps(
+                {
+                    "user_name": user_name,
+                    "agent_name": agent_name,
+                    "message": body,
+                },
+            ),
+            status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
+        )
+        method = "template"
+
+    return {"success": True, "method": method}
 
 
 @auth_router.post("/create")
