@@ -44,11 +44,11 @@ logger = logging.getLogger(__name__)
 WATCH_NAMESPACE = os.environ.get("WATCH_NAMESPACE", SETTINGS.default_namespace)
 RECONCILE_INTERVAL_SECONDS = float(os.environ.get("SESSION_RECONCILE_INTERVAL", "5"))
 CONTAINER_BOOTSTRAP_DEADLINE_SECONDS = float(
-    os.environ.get("CONTAINER_BOOTSTRAP_DEADLINE_SECONDS", "120"),
+    os.environ.get("CONTAINER_BOOTSTRAP_DEADLINE_SECONDS", "90"),
 )
 MAX_BOOTSTRAP_RETRIES = int(os.environ.get("MAX_BOOTSTRAP_RETRIES", "2"))
 VM_READINESS_DEADLINE_SECONDS = float(
-    os.environ.get("VM_READINESS_DEADLINE_SECONDS", "300"),
+    os.environ.get("VM_READINESS_DEADLINE_SECONDS", "60"),
 )
 MAX_VM_READINESS_RETRIES = int(os.environ.get("MAX_VM_READINESS_RETRIES", "2"))
 
