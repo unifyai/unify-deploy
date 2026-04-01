@@ -1789,9 +1789,18 @@ def wait_for_container_done(
 
 
 def probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
-    """Check if Caddy TLS is up on the VM (HEAD https://{hostname}/)."""
+    """Check if the agent-service is alive behind Caddy.
+
+    Hits ``/api/sessions`` through the Caddy reverse proxy.  A 401 from
+    the agent-service auth middleware proves it is running; a 502 from
+    Caddy or a connection error means the VM is broken.
+    """
     try:
-        r = requests.head(f"https://{hostname}/", timeout=timeout, verify=False)
+        r = requests.get(
+            f"https://{hostname}/api/sessions",
+            timeout=timeout,
+            verify=False,
+        )
         return r.status_code < 500
     except requests.RequestException:
         return False

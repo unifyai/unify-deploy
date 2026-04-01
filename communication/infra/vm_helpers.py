@@ -247,14 +247,22 @@ def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
 
 
 def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
-    """Probe whether Caddy is listening on port 443.
+    """Probe whether the agent-service is alive behind Caddy.
+
+    Hits ``/api/sessions`` which Caddy reverse-proxies to the agent-service
+    on port 3000.  Without an Authorization header the agent-service auth
+    middleware returns **401** immediately — proving the process is up.
+    If the agent-service is down but Caddy is running, Caddy returns **502**.
+    If everything is down the connection fails outright.
+
+    This is strictly stronger than probing the Caddy root (``/``), which
+    only confirms Caddy itself is listening and tells us nothing about
+    the agent-service process.
 
     Uses ``verify=False`` because Caddy may still be using a temporary
-    self-signed certificate while the ACME challenge completes.  The goal is
-    to confirm that Caddy is *up and accepting connections*, not that the
-    certificate chain is valid.  Downstream callers (Unity) also skip TLS
-    verification for the same reason — the connection is within GCP's VPC
-    where infrastructure-level encryption already applies.
+    self-signed certificate while the ACME challenge completes.  The
+    connection is within GCP's VPC where infrastructure-level encryption
+    already applies.
     """
     import warnings
 
@@ -264,8 +272,8 @@ def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
                 "ignore",
                 category=requests.packages.urllib3.exceptions.InsecureRequestWarning,
             )
-            resp = requests.head(
-                f"https://{hostname}/",
+            resp = requests.get(
+                f"https://{hostname}/api/sessions",
                 timeout=timeout,
                 verify=False,
             )
@@ -275,7 +283,7 @@ def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
 
 
 def probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
-    """Public wrapper — check if a VM's HTTPS endpoint is reachable."""
+    """Public wrapper — check if a VM's agent-service is reachable."""
     return _probe_vm_https(hostname, timeout)
 
 
@@ -1742,10 +1750,12 @@ def replenish_pool(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
 
 
 def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
-    """Probe idle VMs with a lightweight HTTPS check and quarantine failures.
+    """Probe idle VMs through Caddy to the agent-service and quarantine failures.
 
-    Runs alongside quarantine/scrub in the replenish cycle so that broken
-    idle VMs (e.g. Caddy crashed, agent OOM'd after reaching idle) are
+    Hits ``/api/sessions`` via the Caddy reverse proxy — a 401 from the
+    agent-service auth middleware proves the process is alive; a 502 from
+    Caddy or a connection error means the VM is broken.  Runs alongside
+    quarantine/scrub in the replenish cycle so that broken idle VMs are
     removed from the claimable pool before any session can pick them up.
     """
     client = compute_v1.InstancesClient()
