@@ -702,6 +702,9 @@ def _fetch_infra_jobs(
     return None
 
 
+JOB_INVENTORY_LOOKBACK_HOURS = 36
+
+
 def get_unity_jobs_inventory() -> dict[str, list[dict]]:
     """Get a categorized inventory of Unity jobs from GKE in a single request.
 
@@ -710,7 +713,10 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         filtered by the current environment (staging vs production).
     """
     resp = _fetch_infra_jobs(
-        {"label_selector": "app=unity,unity-status!=done"},
+        {
+            "label_selector": "app=unity,unity-status!=done",
+            "hours": JOB_INVENTORY_LOOKBACK_HOURS,
+        },
         caller="get_unity_jobs_inventory",
     )
     if resp is None:
@@ -829,7 +835,10 @@ def cleanup_idle_pool() -> dict:
     # Get all idle jobs via K8s label selector
     resp = requests.get(
         f"{SETTINGS.comms_url}/infra/jobs",
-        params={"label_selector": "app=unity,unity-status=idle"},
+        params={
+            "label_selector": "app=unity,unity-status=idle",
+            "hours": JOB_INVENTORY_LOOKBACK_HOURS,
+        },
         headers=headers,
     )
     jobs = resp.json()

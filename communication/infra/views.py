@@ -758,10 +758,17 @@ async def start_job(
             medium=medium,
             desktop_mode=desktop_mode,
         )
+        secret_name = await asyncio.to_thread(
+            create_or_update_bootstrap_secret,
+            core_api,
+            SETTINGS.default_namespace,
+            assistant_id,
+            startup_payload,
+        )
 
         if reused_active_session:
             session = existing_session
-            secret_name = str(
+            existing_secret_name = str(
                 existing_session.get("spec", {}).get("startupSecretRef", ""),
             )
             emit_observability_event(
@@ -770,16 +777,10 @@ async def start_job(
                 session_name=session_name,
                 activation_id=activation_id,
                 existing_phase=existing_phase,
+                existing_startup_secret_ref=existing_secret_name,
                 startup_secret_ref=secret_name,
             )
         else:
-            secret_name = await asyncio.to_thread(
-                create_or_update_bootstrap_secret,
-                core_api,
-                SETTINGS.default_namespace,
-                assistant_id,
-                startup_payload,
-            )
             spec = build_assistant_session_spec(
                 assistant_id=assistant_id,
                 user_id=user_id,
@@ -906,11 +907,53 @@ async def stop_job(
         raise HTTPException(status_code=500, detail=f"Failed to suspend job: {str(e)}")
 
 
+def _job_started_at(job) -> datetime | None:
+    """Best-effort UTC start time for a Unity job."""
+    creation_timestamp = getattr(job.metadata, "creation_timestamp", None)
+    if creation_timestamp is not None:
+        if creation_timestamp.tzinfo is None:
+            return creation_timestamp.replace(tzinfo=timezone.utc)
+        return creation_timestamp.astimezone(timezone.utc)
+
+    job_name = str(getattr(job.metadata, "name", "") or "")
+    timestamp_str = "-".join(
+        filter(
+            lambda part: part.isdigit() and len(part) in [2, 4],
+            job_name.split("-"),
+        ),
+    )
+    if not timestamp_str:
+        return None
+    try:
+        return datetime.strptime(
+            timestamp_str,
+            "%Y-%m-%d-%H-%M-%S",
+        ).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _job_date_selector(now: datetime, hours: int | None) -> str | None:
+    """Return a unity-date label selector covering the full requested window."""
+    if hours is None:
+        return None
+
+    cutoff = now - timedelta(hours=hours)
+    start_date = cutoff.date()
+    end_date = now.date()
+    day_count = (end_date - start_date).days
+    relevant_dates = [
+        (start_date + timedelta(days=offset)).isoformat()
+        for offset in range(day_count + 1)
+    ]
+    return f"unity-date in ({','.join(relevant_dates)})"
+
+
 # list kubernetes jobs
 @router.get("/jobs")
 async def list_kubernetes_jobs(
     namespace: str = SETTINGS.default_namespace,
-    hours: int = 8,
+    hours: int | None = None,
     label_selector: str = "app=unity",
 ):
     """
@@ -918,49 +961,34 @@ async def list_kubernetes_jobs(
 
     Args:
         namespace: Kubernetes namespace (optional, defaults to "default")
-        hours: Number of hours to filter jobs (optional, defaults to 3)
+        hours: Optional lookback window in hours. When omitted, returns all
+            matching jobs without time-based filtering.
         label_selector: K8s label selector (optional, defaults to "app=unity")
     """
     try:
         batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=hours)
-        relevant_dates = sorted(
-            {
-                cutoff.strftime("%Y-%m-%d"),
-                now.strftime("%Y-%m-%d"),
-            },
-        )
-        date_filter = f"unity-date in ({','.join(relevant_dates)})"
-        full_selector = (
-            f"{label_selector},{date_filter}" if label_selector else date_filter
-        )
+        date_filter = _job_date_selector(now, hours)
+        full_selector = label_selector
+        if date_filter:
+            full_selector = (
+                f"{label_selector},{date_filter}" if label_selector else date_filter
+            )
 
         jobs = await asyncio.to_thread(
             batch_api.list_namespaced_job,
             namespace=namespace,
             label_selector=full_selector,
         )
-        job_items = list(
-            filter(
-                lambda job: (
-                    now
-                    - datetime.strptime(
-                        "-".join(
-                            filter(
-                                lambda part: part.isdigit() and len(part) in [2, 4],
-                                job.metadata.name.split("-"),
-                            ),
-                        ),
-                        "%Y-%m-%d-%H-%M-%S",
-                    ).replace(tzinfo=timezone.utc)
-                )
-                < timedelta(hours=hours),
-                jobs.items,
-            ),
-        )
-        print(f"Job items: {list(map(lambda job: job.metadata.name, job_items))}")
+        job_items = list(jobs.items)
+        if hours is not None:
+            cutoff = now - timedelta(hours=hours)
+            job_items = [
+                job
+                for job in job_items
+                if (started_at := _job_started_at(job)) is None or started_at >= cutoff
+            ]
 
         job_list = []
         for job in job_items:

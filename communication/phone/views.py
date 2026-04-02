@@ -2,6 +2,7 @@ import os
 from fastapi import APIRouter, Response, Request, HTTPException
 from common.settings import SETTINGS
 from twilio.twiml.voice_response import VoiceResponse
+from twilio.base.exceptions import TwilioRestException
 from livekit.api import (
     LiveKitAPI,
     SIPInboundTrunkInfo,
@@ -225,6 +226,11 @@ async def create_phone_number(request: Request):
 
 @auth_router.delete("/delete")
 async def delete_phone_number(request: Request):
+    """Delete a provisioned phone number, treating already-missing state as success.
+
+    This endpoint remains responsible for cleaning up the matching LiveKit SIP
+    trunk even if the Twilio number was already deleted in a prior attempt.
+    """
     # Expect JSON body: { "PhoneNumber": "+1234567890" }
     data = await request.json()
     phone_number = data.get("PhoneNumber")
@@ -235,12 +241,18 @@ async def delete_phone_number(request: Request):
         phone_number=phone_number,
         limit=1,
     )
-    if not incoming_list:
-        raise HTTPException(status_code=404, detail="Phone number not found")
-    phone_sid = incoming_list[0].sid
+    phone_deleted = False
+    phone_sid = incoming_list[0].sid if incoming_list else None
 
-    # Delete the number
-    twilio_client.incoming_phone_numbers(phone_sid).delete()
+    if incoming_list:
+        try:
+            twilio_client.incoming_phone_numbers(phone_sid).delete()
+            phone_deleted = True
+        except TwilioRestException as exc:
+            if exc.status != 404:
+                raise
+    else:
+        phone_deleted = False
 
     # Delete LiveKit SIP Trunk
     lkapi = LiveKitAPI(
@@ -248,16 +260,26 @@ async def delete_phone_number(request: Request):
         api_key=os.getenv("LIVEKIT_API_KEY"),
         api_secret=os.getenv("LIVEKIT_API_SECRET"),
     )
-    sip_its = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
-    for item in sip_its.items:
-        if phone_number[1:] in item.name:
-            await lkapi.sip.delete_sip_trunk(
-                DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id),
-            )
-            break
+    sip_trunk_deleted = False
+    try:
+        sip_its = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
+        for item in sip_its.items:
+            if phone_number[1:] in item.name:
+                await lkapi.sip.delete_sip_trunk(
+                    DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id),
+                )
+                sip_trunk_deleted = True
+                break
+    finally:
+        await lkapi.aclose()
 
-    await lkapi.aclose()
-    return {"success": True, "sid": phone_sid}
+    return {
+        "success": True,
+        "sid": phone_sid,
+        "deleted": phone_deleted or sip_trunk_deleted,
+        "already_absent": not phone_deleted,
+        "sip_trunk_deleted": sip_trunk_deleted,
+    }
 
 
 # @router.post("/press")

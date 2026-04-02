@@ -9,6 +9,7 @@ import httpx
 
 from common.settings import SETTINGS
 from google.oauth2.service_account import Credentials
+from googleapiclient.errors import HttpError
 from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -25,6 +26,11 @@ creds_json = json.loads(os.environ["GCP_SA_KEY"])
 
 
 # Helpers
+def _is_google_not_found_error(exc: Exception) -> bool:
+    """Return True when a Google API error represents an already-missing user."""
+    return isinstance(exc, HttpError) and getattr(exc.resp, "status", None) == 404
+
+
 def get_admin_service():
     creds = Credentials.from_service_account_info(
         creds_json,
@@ -90,6 +96,7 @@ async def create_email_user(request: Request):
 
 @router.delete("/delete")
 async def delete_email_user(request: Request):
+    """Delete a Workspace user, treating an already-missing user as success."""
     data = await request.json()
     primary_email = data.get("primary_email")
     if not primary_email:
@@ -97,8 +104,24 @@ async def delete_email_user(request: Request):
     try:
         service = get_admin_service()
         service.users().delete(userKey=primary_email).execute()
-        return {"success": True, "message": f"User {primary_email} deleted."}
+        return {
+            "success": True,
+            "deleted": True,
+            "already_absent": False,
+            "message": f"User {primary_email} deleted.",
+        }
     except Exception as e:
+        if _is_google_not_found_error(e):
+            logging.info(
+                "Workspace user %s already absent during delete",
+                primary_email,
+            )
+            return {
+                "success": True,
+                "deleted": False,
+                "already_absent": True,
+                "message": f"User {primary_email} already absent.",
+            }
         logging.error("Failed to delete user: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
