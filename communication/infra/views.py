@@ -779,8 +779,22 @@ async def start_job(
             startup_payload,
         )
 
+        spec = build_assistant_session_spec(
+            assistant_id=assistant_id,
+            user_id=user_id,
+            medium=medium,
+            desktop_mode=desktop_mode,
+            startup_secret_ref=secret_name,
+            activation_id=activation_id,
+        )
+        session = await asyncio.to_thread(
+            create_or_update_assistant_session,
+            custom_api,
+            SETTINGS.default_namespace,
+            assistant_id,
+            spec,
+        )
         if reused_active_session:
-            session = existing_session
             existing_secret_name = str(
                 existing_session.get("spec", {}).get("startupSecretRef", ""),
             )
@@ -792,22 +806,6 @@ async def start_job(
                 existing_phase=existing_phase,
                 existing_startup_secret_ref=existing_secret_name,
                 startup_secret_ref=secret_name,
-            )
-        else:
-            spec = build_assistant_session_spec(
-                assistant_id=assistant_id,
-                user_id=user_id,
-                medium=medium,
-                desktop_mode=desktop_mode,
-                startup_secret_ref=secret_name,
-                activation_id=activation_id,
-            )
-            session = await asyncio.to_thread(
-                create_or_update_assistant_session,
-                custom_api,
-                SETTINGS.default_namespace,
-                assistant_id,
-                spec,
             )
 
         activation_id = str(session.get("spec", {}).get("activationId", activation_id))

@@ -146,6 +146,38 @@ def get_assistant_session(
         raise
 
 
+def _read_secret_or_none(core_api, namespace: str, secret_name: str):
+    try:
+        return core_api.read_namespaced_secret(
+            name=secret_name,
+            namespace=namespace,
+        )
+    except ApiException as e:
+        if e.status == 404:
+            return None
+        raise
+
+
+def _secret_startup_payload(secret) -> dict[str, Any]:
+    data = getattr(secret, "data", None) or {}
+    raw = data.get("startup.json", "")
+    if raw:
+        return json.loads(base64.b64decode(raw).decode("utf-8"))
+
+    string_data = getattr(secret, "string_data", None) or {}
+    raw_string = string_data.get("startup.json", "")
+    if raw_string:
+        return json.loads(raw_string)
+    return {}
+
+
+def _secret_matches_payload(secret, payload: dict[str, Any]) -> bool:
+    try:
+        return _secret_startup_payload(secret) == payload
+    except Exception:
+        return False
+
+
 def delete_assistant_session(
     custom_api: k8s_client.CustomObjectsApi,
     namespace: str,
@@ -184,15 +216,7 @@ def create_or_update_bootstrap_secret(
         type="Opaque",
         string_data={"startup.json": json.dumps(payload)},
     )
-    existing_secret = None
-    try:
-        existing_secret = core_api.read_namespaced_secret(
-            name=secret_name,
-            namespace=namespace,
-        )
-    except ApiException as e:
-        if e.status != 404:
-            raise
+    existing_secret = _read_secret_or_none(core_api, namespace, secret_name)
     if existing_secret is None:
         try:
             core_api.create_namespaced_secret(namespace=namespace, body=body)
@@ -211,9 +235,20 @@ def create_or_update_bootstrap_secret(
                 secret_name=secret_name,
                 error=str(e),
             )
-            return secret_name
+            existing_secret = _read_secret_or_none(core_api, namespace, secret_name)
+            if existing_secret is None:
+                raise RuntimeError(
+                    f"Bootstrap secret {secret_name} still missing after create conflict",
+                )
 
     for _attempt in range(3):
+        if _secret_matches_payload(existing_secret, payload):
+            emit_observability_event(
+                "assistantsession.bootstrap_secret_already_current",
+                assistant_id=assistant_id,
+                secret_name=secret_name,
+            )
+            return secret_name
         body.metadata.resource_version = existing_secret.metadata.resource_version
         try:
             core_api.replace_namespaced_secret(
@@ -237,11 +272,22 @@ def create_or_update_bootstrap_secret(
                 secret_name=secret_name,
                 attempt=_attempt + 1,
             )
-            existing_secret = core_api.read_namespaced_secret(
-                name=secret_name,
-                namespace=namespace,
-            )
-    return secret_name
+            existing_secret = _read_secret_or_none(core_api, namespace, secret_name)
+            if existing_secret is None:
+                raise RuntimeError(
+                    f"Bootstrap secret {secret_name} disappeared during replace retry",
+                )
+    final_secret = _read_secret_or_none(core_api, namespace, secret_name)
+    if final_secret is not None and _secret_matches_payload(final_secret, payload):
+        emit_observability_event(
+            "assistantsession.bootstrap_secret_converged_after_conflicts",
+            assistant_id=assistant_id,
+            secret_name=secret_name,
+        )
+        return secret_name
+    raise RuntimeError(
+        f"Bootstrap secret {secret_name} did not converge to the requested payload",
+    )
 
 
 def read_bootstrap_secret(
@@ -250,11 +296,7 @@ def read_bootstrap_secret(
     secret_name: str,
 ) -> dict[str, Any]:
     secret = core_api.read_namespaced_secret(name=secret_name, namespace=namespace)
-    data = secret.data or {}
-    raw = data.get("startup.json", "")
-    if not raw:
-        return {}
-    return json.loads(base64.b64decode(raw).decode("utf-8"))
+    return _secret_startup_payload(secret)
 
 
 def build_assistant_session_spec(
