@@ -18,6 +18,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from common.settings import SETTINGS
+
 
 @pytest.fixture
 def client():
@@ -166,3 +168,56 @@ class TestListJobsContract:
         assert isinstance(j["job_name"], str)
         assert isinstance(j["assistant_id"], str)
         assert j["status"] in ("Running", "Completed", "Failed", "Unknown")
+
+    def test_default_listing_does_not_hide_jobs_older_than_eight_hours(self, client):
+        job = _make_k8s_job("abc", active=1, minutes_ago=9 * 60)
+
+        with _mock_k8s_returning([job]) as mock_get_clients:
+            resp = client.get(
+                "/infra/jobs",
+                params={"label_selector": "app=unity,assistant-id=abc"},
+            )
+
+        assert resp.status_code == 200
+        assert [j["job_name"] for j in resp.json()["jobs"]] == [job.metadata.name]
+        batch_api = mock_get_clients.return_value[0]
+        batch_api.list_namespaced_job.assert_called_once_with(
+            namespace=SETTINGS.default_namespace,
+            label_selector="app=unity,assistant-id=abc",
+        )
+
+    def test_explicit_hours_filters_out_jobs_older_than_window(self, client):
+        job = _make_k8s_job("abc", active=1, minutes_ago=9 * 60)
+
+        with _mock_k8s_returning([job]):
+            resp = client.get(
+                "/infra/jobs",
+                params={
+                    "label_selector": "app=unity,assistant-id=abc",
+                    "hours": 8,
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["jobs"] == []
+
+    def test_explicit_hours_keeps_cross_day_jobs_within_requested_window(self, client):
+        job = _make_k8s_job("abc", active=1, minutes_ago=30 * 60)
+
+        with _mock_k8s_returning([job]) as mock_get_clients:
+            resp = client.get(
+                "/infra/jobs",
+                params={
+                    "label_selector": "app=unity,assistant-id=abc",
+                    "hours": 36,
+                },
+            )
+
+        assert resp.status_code == 200
+        assert [j["job_name"] for j in resp.json()["jobs"]] == [job.metadata.name]
+        batch_api = mock_get_clients.return_value[0]
+        called_selector = batch_api.list_namespaced_job.call_args.kwargs[
+            "label_selector"
+        ]
+        assert called_selector.startswith("app=unity,assistant-id=abc,unity-date in (")
+        assert "unity-date" in called_selector

@@ -7,10 +7,14 @@ These tests verify:
 - Demo ID propagation for demo assistants (passed as string to Comms)
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from adapters.helpers import (
+    JOB_INVENTORY_LOOKBACK_HOURS,
     build_webhook_context,
+    cleanup_idle_pool,
     get_default_contacts,
+    get_unity_jobs_inventory,
     check_contact_details,
     start_unity_job,
 )
@@ -256,6 +260,46 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 
         assert data["demo_id"] == "99", f"Expected demo_id='99' for medium={medium}"
         assert data["medium"] == medium, f"Expected medium={medium}"
+
+
+@patch("adapters.helpers._fetch_infra_jobs")
+def test_get_unity_jobs_inventory_uses_explicit_lookback(mock_fetch_infra_jobs):
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"jobs": []}
+    mock_fetch_infra_jobs.return_value = mock_response
+
+    inventory = get_unity_jobs_inventory()
+
+    assert inventory == {"running": [], "idle": []}
+    mock_fetch_infra_jobs.assert_called_once()
+    params = mock_fetch_infra_jobs.call_args.args[0]
+    assert params["hours"] == JOB_INVENTORY_LOOKBACK_HOURS
+    assert params["label_selector"] == "app=unity,unity-status!=done"
+
+
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+def test_cleanup_idle_pool_uses_explicit_lookback_for_idle_listing(
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+):
+    mock_get_unity_jobs_inventory.return_value = {"running": [], "idle": []}
+    mock_get_target_idle_count.return_value = SimpleNamespace(target=0)
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"jobs": []}
+    mock_requests_get.return_value = mock_response
+
+    result = cleanup_idle_pool()
+
+    assert result["deleted"] == 0
+    assert result["running"] == 0
+    mock_requests_get.assert_called_once()
+    assert (
+        mock_requests_get.call_args.kwargs["params"]["hours"]
+        == JOB_INVENTORY_LOOKBACK_HOURS
+    )
 
 
 @patch("adapters.helpers.requests.post")
