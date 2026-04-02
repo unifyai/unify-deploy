@@ -96,6 +96,12 @@ POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="pool-maint",
 )
+ASSIGN_AGENT_READY_TIMEOUT_SECONDS = float(
+    os.environ.get("ASSIGN_AGENT_READY_TIMEOUT_SECONDS", "120"),
+)
+ASSIGN_AGENT_READY_POLL_INTERVAL_SECONDS = float(
+    os.environ.get("ASSIGN_AGENT_READY_POLL_INTERVAL_SECONDS", "5"),
+)
 
 
 def _service_account_credentials() -> Credentials:
@@ -141,6 +147,33 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
         f"(message_id={message_id})",
     )
     return message_id
+
+
+async def _wait_for_assigned_vm_agent(
+    hostname: str,
+    api_key: str,
+    *,
+    timeout_seconds: float = ASSIGN_AGENT_READY_TIMEOUT_SECONDS,
+    poll_interval_seconds: float = ASSIGN_AGENT_READY_POLL_INTERVAL_SECONDS,
+) -> bool:
+    """Wait until an assigned VM accepts the expected bearer token."""
+    if not hostname or not api_key:
+        return False
+
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        ready = await asyncio.to_thread(
+            probe_vm_agent_authenticated,
+            hostname,
+            api_key,
+        )
+        if ready:
+            return True
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(poll_interval_seconds, remaining))
 
 
 async def _get_k8s_clients():
@@ -1604,7 +1637,29 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
             partial(replenish_pool, request.vm_type, extra_demand=1),
         )
 
+        agent_ready = await _wait_for_assigned_vm_agent(
+            result.get("hostname", ""),
+            request.unify_apikey,
+        )
+        if not agent_ready:
+            try:
+                await asyncio.to_thread(release_pool_vm, request.assistant_id)
+            except Exception:
+                logger.exception(
+                    "Failed to release unready assigned VM for assistant %s",
+                    request.assistant_id,
+                )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Assigned VM did not become ready for authenticated agent "
+                    f"traffic within {int(ASSIGN_AGENT_READY_TIMEOUT_SECONDS)}s"
+                ),
+            )
+
         return PoolAssignResponse(**result)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:

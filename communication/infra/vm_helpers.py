@@ -628,7 +628,13 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
 
 
 def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
-    """Create a new pool VM with generic name, IP, DNS, and idle labels."""
+    """Create a new pool VM and return once the GCE create request is accepted.
+
+    The instance boots asynchronously after the insert operation starts. The
+    pool already models that in-flight state via the ``provisioning`` label, so
+    callers such as ``rebalance_pool()`` should not block an HTTP request on the
+    full VM boot lifecycle.
+    """
     vm_name = _pool_vm_name(vm_type, n)
     ip_name = _pool_ip_name(vm_type, n)
     hostname = _pool_hostname(vm_type, n)
@@ -774,22 +780,27 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         zone=SETTINGS.vm_zone,
         instance_resource=instance,
     )
-    op.result()
 
-    logger.info(f"Provisioned pool VM: {vm_name} ({vm_type}) with IP {static_ip}")
+    logger.info(
+        "Provision request submitted for pool VM %s (%s) with IP %s",
+        vm_name,
+        vm_type,
+        static_ip,
+    )
     _log_vm_pool_event(
         "provision",
         vm_name=vm_name,
         vm_type=vm_type,
         hostname=hostname,
         ip_address=static_ip,
+        operation_name=getattr(op, "name", None),
     )
     return {
         "vm_name": vm_name,
         "ip_address": static_ip,
         "hostname": hostname,
         "vm_type": vm_type,
-        "status": "RUNNING",
+        "status": "PROVISIONING",
     }
 
 
