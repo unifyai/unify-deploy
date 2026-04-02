@@ -98,6 +98,14 @@ POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
 )
 
 
+def _service_account_credentials() -> Credentials:
+    """Build GCP service-account credentials from the configured env payload."""
+    creds_json = os.getenv("GCP_SA_KEY")
+    if not creds_json:
+        raise RuntimeError("GCP_SA_KEY must be set for GCP-backed infra endpoints")
+    return Credentials.from_service_account_info(json.loads(creds_json))
+
+
 async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
@@ -160,8 +168,7 @@ def _get_pubsub_clients() -> (
     """Return cached PubSub publisher and subscriber clients."""
     global _pubsub_publisher, _pubsub_subscriber
     if _pubsub_publisher is None or _pubsub_subscriber is None:
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        creds = Credentials.from_service_account_info(creds_json)
+        creds = _service_account_credentials()
         _pubsub_publisher = pubsub_v1.PublisherClient(credentials=creds)
         _pubsub_subscriber = pubsub_v1.SubscriberClient(credentials=creds)
     return _pubsub_publisher, _pubsub_subscriber
@@ -198,6 +205,12 @@ def _build_startup_payload(
     team_ids: str,
     org_id: str,
 ) -> dict:
+    """Build the bootstrap Secret payload for a session activation request.
+
+    `/infra/job/start` may reuse a non-terminal AssistantSession, so callers
+    must always pass the latest assistant config. The bootstrap Secret becomes
+    the controller's source of truth for both fresh and reused activations.
+    """
     return {
         "api_key": api_key,
         "medium": medium,
@@ -949,6 +962,37 @@ def _job_date_selector(now: datetime, hours: int | None) -> str | None:
     return f"unity-date in ({','.join(relevant_dates)})"
 
 
+def _job_status(job) -> str:
+    """Translate a Kubernetes Job status into the public /infra/jobs contract."""
+    if job.status.active:
+        return "Running"
+    if job.status.succeeded:
+        return "Completed"
+    if job.status.failed:
+        return "Failed"
+    return "Unknown"
+
+
+def _serialize_job(job) -> dict:
+    """Serialize a Kubernetes Job into the schema returned by /infra/jobs."""
+    labels = dict(job.metadata.labels or {})
+    return {
+        "job_name": job.metadata.name,
+        "assistant_id": labels.get("assistant-id", "unknown"),
+        "labels": labels,
+        "status": _job_status(job),
+        "resource_version": job.metadata.resource_version,
+        "creation_timestamp": (
+            job.metadata.creation_timestamp.isoformat()
+            if job.metadata.creation_timestamp
+            else None
+        ),
+        "active": job.status.active or 0,
+        "succeeded": job.status.succeeded or 0,
+        "failed": job.status.failed or 0,
+    }
+
+
 # list kubernetes jobs
 @router.get("/jobs")
 async def list_kubernetes_jobs(
@@ -990,34 +1034,7 @@ async def list_kubernetes_jobs(
                 if (started_at := _job_started_at(job)) is None or started_at >= cutoff
             ]
 
-        job_list = []
-        for job in job_items:
-            assistant_id = job.metadata.labels.get("assistant-id", "unknown")
-            status = "Unknown"
-
-            if job.status.active:
-                status = "Running"
-            elif job.status.succeeded:
-                status = "Completed"
-            elif job.status.failed:
-                status = "Failed"
-
-            job_info = {
-                "job_name": job.metadata.name,
-                "assistant_id": assistant_id,
-                "labels": job.metadata.labels,
-                "status": status,
-                "resource_version": job.metadata.resource_version,
-                "creation_timestamp": (
-                    job.metadata.creation_timestamp.isoformat()
-                    if job.metadata.creation_timestamp
-                    else None
-                ),
-                "active": job.status.active or 0,
-                "succeeded": job.status.succeeded or 0,
-                "failed": job.status.failed or 0,
-            }
-            job_list.append(job_info)
+        job_list = [_serialize_job(job) for job in job_items]
 
         return {
             "success": True,
@@ -1079,12 +1096,7 @@ async def get_latest_unity_image_commit():
         JSON response with image details with commit hash
     """
     try:
-        # Get credentials from environment variable
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        creds = Credentials.from_service_account_info(creds_json)
-
-        # Initialize the Cloud Storage client
-        storage_client = storage.Client(credentials=creds)
+        storage_client = storage.Client(credentials=_service_account_credentials())
 
         # Define the bucket and file path
         bucket_name = "unity-image-hash"

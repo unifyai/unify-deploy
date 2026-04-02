@@ -97,6 +97,19 @@ class Settings:
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         self.shared_unify_key: str = os.environ.get("SHARED_UNIFY_KEY", "")
 
+        # Cleanup / Workspace integration
+        self.job_inventory_lookback_hours: int = int(
+            os.environ.get("UNITY_JOB_INVENTORY_LOOKBACK_HOURS", "36"),
+        )
+        self.workspace_email_domain: str = os.environ.get(
+            "WORKSPACE_EMAIL_DOMAIN",
+            "unify.ai",
+        )
+        self.workspace_admin_subject: str = os.environ.get(
+            "WORKSPACE_ADMIN_SUBJECT",
+            "dan@unify.ai",
+        )
+
         # K8s Lease-based assignment
         self.lease_duration_seconds: int = 60
 

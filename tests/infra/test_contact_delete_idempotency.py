@@ -1,6 +1,5 @@
 """Unit tests for idempotent contact deletion endpoints."""
 
-import importlib
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -39,8 +38,6 @@ def gmail_client(monkeypatch):
     monkeypatch.setenv("GCP_SA_KEY", GCP_SA_KEY_JSON)
 
     import communication.gmail.views as gmail_views
-
-    importlib.reload(gmail_views)
 
     app = FastAPI()
     app.include_router(gmail_views.router, prefix="/gmail")
@@ -102,7 +99,7 @@ def test_delete_phone_number_succeeds_when_number_absent_but_sip_trunk_exists(
             return_value=twilio_client,
         ),
         patch(
-            "communication.phone.views.LiveKitAPI",
+            "communication.phone.views.get_livekit_api",
             return_value=livekit,
         ),
     ):

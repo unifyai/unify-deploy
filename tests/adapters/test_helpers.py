@@ -10,7 +10,6 @@ These tests verify:
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from adapters.helpers import (
-    JOB_INVENTORY_LOOKBACK_HOURS,
     build_webhook_context,
     cleanup_idle_pool,
     get_default_contacts,
@@ -18,6 +17,7 @@ from adapters.helpers import (
     check_contact_details,
     start_unity_job,
 )
+from common.settings import SETTINGS
 
 # --- get_default_contacts tests ---
 
@@ -273,7 +273,7 @@ def test_get_unity_jobs_inventory_uses_explicit_lookback(mock_fetch_infra_jobs):
     assert inventory == {"running": [], "idle": []}
     mock_fetch_infra_jobs.assert_called_once()
     params = mock_fetch_infra_jobs.call_args.args[0]
-    assert params["hours"] == JOB_INVENTORY_LOOKBACK_HOURS
+    assert params["hours"] == SETTINGS.job_inventory_lookback_hours
     assert params["label_selector"] == "app=unity,unity-status!=done"
 
 
@@ -298,7 +298,7 @@ def test_cleanup_idle_pool_uses_explicit_lookback_for_idle_listing(
     mock_requests_get.assert_called_once()
     assert (
         mock_requests_get.call_args.kwargs["params"]["hours"]
-        == JOB_INVENTORY_LOOKBACK_HOURS
+        == SETTINGS.job_inventory_lookback_hours
     )
 
 

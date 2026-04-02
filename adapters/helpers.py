@@ -702,7 +702,17 @@ def _fetch_infra_jobs(
     return None
 
 
-JOB_INVENTORY_LOOKBACK_HOURS = 36
+def _job_inventory_params(label_selector: str) -> dict[str, str | int]:
+    """Build explicit /infra/jobs params for cleanup-sensitive job inventory calls.
+
+    The comms endpoint now returns all matching jobs by default. Adapters still
+    want a bounded inventory window so pool maintenance sees recent running and
+    idle jobs without silently dropping cross-day jobs during low traffic.
+    """
+    return {
+        "label_selector": label_selector,
+        "hours": SETTINGS.job_inventory_lookback_hours,
+    }
 
 
 def get_unity_jobs_inventory() -> dict[str, list[dict]]:
@@ -713,10 +723,7 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         filtered by the current environment (staging vs production).
     """
     resp = _fetch_infra_jobs(
-        {
-            "label_selector": "app=unity,unity-status!=done",
-            "hours": JOB_INVENTORY_LOOKBACK_HOURS,
-        },
+        _job_inventory_params("app=unity,unity-status!=done"),
         caller="get_unity_jobs_inventory",
     )
     if resp is None:
@@ -835,10 +842,7 @@ def cleanup_idle_pool() -> dict:
     # Get all idle jobs via K8s label selector
     resp = requests.get(
         f"{SETTINGS.comms_url}/infra/jobs",
-        params={
-            "label_selector": "app=unity,unity-status=idle",
-            "hours": JOB_INVENTORY_LOOKBACK_HOURS,
-        },
+        params=_job_inventory_params("app=unity,unity-status=idle"),
         headers=headers,
     )
     jobs = resp.json()
