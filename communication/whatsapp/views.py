@@ -4,7 +4,7 @@ import logging
 import os
 
 import httpx
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 
 from communication.helpers import get_twilio_client
 from common.settings import SETTINGS
@@ -62,16 +62,48 @@ async def check_whatsapp_status(
     MessageStatus: str = Form(...),
     To: str = Form(...),
     From: str = Form(...),
+    MessageSid: str = Form(None),
+    callback_id: str = Query(None),
 ):
-    print(
-        f"[WhatsApp Status Callback] MessageStatus: {MessageStatus}, To: {To}, From: {From}"
+    logger.info(
+        f"[WhatsApp Status Callback] MessageStatus: {MessageStatus}, "
+        f"To: {To}, From: {From}, MessageSid: {MessageSid}, "
+        f"callback_id: {callback_id}",
     )
-    return {
-        "status": True,
-        "message_status": MessageStatus or "",
-        "to_number": To or "",
-        "from_number": From or "",
-    }
+
+    if callback_id:
+        await _forward_notification_status(callback_id, To, MessageSid, MessageStatus)
+
+    return {"status": True, "message_status": MessageStatus}
+
+
+async def _forward_notification_status(
+    callback_id: str,
+    to: str,
+    message_sid: str | None,
+    status: str,
+) -> None:
+    """Forward a delivery receipt to Orchestra's notification-status endpoint."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{SETTINGS.orchestra_url}/admin/whatsapp/notification-status",
+                headers=_admin_headers(),
+                json={
+                    "callback_id": callback_id,
+                    "to": to.replace("whatsapp:", ""),
+                    "message_sid": message_sid,
+                    "status": status,
+                },
+                timeout=10.0,
+            )
+            if resp.status_code >= 400:
+                logger.error(
+                    f"Failed to forward notification status: "
+                    f"{resp.status_code} {resp.text}",
+                )
+    except Exception:
+        logger.exception("Error forwarding notification status to Orchestra")
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +112,46 @@ async def check_whatsapp_status(
 
 
 GREETING_TEMPLATE_SID = "HX8f626deb83316ab8fd355a2866dddc24"
+NUMBER_CHANGE_TEMPLATE_SID = "HX0e3c42c95cbd14786060fceedad3de2a"
+
+
+@auth_router.post("/notify")
+async def notify(request: Request):
+    """Send number-change template notifications to affected users."""
+    data = await request.json()
+    from_number = data["from_number"]
+    recipients = data["recipients"]
+    old_contact = data["old_contact"]
+    new_contact = data["new_contact"]
+    callback_id = data.get("callback_id")
+
+    status_callback = f"{SETTINGS.comms_url}/whatsapp/status"
+    if callback_id:
+        status_callback += f"?callback_id={callback_id}"
+
+    twilio_client = get_twilio_client()
+    results = {}
+    for r in recipients:
+        to = r["to"]
+        if not to:
+            continue
+        msg = twilio_client.messages.create(
+            content_sid=NUMBER_CHANGE_TEMPLATE_SID,
+            to=f"whatsapp:{to}",
+            from_=f"whatsapp:{from_number}",
+            content_variables=json.dumps(
+                {
+                    "user_name": r["user_name"],
+                    "agent_name": r["agent_name"],
+                    "old_contact": old_contact,
+                    "new_contact": new_contact,
+                }
+            ),
+            status_callback=status_callback,
+        )
+        results[to] = {"sid": msg.sid, "status": "sent"}
+
+    return {"results": results}
 
 
 @auth_router.post("/send")
