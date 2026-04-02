@@ -66,7 +66,7 @@ options:
 substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'unity'
-  _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:latest'
+  _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest'
 
 availableSecrets:
   secretManager:

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
+ARG BASE_IMAGE=us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-base-staging:latest
 FROM ${BASE_IMAGE}
 
 USER root
