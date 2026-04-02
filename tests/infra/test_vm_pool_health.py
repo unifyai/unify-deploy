@@ -2,10 +2,12 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from communication.infra import vm_helpers as vm_helpers_module
 from communication.infra.vm_helpers import (
     _claim_idle_vm_inner,
     _is_stale_inflight_vm,
     _start_one_stopped_vm,
+    replenish_pool,
 )
 
 
@@ -105,3 +107,59 @@ def test_claim_idle_vm_quarantines_unhealthy_candidate_before_claim(monkeypatch)
         ("unity-pool-ubuntu-2-preview", "failed health probe during claim"),
     ]
     assert claimed["vm_name"] == "unity-pool-ubuntu-4-preview"
+
+
+def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
+    stopped_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-6-preview",
+        labels={"vm-type": "ubuntu"},
+    )
+
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 1)
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_STOPPED", 1)
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_quarantine_stale_inflight_vms",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_scrub_inconsistent_vms",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_probe_and_quarantine_unhealthy_idle_vms",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bulk idle sweep should not run in replenish"),
+        ),
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_list_pool_state",
+        lambda *_args, **_kwargs: (
+            MagicMock(),
+            [],
+            [],
+            [stopped_vm],
+            [],
+            {stopped_vm.name},
+        ),
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_start_one_stopped_vm",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "provision_pool_vm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("replenish should use the stopped reserve first"),
+        ),
+    )
+
+    result = replenish_pool("ubuntu")
+
+    assert result["vm_type"] == "ubuntu"
+    assert result["actions"] == ["Started stopped VM unity-pool-ubuntu-6-preview"]

@@ -1860,7 +1860,11 @@ def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
 def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
     actions = _quarantine_stale_inflight_vms(vm_type)
     actions.extend(_scrub_inconsistent_vms(vm_type))
-    actions.extend(_probe_and_quarantine_unhealthy_idle_vms(vm_type))
+
+    # Keep hot-path replenish focused on restoring capacity. Bulk health sweeps
+    # over the entire idle pool can quarantine every candidate at once and
+    # temporarily collapse availability faster than replacements can boot.
+    # Claim-time probing still rejects unhealthy VMs before assignment.
 
     client, _, idle_vms, stopped_vms, in_flight_vms, existing_names = _list_pool_state(
         vm_type,
