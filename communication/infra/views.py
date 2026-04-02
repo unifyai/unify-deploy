@@ -1640,7 +1640,14 @@ async def delete_pool_disk_endpoint(assistant_id: str):
     """Delete an assistant's persistent disk (on unhire)."""
     try:
         deleted = await asyncio.to_thread(delete_assistant_disk, assistant_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No disk found for assistant {assistant_id}",
+            )
         return {"assistant_id": assistant_id, "deleted": deleted}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete assistant disk: {e}")
         raise HTTPException(status_code=500, detail=str(e))
