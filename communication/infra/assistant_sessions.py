@@ -23,6 +23,7 @@ TERMINAL_PHASES = {"Succeeded", "Failed"}
 ACTIVE_PHASES = {"PendingContainer", "ContainerAssigned", "PendingVM", "Active"}
 _STATUS_UNSET = object()
 _MAX_CAS_RETRIES = 3
+_ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS = frozenset({"requestedAt"})
 
 
 def _sanitize_for_k8s(value: str) -> str:
@@ -322,6 +323,17 @@ def build_assistant_session_spec(
     }
 
 
+def _assistant_session_spec_matches(
+    session: dict[str, Any] | None,
+    desired_spec: dict[str, Any],
+) -> bool:
+    current_spec = (session or {}).get("spec", {})
+    compare_keys = (
+        set(desired_spec.keys()) - _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS
+    )
+    return all(current_spec.get(key) == desired_spec.get(key) for key in compare_keys)
+
+
 def create_or_update_assistant_session(
     custom_api: k8s_client.CustomObjectsApi,
     namespace: str,
@@ -340,38 +352,43 @@ def create_or_update_assistant_session(
         "metadata": metadata,
         "spec": spec,
     }
-
-    if existing is None:
-        try:
-            return custom_api.create_namespaced_custom_object(
-                group=SETTINGS.assistant_session_group,
-                version=SETTINGS.assistant_session_version,
-                namespace=namespace,
-                plural=SETTINGS.assistant_session_plural,
-                body=body,
-            )
-        except ApiException as e:
-            if e.status != 409:
-                raise
-            emit_observability_event(
-                "assistantsession.create_conflict",
-                assistant_id=assistant_id,
-                session_name=name,
-                activation_id=spec.get("activationId"),
-                error=str(e),
-            )
-            existing = get_assistant_session(custom_api, namespace, assistant_id)
-            if existing is not None:
-                return existing
-            raise
+    last_conflict: ApiException | None = None
 
     for _attempt in range(_MAX_CAS_RETRIES):
+        if _assistant_session_spec_matches(existing, spec):
+            return existing
+
+        if existing is None:
+            try:
+                return custom_api.create_namespaced_custom_object(
+                    group=SETTINGS.assistant_session_group,
+                    version=SETTINGS.assistant_session_version,
+                    namespace=namespace,
+                    plural=SETTINGS.assistant_session_plural,
+                    body=body,
+                )
+            except ApiException as e:
+                if e.status != 409:
+                    raise
+                last_conflict = e
+                emit_observability_event(
+                    "assistantsession.create_conflict",
+                    assistant_id=assistant_id,
+                    session_name=name,
+                    activation_id=spec.get("activationId"),
+                    error=str(e),
+                )
+                existing = get_assistant_session(custom_api, namespace, assistant_id)
+                if existing is None:
+                    raise
+                continue
+
         rv = existing.get("metadata", {}).get("resourceVersion")
         patch: dict[str, Any] = {"spec": spec}
         if rv:
             patch["metadata"] = {"resourceVersion": rv}
         try:
-            return custom_api.patch_namespaced_custom_object(
+            existing = custom_api.patch_namespaced_custom_object(
                 group=SETTINGS.assistant_session_group,
                 version=SETTINGS.assistant_session_version,
                 namespace=namespace,
@@ -379,9 +396,12 @@ def create_or_update_assistant_session(
                 name=name,
                 body=patch,
             )
+            if _assistant_session_spec_matches(existing, spec):
+                return existing
         except ApiException as e:
-            if e.status != 409 or _attempt >= _MAX_CAS_RETRIES - 1:
+            if e.status != 409:
                 raise
+            last_conflict = e
             emit_observability_event(
                 "assistantsession.spec_update_conflict",
                 assistant_id=assistant_id,
@@ -391,7 +411,13 @@ def create_or_update_assistant_session(
             existing = get_assistant_session(custom_api, namespace, assistant_id)
             if existing is None:
                 raise
-    return existing
+    if _assistant_session_spec_matches(existing, spec):
+        return existing
+    if last_conflict is not None:
+        raise last_conflict
+    raise RuntimeError(
+        f"AssistantSession {name} did not converge to the requested spec",
+    )
 
 
 def build_condition(

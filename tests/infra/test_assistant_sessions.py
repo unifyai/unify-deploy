@@ -346,12 +346,62 @@ def test_create_or_update_bootstrap_secret_retries_replace_conflict():
     assert stored_payload == requested_payload
 
 
-def test_create_or_update_assistant_session_returns_existing_on_create_conflict(
+def test_create_or_update_assistant_session_skips_patch_when_spec_already_current(
     monkeypatch,
 ):
+    desired_spec = build_assistant_session_spec(
+        assistant_id="1207",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="assistant-session-bootstrap-1207",
+        activation_id="act-1",
+    )
+    current_session = {
+        "metadata": {"name": "assistant-session-1207", "resourceVersion": "7"},
+        "spec": {
+            **desired_spec,
+            "requestedAt": "2026-04-02T15:00:00+00:00",
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: current_session,
+    )
+
+    class FakeCustomApi:
+        def patch_namespaced_custom_object(self, **_kwargs):
+            raise AssertionError("spec already converged; patch should not run")
+
+    session = create_or_update_assistant_session(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        desired_spec,
+    )
+
+    assert session is current_session
+
+
+def test_create_or_update_assistant_session_returns_existing_on_create_conflict_when_semantically_current(
+    monkeypatch,
+):
+    desired_spec = build_assistant_session_spec(
+        assistant_id="1207",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="assistant-session-bootstrap-1207",
+        activation_id="act-1",
+    )
     existing_session = {
-        "metadata": {"name": "assistant-session-1207"},
-        "spec": {"activationId": "canonical-activation"},
+        "metadata": {"name": "assistant-session-1207", "resourceVersion": "1"},
+        "spec": {
+            **desired_spec,
+            "requestedAt": "2026-04-02T15:00:00+00:00",
+        },
     }
     calls = {"count": 0}
 
@@ -371,11 +421,118 @@ def test_create_or_update_assistant_session_returns_existing_on_create_conflict(
         def create_namespaced_custom_object(self, **_kwargs):
             raise ApiException(status=409)
 
+        def patch_namespaced_custom_object(self, **_kwargs):
+            raise AssertionError(
+                "converged spec should not be patched after create race",
+            )
+
     session = create_or_update_assistant_session(
         FakeCustomApi(),
         "preview",
         "1207",
-        {"assistantId": "1207", "activationId": "racing-activation"},
+        desired_spec,
     )
 
     assert session is existing_session
+
+
+def test_create_or_update_assistant_session_reconciles_create_conflict_to_requested_spec(
+    monkeypatch,
+):
+    desired_spec = build_assistant_session_spec(
+        assistant_id="1207",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="assistant-session-bootstrap-1207",
+        activation_id="act-1",
+    )
+    stored_session = {
+        "metadata": {"name": "assistant-session-1207", "resourceVersion": "1"},
+        "spec": {
+            **desired_spec,
+            "medium": "email",
+            "requestedAt": "2026-04-02T15:00:00+00:00",
+        },
+    }
+    reads = {"count": 0}
+
+    def _get_session(*_args, **_kwargs):
+        reads["count"] += 1
+        return deepcopy(stored_session) if reads["count"] > 1 else None
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        _get_session,
+    )
+
+    class FakeCustomApi:
+        def create_namespaced_custom_object(self, **_kwargs):
+            raise ApiException(status=409)
+
+        def patch_namespaced_custom_object(self, **kwargs):
+            stored_session["spec"] = deepcopy(kwargs["body"]["spec"])
+            stored_session["metadata"]["resourceVersion"] = "2"
+            return deepcopy(stored_session)
+
+    session = create_or_update_assistant_session(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        desired_spec,
+    )
+
+    assert session["spec"]["medium"] == "unify_message"
+    assert session["spec"]["activationId"] == "act-1"
+
+
+def test_create_or_update_assistant_session_converges_after_patch_conflict_when_reread_matches(
+    monkeypatch,
+):
+    desired_spec = build_assistant_session_spec(
+        assistant_id="1207",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="assistant-session-bootstrap-1207",
+        activation_id="act-1",
+    )
+    stale_session = {
+        "metadata": {"name": "assistant-session-1207", "resourceVersion": "1"},
+        "spec": {
+            **desired_spec,
+            "medium": "email",
+            "requestedAt": "2026-04-02T15:00:00+00:00",
+        },
+    }
+    converged_session = {
+        "metadata": {"name": "assistant-session-1207", "resourceVersion": "2"},
+        "spec": {
+            **desired_spec,
+            "requestedAt": "2026-04-02T15:01:00+00:00",
+        },
+    }
+    reads = iter([stale_session, converged_session])
+    patch_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(next(reads)),
+    )
+
+    class FakeCustomApi:
+        def patch_namespaced_custom_object(self, **_kwargs):
+            patch_calls["count"] += 1
+            raise ApiException(status=409)
+
+    session = create_or_update_assistant_session(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        desired_spec,
+    )
+
+    assert patch_calls["count"] == 1
+    assert session["spec"]["medium"] == "unify_message"
