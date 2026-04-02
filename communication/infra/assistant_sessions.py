@@ -107,13 +107,19 @@ def emit_observability_event(event: str, **fields: Any) -> None:
     )
 
 
-def get_latest_unity_image() -> str:
+def _get_storage_client():
     from google.cloud import storage
     from google.oauth2.service_account import Credentials
 
-    creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
-    creds = Credentials.from_service_account_info(creds_json)
-    storage_client = storage.Client(credentials=creds)
+    creds_json = os.getenv("GCP_SA_KEY")
+    if creds_json:
+        creds = Credentials.from_service_account_info(json.loads(creds_json))
+        return storage.Client(credentials=creds)
+    return storage.Client()
+
+
+def get_latest_unity_image() -> str:
+    storage_client = _get_storage_client()
     bucket = storage_client.bucket("unity-image-hash")
     blob = bucket.blob(SETTINGS.image_hash_blob)
     commit_hash = blob.download_as_text().strip()

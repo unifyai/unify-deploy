@@ -16,6 +16,7 @@ from communication.infra.assistant_sessions import (
     create_or_update_bootstrap_secret,
     delete_assistant_session,
     desktop_url_matches_vm_ref,
+    get_latest_unity_image,
     merge_conditions,
     patch_assistant_session_status,
     vm_refs_match,
@@ -536,3 +537,95 @@ def test_create_or_update_assistant_session_converges_after_patch_conflict_when_
 
     assert patch_calls["count"] == 1
     assert session["spec"]["medium"] == "unify_message"
+
+
+def test_get_latest_unity_image_uses_inline_service_account_when_present(
+    monkeypatch,
+):
+    from google.cloud import storage
+    from google.oauth2.service_account import Credentials
+
+    seen = {}
+    sentinel_creds = object()
+
+    def _from_service_account_info(info):
+        seen["info"] = info
+        return sentinel_creds
+
+    class FakeBlob:
+        def download_as_text(self):
+            return "abc123\n"
+
+    class FakeBucket:
+        def blob(self, name):
+            seen["blob"] = name
+            return FakeBlob()
+
+    class FakeStorageClient:
+        def __init__(self, credentials=None):
+            seen["credentials"] = credentials
+
+        def bucket(self, name):
+            seen["bucket"] = name
+            return FakeBucket()
+
+    monkeypatch.setenv("GCP_SA_KEY", json.dumps({"client_email": "svc@example.com"}))
+    monkeypatch.setattr(
+        Credentials,
+        "from_service_account_info",
+        _from_service_account_info,
+    )
+    monkeypatch.setattr(storage, "Client", FakeStorageClient)
+
+    image = get_latest_unity_image()
+
+    assert seen["info"] == {"client_email": "svc@example.com"}
+    assert seen["credentials"] is sentinel_creds
+    assert seen["bucket"] == "unity-image-hash"
+    assert seen["blob"] == assistant_sessions_module.SETTINGS.image_hash_blob
+    assert (
+        image == f"{assistant_sessions_module.SETTINGS.image_registry}/"
+        f"{assistant_sessions_module.SETTINGS.unity_image_name}:abc123"
+    )
+
+
+def test_get_latest_unity_image_falls_back_to_adc_when_inline_key_missing(
+    monkeypatch,
+):
+    from google.cloud import storage
+    from google.oauth2.service_account import Credentials
+
+    seen = {}
+
+    class FakeBlob:
+        def download_as_text(self):
+            return "def456\n"
+
+    class FakeBucket:
+        def blob(self, _name):
+            return FakeBlob()
+
+    class FakeStorageClient:
+        def __init__(self, credentials=None):
+            seen["credentials"] = credentials
+
+        def bucket(self, _name):
+            return FakeBucket()
+
+    monkeypatch.delenv("GCP_SA_KEY", raising=False)
+    monkeypatch.setattr(
+        Credentials,
+        "from_service_account_info",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("inline credentials should not be used without GCP_SA_KEY"),
+        ),
+    )
+    monkeypatch.setattr(storage, "Client", FakeStorageClient)
+
+    image = get_latest_unity_image()
+
+    assert seen["credentials"] is None
+    assert (
+        image == f"{assistant_sessions_module.SETTINGS.image_registry}/"
+        f"{assistant_sessions_module.SETTINGS.unity_image_name}:def456"
+    )
