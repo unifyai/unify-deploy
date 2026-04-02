@@ -591,12 +591,19 @@ async def twilio_whatsapp_webhook(request: Request):
 
     resolve_data = await asyncio.to_thread(resolve_whatsapp_route, pool_number, sender)
 
-    if resolve_data is None:
+    action = resolve_data.get("action") if resolve_data else None
+
+    if resolve_data is None or action == "auto_reply":
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
             "console.unify.ai to view your assistant details.",
         )
+        return Response(content=str(resp_user), media_type="text/xml")
+
+    if action == "reject_cold":
+        resp_user = MessagingResponse()
+        resp_user.message("This number is not accepting new messages.")
         return Response(content=str(resp_user), media_type="text/xml")
 
     resolved_assistant_id = str(resolve_data["assistant_id"])
@@ -1466,9 +1473,6 @@ async def assistant_update_webhook(request: Request):
         logger.info(
             f"Job running: {context['is_job_running']}, job started: {context['job_started']}",
         )
-
-        # Prepare assistant_data for the PubSub message
-        assistant_data.pop("assistant_whatsapp_number", None)
 
         # Job is running, publish to assistant topic
         pubsub_client = get_pubsub_client()

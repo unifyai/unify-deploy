@@ -251,8 +251,11 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
 def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
     """Resolve an inbound WhatsApp message to an assistant via Orchestra.
 
-    Returns {"assistant_id": int, "role": str} on success, or None if no
-    route exists (404). Raises on unexpected errors.
+    Returns one of:
+      - {"assistant_id": int, "role": str} — normal routed message
+      - {"action": "auto_reply"}           — decommissioned route
+      - {"action": "reject_cold"}          — unknown sender on shared pool
+      - None                               — no route at all (404)
     """
     resp = requests.get(
         f"{SETTINGS.orchestra_url}/admin/whatsapp/resolve",
