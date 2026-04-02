@@ -386,7 +386,7 @@ def create_or_update_assistant_session(
                 )
                 existing = get_assistant_session(custom_api, namespace, assistant_id)
                 if existing is None:
-                    raise
+                    continue
                 continue
 
         rv = existing.get("metadata", {}).get("resourceVersion")

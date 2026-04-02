@@ -951,6 +951,33 @@ def _claim_idle_vm_inner(
                 )
                 continue
 
+            hostname = _read_instance_metadata(fresh, "hostname")
+            if not hostname:
+                hostname_label = fresh.labels.get("pool-hostname", "")
+                hostname = (
+                    hostname_label.replace("-", ".")
+                    if hostname_label
+                    else candidate_name + f".{DOMAIN_SUFFIX}"
+                )
+            if hostname and not _probe_vm_https(hostname, timeout=2.0):
+                logger.warning(
+                    "Idle pool VM %s failed HTTPS probe before claim; quarantining",
+                    candidate_name,
+                )
+                _log_vm_pool_event(
+                    "claim_probe_failed",
+                    assistant_id=assistant_id,
+                    vm_name=candidate_name,
+                    vm_type=vm_type,
+                    hostname=hostname,
+                )
+                _quarantine_pool_vm(
+                    client,
+                    fresh,
+                    reason="failed health probe during claim",
+                )
+                continue
+
             sanitized = assistant_id.lower().replace("_", "-")
             new_labels = dict(fresh.labels) if fresh.labels else {}
             new_labels["pool-role"] = "assigned"
@@ -979,15 +1006,6 @@ def _claim_idle_vm_inner(
                                 if ac.nat_i_p:
                                     external_ip = ac.nat_i_p
                                     break
-
-                hostname = _read_instance_metadata(fresh, "hostname")
-                if not hostname:
-                    hostname_label = new_labels.get("pool-hostname", "")
-                    hostname = (
-                        hostname_label.replace("-", ".")
-                        if hostname_label
-                        else candidate_name + f".{DOMAIN_SUFFIX}"
-                    )
 
                 _log_vm_pool_event(
                     "claim",
@@ -1682,12 +1700,16 @@ def _start_one_stopped_vm(client, vm) -> bool:
             zone=SETTINGS.vm_zone,
             instance=vm.name,
         )
-        op.result()
-        logger.info(f"Replenish: started stopped VM {vm.name} (pool-role=starting)")
+        logger.info(
+            "Replenish: start request submitted for stopped VM %s "
+            "(pool-role=starting)",
+            vm.name,
+        )
         _log_vm_pool_event(
             "replenish_start",
             vm_name=vm.name,
             vm_type=(dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu"),
+            operation_name=getattr(op, "name", None),
         )
         return True
     except Exception as e:

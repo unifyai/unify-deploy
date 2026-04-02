@@ -437,6 +437,55 @@ def test_create_or_update_assistant_session_returns_existing_on_create_conflict_
     assert session is existing_session
 
 
+def test_create_or_update_assistant_session_retries_when_create_conflict_reread_is_missing(
+    monkeypatch,
+):
+    desired_spec = build_assistant_session_spec(
+        assistant_id="1207",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="assistant-session-bootstrap-1207",
+        activation_id="act-1",
+    )
+    existing_session = {
+        "metadata": {"name": "assistant-session-1207", "resourceVersion": "2"},
+        "spec": {
+            **desired_spec,
+            "requestedAt": "2026-04-02T15:00:00+00:00",
+        },
+    }
+    calls = {"count": 0}
+
+    def _get_session(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return None
+        return existing_session
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        _get_session,
+    )
+
+    class FakeCustomApi:
+        def create_namespaced_custom_object(self, **_kwargs):
+            raise ApiException(status=409)
+
+        def patch_namespaced_custom_object(self, **_kwargs):
+            raise AssertionError("converged spec should not be patched")
+
+    session = create_or_update_assistant_session(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        desired_spec,
+    )
+
+    assert session is existing_session
+
+
 def test_create_or_update_assistant_session_reconciles_create_conflict_to_requested_spec(
     monkeypatch,
 ):

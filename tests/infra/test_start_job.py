@@ -59,6 +59,7 @@ def _existing_session(
     *,
     phase: str = "PendingVM",
     activation_id: str = "activation-existing",
+    observed_activation_id: str | None = None,
     secret_name: str = "assistant-session-bootstrap-assistant-123",
     user_id: str = "stale-user",
     medium: str = "email",
@@ -77,6 +78,11 @@ def _existing_session(
         },
         "status": {
             "phase": phase,
+            "observedActivationId": (
+                observed_activation_id
+                if observed_activation_id is not None
+                else activation_id
+            ),
         },
     }
 
@@ -204,3 +210,50 @@ def test_start_job_reused_pending_session_picks_up_changed_desktop_mode(client):
     assert refreshed_spec["activationId"] == existing_session["spec"]["activationId"]
     assert refreshed_spec["desktopMode"] == "macos"
     assert refreshed_spec["desktopRequired"] is False
+
+
+def test_start_job_reuses_inflight_restart_activation_for_terminal_session(client):
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session(
+        phase="Succeeded",
+        activation_id="activation-restart-pending",
+        observed_activation_id="activation-old-terminal",
+    )
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value="assistant-session-bootstrap-assistant-123",
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ) as mock_create_or_update_assistant_session,
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 200
+    assert response.json()["activation_id"] == "activation-restart-pending"
+    refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
+    assert refreshed_spec["activationId"] == "activation-restart-pending"
