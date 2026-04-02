@@ -1,7 +1,7 @@
 steps:
   # Build thin enterprise overlay on top of the Unity base image.
   # _BASE_IMAGE is passed by the upstream Unity build trigger via substitution override.
-  # Falls back to unity-staging:latest if triggered manually.
+  # Falls back to unity-base-staging:latest if triggered directly.
 - name: 'gcr.io/cloud-builders/docker'
   id: 'build-image'
   entrypoint: 'bash'
@@ -18,12 +18,20 @@ steps:
   # Push Docker Image (SHA and latest tags in parallel)
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-sha-tag'
-  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${SHORT_SHA}']
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${SHORT_SHA}
   waitFor: ['build-image']
 
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-latest-tag'
-  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:latest']
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:latest
   waitFor: ['build-image']
 
   # Upload SHA to Cloud Storage
@@ -74,7 +82,3 @@ availableSecrets:
     env: 'ORCHESTRA_ADMIN_KEY'
 
 timeout: '600s'
-
-images:
-- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${SHORT_SHA}'
-- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:latest'
