@@ -59,13 +59,21 @@ def _existing_session(
     *,
     phase: str = "PendingVM",
     activation_id: str = "activation-existing",
-    secret_name: str = "assistant-session-assistant-123-startup",
+    secret_name: str = "assistant-session-bootstrap-assistant-123",
+    user_id: str = "stale-user",
+    medium: str = "email",
+    desktop_mode: str = "ubuntu",
+    desktop_required: bool = True,
 ) -> dict:
     return {
         "metadata": {"name": "assistantsession-assistant-123"},
         "spec": {
             "activationId": activation_id,
             "startupSecretRef": secret_name,
+            "userId": user_id,
+            "medium": medium,
+            "desktopMode": desktop_mode,
+            "desktopRequired": desktop_required,
         },
         "status": {
             "phase": phase,
@@ -73,9 +81,20 @@ def _existing_session(
     }
 
 
-def test_start_job_refreshes_bootstrap_secret_for_reused_pending_session(client):
+def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pending_session(
+    client,
+):
     core_api = MagicMock()
+    custom_api = MagicMock()
     existing_session = _existing_session()
+    refreshed_secret_name = "assistant-session-bootstrap-assistant-123"
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
 
     with (
         patch(
@@ -85,7 +104,7 @@ def test_start_job_refreshes_bootstrap_secret_for_reused_pending_session(client)
         ),
         patch(
             "communication.infra.views.get_custom_objects_api",
-            return_value=MagicMock(),
+            return_value=custom_api,
         ),
         patch(
             "communication.infra.views.get_assistant_session",
@@ -93,10 +112,11 @@ def test_start_job_refreshes_bootstrap_secret_for_reused_pending_session(client)
         ),
         patch(
             "communication.infra.views.create_or_update_bootstrap_secret",
-            return_value=existing_session["spec"]["startupSecretRef"],
+            return_value=refreshed_secret_name,
         ) as mock_create_or_update_bootstrap_secret,
         patch(
             "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
         ) as mock_create_or_update_assistant_session,
     ):
         response = client.post(
@@ -121,4 +141,66 @@ def test_start_job_refreshes_bootstrap_secret_for_reused_pending_session(client)
     assert secret_args[3]["assistant_about"] == "Newest assistant bio"
     assert secret_args[3]["voice_id"] == "voice-updated"
 
-    mock_create_or_update_assistant_session.assert_not_called()
+    mock_create_or_update_assistant_session.assert_called_once()
+    session_args = mock_create_or_update_assistant_session.call_args.args
+    assert session_args[0] is custom_api
+    assert session_args[1] == SETTINGS.default_namespace
+    assert session_args[2] == "assistant-123"
+    refreshed_spec = session_args[3]
+    assert refreshed_spec["activationId"] == existing_session["spec"]["activationId"]
+    assert refreshed_spec["userId"] == "user-123"
+    assert refreshed_spec["medium"] == "phone"
+    assert refreshed_spec["desktopMode"] == "ubuntu"
+    assert refreshed_spec["desktopRequired"] is True
+    assert refreshed_spec["startupSecretRef"] == refreshed_secret_name
+    assert refreshed_spec["requestedAt"]
+
+
+def test_start_job_reused_pending_session_picks_up_changed_desktop_mode(client):
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session(
+        desktop_mode="ubuntu",
+        desktop_required=True,
+    )
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value="assistant-session-bootstrap-assistant-123",
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ) as mock_create_or_update_assistant_session,
+    ):
+        response = client.post(
+            "/infra/job/start",
+            data=_start_job_payload(desktop_mode="macos"),
+        )
+
+    assert response.status_code == 200
+    refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
+    assert refreshed_spec["activationId"] == existing_session["spec"]["activationId"]
+    assert refreshed_spec["desktopMode"] == "macos"
+    assert refreshed_spec["desktopRequired"] is False

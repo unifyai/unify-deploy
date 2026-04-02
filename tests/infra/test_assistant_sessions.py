@@ -1,4 +1,6 @@
+import base64
 from copy import deepcopy
+import json
 from pathlib import Path
 
 import yaml
@@ -19,6 +21,24 @@ from communication.infra.assistant_sessions import (
     vm_refs_match,
 )
 from kubernetes.client.rest import ApiException
+
+
+def _fake_secret(payload: dict, resource_version: str = "1"):
+    class FakeSecret:
+        def __init__(self):
+            self.metadata = type(
+                "Metadata",
+                (),
+                {"resource_version": resource_version},
+            )()
+            self.data = {
+                "startup.json": base64.b64encode(
+                    json.dumps(payload).encode("utf-8"),
+                ).decode("utf-8"),
+            }
+            self.string_data = None
+
+    return FakeSecret()
 
 
 def test_assistant_session_names_are_sanitized():
@@ -248,51 +268,82 @@ def test_delete_assistant_session_treats_missing_session_as_absent():
     assert deleted is False
 
 
-def test_create_or_update_bootstrap_secret_treats_create_conflict_as_success():
+def test_create_or_update_bootstrap_secret_reconciles_create_conflict_to_latest_payload():
+    requested_payload = {
+        "api_key": "latest-secret",
+        "assistant_about": "fresh payload",
+    }
+
     class FakeCoreApi:
+        def __init__(self):
+            self.resource_version = "1"
+            self.stored_payload = {"api_key": "stale-secret"}
+            self.read_count = 0
+            self.replace_count = 0
+
         def read_namespaced_secret(self, **_kwargs):
-            raise ApiException(status=404)
+            self.read_count += 1
+            if self.read_count == 1:
+                raise ApiException(status=404)
+            return _fake_secret(
+                self.stored_payload,
+                resource_version=self.resource_version,
+            )
 
         def create_namespaced_secret(self, **_kwargs):
             raise ApiException(status=409)
 
+        def replace_namespaced_secret(self, **kwargs):
+            self.replace_count += 1
+            self.stored_payload = json.loads(kwargs["body"].string_data["startup.json"])
+            self.resource_version = str(int(self.resource_version) + 1)
+
+    core_api = FakeCoreApi()
     secret_name = create_or_update_bootstrap_secret(
-        FakeCoreApi(),
+        core_api,
         "preview",
         "1207",
-        {"api_key": "secret"},
+        requested_payload,
     )
 
     assert secret_name == "assistant-session-bootstrap-1207"
+    assert core_api.replace_count == 1
+    assert core_api.stored_payload == requested_payload
 
 
 def test_create_or_update_bootstrap_secret_retries_replace_conflict():
     call_log = []
-
-    class FakeSecret:
-        class metadata:
-            resource_version = "1"
+    requested_payload = {"api_key": "latest-secret"}
+    stored_payload = {"api_key": "stale-secret"}
 
     class FakeCoreApi:
+        def __init__(self):
+            self.resource_version = "1"
+
         def read_namespaced_secret(self, **_kwargs):
             call_log.append("read")
-            return FakeSecret()
+            return _fake_secret(stored_payload, resource_version=self.resource_version)
 
-        def replace_namespaced_secret(self, **_kwargs):
+        def replace_namespaced_secret(self, **kwargs):
             call_log.append("replace")
             if call_log.count("replace") < 3:
                 raise ApiException(status=409)
+            stored_payload.update(
+                json.loads(kwargs["body"].string_data["startup.json"]),
+            )
+            self.resource_version = str(int(self.resource_version) + 1)
 
     secret_name = create_or_update_bootstrap_secret(
         FakeCoreApi(),
         "preview",
         "1207",
-        {"api_key": "secret"},
+        requested_payload,
     )
 
     assert secret_name == "assistant-session-bootstrap-1207"
     assert call_log.count("replace") == 3
     assert call_log.count("read") == 3
+    assert stored_payload == requested_payload
 
 
 def test_create_or_update_assistant_session_returns_existing_on_create_conflict(
