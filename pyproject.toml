@@ -29,3 +29,6 @@ unillm = { path = "../unillm", editable = true }
 
 [tool.setuptools.packages.find]
 include = ["unity_deploy*"]
+
+[tool.setuptools.package-data]
+"unity_deploy" = ["**/*.json", "**/*.md"]
