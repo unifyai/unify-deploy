@@ -19,6 +19,7 @@ from communication.infra.assistant_sessions import (
     build_condition,
     desktop_url_matches_vm_ref,
     emit_observability_event,
+    get_assistant_session,
     get_latest_unity_image,
     merge_conditions,
     patch_assistant_session_status,
@@ -175,6 +176,82 @@ def _current_pod_ref(job_name: str) -> dict | None:
     if pods.items:
         return {"name": pods.items[0].metadata.name, "namespace": WATCH_NAMESPACE}
     return None
+
+
+def _refresh_session_snapshot(body: dict) -> dict | None:
+    assert _custom_api is not None
+    assistant_id = str((body.get("spec") or {}).get("assistantId", ""))
+    if not assistant_id:
+        return body
+    return get_assistant_session(_custom_api, WATCH_NAMESPACE, assistant_id)
+
+
+def _drop_conditions(
+    conditions: list[dict] | None,
+    *condition_types: str,
+) -> list[dict]:
+    ignored = set(condition_types)
+    return [
+        condition
+        for condition in (conditions or [])
+        if condition.get("type") not in ignored
+    ]
+
+
+def _runtime_state_still_current(
+    *,
+    assistant_id: str,
+    session_name: str,
+    activation_id: str,
+    action: str,
+    job_name: str | None = None,
+    vm_ref: dict | None = None,
+) -> bool:
+    assert _custom_api is not None
+    latest = get_assistant_session(_custom_api, WATCH_NAMESPACE, assistant_id)
+    if latest is None:
+        emit_observability_event(
+            "controller.stale_runtime_action_skipped",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            activation_id=activation_id,
+            action=action,
+            reason="session_missing",
+            source="controller.reconcile",
+        )
+        return False
+
+    latest_spec = latest.get("spec", {})
+    latest_status = latest.get("status", {})
+    latest_activation_id = str(latest_spec.get("activationId", ""))
+    latest_job_name = str((latest_status.get("jobRef") or {}).get("name", ""))
+    latest_vm_ref = latest_status.get("vmRef")
+
+    reason = ""
+    if latest_activation_id != activation_id:
+        reason = "activation_changed"
+    elif job_name is not None and latest_job_name != job_name:
+        reason = "job_changed"
+    elif vm_ref is not None and not vm_refs_match(latest_vm_ref, vm_ref):
+        reason = "vm_changed"
+
+    if not reason:
+        return True
+
+    emit_observability_event(
+        "controller.stale_runtime_action_skipped",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        activation_id=activation_id,
+        action=action,
+        reason=reason,
+        expected_job_name=job_name,
+        current_job_name=latest_job_name,
+        expected_vm_name=(vm_ref or {}).get("name"),
+        current_vm_name=(latest_vm_ref or {}).get("name"),
+        source="controller.reconcile",
+    )
+    return False
 
 
 def _claim_idle_job(assistant_id: str, session_name: str):
@@ -387,6 +464,11 @@ def _unbind_job(
 
 def _update_status_for_session(body: dict) -> None:
     assert _custom_api is not None
+    latest_body = _refresh_session_snapshot(body)
+    if latest_body is None:
+        return
+    body = latest_body
+
     session_name = body["metadata"]["name"]
     spec = body.get("spec", {})
     status = body.get("status", {})
@@ -480,6 +562,15 @@ def _update_status_for_session(body: dict) -> None:
 
     if terminal_phase:
         current_vm_ref = status.get("vmRef")
+        if not _runtime_state_still_current(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            activation_id=activation_id,
+            action="terminal_transition",
+            job_name=job.metadata.name,
+            vm_ref=current_vm_ref,
+        ):
+            return
         if current_vm_ref and assistant_id:
             try:
                 release_pool_vm(assistant_id)
@@ -542,6 +633,14 @@ def _update_status_for_session(body: dict) -> None:
                 pass
 
         if timed_out:
+            if not _runtime_state_still_current(
+                assistant_id=assistant_id,
+                session_name=session_name,
+                activation_id=activation_id,
+                action="bootstrap_timeout",
+                job_name=job.metadata.name,
+            ):
+                return
             emit_observability_event(
                 "controller.bootstrap_timeout",
                 assistant_id=assistant_id,
@@ -684,6 +783,8 @@ def _update_status_for_session(body: dict) -> None:
     if assigned_vm_ref is None:
         vm_ref = None
         desktop_url = None
+        existing_conditions = _drop_conditions(existing_conditions, "VMAssigned")
+        conditions = _drop_conditions(conditions, "VMAssigned")
         existing_conditions = merge_conditions(
             existing_conditions,
             build_condition(
@@ -703,6 +804,8 @@ def _update_status_for_session(body: dict) -> None:
         if not vm_refs_match(vm_ref, assigned_vm_ref):
             vm_ref = assigned_vm_ref
             desktop_url = None
+            existing_conditions = _drop_conditions(existing_conditions, "VMAssigned")
+            conditions = _drop_conditions(conditions, "VMAssigned")
             existing_conditions = merge_conditions(
                 existing_conditions,
                 build_condition(
@@ -900,6 +1003,15 @@ def _update_status_for_session(body: dict) -> None:
             if not alive:
                 probe_failures += 1
                 if probe_failures >= DESKTOP_LIVENESS_FAILURE_THRESHOLD:
+                    if not _runtime_state_still_current(
+                        assistant_id=assistant_id,
+                        session_name=session_name,
+                        activation_id=activation_id,
+                        action="desktop_liveness_failed",
+                        job_name=job.metadata.name,
+                        vm_ref=vm_ref,
+                    ):
+                        return
                     emit_observability_event(
                         "controller.desktop_liveness_failed",
                         assistant_id=assistant_id,
@@ -1035,6 +1147,15 @@ def _update_status_for_session(body: dict) -> None:
 
     if vm_timed_out:
         vm_retries_count = int(status.get("vmRetries", 0))
+        if not _runtime_state_still_current(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            activation_id=activation_id,
+            action="vm_readiness_timeout",
+            job_name=job.metadata.name,
+            vm_ref=vm_ref,
+        ):
+            return
         emit_observability_event(
             "controller.vm_readiness_timeout",
             assistant_id=assistant_id,
