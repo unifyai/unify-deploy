@@ -828,6 +828,130 @@ def get_assistant_session(comms_client, assistant_id: str) -> dict | None:
     return resp.json()
 
 
+def _read_assistant_session_http(assistant_id: str) -> dict | None:
+    """Read AssistantSession state directly from the deployed Comms app."""
+    resp = requests.get(
+        f"{COMMS_APP_URL}/infra/session/{assistant_id}",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=15,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _assistant_runtime_cleared(session: dict | None) -> bool:
+    """Return whether a session no longer owns runtime resources."""
+    if session is None:
+        return True
+    status = session.get("status") or {}
+    if str(status.get("phase", "") or "") != "Released":
+        return False
+    binding = status.get("binding") or {}
+    return not any(
+        [
+            ((binding.get("jobRef") or {}).get("name")),
+            ((binding.get("podRef") or {}).get("name")),
+            ((binding.get("vmRef") or {}).get("name")),
+            (binding.get("desktopUrl") or ""),
+        ],
+    )
+
+
+def wait_for_assistant_runtime_stopped(
+    assistant_id: str,
+    *,
+    batch_api=None,
+    timeout: float = 240,
+    interval: float = 5,
+) -> dict | None:
+    """Wait until an assistant runtime is fully released by AssistantSession."""
+
+    session_name = f"assistant-session-{str(assistant_id).lower().replace('_', '-')}"
+
+    def _settled():
+        session = _read_assistant_session_http(str(assistant_id))
+        assistant_jobs = (
+            list_jobs_with_assistant_id(batch_api, str(assistant_id))
+            if batch_api is not None
+            else []
+        )
+        session_jobs = (
+            list_jobs_with_session_ref(batch_api, session_name)
+            if batch_api is not None
+            else []
+        )
+        assigned_vms = assigned_vm_runtime_refs(str(assistant_id))
+        if not _assistant_runtime_cleared(session):
+            return None
+        if assistant_jobs or session_jobs or assigned_vms:
+            return None
+        return session
+
+    return poll_until(
+        _settled,
+        timeout=timeout,
+        interval=interval,
+        description=f"Assistant runtime {assistant_id} to reach Released with no bound resources",
+        failure_snapshot=lambda: {
+            "session": _read_assistant_session_http(str(assistant_id)),
+            "assistant_jobs": (
+                []
+                if batch_api is None
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_assistant_id(batch_api, str(assistant_id))
+                ]
+            ),
+            "session_jobs": (
+                []
+                if batch_api is None
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_session_ref(batch_api, session_name)
+                ]
+            ),
+            "assigned_vms": assigned_vm_runtime_refs(str(assistant_id)),
+        },
+    )
+
+
+def stop_assistant_runtime(
+    assistant_id: str,
+    *,
+    batch_api=None,
+    timeout: float = 240,
+) -> None:
+    """Stop an assistant runtime through AssistantSession desired state."""
+
+    try:
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/session/{assistant_id}/stop",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=30,
+        )
+    except Exception as exc:
+        print(f"[Cleanup] Failed to request session stop for {assistant_id}: {exc}")
+        return
+
+    if resp.status_code not in (200, 404):
+        print(
+            f"[Cleanup] Session stop for {assistant_id} returned "
+            f"{resp.status_code}: {resp.text[:200]}",
+        )
+        return
+
+    try:
+        wait_for_assistant_runtime_stopped(
+            str(assistant_id),
+            batch_api=batch_api,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        print(f"[Cleanup] Runtime stop wait failed for {assistant_id}: {exc}")
+
+
 def replenish_pool():
     """Trigger idle pool replenishment on the deployed adapters.
 
@@ -876,7 +1000,7 @@ def wait_for_idle_pool(batch_api, min_idle: int = 1, timeout: float = 90):
 
 @dataclass
 class JobTracker:
-    """Tracks created Jobs for cleanup + pool replenishment."""
+    """Tracks created Jobs and cleans them up via the correct authority."""
 
     jobs: list = field(default_factory=list)
     batch_api: Any = None
@@ -888,7 +1012,20 @@ class JobTracker:
     def cleanup(self):
         if not self.batch_api:
             return
+        assistant_ids: set[str] = set()
         for name in self.jobs:
+            try:
+                job = self.batch_api.read_namespaced_job(
+                    name=name,
+                    namespace=self.namespace,
+                )
+            except Exception:
+                continue
+            labels = dict(job.metadata.labels or {})
+            assistant_id = str(labels.get("assistant-id", "") or "").strip()
+            if assistant_id:
+                assistant_ids.add(assistant_id)
+                continue
             try:
                 self.batch_api.delete_namespaced_job(
                     name=name,
@@ -897,6 +1034,12 @@ class JobTracker:
                 )
             except Exception:
                 pass
+        for assistant_id in sorted(assistant_ids):
+            stop_assistant_runtime(
+                assistant_id,
+                batch_api=self.batch_api,
+                timeout=180,
+            )
         if self.jobs:
             replenish_pool()
 
@@ -1035,28 +1178,11 @@ def expire_test_assistant_records(assistant_id: str):
 
 
 def cleanup_assistant_jobs(batch_api, assistant_ids: list[str]):
-    """Delete Jobs, release VMs, and expire records for assistant IDs."""
-    for aid in assistant_ids:
-        expire_test_assistant_records(str(aid))
-        sanitized = str(aid).lower().replace("_", "-")
+    """Stop assistant runtimes through AssistantSession and expire test records."""
+    for aid in dict.fromkeys(str(aid) for aid in assistant_ids):
+        stop_assistant_runtime(aid, batch_api=batch_api, timeout=180)
         try:
-            jobs = batch_api.list_namespaced_job(
-                namespace=NAMESPACE,
-                label_selector=f"app=unity,assistant-id={sanitized}",
-            )
-            for job in jobs.items:
-                try:
-                    batch_api.delete_namespaced_job(
-                        name=job.metadata.name,
-                        namespace=NAMESPACE,
-                        propagation_policy="Foreground",
-                    )
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        try:
-            release_assigned_vms(str(aid), timeout=30)
+            expire_test_assistant_records(aid)
         except Exception:
             pass
 
@@ -1295,17 +1421,12 @@ def _delete_test_assistant(agent_id: str, batch_api=None):
     """Delete a test assistant from Orchestra and clean up infra resources.
 
     Calls DELETE /v0/assistant/{id} which handles Pub/Sub, disks, phones,
-    emails, and DB cleanup.  Also expires any AssistantJobs records and
-    deletes K8s Jobs.
+    emails, and DB cleanup. Also expires AssistantJobs records and waits
+    for any AssistantSession-owned runtime to disappear.
 
     Swallows all exceptions so teardown never aborts mid-way.
     """
     int_id = str(agent_id).split(".")[0]
-
-    try:
-        release_assigned_vms(str(agent_id), timeout=30)
-    except Exception:
-        pass
 
     try:
         resp = requests.delete(
@@ -1329,21 +1450,25 @@ def _delete_test_assistant(agent_id: str, batch_api=None):
         pass
 
     if batch_api is not None:
-        sanitized = str(agent_id).lower().replace("_", "-")
         try:
-            jobs = batch_api.list_namespaced_job(
-                namespace=NAMESPACE,
-                label_selector=f"app=unity,assistant-id={sanitized}",
+            poll_until(
+                lambda: (
+                    _read_assistant_session_http(str(agent_id)) is None
+                    and not list_jobs_with_assistant_id(batch_api, str(agent_id))
+                    and not assigned_vm_runtime_refs(str(agent_id))
+                ),
+                timeout=180,
+                interval=5,
+                description=f"Assistant {agent_id} deletion cleanup to complete",
+                failure_snapshot=lambda: {
+                    "session": _read_assistant_session_http(str(agent_id)),
+                    "assistant_jobs": [
+                        job.metadata.name
+                        for job in list_jobs_with_assistant_id(batch_api, str(agent_id))
+                    ],
+                    "assigned_vms": assigned_vm_runtime_refs(str(agent_id)),
+                },
             )
-            for job in jobs.items:
-                try:
-                    batch_api.delete_namespaced_job(
-                        name=job.metadata.name,
-                        namespace=NAMESPACE,
-                        propagation_policy="Foreground",
-                    )
-                except Exception:
-                    pass
         except Exception:
             pass
 

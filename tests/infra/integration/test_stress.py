@@ -47,7 +47,6 @@ from .conftest import (
     poll_until,
     probe_vm_agent_service_authenticated,
     pull_outbound_messages,
-    release_assigned_vms,
     replenish_pool,
     send_test_meet,
     send_test_message,
@@ -275,8 +274,8 @@ def test_production_traffic_stress(
     print(f"{'=' * 70}")
 
     # ------------------------------------------------------------------
-    # Clean slate: delete all existing jobs, release orphaned VMs, then
-    # create exactly MIN_IDLE fresh containers with the latest image.
+    # Clean slate: stop all live assistant runtimes through AssistantSession,
+    # then create exactly MIN_IDLE fresh containers with the latest image.
     # ------------------------------------------------------------------
     TARGET_IDLE = 3
 
@@ -285,23 +284,18 @@ def test_production_traffic_stress(
         namespace=NAMESPACE,
         label_selector="app=unity",
     )
-    for job in existing_jobs.items:
-        aid = (job.metadata.labels or {}).get("assistant-id", "")
-        try:
-            batch_api.delete_namespaced_job(
-                name=job.metadata.name,
-                namespace=NAMESPACE,
-                propagation_policy="Foreground",
-            )
-        except Exception:
-            pass
-        if aid and gce_client is not None:
-            try:
-                release_assigned_vms(aid, gce_client=gce_client, timeout=15)
-            except Exception:
-                pass
-    if existing_jobs.items:
-        print(f"[Setup] Deleted {len(existing_jobs.items)} leftover jobs")
+    active_assistant_ids = sorted(
+        {
+            str((job.metadata.labels or {}).get("assistant-id", "") or "")
+            for job in existing_jobs.items
+            if (job.metadata.labels or {}).get("assistant-id")
+            and str((job.metadata.labels or {}).get("assistant-id", "") or "")
+            in all_ids
+        },
+    )
+    if active_assistant_ids:
+        cleanup_assistant_jobs(batch_api, active_assistant_ids)
+        print(f"[Setup] Stopped {len(active_assistant_ids)} live assistant runtime(s)")
         time.sleep(10)
 
     print(f"[Setup] Creating {TARGET_IDLE} fresh idle containers...")
@@ -1006,12 +1000,7 @@ def test_production_traffic_stress(
         print(f"{'—' * 70}")
 
         cleanup_assistant_jobs(batch_api, all_ids)
-        print(f"[Phase 8] Jobs deleted, releasing VMs...")
-        for aid in all_ids:
-            try:
-                release_assigned_vms(str(aid), gce_client=gce_client, timeout=15)
-            except Exception:
-                pass
+        print(f"[Phase 8] Requested AssistantSession cleanup for all runtimes")
         print(f"[Phase 8] Waiting 15s for cleanup to propagate...")
         time.sleep(15)
 
@@ -1056,9 +1045,4 @@ def test_production_traffic_stress(
     finally:
         scheduler_noise.stop()
         cleanup_assistant_jobs(batch_api, all_ids)
-        for aid in all_ids:
-            try:
-                release_assigned_vms(str(aid), gce_client=gce_client, timeout=15)
-            except Exception:
-                pass
         replenish_pool()

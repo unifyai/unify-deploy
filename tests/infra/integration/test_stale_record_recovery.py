@@ -24,7 +24,6 @@ import requests
 from .conftest import (
     _create_test_assistant,
     _delete_test_assistant,
-    NAMESPACE,
     ORCHESTRA_URL,
     SHARED_KEY,
     cleanup_assistant_jobs,
@@ -148,18 +147,6 @@ def test_stale_record_does_not_block_new_startup(
 
     finally:
         expire_test_assistant_records(assistant_id)
-        all_jobs = batch_api.list_namespaced_job(
-            namespace=NAMESPACE,
-            label_selector=f"app=unity,assistant-id={assistant_id.lower().replace('_', '-')}",
-        )
-        for job in all_jobs.items:
-            try:
-                batch_api.delete_namespaced_job(
-                    name=job.metadata.name,
-                    namespace=NAMESPACE,
-                    propagation_policy="Foreground",
-                )
-            except Exception:
-                pass
+        cleanup_assistant_jobs(batch_api, [assistant_id])
         replenish_pool()
         _delete_test_assistant(assistant_id, batch_api)

@@ -1630,6 +1630,11 @@ def assign_pool_vm(
         )
 
     try:
+        attached_vm_name = find_vm_with_disk(assistant_id)
+        if attached_vm_name:
+            raise AssistantDiskInUseError(
+                f"Assistant disk {_assistant_disk_name(assistant_id)} is still attached to {attached_vm_name}",
+            )
         claimed = claim_idle_vm(
             assistant_id,
             binding_id,

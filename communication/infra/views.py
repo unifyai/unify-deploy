@@ -774,15 +774,28 @@ async def start_job(
             if existing_session
             else ""
         )
+        existing_binding = session_binding(existing_session)
+        release_draining = bool(
+            existing_phase in {"Releasing", "Released"}
+            and (
+                binding_job_ref(existing_binding).get("name")
+                or binding_pod_ref(existing_binding).get("name")
+                or binding_vm_ref(existing_binding).get("name")
+                or binding_desktop_url(existing_binding)
+            ),
+        )
         reused_active_session = bool(
             existing_phase in ACTIVE_PHASES and existing_activation_id,
         )
         restart_in_progress = bool(
-            existing_phase
-            and existing_phase not in ACTIVE_PHASES
-            and existing_activation_id
-            and observed_activation_id
-            and existing_activation_id != observed_activation_id,
+            release_draining
+            or (
+                existing_phase
+                and existing_phase not in ACTIVE_PHASES
+                and existing_activation_id
+                and observed_activation_id
+                and existing_activation_id != observed_activation_id
+            ),
         )
         activation_id = (
             existing_activation_id
@@ -797,6 +810,7 @@ async def start_job(
             existing_phase=existing_phase,
             reused_active_session=reused_active_session,
             restart_in_progress=restart_in_progress,
+            release_draining=release_draining,
             medium=medium,
             desktop_mode=desktop_mode,
         )

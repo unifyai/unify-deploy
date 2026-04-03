@@ -22,14 +22,12 @@ from .conftest import (
     ADMIN_KEY,
     cleanup_assistant_jobs,
     expire_test_assistant_records,
-    get_assistant_session,
     list_assigned_vms,
-    list_jobs_with_assistant_id,
     poll_until,
     pull_outbound_messages,
-    release_assigned_vms,
     replenish_pool,
     send_test_message,
+    wait_for_assistant_runtime_stopped,
     wait_for_container_running,
 )
 
@@ -52,7 +50,12 @@ class TestE2EFlows:
     """End-to-end flows exercising the adapter -> comms app -> K8s pipeline."""
 
     @pytest.mark.timeout(60)
-    def test_wakeup_responds_within_orchestra_timeout(self, real_assistant_data, comms):
+    def test_wakeup_responds_within_orchestra_timeout(
+        self,
+        real_assistant_data,
+        batch_api,
+        comms,
+    ):
         """Wakeup must return within Orchestra's httpx timeout (20s).
 
         Orchestra calls POST /assistant/wakeup with a ~20s httpx timeout.
@@ -79,20 +82,7 @@ class TestE2EFlows:
             print(f"\n[Wakeup] Responded in {elapsed:.1f}s (budget: 15s)")
         finally:
             try:
-                sanitized = assistant_id.lower().replace("_", "-")
-                jobs_resp = comms.get(
-                    "/infra/jobs",
-                    params={
-                        "label_selector": f"app=unity,assistant-id={sanitized}",
-                        "hours": 1,
-                    },
-                )
-                if jobs_resp.status_code == 200:
-                    for job in jobs_resp.json().get("jobs", []):
-                        comms.delete(
-                            "/infra/job/delete",
-                            data={"job_name": job["job_name"]},
-                        )
+                cleanup_assistant_jobs(batch_api, [assistant_id])
             except Exception:
                 pass
             replenish_pool()
@@ -211,19 +201,10 @@ class TestE2EFlows:
                 stop_resp.status_code == 200
             ), f"Stop failed: {stop_resp.status_code} {stop_resp.text}"
 
-            poll_until(
-                lambda: (
-                    session
-                    if (
-                        (session := get_assistant_session(comms, assistant_id))
-                        and ((session.get("status") or {}).get("phase") == "Released")
-                        and not list_jobs_with_assistant_id(batch_api, assistant_id)
-                    )
-                    else None
-                ),
+            wait_for_assistant_runtime_stopped(
+                assistant_id,
+                batch_api=batch_api,
                 timeout=240,
-                interval=10,
-                description=f"AssistantSession {assistant_id} to stop the first runtime",
             )
             expire_test_assistant_records(assistant_id)
             print("[Resume] First runtime stopped")
@@ -422,9 +403,5 @@ class TestE2EFlows:
                 f"(pool-role=assigned)",
             )
         finally:
-            try:
-                release_assigned_vms(assistant_id, gce_client=gce_client)
-            except Exception:
-                pass
             cleanup_assistant_jobs(batch_api, [assistant_id])
             replenish_pool()

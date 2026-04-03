@@ -40,6 +40,7 @@ from communication.infra.assistant_sessions import (
 )
 from communication.infra.helpers import create_unity_job
 from communication.infra.vm_helpers import (
+    AssistantDiskInUseError,
     assign_pool_vm,
     complete_pool_vm_release,
     get_assigned_vm_ref,
@@ -1416,6 +1417,17 @@ def _job_for_binding(session_name: str, binding: dict | None):
     return None
 
 
+def _binding_has_runtime_refs(binding: dict | None) -> bool:
+    """Return whether a binding still owns any concrete runtime resource."""
+
+    return bool(
+        binding_job_ref(binding).get("name")
+        or binding_pod_ref(binding).get("name")
+        or binding_vm_ref(binding).get("name")
+        or binding_desktop_url(binding),
+    )
+
+
 def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: dict):
     """Claim exactly one idle Job for the current binding."""
 
@@ -1649,13 +1661,6 @@ def _binding_release_state(
         and not cleaned_vm_ref
     )
     if release_complete:
-        released_binding = _binding_payload(
-            binding,
-            job_ref=None,
-            pod_ref=None,
-            vm_ref=None,
-            desktop_url=None,
-        )
         released_conditions = _condition_state(
             existing_conditions,
             "Released",
@@ -1667,7 +1672,7 @@ def _binding_release_state(
             reason="Released",
             message="Runtime cleanup complete",
         )
-        return "Released", released_binding, released_conditions, last_error
+        return "Released", None, released_conditions, last_error
 
     releasing_conditions = _condition_state(
         existing_conditions,
@@ -2208,6 +2213,29 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                     vm_assigned=False,
                     desktop_ready=False,
                     reason="WaitingForCapacity",
+                    message=str(exc),
+                ),
+            )
+            return
+        except AssistantDiskInUseError as exc:
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase="PendingVM",
+                observed_activation_id=activation_id,
+                binding=binding,
+                last_error=str(exc),
+                source="controller.reconcile",
+                conditions=_condition_state(
+                    existing_conditions,
+                    "PendingVM",
+                    desktop_required,
+                    container_assigned=True,
+                    container_ready=True,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason="WaitingForRelease",
                     message=str(exc),
                 ),
             )
