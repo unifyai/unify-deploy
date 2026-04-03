@@ -81,11 +81,21 @@ def test_startup_transition_sets_labels(
     print(f"\nTriggered job/start for assistant {assistant_id}")
 
     try:
+
+        def _session_with_binding_job():
+            candidate = get_assistant_session(comms, assistant_id)
+            if candidate is None:
+                return None
+            binding = (candidate.get("status") or {}).get("binding") or {}
+            if (binding.get("jobRef") or {}).get("name"):
+                return candidate
+            return None
+
         session = poll(
-            lambda: get_assistant_session(comms, assistant_id),
+            _session_with_binding_job,
             timeout=120,
             interval=5,
-            description=f"AssistantSession for {assistant_id}",
+            description=f"AssistantSession for {assistant_id} to record a binding jobRef",
         )
         assert session is not None
         job_name = (

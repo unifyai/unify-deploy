@@ -107,7 +107,11 @@ def test_reconcile_records_binding_owned_job(monkeypatch):
         "get_assistant_session",
         lambda *_args, **_kwargs: deepcopy(body),
     )
-    monkeypatch.setattr(controller, "_create_bound_job", lambda *_args, **_kwargs: created_job)
+    monkeypatch.setattr(
+        controller,
+        "_claim_idle_job_for_binding",
+        lambda *_args, **_kwargs: created_job,
+    )
     monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
@@ -116,6 +120,50 @@ def test_reconcile_records_binding_owned_job(monkeypatch):
     assert patch_status.call_args.kwargs["phase"] == "PendingContainer"
     binding = patch_status.call_args.kwargs["binding"]
     assert binding["jobRef"]["name"] == "unity-job-1"
+
+
+def test_claim_idle_job_for_binding_reuses_existing_job_for_same_binding(monkeypatch):
+    binding = _binding("binding-1")
+    existing_job = _job(name="unity-job-1", container_ready=False)
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+
+    job = controller._claim_idle_job_for_binding(
+        "1207",
+        "assistant-session-1207",
+        binding,
+    )
+
+    assert job is existing_job
+    batch_api.patch_namespaced_job.assert_not_called()
+
+
+def test_reconcile_waits_for_idle_capacity_when_no_idle_job_available(monkeypatch):
+    body = _base_session()
+    body["status"]["binding"] = _binding("binding-1")
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_batch_api", MagicMock())
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_claim_idle_job_for_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+    assert patch_status.call_args.kwargs["last_error"] == ""
 
 
 def test_reconcile_assigns_vm_with_binding_id(monkeypatch):
@@ -137,9 +185,17 @@ def test_reconcile_assigns_vm_with_binding_id(monkeypatch):
         "get_assistant_session",
         lambda *_args, **_kwargs: deepcopy(body),
     )
-    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: _job())
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(),
+    )
     monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(controller, "read_bootstrap_secret", lambda *_args, **_kwargs: {"api_key": "key"})
+    monkeypatch.setattr(
+        controller,
+        "read_bootstrap_secret",
+        lambda *_args, **_kwargs: {"api_key": "key"},
+    )
     monkeypatch.setattr(controller, "assign_pool_vm", assign_pool_vm)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
@@ -152,7 +208,10 @@ def test_reconcile_assigns_vm_with_binding_id(monkeypatch):
         vm_type="ubuntu",
     )
     assert patch_status.call_args.kwargs["phase"] == "PendingGuest"
-    assert patch_status.call_args.kwargs["binding"]["vmRef"]["name"] == "unity-pool-ubuntu-1"
+    assert (
+        patch_status.call_args.kwargs["binding"]["vmRef"]["name"]
+        == "unity-pool-ubuntu-1"
+    )
 
 
 def test_reconcile_marks_active_from_ready_binding(monkeypatch):
@@ -175,7 +234,11 @@ def test_reconcile_marks_active_from_ready_binding(monkeypatch):
         "get_assistant_session",
         lambda *_args, **_kwargs: deepcopy(body),
     )
-    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: _job())
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(),
+    )
     monkeypatch.setattr(
         controller,
         "verify_vm_assignment",
@@ -184,13 +247,20 @@ def test_reconcile_marks_active_from_ready_binding(monkeypatch):
             "hostname": "vm-1.vm.unify.ai",
         },
     )
-    monkeypatch.setattr(controller, "probe_vm_agent_service", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        controller,
+        "probe_vm_agent_service",
+        lambda *_args, **_kwargs: True,
+    )
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
     controller._update_status_for_session(deepcopy(body))
 
     assert patch_status.call_args.kwargs["phase"] == "Active"
-    assert patch_status.call_args.kwargs["binding"]["desktopUrl"] == "https://vm-1.vm.unify.ai"
+    assert (
+        patch_status.call_args.kwargs["binding"]["desktopUrl"]
+        == "https://vm-1.vm.unify.ai"
+    )
 
 
 def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):

@@ -33,14 +33,12 @@ from .assistant_sessions import (
     binding_vm_ref,
     build_binding,
     build_assistant_session_spec,
-    build_condition,
     delete_assistant_session,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
     emit_observability_event,
     get_assistant_session,
     get_custom_objects_api,
-    merge_conditions,
     patch_assistant_session_spec,
     patch_assistant_session_status,
     read_bootstrap_secret,
@@ -50,9 +48,7 @@ from .assistant_sessions import (
 from .vm_helpers import (
     AssistantDiskInUseError,
     get_dns_hostname,
-    probe_vm_agent_service,
     probe_vm_agent_service_authenticated,
-    get_assigned_vm_ref,
     verify_vm_assignment,
     _set_pool_labels,
     _update_instance_metadata,
@@ -60,9 +56,7 @@ from .vm_helpers import (
     start_pool_vm,
     assign_pool_vm,
     release_pool_vm,
-    complete_pool_vm_release,
     replenish_pool,
-    trim_pool,
     rebalance_pool,
     list_pool_vms,
     find_vm_with_disk,
@@ -1920,7 +1914,9 @@ async def runtime_status_endpoint(assistant_id: str):
             SETTINGS.default_namespace,
             assistant_id,
         )
-    session_phase = str(((assistant_session or {}).get("status") or {}).get("phase", "") or "")
+    session_phase = str(
+        ((assistant_session or {}).get("status") or {}).get("phase", "") or "",
+    )
     session_desired_state = str(
         ((assistant_session or {}).get("spec") or {}).get("desiredState", "") or "",
     )

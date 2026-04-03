@@ -24,7 +24,13 @@ CONTAINER_READY_ANNOTATION = "assistantsession.unify.ai/container-ready"
 DESIRED_STATE_RUNNING = "Running"
 DESIRED_STATE_STOPPED = "Stopped"
 TERMINAL_PHASES = {"Released", "Failed"}
-ACTIVE_PHASES = {"PendingJob", "PendingContainer", "PendingVM", "PendingGuest", "Active"}
+ACTIVE_PHASES = {
+    "PendingJob",
+    "PendingContainer",
+    "PendingVM",
+    "PendingGuest",
+    "Active",
+}
 _STATUS_UNSET = object()
 _MAX_CAS_RETRIES = 3
 _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS = frozenset({"requestedAt"})

@@ -37,7 +37,6 @@ import requests
 from .conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
-    COMMS_APP_URL,
     NAMESPACE,
     check_invariants,
     cleanup_assistant_jobs,

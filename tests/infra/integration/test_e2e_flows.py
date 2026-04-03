@@ -16,15 +16,15 @@ import time
 
 import pytest
 import requests
-from kubernetes.client.rest import ApiException
 
 from .conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
-    NAMESPACE,
     cleanup_assistant_jobs,
     expire_test_assistant_records,
+    get_assistant_session,
     list_assigned_vms,
+    list_jobs_with_assistant_id,
     poll_until,
     pull_outbound_messages,
     release_assigned_vms,
@@ -46,31 +46,6 @@ def _wakeup(assistant_id: str):
         timeout=30,
     )
     return resp, time.monotonic() - t0
-
-
-def _wait_for_job_inactive(
-    batch_api,
-    job_name: str,
-    timeout: float = 180,
-    interval: float = 10,
-):
-    """Wait for the specific stopped Job to become inactive."""
-
-    def _check():
-        try:
-            job = batch_api.read_namespaced_job(name=job_name, namespace=NAMESPACE)
-        except ApiException as exc:
-            if exc.status == 404:
-                return True
-            raise
-        return not (job.status.active and job.status.active > 0)
-
-    poll_until(
-        _check,
-        timeout=timeout,
-        interval=interval,
-        description=f"Job {job_name} to become inactive",
-    )
 
 
 class TestE2EFlows:
@@ -199,7 +174,7 @@ class TestE2EFlows:
         batch_api,
         comms,
     ):
-        """After stopping a container, a second wakeup must start a fresh one.
+        """After stopping a runtime, a second wakeup must start a fresh one.
 
         Exercises the full session lifecycle: wakeup -> container runs -> stop
         -> wakeup again -> new container runs. The second container must be a
@@ -231,22 +206,27 @@ class TestE2EFlows:
             first_job_name = jobs[0].metadata.name
             print(f"\n[Resume] First container: {first_job_name}")
 
-            stop_resp = comms.post(
-                "/infra/job/stop",
-                data={"job_name": first_job_name},
-            )
+            stop_resp = comms.post(f"/infra/session/{assistant_id}/stop")
             assert (
                 stop_resp.status_code == 200
             ), f"Stop failed: {stop_resp.status_code} {stop_resp.text}"
 
-            _wait_for_job_inactive(
-                batch_api,
-                first_job_name,
-                timeout=180,
+            poll_until(
+                lambda: (
+                    session
+                    if (
+                        (session := get_assistant_session(comms, assistant_id))
+                        and ((session.get("status") or {}).get("phase") == "Released")
+                        and not list_jobs_with_assistant_id(batch_api, assistant_id)
+                    )
+                    else None
+                ),
+                timeout=240,
                 interval=10,
+                description=f"AssistantSession {assistant_id} to stop the first runtime",
             )
             expire_test_assistant_records(assistant_id)
-            print("[Resume] First container stopped")
+            print("[Resume] First runtime stopped")
 
             replenish_pool()
             time.sleep(10)

@@ -245,8 +245,8 @@ def _instance_boot_reference_time(instance) -> Optional[datetime]:
         _pool_progress_reference_time(instance)
         or _pool_transition_reference_time(instance)
         or _parse_gce_timestamp(
-        getattr(instance, "last_start_timestamp", None)
-        or getattr(instance, "creation_timestamp", None),
+            getattr(instance, "last_start_timestamp", None)
+            or getattr(instance, "creation_timestamp", None),
         )
     )
 
@@ -281,7 +281,9 @@ def _is_stale_inflight_vm(
     progress_phase = _pool_progress_phase(instance) or labels.get(POOL_ROLE_LABEL, "")
     if progress_phase not in INFLIGHT_ROLE_TIMEOUT_SECONDS:
         return False
-    reference_time = _pool_progress_reference_time(instance) or _instance_boot_reference_time(
+    reference_time = _pool_progress_reference_time(
+        instance,
+    ) or _instance_boot_reference_time(
         instance,
     )
     if reference_time is None:
@@ -1067,7 +1069,9 @@ def _set_pool_labels(
         if POOL_ROLE_LABEL in label_overrides:
             labels[POOL_TRANSITION_EPOCH_LABEL] = _pool_transition_epoch_value()
             if POOL_PROGRESS_PHASE_LABEL not in label_overrides:
-                progress_phase = _progress_phase_for_role(label_overrides[POOL_ROLE_LABEL])
+                progress_phase = _progress_phase_for_role(
+                    label_overrides[POOL_ROLE_LABEL],
+                )
                 if progress_phase:
                     labels[POOL_PROGRESS_PHASE_LABEL] = progress_phase
                     labels[POOL_PROGRESS_EPOCH_LABEL] = _pool_progress_epoch_value()

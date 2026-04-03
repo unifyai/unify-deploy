@@ -11,7 +11,6 @@ from kubernetes.client.rest import ApiException
 
 from common.settings import SETTINGS
 from communication.infra.assistant_sessions import (
-    ACTIVE_PHASES,
     assistant_session_observability_fields,
     assistant_session_desired_state,
     BINDING_ID_ANNOTATION,
@@ -23,7 +22,6 @@ from communication.infra.assistant_sessions import (
     binding_vm_ref,
     build_binding,
     CONTAINER_READY_ANNOTATION,
-    DESIRED_STATE_RUNNING,
     DESIRED_STATE_STOPPED,
     SESSION_REF_ANNOTATION,
     SESSION_REF_LABEL,
@@ -1278,19 +1276,27 @@ def _binding_payload(
 
     binding = binding or {}
     resolved_binding_id = (
-        binding_id_from_status(binding) if binding_id is _BINDING_UNSET else str(binding_id)
+        binding_id_from_status(binding)
+        if binding_id is _BINDING_UNSET
+        else str(binding_id)
     )
     return build_binding(
         binding_id=resolved_binding_id,
-        job_ref=binding_job_ref(binding) or None if job_ref is _BINDING_UNSET else job_ref,
-        pod_ref=binding_pod_ref(binding) or None if pod_ref is _BINDING_UNSET else pod_ref,
+        job_ref=(
+            binding_job_ref(binding) or None if job_ref is _BINDING_UNSET else job_ref
+        ),
+        pod_ref=(
+            binding_pod_ref(binding) or None if pod_ref is _BINDING_UNSET else pod_ref
+        ),
         vm_ref=binding_vm_ref(binding) or None if vm_ref is _BINDING_UNSET else vm_ref,
         desktop_url=(
             binding_desktop_url(binding) or None
             if desktop_url is _BINDING_UNSET
             else desktop_url
         ),
-        created_at=binding.get("createdAt") if created_at is _BINDING_UNSET else created_at,
+        created_at=(
+            binding.get("createdAt") if created_at is _BINDING_UNSET else created_at
+        ),
         container_ready_at=(
             binding.get("containerReadyAt")
             if container_ready_at is _BINDING_UNSET
@@ -1380,67 +1386,109 @@ def _job_matches_binding(job, session_name: str, binding_id: str) -> bool:
 
 
 def _job_for_binding(session_name: str, binding: dict | None):
-    """Load the recorded Job for a binding without rediscovery."""
+    """Load the current binding-owned Job."""
 
     assert _batch_api is not None
     job_name = str(binding_job_ref(binding).get("name", "") or "")
     current_binding_id = binding_id_from_status(binding)
-    if not job_name or not current_binding_id:
+    if not current_binding_id:
         return None
-    try:
-        job = _batch_api.read_namespaced_job(
-            name=job_name,
-            namespace=WATCH_NAMESPACE,
-        )
-    except ApiException as exc:
-        if exc.status == 404:
-            return None
-        raise
-    if not _job_matches_binding(job, session_name, current_binding_id):
-        return None
-    return job
+    if job_name:
+        try:
+            job = _batch_api.read_namespaced_job(
+                name=job_name,
+                namespace=WATCH_NAMESPACE,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+        else:
+            if _job_matches_binding(job, session_name, current_binding_id):
+                return job
+
+    jobs = _batch_api.list_namespaced_job(
+        namespace=WATCH_NAMESPACE,
+        label_selector=f"{SESSION_REF_LABEL}={session_name}",
+    )
+    for job in jobs.items:
+        if _job_matches_binding(job, session_name, current_binding_id):
+            return job
+    return None
 
 
-def _create_bound_job(assistant_id: str, session_name: str, binding: dict):
-    """Create the one Job owned by the current binding."""
+def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: dict):
+    """Claim exactly one idle Job for the current binding."""
 
     assert _batch_api is not None
     current_binding_id = binding_id_from_status(binding)
-    timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
-    random_id = f"u{uuid.uuid4().hex[:4]}"
-    job_name = f"unity-{timestamp_str}-{random_id}{SETTINGS.env_suffix}"
-    image = get_latest_unity_image()
-    created = create_unity_job(
-        batch_api=_batch_api,
-        job_name=job_name,
-        namespace=WATCH_NAMESPACE,
-        image=image,
-        deploy_env=SETTINGS.deploy_env,
-        unity_status="running",
-        priority_class_name=_priority_class_name(),
-        extra_labels={
-            "assistant-id": _sanitize_for_k8s(assistant_id),
-            "unity-status": "running",
-            SESSION_REF_LABEL: session_name,
-            BINDING_ID_LABEL: current_binding_id,
-        },
-        extra_annotations={
-            SESSION_REF_ANNOTATION: session_name,
-            BINDING_ID_ANNOTATION: current_binding_id,
-            CONTAINER_READY_ANNOTATION: "false",
-        },
-    )
-    if not created:
+    if not current_binding_id:
         return None
-    emit_observability_event(
-        "controller.binding_job_created",
-        assistant_id=assistant_id,
-        session_name=session_name,
-        binding_id=current_binding_id,
-        job_name=job_name,
-        source="controller.reconcile",
+
+    existing_job = _job_for_binding(session_name, binding)
+    if existing_job is not None:
+        return existing_job
+
+    sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
+    jobs = _batch_api.list_namespaced_job(
+        namespace=WATCH_NAMESPACE,
+        label_selector="app=unity,unity-status=idle",
     )
-    return _batch_api.read_namespaced_job(name=job_name, namespace=WATCH_NAMESPACE)
+    idle_jobs = sorted(
+        (
+            job
+            for job in jobs.items
+            if job.status.active
+            and job.status.active > 0
+            and not job.metadata.deletion_timestamp
+        ),
+        key=lambda job: str(job.metadata.name or ""),
+    )
+
+    for job in idle_jobs:
+        labels = dict(job.metadata.labels or {})
+        labels["assistant-id"] = sanitized_assistant_id
+        labels["unity-status"] = "running"
+        labels[SESSION_REF_LABEL] = session_name
+        labels[BINDING_ID_LABEL] = current_binding_id
+        annotations = dict(job.metadata.annotations or {})
+        annotations[SESSION_REF_ANNOTATION] = session_name
+        annotations[BINDING_ID_ANNOTATION] = current_binding_id
+        annotations[CONTAINER_READY_ANNOTATION] = "false"
+        body = {
+            "metadata": {
+                "labels": labels,
+                "annotations": annotations,
+                "resourceVersion": job.metadata.resource_version,
+            },
+        }
+        try:
+            _batch_api.patch_namespaced_job(
+                name=job.metadata.name,
+                namespace=WATCH_NAMESPACE,
+                body=body,
+            )
+        except ApiException as exc:
+            if exc.status == 409:
+                existing_job = _job_for_binding(session_name, binding)
+                if existing_job is not None:
+                    return existing_job
+                continue
+            raise
+
+        emit_observability_event(
+            "controller.binding_job_claimed",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding_id=current_binding_id,
+            job_name=job.metadata.name,
+            source="controller.reconcile",
+        )
+        return _batch_api.read_namespaced_job(
+            name=job.metadata.name,
+            namespace=WATCH_NAMESPACE,
+        )
+
+    return None
 
 
 def _suspend_bound_job(job, *, source: str) -> None:
@@ -1536,7 +1584,10 @@ def _binding_release_state(
         try:
             _suspend_bound_job(job, source=f"controller.release.{source_reason}")
         except Exception as exc:  # pragma: no cover - best effort suspend
-            logger.exception("Failed to suspend Job %s during release", job.metadata.name)
+            logger.exception(
+                "Failed to suspend Job %s during release",
+                job.metadata.name,
+            )
             last_error = str(exc)
 
     if vm_name:
@@ -1588,9 +1639,15 @@ def _binding_release_state(
         )
 
     refreshed_job = _job_for_binding(session_name, binding)
-    refreshed_job_live = refreshed_job is not None and _job_terminal_phase(refreshed_job) is None
+    refreshed_job_live = (
+        refreshed_job is not None and _job_terminal_phase(refreshed_job) is None
+    )
     cleaned_vm_ref = binding_vm_ref(binding)
-    release_complete = bool(binding.get("releaseCompletedAt")) and not refreshed_job_live and not cleaned_vm_ref
+    release_complete = (
+        bool(binding.get("releaseCompletedAt"))
+        and not refreshed_job_live
+        and not cleaned_vm_ref
+    )
     if release_complete:
         released_binding = _binding_payload(
             binding,
@@ -1714,7 +1771,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     current_binding_id = binding_id_from_status(binding)
     phase = str(status.get("phase", "") or "")
 
-    if phase == "Failed" and not current_binding_id and observed_activation_id == activation_id:
+    if (
+        phase == "Failed"
+        and not current_binding_id
+        and observed_activation_id == activation_id
+    ):
         return
 
     if desired_state == DESIRED_STATE_STOPPED:
@@ -1741,13 +1802,15 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 ),
             )
             return
-        release_phase, release_binding, release_conditions, release_error = _binding_release_state(
-            assistant_id=assistant_id,
-            session_name=session_name,
-            binding=binding,
-            existing_conditions=existing_conditions,
-            desktop_required=desktop_required,
-            source_reason="desired_stop",
+        release_phase, release_binding, release_conditions, release_error = (
+            _binding_release_state(
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding=binding,
+                existing_conditions=existing_conditions,
+                desktop_required=desktop_required,
+                source_reason="desired_stop",
+            )
         )
         patch_assistant_session_status(
             _custom_api,
@@ -1762,14 +1825,20 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         )
         return
 
-    if current_binding_id and observed_activation_id and observed_activation_id != activation_id:
-        release_phase, release_binding, release_conditions, release_error = _binding_release_state(
-            assistant_id=assistant_id,
-            session_name=session_name,
-            binding=binding,
-            existing_conditions=existing_conditions,
-            desktop_required=desktop_required,
-            source_reason="activation_replacement",
+    if (
+        current_binding_id
+        and observed_activation_id
+        and observed_activation_id != activation_id
+    ):
+        release_phase, release_binding, release_conditions, release_error = (
+            _binding_release_state(
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding=binding,
+                existing_conditions=existing_conditions,
+                desktop_required=desktop_required,
+                source_reason="activation_replacement",
+            )
         )
         if release_phase != "Released":
             patch_assistant_session_status(
@@ -1779,7 +1848,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 phase=release_phase,
                 observed_activation_id=observed_activation_id,
                 binding=release_binding if release_binding else None,
-                last_error=release_error or "Releasing prior binding for activation replacement",
+                last_error=release_error
+                or "Releasing prior binding for activation replacement",
                 source="controller.reconcile",
                 conditions=release_conditions,
             )
@@ -1790,13 +1860,15 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         phase = "Released"
 
     if phase == "Releasing" and current_binding_id:
-        release_phase, release_binding, release_conditions, release_error = _binding_release_state(
-            assistant_id=assistant_id,
-            session_name=session_name,
-            binding=binding,
-            existing_conditions=existing_conditions,
-            desktop_required=desktop_required,
-            source_reason="continue_release",
+        release_phase, release_binding, release_conditions, release_error = (
+            _binding_release_state(
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding=binding,
+                existing_conditions=existing_conditions,
+                desktop_required=desktop_required,
+                source_reason="continue_release",
+            )
         )
         if release_phase != "Released":
             patch_assistant_session_status(
@@ -1838,7 +1910,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 vm_assigned=False,
                 desktop_ready=False,
                 reason="BindingCreated",
-                message="Waiting to create binding-owned Job",
+                message="Waiting to claim an idle Unity container",
             ),
         )
         return
@@ -1880,34 +1952,34 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         return
 
     if not binding_job_ref(binding):
-        created_job = _create_bound_job(assistant_id, session_name, binding)
-        if created_job is None:
+        claimed_job = _claim_idle_job_for_binding(assistant_id, session_name, binding)
+        if claimed_job is None:
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
                 assistant_id,
-                phase="Failed",
+                phase="PendingJob",
                 observed_activation_id=activation_id,
                 binding=binding,
-                last_error="Failed to create binding-owned Job",
+                last_error="",
                 source="controller.reconcile",
                 conditions=_condition_state(
                     existing_conditions,
-                    "Failed",
+                    "PendingJob",
                     desktop_required,
                     container_assigned=False,
                     container_ready=False,
                     vm_assigned=False,
                     desktop_ready=False,
-                    reason="JobCreateFailed",
-                    message="Failed to create binding-owned Job",
+                    reason="WaitingForCapacity",
+                    message="Waiting for idle Unity container capacity",
                 ),
             )
             return
         binding = _binding_payload(
             binding,
-            job_ref={"name": created_job.metadata.name, "namespace": WATCH_NAMESPACE},
-            pod_ref=_current_pod_ref(created_job.metadata.name),
+            job_ref={"name": claimed_job.metadata.name, "namespace": WATCH_NAMESPACE},
+            pod_ref=_current_pod_ref(claimed_job.metadata.name),
         )
         patch_assistant_session_status(
             _custom_api,
@@ -1941,13 +2013,15 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     )
     terminal_phase = _job_terminal_phase(job)
     if terminal_phase:
-        release_phase, release_binding, release_conditions, release_error = _binding_release_state(
-            assistant_id=assistant_id,
-            session_name=session_name,
-            binding=binding,
-            existing_conditions=existing_conditions,
-            desktop_required=desktop_required,
-            source_reason=f"job_terminal_{terminal_phase.lower()}",
+        release_phase, release_binding, release_conditions, release_error = (
+            _binding_release_state(
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding=binding,
+                existing_conditions=existing_conditions,
+                desktop_required=desktop_required,
+                source_reason=f"job_terminal_{terminal_phase.lower()}",
+            )
         )
         if release_phase != "Released":
             patch_assistant_session_status(
@@ -1957,7 +2031,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 phase=release_phase,
                 observed_activation_id=activation_id,
                 binding=release_binding if release_binding else None,
-                last_error=release_error or f"Job reached terminal phase {terminal_phase}",
+                last_error=release_error
+                or f"Job reached terminal phase {terminal_phase}",
                 source="controller.reconcile",
                 conditions=release_conditions,
             )
@@ -1996,13 +2071,22 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         )
         return
 
-    container_ready = (job.metadata.annotations or {}).get(CONTAINER_READY_ANNOTATION) == "true"
+    container_ready = (job.metadata.annotations or {}).get(
+        CONTAINER_READY_ANNOTATION,
+    ) == "true"
     if not container_ready:
-        if _binding_deadline_exceeded(binding, "createdAt", CONTAINER_BOOTSTRAP_DEADLINE_SECONDS):
+        if _binding_deadline_exceeded(
+            binding,
+            "createdAt",
+            CONTAINER_BOOTSTRAP_DEADLINE_SECONDS,
+        ):
             try:
                 _suspend_bound_job(job, source="controller.bootstrap_timeout")
             except Exception:  # pragma: no cover - best effort suspend
-                logger.exception("Failed to suspend bootstrap-timed-out job %s", job.metadata.name)
+                logger.exception(
+                    "Failed to suspend bootstrap-timed-out job %s",
+                    job.metadata.name,
+                )
             decision = _restart_binding_decision(
                 assistant_id=assistant_id,
                 activation_id=activation_id,
@@ -2199,7 +2283,10 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         try:
             _suspend_bound_job(job, source="controller.vm_ownership_lost")
         except Exception:  # pragma: no cover - best effort suspend
-            logger.exception("Failed to suspend Job %s after VM ownership loss", job.metadata.name)
+            logger.exception(
+                "Failed to suspend Job %s after VM ownership loss",
+                job.metadata.name,
+            )
         decision = _restart_binding_decision(
             assistant_id=assistant_id,
             activation_id=activation_id,
@@ -2243,13 +2330,15 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         if not alive:
             probe_failures = desktop_probe_failures + 1
             if probe_failures >= DESKTOP_LIVENESS_FAILURE_THRESHOLD:
-                release_phase, release_binding, release_conditions, release_error = _binding_release_state(
-                    assistant_id=assistant_id,
-                    session_name=session_name,
-                    binding=binding,
-                    existing_conditions=existing_conditions,
-                    desktop_required=desktop_required,
-                    source_reason="desktop_liveness_failed",
+                release_phase, release_binding, release_conditions, release_error = (
+                    _binding_release_state(
+                        assistant_id=assistant_id,
+                        session_name=session_name,
+                        binding=binding,
+                        existing_conditions=existing_conditions,
+                        desktop_required=desktop_required,
+                        source_reason="desktop_liveness_failed",
+                    )
                 )
                 if release_phase != "Released":
                     patch_assistant_session_status(
@@ -2259,7 +2348,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                         phase=release_phase,
                         observed_activation_id=activation_id,
                         binding=release_binding if release_binding else None,
-                        last_error=release_error or "Desktop liveness failed; replacing binding",
+                        last_error=release_error
+                        or "Desktop liveness failed; replacing binding",
                         source="controller.reconcile",
                         bootstrap_retries=bootstrap_retries,
                         vm_retries=vm_retries + 1,
@@ -2352,14 +2442,20 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         )
         return
 
-    if _binding_deadline_exceeded(binding, "vmAssignedAt", VM_READINESS_DEADLINE_SECONDS):
-        release_phase, release_binding, release_conditions, release_error = _binding_release_state(
-            assistant_id=assistant_id,
-            session_name=session_name,
-            binding=binding,
-            existing_conditions=existing_conditions,
-            desktop_required=desktop_required,
-            source_reason="vm_readiness_timeout",
+    if _binding_deadline_exceeded(
+        binding,
+        "vmAssignedAt",
+        VM_READINESS_DEADLINE_SECONDS,
+    ):
+        release_phase, release_binding, release_conditions, release_error = (
+            _binding_release_state(
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding=binding,
+                existing_conditions=existing_conditions,
+                desktop_required=desktop_required,
+                source_reason="vm_readiness_timeout",
+            )
         )
         if release_phase != "Released":
             patch_assistant_session_status(
