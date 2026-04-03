@@ -46,7 +46,7 @@ from .conftest import (
     list_idle_vms,
     list_jobs_with_assistant_id,
     poll_until,
-    probe_vm_agent_service,
+    probe_vm_agent_service_authenticated,
     pull_outbound_messages,
     replenish_pool,
     send_test_meet,
@@ -544,7 +544,10 @@ def test_production_traffic_stress(
                     vms = list_assigned_vms(gce_client, aid)
                     if vms:
                         hostname = _get_vm_hostname(vms[0])
-                        resp = probe_vm_agent_service(hostname, a["api_key"])
+                        resp = probe_vm_agent_service_authenticated(
+                            hostname,
+                            a["api_key"],
+                        )
                         if resp and resp.status_code == 200:
                             vm_auth_ok += 1
                         else:
@@ -976,7 +979,10 @@ def test_production_traffic_stress(
                     vms = list_assigned_vms(gce_client, aid)
                     if vms:
                         hostname = _get_vm_hostname(vms[0])
-                        resp = probe_vm_agent_service(hostname, a["api_key"])
+                        resp = probe_vm_agent_service_authenticated(
+                            hostname,
+                            a["api_key"],
+                        )
                         if resp and resp.status_code == 200:
                             print(f"  {aid}: VM {vms[0].name} re-attached, auth OK")
                         else:

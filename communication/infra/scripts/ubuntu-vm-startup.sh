@@ -447,7 +447,9 @@ echo "  Inbound: ports 6080/3000 blocked (behind Caddy)"
 echo "  Outbound: metadata server blocked for unityuser"
 
 # =============================================================================
-# Start Services (before marking idle, so Caddy is ready before VM is claimable)
+# Start Services before marking idle so the desktop surface is reachable.
+# Pool idle does not mean agent-service is running yet; the watcher starts
+# agent-service only after assignment metadata appears.
 # =============================================================================
 ELAPSED=$(( $(date +%s) - START_TIME ))
 echo ""

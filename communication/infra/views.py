@@ -40,8 +40,8 @@ from .assistant_sessions import (
 )
 from .vm_helpers import (
     get_dns_hostname,
-    _probe_vm_https,
-    probe_vm_agent_authenticated,
+    probe_vm_agent_service,
+    probe_vm_agent_service_authenticated,
     get_assigned_vm_ref,
     verify_vm_assignment,
     _set_pool_labels,
@@ -1287,26 +1287,28 @@ async def vm_ready_endpoint(
     )
 
     # Legacy compatibility: if no AssistantSession exists, preserve the old
-    # HTTPS reachability contract so already-running legacy sessions are not
-    # broken during rollout.
+    # agent-service reachability contract for already-running desktops that
+    # predate AssistantSession rollout.
     if session is None:
         hostname = requested_hostname
-        reachable = await asyncio.to_thread(_probe_vm_https, hostname)
+        reachable = await asyncio.to_thread(probe_vm_agent_service, hostname)
         if not reachable:
             emit_observability_event(
                 "infra.vm_ready.legacy_rejected",
                 assistant_id=assistant_id,
                 requested_hostname=requested_hostname,
-                reason="https_probe_failed",
+                reason="agent_service_probe_failed",
                 mode="legacy",
             )
             logger.warning(
-                f"VM HTTPS probe failed for {hostname} (assistant {assistant_id}), "
+                "VM agent-service probe failed for %s (assistant %s), "
                 "not publishing assistant_desktop_ready",
+                hostname,
+                assistant_id,
             )
             raise HTTPException(
                 status_code=503,
-                detail=f"VM HTTPS not reachable at {hostname}",
+                detail=f"VM agent-service not reachable at {hostname}",
             )
 
         message_id = await _publish_desktop_ready(assistant_id, hostname, vm_type)
@@ -1458,7 +1460,7 @@ async def vm_ready_endpoint(
     hostname = str(assigned_vm_ref.get("hostname", requested_hostname))
 
     ready = await asyncio.to_thread(
-        probe_vm_agent_authenticated,
+        probe_vm_agent_service_authenticated,
         hostname,
         expected_api_key or api_key,
     )

@@ -30,7 +30,7 @@ from communication.infra.helpers import create_unity_job
 from communication.infra.vm_helpers import (
     assign_pool_vm,
     get_assigned_vm_ref,
-    probe_vm_https,
+    probe_vm_agent_service,
     release_pool_vm,
     replenish_pool,
     verify_vm_assignment,
@@ -999,7 +999,7 @@ def _update_status_for_session(body: dict) -> None:
         )
 
         if vm_hostname:
-            alive = probe_vm_https(vm_hostname, timeout=3.0)
+            alive = probe_vm_agent_service(vm_hostname, timeout=3.0)
             if not alive:
                 probe_failures += 1
                 if probe_failures >= DESKTOP_LIVENESS_FAILURE_THRESHOLD:

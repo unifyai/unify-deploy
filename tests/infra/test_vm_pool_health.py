@@ -61,39 +61,35 @@ def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
     client.start.assert_called_once()
 
 
-def test_claim_idle_vm_quarantines_unhealthy_candidate_before_claim(monkeypatch):
-    def _pool_vm(name: str) -> SimpleNamespace:
-        return SimpleNamespace(
-            name=name,
-            labels={"pool-role": "idle", "vm-type": "ubuntu"},
-            label_fingerprint=f"{name}-fp",
-            network_interfaces=[],
-            metadata=SimpleNamespace(
-                items=[SimpleNamespace(key="hostname", value=f"{name}.example.com")],
-            ),
-        )
-
-    bad_vm = _pool_vm("unity-pool-ubuntu-2-preview")
-    good_vm = _pool_vm("unity-pool-ubuntu-4-preview")
+def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypatch):
+    pool_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-2-preview",
+        labels={"pool-role": "idle", "vm-type": "ubuntu"},
+        label_fingerprint="unity-pool-ubuntu-2-preview-fp",
+        network_interfaces=[],
+        metadata=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    key="hostname",
+                    value="unity-pool-ubuntu-2-preview.example.com",
+                ),
+            ],
+        ),
+    )
     client = MagicMock()
-    client.list.side_effect = [[bad_vm], [good_vm]]
-    client.get.side_effect = [bad_vm, good_vm]
+    client.list.return_value = [pool_vm]
+    client.get.return_value = pool_vm
     client.set_labels.return_value = SimpleNamespace(result=lambda: None)
-
-    quarantined = []
 
     monkeypatch.setattr(
         "communication.infra.vm_helpers.random.choice",
         lambda vms: vms[0],
     )
     monkeypatch.setattr(
-        "communication.infra.vm_helpers._probe_vm_https",
-        lambda hostname, timeout=2.0: hostname.startswith(good_vm.name),
-    )
-    monkeypatch.setattr(
-        "communication.infra.vm_helpers._quarantine_pool_vm",
-        lambda _client, vm, reason: quarantined.append((vm.name, reason))
-        or "quarantined",
+        "communication.infra.vm_helpers.probe_vm_agent_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("claim path must not depend on agent-service readiness"),
+        ),
     )
 
     claimed = _claim_idle_vm_inner(
@@ -104,10 +100,7 @@ def test_claim_idle_vm_quarantines_unhealthy_candidate_before_claim(monkeypatch)
         vm_number=None,
     )
 
-    assert quarantined == [
-        ("unity-pool-ubuntu-2-preview", "failed health probe during claim"),
-    ]
-    assert claimed["vm_name"] == "unity-pool-ubuntu-4-preview"
+    assert claimed["vm_name"] == "unity-pool-ubuntu-2-preview"
 
 
 def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):

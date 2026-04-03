@@ -271,21 +271,22 @@ def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
     return actions
 
 
-def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
-    """Probe whether the agent-service is alive behind Caddy.
+def probe_vm_agent_service(hostname: str, timeout: float = 5.0) -> bool:
+    """Probe the VM's agent-service through Caddy.
 
     Hits ``/api/sessions`` which Caddy reverse-proxies to the agent-service
-    on port 3000.  Without an Authorization header the agent-service auth
-    middleware returns **401** immediately — proving the process is up.
+    on port 3000. Without an Authorization header the agent-service auth
+    middleware returns **401** immediately, which proves the process is up.
     If the agent-service is down but Caddy is running, Caddy returns **502**.
     If everything is down the connection fails outright.
 
-    This is strictly stronger than probing the Caddy root (``/``), which
-    only confirms Caddy itself is listening and tells us nothing about
-    the agent-service process.
+    This probe is only valid once a VM is already running an assistant
+    workload, such as post-assignment liveness checks or legacy already-
+    assigned desktops. Idle pool VMs intentionally keep agent-service off
+    until assignment, so claim-time pool health must not depend on this.
 
     Uses ``verify=False`` because Caddy may still be using a temporary
-    self-signed certificate while the ACME challenge completes.  The
+    self-signed certificate while the ACME challenge completes. The
     connection is within GCP's VPC where infrastructure-level encryption
     already applies.
     """
@@ -307,17 +308,12 @@ def _probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
         return False
 
 
-def probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
-    """Public wrapper — check if a VM's agent-service is reachable."""
-    return _probe_vm_https(hostname, timeout)
-
-
-def probe_vm_agent_authenticated(
+def probe_vm_agent_service_authenticated(
     hostname: str,
     api_key: str,
     timeout: float = 10.0,
 ) -> bool:
-    """Verify the VM agent is reachable with the expected bearer token.
+    """Verify the assigned VM agent accepts the expected bearer token.
 
     This is stricter than plain HTTPS reachability: it proves the agent
     process is up and accepts the key that the session expects.
@@ -984,25 +980,9 @@ def _claim_idle_vm_inner(
                     if hostname_label
                     else candidate_name + f".{DOMAIN_SUFFIX}"
                 )
-            if hostname and not _probe_vm_https(hostname, timeout=2.0):
-                logger.warning(
-                    "Idle pool VM %s failed HTTPS probe before claim; quarantining",
-                    candidate_name,
-                )
-                _log_vm_pool_event(
-                    "claim_probe_failed",
-                    assistant_id=assistant_id,
-                    vm_name=candidate_name,
-                    vm_type=vm_type,
-                    hostname=hostname,
-                )
-                _quarantine_pool_vm(
-                    client,
-                    fresh,
-                    reason="failed health probe during claim",
-                )
-                continue
-
+            # Idle pool VMs intentionally keep agent-service off until the
+            # watcher sees assignment metadata. Claim only binds ownership;
+            # strict desktop readiness is enforced later via /infra/vm/ready.
             sanitized = assistant_id.lower().replace("_", "-")
             new_labels = dict(fresh.labels) if fresh.labels else {}
             new_labels["pool-role"] = "assigned"
@@ -1857,7 +1837,7 @@ def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
         hostname = ref.get("hostname", "")
         if not hostname:
             return None
-        if _probe_vm_https(hostname, timeout=2.0):
+        if probe_vm_agent_service(hostname, timeout=2.0):
             return None
         _log_vm_pool_event(
             "idle_probe_failed",

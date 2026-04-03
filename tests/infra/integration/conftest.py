@@ -1773,8 +1773,8 @@ def wait_for_container_done(
 # ---------------------------------------------------------------------------
 
 
-def probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
-    """Check if the agent-service is alive behind Caddy.
+def probe_vm_agent_service(hostname: str, timeout: float = 5.0) -> bool:
+    """Check if the VM's agent-service is reachable through Caddy.
 
     Hits ``/api/sessions`` through the Caddy reverse proxy.  A 401 from
     the agent-service auth middleware proves it is running; a 502 from
@@ -1791,12 +1791,12 @@ def probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
         return False
 
 
-def probe_vm_agent_service(
+def probe_vm_agent_service_authenticated(
     hostname: str,
     api_key: str,
     command: str = "echo ok",
 ) -> requests.Response | None:
-    """Call /api/exec on the VM's agent-service. Returns the response or None."""
+    """Call `/api/exec` with auth and return the VM's response, if any."""
     try:
         return requests.post(
             f"https://{hostname}/api/exec",
