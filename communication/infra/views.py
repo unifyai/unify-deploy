@@ -39,6 +39,7 @@ from .assistant_sessions import (
     vm_refs_match,
 )
 from .vm_helpers import (
+    AssistantDiskInUseError,
     get_dns_hostname,
     probe_vm_agent_service,
     probe_vm_agent_service_authenticated,
@@ -50,6 +51,7 @@ from .vm_helpers import (
     start_pool_vm,
     assign_pool_vm,
     release_pool_vm,
+    complete_pool_vm_release,
     replenish_pool,
     trim_pool,
     rebalance_pool,
@@ -1634,22 +1636,14 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
 
 @router.post("/vm/pool/release")
 async def release_pool_endpoint(request: PoolReleaseRequest):
-    """Release a pool VM back to idle.
+    """Start guest cleanup for a pool VM release.
 
-    Clears assignment metadata (triggering watcher cleanup), detaches
-    the persistent disk, and resets labels. Idempotent.
+    The VM transitions to ``releasing`` immediately so it is no longer
+    claimable. The guest watcher later calls back into Comms to detach the
+    assistant disk and mark the VM idle once cleanup is actually complete.
     """
     try:
-        result = await asyncio.to_thread(release_pool_vm, request.assistant_id)
-
-        # Trim: stop excess idle VMs now that one was returned (fire-and-forget)
-        vm_type = result.get("vm_type", "ubuntu")
-        asyncio.get_running_loop().run_in_executor(
-            POOL_MAINTENANCE_EXECUTOR,
-            partial(trim_pool, vm_type),
-        )
-
-        return result
+        return await asyncio.to_thread(release_pool_vm, request.assistant_id)
     except Exception as e:
         logger.error(f"Failed to release pool VM: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1666,6 +1660,8 @@ async def delete_pool_disk_endpoint(assistant_id: str):
                 detail=f"No disk found for assistant {assistant_id}",
             )
         return {"assistant_id": assistant_id, "deleted": deleted}
+    except AssistantDiskInUseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as e:
@@ -1708,6 +1704,56 @@ async def detach_pool_disk_endpoint(assistant_id: str):
     except Exception as e:
         logger.error(f"Failed to detach assistant disk: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/runtime/{assistant_id}")
+async def runtime_status_endpoint(assistant_id: str):
+    """Report whether an assistant still has live runtime resources."""
+    batch_api, _, _, _ = await _get_k8s_clients()
+    sanitized = assistant_id.lower().replace("_", "-")
+    jobs = await asyncio.to_thread(
+        batch_api.list_namespaced_job,
+        namespace=SETTINGS.default_namespace,
+        label_selector=f"app=unity,assistant-id={sanitized}",
+    )
+    active_job_names = [
+        job.metadata.name
+        for job in jobs.items
+        if job.status.active and job.status.active > 0
+    ]
+
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    assistant_session = None
+    if custom_api is not None:
+        assistant_session = await asyncio.to_thread(
+            get_assistant_session,
+            custom_api,
+            SETTINGS.default_namespace,
+            assistant_id,
+        )
+
+    owned_vms = [
+        vm
+        for vm in await asyncio.to_thread(list_pool_vms)
+        if vm.get("assistant_id") == sanitized
+        and vm.get("pool_role") in ("assigned", "releasing")
+    ]
+    disk_vm_name = await asyncio.to_thread(find_vm_with_disk, assistant_id)
+    runtime_cleanup_complete = (
+        assistant_session is None
+        and not active_job_names
+        and not owned_vms
+        and disk_vm_name is None
+    )
+
+    return {
+        "assistant_id": assistant_id,
+        "assistant_session_exists": assistant_session is not None,
+        "active_job_names": active_job_names,
+        "owned_vms": owned_vms,
+        "disk_vm_name": disk_vm_name,
+        "runtime_cleanup_complete": runtime_cleanup_complete,
+    }
 
 
 @router.get("/vm/pool/status", response_model=PoolStatusResponse)
@@ -1864,6 +1910,23 @@ async def vm_mark_idle_endpoint(
         }
     logger.info(f"VM {vm_name} marked itself as idle via identity token")
     return {"vm_name": vm_name, "pool_role": "idle"}
+
+
+@vm_self_router.post("/vm/release-complete")
+async def vm_release_complete_endpoint(
+    claims: dict = Depends(authenticate_vm_identity),
+):
+    """Finalize a VM release after guest cleanup finishes."""
+    gce = claims["google"]["compute_engine"]
+    vm_name = gce["instance_name"]
+
+    result = await asyncio.to_thread(complete_pool_vm_release, vm_name)
+    if not result.get("skipped") and result.get("pool_role") == "idle":
+        asyncio.get_running_loop().run_in_executor(
+            POOL_MAINTENANCE_EXECUTOR,
+            partial(trim_pool, result.get("vm_type", "ubuntu")),
+        )
+    return result
 
 
 @vm_self_router.post("/vm/wipe-metadata-key")

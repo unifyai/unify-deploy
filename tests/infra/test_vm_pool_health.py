@@ -2,12 +2,18 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from communication.infra import vm_helpers as vm_helpers_module
 from communication.infra.vm_helpers import (
+    AssistantDiskInUseError,
     _claim_idle_vm_inner,
+    complete_pool_vm_release,
     _is_stale_inflight_vm,
     _quarantine_pool_vm,
     _start_one_stopped_vm,
+    delete_assistant_disk,
+    release_pool_vm,
     replenish_pool,
 )
 
@@ -29,6 +35,23 @@ def test_is_stale_inflight_vm_detects_old_starting_vm():
 
 def test_is_stale_inflight_vm_ignores_recent_starting_vm():
     vm = _fake_vm(role="starting", age_seconds=120)
+    assert not _is_stale_inflight_vm(vm, timeout_seconds=600)
+
+
+def test_is_stale_inflight_vm_prefers_explicit_transition_epoch():
+    old_started_at = datetime.now(UTC) - timedelta(seconds=1200)
+    recent_transition = datetime.now(UTC) - timedelta(seconds=120)
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-6-preview",
+        labels={
+            "pool-role": "starting",
+            "pool-transition-epoch": str(int(recent_transition.timestamp())),
+        },
+        status="RUNNING",
+        last_start_timestamp=old_started_at.isoformat(),
+        creation_timestamp=old_started_at.isoformat(),
+    )
+
     assert not _is_stale_inflight_vm(vm, timeout_seconds=600)
 
 
@@ -131,6 +154,154 @@ def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
         "failed health probe during claim"
     )
     client.stop.assert_called_once()
+
+
+def test_release_pool_vm_transitions_to_releasing(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        labels={
+            "pool-role": "assigned",
+            "assistant-id": "assistant-123",
+            "vm-type": "ubuntu",
+        },
+    )
+    client = MagicMock()
+    client.list.return_value = [vm]
+    metadata_updates = []
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+    )
+
+    result = release_pool_vm("assistant-123")
+
+    assert result["released"] is True
+    assert result["pool_role"] == "releasing"
+    assert metadata_updates == [
+        (
+            "unity-pool-ubuntu-3-preview",
+            {
+                "unify-key": "",
+                "vnc-password": "",
+                "ssh-public-key": "",
+            },
+        ),
+    ]
+
+
+def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        labels={
+            "pool-role": "releasing",
+            "assistant-id": "assistant-123",
+            "vm-type": "ubuntu",
+        },
+        metadata=SimpleNamespace(
+            items=[
+                SimpleNamespace(key="unify-key", value="still-set"),
+            ],
+        ),
+    )
+    client = MagicMock()
+    client.list.return_value = [vm]
+    metadata_updates = []
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+    )
+
+    result = release_pool_vm("assistant-123")
+
+    assert result["released"] is True
+    assert result["pool_role"] == "releasing"
+    assert metadata_updates == [
+        (
+            "unity-pool-ubuntu-3-preview",
+            {
+                "unify-key": "",
+                "vnc-password": "",
+                "ssh-public-key": "",
+            },
+        ),
+    ]
+
+
+def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
+    releasing_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        status="RUNNING",
+        labels={
+            "pool-role": "releasing",
+            "assistant-id": "assistant-123",
+            "vm-type": "ubuntu",
+        },
+    )
+    client = MagicMock()
+    client.get.return_value = releasing_vm
+    metadata_updates = []
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._detach_attached_assistant_disk",
+        lambda vm_name: (True, "unity-disk-assistant-123"),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        lambda *_args, **_kwargs: True,
+    )
+
+    result = complete_pool_vm_release("unity-pool-ubuntu-3-preview")
+
+    assert result["pool_role"] == "idle"
+    assert result["detached"] is True
+    assert metadata_updates == [
+        (
+            "unity-pool-ubuntu-3-preview",
+            {
+                "assistant-id": "",
+                "disk-device": "",
+                "unify-key": "",
+                "vnc-password": "",
+                "ssh-public-key": "",
+            },
+        ),
+    ]
+
+
+def test_delete_assistant_disk_raises_when_disk_still_attached(monkeypatch):
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.DisksClient",
+        lambda: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-3-preview",
+    )
+
+    with pytest.raises(AssistantDiskInUseError):
+        delete_assistant_disk("assistant-123")
 
 
 def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):

@@ -60,3 +60,28 @@ def test_vm_mark_idle_uses_role_cas_and_skips_if_role_changed(client):
         {"pool-role": "idle"},
         expected_role="starting",
     )
+
+
+def test_vm_release_complete_triggers_trim_after_idle_transition(client):
+    loop = MagicMock()
+
+    with (
+        patch(
+            "communication.infra.views.complete_pool_vm_release",
+            return_value={
+                "vm_name": "unity-pool-ubuntu-1-preview",
+                "vm_type": "ubuntu",
+                "pool_role": "idle",
+            },
+        ) as mock_complete_release,
+        patch(
+            "communication.infra.views.asyncio.get_running_loop",
+            return_value=loop,
+        ),
+    ):
+        resp = client.post("/infra/vm/release-complete")
+
+    assert resp.status_code == 200
+    assert resp.json()["pool_role"] == "idle"
+    mock_complete_release.assert_called_once_with("unity-pool-ubuntu-1-preview")
+    loop.run_in_executor.assert_called_once()

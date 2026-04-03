@@ -55,6 +55,7 @@ from .vm_config import (
     POOL_TARGET_IDLE,
     POOL_TARGET_STOPPED,
     POOL_BOOT_TIMEOUT_SECONDS,
+    POOL_RELEASE_TIMEOUT_SECONDS,
     POOL_ASSISTANT_DISK_SIZE_GB,
     POOL_ASSISTANT_DISK_TYPE,
     POOL_VM_NAME_PREFIX,
@@ -63,6 +64,21 @@ from .vm_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+POOL_ROLE_LABEL = "pool-role"
+ASSISTANT_ID_LABEL = "assistant-id"
+POOL_ROLE_RELEASING = "releasing"
+POOL_TRANSITION_EPOCH_LABEL = "pool-transition-epoch"
+RELEASE_TRIGGER_METADATA_KEYS = ("unify-key", "vnc-password", "ssh-public-key")
+INFLIGHT_ROLE_TIMEOUT_SECONDS = {
+    "provisioning": POOL_BOOT_TIMEOUT_SECONDS,
+    "starting": POOL_BOOT_TIMEOUT_SECONDS,
+    POOL_ROLE_RELEASING: POOL_RELEASE_TIMEOUT_SECONDS,
+}
+
+
+class AssistantDiskInUseError(RuntimeError):
+    """Permanent disk deletion was requested before the disk finished detaching."""
 
 
 def _compact_vm_log_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -136,26 +152,72 @@ def _parse_gce_timestamp(value: str | None) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+def _pool_transition_epoch_value(now: Optional[datetime] = None) -> str:
+    reference = now or datetime.now(timezone.utc)
+    return str(int(reference.timestamp()))
+
+
+def _pool_transition_reference_time(instance) -> Optional[datetime]:
+    labels = dict(instance.labels) if instance.labels else {}
+    epoch_value = labels.get(POOL_TRANSITION_EPOCH_LABEL)
+    if epoch_value:
+        try:
+            return datetime.fromtimestamp(int(epoch_value), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            logger.warning(
+                "Invalid %s label on %s",
+                POOL_TRANSITION_EPOCH_LABEL,
+                instance.name,
+            )
+    return None
+
+
 def _instance_boot_reference_time(instance) -> Optional[datetime]:
-    return _parse_gce_timestamp(
+    return _pool_transition_reference_time(instance) or _parse_gce_timestamp(
         getattr(instance, "last_start_timestamp", None)
         or getattr(instance, "creation_timestamp", None),
+    )
+
+
+def _release_metadata_updates(*, clear_assignment: bool) -> Dict[str, str]:
+    """Return the metadata keys that must be cleared during VM release."""
+    updates = {key: "" for key in RELEASE_TRIGGER_METADATA_KEYS}
+    if clear_assignment:
+        updates.update(
+            {
+                ASSISTANT_ID_LABEL: "",
+                "disk-device": "",
+            },
+        )
+    return updates
+
+
+def _release_metadata_still_present(instance) -> bool:
+    """Return whether the watcher-triggering release metadata is still present."""
+    return any(
+        _read_instance_metadata(instance, key) for key in RELEASE_TRIGGER_METADATA_KEYS
     )
 
 
 def _is_stale_inflight_vm(
     instance,
     now: Optional[datetime] = None,
-    timeout_seconds: int = POOL_BOOT_TIMEOUT_SECONDS,
+    timeout_seconds: Optional[int] = None,
 ) -> bool:
     labels = dict(instance.labels) if instance.labels else {}
-    if labels.get("pool-role") not in ("starting", "provisioning"):
+    current_role = labels.get(POOL_ROLE_LABEL, "")
+    if current_role not in INFLIGHT_ROLE_TIMEOUT_SECONDS:
         return False
     reference_time = _instance_boot_reference_time(instance)
     if reference_time is None:
         return False
     now = now or datetime.now(timezone.utc)
-    return (now - reference_time).total_seconds() > timeout_seconds
+    max_age_seconds = (
+        timeout_seconds
+        if timeout_seconds is not None
+        else INFLIGHT_ROLE_TIMEOUT_SECONDS[current_role]
+    )
+    return (now - reference_time).total_seconds() > max_age_seconds
 
 
 def _quarantine_pool_vm(
@@ -252,18 +314,23 @@ def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
     now = datetime.now(timezone.utc)
     actions: list[str] = []
     for instance in client.list(request=request):
-        if not _is_stale_inflight_vm(instance, now=now):
+        refreshed = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=instance.name,
+        )
+        if not _is_stale_inflight_vm(refreshed, now=now):
             continue
-        reference_time = _instance_boot_reference_time(instance)
+        reference_time = _instance_boot_reference_time(refreshed)
         if reference_time is None:
             continue
         age_seconds = int((now - reference_time).total_seconds())
         action = _quarantine_pool_vm(
             client,
-            instance,
+            refreshed,
             reason=(
-                f"pool-role={dict(instance.labels or {}).get('pool-role', '')}, "
-                f"status={instance.status}, age={age_seconds}s"
+                f"pool-role={dict(refreshed.labels or {}).get(POOL_ROLE_LABEL, '')}, "
+                f"status={refreshed.status}, age={age_seconds}s"
             ),
         )
         if action:
@@ -584,23 +651,20 @@ def _assistant_disk_name(assistant_id: str) -> str:
 
 
 def find_vm_with_disk(assistant_id: str) -> Optional[str]:
-    """Find a VM that has the assistant's disk attached, regardless of labels.
-
-    Scans all VMs in the zone. Returns the VM name, or None.
-    """
-    client = compute_v1.InstancesClient()
+    """Return the VM name currently attached to the assistant disk, if any."""
+    client = compute_v1.DisksClient()
     disk_name = _assistant_disk_name(assistant_id)
-    disk_suffix = f"/disks/{disk_name}"
-
-    request = compute_v1.ListInstancesRequest(
-        project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
-    )
-    for instance in client.list(request=request):
-        if instance.disks:
-            for d in instance.disks:
-                if d.source and d.source.endswith(disk_suffix):
-                    return instance.name
+    try:
+        disk = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            disk=disk_name,
+        )
+    except NotFound:
+        return None
+    for user in getattr(disk, "users", None) or []:
+        if "/instances/" in user:
+            return user.rsplit("/", 1)[-1]
     return None
 
 
@@ -741,10 +805,11 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     )
 
     labels = {
-        "pool-role": "provisioning",
-        "assistant-id": "",
+        POOL_ROLE_LABEL: "provisioning",
+        ASSISTANT_ID_LABEL: "",
         "vm-type": vm_type,
         "pool-hostname": hostname.replace(".", "-"),
+        POOL_TRANSITION_EPOCH_LABEL: _pool_transition_epoch_value(),
     }
 
     instance_kwargs = dict(
@@ -851,14 +916,16 @@ def _set_pool_labels(
             instance=vm_name,
         )
         labels = dict(fresh.labels) if fresh.labels else {}
-        if expected_role is not None and labels.get("pool-role") != expected_role:
+        if expected_role is not None and labels.get(POOL_ROLE_LABEL) != expected_role:
             logger.info(
                 f"Skipping label update on {vm_name}: "
                 f"expected pool-role={expected_role}, "
-                f"got {labels.get('pool-role')}",
+                f"got {labels.get(POOL_ROLE_LABEL)}",
             )
             return False
         labels.update(label_overrides)
+        if POOL_ROLE_LABEL in label_overrides:
+            labels[POOL_TRANSITION_EPOCH_LABEL] = _pool_transition_epoch_value()
         try:
             client.set_labels(
                 project=SETTINGS.vm_project_id,
@@ -1174,9 +1241,15 @@ def detach_assistant_disk(vm_name: str, assistant_id: str) -> bool:
 
 def delete_assistant_disk(assistant_id: str) -> bool:
     """Delete an assistant's persistent disk."""
-    client = compute_v1.DisksClient()
     disk_name = _assistant_disk_name(assistant_id)
 
+    attached_vm_name = find_vm_with_disk(assistant_id)
+    if attached_vm_name:
+        raise AssistantDiskInUseError(
+            f"Assistant disk {disk_name} is still attached to {attached_vm_name}",
+        )
+
+    client = compute_v1.DisksClient()
     try:
         op = client.delete(
             project=SETTINGS.vm_project_id,
@@ -1189,6 +1262,48 @@ def delete_assistant_disk(assistant_id: str) -> bool:
     except NotFound:
         logger.warning(f"Assistant disk {disk_name} not found")
         return False
+
+
+def _detach_attached_assistant_disk(vm_name: str) -> tuple[bool, Optional[str]]:
+    """Detach the attached assistant data disk, if this VM still has one."""
+    client = compute_v1.InstancesClient()
+    vm = client.get(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
+    attached_disk = None
+    for disk in vm.disks or []:
+        source = getattr(disk, "source", "") or ""
+        if getattr(disk, "boot", False):
+            continue
+        if "/disks/unity-disk-" not in source:
+            continue
+        attached_disk = disk
+        break
+    if attached_disk is None:
+        return False, None
+
+    disk_name = (attached_disk.source or "").rsplit("/", 1)[-1]
+    client.detach_disk(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+        device_name=attached_disk.device_name,
+    ).result()
+    logger.info(
+        "Detached assistant disk %s from %s during release completion",
+        disk_name,
+        vm_name,
+    )
+    _log_vm_pool_event(
+        "detach_disk",
+        vm_name=vm_name,
+        disk_name=disk_name,
+        device_name=attached_disk.device_name,
+        reason="release_complete",
+    )
+    return True, disk_name
 
 
 def _update_instance_metadata(
@@ -1566,21 +1681,29 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
 
 
 def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
-    """Release a pool VM: clear metadata, detach disk, reset labels.
+    """Transition an assigned VM into guest-side release cleanup.
 
-    Idempotent — returns success if no VM is currently assigned.
+    Release is now asynchronous: the pool role moves from ``assigned`` to
+    ``releasing`` immediately so the VM is no longer claimable, then the
+    pool watcher finishes guest cleanup and calls back into Comms to detach
+    the disk and mark the VM idle.
     """
     client = compute_v1.InstancesClient()
     sanitized = assistant_id.lower().replace("_", "-")
-    label_filter = f"labels.pool-role=assigned AND labels.assistant-id={sanitized}"
+    label_filter = f"labels.assistant-id={sanitized}"
 
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
         zone=SETTINGS.vm_zone,
         filter=label_filter,
     )
-    vms = list(client.list(request=request))
-    if not vms:
+    candidates = [
+        vm
+        for vm in client.list(request=request)
+        if (dict(vm.labels) if vm.labels else {}).get(POOL_ROLE_LABEL)
+        in ("assigned", POOL_ROLE_RELEASING)
+    ]
+    if not candidates:
         logger.info(
             f"No pool VM assigned to assistant {assistant_id} — nothing to release",
         )
@@ -1595,39 +1718,170 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
             "message": "No VM assigned",
         }
 
-    vm = vms[0]
+    vm = next(
+        (
+            candidate
+            for candidate in candidates
+            if (dict(candidate.labels) if candidate.labels else {}).get(POOL_ROLE_LABEL)
+            == "assigned"
+        ),
+        candidates[0],
+    )
     vm_name = vm.name
+    labels = dict(vm.labels) if vm.labels else {}
+    current_role = labels.get(POOL_ROLE_LABEL, "")
+    vm_type = labels.get("vm-type", "ubuntu")
 
-    # Clear assignment metadata (triggers watcher cleanup)
+    if current_role == POOL_ROLE_RELEASING:
+        resumed = False
+        if _release_metadata_still_present(vm):
+            _update_instance_metadata(
+                vm_name,
+                _release_metadata_updates(clear_assignment=False),
+            )
+            resumed = True
+            _log_vm_pool_event(
+                "release_resumed",
+                assistant_id=assistant_id,
+                vm_name=vm_name,
+            )
+        logger.info("Release already in progress for pool VM %s", vm_name)
+        return {
+            "released": resumed,
+            "assistant_id": assistant_id,
+            "vm_name": vm_name,
+            "vm_type": vm_type,
+            "pool_role": POOL_ROLE_RELEASING,
+            "message": "Release already in progress",
+        }
+
+    updated = _set_pool_labels(
+        client,
+        vm_name,
+        {POOL_ROLE_LABEL: POOL_ROLE_RELEASING},
+        expected_role="assigned",
+    )
+    if not updated:
+        refreshed = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
+        refreshed_labels = dict(refreshed.labels) if refreshed.labels else {}
+        refreshed_role = refreshed_labels.get(POOL_ROLE_LABEL, "")
+        if (
+            refreshed_role == POOL_ROLE_RELEASING
+            and refreshed_labels.get(ASSISTANT_ID_LABEL) == sanitized
+        ):
+            return {
+                "released": False,
+                "assistant_id": assistant_id,
+                "vm_name": vm_name,
+                "vm_type": vm_type,
+                "pool_role": POOL_ROLE_RELEASING,
+                "message": "Release already in progress",
+            }
+        return {
+            "released": False,
+            "assistant_id": assistant_id,
+            "vm_name": vm_name,
+            "vm_type": vm_type,
+            "message": "VM role changed before release could start",
+        }
+
     _update_instance_metadata(
         vm_name,
-        {
-            "unify-key": "",
-            "vnc-password": "",
-            "ssh-public-key": "",
-            "disk-device": "",
-            "assistant-id": "",
-        },
+        _release_metadata_updates(clear_assignment=False),
     )
 
-    # Detach persistent disk
-    detach_assistant_disk(vm_name, assistant_id)
-
-    _set_pool_labels(client, vm_name, {"pool-role": "idle", "assistant-id": ""})
-
-    logger.info(f"Released pool VM {vm_name} from assistant {assistant_id}")
+    logger.info(
+        "Release requested for pool VM %s from assistant %s",
+        vm_name,
+        assistant_id,
+    )
     _log_vm_pool_event(
-        "release",
+        "release_requested",
         assistant_id=assistant_id,
         vm_name=vm_name,
     )
 
-    vm_type = (dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu")
     return {
         "released": True,
         "assistant_id": assistant_id,
         "vm_name": vm_name,
         "vm_type": vm_type,
+        "pool_role": POOL_ROLE_RELEASING,
+    }
+
+
+def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
+    """Detach residual assistant state and transition a releasing VM to idle."""
+    client = compute_v1.InstancesClient()
+    vm = client.get(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
+    labels = dict(vm.labels) if vm.labels else {}
+    current_role = labels.get(POOL_ROLE_LABEL, "")
+    assistant_id = labels.get(ASSISTANT_ID_LABEL, "")
+    vm_type = labels.get("vm-type", "ubuntu")
+
+    if vm.status != "RUNNING":
+        return {
+            "vm_name": vm_name,
+            "status": vm.status,
+            "pool_role": current_role,
+            "skipped": True,
+            "reason": "vm_not_running",
+        }
+    if current_role != POOL_ROLE_RELEASING:
+        return {
+            "vm_name": vm_name,
+            "pool_role": current_role,
+            "skipped": True,
+            "reason": "not_releasing",
+        }
+
+    detached, disk_name = _detach_attached_assistant_disk(vm_name)
+    _update_instance_metadata(vm_name, _release_metadata_updates(clear_assignment=True))
+
+    updated = _set_pool_labels(
+        client,
+        vm_name,
+        {POOL_ROLE_LABEL: "idle", ASSISTANT_ID_LABEL: ""},
+        expected_role=POOL_ROLE_RELEASING,
+    )
+    if not updated:
+        refreshed = client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
+        return {
+            "vm_name": vm_name,
+            "pool_role": (dict(refreshed.labels) if refreshed.labels else {}).get(
+                POOL_ROLE_LABEL,
+                "",
+            ),
+            "skipped": True,
+            "reason": "role_changed",
+        }
+
+    _log_vm_pool_event(
+        "release_complete",
+        assistant_id=assistant_id or None,
+        vm_name=vm_name,
+        disk_name=disk_name,
+        detached=detached,
+    )
+    return {
+        "vm_name": vm_name,
+        "vm_type": vm_type,
+        "pool_role": "idle",
+        "assistant_id": assistant_id or None,
+        "disk_name": disk_name,
+        "detached": detached,
     }
 
 
@@ -1635,8 +1889,8 @@ def _list_pool_state(vm_type: str):
     """Snapshot current pool state for a VM type.
 
     Returns (client, pool_vms, idle_vms, stopped_vms, in_flight_vms, existing_names).
-    in_flight_vms are VMs that are booting but not yet idle (provisioning or
-    recently started stopped VMs).
+    in_flight_vms are VMs that are transitioning back toward service but not yet
+    claimable (provisioning, starting, or releasing).
     """
     client = compute_v1.InstancesClient()
     type_filter = f"labels.vm-type={vm_type}"
@@ -1661,7 +1915,8 @@ def _list_pool_state(vm_type: str):
         vm
         for vm in pool_vms
         if vm.status in ("STAGING", "RUNNING")
-        and vm.labels.get("pool-role") in ("provisioning", "starting")
+        and vm.labels.get("pool-role")
+        in ("provisioning", "starting", POOL_ROLE_RELEASING)
     ]
     existing_names = {vm.name for vm in pool_vms}
     return client, pool_vms, idle_vms, stopped_vms, in_flight_vms, existing_names

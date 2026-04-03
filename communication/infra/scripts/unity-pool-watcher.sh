@@ -134,6 +134,27 @@ wipe_metadata_key() {
         || log "WARNING: failed to wipe metadata key $key via Comms API"
 }
 
+notify_release_complete() {
+    local comms_url id_token
+    comms_url=$(get_metadata "comms-url")
+    id_token=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
+        2>/dev/null || true)
+    [[ -z "$comms_url" || -z "$id_token" ]] && return 1
+
+    for attempt in $(seq 1 10); do
+        if curl -sf -X POST "$comms_url/infra/vm/release-complete" \
+            -H "Authorization: Bearer $id_token" >/dev/null 2>&1; then
+            log "Reported release completion to Comms"
+            return 0
+        fi
+        sleep 3
+    done
+
+    log "WARNING: failed to report release completion to Comms"
+    return 1
+}
+
 kill_agent_service() {
     pkill -f "ts-node src/index.ts" 2>/dev/null || true
     pkill -f "node" 2>/dev/null || true
@@ -491,6 +512,7 @@ PYSCRIPT
     do_update
 
     wipe_metadata_key "github-token"
+    notify_release_complete
 
     log "RELEASE complete"
 }
