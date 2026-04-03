@@ -1056,12 +1056,7 @@ def cleanup_assistant_jobs(batch_api, assistant_ids: list[str]):
         except Exception:
             pass
         try:
-            requests.post(
-                f"{COMMS_APP_URL}/infra/vm/pool/release",
-                json={"assistant_id": str(aid)},
-                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                timeout=30,
-            )
+            release_assigned_vms(str(aid), timeout=30)
         except Exception:
             pass
 
@@ -1308,12 +1303,7 @@ def _delete_test_assistant(agent_id: str, batch_api=None):
     int_id = str(agent_id).split(".")[0]
 
     try:
-        requests.post(
-            f"{COMMS_APP_URL}/infra/vm/pool/release",
-            json={"assistant_id": str(agent_id)},
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=30,
-        )
+        release_assigned_vms(str(agent_id), timeout=30)
     except Exception:
         pass
 
@@ -1574,7 +1564,11 @@ def find_assistant_with_assigned_vm() -> dict | None:
         vms = list(client.list(request=request))
         if not vms:
             return None
-        aid = vms[0].labels.get("assistant-id")
+        vm = vms[0]
+        labels = dict(vm.labels or {})
+        aid = labels.get("assistant-id")
+        binding_id = str(labels.get("binding-id", "") or "")
+        hostname = _vm_metadata_value(vm, "hostname")
         if not aid:
             return None
         resp = requests.get(
@@ -1587,7 +1581,9 @@ def find_assistant_with_assigned_vm() -> dict | None:
         if assistants:
             return {
                 "assistant_id": assistants[0]["agent_id"],
-                "vm_name": vms[0].name,
+                "vm_name": vm.name,
+                "binding_id": binding_id,
+                "hostname": hostname,
                 **{k: v for k, v in assistants[0].items() if k not in ("agent_id",)},
             }
     except Exception:
@@ -1838,6 +1834,73 @@ def list_assigned_vms(gce_client, assistant_id: str) -> list:
     return list(gce_client.list(request=request))
 
 
+def _vm_metadata_value(vm, key: str) -> str:
+    """Return a metadata value from a GCE VM instance."""
+
+    for item in getattr(getattr(vm, "metadata", None), "items", []) or []:
+        if item.key == key:
+            return str(item.value or "")
+    return ""
+
+
+def assigned_vm_runtime_refs(
+    assistant_id: str,
+    *,
+    gce_client=None,
+) -> list[dict[str, str]]:
+    """Return binding-aware runtime refs for currently assigned VMs."""
+
+    try:
+        if gce_client is None:
+            from google.cloud import compute_v1
+
+            gce_client = compute_v1.InstancesClient()
+        assigned_vms = list_assigned_vms(gce_client, assistant_id)
+    except Exception:
+        return []
+
+    refs: list[dict[str, str]] = []
+    for vm in assigned_vms:
+        labels = dict(vm.labels or {})
+        binding_id = str(labels.get("binding-id", "") or "")
+        vm_name = str(getattr(vm, "name", "") or "")
+        if not binding_id or not vm_name:
+            continue
+        refs.append(
+            {
+                "binding_id": binding_id,
+                "vm_name": vm_name,
+                "hostname": _vm_metadata_value(vm, "hostname"),
+            },
+        )
+    return refs
+
+
+def release_assigned_vms(
+    assistant_id: str,
+    *,
+    gce_client=None,
+    timeout: float = 30,
+) -> list[requests.Response]:
+    """Best-effort release of all VMs currently assigned to an assistant."""
+
+    responses: list[requests.Response] = []
+    for vm_ref in assigned_vm_runtime_refs(assistant_id, gce_client=gce_client):
+        responses.append(
+            requests.post(
+                f"{COMMS_APP_URL}/infra/vm/pool/release",
+                json={
+                    "assistant_id": str(assistant_id),
+                    "binding_id": vm_ref["binding_id"],
+                    "vm_name": vm_ref["vm_name"],
+                },
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=timeout,
+            ),
+        )
+    return responses
+
+
 def list_idle_vms(gce_client, vm_type: str = "ubuntu") -> list:
     """List idle pool VMs."""
     from google.cloud import compute_v1
@@ -2067,8 +2130,9 @@ def check_invariants_after_test(request, k8s_clients, gce_client, invariant_base
                 f"session={(session.get('metadata') or {}).get('name')} "
                 f"activation={spec.get('activationId')} "
                 f"phase={status.get('phase')} "
-                f"jobRef={(status.get('jobRef') or {}).get('name')} "
-                f"vmRef={(status.get('vmRef') or {}).get('name')} "
+                f"bindingId={((status.get('binding') or {}).get('id'))} "
+                f"jobRef={(((status.get('binding') or {}).get('jobRef') or {}).get('name'))} "
+                f"vmRef={(((status.get('binding') or {}).get('vmRef') or {}).get('name'))} "
                 f"lastError={status.get('lastError')}\n"
             )
         if artifact_path:

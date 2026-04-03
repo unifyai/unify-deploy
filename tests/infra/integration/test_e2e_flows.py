@@ -27,6 +27,7 @@ from .conftest import (
     list_assigned_vms,
     poll_until,
     pull_outbound_messages,
+    release_assigned_vms,
     replenish_pool,
     send_test_message,
     wait_for_container_running,
@@ -442,10 +443,7 @@ class TestE2EFlows:
             )
         finally:
             try:
-                comms.post(
-                    "/infra/vm/pool/release",
-                    json={"assistant_id": assistant_id},
-                )
+                release_assigned_vms(assistant_id, gce_client=gce_client)
             except Exception:
                 pass
             cleanup_assistant_jobs(batch_api, [assistant_id])

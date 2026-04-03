@@ -457,15 +457,18 @@ class TestVMReady:
             f"{COMMS_APP_URL}/infra/vm/ready",
             json={
                 "assistant_id": str(assistant["assistant_id"]),
+                "binding_id": str(assistant.get("binding_id", "") or ""),
+                "hostname": str(assistant.get("hostname", "") or ""),
                 "vm_type": "ubuntu",
             },
             headers={"Authorization": f"Bearer {UNIFY_KEY}"},
             timeout=30,
         )
-        # 200 = authenticated readiness confirmed; 401/503 reflect session/key mismatch
+        # 200 = authenticated readiness confirmed; 401/409/503 reflect auth/session drift
         assert resp.status_code in (
             200,
             401,
+            409,
             503,
         ), f"vm/ready unexpected: {resp.status_code} {resp.text}"
         if resp.status_code == 200:

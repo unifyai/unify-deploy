@@ -48,6 +48,7 @@ from .conftest import (
     poll_until,
     probe_vm_agent_service_authenticated,
     pull_outbound_messages,
+    release_assigned_vms,
     replenish_pool,
     send_test_meet,
     send_test_message,
@@ -297,12 +298,7 @@ def test_production_traffic_stress(
             pass
         if aid and gce_client is not None:
             try:
-                requests.post(
-                    f"{COMMS_APP_URL}/infra/vm/pool/release",
-                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    json={"assistant_id": aid},
-                    timeout=15,
-                )
+                release_assigned_vms(aid, gce_client=gce_client, timeout=15)
             except Exception:
                 pass
     if existing_jobs.items:
@@ -1014,12 +1010,7 @@ def test_production_traffic_stress(
         print(f"[Phase 8] Jobs deleted, releasing VMs...")
         for aid in all_ids:
             try:
-                requests.post(
-                    f"{COMMS_APP_URL}/infra/vm/pool/release",
-                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    json={"assistant_id": str(aid)},
-                    timeout=15,
-                )
+                release_assigned_vms(str(aid), gce_client=gce_client, timeout=15)
             except Exception:
                 pass
         print(f"[Phase 8] Waiting 15s for cleanup to propagate...")
@@ -1068,12 +1059,7 @@ def test_production_traffic_stress(
         cleanup_assistant_jobs(batch_api, all_ids)
         for aid in all_ids:
             try:
-                requests.post(
-                    f"{COMMS_APP_URL}/infra/vm/pool/release",
-                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    json={"assistant_id": str(aid)},
-                    timeout=15,
-                )
+                release_assigned_vms(str(aid), gce_client=gce_client, timeout=15)
             except Exception:
                 pass
         replenish_pool()

@@ -22,6 +22,7 @@ from .conftest import (
     list_assigned_vms,
     list_idle_vms,
     list_stopped_vms,
+    release_assigned_vms,
     require_gce,
 )
 
@@ -34,6 +35,10 @@ def _vm_test_assistant_id(prefix: str) -> str:
     return f"{prefix}-{int(time.time())}"
 
 
+def _vm_test_binding_id(assistant_id: str) -> str:
+    return f"{assistant_id}-binding".lower().replace("_", "-")[:63]
+
+
 @pytest.mark.invariant("INV-9", "INV-10")
 def test_vm_assign_sets_labels_and_metadata(comms, gce_client, poll):
     """Assigning a pool VM sets correct GCE labels and metadata.
@@ -44,12 +49,14 @@ def test_vm_assign_sets_labels_and_metadata(comms, gce_client, poll):
     """
     require_gce(gce_client)
     assistant_id = _vm_test_assistant_id("vm-assign-test")
+    binding_id = _vm_test_binding_id(assistant_id)
 
     try:
         resp = comms.post(
             "/infra/vm/pool/assign",
             json={
                 "assistant_id": assistant_id,
+                "binding_id": binding_id,
                 "unify_apikey": "test-api-key-for-integration",
                 "vm_type": "ubuntu",
             },
@@ -75,7 +82,7 @@ def test_vm_assign_sets_labels_and_metadata(comms, gce_client, poll):
         assert labels.get("assistant-id") == assistant_id.lower().replace("_", "-")
 
     finally:
-        comms.post("/infra/vm/pool/release", json={"assistant_id": assistant_id})
+        release_assigned_vms(assistant_id, gce_client=gce_client)
 
 
 @pytest.mark.invariant("INV-11")
@@ -95,12 +102,14 @@ def test_vm_auth_key_matches_after_assignment(comms, gce_client, poll):
     require_gce(gce_client)
     assert UNIFY_KEY, "UNIFY_KEY must be set for this test"
     assistant_id = _vm_test_assistant_id("vm-auth-test")
+    binding_id = _vm_test_binding_id(assistant_id)
 
     try:
         resp = comms.post(
             "/infra/vm/pool/assign",
             json={
                 "assistant_id": assistant_id,
+                "binding_id": binding_id,
                 "unify_apikey": UNIFY_KEY,
                 "vm_type": "ubuntu",
             },
@@ -143,7 +152,7 @@ def test_vm_auth_key_matches_after_assignment(comms, gce_client, poll):
         )
 
     finally:
-        comms.post("/infra/vm/pool/release", json={"assistant_id": assistant_id})
+        release_assigned_vms(assistant_id, gce_client=gce_client)
 
 
 @pytest.mark.invariant("INV-10")
@@ -156,11 +165,13 @@ def test_vm_release_resets_labels(comms, gce_client, poll):
     """
     require_gce(gce_client)
     assistant_id = _vm_test_assistant_id("vm-release-test")
+    binding_id = _vm_test_binding_id(assistant_id)
 
     resp = comms.post(
         "/infra/vm/pool/assign",
         json={
             "assistant_id": assistant_id,
+            "binding_id": binding_id,
             "unify_apikey": "test-key",
             "vm_type": "ubuntu",
         },
@@ -172,6 +183,8 @@ def test_vm_release_resets_labels(comms, gce_client, poll):
         "/infra/vm/pool/release",
         json={
             "assistant_id": assistant_id,
+            "binding_id": binding_id,
+            "vm_name": vm_name,
         },
     )
     assert release_resp.status_code == 200
@@ -186,6 +199,8 @@ def test_vm_release_resets_labels(comms, gce_client, poll):
         "/infra/vm/pool/release",
         json={
             "assistant_id": assistant_id,
+            "binding_id": binding_id,
+            "vm_name": vm_name,
         },
     )
     assert (
@@ -283,10 +298,12 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
     dummy_aids: list[str] = []
     for i in range(needed):
         dummy_aid = f"scrub-test-{int(time.time())}-{i}"
+        dummy_binding_id = _vm_test_binding_id(dummy_aid)
         resp = requests.post(
             f"{COMMS_APP_URL}/infra/vm/pool/assign",
             json={
                 "assistant_id": dummy_aid,
+                "binding_id": dummy_binding_id,
                 "unify_apikey": "test-key",
                 "vm_type": "ubuntu",
             },
@@ -334,12 +351,7 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
 
     if not newly_started:
         for aid in dummy_aids:
-            requests.post(
-                f"{COMMS_APP_URL}/infra/vm/pool/release",
-                json={"assistant_id": aid},
-                headers=_ADMIN_HEADERS,
-                timeout=30,
-            )
+            release_assigned_vms(aid, gce_client=gce_client, timeout=30)
         pytest.skip(
             f"Rebalance did not start any VMs (idle={len(idle_before)}, "
             f"consumed={len(dummy_aids)}). Pool may have been replenished "
@@ -392,12 +404,7 @@ def test_restarted_vm_survives_scrub_and_reaches_idle(gce_client, comms, poll):
         )
     finally:
         for aid in dummy_aids:
-            requests.post(
-                f"{COMMS_APP_URL}/infra/vm/pool/release",
-                json={"assistant_id": aid},
-                headers=_ADMIN_HEADERS,
-                timeout=30,
-            )
+            release_assigned_vms(aid, gce_client=gce_client, timeout=30)
 
 
 # ---------------------------------------------------------------------------
@@ -411,12 +418,7 @@ def _release_all_vms_for(gce_client, assistant_id: str):
         assigned = list_assigned_vms(gce_client, assistant_id)
         if not assigned:
             break
-        requests.post(
-            f"{COMMS_APP_URL}/infra/vm/pool/release",
-            json={"assistant_id": assistant_id},
-            headers=_ADMIN_HEADERS,
-            timeout=30,
-        )
+        release_assigned_vms(assistant_id, gce_client=gce_client, timeout=30)
         time.sleep(2)
 
 
@@ -433,6 +435,7 @@ def test_concurrent_assign_produces_at_most_one_vm(
     require_gce(gce_client)
 
     assistant_id = _vm_test_assistant_id("vm-concurrent-test")
+    binding_id = _vm_test_binding_id(assistant_id)
     api_key = UNIFY_KEY or "test-key"
 
     _release_all_vms_for(gce_client, assistant_id)
@@ -452,6 +455,7 @@ def test_concurrent_assign_produces_at_most_one_vm(
                     f"{COMMS_APP_URL}/infra/vm/pool/assign",
                     json={
                         "assistant_id": assistant_id,
+                        "binding_id": binding_id,
                         "unify_apikey": api_key,
                         "vm_type": "ubuntu",
                     },
@@ -503,12 +507,14 @@ def test_orphaned_vm_detected_and_reconciled(
     require_gce(gce_client)
 
     orphan_aid = f"orphan-test-{int(time.time())}"
+    orphan_binding_id = _vm_test_binding_id(orphan_aid)
 
     try:
         assign_resp = requests.post(
             f"{COMMS_APP_URL}/infra/vm/pool/assign",
             json={
                 "assistant_id": orphan_aid,
+                "binding_id": orphan_binding_id,
                 "unify_apikey": "orphan-test-key",
                 "vm_type": "ubuntu",
             },

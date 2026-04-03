@@ -420,16 +420,14 @@ def check_valid_contact(
 
 
 def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
-    """Suspend K8s jobs that have been running longer than *max_age_hours*.
+    """Stop stale assistant runtimes that have been running too long.
 
     Also sweeps ``unity-status=done`` jobs that were unbound by the
     controller but may predate the suspend-on-unbind fix.
 
-    For each stale job:
-    - Suspends the K8s job
-    - Releases any leaked pool VM for the assistant
-
-    Uses K8s as the source of truth (via /infra/jobs).
+    Uses the current K8s Job inventory as the signal for staleness, then
+    declares the corresponding ``AssistantSession`` desired state stopped so
+    the binding-authoritative controller owns runtime shutdown.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not SETTINGS.comms_url:
@@ -482,8 +480,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     if not stale:
         return {"total_running": len(all_jobs), "expired": 0}
 
-    jobs_to_suspend = []
-    stale_release_targets = []
+    stale_assistants = []
     for job in stale:
         job_name = job.get("job_name")
         assistant_id = job.get("assistant_id", "unknown")
@@ -492,71 +489,46 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             f"assistant_id={assistant_id} "
             f"created={job.get('creation_timestamp')}",
         )
-        if job_name:
-            jobs_to_suspend.append(job_name)
         if assistant_id and assistant_id != "unknown":
-            stale_release_targets.append(
-                {
-                    "assistant_id": assistant_id,
-                    "job_name": job_name,
-                },
-            )
+            stale_assistants.append(str(assistant_id))
 
-    suspended_jobs = []
+    stopped_assistants = []
 
-    def _suspend_job(jn):
+    def _stop_session(aid: str):
         try:
-            requests.post(
-                f"{SETTINGS.comms_url}/infra/job/stop",
-                data={"job_name": jn},
+            resp = requests.post(
+                f"{SETTINGS.comms_url}/infra/session/{aid}/stop",
                 headers=headers,
                 timeout=10,
             )
-            logger.info(f"[expire_all_stale_jobs] Suspended K8s job: {jn}")
-            return jn
+            if resp.status_code in (200, 404):
+                logger.info(
+                    f"[expire_all_stale_jobs] Declared stale runtime stopped for {aid}",
+                )
+                return aid
+            logger.info(
+                "[expire_all_stale_jobs] Session stop non-fatal for %s: %s %s",
+                aid,
+                resp.status_code,
+                resp.text[:200],
+            )
         except Exception as exc:
             logger.info(
-                f"[expire_all_stale_jobs] Job suspend non-fatal for {jn}: {exc}",
+                f"[expire_all_stale_jobs] Session stop non-fatal for {aid}: {exc}",
             )
             return None
+        return None
 
-    if jobs_to_suspend:
-        with ThreadPoolExecutor(max_workers=len(jobs_to_suspend)) as pool:
-            results = list(pool.map(_suspend_job, jobs_to_suspend))
-        suspended_jobs = [r for r in results if r is not None]
-
-    released_assistants = []
-
-    def _release_vm(target):
-        aid = target["assistant_id"]
-        job_name = target.get("job_name")
-        payload = {"assistant_id": aid}
-        if job_name:
-            payload["job_name"] = job_name
-        try:
-            requests.post(
-                f"{SETTINGS.comms_url}/infra/vm/pool/release",
-                headers=headers,
-                json=payload,
-                timeout=10,
-            )
-            return aid
-        except Exception as exc:
-            logger.info(
-                f"[expire_all_stale_jobs] VM release non-fatal for {aid}: {exc}",
-            )
-            return None
-
-    if stale_release_targets:
-        with ThreadPoolExecutor(max_workers=len(stale_release_targets)) as pool:
-            results = list(pool.map(_release_vm, stale_release_targets))
-        released_assistants = list(dict.fromkeys(r for r in results if r is not None))
+    deduped_assistants = list(dict.fromkeys(stale_assistants))
+    if deduped_assistants:
+        with ThreadPoolExecutor(max_workers=len(deduped_assistants)) as pool:
+            results = list(pool.map(_stop_session, deduped_assistants))
+        stopped_assistants = [r for r in results if r is not None]
 
     return {
         "total_running": len(all_jobs),
         "expired": len(stale),
-        "suspended_k8s_jobs": suspended_jobs,
-        "released_assistants": released_assistants,
+        "stopped_assistants": stopped_assistants,
     }
 
 

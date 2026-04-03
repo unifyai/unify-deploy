@@ -3117,7 +3117,7 @@ def scheduled_infra_maintenance():
         logger.exception("maintenance: pool cleanup failed")
         results["pool_cleanup_error"] = str(exc)
 
-    # 3 — Expire stale jobs (running >12 h) and release leaked VMs
+    # 3 — Stop stale assistant runtimes (running >12 h)
     try:
         results["stale_jobs"] = expire_all_stale_jobs(max_age_hours=12)
     except Exception as exc:
@@ -3196,7 +3196,7 @@ def scheduled_jobs_cleanup():
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_expire_stale():
-    """Expire stale jobs (utility — use /scheduled/infra/maintenance for cron)."""
+    """Stop stale assistant runtimes (utility — use /scheduled/infra/maintenance for cron)."""
     result = expire_all_stale_jobs(max_age_hours=12)
     try:
         orphan_resp = requests.post(
