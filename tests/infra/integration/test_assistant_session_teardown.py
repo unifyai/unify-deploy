@@ -54,6 +54,7 @@ from .conftest import (
     list_jobs_with_assistant_id,
     list_jobs_with_session_ref,
     start_real_job,
+    wait_for_assistant_runtime_stopped,
 )
 
 pytestmark = [pytest.mark.integration]
@@ -310,39 +311,14 @@ def test_delete_assistant_runtime_cleanup_completes(
             f"(status={tasks[0]['status']}) ✓",
         )
 
-        # K8s job stopped.
-        poll(
-            lambda: not list_jobs_with_assistant_id(batch_api, agent_id),
+        wait_for_assistant_runtime_stopped(
+            agent_id,
+            batch_api=batch_api,
             timeout=CLEANUP_TIMEOUT_SECONDS,
             interval=5,
-            description=f"K8s job for assistant {agent_id} to be stopped",
-            failure_snapshot=lambda: {
-                "active_jobs": [
-                    j.metadata.name
-                    for j in list_jobs_with_assistant_id(batch_api, agent_id)
-                ],
-                "cleanup_tasks": _get_cleanup_tasks(agent_id),
-            },
         )
-        print(f"[Cleanup] K8s job stopped ✓")
+        print(f"[Cleanup] Assistant runtime released ✓")
 
-        # Pool VM released.
-        if has_gce:
-            poll(
-                lambda: not list_assigned_vms(gce_client, agent_id),
-                timeout=CLEANUP_TIMEOUT_SECONDS,
-                interval=5,
-                description=f"Pool VM for assistant {agent_id} to be released",
-                failure_snapshot=lambda: {
-                    "assigned_vms": [
-                        vm.name for vm in list_assigned_vms(gce_client, agent_id)
-                    ],
-                    "cleanup_tasks": _get_cleanup_tasks(agent_id),
-                },
-            )
-            print(f"[Cleanup] Pool VM released ✓")
-
-        # AssistantSession deleted (only when CRD is available).
         if has_session_crd:
             poll(
                 lambda: get_assistant_session(comms, agent_id) is None,
