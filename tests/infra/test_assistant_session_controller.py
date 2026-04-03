@@ -25,14 +25,45 @@ fake_kopf.OperatorSettings = type("OperatorSettings", (), {})
 sys.modules.setdefault("kopf", fake_kopf)
 
 from communication.assistant_session_controller import controller
-from communication.infra.assistant_sessions import build_condition
 
 
-def _make_bound_job(name: str = "unity-job-1", *, container_ready: bool = True):
+def _base_session(*, desired_state: str = "Running") -> dict:
+    return {
+        "metadata": {"name": "assistant-session-1207"},
+        "spec": {
+            "assistantId": "1207",
+            "activationId": "act-1",
+            "desiredState": desired_state,
+            "desktop": {"required": True, "mode": "ubuntu"},
+            "startupSecretRef": "assistant-session-bootstrap-1207",
+        },
+        "status": {
+            "phase": "",
+            "observedActivationId": "act-1",
+            "conditions": [],
+            "bootstrapRetries": 0,
+            "vmRetries": 0,
+            "desktopProbeFailures": 0,
+        },
+    }
+
+
+def _binding(binding_id: str = "binding-1", **overrides) -> dict:
+    binding = {"id": binding_id}
+    binding.update(overrides)
+    return binding
+
+
+def _job(name: str = "unity-job-1", *, container_ready: bool = True):
     job = MagicMock()
     job.metadata.name = name
-    job.metadata.labels = {}
+    job.metadata.labels = {
+        controller.SESSION_REF_LABEL: "assistant-session-1207",
+        controller.BINDING_ID_LABEL: "binding-1",
+    }
     job.metadata.annotations = {
+        controller.SESSION_REF_ANNOTATION: "assistant-session-1207",
+        controller.BINDING_ID_ANNOTATION: "binding-1",
         controller.CONTAINER_READY_ANNOTATION: "true" if container_ready else "false",
     }
     job.metadata.deletion_timestamp = None
@@ -40,447 +71,156 @@ def _make_bound_job(name: str = "unity-job-1", *, container_ready: bool = True):
     return job
 
 
-def test_new_activation_resets_stale_vm_retry_budget(monkeypatch):
-    monkeypatch.setattr(controller, "_custom_api", object())
-    monkeypatch.setattr(controller, "_core_api", MagicMock())
-    monkeypatch.setattr(
-        controller,
-        "_ensure_job_binding",
-        lambda *_args: _make_bound_job(),
-    )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args: None)
-    monkeypatch.setattr(
-        controller,
-        "read_bootstrap_secret",
-        lambda *_args: {"api_key": "key"},
-    )
-
-    assign_pool_vm = MagicMock(
-        return_value={"vm_name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
-    )
-    replenish_pool = MagicMock()
+def test_reconcile_mints_binding_for_unbound_running_session(monkeypatch):
+    body = _base_session()
     patch_status = MagicMock()
 
-    monkeypatch.setattr(controller, "assign_pool_vm", assign_pool_vm)
-    monkeypatch.setattr(controller, "replenish_pool", replenish_pool)
-    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
-
-    body = {
-        "metadata": {"name": "assistant-session-1207"},
-        "spec": {
-            "assistantId": "1207",
-            "activationId": "act-new",
-            "desktopRequired": True,
-            "desktopMode": "ubuntu",
-            "startupSecretRef": "assistant-session-bootstrap-1207",
-        },
-        "status": {
-            "observedActivationId": "act-old",
-            "vmRetries": 99,
-            "conditions": [
-                build_condition(
-                    "VMAssigned",
-                    False,
-                    "RetriesExhausted",
-                    "stale retry budget",
-                ),
-            ],
-        },
-    }
+    monkeypatch.setattr(controller, "_batch_api", MagicMock())
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
     monkeypatch.setattr(
         controller,
         "get_assistant_session",
         lambda *_args, **_kwargs: deepcopy(body),
     )
-
-    controller._update_status_for_session(body)
-
-    assign_pool_vm.assert_called_once()
-    replenish_pool.assert_not_called()
-    patch_status.assert_called_once()
-    assert patch_status.call_args.kwargs["phase"] == "PendingVM"
-    assert patch_status.call_args.kwargs["bootstrap_retries"] == 0
-    assert patch_status.call_args.kwargs["vm_retries"] == 0
-    assert patch_status.call_args.kwargs["desktop_probe_failures"] == 0
-
-
-def test_reconcile_refreshes_latest_session_before_acting(monkeypatch):
-    monkeypatch.setattr(controller, "_custom_api", object())
-    monkeypatch.setattr(controller, "_core_api", MagicMock())
-    monkeypatch.setattr(
-        controller,
-        "_ensure_job_binding",
-        lambda *_args: _make_bound_job(),
-    )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args: None)
-    monkeypatch.setattr(
-        controller,
-        "read_bootstrap_secret",
-        lambda *_args: {"api_key": "key"},
-    )
-
-    latest_session = {
-        "metadata": {"name": "assistant-session-1207"},
-        "spec": {
-            "assistantId": "1207",
-            "activationId": "act-new",
-            "desktopRequired": True,
-            "desktopMode": "ubuntu",
-            "startupSecretRef": "assistant-session-bootstrap-1207",
-        },
-        "status": {
-            "observedActivationId": "act-old",
-            "vmRetries": 99,
-            "conditions": [
-                build_condition(
-                    "VMAssigned",
-                    False,
-                    "RetriesExhausted",
-                    "stale retry budget",
-                ),
-            ],
-        },
-    }
-
-    monkeypatch.setattr(
-        controller,
-        "get_assistant_session",
-        lambda *_args, **_kwargs: deepcopy(latest_session),
-    )
-
-    assign_pool_vm = MagicMock(
-        return_value={"vm_name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
-    )
-    replenish_pool = MagicMock()
-    patch_status = MagicMock()
-
-    monkeypatch.setattr(controller, "assign_pool_vm", assign_pool_vm)
-    monkeypatch.setattr(controller, "replenish_pool", replenish_pool)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
-    stale_body = {
-        "metadata": {"name": "assistant-session-1207"},
-        "spec": {
-            "assistantId": "1207",
-            "activationId": "act-old",
-            "desktopRequired": True,
-            "desktopMode": "ubuntu",
-            "startupSecretRef": "assistant-session-bootstrap-1207",
-        },
-        "status": {
-            "observedActivationId": "act-old",
-            "vmRetries": 99,
-            "conditions": [
-                build_condition(
-                    "VMAssigned",
-                    False,
-                    "RetriesExhausted",
-                    "stale retry budget",
-                ),
-            ],
-        },
-    }
+    controller._update_status_for_session(deepcopy(body))
 
-    controller._update_status_for_session(stale_body)
-
-    assign_pool_vm.assert_called_once()
-    replenish_pool.assert_not_called()
-    assert patch_status.call_args.kwargs["observed_activation_id"] == "act-new"
-    assert patch_status.call_args.kwargs["bootstrap_retries"] == 0
-    assert patch_status.call_args.kwargs["vm_retries"] == 0
-    assert patch_status.call_args.kwargs["desktop_probe_failures"] == 0
+    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+    binding = patch_status.call_args.kwargs["binding"]
+    assert binding["id"]
+    assert patch_status.call_args.kwargs["observed_activation_id"] == "act-1"
 
 
-def test_vm_reassignment_refreshes_vm_assigned_transition_time(monkeypatch):
+def test_reconcile_records_binding_owned_job(monkeypatch):
+    body = _base_session()
+    body["status"]["binding"] = _binding("binding-1")
+    created_job = _job()
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_batch_api", MagicMock())
     monkeypatch.setattr(controller, "_custom_api", object())
     monkeypatch.setattr(controller, "_core_api", MagicMock())
-    monkeypatch.setattr(
-        controller,
-        "_ensure_job_binding",
-        lambda *_args: _make_bound_job(),
-    )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args: None)
-
-    old_transition_time = "2026-04-01T00:00:00+00:00"
-    body = {
-        "metadata": {"name": "assistant-session-1207"},
-        "spec": {
-            "assistantId": "1207",
-            "activationId": "act-1",
-            "desktopRequired": True,
-            "desktopMode": "ubuntu",
-            "startupSecretRef": "assistant-session-bootstrap-1207",
-        },
-        "status": {
-            "observedActivationId": "act-1",
-            "jobRef": {"name": "unity-job-1"},
-            "vmRef": {
-                "name": "unity-pool-ubuntu-1",
-                "hostname": "vm-1.vm.unify.ai",
-            },
-            "conditions": [
-                build_condition(
-                    "ContainerAssigned",
-                    True,
-                    "Bound",
-                    "Session job bound",
-                ),
-                build_condition(
-                    "ContainerReady",
-                    True,
-                    "UnityReady",
-                    "Unity bootstrap complete",
-                ),
-                {
-                    "type": "VMAssigned",
-                    "status": "True",
-                    "reason": "Assigned",
-                    "message": "Managed VM assigned",
-                    "lastTransitionTime": old_transition_time,
-                },
-                build_condition(
-                    "DesktopReady",
-                    False,
-                    "WaitingForDesktop",
-                    "Waiting for authenticated desktop readiness",
-                ),
-                build_condition(
-                    "Active",
-                    False,
-                    "WaitingForDesktop",
-                    "Desktop session not ready yet",
-                ),
-            ],
-        },
-    }
-
     monkeypatch.setattr(
         controller,
         "get_assistant_session",
         lambda *_args, **_kwargs: deepcopy(body),
     )
+    monkeypatch.setattr(controller, "_create_bound_job", lambda *_args, **_kwargs: created_job)
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "PendingContainer"
+    binding = patch_status.call_args.kwargs["binding"]
+    assert binding["jobRef"]["name"] == "unity-job-1"
+
+
+def test_reconcile_assigns_vm_with_binding_id(monkeypatch):
+    body = _base_session()
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+    )
+    patch_status = MagicMock()
+    assign_pool_vm = MagicMock(
+        return_value={"vm_name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+    )
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: _job())
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "read_bootstrap_secret", lambda *_args, **_kwargs: {"api_key": "key"})
+    monkeypatch.setattr(controller, "assign_pool_vm", assign_pool_vm)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assign_pool_vm.assert_called_once_with(
+        assistant_id="1207",
+        binding_id="binding-1",
+        unify_apikey="key",
+        vm_type="ubuntu",
+    )
+    assert patch_status.call_args.kwargs["phase"] == "PendingGuest"
+    assert patch_status.call_args.kwargs["binding"]["vmRef"]["name"] == "unity-pool-ubuntu-1"
+
+
+def test_reconcile_marks_active_from_ready_binding(monkeypatch):
+    body = _base_session()
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+        vmAssignedAt="2026-04-03T00:00:05+00:00",
+        vmReadyObservedAt="2026-04-03T00:00:10+00:00",
+        desktopUrl="https://vm-1.vm.unify.ai",
+    )
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: _job())
     monkeypatch.setattr(
         controller,
         "verify_vm_assignment",
         lambda *_args, **_kwargs: {
-            "name": "unity-pool-ubuntu-2",
-            "hostname": "vm-2.vm.unify.ai",
+            "name": "unity-pool-ubuntu-1",
+            "hostname": "vm-1.vm.unify.ai",
         },
     )
-
-    release_pool_vm = MagicMock()
-    patch_status = MagicMock()
-
-    monkeypatch.setattr(controller, "release_pool_vm", release_pool_vm)
+    monkeypatch.setattr(controller, "probe_vm_agent_service", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
     controller._update_status_for_session(deepcopy(body))
 
-    release_pool_vm.assert_not_called()
-    assert patch_status.call_args.kwargs["phase"] == "PendingVM"
-    assert patch_status.call_args.kwargs["vm_ref"]["name"] == "unity-pool-ubuntu-2"
-    condition_map = {
-        condition["type"]: condition
-        for condition in patch_status.call_args.kwargs["conditions"]
-    }
-    assert condition_map["VMAssigned"]["reason"] == "Assigned"
-    assert condition_map["VMAssigned"]["lastTransitionTime"] != old_transition_time
+    assert patch_status.call_args.kwargs["phase"] == "Active"
+    assert patch_status.call_args.kwargs["binding"]["desktopUrl"] == "https://vm-1.vm.unify.ai"
 
 
-def test_bootstrap_timeout_skips_stale_unbind_when_session_moved_on(monkeypatch):
-    monkeypatch.setattr(controller, "_custom_api", object())
-    monkeypatch.setattr(controller, "_core_api", MagicMock())
-    monkeypatch.setattr(
-        controller,
-        "_ensure_job_binding",
-        lambda *_args: _make_bound_job(container_ready=False),
+def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Active"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
     )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args: None)
-
-    current_session = {
-        "metadata": {"name": "assistant-session-1207"},
-        "spec": {
-            "assistantId": "1207",
-            "activationId": "act-1",
-            "desktopRequired": True,
-            "desktopMode": "ubuntu",
-            "startupSecretRef": "assistant-session-bootstrap-1207",
-        },
-        "status": {
-            "observedActivationId": "act-1",
-            "jobRef": {"name": "unity-job-1"},
-            "conditions": [
-                {
-                    "type": "ContainerReady",
-                    "status": "False",
-                    "reason": "WaitingForUnity",
-                    "message": "Unity has not yet signaled container-ready",
-                    "lastTransitionTime": "2026-04-01T00:00:00+00:00",
-                },
-            ],
-        },
-    }
-    moved_session = deepcopy(current_session)
-    moved_session["status"]["jobRef"] = {"name": "unity-job-2"}
-
-    session_reads = iter([current_session, moved_session])
-    monkeypatch.setattr(
-        controller,
-        "get_assistant_session",
-        lambda *_args, **_kwargs: deepcopy(next(session_reads)),
-    )
-
-    unbind_job = MagicMock()
     patch_status = MagicMock()
+    release_pool_vm = MagicMock(
+        return_value={"released": True, "pool_role": "releasing"},
+    )
 
-    monkeypatch.setattr(controller, "_unbind_job", unbind_job)
-    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
-
-    controller._update_status_for_session(deepcopy(current_session))
-
-    unbind_job.assert_not_called()
-    patch_status.assert_not_called()
-
-
-def test_vm_timeout_skips_stale_release_when_session_moved_on(monkeypatch):
     monkeypatch.setattr(controller, "_custom_api", object())
     monkeypatch.setattr(controller, "_core_api", MagicMock())
-    monkeypatch.setattr(
-        controller,
-        "_ensure_job_binding",
-        lambda *_args: _make_bound_job(),
-    )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args: None)
-
-    current_session = {
-        "metadata": {"name": "assistant-session-1207"},
-        "spec": {
-            "assistantId": "1207",
-            "activationId": "act-1",
-            "desktopRequired": True,
-            "desktopMode": "ubuntu",
-            "startupSecretRef": "assistant-session-bootstrap-1207",
-        },
-        "status": {
-            "observedActivationId": "act-1",
-            "jobRef": {"name": "unity-job-1"},
-            "vmRef": {
-                "name": "unity-pool-ubuntu-1",
-                "hostname": "vm-1.vm.unify.ai",
-            },
-            "conditions": [
-                build_condition(
-                    "ContainerAssigned",
-                    True,
-                    "Bound",
-                    "Session job bound",
-                ),
-                build_condition(
-                    "ContainerReady",
-                    True,
-                    "UnityReady",
-                    "Unity bootstrap complete",
-                ),
-                {
-                    "type": "VMAssigned",
-                    "status": "True",
-                    "reason": "Assigned",
-                    "message": "Managed VM assigned",
-                    "lastTransitionTime": "2026-04-01T00:00:00+00:00",
-                },
-                build_condition(
-                    "DesktopReady",
-                    False,
-                    "WaitingForDesktop",
-                    "Waiting for authenticated desktop readiness",
-                ),
-            ],
-        },
-    }
-    moved_session = deepcopy(current_session)
-    moved_session["status"]["jobRef"] = {"name": "unity-job-2"}
-    moved_session["status"]["vmRef"] = {
-        "name": "unity-pool-ubuntu-2",
-        "hostname": "vm-2.vm.unify.ai",
-    }
-
-    session_reads = iter([current_session, moved_session])
-    monkeypatch.setattr(
-        controller,
-        "get_assistant_session",
-        lambda *_args, **_kwargs: deepcopy(next(session_reads)),
-    )
-    monkeypatch.setattr(
-        controller,
-        "verify_vm_assignment",
-        lambda *_args, **_kwargs: deepcopy(current_session["status"]["vmRef"]),
-    )
-
-    release_pool_vm = MagicMock()
-    patch_status = MagicMock()
-
-    monkeypatch.setattr(controller, "release_pool_vm", release_pool_vm)
-    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
-
-    controller._update_status_for_session(deepcopy(current_session))
-
-    release_pool_vm.assert_not_called()
-    patch_status.assert_not_called()
-
-
-def test_terminal_transition_releases_exact_vm_name(monkeypatch):
-    monkeypatch.setattr(controller, "_custom_api", object())
-    monkeypatch.setattr(controller, "_core_api", MagicMock())
-
-    terminal_job = _make_bound_job()
-    terminal_job.metadata.labels = {"unity-status": "done"}
-    monkeypatch.setattr(
-        controller,
-        "_ensure_job_binding",
-        lambda *_args: terminal_job,
-    )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args: None)
-
-    body = {
-        "metadata": {"name": "assistant-session-1207"},
-        "spec": {
-            "assistantId": "1207",
-            "activationId": "act-1",
-            "desktopRequired": True,
-            "desktopMode": "ubuntu",
-            "startupSecretRef": "assistant-session-bootstrap-1207",
-        },
-        "status": {
-            "observedActivationId": "act-1",
-            "jobRef": {"name": "unity-job-1"},
-            "vmRef": {
-                "name": "unity-pool-ubuntu-1",
-                "hostname": "vm-1.vm.unify.ai",
-            },
-            "conditions": [
-                build_condition(
-                    "ContainerAssigned",
-                    True,
-                    "Bound",
-                    "Session job bound",
-                ),
-            ],
-        },
-    }
-
     monkeypatch.setattr(
         controller,
         "get_assistant_session",
         lambda *_args, **_kwargs: deepcopy(body),
     )
-
-    release_pool_vm = MagicMock()
-    patch_status = MagicMock()
-
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "release_pool_vm", release_pool_vm)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
     controller._update_status_for_session(deepcopy(body))
 
-    release_pool_vm.assert_called_once_with("1207", vm_name="unity-pool-ubuntu-1")
-    assert patch_status.call_args.kwargs["phase"] == "Succeeded"
+    release_pool_vm.assert_called_once_with(
+        "1207",
+        "binding-1",
+        vm_name="unity-pool-ubuntu-1",
+    )
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"

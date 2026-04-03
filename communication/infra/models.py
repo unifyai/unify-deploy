@@ -10,6 +10,7 @@ from typing import Optional, Literal
 
 class VMReadyRequest(BaseModel):
     assistant_id: str
+    binding_id: str
     vm_type: Literal["windows", "ubuntu"] = "windows"
     hostname: Optional[str] = None
 
@@ -26,6 +27,7 @@ class PoolProvisionRequest(BaseModel):
 
 class PoolAssignRequest(BaseModel):
     assistant_id: str
+    binding_id: str
     unify_apikey: str
     vm_type: Literal["windows", "ubuntu"] = "ubuntu"
     vm_number: Optional[int] = None
@@ -49,6 +51,7 @@ class PoolStartVMRequest(BaseModel):
 
 class PoolReleaseRequest(BaseModel):
     assistant_id: str
+    binding_id: str
     vm_name: Optional[str] = None
     job_name: Optional[str] = None
 
@@ -83,6 +86,10 @@ class PoolStatusResponse(BaseModel):
 
 class VMWipeMetadataKeyRequest(BaseModel):
     key: str
+
+
+class VMReleaseCompleteRequest(BaseModel):
+    binding_id: str
 
 
 class TunnelRegisterRequest(BaseModel):

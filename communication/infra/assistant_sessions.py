@@ -17,10 +17,14 @@ logger = logging.getLogger(__name__)
 
 SESSION_REF_LABEL = "assistantsession.unify.ai/name"
 SESSION_REF_ANNOTATION = "assistantsession.unify.ai/name"
+BINDING_ID_LABEL = "assistantsession.unify.ai/binding-id"
+BINDING_ID_ANNOTATION = "assistantsession.unify.ai/binding-id"
 CONTAINER_READY_ANNOTATION = "assistantsession.unify.ai/container-ready"
 
-TERMINAL_PHASES = {"Succeeded", "Failed"}
-ACTIVE_PHASES = {"PendingContainer", "ContainerAssigned", "PendingVM", "Active"}
+DESIRED_STATE_RUNNING = "Running"
+DESIRED_STATE_STOPPED = "Stopped"
+TERMINAL_PHASES = {"Released", "Failed"}
+ACTIVE_PHASES = {"PendingJob", "PendingContainer", "PendingVM", "PendingGuest", "Active"}
 _STATUS_UNSET = object()
 _MAX_CAS_RETRIES = 3
 _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS = frozenset({"requestedAt"})
@@ -36,6 +40,105 @@ def assistant_session_name(assistant_id: str) -> str:
 
 def assistant_session_secret_name(assistant_id: str) -> str:
     return f"assistant-session-bootstrap-{_sanitize_for_k8s(assistant_id)}"
+
+
+def assistant_session_desired_state(session: dict[str, Any] | None) -> str:
+    """Return the desired runtime state for a session, defaulting to Running."""
+
+    spec = (session or {}).get("spec", {})
+    desired_state = str(spec.get("desiredState", "") or "")
+    return desired_state or DESIRED_STATE_RUNNING
+
+
+def session_desktop_required(session: dict[str, Any] | None) -> bool:
+    """Return whether the session currently requires a managed desktop."""
+
+    desktop = ((session or {}).get("spec") or {}).get("desktop") or {}
+    return bool(desktop.get("required", False))
+
+
+def session_desktop_mode(session: dict[str, Any] | None) -> str:
+    """Return the managed desktop mode configured for the session."""
+
+    desktop = ((session or {}).get("spec") or {}).get("desktop") or {}
+    return str(desktop.get("mode", "") or "")
+
+
+def session_binding(session: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the controller-owned binding object for a session."""
+
+    status = (session or {}).get("status", {})
+    binding = status.get("binding")
+    return binding if isinstance(binding, dict) else {}
+
+
+def binding_job_ref(binding: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the bound Job reference from a binding."""
+
+    value = (binding or {}).get("jobRef")
+    return value if isinstance(value, dict) else {}
+
+
+def binding_pod_ref(binding: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the bound Pod reference from a binding."""
+
+    value = (binding or {}).get("podRef")
+    return value if isinstance(value, dict) else {}
+
+
+def binding_vm_ref(binding: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the bound VM reference from a binding."""
+
+    value = (binding or {}).get("vmRef")
+    return value if isinstance(value, dict) else {}
+
+
+def binding_desktop_url(binding: dict[str, Any] | None) -> str:
+    """Return the resolved desktop URL stored on the binding."""
+
+    return str((binding or {}).get("desktopUrl", "") or "")
+
+
+def binding_id(binding: dict[str, Any] | None) -> str:
+    """Return the immutable binding identifier."""
+
+    return str((binding or {}).get("id", "") or "")
+
+
+def build_binding(
+    *,
+    binding_id: str,
+    job_ref: dict[str, Any] | None = None,
+    pod_ref: dict[str, Any] | None = None,
+    vm_ref: dict[str, Any] | None = None,
+    desktop_url: str | None = None,
+    created_at: str | None = None,
+    container_ready_at: str | None = None,
+    vm_assigned_at: str | None = None,
+    vm_ready_observed_at: str | None = None,
+    vm_ready_hostname: str | None = None,
+    vm_ready_message_id: str | None = None,
+    release_requested_at: str | None = None,
+    release_completed_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the canonical binding payload stored under ``status.binding``."""
+
+    fields = {
+        "id": binding_id,
+        "jobRef": job_ref,
+        "podRef": pod_ref,
+        "vmRef": vm_ref,
+        "desktopUrl": desktop_url,
+        "createdAt": created_at,
+        "containerReadyAt": container_ready_at,
+        "vmAssignedAt": vm_assigned_at,
+        "vmReadyObservedAt": vm_ready_observed_at,
+        "vmReadyHostname": vm_ready_hostname,
+        "vmReadyMessageId": vm_ready_message_id,
+        "releaseRequestedAt": release_requested_at,
+        "releaseCompletedAt": release_completed_at,
+    }
+    return {key: value for key, value in fields.items() if value not in (None, "")}
 
 
 def _compact_observability_fields(fields: dict[str, Any]) -> dict[str, Any]:
@@ -65,24 +168,31 @@ def assistant_session_observability_fields(
     metadata = session.get("metadata", {}) if session else {}
     spec = session.get("spec", {}) if session else {}
     status = session.get("status", {}) if session else {}
+    binding = session_binding(session)
+    vm_ref = binding_vm_ref(binding)
 
     fields = {
         "assistant_id": overrides.pop("assistant_id", spec.get("assistantId")),
         "session_name": overrides.pop("session_name", metadata.get("name")),
         "activation_id": overrides.pop("activation_id", spec.get("activationId")),
+        "desired_state": overrides.pop(
+            "desired_state",
+            spec.get("desiredState", DESIRED_STATE_RUNNING),
+        ),
         "observed_activation_id": overrides.pop(
             "observed_activation_id",
             status.get("observedActivationId"),
         ),
         "phase": overrides.pop("phase", status.get("phase")),
-        "job_name": overrides.pop("job_name", (status.get("jobRef") or {}).get("name")),
-        "pod_name": overrides.pop("pod_name", (status.get("podRef") or {}).get("name")),
-        "vm_name": overrides.pop("vm_name", (status.get("vmRef") or {}).get("name")),
+        "binding_id": overrides.pop("binding_id", binding_id(binding)),
+        "job_name": overrides.pop("job_name", binding_job_ref(binding).get("name")),
+        "pod_name": overrides.pop("pod_name", binding_pod_ref(binding).get("name")),
+        "vm_name": overrides.pop("vm_name", vm_ref.get("name")),
         "vm_hostname": overrides.pop(
             "vm_hostname",
-            (status.get("vmRef") or {}).get("hostname"),
+            vm_ref.get("hostname"),
         ),
-        "desktop_url": overrides.pop("desktop_url", status.get("desktopUrl")),
+        "desktop_url": overrides.pop("desktop_url", binding_desktop_url(binding)),
         "last_error": overrides.pop("last_error", status.get("lastError")),
         "condition_states": overrides.pop(
             "condition_states",
@@ -314,14 +424,18 @@ def build_assistant_session_spec(
     desktop_mode: str,
     startup_secret_ref: str,
     activation_id: str,
+    desired_state: str = DESIRED_STATE_RUNNING,
 ) -> dict[str, Any]:
     desktop_required = desktop_mode in ("windows", "ubuntu")
     return {
         "assistantId": str(assistant_id),
         "userId": str(user_id),
         "medium": medium,
-        "desktopRequired": desktop_required,
-        "desktopMode": desktop_mode,
+        "desiredState": desired_state,
+        "desktop": {
+            "required": desktop_required,
+            "mode": desktop_mode,
+        },
         "startupSecretRef": startup_secret_ref,
         "protocolVersion": SETTINGS.assistant_session_protocol_version,
         "activationId": activation_id,
@@ -338,54 +452,6 @@ def _assistant_session_spec_matches(
         set(desired_spec.keys()) - _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS
     )
     return all(current_spec.get(key) == desired_spec.get(key) for key in compare_keys)
-
-
-def _preserved_session_activation_id(session: dict[str, Any] | None) -> str | None:
-    """Return the activation that concurrent callers must preserve, if any.
-
-    Active sessions keep serving their current activation. Terminal sessions
-    that already rolled their spec to a new activation but have not yet been
-    observed by the controller represent an inflight restart; concurrent
-    callers must reuse that activation instead of minting another one.
-    """
-
-    if not session:
-        return None
-
-    current_spec = session.get("spec", {})
-    current_status = session.get("status", {})
-    activation_id = str(current_spec.get("activationId", "") or "")
-    if not activation_id:
-        return None
-
-    current_phase = str(current_status.get("phase", "") or "")
-    if current_phase in ACTIVE_PHASES:
-        return activation_id
-
-    observed_activation_id = str(current_status.get("observedActivationId", "") or "")
-    restart_in_progress = bool(
-        current_phase
-        and current_phase not in ACTIVE_PHASES
-        and observed_activation_id
-        and observed_activation_id != activation_id
-    )
-    if restart_in_progress:
-        return activation_id
-
-    return None
-
-
-def _effective_assistant_session_spec(
-    session: dict[str, Any] | None,
-    desired_spec: dict[str, Any],
-) -> dict[str, Any]:
-    """Normalize desired spec to the current activation ownership contract."""
-
-    effective_spec = dict(desired_spec)
-    preserved_activation_id = _preserved_session_activation_id(session)
-    if preserved_activation_id:
-        effective_spec["activationId"] = preserved_activation_id
-    return effective_spec
 
 
 def create_or_update_assistant_session(
@@ -409,10 +475,9 @@ def create_or_update_assistant_session(
     last_conflict: ApiException | None = None
 
     for _attempt in range(_MAX_CAS_RETRIES):
-        effective_spec = _effective_assistant_session_spec(existing, spec)
-        body["spec"] = effective_spec
+        body["spec"] = spec
 
-        if _assistant_session_spec_matches(existing, effective_spec):
+        if _assistant_session_spec_matches(existing, spec):
             return existing
 
         if existing is None:
@@ -432,7 +497,7 @@ def create_or_update_assistant_session(
                     "assistantsession.create_conflict",
                     assistant_id=assistant_id,
                     session_name=name,
-                    activation_id=effective_spec.get("activationId"),
+                    activation_id=spec.get("activationId"),
                     error=str(e),
                 )
                 existing = get_assistant_session(custom_api, namespace, assistant_id)
@@ -441,7 +506,7 @@ def create_or_update_assistant_session(
                 continue
 
         rv = existing.get("metadata", {}).get("resourceVersion")
-        patch: dict[str, Any] = {"spec": effective_spec}
+        patch: dict[str, Any] = {"spec": spec}
         if rv:
             patch["metadata"] = {"resourceVersion": rv}
         try:
@@ -470,13 +535,39 @@ def create_or_update_assistant_session(
                 raise
     if _assistant_session_spec_matches(
         existing,
-        _effective_assistant_session_spec(existing, spec),
+        spec,
     ):
         return existing
     if last_conflict is not None:
         raise last_conflict
     raise RuntimeError(
         f"AssistantSession {name} did not converge to the requested spec",
+    )
+
+
+def patch_assistant_session_spec(
+    custom_api: k8s_client.CustomObjectsApi,
+    namespace: str,
+    assistant_id: str,
+    *,
+    desired_state: str | None = None,
+) -> dict[str, Any]:
+    """Patch controller-consumed AssistantSession spec fields."""
+
+    name = assistant_session_name(assistant_id)
+    spec_patch: dict[str, Any] = {}
+    if desired_state is not None:
+        spec_patch["desiredState"] = desired_state
+    if not spec_patch:
+        raise ValueError("patch_assistant_session_spec requires at least one field")
+
+    return custom_api.patch_namespaced_custom_object(
+        group=SETTINGS.assistant_session_group,
+        version=SETTINGS.assistant_session_version,
+        namespace=namespace,
+        plural=SETTINGS.assistant_session_plural,
+        name=name,
+        body={"spec": spec_patch},
     )
 
 
@@ -556,10 +647,7 @@ def patch_assistant_session_status(
     *,
     phase: str | None = None,
     observed_activation_id: str | None = None,
-    job_ref: dict[str, Any] | None | object = _STATUS_UNSET,
-    pod_ref: dict[str, Any] | None | object = _STATUS_UNSET,
-    vm_ref: dict[str, Any] | None | object = _STATUS_UNSET,
-    desktop_url: str | None | object = _STATUS_UNSET,
+    binding: dict[str, Any] | None | object = _STATUS_UNSET,
     last_error: str | None | object = _STATUS_UNSET,
     conditions: list[dict[str, Any]] | None | object = _STATUS_UNSET,
     source: str | None = None,
@@ -573,14 +661,8 @@ def patch_assistant_session_status(
         status_fields["phase"] = phase
     if observed_activation_id is not None:
         status_fields["observedActivationId"] = observed_activation_id
-    if job_ref is not _STATUS_UNSET:
-        status_fields["jobRef"] = job_ref
-    if pod_ref is not _STATUS_UNSET:
-        status_fields["podRef"] = pod_ref
-    if vm_ref is not _STATUS_UNSET:
-        status_fields["vmRef"] = vm_ref
-    if desktop_url is not _STATUS_UNSET:
-        status_fields["desktopUrl"] = desktop_url
+    if binding is not _STATUS_UNSET:
+        status_fields["binding"] = binding
     if last_error is not _STATUS_UNSET:
         status_fields["lastError"] = last_error
     if conditions is not _STATUS_UNSET:

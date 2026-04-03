@@ -10,6 +10,7 @@ from communication.infra.assistant_sessions import (
     assistant_session_name,
     assistant_session_observability_fields,
     assistant_session_secret_name,
+    build_binding,
     build_assistant_session_spec,
     build_condition,
     create_or_update_assistant_session,
@@ -61,8 +62,8 @@ def test_build_assistant_session_spec_sets_desktop_required():
     )
     assert spec["assistantId"] == "42"
     assert spec["userId"] == "7"
-    assert spec["desktopRequired"] is True
-    assert spec["desktopMode"] == "ubuntu"
+    assert spec["desiredState"] == "Running"
+    assert spec["desktop"] == {"required": True, "mode": "ubuntu"}
     assert spec["startupSecretRef"] == "session-bootstrap-42"
     assert spec["activationId"] == "act-1"
 
@@ -121,17 +122,24 @@ def test_desktop_url_matches_vm_ref_normalizes_scheme():
 def test_assistant_session_observability_fields_summarize_runtime_state():
     session = {
         "metadata": {"name": "assistant-session-1207"},
-        "spec": {"assistantId": "1207", "activationId": "act-1"},
+        "spec": {
+            "assistantId": "1207",
+            "activationId": "act-1",
+            "desiredState": "Running",
+        },
         "status": {
             "phase": "PendingVM",
             "observedActivationId": "act-1",
-            "jobRef": {"name": "unity-job-1"},
-            "podRef": {"name": "unity-pod-1"},
-            "vmRef": {
-                "name": "unity-pool-ubuntu-10-preview",
-                "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
-            },
-            "desktopUrl": "https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+            "binding": build_binding(
+                binding_id="binding-1",
+                job_ref={"name": "unity-job-1"},
+                pod_ref={"name": "unity-pod-1"},
+                vm_ref={
+                    "name": "unity-pool-ubuntu-10-preview",
+                    "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+                },
+                desktop_url="https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+            ),
             "lastError": "waiting",
             "conditions": [
                 build_condition("ContainerAssigned", True, "Bound"),
@@ -159,8 +167,11 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
         "get_assistant_session",
         lambda *_args, **_kwargs: {
             "status": {
-                "vmRef": {"name": "unity-pool-ubuntu-10-preview"},
-                "desktopUrl": "https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+                "binding": build_binding(
+                    binding_id="binding-1",
+                    vm_ref={"name": "unity-pool-ubuntu-10-preview"},
+                    desktop_url="https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+                ),
             },
         },
     )
@@ -174,12 +185,10 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
         FakeCustomApi(),
         "preview",
         "1207",
-        vm_ref=None,
-        desktop_url=None,
+        binding=None,
     )
 
-    assert captured["body"]["status"]["vmRef"] is None
-    assert captured["body"]["status"]["desktopUrl"] is None
+    assert captured["body"]["status"]["binding"] is None
 
 
 def test_patch_assistant_session_status_preserves_retry_counters(monkeypatch):
@@ -242,10 +251,7 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
     expected_fields = {
         "phase",
         "observedActivationId",
-        "jobRef",
-        "podRef",
-        "vmRef",
-        "desktopUrl",
+        "binding",
         "lastError",
         "conditions",
         "bootstrapRetries",
@@ -253,6 +259,10 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
         "desktopProbeFailures",
     }
     assert expected_fields.issubset(status_properties.keys())
+    binding_properties = status_properties["binding"]["properties"]
+    assert {"id", "jobRef", "podRef", "vmRef", "desktopUrl"}.issubset(
+        binding_properties.keys(),
+    )
 
 
 def test_delete_assistant_session_treats_missing_session_as_absent():
@@ -537,7 +547,7 @@ def test_create_or_update_assistant_session_reconciles_create_conflict_to_reques
     assert session["spec"]["activationId"] == "act-1"
 
 
-def test_create_or_update_assistant_session_preserves_inflight_restart_activation(
+def test_create_or_update_assistant_session_applies_requested_activation(
     monkeypatch,
 ):
     desired_spec = build_assistant_session_spec(
@@ -552,13 +562,8 @@ def test_create_or_update_assistant_session_preserves_inflight_restart_activatio
         "metadata": {"name": "assistant-session-1207", "resourceVersion": "1"},
         "spec": {
             **desired_spec,
-            "activationId": "act-winner",
             "medium": "email",
             "requestedAt": "2026-04-02T15:00:00+00:00",
-        },
-        "status": {
-            "phase": "Succeeded",
-            "observedActivationId": "act-old-terminal",
         },
     }
     patched_specs = []
@@ -583,13 +588,8 @@ def test_create_or_update_assistant_session_preserves_inflight_restart_activatio
         desired_spec,
     )
 
-    assert patched_specs == [
-        {
-            **desired_spec,
-            "activationId": "act-winner",
-        },
-    ]
-    assert session["spec"]["activationId"] == "act-winner"
+    assert patched_specs == [desired_spec]
+    assert session["spec"]["activationId"] == "act-loser"
     assert session["spec"]["medium"] == "unify_message"
 
 

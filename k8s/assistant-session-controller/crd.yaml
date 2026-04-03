@@ -22,12 +22,18 @@ spec:
     - name: Phase
       type: string
       jsonPath: .status.phase
+    - name: Desired
+      type: string
+      jsonPath: .spec.desiredState
+    - name: Binding
+      type: string
+      jsonPath: .status.binding.id
     - name: Job
       type: string
-      jsonPath: .status.jobRef.name
+      jsonPath: .status.binding.jobRef.name
     - name: VM
       type: string
-      jsonPath: .status.vmRef.name
+      jsonPath: .status.binding.vmRef.name
     schema:
       openAPIV3Schema:
         type: object
@@ -38,8 +44,8 @@ spec:
             - assistantId
             - userId
             - medium
-            - desktopRequired
-            - desktopMode
+            - desiredState
+            - desktop
             - startupSecretRef
             - protocolVersion
             - activationId
@@ -51,10 +57,18 @@ spec:
                 type: string
               medium:
                 type: string
-              desktopRequired:
-                type: boolean
-              desktopMode:
+              desiredState:
                 type: string
+              desktop:
+                type: object
+                required:
+                - required
+                - mode
+                properties:
+                  required:
+                    type: boolean
+                  mode:
+                    type: string
               startupSecretRef:
                 type: string
               protocolVersion:
@@ -70,8 +84,6 @@ spec:
                 type: string
               observedActivationId:
                 type: string
-              desktopUrl:
-                type: string
               lastError:
                 type: string
               bootstrapRetries:
@@ -80,28 +92,51 @@ spec:
                 type: integer
               desktopProbeFailures:
                 type: integer
-              jobRef:
+              binding:
                 type: object
                 properties:
-                  name:
+                  id:
                     type: string
-                  namespace:
+                  jobRef:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                  podRef:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                  vmRef:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      hostname:
+                        type: string
+                      vmType:
+                        type: string
+                  desktopUrl:
                     type: string
-              podRef:
-                type: object
-                properties:
-                  name:
+                  createdAt:
                     type: string
-                  namespace:
+                  containerReadyAt:
                     type: string
-              vmRef:
-                type: object
-                properties:
-                  name:
+                  vmAssignedAt:
                     type: string
-                  hostname:
+                  vmReadyObservedAt:
                     type: string
-                  vmType:
+                  vmReadyHostname:
+                    type: string
+                  vmReadyMessageId:
+                    type: string
+                  releaseRequestedAt:
+                    type: string
+                  releaseCompletedAt:
                     type: string
               conditions:
                 type: array

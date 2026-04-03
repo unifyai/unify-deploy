@@ -138,9 +138,9 @@ def test_container_labels_set_after_startup(
             description=f"AssistantSession for {assistant_id}",
         )
         data = session
-        session_job_name = ((session.get("status") or {}).get("jobRef") or {}).get(
-            "name",
-        )
+        session_job_name = (
+            (((session.get("status") or {}).get("binding") or {}).get("jobRef") or {})
+        ).get("name")
         assert session_job_name == job_name, (
             f"Expected session jobRef to point to {job_name}, got {session_job_name}. "
             f"Session data: {data}"

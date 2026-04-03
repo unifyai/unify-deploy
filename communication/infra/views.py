@@ -23,8 +23,15 @@ from .helpers import (
 )
 from .assistant_sessions import (
     ACTIVE_PHASES,
+    DESIRED_STATE_STOPPED,
     assistant_session_observability_fields,
     assistant_session_name,
+    binding_desktop_url,
+    binding_id as binding_id_from_status,
+    binding_job_ref,
+    binding_pod_ref,
+    binding_vm_ref,
+    build_binding,
     build_assistant_session_spec,
     build_condition,
     delete_assistant_session,
@@ -34,8 +41,10 @@ from .assistant_sessions import (
     get_assistant_session,
     get_custom_objects_api,
     merge_conditions,
+    patch_assistant_session_spec,
     patch_assistant_session_status,
     read_bootstrap_secret,
+    session_binding,
     vm_refs_match,
 )
 from .vm_helpers import (
@@ -68,6 +77,7 @@ from .tunnel_helpers import (
 )
 from .models import (
     VMReadyRequest,
+    VMReleaseCompleteRequest,
     VMWipeMetadataKeyRequest,
     TunnelRegisterRequest,
     TunnelRegisterResponse,
@@ -108,7 +118,13 @@ def _service_account_credentials() -> Credentials:
     return Credentials.from_service_account_info(json.loads(creds_json))
 
 
-async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str) -> str:
+async def _publish_desktop_ready(
+    assistant_id: str,
+    hostname: str,
+    vm_type: str,
+    *,
+    binding_id: str,
+) -> str:
     """Publish an ``assistant_desktop_ready`` system event via Pub/Sub.
 
     Publishes a single inbound message for Unity. Unity's event handler
@@ -128,6 +144,7 @@ async def _publish_desktop_ready(assistant_id: str, hostname: str, vm_type: str)
             "publish_timestamp": time.time(),
             "event": {
                 "assistant_id": assistant_id,
+                "binding_id": binding_id,
                 "event_type": "assistant_desktop_ready",
                 "desktop_url": f"https://{hostname}",
                 "vm_type": vm_type,
@@ -828,6 +845,7 @@ async def start_job(
 
         activation_id = str(session.get("spec", {}).get("activationId", activation_id))
         status = session.get("status", {})
+        binding = session_binding(session)
         emit_observability_event(
             "infra.job_start.ensured",
             **assistant_session_observability_fields(
@@ -842,8 +860,8 @@ async def start_job(
             "assistant_id": assistant_id,
             "session_name": session_name,
             "activation_id": activation_id,
-            "phase": status.get("phase", "PendingContainer"),
-            "job_name": (status.get("jobRef") or {}).get("name"),
+            "phase": status.get("phase", "PendingJob"),
+            "job_name": binding_job_ref(binding).get("name"),
         }
     except Exception as e:
         emit_observability_event(
@@ -904,6 +922,46 @@ async def delete_current_assistant_session(assistant_id: str):
         "success": True,
         "assistant_id": assistant_id,
         "deleted": deleted,
+    }
+
+
+@router.post("/session/{assistant_id}/stop")
+async def stop_current_assistant_session(assistant_id: str):
+    """Declare that the assistant runtime should stop."""
+
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize AssistantSession API client",
+        )
+
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+    if session is None:
+        return {
+            "success": True,
+            "assistant_id": assistant_id,
+            "stopped": False,
+            "reason": "not_found",
+        }
+
+    updated = await asyncio.to_thread(
+        patch_assistant_session_spec,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+        desired_state=DESIRED_STATE_STOPPED,
+    )
+    return {
+        "success": True,
+        "assistant_id": assistant_id,
+        "stopped": True,
+        "desired_state": ((updated.get("spec") or {}).get("desiredState") or ""),
     }
 
 
@@ -1270,9 +1328,9 @@ async def vm_ready_endpoint(
     await authenticate_user_api_key(api_key)
 
     assistant_id = request_body.assistant_id
+    requested_binding_id = request_body.binding_id
     vm_type = request_body.vm_type
 
-    # Pool VMs pass their own hostname; legacy VMs derive it from assistant_id.
     requested_hostname = request_body.hostname or get_dns_hostname(assistant_id)
     custom_api = await asyncio.to_thread(get_custom_objects_api)
     if custom_api is None:
@@ -1287,48 +1345,11 @@ async def vm_ready_endpoint(
         SETTINGS.default_namespace,
         assistant_id,
     )
-
-    # Legacy compatibility: if no AssistantSession exists, preserve the old
-    # agent-service reachability contract for already-running desktops that
-    # predate AssistantSession rollout.
     if session is None:
-        hostname = requested_hostname
-        reachable = await asyncio.to_thread(probe_vm_agent_service, hostname)
-        if not reachable:
-            emit_observability_event(
-                "infra.vm_ready.legacy_rejected",
-                assistant_id=assistant_id,
-                requested_hostname=requested_hostname,
-                reason="agent_service_probe_failed",
-                mode="legacy",
-            )
-            logger.warning(
-                "VM agent-service probe failed for %s (assistant %s), "
-                "not publishing assistant_desktop_ready",
-                hostname,
-                assistant_id,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=f"VM agent-service not reachable at {hostname}",
-            )
-
-        message_id = await _publish_desktop_ready(assistant_id, hostname, vm_type)
-        emit_observability_event(
-            "infra.vm_ready.legacy_accepted",
-            assistant_id=assistant_id,
-            requested_hostname=requested_hostname,
-            assigned_hostname=hostname,
-            vm_type=vm_type,
-            mode="legacy",
-            message_id=message_id,
+        raise HTTPException(
+            status_code=409,
+            detail="VM ready signal rejected: AssistantSession not found",
         )
-        return {
-            "success": True,
-            "message_id": message_id,
-            "assistant_id": assistant_id,
-            "mode": "legacy",
-        }
 
     secret_name = session.get("spec", {}).get("startupSecretRef", "")
     startup_payload = await asyncio.to_thread(
@@ -1364,6 +1385,25 @@ async def vm_ready_endpoint(
         raise HTTPException(status_code=409, detail="AssistantSession disappeared")
     fresh_spec = fresh.get("spec", {})
     fresh_status = fresh.get("status", {})
+    fresh_binding = session_binding(fresh)
+    current_binding_id = binding_id_from_status(fresh_binding)
+
+    if current_binding_id != requested_binding_id:
+        emit_observability_event(
+            "infra.vm_ready.rejected",
+            **assistant_session_observability_fields(
+                fresh,
+                requested_binding_id=requested_binding_id,
+                current_binding_id=current_binding_id or None,
+                requested_hostname=requested_hostname,
+                reason="binding_changed",
+                vm_type=vm_type,
+            ),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Ready signal came from a stale binding",
+        )
 
     activation_id = fresh_spec.get("activationId", "")
     observed_id = fresh_status.get("observedActivationId", "")
@@ -1407,16 +1447,20 @@ async def vm_ready_endpoint(
             detail="VM ready signal rejected: container is not yet ready",
         )
 
-    existing_vm_ref = fresh_status.get("vmRef") or {}
+    existing_vm_ref = binding_vm_ref(fresh_binding)
     existing_vm_name = existing_vm_ref.get("name", "")
-    if existing_vm_name:
-        assigned_vm_ref = await asyncio.to_thread(
-            verify_vm_assignment,
-            existing_vm_name,
-            assistant_id,
+    if not existing_vm_name:
+        raise HTTPException(
+            status_code=409,
+            detail="Ready signal arrived before the current binding owned a VM",
         )
-    else:
-        assigned_vm_ref = await asyncio.to_thread(get_assigned_vm_ref, assistant_id)
+
+    assigned_vm_ref = await asyncio.to_thread(
+        verify_vm_assignment,
+        existing_vm_name,
+        current_binding_id,
+        assistant_id,
+    )
 
     if assigned_vm_ref is None:
         emit_observability_event(
@@ -1429,19 +1473,20 @@ async def vm_ready_endpoint(
             ),
         )
         logger.warning(
-            "Ignoring VM ready from %s for assistant %s: no VM is currently assigned",
+            "Ignoring VM ready from %s for assistant %s: binding no longer owns a VM",
             requested_hostname,
             assistant_id,
         )
         raise HTTPException(
             status_code=409,
-            detail="Ready signal arrived with no assigned VM for this assistant",
+            detail="Ready signal arrived after the current binding lost VM ownership",
         )
     if not vm_refs_match({"hostname": requested_hostname}, assigned_vm_ref):
         emit_observability_event(
             "infra.vm_ready.rejected",
             **assistant_session_observability_fields(
                 fresh,
+                requested_binding_id=requested_binding_id,
                 requested_hostname=requested_hostname,
                 assigned_hostname=assigned_vm_ref.get("hostname"),
                 assigned_vm_name=assigned_vm_ref.get("name"),
@@ -1457,7 +1502,7 @@ async def vm_ready_endpoint(
         )
         raise HTTPException(
             status_code=409,
-            detail="Ready signal came from a VM that is no longer assigned to the active AssistantSession",
+            detail="Ready signal came from a VM that is no longer assigned to the current binding",
         )
     hostname = str(assigned_vm_ref.get("hostname", requested_hostname))
 
@@ -1488,33 +1533,41 @@ async def vm_ready_endpoint(
             detail=f"VM agent not ready at {hostname}",
         )
 
+    message_id = await _publish_desktop_ready(
+        assistant_id,
+        hostname,
+        vm_type,
+        binding_id=current_binding_id,
+    )
+    updated_binding = build_binding(
+        binding_id=current_binding_id,
+        job_ref=binding_job_ref(fresh_binding) or None,
+        pod_ref=binding_pod_ref(fresh_binding) or None,
+        vm_ref=assigned_vm_ref,
+        desktop_url=f"https://{hostname}",
+        created_at=fresh_binding.get("createdAt"),
+        container_ready_at=fresh_binding.get("containerReadyAt"),
+        vm_assigned_at=fresh_binding.get("vmAssignedAt"),
+        vm_ready_observed_at=datetime.now(timezone.utc).isoformat(),
+        vm_ready_hostname=hostname,
+        vm_ready_message_id=message_id,
+        release_requested_at=fresh_binding.get("releaseRequestedAt"),
+        release_completed_at=fresh_binding.get("releaseCompletedAt"),
+    )
     await asyncio.to_thread(
         patch_assistant_session_status,
         custom_api,
         SETTINGS.default_namespace,
         assistant_id,
-        phase="Active",
         observed_activation_id=activation_id,
-        vm_ref=assigned_vm_ref,
-        desktop_url=f"https://{hostname}",
+        binding=updated_binding,
         source="views.vm_ready",
-        conditions=merge_conditions(
-            fresh_conditions,
-            build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
-            build_condition(
-                "DesktopReady",
-                True,
-                "DesktopReady",
-                "Authenticated desktop readiness complete",
-            ),
-            build_condition("Active", True, "Ready", "Desktop session active"),
-        ),
     )
-    message_id = await _publish_desktop_ready(assistant_id, hostname, vm_type)
     emit_observability_event(
         "infra.vm_ready.accepted",
         **assistant_session_observability_fields(
             fresh,
+            binding_id=current_binding_id,
             assigned_hostname=hostname,
             assigned_vm_name=assigned_vm_ref.get("name"),
             requested_hostname=requested_hostname,
@@ -1613,6 +1666,7 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
             partial(
                 assign_pool_vm,
                 assistant_id=request.assistant_id,
+                binding_id=request.binding_id,
                 unify_apikey=request.unify_apikey,
                 vm_type=request.vm_type,
                 vm_number=request.vm_number,
@@ -1639,6 +1693,12 @@ async def _resolve_release_vm_name(
 ) -> tuple[str | None, dict[str, object] | None]:
     """Resolve a job-targeted release request to the exact VM name, if any."""
 
+    if not request.binding_id:
+        raise HTTPException(
+            status_code=400,
+            detail="binding_id is required for binding-scoped VM release",
+        )
+
     if request.vm_name and request.job_name:
         raise HTTPException(
             status_code=400,
@@ -1649,7 +1709,10 @@ async def _resolve_release_vm_name(
         return request.vm_name, None
 
     if not request.job_name:
-        return None, None
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either vm_name or job_name for VM release",
+        )
 
     custom_api = await asyncio.to_thread(get_custom_objects_api)
     if custom_api is None:
@@ -1674,17 +1737,39 @@ async def _resolve_release_vm_name(
         return None, {
             "released": False,
             "assistant_id": request.assistant_id,
+            "binding_id": request.binding_id,
             "job_name": request.job_name,
             "stale": True,
             "message": "No current AssistantSession for job-targeted release",
         }
 
-    status = session.get("status", {})
-    current_job_name = str((status.get("jobRef") or {}).get("name", "") or "")
+    binding = session_binding(session)
+    current_binding_id = binding_id_from_status(binding)
+    if current_binding_id != request.binding_id:
+        emit_observability_event(
+            "infra.vm_release.skipped",
+            assistant_id=request.assistant_id,
+            binding_id=request.binding_id,
+            current_binding_id=current_binding_id or None,
+            job_name=request.job_name,
+            reason="binding_changed",
+        )
+        return None, {
+            "released": False,
+            "assistant_id": request.assistant_id,
+            "binding_id": request.binding_id,
+            "current_binding_id": current_binding_id or None,
+            "job_name": request.job_name,
+            "stale": True,
+            "message": "Binding no longer owns the current session VM",
+        }
+
+    current_job_name = str(binding_job_ref(binding).get("name", "") or "")
     if current_job_name != request.job_name:
         emit_observability_event(
             "infra.vm_release.skipped",
             assistant_id=request.assistant_id,
+            binding_id=request.binding_id,
             job_name=request.job_name,
             current_job_name=current_job_name,
             reason="job_changed",
@@ -1692,23 +1777,26 @@ async def _resolve_release_vm_name(
         return None, {
             "released": False,
             "assistant_id": request.assistant_id,
+            "binding_id": request.binding_id,
             "job_name": request.job_name,
             "current_job_name": current_job_name or None,
             "stale": True,
             "message": "Job no longer owns the current session VM",
         }
 
-    vm_name = str((status.get("vmRef") or {}).get("name", "") or "")
+    vm_name = str(binding_vm_ref(binding).get("name", "") or "")
     if not vm_name:
         emit_observability_event(
             "infra.vm_release.skipped",
             assistant_id=request.assistant_id,
+            binding_id=request.binding_id,
             job_name=request.job_name,
             reason="no_vm_ref",
         )
         return None, {
             "released": False,
             "assistant_id": request.assistant_id,
+            "binding_id": request.binding_id,
             "job_name": request.job_name,
             "message": "Current session has no VM to release",
         }
@@ -1736,6 +1824,7 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
         result = await asyncio.to_thread(
             release_pool_vm,
             request.assistant_id,
+            request.binding_id,
             vm_name=resolved_vm_name,
         )
         if result.get("retired"):
@@ -1831,6 +1920,10 @@ async def runtime_status_endpoint(assistant_id: str):
             SETTINGS.default_namespace,
             assistant_id,
         )
+    session_phase = str(((assistant_session or {}).get("status") or {}).get("phase", "") or "")
+    session_desired_state = str(
+        ((assistant_session or {}).get("spec") or {}).get("desiredState", "") or "",
+    )
 
     owned_vms = [
         vm
@@ -1839,8 +1932,11 @@ async def runtime_status_endpoint(assistant_id: str):
         and vm.get("pool_role") in ("assigned", "releasing")
     ]
     disk_vm_name = await asyncio.to_thread(find_vm_with_disk, assistant_id)
+    session_cleanup_complete = assistant_session is None or (
+        session_desired_state == DESIRED_STATE_STOPPED and session_phase == "Released"
+    )
     runtime_cleanup_complete = (
-        assistant_session is None
+        session_cleanup_complete
         and not active_job_names
         and not owned_vms
         and disk_vm_name is None
@@ -1849,6 +1945,8 @@ async def runtime_status_endpoint(assistant_id: str):
     return {
         "assistant_id": assistant_id,
         "assistant_session_exists": assistant_session is not None,
+        "assistant_session_phase": session_phase or None,
+        "assistant_session_desired_state": session_desired_state or None,
         "active_job_names": active_job_names,
         "owned_vms": owned_vms,
         "disk_vm_name": disk_vm_name,
@@ -2014,25 +2112,92 @@ async def vm_mark_idle_endpoint(
 
 @vm_self_router.post("/vm/release-complete")
 async def vm_release_complete_endpoint(
+    body: VMReleaseCompleteRequest,
     claims: dict = Depends(authenticate_vm_identity),
 ):
-    """Finalize a VM release after guest cleanup finishes."""
+    """Record release completion for the current binding."""
     gce = claims["google"]["compute_engine"]
     vm_name = gce["instance_name"]
+    client = compute_v1.InstancesClient()
+    vm = await asyncio.to_thread(
+        client.get,
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
+    labels = dict(vm.labels) if vm.labels else {}
+    assistant_id = str(labels.get("assistant-id", "") or "")
+    current_binding_id = str(labels.get("binding-id", "") or "")
+    if not assistant_id or current_binding_id != body.binding_id:
+        return {
+            "vm_name": vm_name,
+            "assistant_id": assistant_id or None,
+            "binding_id": body.binding_id,
+            "skipped": True,
+            "reason": "binding_changed",
+        }
 
-    result = await asyncio.to_thread(complete_pool_vm_release, vm_name)
-    if not result.get("skipped"):
-        if result.get("pool_role") == "idle":
-            asyncio.get_running_loop().run_in_executor(
-                POOL_MAINTENANCE_EXECUTOR,
-                partial(trim_pool, result.get("vm_type", "ubuntu")),
-            )
-        elif result.get("retired"):
-            asyncio.get_running_loop().run_in_executor(
-                POOL_MAINTENANCE_EXECUTOR,
-                partial(replenish_pool, result.get("vm_type", "ubuntu")),
-            )
-    return result
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize AssistantSession API client",
+        )
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+    if session is None:
+        return {
+            "vm_name": vm_name,
+            "assistant_id": assistant_id,
+            "binding_id": body.binding_id,
+            "skipped": True,
+            "reason": "session_missing",
+        }
+
+    binding = session_binding(session)
+    if binding_id_from_status(binding) != body.binding_id:
+        return {
+            "vm_name": vm_name,
+            "assistant_id": assistant_id,
+            "binding_id": body.binding_id,
+            "current_binding_id": binding_id_from_status(binding) or None,
+            "skipped": True,
+            "reason": "binding_changed",
+        }
+
+    updated_binding = build_binding(
+        binding_id=body.binding_id,
+        job_ref=binding_job_ref(binding) or None,
+        pod_ref=binding_pod_ref(binding) or None,
+        vm_ref=binding_vm_ref(binding) or None,
+        desktop_url=binding_desktop_url(binding) or None,
+        created_at=binding.get("createdAt"),
+        container_ready_at=binding.get("containerReadyAt"),
+        vm_assigned_at=binding.get("vmAssignedAt"),
+        vm_ready_observed_at=binding.get("vmReadyObservedAt"),
+        vm_ready_hostname=binding.get("vmReadyHostname"),
+        vm_ready_message_id=binding.get("vmReadyMessageId"),
+        release_requested_at=binding.get("releaseRequestedAt"),
+        release_completed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    await asyncio.to_thread(
+        patch_assistant_session_status,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+        binding=updated_binding,
+        source="views.release_complete",
+    )
+    return {
+        "vm_name": vm_name,
+        "assistant_id": assistant_id,
+        "binding_id": body.binding_id,
+        "accepted": True,
+    }
 
 
 @vm_self_router.post("/vm/wipe-metadata-key")

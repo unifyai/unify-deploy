@@ -68,9 +68,12 @@ logger = logging.getLogger(__name__)
 
 POOL_ROLE_LABEL = "pool-role"
 ASSISTANT_ID_LABEL = "assistant-id"
+BINDING_ID_LABEL = "binding-id"
 POOL_ROLE_RELEASING = "releasing"
 POOL_CONTRACT_GENERATION_LABEL = "pool-contract-generation"
 POOL_TRANSITION_EPOCH_LABEL = "pool-transition-epoch"
+POOL_PROGRESS_PHASE_LABEL = "pool-progress-phase"
+POOL_PROGRESS_EPOCH_LABEL = "pool-progress-epoch"
 RELEASE_TRIGGER_METADATA_KEYS = ("unify-key", "vnc-password", "ssh-public-key")
 RECYCLEABLE_STALE_POOL_ROLES = frozenset(
     {
@@ -84,6 +87,7 @@ RECYCLEABLE_STALE_POOL_ROLES = frozenset(
 )
 INFLIGHT_ROLE_TIMEOUT_SECONDS = {
     "provisioning": POOL_BOOT_TIMEOUT_SECONDS,
+    "booting": POOL_BOOT_TIMEOUT_SECONDS,
     "starting": POOL_BOOT_TIMEOUT_SECONDS,
     POOL_ROLE_RELEASING: POOL_RELEASE_TIMEOUT_SECONDS,
 }
@@ -169,6 +173,13 @@ def _pool_transition_epoch_value(now: Optional[datetime] = None) -> str:
     return str(int(reference.timestamp()))
 
 
+def _pool_progress_epoch_value(now: Optional[datetime] = None) -> str:
+    """Return a Unix epoch string for the current VM progress phase."""
+
+    reference = now or datetime.now(timezone.utc)
+    return str(int(reference.timestamp()))
+
+
 def _pool_transition_reference_time(instance) -> Optional[datetime]:
     labels = dict(instance.labels) if instance.labels else {}
     epoch_value = labels.get(POOL_TRANSITION_EPOCH_LABEL)
@@ -184,6 +195,42 @@ def _pool_transition_reference_time(instance) -> Optional[datetime]:
     return None
 
 
+def _pool_progress_phase(instance) -> str:
+    """Return the explicit VM progress phase tracked on the instance."""
+
+    labels = dict(instance.labels) if instance.labels else {}
+    return str(labels.get(POOL_PROGRESS_PHASE_LABEL, "") or "")
+
+
+def _pool_progress_reference_time(instance) -> Optional[datetime]:
+    """Return the timestamp for the current progress phase."""
+
+    labels = dict(instance.labels) if instance.labels else {}
+    epoch_value = labels.get(POOL_PROGRESS_EPOCH_LABEL)
+    if epoch_value:
+        try:
+            return datetime.fromtimestamp(int(epoch_value), tz=timezone.utc)
+        except (TypeError, ValueError, OSError):
+            logger.warning(
+                "Invalid %s label on %s",
+                POOL_PROGRESS_EPOCH_LABEL,
+                instance.name,
+            )
+    return None
+
+
+def _progress_phase_for_role(role: str) -> str:
+    """Map the coarse pool role to its default progress phase."""
+
+    if role in {"assigned", "idle", "stopped", "quarantined"}:
+        return role
+    if role == POOL_ROLE_RELEASING:
+        return POOL_ROLE_RELEASING
+    if role in {"provisioning", "starting"}:
+        return role
+    return ""
+
+
 def _pool_contract_generation(instance) -> str:
     labels = dict(instance.labels) if instance.labels else {}
     return labels.get(POOL_CONTRACT_GENERATION_LABEL, "")
@@ -194,9 +241,13 @@ def _has_current_pool_contract(instance) -> bool:
 
 
 def _instance_boot_reference_time(instance) -> Optional[datetime]:
-    return _pool_transition_reference_time(instance) or _parse_gce_timestamp(
+    return (
+        _pool_progress_reference_time(instance)
+        or _pool_transition_reference_time(instance)
+        or _parse_gce_timestamp(
         getattr(instance, "last_start_timestamp", None)
         or getattr(instance, "creation_timestamp", None),
+        )
     )
 
 
@@ -207,6 +258,7 @@ def _release_metadata_updates(*, clear_assignment: bool) -> Dict[str, str]:
         updates.update(
             {
                 ASSISTANT_ID_LABEL: "",
+                BINDING_ID_LABEL: "",
                 "disk-device": "",
             },
         )
@@ -226,17 +278,19 @@ def _is_stale_inflight_vm(
     timeout_seconds: Optional[int] = None,
 ) -> bool:
     labels = dict(instance.labels) if instance.labels else {}
-    current_role = labels.get(POOL_ROLE_LABEL, "")
-    if current_role not in INFLIGHT_ROLE_TIMEOUT_SECONDS:
+    progress_phase = _pool_progress_phase(instance) or labels.get(POOL_ROLE_LABEL, "")
+    if progress_phase not in INFLIGHT_ROLE_TIMEOUT_SECONDS:
         return False
-    reference_time = _instance_boot_reference_time(instance)
+    reference_time = _pool_progress_reference_time(instance) or _instance_boot_reference_time(
+        instance,
+    )
     if reference_time is None:
         return False
     now = now or datetime.now(timezone.utc)
     max_age_seconds = (
         timeout_seconds
         if timeout_seconds is not None
-        else INFLIGHT_ROLE_TIMEOUT_SECONDS[current_role]
+        else INFLIGHT_ROLE_TIMEOUT_SECONDS[progress_phase]
     )
     return (now - reference_time).total_seconds() > max_age_seconds
 
@@ -325,6 +379,40 @@ def _request_vm_stop(
         logger.error("Failed to submit stop request for %s: %s", vm_name, exc)
 
 
+def _refresh_inflight_progress_phase(client: compute_v1.InstancesClient, instance):
+    """Advance provisioning/starting VMs into booting once GCE reports RUNNING."""
+
+    role = (dict(instance.labels) if instance.labels else {}).get(POOL_ROLE_LABEL, "")
+    progress_phase = _pool_progress_phase(instance)
+    if role not in {"provisioning", "starting"}:
+        return instance
+    if instance.status != "RUNNING":
+        return instance
+    if progress_phase == "booting":
+        return instance
+
+    updated = _set_pool_labels(
+        client,
+        instance.name,
+        {
+            POOL_PROGRESS_PHASE_LABEL: "booting",
+            POOL_PROGRESS_EPOCH_LABEL: _pool_progress_epoch_value(),
+        },
+        expected_role=role,
+    )
+    if not updated:
+        return client.get(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=instance.name,
+        )
+    return client.get(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=instance.name,
+    )
+
+
 def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
     client = compute_v1.InstancesClient()
     request = compute_v1.ListInstancesRequest(
@@ -340,6 +428,7 @@ def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
             zone=SETTINGS.vm_zone,
             instance=instance.name,
         )
+        refreshed = _refresh_inflight_progress_phase(client, refreshed)
         if not _is_stale_inflight_vm(refreshed, now=now):
             continue
         reference_time = _instance_boot_reference_time(refreshed)
@@ -770,6 +859,7 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
             "vm_name": instance.name,
             "pool_role": labels.get("pool-role", "unknown"),
             "assistant_id": labels.get("assistant-id", "") or None,
+            "binding_id": labels.get(BINDING_ID_LABEL, "") or None,
             "vm_type": labels.get("vm-type", "unknown"),
             "contract_generation": labels.get(POOL_CONTRACT_GENERATION_LABEL) or None,
             "contract_current": _has_current_pool_contract(instance),
@@ -853,10 +943,13 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     labels = {
         POOL_ROLE_LABEL: "provisioning",
         ASSISTANT_ID_LABEL: "",
+        BINDING_ID_LABEL: "",
         "vm-type": vm_type,
         "pool-hostname": hostname.replace(".", "-"),
         POOL_CONTRACT_GENERATION_LABEL: POOL_VM_CONTRACT_GENERATION,
         POOL_TRANSITION_EPOCH_LABEL: _pool_transition_epoch_value(),
+        POOL_PROGRESS_PHASE_LABEL: "provisioning",
+        POOL_PROGRESS_EPOCH_LABEL: _pool_progress_epoch_value(),
     }
 
     instance_kwargs = dict(
@@ -973,6 +1066,14 @@ def _set_pool_labels(
         labels.update(label_overrides)
         if POOL_ROLE_LABEL in label_overrides:
             labels[POOL_TRANSITION_EPOCH_LABEL] = _pool_transition_epoch_value()
+            if POOL_PROGRESS_PHASE_LABEL not in label_overrides:
+                progress_phase = _progress_phase_for_role(label_overrides[POOL_ROLE_LABEL])
+                if progress_phase:
+                    labels[POOL_PROGRESS_PHASE_LABEL] = progress_phase
+                    labels[POOL_PROGRESS_EPOCH_LABEL] = _pool_progress_epoch_value()
+                else:
+                    labels.pop(POOL_PROGRESS_PHASE_LABEL, None)
+                    labels.pop(POOL_PROGRESS_EPOCH_LABEL, None)
         try:
             client.set_labels(
                 project=SETTINGS.vm_project_id,
@@ -996,6 +1097,7 @@ def _set_pool_labels(
 
 def claim_idle_vm(
     assistant_id: str,
+    binding_id: str,
     vm_type: str,
     vm_number: int | None = None,
 ) -> Dict[str, Any]:
@@ -1023,6 +1125,7 @@ def claim_idle_vm(
             client,
             label_filter,
             assistant_id,
+            binding_id,
             vm_type,
             vm_number,
         )
@@ -1035,6 +1138,7 @@ def _claim_idle_vm_inner(
     client,
     label_filter: str,
     assistant_id: str,
+    binding_id: str,
     vm_type: str,
     vm_number: int | None,
 ) -> Dict[str, Any]:
@@ -1115,9 +1219,14 @@ def _claim_idle_vm_inner(
             # watcher sees assignment metadata. Claim only binds ownership;
             # strict desktop readiness is enforced later via /infra/vm/ready.
             sanitized = assistant_id.lower().replace("_", "-")
+            binding_label = binding_id.lower().replace("_", "-")
             new_labels = dict(fresh.labels) if fresh.labels else {}
             new_labels["pool-role"] = "assigned"
             new_labels["assistant-id"] = sanitized
+            new_labels[BINDING_ID_LABEL] = binding_label
+            new_labels[POOL_TRANSITION_EPOCH_LABEL] = _pool_transition_epoch_value()
+            new_labels[POOL_PROGRESS_PHASE_LABEL] = "assigned"
+            new_labels[POOL_PROGRESS_EPOCH_LABEL] = _pool_progress_epoch_value()
 
             try:
                 op = client.set_labels(
@@ -1488,18 +1597,12 @@ def _recycle_stale_pool_vms(vm_type: str) -> list[str]:
 
 def assign_pool_vm(
     assistant_id: str,
+    binding_id: str,
     unify_apikey: str,
     vm_type: str = "ubuntu",
     vm_number: int | None = None,
 ) -> Dict[str, Any]:
-    """Full pool assignment: release any existing VM, claim a fresh one.
-
-    Always releases the assistant's current VM (if any) before claiming,
-    ensuring metadata, disk, and labels are cleanly handed back to the pool.
-
-    Uses a per-assistant K8s Lease to prevent concurrent calls for the
-    same assistant from claiming multiple VMs (RACE-3).
-    """
+    """Claim and configure exactly one VM for a specific binding."""
     from .helpers import (
         acquire_assignment_lease,
         release_assignment_lease,
@@ -1512,21 +1615,23 @@ def assign_pool_vm(
 
     acquired = acquire_assignment_lease(
         coord_api,
-        f"vm-{assistant_id}",
+        f"vm-{binding_id}",
         namespace,
         holder_id,
         duration=180,
     )
     if not acquired:
         raise RuntimeError(
-            f"Another VM assignment is already in progress for assistant {assistant_id}",
+            f"Another VM assignment is already in progress for binding {binding_id}",
         )
 
     try:
-        current_vm_ref = get_assigned_vm_ref(assistant_id)
-        if current_vm_ref is not None:
-            release_pool_vm(assistant_id, vm_name=current_vm_ref["name"])
-        claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
+        claimed = claim_idle_vm(
+            assistant_id,
+            binding_id,
+            vm_type,
+            vm_number=vm_number,
+        )
         vm_name = claimed["vm_name"]
         create_assistant_disk(assistant_id)
         device_name = attach_assistant_disk(vm_name, assistant_id)
@@ -1545,6 +1650,7 @@ def assign_pool_vm(
             "ssh-public-key": public_key,
             "disk-device": device_name,
             "assistant-id": assistant_id,
+            "binding-id": binding_id,
             "github-token": github_token,
         }
         if vm_type == "windows" and MAK_KEY:
@@ -1557,6 +1663,7 @@ def assign_pool_vm(
         _log_vm_pool_event(
             "assign_complete",
             assistant_id=assistant_id,
+            binding_id=binding_id,
             vm_name=vm_name,
             vm_type=vm_type,
             hostname=claimed["hostname"],
@@ -1565,6 +1672,7 @@ def assign_pool_vm(
         return {
             "vm_name": vm_name,
             "assistant_id": assistant_id,
+            "binding_id": binding_id,
             "ip_address": claimed["ip_address"],
             "hostname": claimed["hostname"],
             "desktop_url": claimed["desktop_url"],
@@ -1573,7 +1681,7 @@ def assign_pool_vm(
             "ssh_port": SSH_SYNC_PORT,
         }
     finally:
-        release_assignment_lease(coord_api, f"vm-{assistant_id}", namespace)
+        release_assignment_lease(coord_api, f"vm-{binding_id}", namespace)
 
 
 def has_assigned_vm(assistant_id: str) -> bool:
@@ -1618,15 +1726,15 @@ def get_assigned_vm_ref(assistant_id: str) -> Optional[Dict[str, Any]]:
 
 def verify_vm_assignment(
     vm_name: str,
-    assistant_id: str,
+    binding_id: str,
+    assistant_id: str | None = None,
 ) -> Optional[Dict[str, Any]]:
-    """Strongly consistent check: GET the named VM and verify its labels.
-
-    Returns a vm_ref dict if the instance exists with pool-role=assigned
-    and the expected assistant-id. Returns None otherwise.
-    """
+    """Strongly consistent check: GET the named VM and verify binding ownership."""
     client = compute_v1.InstancesClient()
-    sanitized = assistant_id.lower().replace("_", "-")
+    binding_label = binding_id.lower().replace("_", "-")
+    assistant_label = (
+        assistant_id.lower().replace("_", "-") if assistant_id is not None else None
+    )
     try:
         vm = client.get(
             project=SETTINGS.vm_project_id,
@@ -1638,7 +1746,9 @@ def verify_vm_assignment(
     labels = dict(vm.labels) if vm.labels else {}
     if labels.get("pool-role") != "assigned":
         return None
-    if labels.get("assistant-id") != sanitized:
+    if labels.get(BINDING_ID_LABEL) != binding_label:
+        return None
+    if assistant_label is not None and labels.get("assistant-id") != assistant_label:
         return None
     return _vm_ref_from_instance(vm)
 
@@ -1708,6 +1818,7 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
     kept = []
     for vm in assigned_vms:
         aid = vm.labels.get("assistant-id", "")
+        binding_id = vm.labels.get(BINDING_ID_LABEL, "")
         if not aid:
             continue
 
@@ -1732,8 +1843,20 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
                 aid,
             )
             try:
-                release_pool_vm(aid, vm_name=vm.name)
-                released.append({"vm_name": vm.name, "assistant_id": aid})
+                if not binding_id:
+                    logger.warning(
+                        "Skipping orphan release for %s because binding-id is missing",
+                        vm.name,
+                    )
+                    continue
+                release_pool_vm(aid, binding_id, vm_name=vm.name)
+                released.append(
+                    {
+                        "vm_name": vm.name,
+                        "assistant_id": aid,
+                        "binding_id": binding_id,
+                    },
+                )
             except Exception as e:
                 logger.error(
                     "Failed to release orphaned VM %s: %s",
@@ -1809,6 +1932,7 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
 
 def release_pool_vm(
     assistant_id: str,
+    binding_id: str,
     *,
     vm_name: str | None = None,
 ) -> Dict[str, Any]:
@@ -1824,6 +1948,7 @@ def release_pool_vm(
     """
     client = compute_v1.InstancesClient()
     sanitized = assistant_id.lower().replace("_", "-")
+    binding_label = binding_id.lower().replace("_", "-")
     vm = None
 
     if vm_name:
@@ -1849,26 +1974,31 @@ def release_pool_vm(
 
         candidate_labels = dict(candidate.labels) if candidate.labels else {}
         candidate_role = candidate_labels.get(POOL_ROLE_LABEL, "")
-        if candidate_labels.get(
-            ASSISTANT_ID_LABEL
-        ) != sanitized or candidate_role not in ("assigned", POOL_ROLE_RELEASING):
+        if (
+            candidate_labels.get(ASSISTANT_ID_LABEL) != sanitized
+            or candidate_labels.get(BINDING_ID_LABEL) != binding_label
+            or candidate_role not in ("assigned", POOL_ROLE_RELEASING)
+        ):
             _log_vm_pool_event(
                 "release_skipped",
                 assistant_id=assistant_id,
+                binding_id=binding_id,
                 vm_name=vm_name,
                 current_role=candidate_role or None,
                 current_assistant_id=candidate_labels.get(ASSISTANT_ID_LABEL) or None,
+                current_binding_id=candidate_labels.get(BINDING_ID_LABEL) or None,
                 reason="vm_not_owned",
             )
             return {
                 "released": False,
                 "assistant_id": assistant_id,
+                "binding_id": binding_id,
                 "vm_name": vm_name,
                 "message": "VM is not currently owned by assistant",
             }
         vm = candidate
     else:
-        label_filter = f"labels.assistant-id={sanitized}"
+        label_filter = f"labels.{BINDING_ID_LABEL}={binding_label}"
         request = compute_v1.ListInstancesRequest(
             project=SETTINGS.vm_project_id,
             zone=SETTINGS.vm_zone,
@@ -1887,11 +2017,13 @@ def release_pool_vm(
             _log_vm_pool_event(
                 "release_skipped",
                 assistant_id=assistant_id,
+                binding_id=binding_id,
                 reason="no_assigned_vm",
             )
             return {
                 "released": False,
                 "assistant_id": assistant_id,
+                "binding_id": binding_id,
                 "message": "No VM assigned",
             }
 
@@ -1921,6 +2053,7 @@ def release_pool_vm(
         return {
             "released": True,
             "assistant_id": assistant_id,
+            "binding_id": binding_id,
             "vm_name": vm_name,
             "vm_type": vm_type,
             "pool_role": "retired",
@@ -1939,12 +2072,14 @@ def release_pool_vm(
             _log_vm_pool_event(
                 "release_resumed",
                 assistant_id=assistant_id,
+                binding_id=binding_id,
                 vm_name=vm_name,
             )
         logger.info("Release already in progress for pool VM %s", vm_name)
         return {
             "released": resumed,
             "assistant_id": assistant_id,
+            "binding_id": binding_id,
             "vm_name": vm_name,
             "vm_type": vm_type,
             "pool_role": POOL_ROLE_RELEASING,
@@ -1968,10 +2103,12 @@ def release_pool_vm(
         if (
             refreshed_role == POOL_ROLE_RELEASING
             and refreshed_labels.get(ASSISTANT_ID_LABEL) == sanitized
+            and refreshed_labels.get(BINDING_ID_LABEL) == binding_label
         ):
             return {
                 "released": False,
                 "assistant_id": assistant_id,
+                "binding_id": binding_id,
                 "vm_name": vm_name,
                 "vm_type": vm_type,
                 "pool_role": POOL_ROLE_RELEASING,
@@ -1980,6 +2117,7 @@ def release_pool_vm(
         return {
             "released": False,
             "assistant_id": assistant_id,
+            "binding_id": binding_id,
             "vm_name": vm_name,
             "vm_type": vm_type,
             "message": "VM role changed before release could start",
@@ -1998,19 +2136,21 @@ def release_pool_vm(
     _log_vm_pool_event(
         "release_requested",
         assistant_id=assistant_id,
+        binding_id=binding_id,
         vm_name=vm_name,
     )
 
     return {
         "released": True,
         "assistant_id": assistant_id,
+        "binding_id": binding_id,
         "vm_name": vm_name,
         "vm_type": vm_type,
         "pool_role": POOL_ROLE_RELEASING,
     }
 
 
-def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
+def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
     """Finalize release by idling current VMs or retiring stale-contract ones."""
     client = compute_v1.InstancesClient()
     vm = client.get(
@@ -2021,6 +2161,8 @@ def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
     labels = dict(vm.labels) if vm.labels else {}
     current_role = labels.get(POOL_ROLE_LABEL, "")
     assistant_id = labels.get(ASSISTANT_ID_LABEL, "")
+    current_binding_id = labels.get(BINDING_ID_LABEL, "")
+    binding_label = binding_id.lower().replace("_", "-")
     vm_type = labels.get("vm-type", "ubuntu")
 
     if vm.status != "RUNNING":
@@ -2038,6 +2180,14 @@ def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
             "skipped": True,
             "reason": "not_releasing",
         }
+    if current_binding_id != binding_label:
+        return {
+            "vm_name": vm_name,
+            "pool_role": current_role,
+            "binding_id": current_binding_id or None,
+            "skipped": True,
+            "reason": "binding_changed",
+        }
 
     detached, disk_name = _detach_attached_assistant_disk(vm_name)
     _update_instance_metadata(vm_name, _release_metadata_updates(clear_assignment=True))
@@ -2053,6 +2203,7 @@ def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
             "vm_type": vm_type,
             "pool_role": "retired",
             "assistant_id": assistant_id or None,
+            "binding_id": current_binding_id or None,
             "disk_name": disk_name,
             "detached": detached,
             "retired": True,
@@ -2061,7 +2212,11 @@ def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
     updated = _set_pool_labels(
         client,
         vm_name,
-        {POOL_ROLE_LABEL: "idle", ASSISTANT_ID_LABEL: ""},
+        {
+            POOL_ROLE_LABEL: "idle",
+            ASSISTANT_ID_LABEL: "",
+            BINDING_ID_LABEL: "",
+        },
         expected_role=POOL_ROLE_RELEASING,
     )
     if not updated:
@@ -2083,6 +2238,7 @@ def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
     _log_vm_pool_event(
         "release_complete",
         assistant_id=assistant_id or None,
+        binding_id=current_binding_id or None,
         vm_name=vm_name,
         disk_name=disk_name,
         detached=detached,
@@ -2092,6 +2248,7 @@ def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
         "vm_type": vm_type,
         "pool_role": "idle",
         "assistant_id": assistant_id or None,
+        "binding_id": current_binding_id or None,
         "disk_name": disk_name,
         "detached": detached,
     }

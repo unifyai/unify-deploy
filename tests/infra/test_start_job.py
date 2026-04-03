@@ -73,8 +73,11 @@ def _existing_session(
             "startupSecretRef": secret_name,
             "userId": user_id,
             "medium": medium,
-            "desktopMode": desktop_mode,
-            "desktopRequired": desktop_required,
+            "desiredState": "Running",
+            "desktop": {
+                "mode": desktop_mode,
+                "required": desktop_required,
+            },
         },
         "status": {
             "phase": phase,
@@ -156,8 +159,8 @@ def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pendin
     assert refreshed_spec["activationId"] == existing_session["spec"]["activationId"]
     assert refreshed_spec["userId"] == "user-123"
     assert refreshed_spec["medium"] == "phone"
-    assert refreshed_spec["desktopMode"] == "ubuntu"
-    assert refreshed_spec["desktopRequired"] is True
+    assert refreshed_spec["desiredState"] == "Running"
+    assert refreshed_spec["desktop"] == {"mode": "ubuntu", "required": True}
     assert refreshed_spec["startupSecretRef"] == refreshed_secret_name
     assert refreshed_spec["requestedAt"]
 
@@ -208,8 +211,7 @@ def test_start_job_reused_pending_session_picks_up_changed_desktop_mode(client):
     assert response.status_code == 200
     refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
     assert refreshed_spec["activationId"] == existing_session["spec"]["activationId"]
-    assert refreshed_spec["desktopMode"] == "macos"
-    assert refreshed_spec["desktopRequired"] is False
+    assert refreshed_spec["desktop"] == {"mode": "macos", "required": False}
 
 
 def test_start_job_reuses_inflight_restart_activation_for_terminal_session(client):

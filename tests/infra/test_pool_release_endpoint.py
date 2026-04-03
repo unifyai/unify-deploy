@@ -4,6 +4,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
+def _views_module():
+    import communication.infra.views as views_module
+
+    return views_module
+
+
 def _client() -> TestClient:
     from communication.infra.views import router
 
@@ -13,27 +19,26 @@ def _client() -> TestClient:
 
 
 def test_release_endpoint_resolves_job_name_to_current_vm():
+    views_module = _views_module()
     session = {
         "status": {
-            "jobRef": {"name": "unity-job-1"},
-            "vmRef": {
-                "name": "unity-pool-ubuntu-3-preview",
-                "hostname": "vm-3.vm.unify.ai",
+            "binding": {
+                "id": "binding-1",
+                "jobRef": {"name": "unity-job-1"},
+                "vmRef": {
+                    "name": "unity-pool-ubuntu-3-preview",
+                    "hostname": "vm-3.vm.unify.ai",
+                },
             },
         },
     }
 
     with (
-        patch(
-            "communication.infra.views.get_custom_objects_api",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "communication.infra.views.get_assistant_session",
-            return_value=session,
-        ),
-        patch(
-            "communication.infra.views.release_pool_vm",
+        patch.object(views_module, "get_custom_objects_api", return_value=MagicMock()),
+        patch.object(views_module, "get_assistant_session", return_value=session),
+        patch.object(
+            views_module,
+            "release_pool_vm",
             return_value={
                 "released": True,
                 "assistant_id": "assistant-123",
@@ -46,6 +51,7 @@ def test_release_endpoint_resolves_job_name_to_current_vm():
             "/infra/vm/pool/release",
             json={
                 "assistant_id": "assistant-123",
+                "binding_id": "binding-1",
                 "job_name": "unity-job-1",
             },
         )
@@ -54,32 +60,32 @@ def test_release_endpoint_resolves_job_name_to_current_vm():
     assert resp.json()["released"] is True
     mock_release_pool_vm.assert_called_once_with(
         "assistant-123",
+        "binding-1",
         vm_name="unity-pool-ubuntu-3-preview",
     )
 
 
 def test_release_endpoint_skips_stale_job_target():
+    views_module = _views_module()
     session = {
         "status": {
-            "jobRef": {"name": "unity-job-2"},
-            "vmRef": {
-                "name": "unity-pool-ubuntu-3-preview",
-                "hostname": "vm-3.vm.unify.ai",
+            "binding": {
+                "id": "binding-1",
+                "jobRef": {"name": "unity-job-2"},
+                "vmRef": {
+                    "name": "unity-pool-ubuntu-3-preview",
+                    "hostname": "vm-3.vm.unify.ai",
+                },
             },
         },
     }
 
     with (
-        patch(
-            "communication.infra.views.get_custom_objects_api",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "communication.infra.views.get_assistant_session",
-            return_value=session,
-        ),
-        patch(
-            "communication.infra.views.release_pool_vm",
+        patch.object(views_module, "get_custom_objects_api", return_value=MagicMock()),
+        patch.object(views_module, "get_assistant_session", return_value=session),
+        patch.object(
+            views_module,
+            "release_pool_vm",
             side_effect=AssertionError("stale job must not release current VM"),
         ),
     ):
@@ -87,6 +93,7 @@ def test_release_endpoint_skips_stale_job_target():
             "/infra/vm/pool/release",
             json={
                 "assistant_id": "assistant-123",
+                "binding_id": "binding-1",
                 "job_name": "unity-job-1",
             },
         )
@@ -95,6 +102,7 @@ def test_release_endpoint_skips_stale_job_target():
     assert resp.json() == {
         "released": False,
         "assistant_id": "assistant-123",
+        "binding_id": "binding-1",
         "job_name": "unity-job-1",
         "current_job_name": "unity-job-2",
         "stale": True,

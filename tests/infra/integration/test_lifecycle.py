@@ -88,7 +88,9 @@ def test_startup_transition_sets_labels(
             description=f"AssistantSession for {assistant_id}",
         )
         assert session is not None
-        job_name = ((session.get("status") or {}).get("jobRef") or {}).get("name")
+        job_name = (
+            (((session.get("status") or {}).get("binding") or {}).get("jobRef") or {})
+        ).get("name")
         assert job_name, f"Expected jobRef in session status, got: {session}"
         job_tracker.track(job_name)
 

@@ -143,6 +143,7 @@ def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypa
         client,
         label_filter="labels.pool-role = idle",
         assistant_id="assistant-123",
+        binding_id="binding-123",
         vm_type="ubuntu",
         vm_number=None,
     )
@@ -187,6 +188,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
             **{
                 "pool-role": "assigned",
                 "assistant-id": "assistant-123",
+                "binding-id": "binding-123",
                 "vm-type": "ubuntu",
             },
         ),
@@ -208,7 +210,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
         lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
     )
 
-    result = release_pool_vm("assistant-123")
+    result = release_pool_vm("assistant-123", "binding-123")
 
     assert result["released"] is True
     assert result["pool_role"] == "releasing"
@@ -231,6 +233,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
             **{
                 "pool-role": "assigned",
                 "assistant-id": "assistant-123",
+                "binding-id": "binding-123",
                 "vm-type": "ubuntu",
             },
         ),
@@ -252,7 +255,11 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
         lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
     )
 
-    result = release_pool_vm("assistant-123", vm_name="unity-pool-ubuntu-3-preview")
+    result = release_pool_vm(
+        "assistant-123",
+        "binding-123",
+        vm_name="unity-pool-ubuntu-3-preview",
+    )
 
     assert result["released"] is True
     assert result["vm_name"] == "unity-pool-ubuntu-3-preview"
@@ -276,6 +283,7 @@ def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
             **{
                 "pool-role": "assigned",
                 "assistant-id": "assistant-999",
+                "binding-id": "binding-other",
                 "vm-type": "ubuntu",
             },
         ),
@@ -294,7 +302,11 @@ def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
         ),
     )
 
-    result = release_pool_vm("assistant-123", vm_name="unity-pool-ubuntu-3-preview")
+    result = release_pool_vm(
+        "assistant-123",
+        "binding-123",
+        vm_name="unity-pool-ubuntu-3-preview",
+    )
 
     assert result["released"] is False
     assert result["message"] == "VM is not currently owned by assistant"
@@ -307,6 +319,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
             **{
                 "pool-role": "releasing",
                 "assistant-id": "assistant-123",
+                "binding-id": "binding-123",
                 "vm-type": "ubuntu",
             },
         ),
@@ -329,7 +342,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
         lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
     )
 
-    result = release_pool_vm("assistant-123")
+    result = release_pool_vm("assistant-123", "binding-123")
 
     assert result["released"] is True
     assert result["pool_role"] == "releasing"
@@ -351,6 +364,7 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
         labels={
             "pool-role": "assigned",
             "assistant-id": "assistant-123",
+            "binding-id": "binding-123",
             "vm-type": "ubuntu",
             "pool-contract-generation": "guest-contract-v1",
         },
@@ -375,7 +389,7 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
         ),
     )
 
-    result = release_pool_vm("assistant-123")
+    result = release_pool_vm("assistant-123", "binding-123")
 
     assert result["released"] is True
     assert result["retired"] is True
@@ -391,6 +405,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
             **{
                 "pool-role": "releasing",
                 "assistant-id": "assistant-123",
+                "binding-id": "binding-123",
                 "vm-type": "ubuntu",
             },
         ),
@@ -416,7 +431,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
         lambda *_args, **_kwargs: True,
     )
 
-    result = complete_pool_vm_release("unity-pool-ubuntu-3-preview")
+    result = complete_pool_vm_release("unity-pool-ubuntu-3-preview", "binding-123")
 
     assert result["pool_role"] == "idle"
     assert result["detached"] is True
@@ -425,6 +440,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
             "unity-pool-ubuntu-3-preview",
             {
                 "assistant-id": "",
+                "binding-id": "",
                 "disk-device": "",
                 "unify-key": "",
                 "vnc-password": "",

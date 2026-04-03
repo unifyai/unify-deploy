@@ -135,16 +135,19 @@ wipe_metadata_key() {
 }
 
 notify_release_complete() {
-    local comms_url id_token
+    local binding_id comms_url id_token
+    binding_id=$(get_metadata "binding-id")
     comms_url=$(get_metadata "comms-url")
     id_token=$(curl -sf -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
         2>/dev/null || true)
-    [[ -z "$comms_url" || -z "$id_token" ]] && return 1
+    [[ -z "$binding_id" || -z "$comms_url" || -z "$id_token" ]] && return 1
 
     for attempt in $(seq 1 10); do
         if curl -sf -X POST "$comms_url/infra/vm/release-complete" \
-            -H "Authorization: Bearer $id_token" >/dev/null 2>&1; then
+            -H "Authorization: Bearer $id_token" \
+            -H "Content-Type: application/json" \
+            -d "{\"binding_id\": \"$binding_id\"}" >/dev/null 2>&1; then
             log "Reported release completion to Comms"
             return 0
         fi
@@ -308,6 +311,7 @@ do_assign() {
     local ssh_public_key
     local disk_device
     local assistant_id
+    local binding_id
     local hostname
     local orchestra_url
     local comms_url
@@ -316,6 +320,7 @@ do_assign() {
     ssh_public_key=$(get_metadata "ssh-public-key")
     disk_device=$(get_metadata "disk-device")
     assistant_id=$(get_metadata "assistant-id")
+    binding_id=$(get_metadata "binding-id")
     hostname=$(get_metadata "hostname")
     orchestra_url=$(get_metadata "orchestra-url")
     comms_url=$(get_metadata "comms-url")
@@ -438,14 +443,14 @@ EOF
     fi
 
     # Send ready notification
-    if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" ]]; then
+    if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" && -n "$binding_id" ]]; then
         for attempt in $(seq 1 10); do
             local http_code
             http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
                 -X POST "$comms_url/infra/vm/ready" \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer $unify_key" \
-                -d "{\"assistant_id\": \"$assistant_id\", \"vm_type\": \"ubuntu\", \"hostname\": \"$hostname\"}" \
+                -d "{\"assistant_id\": \"$assistant_id\", \"binding_id\": \"$binding_id\", \"vm_type\": \"ubuntu\", \"hostname\": \"$hostname\"}" \
                 2>/dev/null || echo "000")
 
             if [[ "$http_code" == "200" ]]; then

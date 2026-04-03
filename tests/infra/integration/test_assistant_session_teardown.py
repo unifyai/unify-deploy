@@ -437,7 +437,9 @@ def test_delete_session_endpoint_tears_down_pending_runtime(
         )
         assert session is not None
 
-        job_name = ((session.get("status") or {}).get("jobRef") or {}).get("name")
+        job_name = (
+            (((session.get("status") or {}).get("binding") or {}).get("jobRef") or {})
+        ).get("name")
         assert job_name, f"Expected jobRef in pending session, got: {session}"
         job_tracker.track(job_name)
 
