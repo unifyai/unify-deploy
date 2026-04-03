@@ -28,6 +28,13 @@ def _fake_vm(*, role: str, age_seconds: int, status: str = "RUNNING"):
     )
 
 
+def _current_contract_labels(**labels):
+    return {
+        "pool-contract-generation": vm_helpers_module.POOL_VM_CONTRACT_GENERATION,
+        **labels,
+    }
+
+
 def test_is_stale_inflight_vm_detects_old_starting_vm():
     vm = _fake_vm(role="starting", age_seconds=1200)
     assert _is_stale_inflight_vm(vm, timeout_seconds=600)
@@ -63,31 +70,48 @@ def test_is_stale_inflight_vm_ignores_non_inflight_roles():
 def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
     vm = SimpleNamespace(
         name="unity-pool-ubuntu-6-preview",
-        labels={"vm-type": "ubuntu"},
+        labels=_current_contract_labels(**{"vm-type": "ubuntu"}),
     )
     client = MagicMock()
     client.start.return_value = SimpleNamespace(
         name="operation-123",
         result=lambda: (_ for _ in ()).throw(AssertionError("should not wait")),
     )
+    metadata_updates = []
 
     monkeypatch.setattr(
         "communication.infra.vm_helpers._set_pool_labels",
         lambda *_args, **_kwargs: True,
     )
     monkeypatch.setattr(
-        "communication.infra.vm_helpers.get_secret",
-        lambda *_args, **_kwargs: "",
+        "communication.infra.vm_helpers._pool_bootstrap_metadata_updates",
+        lambda *_args, **_kwargs: {
+            "pool-watcher-script": "watcher",
+            "pool-contract-generation": vm_helpers_module.POOL_VM_CONTRACT_GENERATION,
+        },
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
     )
 
     assert _start_one_stopped_vm(client, vm)
     client.start.assert_called_once()
+    assert metadata_updates == [
+        (
+            "unity-pool-ubuntu-6-preview",
+            {
+                "pool-watcher-script": "watcher",
+                "pool-contract-generation": vm_helpers_module.POOL_VM_CONTRACT_GENERATION,
+            },
+        ),
+    ]
 
 
 def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypatch):
     pool_vm = SimpleNamespace(
         name="unity-pool-ubuntu-2-preview",
-        labels={"pool-role": "idle", "vm-type": "ubuntu"},
+        labels=_current_contract_labels(**{"pool-role": "idle", "vm-type": "ubuntu"}),
         label_fingerprint="unity-pool-ubuntu-2-preview-fp",
         network_interfaces=[],
         metadata=SimpleNamespace(
@@ -159,11 +183,13 @@ def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
 def test_release_pool_vm_transitions_to_releasing(monkeypatch):
     vm = SimpleNamespace(
         name="unity-pool-ubuntu-3-preview",
-        labels={
-            "pool-role": "assigned",
-            "assistant-id": "assistant-123",
-            "vm-type": "ubuntu",
-        },
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "assigned",
+                "assistant-id": "assistant-123",
+                "vm-type": "ubuntu",
+            },
+        ),
     )
     client = MagicMock()
     client.list.return_value = [vm]
@@ -201,11 +227,13 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
 def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     vm = SimpleNamespace(
         name="unity-pool-ubuntu-3-preview",
-        labels={
-            "pool-role": "releasing",
-            "assistant-id": "assistant-123",
-            "vm-type": "ubuntu",
-        },
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "releasing",
+                "assistant-id": "assistant-123",
+                "vm-type": "ubuntu",
+            },
+        ),
         metadata=SimpleNamespace(
             items=[
                 SimpleNamespace(key="unify-key", value="still-set"),
@@ -241,15 +269,55 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     ]
 
 
+def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
+    stale_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        labels={
+            "pool-role": "assigned",
+            "assistant-id": "assistant-123",
+            "vm-type": "ubuntu",
+            "pool-contract-generation": "guest-contract-v1",
+        },
+        status="RUNNING",
+    )
+    client = MagicMock()
+    client.list.return_value = [stale_vm]
+    recycled = []
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._recycle_pool_vm_instance",
+        lambda *_args, **kwargs: recycled.append(kwargs["reason"]),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("stale-contract release must not relabel for reuse"),
+        ),
+    )
+
+    result = release_pool_vm("assistant-123")
+
+    assert result["released"] is True
+    assert result["retired"] is True
+    assert result["pool_role"] == "retired"
+    assert recycled == ["assistant_release_with_stale_contract"]
+
+
 def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
     releasing_vm = SimpleNamespace(
         name="unity-pool-ubuntu-3-preview",
         status="RUNNING",
-        labels={
-            "pool-role": "releasing",
-            "assistant-id": "assistant-123",
-            "vm-type": "ubuntu",
-        },
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "releasing",
+                "assistant-id": "assistant-123",
+                "vm-type": "ubuntu",
+            },
+        ),
     )
     client = MagicMock()
     client.get.return_value = releasing_vm
@@ -339,6 +407,11 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
 
     monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_IDLE", 1)
     monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_STOPPED", 1)
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_recycle_stale_pool_vms",
+        lambda *_args, **_kwargs: [],
+    )
     monkeypatch.setattr(
         vm_helpers_module,
         "_quarantine_stale_inflight_vms",

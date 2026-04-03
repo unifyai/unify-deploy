@@ -1641,9 +1641,17 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
     The VM transitions to ``releasing`` immediately so it is no longer
     claimable. The guest watcher later calls back into Comms to detach the
     assistant disk and mark the VM idle once cleanup is actually complete.
+    VMs on an outdated guest contract are retired and replenished instead of
+    being returned to idle.
     """
     try:
-        return await asyncio.to_thread(release_pool_vm, request.assistant_id)
+        result = await asyncio.to_thread(release_pool_vm, request.assistant_id)
+        if result.get("retired"):
+            asyncio.get_running_loop().run_in_executor(
+                POOL_MAINTENANCE_EXECUTOR,
+                partial(replenish_pool, result.get("vm_type", "ubuntu")),
+            )
+        return result
     except Exception as e:
         logger.error(f"Failed to release pool VM: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1921,11 +1929,17 @@ async def vm_release_complete_endpoint(
     vm_name = gce["instance_name"]
 
     result = await asyncio.to_thread(complete_pool_vm_release, vm_name)
-    if not result.get("skipped") and result.get("pool_role") == "idle":
-        asyncio.get_running_loop().run_in_executor(
-            POOL_MAINTENANCE_EXECUTOR,
-            partial(trim_pool, result.get("vm_type", "ubuntu")),
-        )
+    if not result.get("skipped"):
+        if result.get("pool_role") == "idle":
+            asyncio.get_running_loop().run_in_executor(
+                POOL_MAINTENANCE_EXECUTOR,
+                partial(trim_pool, result.get("vm_type", "ubuntu")),
+            )
+        elif result.get("retired"):
+            asyncio.get_running_loop().run_in_executor(
+                POOL_MAINTENANCE_EXECUTOR,
+                partial(replenish_pool, result.get("vm_type", "ubuntu")),
+            )
     return result
 
 

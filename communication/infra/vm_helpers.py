@@ -56,6 +56,7 @@ from .vm_config import (
     POOL_TARGET_STOPPED,
     POOL_BOOT_TIMEOUT_SECONDS,
     POOL_RELEASE_TIMEOUT_SECONDS,
+    POOL_VM_CONTRACT_GENERATION,
     POOL_ASSISTANT_DISK_SIZE_GB,
     POOL_ASSISTANT_DISK_TYPE,
     POOL_VM_NAME_PREFIX,
@@ -68,8 +69,19 @@ logger = logging.getLogger(__name__)
 POOL_ROLE_LABEL = "pool-role"
 ASSISTANT_ID_LABEL = "assistant-id"
 POOL_ROLE_RELEASING = "releasing"
+POOL_CONTRACT_GENERATION_LABEL = "pool-contract-generation"
 POOL_TRANSITION_EPOCH_LABEL = "pool-transition-epoch"
 RELEASE_TRIGGER_METADATA_KEYS = ("unify-key", "vnc-password", "ssh-public-key")
+RECYCLEABLE_STALE_POOL_ROLES = frozenset(
+    {
+        "idle",
+        "stopped",
+        "starting",
+        "provisioning",
+        POOL_ROLE_RELEASING,
+        "quarantined",
+    },
+)
 INFLIGHT_ROLE_TIMEOUT_SECONDS = {
     "provisioning": POOL_BOOT_TIMEOUT_SECONDS,
     "starting": POOL_BOOT_TIMEOUT_SECONDS,
@@ -170,6 +182,15 @@ def _pool_transition_reference_time(instance) -> Optional[datetime]:
                 instance.name,
             )
     return None
+
+
+def _pool_contract_generation(instance) -> str:
+    labels = dict(instance.labels) if instance.labels else {}
+    return labels.get(POOL_CONTRACT_GENERATION_LABEL, "")
+
+
+def _has_current_pool_contract(instance) -> bool:
+    return _pool_contract_generation(instance) == POOL_VM_CONTRACT_GENERATION
 
 
 def _instance_boot_reference_time(instance) -> Optional[datetime]:
@@ -645,9 +666,60 @@ def _pool_hostname(vm_type: str, n: int) -> str:
     return f"{POOL_VM_NAME_PREFIX}-{vm_type}-{n}{SETTINGS.env_suffix}.{DOMAIN_SUFFIX}"
 
 
+def _pool_vm_number(vm_name: str, vm_type: str) -> Optional[int]:
+    prefix = f"{POOL_VM_NAME_PREFIX}-{vm_type}-"
+    if not vm_name.startswith(prefix):
+        return None
+    number_text = vm_name[len(prefix) :]
+    if SETTINGS.env_suffix:
+        if not number_text.endswith(SETTINGS.env_suffix):
+            return None
+        number_text = number_text[: -len(SETTINGS.env_suffix)]
+    try:
+        return int(number_text)
+    except ValueError:
+        return None
+
+
+def _pool_vm_hostname(vm_name: str, vm_type: str) -> str:
+    vm_number = _pool_vm_number(vm_name, vm_type)
+    if vm_number is None:
+        return f"{vm_name}.{DOMAIN_SUFFIX}"
+    return _pool_hostname(vm_type, vm_number)
+
+
 def _assistant_disk_name(assistant_id: str) -> str:
     sanitized = assistant_id.lower().replace("_", "-")
     return f"unity-disk-{sanitized}{SETTINGS.env_suffix}"
+
+
+def _pool_bootstrap_metadata_updates(vm_name: str, vm_type: str) -> Dict[str, str]:
+    cfg = _pool_vm_config(vm_type)
+    metadata_updates = {
+        cfg["startup_script_key"]: cfg["startup_script_loader"](),
+        "pool-watcher-script": cfg["pool_watcher_loader"](),
+        "hostname": _pool_vm_hostname(vm_name, vm_type),
+        "orchestra-url": SETTINGS.orchestra_url,
+        "comms-url": SETTINGS.comms_url,
+        "unity-environment": SETTINGS.deploy_env,
+        POOL_CONTRACT_GENERATION_LABEL: POOL_VM_CONTRACT_GENERATION,
+    }
+
+    supervisord_conf_loader = cfg.get("supervisord_conf_loader")
+    if supervisord_conf_loader:
+        metadata_updates["supervisord-conf"] = supervisord_conf_loader()
+
+    github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
+    if github_token:
+        metadata_updates["github-token"] = github_token
+
+    tls_cert = get_secret(VM_WILDCARD_CERT_SECRET) or ""
+    tls_key = get_secret(VM_WILDCARD_KEY_SECRET) or ""
+    if tls_cert and tls_key:
+        metadata_updates["tls-fullchain"] = tls_cert
+        metadata_updates["tls-privkey"] = tls_key
+
+    return metadata_updates
 
 
 def find_vm_with_disk(assistant_id: str) -> Optional[str]:
@@ -699,6 +771,8 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
             "pool_role": labels.get("pool-role", "unknown"),
             "assistant_id": labels.get("assistant-id", "") or None,
             "vm_type": labels.get("vm-type", "unknown"),
+            "contract_generation": labels.get(POOL_CONTRACT_GENERATION_LABEL) or None,
+            "contract_current": _has_current_pool_contract(instance),
             "ip_address": external_ip,
             "hostname": hostname,
             "status": instance.status,
@@ -771,44 +845,17 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     changes.create()
     logger.info(f"Created DNS A record: {hostname} -> {static_ip}")
 
-    # Fetch secrets
-    github_token = get_secret("DEVBOT_GITHUB_TOKEN")
-    tls_cert = get_secret(VM_WILDCARD_CERT_SECRET)
-    tls_key = get_secret(VM_WILDCARD_KEY_SECRET)
-
-    startup_script = cfg["startup_script_loader"]()
-    pool_watcher_script = cfg["pool_watcher_loader"]()
-
     metadata_items = [
-        compute_v1.Items(key=cfg["startup_script_key"], value=startup_script),
-        compute_v1.Items(key="pool-watcher-script", value=pool_watcher_script),
+        compute_v1.Items(key=key, value=value)
+        for key, value in _pool_bootstrap_metadata_updates(vm_name, vm_type).items()
     ]
-
-    supervisord_conf_loader = cfg.get("supervisord_conf_loader")
-    if supervisord_conf_loader:
-        metadata_items.append(
-            compute_v1.Items(key="supervisord-conf", value=supervisord_conf_loader()),
-        )
-
-    metadata_items += [
-        compute_v1.Items(key="hostname", value=hostname),
-        compute_v1.Items(key="orchestra-url", value=SETTINGS.orchestra_url),
-        compute_v1.Items(key="comms-url", value=SETTINGS.comms_url),
-    ]
-    if github_token:
-        metadata_items.append(compute_v1.Items(key="github-token", value=github_token))
-    if tls_cert and tls_key:
-        metadata_items.append(compute_v1.Items(key="tls-fullchain", value=tls_cert))
-        metadata_items.append(compute_v1.Items(key="tls-privkey", value=tls_key))
-    metadata_items.append(
-        compute_v1.Items(key="unity-environment", value=SETTINGS.deploy_env),
-    )
 
     labels = {
         POOL_ROLE_LABEL: "provisioning",
         ASSISTANT_ID_LABEL: "",
         "vm-type": vm_type,
         "pool-hostname": hostname.replace(".", "-"),
+        POOL_CONTRACT_GENERATION_LABEL: POOL_VM_CONTRACT_GENERATION,
         POOL_TRANSITION_EPOCH_LABEL: _pool_transition_epoch_value(),
     }
 
@@ -963,7 +1010,9 @@ def claim_idle_vm(
     """
     client = compute_v1.InstancesClient()
     label_filter = (
-        f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING"
+        f"labels.pool-role=idle AND labels.vm-type={vm_type} "
+        f"AND labels.{POOL_CONTRACT_GENERATION_LABEL}={POOL_VM_CONTRACT_GENERATION} "
+        "AND status=RUNNING"
     )
 
     with _pending_lock:
@@ -1032,6 +1081,21 @@ def _claim_idle_vm_inner(
                 zone=SETTINGS.vm_zone,
                 instance=candidate_name,
             )
+            if not _has_current_pool_contract(fresh):
+                logger.info(
+                    "Skipping stale-contract idle VM %s during claim",
+                    candidate_name,
+                )
+                _log_vm_pool_event(
+                    "claim_skipped",
+                    assistant_id=assistant_id,
+                    vm_name=candidate_name,
+                    vm_type=vm_type,
+                    reason="stale_contract",
+                    contract_generation=_pool_contract_generation(fresh) or None,
+                    current_contract_generation=POOL_VM_CONTRACT_GENERATION,
+                )
+                continue
             if fresh.labels.get("pool-role") != "idle":
                 logger.info(
                     f"VM {candidate_name} already claimed (pool-role="
@@ -1361,6 +1425,67 @@ def _update_instance_metadata(
             raise
 
 
+def _delete_pool_vm_instance(client, vm_name: str) -> None:
+    client.delete(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    ).result()
+
+
+def _recycle_pool_vm_instance(client, vm, *, reason: str) -> str:
+    labels = dict(vm.labels) if vm.labels else {}
+    vm_type = labels.get("vm-type", "ubuntu")
+    assistant_id = labels.get(ASSISTANT_ID_LABEL, "") or None
+    contract_generation = labels.get(POOL_CONTRACT_GENERATION_LABEL, "") or None
+
+    _delete_pool_vm_instance(client, vm.name)
+    _log_vm_pool_event(
+        "contract_recycled",
+        vm_name=vm.name,
+        vm_type=vm_type,
+        assistant_id=assistant_id,
+        pool_role=labels.get(POOL_ROLE_LABEL, ""),
+        status=getattr(vm, "status", ""),
+        contract_generation=contract_generation,
+        current_contract_generation=POOL_VM_CONTRACT_GENERATION,
+        reason=reason,
+    )
+    logger.info("Recycled stale-contract VM %s (%s)", vm.name, reason)
+    return f"Recycled stale-contract VM {vm.name}"
+
+
+def _recycle_stale_pool_vms(vm_type: str) -> list[str]:
+    client = compute_v1.InstancesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        filter=f"labels.vm-type={vm_type}",
+    )
+
+    actions: list[str] = []
+    for vm in client.list(request=request):
+        labels = dict(vm.labels) if vm.labels else {}
+        role = labels.get(POOL_ROLE_LABEL, "")
+        if (
+            not role
+            or role not in RECYCLEABLE_STALE_POOL_ROLES
+            or _has_current_pool_contract(vm)
+        ):
+            continue
+        try:
+            actions.append(
+                _recycle_pool_vm_instance(
+                    client,
+                    vm,
+                    reason="outdated_guest_contract",
+                ),
+            )
+        except Exception as exc:
+            logger.error("Failed to recycle stale-contract VM %s: %s", vm.name, exc)
+    return actions
+
+
 def assign_pool_vm(
     assistant_id: str,
     unify_apikey: str,
@@ -1686,7 +1811,8 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     Release is now asynchronous: the pool role moves from ``assigned`` to
     ``releasing`` immediately so the VM is no longer claimable, then the
     pool watcher finishes guest cleanup and calls back into Comms to detach
-    the disk and mark the VM idle.
+    the disk and mark the VM idle. VMs running an outdated guest contract are
+    retired instead of being returned to service.
     """
     client = compute_v1.InstancesClient()
     sanitized = assistant_id.lower().replace("_", "-")
@@ -1731,6 +1857,22 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
     labels = dict(vm.labels) if vm.labels else {}
     current_role = labels.get(POOL_ROLE_LABEL, "")
     vm_type = labels.get("vm-type", "ubuntu")
+
+    if not _has_current_pool_contract(vm):
+        _recycle_pool_vm_instance(
+            client,
+            vm,
+            reason="assistant_release_with_stale_contract",
+        )
+        return {
+            "released": True,
+            "assistant_id": assistant_id,
+            "vm_name": vm_name,
+            "vm_type": vm_type,
+            "pool_role": "retired",
+            "retired": True,
+            "message": "Retired stale-contract VM",
+        }
 
     if current_role == POOL_ROLE_RELEASING:
         resumed = False
@@ -1815,7 +1957,7 @@ def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
 
 
 def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
-    """Detach residual assistant state and transition a releasing VM to idle."""
+    """Finalize release by idling current VMs or retiring stale-contract ones."""
     client = compute_v1.InstancesClient()
     vm = client.get(
         project=SETTINGS.vm_project_id,
@@ -1845,6 +1987,22 @@ def complete_pool_vm_release(vm_name: str) -> Dict[str, Any]:
 
     detached, disk_name = _detach_attached_assistant_disk(vm_name)
     _update_instance_metadata(vm_name, _release_metadata_updates(clear_assignment=True))
+
+    if not _has_current_pool_contract(vm):
+        _recycle_pool_vm_instance(
+            client,
+            vm,
+            reason="release_complete_with_stale_contract",
+        )
+        return {
+            "vm_name": vm_name,
+            "vm_type": vm_type,
+            "pool_role": "retired",
+            "assistant_id": assistant_id or None,
+            "disk_name": disk_name,
+            "detached": detached,
+            "retired": True,
+        }
 
     updated = _set_pool_labels(
         client,
@@ -1900,7 +2058,8 @@ def _list_pool_state(vm_type: str):
         filter=type_filter,
     )
     all_vms = list(client.list(request=request))
-    pool_vms = [vm for vm in all_vms if vm.labels and vm.labels.get("pool-role")]
+    all_pool_vms = [vm for vm in all_vms if vm.labels and vm.labels.get("pool-role")]
+    pool_vms = [vm for vm in all_pool_vms if _has_current_pool_contract(vm)]
     idle_vms = [
         vm
         for vm in pool_vms
@@ -1918,7 +2077,7 @@ def _list_pool_state(vm_type: str):
         and vm.labels.get("pool-role")
         in ("provisioning", "starting", POOL_ROLE_RELEASING)
     ]
-    existing_names = {vm.name for vm in pool_vms}
+    existing_names = {vm.name for vm in all_pool_vms}
     return client, pool_vms, idle_vms, stopped_vms, in_flight_vms, existing_names
 
 
@@ -1934,7 +2093,16 @@ def _start_one_stopped_vm(client, vm) -> bool:
     previous boot's startup script wipes it for security. Without it,
     the startup script can't clone private repos and crashes (set -e).
     """
+    vm_type = (dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu")
     try:
+        if not _has_current_pool_contract(vm):
+            _recycle_pool_vm_instance(
+                client,
+                vm,
+                reason="start_requested_with_stale_contract",
+            )
+            return False
+
         ok = _set_pool_labels(
             client,
             vm.name,
@@ -1951,9 +2119,10 @@ def _start_one_stopped_vm(client, vm) -> bool:
             )
             return False
 
-        github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
-        if github_token:
-            _update_instance_metadata(vm.name, {"github-token": github_token})
+        _update_instance_metadata(
+            vm.name,
+            _pool_bootstrap_metadata_updates(vm.name, vm_type),
+        )
 
         op = client.start(
             project=SETTINGS.vm_project_id,
@@ -1968,7 +2137,7 @@ def _start_one_stopped_vm(client, vm) -> bool:
         _log_vm_pool_event(
             "replenish_start",
             vm_name=vm.name,
-            vm_type=(dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu"),
+            vm_type=vm_type,
             operation_name=getattr(op, "name", None),
         )
         return True
@@ -1978,7 +2147,7 @@ def _start_one_stopped_vm(client, vm) -> bool:
         _log_vm_pool_event(
             "replenish_start_failed",
             vm_name=vm.name,
-            vm_type=(dict(vm.labels) if vm.labels else {}).get("vm-type", "ubuntu"),
+            vm_type=vm_type,
             error=str(e),
         )
         return False
@@ -1989,7 +2158,9 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
 
     Uses the same stopped → starting label transition as
     _start_one_stopped_vm so the VM is protected from scrub during
-    boot and can legitimately transition to idle via mark-idle.
+    boot and can legitimately transition to idle via mark-idle. If the
+    stopped VM is on an outdated guest contract, it is replaced with a
+    freshly provisioned VM instead of being started.
     """
     vm_name = _pool_vm_name(vm_type, vm_number)
     client = compute_v1.InstancesClient()
@@ -2006,6 +2177,15 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
     if vm.status != "TERMINATED":
         raise Conflict(f"VM {vm_name} is {vm.status}, expected TERMINATED")
 
+    if not _has_current_pool_contract(vm):
+        _recycle_pool_vm_instance(
+            client,
+            vm,
+            reason="manual_start_with_stale_contract",
+        )
+        provision_pool_vm(vm_type, vm_number)
+        return {"vm_name": vm_name, "status": "provisioning", "recycled": True}
+
     ok = _set_pool_labels(
         client,
         vm_name,
@@ -2017,9 +2197,10 @@ def start_pool_vm(vm_type: str, vm_number: int) -> Dict[str, Any]:
             f"VM {vm_name} label CAS failed (pool-role is not stopped)",
         )
 
-    github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
-    if github_token:
-        _update_instance_metadata(vm_name, {"github-token": github_token})
+    _update_instance_metadata(
+        vm_name,
+        _pool_bootstrap_metadata_updates(vm_name, vm_type),
+    )
 
     try:
         op = client.start(
@@ -2079,7 +2260,11 @@ def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
     request = compute_v1.ListInstancesRequest(
         project=SETTINGS.vm_project_id,
         zone=SETTINGS.vm_zone,
-        filter=f"labels.pool-role=idle AND labels.vm-type={vm_type} AND status=RUNNING",
+        filter=(
+            f"labels.pool-role=idle AND labels.vm-type={vm_type} "
+            f"AND labels.{POOL_CONTRACT_GENERATION_LABEL}={POOL_VM_CONTRACT_GENERATION} "
+            "AND status=RUNNING"
+        ),
     )
     idle_vms = list(client.list(request=request))
     if not idle_vms:
@@ -2118,7 +2303,8 @@ def _probe_and_quarantine_unhealthy_idle_vms(vm_type: str) -> list:
 
 
 def _replenish_pool_inner(vm_type: str, extra_demand: int = 0) -> Dict[str, Any]:
-    actions = _quarantine_stale_inflight_vms(vm_type)
+    actions = _recycle_stale_pool_vms(vm_type)
+    actions.extend(_quarantine_stale_inflight_vms(vm_type))
     actions.extend(_scrub_inconsistent_vms(vm_type))
 
     # Keep hot-path replenish focused on restoring capacity. Bulk health sweeps

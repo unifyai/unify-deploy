@@ -63,6 +63,8 @@ def test_vm_mark_idle_uses_role_cas_and_skips_if_role_changed(client):
 
 
 def test_vm_release_complete_triggers_trim_after_idle_transition(client):
+    from communication.infra import views as views_module
+
     loop = MagicMock()
 
     with (
@@ -85,3 +87,37 @@ def test_vm_release_complete_triggers_trim_after_idle_transition(client):
     assert resp.json()["pool_role"] == "idle"
     mock_complete_release.assert_called_once_with("unity-pool-ubuntu-1-preview")
     loop.run_in_executor.assert_called_once()
+    scheduled = loop.run_in_executor.call_args.args[1]
+    assert scheduled.func is views_module.trim_pool
+    assert scheduled.args == ("ubuntu",)
+
+
+def test_vm_release_complete_triggers_replenish_after_retirement(client):
+    from communication.infra import views as views_module
+
+    loop = MagicMock()
+
+    with (
+        patch(
+            "communication.infra.views.complete_pool_vm_release",
+            return_value={
+                "vm_name": "unity-pool-ubuntu-1-preview",
+                "vm_type": "ubuntu",
+                "pool_role": "retired",
+                "retired": True,
+            },
+        ) as mock_complete_release,
+        patch(
+            "communication.infra.views.asyncio.get_running_loop",
+            return_value=loop,
+        ),
+    ):
+        resp = client.post("/infra/vm/release-complete")
+
+    assert resp.status_code == 200
+    assert resp.json()["retired"] is True
+    mock_complete_release.assert_called_once_with("unity-pool-ubuntu-1-preview")
+    loop.run_in_executor.assert_called_once()
+    scheduled = loop.run_in_executor.call_args.args[1]
+    assert scheduled.func is views_module.replenish_pool
+    assert scheduled.args == ("ubuntu",)
