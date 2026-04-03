@@ -49,6 +49,8 @@ class PoolStartVMRequest(BaseModel):
 
 class PoolReleaseRequest(BaseModel):
     assistant_id: str
+    vm_name: Optional[str] = None
+    job_name: Optional[str] = None
 
 
 class PoolDiskDeleteRequest(BaseModel):

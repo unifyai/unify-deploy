@@ -537,6 +537,62 @@ def test_create_or_update_assistant_session_reconciles_create_conflict_to_reques
     assert session["spec"]["activationId"] == "act-1"
 
 
+def test_create_or_update_assistant_session_preserves_inflight_restart_activation(
+    monkeypatch,
+):
+    desired_spec = build_assistant_session_spec(
+        assistant_id="1207",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="assistant-session-bootstrap-1207",
+        activation_id="act-loser",
+    )
+    stored_session = {
+        "metadata": {"name": "assistant-session-1207", "resourceVersion": "1"},
+        "spec": {
+            **desired_spec,
+            "activationId": "act-winner",
+            "medium": "email",
+            "requestedAt": "2026-04-02T15:00:00+00:00",
+        },
+        "status": {
+            "phase": "Succeeded",
+            "observedActivationId": "act-old-terminal",
+        },
+    }
+    patched_specs = []
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(stored_session),
+    )
+
+    class FakeCustomApi:
+        def patch_namespaced_custom_object(self, **kwargs):
+            patched_specs.append(deepcopy(kwargs["body"]["spec"]))
+            stored_session["spec"] = deepcopy(kwargs["body"]["spec"])
+            stored_session["metadata"]["resourceVersion"] = "2"
+            return deepcopy(stored_session)
+
+    session = create_or_update_assistant_session(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        desired_spec,
+    )
+
+    assert patched_specs == [
+        {
+            **desired_spec,
+            "activationId": "act-winner",
+        },
+    ]
+    assert session["spec"]["activationId"] == "act-winner"
+    assert session["spec"]["medium"] == "unify_message"
+
+
 def test_create_or_update_assistant_session_converges_after_patch_conflict_when_reread_matches(
     monkeypatch,
 ):

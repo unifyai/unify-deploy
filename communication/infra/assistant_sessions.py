@@ -340,6 +340,54 @@ def _assistant_session_spec_matches(
     return all(current_spec.get(key) == desired_spec.get(key) for key in compare_keys)
 
 
+def _preserved_session_activation_id(session: dict[str, Any] | None) -> str | None:
+    """Return the activation that concurrent callers must preserve, if any.
+
+    Active sessions keep serving their current activation. Terminal sessions
+    that already rolled their spec to a new activation but have not yet been
+    observed by the controller represent an inflight restart; concurrent
+    callers must reuse that activation instead of minting another one.
+    """
+
+    if not session:
+        return None
+
+    current_spec = session.get("spec", {})
+    current_status = session.get("status", {})
+    activation_id = str(current_spec.get("activationId", "") or "")
+    if not activation_id:
+        return None
+
+    current_phase = str(current_status.get("phase", "") or "")
+    if current_phase in ACTIVE_PHASES:
+        return activation_id
+
+    observed_activation_id = str(current_status.get("observedActivationId", "") or "")
+    restart_in_progress = bool(
+        current_phase
+        and current_phase not in ACTIVE_PHASES
+        and observed_activation_id
+        and observed_activation_id != activation_id
+    )
+    if restart_in_progress:
+        return activation_id
+
+    return None
+
+
+def _effective_assistant_session_spec(
+    session: dict[str, Any] | None,
+    desired_spec: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize desired spec to the current activation ownership contract."""
+
+    effective_spec = dict(desired_spec)
+    preserved_activation_id = _preserved_session_activation_id(session)
+    if preserved_activation_id:
+        effective_spec["activationId"] = preserved_activation_id
+    return effective_spec
+
+
 def create_or_update_assistant_session(
     custom_api: k8s_client.CustomObjectsApi,
     namespace: str,
@@ -361,7 +409,10 @@ def create_or_update_assistant_session(
     last_conflict: ApiException | None = None
 
     for _attempt in range(_MAX_CAS_RETRIES):
-        if _assistant_session_spec_matches(existing, spec):
+        effective_spec = _effective_assistant_session_spec(existing, spec)
+        body["spec"] = effective_spec
+
+        if _assistant_session_spec_matches(existing, effective_spec):
             return existing
 
         if existing is None:
@@ -381,7 +432,7 @@ def create_or_update_assistant_session(
                     "assistantsession.create_conflict",
                     assistant_id=assistant_id,
                     session_name=name,
-                    activation_id=spec.get("activationId"),
+                    activation_id=effective_spec.get("activationId"),
                     error=str(e),
                 )
                 existing = get_assistant_session(custom_api, namespace, assistant_id)
@@ -390,7 +441,7 @@ def create_or_update_assistant_session(
                 continue
 
         rv = existing.get("metadata", {}).get("resourceVersion")
-        patch: dict[str, Any] = {"spec": spec}
+        patch: dict[str, Any] = {"spec": effective_spec}
         if rv:
             patch["metadata"] = {"resourceVersion": rv}
         try:
@@ -417,7 +468,10 @@ def create_or_update_assistant_session(
             existing = get_assistant_session(custom_api, namespace, assistant_id)
             if existing is None:
                 raise
-    if _assistant_session_spec_matches(existing, spec):
+    if _assistant_session_spec_matches(
+        existing,
+        _effective_assistant_session_spec(existing, spec),
+    ):
         return existing
     if last_conflict is not None:
         raise last_conflict

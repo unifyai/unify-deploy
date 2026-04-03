@@ -224,6 +224,82 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
     ]
 
 
+def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "assigned",
+                "assistant-id": "assistant-123",
+                "vm-type": "ubuntu",
+            },
+        ),
+    )
+    client = MagicMock()
+    client.get.return_value = vm
+    metadata_updates = []
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+    )
+
+    result = release_pool_vm("assistant-123", vm_name="unity-pool-ubuntu-3-preview")
+
+    assert result["released"] is True
+    assert result["vm_name"] == "unity-pool-ubuntu-3-preview"
+    client.list.assert_not_called()
+    assert metadata_updates == [
+        (
+            "unity-pool-ubuntu-3-preview",
+            {
+                "unify-key": "",
+                "vnc-password": "",
+                "ssh-public-key": "",
+            },
+        ),
+    ]
+
+
+def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "assigned",
+                "assistant-id": "assistant-999",
+                "vm-type": "ubuntu",
+            },
+        ),
+    )
+    client = MagicMock()
+    client.get.return_value = vm
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("wrongly-owned VM must not be relabeled"),
+        ),
+    )
+
+    result = release_pool_vm("assistant-123", vm_name="unity-pool-ubuntu-3-preview")
+
+    assert result["released"] is False
+    assert result["message"] == "VM is not currently owned by assistant"
+
+
 def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     vm = SimpleNamespace(
         name="unity-pool-ubuntu-3-preview",

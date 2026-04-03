@@ -426,3 +426,61 @@ def test_vm_timeout_skips_stale_release_when_session_moved_on(monkeypatch):
 
     release_pool_vm.assert_not_called()
     patch_status.assert_not_called()
+
+
+def test_terminal_transition_releases_exact_vm_name(monkeypatch):
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+
+    terminal_job = _make_bound_job()
+    terminal_job.metadata.labels = {"unity-status": "done"}
+    monkeypatch.setattr(
+        controller,
+        "_ensure_job_binding",
+        lambda *_args: terminal_job,
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args: None)
+
+    body = {
+        "metadata": {"name": "assistant-session-1207"},
+        "spec": {
+            "assistantId": "1207",
+            "activationId": "act-1",
+            "desktopRequired": True,
+            "desktopMode": "ubuntu",
+            "startupSecretRef": "assistant-session-bootstrap-1207",
+        },
+        "status": {
+            "observedActivationId": "act-1",
+            "jobRef": {"name": "unity-job-1"},
+            "vmRef": {
+                "name": "unity-pool-ubuntu-1",
+                "hostname": "vm-1.vm.unify.ai",
+            },
+            "conditions": [
+                build_condition(
+                    "ContainerAssigned",
+                    True,
+                    "Bound",
+                    "Session job bound",
+                ),
+            ],
+        },
+    }
+
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+
+    release_pool_vm = MagicMock()
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "release_pool_vm", release_pool_vm)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    release_pool_vm.assert_called_once_with("1207", vm_name="unity-pool-ubuntu-1")
+    assert patch_status.call_args.kwargs["phase"] == "Succeeded"

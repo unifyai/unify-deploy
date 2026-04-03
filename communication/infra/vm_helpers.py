@@ -1523,7 +1523,9 @@ def assign_pool_vm(
         )
 
     try:
-        release_pool_vm(assistant_id)
+        current_vm_ref = get_assigned_vm_ref(assistant_id)
+        if current_vm_ref is not None:
+            release_pool_vm(assistant_id, vm_name=current_vm_ref["name"])
         claimed = claim_idle_vm(assistant_id, vm_type, vm_number=vm_number)
         vm_name = claimed["vm_name"]
         create_assistant_disk(assistant_id)
@@ -1730,7 +1732,7 @@ def reconcile_orphaned_vms(batch_api, vm_type: str = "ubuntu") -> Dict[str, Any]
                 aid,
             )
             try:
-                release_pool_vm(aid)
+                release_pool_vm(aid, vm_name=vm.name)
                 released.append({"vm_name": vm.name, "assistant_id": aid})
             except Exception as e:
                 logger.error(
@@ -1805,54 +1807,107 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
     return {"found": len(quarantined), "deleted": deleted, "errors": errors}
 
 
-def release_pool_vm(assistant_id: str) -> Dict[str, Any]:
+def release_pool_vm(
+    assistant_id: str,
+    *,
+    vm_name: str | None = None,
+) -> Dict[str, Any]:
     """Transition an assigned VM into guest-side release cleanup.
 
     Release is now asynchronous: the pool role moves from ``assigned`` to
     ``releasing`` immediately so the VM is no longer claimable, then the
     pool watcher finishes guest cleanup and calls back into Comms to detach
-    the disk and mark the VM idle. VMs running an outdated guest contract are
-    retired instead of being returned to service.
+    the disk and mark the VM idle. Product callers should pass ``vm_name`` so
+    stale cleanup paths cannot retarget a newer VM for the same assistant.
+    VMs running an outdated guest contract are retired instead of being
+    returned to service.
     """
     client = compute_v1.InstancesClient()
     sanitized = assistant_id.lower().replace("_", "-")
-    label_filter = f"labels.assistant-id={sanitized}"
+    vm = None
 
-    request = compute_v1.ListInstancesRequest(
-        project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
-        filter=label_filter,
-    )
-    candidates = [
-        vm
-        for vm in client.list(request=request)
-        if (dict(vm.labels) if vm.labels else {}).get(POOL_ROLE_LABEL)
-        in ("assigned", POOL_ROLE_RELEASING)
-    ]
-    if not candidates:
-        logger.info(
-            f"No pool VM assigned to assistant {assistant_id} — nothing to release",
-        )
-        _log_vm_pool_event(
-            "release_skipped",
-            assistant_id=assistant_id,
-            reason="no_assigned_vm",
-        )
-        return {
-            "released": False,
-            "assistant_id": assistant_id,
-            "message": "No VM assigned",
-        }
+    if vm_name:
+        try:
+            candidate = client.get(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                instance=vm_name,
+            )
+        except NotFound:
+            _log_vm_pool_event(
+                "release_skipped",
+                assistant_id=assistant_id,
+                vm_name=vm_name,
+                reason="vm_not_found",
+            )
+            return {
+                "released": False,
+                "assistant_id": assistant_id,
+                "vm_name": vm_name,
+                "message": "VM not found",
+            }
 
-    vm = next(
-        (
+        candidate_labels = dict(candidate.labels) if candidate.labels else {}
+        candidate_role = candidate_labels.get(POOL_ROLE_LABEL, "")
+        if (
+            candidate_labels.get(ASSISTANT_ID_LABEL) != sanitized
+            or candidate_role not in ("assigned", POOL_ROLE_RELEASING)
+        ):
+            _log_vm_pool_event(
+                "release_skipped",
+                assistant_id=assistant_id,
+                vm_name=vm_name,
+                current_role=candidate_role or None,
+                current_assistant_id=candidate_labels.get(ASSISTANT_ID_LABEL) or None,
+                reason="vm_not_owned",
+            )
+            return {
+                "released": False,
+                "assistant_id": assistant_id,
+                "vm_name": vm_name,
+                "message": "VM is not currently owned by assistant",
+            }
+        vm = candidate
+    else:
+        label_filter = f"labels.assistant-id={sanitized}"
+        request = compute_v1.ListInstancesRequest(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            filter=label_filter,
+        )
+        candidates = [
             candidate
-            for candidate in candidates
+            for candidate in client.list(request=request)
             if (dict(candidate.labels) if candidate.labels else {}).get(POOL_ROLE_LABEL)
-            == "assigned"
-        ),
-        candidates[0],
-    )
+            in ("assigned", POOL_ROLE_RELEASING)
+        ]
+        if not candidates:
+            logger.info(
+                f"No pool VM assigned to assistant {assistant_id} — nothing to release",
+            )
+            _log_vm_pool_event(
+                "release_skipped",
+                assistant_id=assistant_id,
+                reason="no_assigned_vm",
+            )
+            return {
+                "released": False,
+                "assistant_id": assistant_id,
+                "message": "No VM assigned",
+            }
+
+        vm = next(
+            (
+                candidate
+                for candidate in candidates
+                if (dict(candidate.labels) if candidate.labels else {}).get(
+                    POOL_ROLE_LABEL,
+                )
+                == "assigned"
+            ),
+            candidates[0],
+        )
+
     vm_name = vm.name
     labels = dict(vm.labels) if vm.labels else {}
     current_role = labels.get(POOL_ROLE_LABEL, "")

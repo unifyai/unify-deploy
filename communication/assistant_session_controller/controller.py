@@ -571,9 +571,9 @@ def _update_status_for_session(body: dict) -> None:
             vm_ref=current_vm_ref,
         ):
             return
-        if current_vm_ref and assistant_id:
+        if current_vm_ref and current_vm_ref.get("name") and assistant_id:
             try:
-                release_pool_vm(assistant_id)
+                release_pool_vm(assistant_id, vm_name=current_vm_ref["name"])
                 emit_observability_event(
                     "controller.terminal_vm_released",
                     assistant_id=assistant_id,
@@ -1021,7 +1021,7 @@ def _update_status_for_session(body: dict) -> None:
                         source="controller.reconcile",
                     )
                     try:
-                        release_pool_vm(assistant_id)
+                        release_pool_vm(assistant_id, vm_name=vm_ref["name"])
                     except Exception:
                         logger.exception(
                             "Failed to release dead VM for %s",
@@ -1165,7 +1165,7 @@ def _update_status_for_session(body: dict) -> None:
             source="controller.reconcile",
         )
         try:
-            release_pool_vm(assistant_id)
+            release_pool_vm(assistant_id, vm_name=vm_ref["name"])
         except Exception:
             logger.exception(
                 "Failed to release timed-out VM for %s",
@@ -1311,8 +1311,10 @@ def delete_session(body, **_):
                     "Failed deleting bootstrap secret for deleted AssistantSession",
                 )
     if assistant_id:
+        current_vm_ref = status.get("vmRef") or get_assigned_vm_ref(assistant_id) or {}
         try:
-            release_pool_vm(assistant_id)
+            if current_vm_ref.get("name"):
+                release_pool_vm(assistant_id, vm_name=current_vm_ref["name"])
         except Exception:  # pragma: no cover - best effort cleanup
             logger.exception("Failed releasing VM for deleted AssistantSession")
 

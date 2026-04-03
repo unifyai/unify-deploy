@@ -1634,6 +1634,88 @@ async def assign_pool_endpoint(request: PoolAssignRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _resolve_release_vm_name(
+    request: PoolReleaseRequest,
+) -> tuple[str | None, dict[str, object] | None]:
+    """Resolve a job-targeted release request to the exact VM name, if any."""
+
+    if request.vm_name and request.job_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at most one of vm_name or job_name",
+        )
+
+    if request.vm_name:
+        return request.vm_name, None
+
+    if not request.job_name:
+        return None, None
+
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize AssistantSession API client",
+        )
+
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        request.assistant_id,
+    )
+    if session is None:
+        emit_observability_event(
+            "infra.vm_release.skipped",
+            assistant_id=request.assistant_id,
+            job_name=request.job_name,
+            reason="session_missing",
+        )
+        return None, {
+            "released": False,
+            "assistant_id": request.assistant_id,
+            "job_name": request.job_name,
+            "stale": True,
+            "message": "No current AssistantSession for job-targeted release",
+        }
+
+    status = session.get("status", {})
+    current_job_name = str((status.get("jobRef") or {}).get("name", "") or "")
+    if current_job_name != request.job_name:
+        emit_observability_event(
+            "infra.vm_release.skipped",
+            assistant_id=request.assistant_id,
+            job_name=request.job_name,
+            current_job_name=current_job_name,
+            reason="job_changed",
+        )
+        return None, {
+            "released": False,
+            "assistant_id": request.assistant_id,
+            "job_name": request.job_name,
+            "current_job_name": current_job_name or None,
+            "stale": True,
+            "message": "Job no longer owns the current session VM",
+        }
+
+    vm_name = str((status.get("vmRef") or {}).get("name", "") or "")
+    if not vm_name:
+        emit_observability_event(
+            "infra.vm_release.skipped",
+            assistant_id=request.assistant_id,
+            job_name=request.job_name,
+            reason="no_vm_ref",
+        )
+        return None, {
+            "released": False,
+            "assistant_id": request.assistant_id,
+            "job_name": request.job_name,
+            "message": "Current session has no VM to release",
+        }
+
+    return vm_name, None
+
+
 @router.post("/vm/pool/release")
 async def release_pool_endpoint(request: PoolReleaseRequest):
     """Start guest cleanup for a pool VM release.
@@ -1642,10 +1724,20 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
     claimable. The guest watcher later calls back into Comms to detach the
     assistant disk and mark the VM idle once cleanup is actually complete.
     VMs on an outdated guest contract are retired and replenished instead of
-    being returned to idle.
+    being returned to idle. Product callers should pass ``job_name`` or
+    ``vm_name`` so Comms can verify that the cleanup request still owns the
+    current runtime before releasing anything.
     """
     try:
-        result = await asyncio.to_thread(release_pool_vm, request.assistant_id)
+        resolved_vm_name, skipped = await _resolve_release_vm_name(request)
+        if skipped is not None:
+            return skipped
+
+        result = await asyncio.to_thread(
+            release_pool_vm,
+            request.assistant_id,
+            vm_name=resolved_vm_name,
+        )
         if result.get("retired"):
             asyncio.get_running_loop().run_in_executor(
                 POOL_MAINTENANCE_EXECUTOR,

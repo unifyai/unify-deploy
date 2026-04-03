@@ -483,7 +483,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         return {"total_running": len(all_jobs), "expired": 0}
 
     jobs_to_suspend = []
-    unique_assistants = set()
+    stale_release_targets = []
     for job in stale:
         job_name = job.get("job_name")
         assistant_id = job.get("assistant_id", "unknown")
@@ -495,7 +495,12 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         if job_name:
             jobs_to_suspend.append(job_name)
         if assistant_id and assistant_id != "unknown":
-            unique_assistants.add(assistant_id)
+            stale_release_targets.append(
+                {
+                    "assistant_id": assistant_id,
+                    "job_name": job_name,
+                },
+            )
 
     suspended_jobs = []
 
@@ -522,12 +527,17 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
 
     released_assistants = []
 
-    def _release_vm(aid):
+    def _release_vm(target):
+        aid = target["assistant_id"]
+        job_name = target.get("job_name")
+        payload = {"assistant_id": aid}
+        if job_name:
+            payload["job_name"] = job_name
         try:
             requests.post(
                 f"{SETTINGS.comms_url}/infra/vm/pool/release",
                 headers=headers,
-                json={"assistant_id": aid},
+                json=payload,
                 timeout=10,
             )
             return aid
@@ -537,10 +547,10 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             )
             return None
 
-    if unique_assistants:
-        with ThreadPoolExecutor(max_workers=len(unique_assistants)) as pool:
-            results = list(pool.map(_release_vm, unique_assistants))
-        released_assistants = [r for r in results if r is not None]
+    if stale_release_targets:
+        with ThreadPoolExecutor(max_workers=len(stale_release_targets)) as pool:
+            results = list(pool.map(_release_vm, stale_release_targets))
+        released_assistants = list(dict.fromkeys(r for r in results if r is not None))
 
     return {
         "total_running": len(all_jobs),
