@@ -1849,10 +1849,9 @@ def release_pool_vm(
 
         candidate_labels = dict(candidate.labels) if candidate.labels else {}
         candidate_role = candidate_labels.get(POOL_ROLE_LABEL, "")
-        if (
-            candidate_labels.get(ASSISTANT_ID_LABEL) != sanitized
-            or candidate_role not in ("assigned", POOL_ROLE_RELEASING)
-        ):
+        if candidate_labels.get(
+            ASSISTANT_ID_LABEL
+        ) != sanitized or candidate_role not in ("assigned", POOL_ROLE_RELEASING):
             _log_vm_pool_event(
                 "release_skipped",
                 assistant_id=assistant_id,
