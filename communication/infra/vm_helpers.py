@@ -193,18 +193,12 @@ def _quarantine_pool_vm(
         return None
 
     if instance.status in ("RUNNING", "STAGING"):
-        try:
-            client.stop(
-                project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
-                instance=instance.name,
-            ).result()
-        except Exception as exc:
-            logger.error(
-                "Quarantine: failed stopping %s after quarantine: %s",
-                instance.name,
-                exc,
-            )
+        _request_vm_stop(
+            client,
+            instance.name,
+            vm_type=labels.get("vm-type", "ubuntu"),
+            reason=f"quarantine: {reason}",
+        )
 
     action = f"Quarantined unhealthy VM {instance.name}: {reason}"
     logger.warning(action)
@@ -215,6 +209,37 @@ def _quarantine_pool_vm(
         reason=reason,
     )
     return action
+
+
+def _request_vm_stop(
+    client: compute_v1.InstancesClient,
+    vm_name: str,
+    *,
+    vm_type: str,
+    reason: str,
+) -> None:
+    """Submit a best-effort GCE stop request without waiting for completion."""
+    try:
+        op = client.stop(
+            project=SETTINGS.vm_project_id,
+            zone=SETTINGS.vm_zone,
+            instance=vm_name,
+        )
+        logger.info(
+            "Stop request submitted for pool VM %s (%s): %s",
+            vm_name,
+            vm_type,
+            reason,
+        )
+        _log_vm_pool_event(
+            "stop_requested",
+            vm_name=vm_name,
+            vm_type=vm_type,
+            reason=reason,
+            operation_name=getattr(op, "name", None),
+        )
+    except Exception as exc:
+        logger.error("Failed to submit stop request for %s: %s", vm_name, exc)
 
 
 def _quarantine_stale_inflight_vms(vm_type: str) -> list[str]:
@@ -2141,12 +2166,13 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
 
         try:
             if key in _STOP_ANOMALIES:
-                client.stop(
-                    project=SETTINGS.vm_project_id,
-                    zone=SETTINGS.vm_zone,
-                    instance=vm.name,
-                ).result()
-                msg = f"Scrub: stopped {vm.name} ({anomaly})"
+                _request_vm_stop(
+                    client,
+                    vm.name,
+                    vm_type=vm_type,
+                    reason=f"scrub: {anomaly}",
+                )
+                msg = f"Scrub: stop requested for {vm.name} ({anomaly})"
                 actions.append(msg)
                 logger.info(msg)
                 _log_vm_pool_event(

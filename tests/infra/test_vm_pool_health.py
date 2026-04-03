@@ -6,6 +6,7 @@ from communication.infra import vm_helpers as vm_helpers_module
 from communication.infra.vm_helpers import (
     _claim_idle_vm_inner,
     _is_stale_inflight_vm,
+    _quarantine_pool_vm,
     _start_one_stopped_vm,
     replenish_pool,
 )
@@ -107,6 +108,63 @@ def test_claim_idle_vm_quarantines_unhealthy_candidate_before_claim(monkeypatch)
         ("unity-pool-ubuntu-2-preview", "failed health probe during claim"),
     ]
     assert claimed["vm_name"] == "unity-pool-ubuntu-4-preview"
+
+
+def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-2-preview",
+        labels={"pool-role": "idle", "vm-type": "ubuntu"},
+        status="RUNNING",
+    )
+    client = MagicMock()
+    client.stop.return_value = SimpleNamespace(
+        name="operation-456",
+        result=lambda: (_ for _ in ()).throw(AssertionError("should not wait")),
+    )
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        lambda *_args, **_kwargs: True,
+    )
+
+    action = _quarantine_pool_vm(
+        client,
+        vm,
+        reason="failed health probe during claim",
+    )
+
+    assert action == (
+        "Quarantined unhealthy VM unity-pool-ubuntu-2-preview: "
+        "failed health probe during claim"
+    )
+    client.stop.assert_called_once()
+
+
+def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-15-preview",
+        labels={"pool-role": "quarantined", "vm-type": "ubuntu"},
+        status="RUNNING",
+    )
+    client = MagicMock()
+    client.list.return_value = [vm]
+    client.stop.return_value = SimpleNamespace(
+        name="operation-789",
+        result=lambda: (_ for _ in ()).throw(AssertionError("should not wait")),
+    )
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+
+    actions = vm_helpers_module._scrub_inconsistent_vms("ubuntu")
+
+    assert actions == [
+        "Scrub: stop requested for unity-pool-ubuntu-15-preview "
+        "(quarantined_but_running)",
+    ]
+    client.stop.assert_called_once()
 
 
 def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
