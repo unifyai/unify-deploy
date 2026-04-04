@@ -1432,23 +1432,11 @@ def _delete_test_assistant(agent_id: str, batch_api=None):
 
     if batch_api is not None:
         try:
-            poll_until(
-                lambda: (
-                    _read_assistant_session_http(str(agent_id)) is None
-                    and not list_jobs_with_assistant_id(batch_api, str(agent_id))
-                    and not assigned_vm_runtime_refs(str(agent_id))
-                ),
+            wait_for_assistant_runtime_stopped(
+                str(agent_id),
+                batch_api=batch_api,
                 timeout=180,
                 interval=5,
-                description=f"Assistant {agent_id} deletion cleanup to complete",
-                failure_snapshot=lambda: {
-                    "session": _read_assistant_session_http(str(agent_id)),
-                    "assistant_jobs": [
-                        job.metadata.name
-                        for job in list_jobs_with_assistant_id(batch_api, str(agent_id))
-                    ],
-                    "assigned_vms": assigned_vm_runtime_refs(str(agent_id)),
-                },
             )
         except Exception:
             pass
