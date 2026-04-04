@@ -591,7 +591,7 @@ def _binding_release_state(
                     vm_ref=None,
                     desktop_url=None,
                 )
-        elif not release_requested_at:
+        else:
             emit_observability_event(
                 "controller.release_state.request_vm_release",
                 **_release_observability_fields(
@@ -605,6 +605,7 @@ def _binding_release_state(
                     owned_runtime_vms=owned_runtime_vms,
                     disk_vm_name=disk_vm_name,
                 ),
+                release_retry=bool(release_requested_at),
             )
             result = release_pool_vm(
                 assistant_id,
@@ -625,13 +626,15 @@ def _binding_release_state(
                     disk_vm_name=disk_vm_name,
                 ),
                 release_result=result,
+                release_retry=bool(release_requested_at),
             )
             if result.get("released") or result.get("pool_role") == "releasing":
-                release_requested_at = _now_iso()
-                binding = _binding_payload(
-                    binding,
-                    release_requested_at=release_requested_at,
-                )
+                if not release_requested_at:
+                    release_requested_at = _now_iso()
+                    binding = _binding_payload(
+                        binding,
+                        release_requested_at=release_requested_at,
+                    )
             if result.get("retired"):
                 release_completed_at = release_requested_at or _now_iso()
                 binding = _binding_payload(
@@ -641,21 +644,6 @@ def _binding_release_state(
                     release_requested_at=release_requested_at,
                     release_completed_at=release_completed_at,
                 )
-        else:
-            emit_observability_event(
-                "controller.release_state.vm_release_already_requested",
-                **_release_observability_fields(
-                    assistant_id=assistant_id,
-                    session_name=session_name,
-                    binding=binding,
-                    source_reason=source_reason,
-                    job_live=job_live,
-                    release_requested_at=release_requested_at,
-                    release_completed_at=release_completed_at,
-                    owned_runtime_vms=owned_runtime_vms,
-                    disk_vm_name=disk_vm_name,
-                ),
-            )
     else:
         emit_observability_event(
             "controller.release_state.no_vm_ref",

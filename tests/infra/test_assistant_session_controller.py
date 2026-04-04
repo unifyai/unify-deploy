@@ -436,6 +436,61 @@ def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
 
 
+def test_reconcile_releasing_binding_still_requests_vm_release_after_vm_ref_appears(
+    monkeypatch,
+):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+    )
+    patch_status = MagicMock()
+    release_pool_vm = MagicMock(
+        return_value={"released": True, "pool_role": "releasing"},
+    )
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "list_pool_vms",
+        lambda *_args, **_kwargs: [
+            {
+                "assistant_id": "1207",
+                "pool_role": "assigned",
+                "vm_name": "unity-pool-ubuntu-1",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        controller,
+        "find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+    )
+    monkeypatch.setattr(controller, "release_pool_vm", release_pool_vm)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    release_pool_vm.assert_called_once_with(
+        "1207",
+        "binding-1",
+        vm_name="unity-pool-ubuntu-1",
+    )
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+    assert patch_status.call_args.kwargs["binding"]["releaseRequestedAt"] == (
+        "2026-04-03T00:00:30+00:00"
+    )
+
+
 def test_reconcile_finishes_release_when_runtime_artifacts_are_already_gone(
     monkeypatch,
 ):
