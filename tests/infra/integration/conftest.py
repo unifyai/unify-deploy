@@ -841,22 +841,15 @@ def _read_assistant_session_http(assistant_id: str) -> dict | None:
     return resp.json()
 
 
-def _assistant_runtime_cleared(session: dict | None) -> bool:
-    """Return whether a session no longer owns runtime resources."""
-    if session is None:
-        return True
-    status = session.get("status") or {}
-    if str(status.get("phase", "") or "") != "Released":
-        return False
-    binding = status.get("binding") or {}
-    return not any(
-        [
-            ((binding.get("jobRef") or {}).get("name")),
-            ((binding.get("podRef") or {}).get("name")),
-            ((binding.get("vmRef") or {}).get("name")),
-            (binding.get("desktopUrl") or ""),
-        ],
+def _read_runtime_status_http(assistant_id: str) -> dict:
+    """Read the deployed runtime-cleanup status for an assistant."""
+    resp = requests.get(
+        f"{COMMS_APP_URL}/infra/runtime/{assistant_id}",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=20,
     )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def wait_for_assistant_runtime_stopped(
@@ -871,23 +864,10 @@ def wait_for_assistant_runtime_stopped(
     session_name = f"assistant-session-{str(assistant_id).lower().replace('_', '-')}"
 
     def _settled():
-        session = _read_assistant_session_http(str(assistant_id))
-        assistant_jobs = (
-            list_jobs_with_assistant_id(batch_api, str(assistant_id))
-            if batch_api is not None
-            else []
-        )
-        session_jobs = (
-            list_jobs_with_session_ref(batch_api, session_name)
-            if batch_api is not None
-            else []
-        )
-        assigned_vms = assigned_vm_runtime_refs(str(assistant_id))
-        if not _assistant_runtime_cleared(session):
+        runtime_status = _read_runtime_status_http(str(assistant_id))
+        if not runtime_status.get("runtime_cleanup_complete"):
             return None
-        if assistant_jobs or session_jobs or assigned_vms:
-            return None
-        return session
+        return runtime_status
 
     return poll_until(
         _settled,
@@ -895,6 +875,7 @@ def wait_for_assistant_runtime_stopped(
         interval=interval,
         description=f"Assistant runtime {assistant_id} to reach Released with no bound resources",
         failure_snapshot=lambda: {
+            "runtime_status": _read_runtime_status_http(str(assistant_id)),
             "session": _read_assistant_session_http(str(assistant_id)),
             "assistant_jobs": (
                 []
