@@ -2,6 +2,7 @@
 Focused tests for POST /infra/job/start session reuse behavior.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -65,6 +66,7 @@ def _existing_session(
     medium: str = "email",
     desktop_mode: str = "ubuntu",
     desktop_required: bool = True,
+    binding: dict | None = None,
 ) -> dict:
     return {
         "metadata": {"name": "assistantsession-assistant-123"},
@@ -86,6 +88,7 @@ def _existing_session(
                 if observed_activation_id is not None
                 else activation_id
             ),
+            "binding": binding or {},
         },
     }
 
@@ -259,3 +262,106 @@ def test_start_job_reuses_inflight_restart_activation_for_terminal_session(clien
     assert response.json()["activation_id"] == "activation-restart-pending"
     refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
     assert refreshed_spec["activationId"] == "activation-restart-pending"
+
+
+def test_start_job_reuses_activation_while_release_is_draining(client):
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session(
+        phase="Releasing",
+        activation_id="activation-draining",
+        binding={
+            "id": "binding-1",
+            "vmRef": {
+                "name": "unity-pool-ubuntu-1",
+                "hostname": "vm-1.vm.unify.ai",
+            },
+        },
+    )
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value="assistant-session-bootstrap-assistant-123",
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ) as mock_create_or_update_assistant_session,
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 200
+    assert response.json()["activation_id"] == "activation-draining"
+    refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
+    assert refreshed_spec["activationId"] == "activation-draining"
+
+
+def test_start_job_mints_new_activation_after_released_session_cleanup(client):
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session(
+        phase="Released",
+        activation_id="activation-old",
+    )
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value="assistant-session-bootstrap-assistant-123",
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ) as mock_create_or_update_assistant_session,
+        patch(
+            "communication.infra.views.uuid.uuid4",
+            return_value=SimpleNamespace(hex="activation-new"),
+        ),
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 200
+    assert response.json()["activation_id"] == "activation-new"
+    refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
+    assert refreshed_spec["activationId"] == "activation-new"
