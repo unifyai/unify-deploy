@@ -60,6 +60,7 @@ from .vm_helpers import (
     rebalance_pool,
     list_pool_vms,
     find_vm_with_disk,
+    split_binding_runtime_vms,
     detach_assistant_disk,
     delete_assistant_disk,
 )
@@ -2010,13 +2011,13 @@ async def runtime_status_endpoint(assistant_id: str):
     session_desired_state = str(
         ((assistant_session or {}).get("spec") or {}).get("desiredState", "") or "",
     )
+    current_binding_id = binding_id_from_status(session_binding(assistant_session))
 
-    owned_vms = [
-        vm
-        for vm in await asyncio.to_thread(list_pool_vms)
-        if vm.get("assistant_id") == sanitized
-        and vm.get("pool_role") in ("assigned", "releasing")
-    ]
+    owned_vms, other_owned_vms = await asyncio.to_thread(
+        split_binding_runtime_vms,
+        assistant_id,
+        binding_id=current_binding_id or None,
+    )
     disk_vm_name = await asyncio.to_thread(find_vm_with_disk, assistant_id)
     session_cleanup_complete = assistant_session is None or (
         session_desired_state == DESIRED_STATE_STOPPED and session_phase == "Released"
@@ -2025,6 +2026,7 @@ async def runtime_status_endpoint(assistant_id: str):
         session_cleanup_complete
         and not active_job_names
         and not owned_vms
+        and not other_owned_vms
         and disk_vm_name is None
     )
 
@@ -2035,6 +2037,7 @@ async def runtime_status_endpoint(assistant_id: str):
         "assistant_session_desired_state": session_desired_state or None,
         "active_job_names": active_job_names,
         "owned_vms": owned_vms,
+        "other_owned_vms": other_owned_vms,
         "disk_vm_name": disk_vm_name,
         "runtime_cleanup_complete": runtime_cleanup_complete,
     }

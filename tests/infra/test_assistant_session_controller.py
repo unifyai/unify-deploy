@@ -3,6 +3,8 @@ import sys
 import types
 from unittest.mock import MagicMock
 
+from kubernetes.client.rest import ApiException
+
 fake_kopf = types.SimpleNamespace()
 
 
@@ -149,6 +151,62 @@ def test_claim_idle_job_for_binding_reuses_existing_job_for_same_binding(monkeyp
 
     assert job is existing_job
     batch_api.patch_namespaced_job.assert_not_called()
+
+
+def test_job_for_binding_lists_by_binding_when_jobref_missing(monkeypatch):
+    binding = _binding("binding-1")
+    existing_job = _job(name="unity-job-1", container_ready=False)
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+
+    job = controller._job_for_binding("assistant-session-1207", binding)
+
+    assert job is existing_job
+    batch_api.read_namespaced_job.assert_not_called()
+    batch_api.list_namespaced_job.assert_called_once()
+
+
+def test_job_for_binding_does_not_rediscover_when_named_job_is_missing(monkeypatch):
+    binding = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+    )
+    existing_job = _job(name="unity-job-2", container_ready=False)
+    batch_api = MagicMock()
+    batch_api.read_namespaced_job.side_effect = ApiException(status=404)
+    batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+
+    job = controller._job_for_binding("assistant-session-1207", binding)
+
+    assert job is None
+    batch_api.read_namespaced_job.assert_called_once()
+    batch_api.list_namespaced_job.assert_not_called()
+
+
+def test_job_for_binding_does_not_rediscover_when_named_job_mismatches(monkeypatch):
+    binding = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+    )
+    mismatched_job = _job(name="unity-job-1", container_ready=False)
+    mismatched_job.metadata.labels[controller.BINDING_ID_LABEL] = "binding-other"
+    batch_api = MagicMock()
+    batch_api.read_namespaced_job.return_value = mismatched_job
+    batch_api.list_namespaced_job.return_value = MagicMock(
+        items=[_job(name="unity-job-2")],
+    )
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+
+    job = controller._job_for_binding("assistant-session-1207", binding)
+
+    assert job is None
+    batch_api.read_namespaced_job.assert_called_once()
+    batch_api.list_namespaced_job.assert_not_called()
 
 
 def test_reconcile_waits_for_idle_capacity_when_no_idle_job_available(monkeypatch):
@@ -374,7 +432,11 @@ def test_reconcile_restarts_after_terminal_job_cleanup(monkeypatch):
         MagicMock(side_effect=[terminal_job, terminal_job, None]),
     )
     monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(controller, "list_pool_vms", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
     monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
@@ -409,14 +471,17 @@ def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
     monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         controller,
-        "list_pool_vms",
-        lambda *_args, **_kwargs: [
-            {
-                "assistant_id": "1207",
-                "pool_role": "assigned",
-                "vm_name": "unity-pool-ubuntu-1",
-            },
-        ],
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "assistant_id": "1207",
+                    "pool_role": "assigned",
+                    "vm_name": "unity-pool-ubuntu-1",
+                },
+            ],
+            [],
+        ),
     )
     monkeypatch.setattr(
         controller,
@@ -461,14 +526,17 @@ def test_reconcile_releasing_binding_still_requests_vm_release_after_vm_ref_appe
     monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         controller,
-        "list_pool_vms",
-        lambda *_args, **_kwargs: [
-            {
-                "assistant_id": "1207",
-                "pool_role": "assigned",
-                "vm_name": "unity-pool-ubuntu-1",
-            },
-        ],
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "assistant_id": "1207",
+                    "pool_role": "assigned",
+                    "vm_name": "unity-pool-ubuntu-1",
+                },
+            ],
+            [],
+        ),
     )
     monkeypatch.setattr(
         controller,
@@ -512,7 +580,11 @@ def test_reconcile_finishes_release_when_runtime_artifacts_are_already_gone(
         lambda *_args, **_kwargs: deepcopy(body),
     )
     monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(controller, "list_pool_vms", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
     monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
@@ -567,14 +639,17 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
     monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         controller,
-        "list_pool_vms",
-        lambda *_args, **_kwargs: [
-            {
-                "assistant_id": "1207",
-                "pool_role": "assigned",
-                "vm_name": "unity-pool-ubuntu-1",
-            },
-        ],
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "assistant_id": "1207",
+                    "pool_role": "assigned",
+                    "vm_name": "unity-pool-ubuntu-1",
+                },
+            ],
+            [],
+        ),
     )
     monkeypatch.setattr(
         controller,
@@ -613,7 +688,11 @@ def test_reconcile_job_missing_restarts_only_after_cleanup_finishes(monkeypatch)
         lambda *_args, **_kwargs: deepcopy(body),
     )
     monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(controller, "list_pool_vms", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
     monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
@@ -942,14 +1021,17 @@ def test_reconcile_activation_replacement_waits_for_release(monkeypatch):
     monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         controller,
-        "list_pool_vms",
-        lambda *_args, **_kwargs: [
-            {
-                "assistant_id": "1207",
-                "pool_role": "assigned",
-                "vm_name": "unity-pool-ubuntu-1",
-            },
-        ],
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "assistant_id": "1207",
+                    "pool_role": "assigned",
+                    "vm_name": "unity-pool-ubuntu-1",
+                },
+            ],
+            [],
+        ),
     )
     monkeypatch.setattr(
         controller,
@@ -988,11 +1070,60 @@ def test_reconcile_does_not_mark_released_while_disk_is_still_attached(monkeypat
         lambda *_args, **_kwargs: deepcopy(body),
     )
     monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(controller, "list_pool_vms", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
     monkeypatch.setattr(
         controller,
         "find_vm_with_disk",
         lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+
+
+def test_reconcile_does_not_mark_released_while_other_assistant_vm_exists(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+    )
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: (
+            [],
+            [
+                {
+                    "assistant_id": "1207",
+                    "binding_id": "binding-other",
+                    "pool_role": "assigned",
+                    "vm_name": "unity-pool-ubuntu-2",
+                },
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "find_vm_with_disk",
+        lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 

@@ -40,10 +40,10 @@ from communication.infra.vm_helpers import (
     assign_pool_vm,
     complete_pool_vm_release,
     find_vm_with_disk,
-    list_pool_vms,
     probe_vm_agent_service,
     release_pool_vm,
     replenish_pool,
+    split_binding_runtime_vms,
     verify_vm_assignment,
 )
 
@@ -275,9 +275,10 @@ def _job_for_binding(session_name: str, binding: dict | None):
         except ApiException as exc:
             if exc.status != 404:
                 raise
-        else:
-            if _job_matches_binding(job, session_name, current_binding_id):
-                return job
+            return None
+        return (
+            job if _job_matches_binding(job, session_name, current_binding_id) else None
+        )
 
     jobs = _batch_api.list_namespaced_job(
         namespace=WATCH_NAMESPACE,
@@ -433,17 +434,17 @@ def _condition_state(
     return merge_conditions(existing_conditions, *updates)
 
 
-def _owned_runtime_cleanup_state(assistant_id: str) -> tuple[list[dict], str | None]:
-    """Return any assistant-owned VMs or attached assistant disk still present."""
+def _owned_runtime_cleanup_state(
+    assistant_id: str,
+    binding_id: str | None = None,
+) -> tuple[list[dict], list[dict], str | None]:
+    """Return current-binding VMs, other assistant VMs, and attached disk holder."""
 
-    sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
-    owned_runtime_vms = [
-        vm
-        for vm in list_pool_vms()
-        if vm.get("assistant_id") == sanitized_assistant_id
-        and vm.get("pool_role") in ("assigned", "releasing")
-    ]
-    return owned_runtime_vms, find_vm_with_disk(assistant_id)
+    current_binding_vms, other_binding_vms = split_binding_runtime_vms(
+        assistant_id,
+        binding_id=binding_id,
+    )
+    return current_binding_vms, other_binding_vms, find_vm_with_disk(assistant_id)
 
 
 def _release_observability_fields(
@@ -456,6 +457,7 @@ def _release_observability_fields(
     release_requested_at: str,
     release_completed_at: str,
     owned_runtime_vms: list[dict],
+    other_runtime_vms: list[dict],
     disk_vm_name: str | None,
 ) -> dict:
     """Return consistent release-state observability fields."""
@@ -478,6 +480,14 @@ def _release_observability_fields(
         "owned_runtime_vm_roles": {
             str(vm.get("vm_name", "") or ""): str(vm.get("pool_role", "") or "")
             for vm in owned_runtime_vms
+            if vm.get("vm_name")
+        },
+        "other_runtime_vm_names": [
+            str(vm.get("vm_name", "") or "") for vm in other_runtime_vms
+        ],
+        "other_runtime_vm_roles": {
+            str(vm.get("vm_name", "") or ""): str(vm.get("pool_role", "") or "")
+            for vm in other_runtime_vms
             if vm.get("vm_name")
         },
         "disk_vm_name": disk_vm_name or None,
@@ -514,7 +524,10 @@ def _binding_release_state(
             )
             last_error = str(exc)
 
-    owned_runtime_vms, disk_vm_name = _owned_runtime_cleanup_state(assistant_id)
+    owned_runtime_vms, other_runtime_vms, disk_vm_name = _owned_runtime_cleanup_state(
+        assistant_id,
+        current_binding_id,
+    )
     emit_observability_event(
         "controller.release_state.enter",
         **_release_observability_fields(
@@ -526,12 +539,14 @@ def _binding_release_state(
             release_requested_at=release_requested_at,
             release_completed_at=release_completed_at,
             owned_runtime_vms=owned_runtime_vms,
+            other_runtime_vms=other_runtime_vms,
             disk_vm_name=disk_vm_name,
         ),
     )
     if (
         not job_live
         and not owned_runtime_vms
+        and not other_runtime_vms
         and disk_vm_name is None
         and (vm_name or release_requested_at or release_completed_at)
     ):
@@ -559,6 +574,7 @@ def _binding_release_state(
                     release_requested_at=release_requested_at,
                     release_completed_at=release_completed_at,
                     owned_runtime_vms=owned_runtime_vms,
+                    other_runtime_vms=other_runtime_vms,
                     disk_vm_name=disk_vm_name,
                 ),
             )
@@ -574,6 +590,7 @@ def _binding_release_state(
                     release_requested_at=release_requested_at,
                     release_completed_at=release_completed_at,
                     owned_runtime_vms=owned_runtime_vms,
+                    other_runtime_vms=other_runtime_vms,
                     disk_vm_name=disk_vm_name,
                 ),
                 release_result=result,
@@ -603,6 +620,7 @@ def _binding_release_state(
                     release_requested_at=release_requested_at,
                     release_completed_at=release_completed_at,
                     owned_runtime_vms=owned_runtime_vms,
+                    other_runtime_vms=other_runtime_vms,
                     disk_vm_name=disk_vm_name,
                 ),
                 release_retry=bool(release_requested_at),
@@ -623,6 +641,7 @@ def _binding_release_state(
                     release_requested_at=release_requested_at,
                     release_completed_at=release_completed_at,
                     owned_runtime_vms=owned_runtime_vms,
+                    other_runtime_vms=other_runtime_vms,
                     disk_vm_name=disk_vm_name,
                 ),
                 release_result=result,
@@ -656,6 +675,7 @@ def _binding_release_state(
                 release_requested_at=release_requested_at,
                 release_completed_at=release_completed_at,
                 owned_runtime_vms=owned_runtime_vms,
+                other_runtime_vms=other_runtime_vms,
                 disk_vm_name=disk_vm_name,
             ),
         )
@@ -674,14 +694,18 @@ def _binding_release_state(
         refreshed_job is not None and _job_terminal_phase(refreshed_job) is None
     )
     cleaned_vm_ref = binding_vm_ref(binding)
-    remaining_runtime_vms, remaining_disk_vm_name = _owned_runtime_cleanup_state(
-        assistant_id,
+    remaining_runtime_vms, remaining_other_runtime_vms, remaining_disk_vm_name = (
+        _owned_runtime_cleanup_state(
+            assistant_id,
+            current_binding_id,
+        )
     )
     release_complete = (
         bool(binding.get("releaseCompletedAt"))
         and not refreshed_job_live
         and not cleaned_vm_ref
         and not remaining_runtime_vms
+        and not remaining_other_runtime_vms
         and remaining_disk_vm_name is None
     )
     emit_observability_event(
@@ -695,6 +719,7 @@ def _binding_release_state(
             release_requested_at=str(binding.get("releaseRequestedAt", "") or ""),
             release_completed_at=str(binding.get("releaseCompletedAt", "") or ""),
             owned_runtime_vms=remaining_runtime_vms,
+            other_runtime_vms=remaining_other_runtime_vms,
             disk_vm_name=remaining_disk_vm_name,
         ),
         release_complete=release_complete,

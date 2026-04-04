@@ -887,6 +887,34 @@ def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
     return results
 
 
+def split_binding_runtime_vms(
+    assistant_id: str,
+    *,
+    binding_id: str | None = None,
+) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
+    """Split assistant-owned runtime VMs into current-binding and other sets."""
+
+    sanitized_assistant_id = assistant_id.lower().replace("_", "-")
+    runtime_vms = [
+        vm
+        for vm in list_pool_vms()
+        if vm.get("assistant_id") == sanitized_assistant_id
+        and vm.get("pool_role") in ("assigned", POOL_ROLE_RELEASING)
+    ]
+    if not binding_id:
+        return runtime_vms, []
+
+    binding_label = binding_id.lower().replace("_", "-")
+    current_binding_vms = []
+    other_binding_vms = []
+    for vm in runtime_vms:
+        if str(vm.get("binding_id", "") or "") == binding_label:
+            current_binding_vms.append(vm)
+        else:
+            other_binding_vms.append(vm)
+    return current_binding_vms, other_binding_vms
+
+
 def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     """Create a new pool VM and return once the GCE create request is accepted.
 

@@ -15,6 +15,7 @@ from communication.infra.vm_helpers import (
     delete_assistant_disk,
     release_pool_vm,
     replenish_pool,
+    split_binding_runtime_vms,
 )
 
 
@@ -149,6 +150,41 @@ def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypa
     )
 
     assert claimed["vm_name"] == "unity-pool-ubuntu-2-preview"
+
+
+def test_split_binding_runtime_vms_separates_current_and_other_bindings(monkeypatch):
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "list_pool_vms",
+        lambda: [
+            {
+                "vm_name": "unity-pool-ubuntu-1-preview",
+                "assistant_id": "assistant-123",
+                "binding_id": "binding-current",
+                "pool_role": "assigned",
+            },
+            {
+                "vm_name": "unity-pool-ubuntu-2-preview",
+                "assistant_id": "assistant-123",
+                "binding_id": "binding-other",
+                "pool_role": "releasing",
+            },
+            {
+                "vm_name": "unity-pool-ubuntu-3-preview",
+                "assistant_id": "assistant-999",
+                "binding_id": "binding-current",
+                "pool_role": "assigned",
+            },
+        ],
+    )
+
+    current, other = split_binding_runtime_vms(
+        "assistant-123",
+        binding_id="binding-current",
+    )
+
+    assert [vm["vm_name"] for vm in current] == ["unity-pool-ubuntu-1-preview"]
+    assert [vm["vm_name"] for vm in other] == ["unity-pool-ubuntu-2-preview"]
 
 
 def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
