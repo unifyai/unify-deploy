@@ -43,7 +43,9 @@ from communication.infra.vm_helpers import (
     AssistantDiskInUseError,
     assign_pool_vm,
     complete_pool_vm_release,
+    find_vm_with_disk,
     get_assigned_vm_ref,
+    list_pool_vms,
     probe_vm_agent_service,
     release_pool_vm,
     replenish_pool,
@@ -1601,6 +1603,31 @@ def _binding_release_state(
                 job.metadata.name,
             )
             last_error = str(exc)
+
+    sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
+    owned_runtime_vms = [
+        vm
+        for vm in list_pool_vms()
+        if vm.get("assistant_id") == sanitized_assistant_id
+        and vm.get("pool_role") in ("assigned", "releasing")
+    ]
+    disk_vm_name = find_vm_with_disk(assistant_id)
+    if (
+        not job_live
+        and not owned_runtime_vms
+        and disk_vm_name is None
+        and (vm_name or release_requested_at or release_completed_at)
+    ):
+        release_requested_at = release_requested_at or _now_iso()
+        release_completed_at = release_completed_at or _now_iso()
+        binding = _binding_payload(
+            binding,
+            vm_ref=None,
+            desktop_url=None,
+            release_requested_at=release_requested_at,
+            release_completed_at=release_completed_at,
+        )
+        vm_name = ""
 
     if vm_name:
         if release_completed_at:
