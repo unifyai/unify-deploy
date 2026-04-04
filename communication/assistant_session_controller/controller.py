@@ -29,22 +29,17 @@ from communication.infra.assistant_sessions import (
     session_desktop_mode,
     session_desktop_required,
     build_condition,
-    desktop_url_matches_vm_ref,
     emit_observability_event,
     get_assistant_session,
-    get_latest_unity_image,
     merge_conditions,
     patch_assistant_session_status,
     read_bootstrap_secret,
-    vm_refs_match,
 )
-from communication.infra.helpers import create_unity_job
 from communication.infra.vm_helpers import (
     AssistantDiskInUseError,
     assign_pool_vm,
     complete_pool_vm_release,
     find_vm_with_disk,
-    get_assigned_vm_ref,
     list_pool_vms,
     probe_vm_agent_service,
     release_pool_vm,
@@ -96,18 +91,6 @@ def _sanitize_for_k8s(value: str) -> str:
     return str(value).lower().replace("_", "-")
 
 
-def _priority_class_name() -> str:
-    return "unity-critical" if SETTINGS.deploy_env == "production" else "unity-high"
-
-
-def _conditions_map(conditions: list[dict] | None) -> dict[str, dict]:
-    return {c.get("type", ""): c for c in (conditions or []) if c.get("type")}
-
-
-def _condition_is_true(conditions: list[dict] | None, condition_type: str) -> bool:
-    return _conditions_map(conditions).get(condition_type, {}).get("status") == "True"
-
-
 def _job_terminal_phase(job) -> str | None:
     labels = job.metadata.labels or {}
     if labels.get("unity-status") == "done":
@@ -118,66 +101,6 @@ def _job_terminal_phase(job) -> str | None:
         if condition.type == "Complete" and condition.status == "True":
             return "Succeeded"
     return None
-
-
-def _session_jobs(label_selector: str) -> list:
-    assert _batch_api is not None
-    jobs = _batch_api.list_namespaced_job(
-        namespace=WATCH_NAMESPACE,
-        label_selector=label_selector,
-    )
-    return list(jobs.items)
-
-
-def _bound_job_for_session(session_name: str):
-    """Return the non-terminal Job bound to this session, if any.
-
-    Unlike the previous ``_active_job_for_session`` which required
-    ``active > 0``, this returns a Job as long as it is not terminal
-    and not being deleted.  A pod in restart-backoff temporarily has
-    ``active == 0`` without any terminal condition; treating that as
-    "no bound Job" caused the controller to claim a second container
-    for the same session.  The bootstrap deadline (fix 1) handles the
-    case where the pod never recovers.
-    """
-    jobs = _session_jobs(f"{SESSION_REF_LABEL}={session_name}")
-    for job in jobs:
-        if job.metadata.deletion_timestamp:
-            continue
-        if _job_terminal_phase(job) is not None:
-            continue
-        return job
-    return None
-
-
-def _job_matches_session(job, session_name: str) -> bool:
-    labels = job.metadata.labels or {}
-    if labels.get(SESSION_REF_LABEL) == session_name:
-        return True
-    annotations = job.metadata.annotations or {}
-    return annotations.get(SESSION_REF_ANNOTATION) == session_name
-
-
-def _job_for_session_delete(session_name: str, job_ref: dict | None):
-    assert _batch_api is not None
-    job_name = str((job_ref or {}).get("name", ""))
-    if job_name:
-        try:
-            job = _batch_api.read_namespaced_job(
-                name=job_name,
-                namespace=WATCH_NAMESPACE,
-            )
-        except ApiException as e:
-            if e.status != 404:
-                raise
-        else:
-            if (
-                not job.metadata.deletion_timestamp
-                and _job_terminal_phase(job) is None
-                and _job_matches_session(job, session_name)
-            ):
-                return job
-    return _bound_job_for_session(session_name)
 
 
 def _current_pod_ref(job_name: str) -> dict | None:
@@ -200,1059 +123,6 @@ def _refresh_session_snapshot(body: dict) -> dict | None:
     if not assistant_id:
         return body
     return get_assistant_session(_custom_api, WATCH_NAMESPACE, assistant_id)
-
-
-def _drop_conditions(
-    conditions: list[dict] | None,
-    *condition_types: str,
-) -> list[dict]:
-    ignored = set(condition_types)
-    return [
-        condition
-        for condition in (conditions or [])
-        if condition.get("type") not in ignored
-    ]
-
-
-def _runtime_state_still_current(
-    *,
-    assistant_id: str,
-    session_name: str,
-    activation_id: str,
-    action: str,
-    job_name: str | None = None,
-    vm_ref: dict | None = None,
-) -> bool:
-    assert _custom_api is not None
-    latest = get_assistant_session(_custom_api, WATCH_NAMESPACE, assistant_id)
-    if latest is None:
-        emit_observability_event(
-            "controller.stale_runtime_action_skipped",
-            assistant_id=assistant_id,
-            session_name=session_name,
-            activation_id=activation_id,
-            action=action,
-            reason="session_missing",
-            source="controller.reconcile",
-        )
-        return False
-
-    latest_spec = latest.get("spec", {})
-    latest_status = latest.get("status", {})
-    latest_activation_id = str(latest_spec.get("activationId", ""))
-    latest_job_name = str((latest_status.get("jobRef") or {}).get("name", ""))
-    latest_vm_ref = latest_status.get("vmRef")
-
-    reason = ""
-    if latest_activation_id != activation_id:
-        reason = "activation_changed"
-    elif job_name is not None and latest_job_name != job_name:
-        reason = "job_changed"
-    elif vm_ref is not None and not vm_refs_match(latest_vm_ref, vm_ref):
-        reason = "vm_changed"
-
-    if not reason:
-        return True
-
-    emit_observability_event(
-        "controller.stale_runtime_action_skipped",
-        assistant_id=assistant_id,
-        session_name=session_name,
-        activation_id=activation_id,
-        action=action,
-        reason=reason,
-        expected_job_name=job_name,
-        current_job_name=latest_job_name,
-        expected_vm_name=(vm_ref or {}).get("name"),
-        current_vm_name=(latest_vm_ref or {}).get("name"),
-        source="controller.reconcile",
-    )
-    return False
-
-
-def _claim_idle_job(assistant_id: str, session_name: str):
-    assert _batch_api is not None
-    sanitized = _sanitize_for_k8s(assistant_id)
-    jobs = _batch_api.list_namespaced_job(
-        namespace=WATCH_NAMESPACE,
-        label_selector="app=unity,unity-status=idle",
-    )
-    for job in jobs.items:
-        if not job.status.active or job.status.active <= 0:
-            continue
-        labels = dict(job.metadata.labels or {})
-        labels["assistant-id"] = sanitized
-        labels["unity-status"] = "running"
-        labels[SESSION_REF_LABEL] = session_name
-        annotations = dict(job.metadata.annotations or {})
-        annotations[SESSION_REF_ANNOTATION] = session_name
-        annotations[CONTAINER_READY_ANNOTATION] = "false"
-        body = {
-            "metadata": {
-                "labels": labels,
-                "annotations": annotations,
-                "resourceVersion": job.metadata.resource_version,
-            },
-        }
-        try:
-            _batch_api.patch_namespaced_job(
-                name=job.metadata.name,
-                namespace=WATCH_NAMESPACE,
-                body=body,
-            )
-            logger.info(
-                "Claimed idle job %s for assistant %s session %s",
-                job.metadata.name,
-                assistant_id,
-                session_name,
-            )
-            emit_observability_event(
-                "controller.job_claimed",
-                assistant_id=assistant_id,
-                session_name=session_name,
-                job_name=job.metadata.name,
-                source="controller.reconcile",
-            )
-            return _batch_api.read_namespaced_job(
-                name=job.metadata.name,
-                namespace=WATCH_NAMESPACE,
-            )
-        except ApiException as e:
-            if e.status == 409:
-                continue
-            raise
-    return None
-
-
-def _create_session_bound_job(assistant_id: str, session_name: str):
-    assert _batch_api is not None
-    timestamp_str = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
-    random_id = f"u{uuid.uuid4().hex[:4]}"
-    job_name = f"unity-{timestamp_str}-{random_id}{SETTINGS.env_suffix}"
-    image = get_latest_unity_image()
-    extra_labels = {
-        "assistant-id": _sanitize_for_k8s(assistant_id),
-        "unity-status": "running",
-        SESSION_REF_LABEL: session_name,
-    }
-    extra_annotations = {
-        SESSION_REF_ANNOTATION: session_name,
-        CONTAINER_READY_ANNOTATION: "false",
-    }
-    created = create_unity_job(
-        batch_api=_batch_api,
-        job_name=job_name,
-        namespace=WATCH_NAMESPACE,
-        image=image,
-        deploy_env=SETTINGS.deploy_env,
-        unity_status="running",
-        priority_class_name=_priority_class_name(),
-        extra_labels=extra_labels,
-        extra_annotations=extra_annotations,
-    )
-    if not created:
-        return None
-    emit_observability_event(
-        "controller.session_bound_job_created",
-        assistant_id=assistant_id,
-        session_name=session_name,
-        job_name=job_name,
-        source="controller.reconcile",
-    )
-    return _batch_api.read_namespaced_job(name=job_name, namespace=WATCH_NAMESPACE)
-
-
-def _ensure_job_binding(assistant_id: str, session_name: str):
-    job = _bound_job_for_session(session_name)
-    if job is not None:
-        return job
-
-    # Opportunistically adopt a single already-running legacy job for the assistant.
-    legacy_jobs = _session_jobs(
-        f"app=unity,assistant-id={_sanitize_for_k8s(assistant_id)}",
-    )
-    active_legacy = [
-        job
-        for job in legacy_jobs
-        if job.status.active
-        and job.status.active > 0
-        and not job.metadata.deletion_timestamp
-    ]
-    if len(active_legacy) == 1:
-        job = active_legacy[0]
-        labels = dict(job.metadata.labels or {})
-        labels[SESSION_REF_LABEL] = session_name
-        annotations = dict(job.metadata.annotations or {})
-        annotations[SESSION_REF_ANNOTATION] = session_name
-        annotations.setdefault(CONTAINER_READY_ANNOTATION, "true")
-        body = {
-            "metadata": {
-                "labels": labels,
-                "annotations": annotations,
-                "resourceVersion": job.metadata.resource_version,
-            },
-        }
-        try:
-            _batch_api.patch_namespaced_job(
-                name=job.metadata.name,
-                namespace=WATCH_NAMESPACE,
-                body=body,
-            )
-        except ApiException as exc:
-            if exc.status == 409:
-                logger.info(
-                    "Legacy adoption conflict for %s — "
-                    "another reconcile likely adopted it first, "
-                    "falling through to idle claim",
-                    job.metadata.name,
-                )
-            else:
-                raise
-        else:
-            emit_observability_event(
-                "controller.legacy_job_adopted",
-                assistant_id=assistant_id,
-                session_name=session_name,
-                job_name=job.metadata.name,
-                source="controller.reconcile",
-            )
-            return _batch_api.read_namespaced_job(
-                name=job.metadata.name,
-                namespace=WATCH_NAMESPACE,
-            )
-
-    job = _claim_idle_job(assistant_id, session_name)
-    if job is not None:
-        return job
-    return _create_session_bound_job(assistant_id, session_name)
-
-
-def _unbind_job(
-    job,
-    session_name: str,
-    *,
-    source: str = "controller.bootstrap_timeout",
-) -> None:
-    """Remove session binding and stop a job that failed to bootstrap.
-
-    Marks the job as done so it is excluded from future idle-pool claims,
-    then suspends it so the underlying pod is terminated rather than left
-    running indefinitely.  The stale-job expiry path acts as a secondary
-    cleanup for any historical done-labeled jobs that predate this fix.
-    """
-    assert _batch_api is not None
-    labels = dict(job.metadata.labels or {})
-    labels.pop(SESSION_REF_LABEL, None)
-    labels.pop("assistant-id", None)
-    labels["unity-status"] = "done"
-    annotations = dict(job.metadata.annotations or {})
-    annotations.pop(SESSION_REF_ANNOTATION, None)
-    annotations.pop(CONTAINER_READY_ANNOTATION, None)
-    body = {
-        "metadata": {"labels": labels, "annotations": annotations},
-        "spec": {"suspend": True},
-    }
-    try:
-        _batch_api.patch_namespaced_job(
-            name=job.metadata.name,
-            namespace=WATCH_NAMESPACE,
-            body=body,
-        )
-        logger.info(
-            "Unbound and suspended stale job %s from session %s",
-            job.metadata.name,
-            session_name,
-        )
-        emit_observability_event(
-            "controller.job_unbound",
-            session_name=session_name,
-            job_name=job.metadata.name,
-            suspended=True,
-            source=source,
-        )
-    except ApiException:
-        logger.exception(
-            "Failed to unbind job %s from session %s",
-            job.metadata.name,
-            session_name,
-        )
-
-
-def _update_status_for_session(body: dict) -> None:
-    assert _custom_api is not None
-    latest_body = _refresh_session_snapshot(body)
-    if latest_body is None:
-        return
-    body = latest_body
-
-    session_name = body["metadata"]["name"]
-    spec = body.get("spec", {})
-    status = body.get("status", {})
-
-    assistant_id = str(spec.get("assistantId", ""))
-    activation_id = str(spec.get("activationId", ""))
-    desktop_required = bool(spec.get("desktopRequired", False))
-    desktop_mode = str(spec.get("desktopMode", ""))
-    secret_name = str(spec.get("startupSecretRef", ""))
-    observed_activation_id = str(status.get("observedActivationId", ""))
-    new_activation = observed_activation_id != activation_id
-    existing_conditions = [] if new_activation else status.get("conditions", [])
-    activation_rollover_status = (
-        {
-            "bootstrap_retries": 0,
-            "vm_retries": 0,
-            "desktop_probe_failures": 0,
-        }
-        if new_activation
-        else {}
-    )
-    emit_observability_event(
-        "controller.session_reconcile",
-        **assistant_session_observability_fields(
-            body,
-            source="controller.reconcile",
-            new_activation=new_activation,
-            observed_activation_id=observed_activation_id,
-        ),
-    )
-
-    if not assistant_id or not activation_id or not secret_name:
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="Failed",
-            job_ref=None,
-            pod_ref=None,
-            vm_ref=None,
-            desktop_url=None,
-            last_error="AssistantSession missing required spec fields",
-            source="controller.reconcile",
-            conditions=merge_conditions(
-                existing_conditions,
-                build_condition(
-                    "Active",
-                    False,
-                    "InvalidSpec",
-                    "Missing required spec",
-                ),
-            ),
-            **activation_rollover_status,
-        )
-        return
-
-    job = _ensure_job_binding(assistant_id, session_name)
-    if job is None:
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="Failed",
-            observed_activation_id=activation_id,
-            job_ref=None,
-            pod_ref=None,
-            vm_ref=None,
-            desktop_url=None,
-            last_error="Failed to bind a Unity job",
-            source="controller.reconcile",
-            conditions=merge_conditions(
-                existing_conditions,
-                build_condition(
-                    "ContainerAssigned",
-                    False,
-                    "BindFailed",
-                    "No Unity job could be bound",
-                ),
-            ),
-            **activation_rollover_status,
-        )
-        return
-
-    terminal_phase = _job_terminal_phase(job)
-    job_ref = {"name": job.metadata.name, "namespace": WATCH_NAMESPACE}
-    pod_ref = _current_pod_ref(job.metadata.name)
-    conditions = merge_conditions(
-        existing_conditions,
-        build_condition("ContainerAssigned", True, "Bound", "Session job bound"),
-    )
-
-    if terminal_phase:
-        current_vm_ref = status.get("vmRef")
-        if not _runtime_state_still_current(
-            assistant_id=assistant_id,
-            session_name=session_name,
-            activation_id=activation_id,
-            action="terminal_transition",
-            job_name=job.metadata.name,
-            vm_ref=current_vm_ref,
-        ):
-            return
-        if current_vm_ref and current_vm_ref.get("name") and assistant_id:
-            try:
-                release_pool_vm(assistant_id, vm_name=current_vm_ref["name"])
-                emit_observability_event(
-                    "controller.terminal_vm_released",
-                    assistant_id=assistant_id,
-                    session_name=session_name,
-                    vm_name=current_vm_ref.get("name"),
-                    terminal_phase=terminal_phase,
-                    source="controller.reconcile",
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to release VM on terminal transition for %s",
-                    assistant_id,
-                )
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase=terminal_phase,
-            observed_activation_id=activation_id,
-            job_ref=job_ref,
-            pod_ref=pod_ref,
-            vm_ref=None,
-            desktop_url=None,
-            source="controller.reconcile",
-            conditions=merge_conditions(
-                conditions,
-                build_condition(
-                    "Active",
-                    False,
-                    "Terminal",
-                    f"Job reached terminal phase {terminal_phase}",
-                ),
-            ),
-            **activation_rollover_status,
-        )
-        return
-
-    annotations = job.metadata.annotations or {}
-    container_ready = annotations.get(CONTAINER_READY_ANNOTATION) == "true"
-    if not container_ready:
-        bootstrap_retries = (
-            0 if new_activation else int(status.get("bootstrapRetries", 0))
-        )
-        ready_condition = _conditions_map(existing_conditions).get(
-            "ContainerReady",
-            {},
-        )
-        transition_time_str = ready_condition.get("lastTransitionTime", "")
-
-        timed_out = False
-        if transition_time_str and not new_activation:
-            try:
-                transition_time = datetime.fromisoformat(transition_time_str)
-                elapsed = (datetime.now(timezone.utc) - transition_time).total_seconds()
-                timed_out = elapsed > CONTAINER_BOOTSTRAP_DEADLINE_SECONDS
-            except (ValueError, TypeError):
-                pass
-
-        if timed_out:
-            if not _runtime_state_still_current(
-                assistant_id=assistant_id,
-                session_name=session_name,
-                activation_id=activation_id,
-                action="bootstrap_timeout",
-                job_name=job.metadata.name,
-            ):
-                return
-            emit_observability_event(
-                "controller.bootstrap_timeout",
-                assistant_id=assistant_id,
-                session_name=session_name,
-                job_name=job.metadata.name,
-                bootstrap_retries=bootstrap_retries,
-                source="controller.reconcile",
-            )
-            _unbind_job(job, session_name)
-
-            if bootstrap_retries >= MAX_BOOTSTRAP_RETRIES:
-                patch_assistant_session_status(
-                    _custom_api,
-                    WATCH_NAMESPACE,
-                    assistant_id,
-                    phase="Failed",
-                    observed_activation_id=activation_id,
-                    job_ref=None,
-                    pod_ref=None,
-                    vm_ref=None,
-                    desktop_url=None,
-                    last_error=(
-                        f"Container failed to become ready after "
-                        f"{bootstrap_retries + 1} attempts"
-                    ),
-                    source="controller.reconcile",
-                    bootstrap_retries=bootstrap_retries + 1,
-                    conditions=merge_conditions(
-                        conditions,
-                        build_condition(
-                            "ContainerReady",
-                            False,
-                            "BootstrapFailed",
-                            f"Exhausted {bootstrap_retries + 1} bootstrap attempts",
-                        ),
-                    ),
-                )
-                return
-
-            patch_assistant_session_status(
-                _custom_api,
-                WATCH_NAMESPACE,
-                assistant_id,
-                phase="PendingContainer",
-                observed_activation_id=activation_id,
-                job_ref=None,
-                pod_ref=None,
-                vm_ref=None,
-                desktop_url=None,
-                last_error=(
-                    f"Bootstrap timeout on attempt {bootstrap_retries + 1}, retrying"
-                ),
-                source="controller.reconcile",
-                bootstrap_retries=bootstrap_retries + 1,
-                conditions=merge_conditions(
-                    existing_conditions,
-                    build_condition(
-                        "ContainerReady",
-                        False,
-                        "BootstrapTimeout",
-                        (
-                            f"Container did not become ready within "
-                            f"{int(CONTAINER_BOOTSTRAP_DEADLINE_SECONDS)}s"
-                        ),
-                    ),
-                ),
-            )
-            return
-
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="ContainerAssigned",
-            observed_activation_id=activation_id,
-            job_ref=job_ref,
-            pod_ref=pod_ref,
-            vm_ref=None if new_activation else status.get("vmRef"),
-            desktop_url=None if new_activation else status.get("desktopUrl"),
-            last_error="" if new_activation else None,
-            source="controller.reconcile",
-            conditions=merge_conditions(
-                conditions,
-                build_condition(
-                    "ContainerReady",
-                    False,
-                    "WaitingForUnity",
-                    "Unity has not yet signaled container-ready",
-                ),
-                build_condition(
-                    "Active",
-                    False,
-                    "WaitingForUnity",
-                    "Waiting for Unity bootstrap",
-                ),
-            ),
-            **activation_rollover_status,
-        )
-        return
-
-    conditions = merge_conditions(
-        conditions,
-        build_condition(
-            "ContainerReady",
-            True,
-            "UnityReady",
-            "Unity bootstrap complete",
-        ),
-    )
-
-    if not desktop_required:
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="Active",
-            observed_activation_id=activation_id,
-            job_ref=job_ref,
-            pod_ref=pod_ref,
-            vm_ref=None,
-            desktop_url=None,
-            last_error="" if new_activation else None,
-            source="controller.reconcile",
-            conditions=merge_conditions(
-                conditions,
-                build_condition("Active", True, "Ready", "Container session active"),
-            ),
-            **activation_rollover_status,
-        )
-        return
-
-    vm_ref = None if new_activation else status.get("vmRef")
-    desktop_url = None if new_activation else status.get("desktopUrl")
-    if new_activation:
-        assigned_vm_ref = None
-    elif vm_ref and vm_ref.get("name"):
-        assigned_vm_ref = verify_vm_assignment(vm_ref["name"], assistant_id)
-    else:
-        assigned_vm_ref = get_assigned_vm_ref(assistant_id)
-    if assigned_vm_ref is None:
-        vm_ref = None
-        desktop_url = None
-        existing_conditions = _drop_conditions(existing_conditions, "VMAssigned")
-        conditions = _drop_conditions(conditions, "VMAssigned")
-        existing_conditions = merge_conditions(
-            existing_conditions,
-            build_condition(
-                "DesktopReady",
-                False,
-                "WaitingForDesktop",
-                "Waiting for authenticated desktop readiness",
-            ),
-            build_condition(
-                "Active",
-                False,
-                "WaitingForDesktop",
-                "Desktop session not ready yet",
-            ),
-        )
-    else:
-        if not vm_refs_match(vm_ref, assigned_vm_ref):
-            vm_ref = assigned_vm_ref
-            desktop_url = None
-            existing_conditions = _drop_conditions(existing_conditions, "VMAssigned")
-            conditions = _drop_conditions(conditions, "VMAssigned")
-            existing_conditions = merge_conditions(
-                existing_conditions,
-                build_condition(
-                    "DesktopReady",
-                    False,
-                    "WaitingForDesktop",
-                    "Waiting for authenticated desktop readiness",
-                ),
-                build_condition(
-                    "Active",
-                    False,
-                    "WaitingForDesktop",
-                    "Desktop session not ready yet",
-                ),
-            )
-        elif desktop_url and not desktop_url_matches_vm_ref(
-            desktop_url,
-            assigned_vm_ref,
-        ):
-            desktop_url = None
-            existing_conditions = merge_conditions(
-                existing_conditions,
-                build_condition(
-                    "DesktopReady",
-                    False,
-                    "WaitingForDesktop",
-                    "Waiting for authenticated desktop readiness",
-                ),
-                build_condition(
-                    "Active",
-                    False,
-                    "WaitingForDesktop",
-                    "Desktop session not ready yet",
-                ),
-            )
-
-    if not vm_ref:
-        vm_retries_count = 0 if new_activation else int(status.get("vmRetries", 0))
-        if vm_retries_count > MAX_VM_READINESS_RETRIES:
-            replenish_pool(desktop_mode or "ubuntu")
-            patch_assistant_session_status(
-                _custom_api,
-                WATCH_NAMESPACE,
-                assistant_id,
-                phase="PendingVM",
-                observed_activation_id=activation_id,
-                job_ref=job_ref,
-                pod_ref=pod_ref,
-                vm_ref=None,
-                desktop_url=None,
-                last_error=(
-                    f"VM readiness exhausted after {vm_retries_count} attempts; "
-                    f"waiting for pool replenishment"
-                ),
-                source="controller.reconcile",
-                conditions=merge_conditions(
-                    conditions,
-                    build_condition(
-                        "VMAssigned",
-                        False,
-                        "RetriesExhausted",
-                        f"Exhausted {vm_retries_count} VM readiness attempts",
-                    ),
-                    build_condition(
-                        "DesktopReady",
-                        False,
-                        "RetriesExhausted",
-                        "Waiting for pool replenishment",
-                    ),
-                ),
-                **activation_rollover_status,
-            )
-            return
-
-        startup_payload = read_bootstrap_secret(_core_api, WATCH_NAMESPACE, secret_name)
-        api_key = str(startup_payload.get("api_key", ""))
-        try:
-            result = assign_pool_vm(
-                assistant_id=assistant_id,
-                unify_apikey=api_key,
-                vm_type=desktop_mode or "ubuntu",
-            )
-            vm_ref = {
-                "name": result["vm_name"],
-                "hostname": result["hostname"],
-                "vmType": desktop_mode or "ubuntu",
-            }
-            conditions = merge_conditions(
-                conditions,
-                build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
-                build_condition(
-                    "DesktopReady",
-                    False,
-                    "WaitingForDesktop",
-                    "Waiting for authenticated desktop readiness",
-                ),
-                build_condition(
-                    "Active",
-                    False,
-                    "WaitingForDesktop",
-                    "Desktop session not ready yet",
-                ),
-            )
-            patch_assistant_session_status(
-                _custom_api,
-                WATCH_NAMESPACE,
-                assistant_id,
-                phase="PendingVM",
-                observed_activation_id=activation_id,
-                job_ref=job_ref,
-                pod_ref=pod_ref,
-                vm_ref=vm_ref,
-                desktop_url=None,
-                last_error="",
-                source="controller.reconcile",
-                conditions=conditions,
-                **activation_rollover_status,
-            )
-            return
-        except ValueError as exc:
-            replenish_pool(desktop_mode or "ubuntu")
-            patch_assistant_session_status(
-                _custom_api,
-                WATCH_NAMESPACE,
-                assistant_id,
-                phase="PendingVM",
-                observed_activation_id=activation_id,
-                job_ref=job_ref,
-                pod_ref=pod_ref,
-                vm_ref=None,
-                desktop_url=None,
-                last_error=str(exc),
-                source="controller.reconcile",
-                conditions=merge_conditions(
-                    conditions,
-                    build_condition(
-                        "VMAssigned",
-                        False,
-                        "WaitingForCapacity",
-                        str(exc),
-                    ),
-                    build_condition(
-                        "DesktopReady",
-                        False,
-                        "WaitingForCapacity",
-                        "Waiting for VM capacity",
-                    ),
-                ),
-                **activation_rollover_status,
-            )
-            return
-        except Exception as exc:  # pragma: no cover - defensive reconcile
-            logger.exception("AssistantSession VM assignment failed")
-            emit_observability_event(
-                "controller.vm_assignment_failed",
-                **assistant_session_observability_fields(
-                    body,
-                    source="controller.reconcile",
-                    error=str(exc),
-                ),
-            )
-            patch_assistant_session_status(
-                _custom_api,
-                WATCH_NAMESPACE,
-                assistant_id,
-                phase="PendingVM",
-                observed_activation_id=activation_id,
-                job_ref=job_ref,
-                pod_ref=pod_ref,
-                vm_ref=None,
-                desktop_url=None,
-                last_error=str(exc),
-                source="controller.reconcile",
-                conditions=merge_conditions(
-                    conditions,
-                    build_condition(
-                        "VMAssigned",
-                        False,
-                        "AssignError",
-                        str(exc),
-                    ),
-                ),
-                **activation_rollover_status,
-            )
-            return
-
-    if _condition_is_true(existing_conditions, "DesktopReady"):
-        vm_hostname = (vm_ref or {}).get("hostname", "")
-        probe_failures = (
-            0 if new_activation else int(status.get("desktopProbeFailures", 0))
-        )
-
-        if vm_hostname:
-            alive = probe_vm_agent_service(vm_hostname, timeout=3.0)
-            if not alive:
-                probe_failures += 1
-                if probe_failures >= DESKTOP_LIVENESS_FAILURE_THRESHOLD:
-                    if not _runtime_state_still_current(
-                        assistant_id=assistant_id,
-                        session_name=session_name,
-                        activation_id=activation_id,
-                        action="desktop_liveness_failed",
-                        job_name=job.metadata.name,
-                        vm_ref=vm_ref,
-                    ):
-                        return
-                    emit_observability_event(
-                        "controller.desktop_liveness_failed",
-                        assistant_id=assistant_id,
-                        session_name=session_name,
-                        vm_name=(vm_ref or {}).get("name"),
-                        consecutive_failures=probe_failures,
-                        source="controller.reconcile",
-                    )
-                    try:
-                        release_pool_vm(assistant_id, vm_name=vm_ref["name"])
-                    except Exception:
-                        logger.exception(
-                            "Failed to release dead VM for %s",
-                            assistant_id,
-                        )
-                    patch_assistant_session_status(
-                        _custom_api,
-                        WATCH_NAMESPACE,
-                        assistant_id,
-                        phase="PendingVM",
-                        observed_activation_id=activation_id,
-                        job_ref=job_ref,
-                        pod_ref=pod_ref,
-                        vm_ref=None,
-                        desktop_url=None,
-                        last_error=(
-                            f"Desktop VM unreachable after "
-                            f"{probe_failures} consecutive probes"
-                        ),
-                        source="controller.reconcile",
-                        desktop_probe_failures=0,
-                        conditions=merge_conditions(
-                            conditions,
-                            build_condition(
-                                "VMAssigned",
-                                False,
-                                "LivenessFailed",
-                                f"VM unreachable after {probe_failures} probes",
-                            ),
-                            build_condition(
-                                "DesktopReady",
-                                False,
-                                "LivenessFailed",
-                                "Released VM after liveness failure",
-                            ),
-                            build_condition(
-                                "Active",
-                                False,
-                                "LivenessFailed",
-                                "Desktop lost; re-assigning VM",
-                            ),
-                        ),
-                    )
-                    return
-
-                patch_assistant_session_status(
-                    _custom_api,
-                    WATCH_NAMESPACE,
-                    assistant_id,
-                    phase="Active",
-                    observed_activation_id=activation_id,
-                    job_ref=job_ref,
-                    pod_ref=pod_ref,
-                    vm_ref=vm_ref,
-                    desktop_url=desktop_url,
-                    last_error="",
-                    source="controller.reconcile",
-                    desktop_probe_failures=probe_failures,
-                    conditions=merge_conditions(
-                        conditions,
-                        build_condition(
-                            "VMAssigned",
-                            True,
-                            "Assigned",
-                            "Managed VM assigned",
-                        ),
-                        build_condition(
-                            "DesktopReady",
-                            True,
-                            "DesktopReady",
-                            "Authenticated desktop readiness complete",
-                        ),
-                        build_condition(
-                            "Active",
-                            True,
-                            "Ready",
-                            "Desktop session active",
-                        ),
-                    ),
-                )
-                return
-
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="Active",
-            observed_activation_id=activation_id,
-            job_ref=job_ref,
-            pod_ref=pod_ref,
-            vm_ref=vm_ref,
-            desktop_url=desktop_url,
-            last_error="",
-            source="controller.reconcile",
-            desktop_probe_failures=0,
-            conditions=merge_conditions(
-                conditions,
-                build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
-                build_condition(
-                    "DesktopReady",
-                    True,
-                    "DesktopReady",
-                    "Authenticated desktop readiness complete",
-                ),
-                build_condition("Active", True, "Ready", "Desktop session active"),
-            ),
-        )
-        return
-
-    vm_assigned_condition = _conditions_map(existing_conditions).get(
-        "VMAssigned",
-        {},
-    )
-    vm_assigned_time_str = vm_assigned_condition.get("lastTransitionTime", "")
-    vm_timed_out = False
-    if vm_assigned_time_str and not new_activation:
-        try:
-            vm_assigned_time = datetime.fromisoformat(vm_assigned_time_str)
-            vm_elapsed = (datetime.now(timezone.utc) - vm_assigned_time).total_seconds()
-            vm_timed_out = vm_elapsed > VM_READINESS_DEADLINE_SECONDS
-        except (ValueError, TypeError):
-            pass
-
-    if vm_timed_out:
-        vm_retries_count = int(status.get("vmRetries", 0))
-        if not _runtime_state_still_current(
-            assistant_id=assistant_id,
-            session_name=session_name,
-            activation_id=activation_id,
-            action="vm_readiness_timeout",
-            job_name=job.metadata.name,
-            vm_ref=vm_ref,
-        ):
-            return
-        emit_observability_event(
-            "controller.vm_readiness_timeout",
-            assistant_id=assistant_id,
-            session_name=session_name,
-            vm_name=(vm_ref or {}).get("name"),
-            vm_retries=vm_retries_count,
-            source="controller.reconcile",
-        )
-        try:
-            release_pool_vm(assistant_id, vm_name=vm_ref["name"])
-        except Exception:
-            logger.exception(
-                "Failed to release timed-out VM for %s",
-                assistant_id,
-            )
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="PendingVM",
-            observed_activation_id=activation_id,
-            job_ref=job_ref,
-            pod_ref=pod_ref,
-            vm_ref=None,
-            desktop_url=None,
-            last_error=(
-                f"VM readiness timeout on attempt {vm_retries_count + 1}, retrying"
-            ),
-            source="controller.reconcile",
-            vm_retries=vm_retries_count + 1,
-            conditions=merge_conditions(
-                conditions,
-                build_condition(
-                    "VMAssigned",
-                    False,
-                    "ReadinessTimeout",
-                    (
-                        f"VM did not become ready within "
-                        f"{int(VM_READINESS_DEADLINE_SECONDS)}s"
-                    ),
-                ),
-                build_condition(
-                    "DesktopReady",
-                    False,
-                    "ReadinessTimeout",
-                    "Released VM after readiness timeout",
-                ),
-            ),
-        )
-        return
-
-    patch_assistant_session_status(
-        _custom_api,
-        WATCH_NAMESPACE,
-        assistant_id,
-        phase="PendingVM",
-        observed_activation_id=activation_id,
-        job_ref=job_ref,
-        pod_ref=pod_ref,
-        vm_ref=vm_ref,
-        desktop_url=desktop_url,
-        last_error="",
-        source="controller.reconcile",
-        conditions=merge_conditions(
-            conditions,
-            build_condition("VMAssigned", True, "Assigned", "Managed VM assigned"),
-            build_condition(
-                "DesktopReady",
-                False,
-                "WaitingForDesktop",
-                "Waiting for authenticated desktop readiness",
-            ),
-            build_condition(
-                "Active",
-                False,
-                "WaitingForDesktop",
-                "Desktop session not ready yet",
-            ),
-        ),
-        **activation_rollover_status,
-    )
 
 
 _BINDING_UNSET = object()
@@ -1419,17 +289,6 @@ def _job_for_binding(session_name: str, binding: dict | None):
     return None
 
 
-def _binding_has_runtime_refs(binding: dict | None) -> bool:
-    """Return whether a binding still owns any concrete runtime resource."""
-
-    return bool(
-        binding_job_ref(binding).get("name")
-        or binding_pod_ref(binding).get("name")
-        or binding_vm_ref(binding).get("name")
-        or binding_desktop_url(binding),
-    )
-
-
 def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: dict):
     """Claim exactly one idle Job for the current binding."""
 
@@ -1574,6 +433,19 @@ def _condition_state(
     return merge_conditions(existing_conditions, *updates)
 
 
+def _owned_runtime_cleanup_state(assistant_id: str) -> tuple[list[dict], str | None]:
+    """Return any assistant-owned VMs or attached assistant disk still present."""
+
+    sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
+    owned_runtime_vms = [
+        vm
+        for vm in list_pool_vms()
+        if vm.get("assistant_id") == sanitized_assistant_id
+        and vm.get("pool_role") in ("assigned", "releasing")
+    ]
+    return owned_runtime_vms, find_vm_with_disk(assistant_id)
+
+
 def _binding_release_state(
     *,
     assistant_id: str,
@@ -1604,14 +476,7 @@ def _binding_release_state(
             )
             last_error = str(exc)
 
-    sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
-    owned_runtime_vms = [
-        vm
-        for vm in list_pool_vms()
-        if vm.get("assistant_id") == sanitized_assistant_id
-        and vm.get("pool_role") in ("assigned", "releasing")
-    ]
-    disk_vm_name = find_vm_with_disk(assistant_id)
+    owned_runtime_vms, disk_vm_name = _owned_runtime_cleanup_state(assistant_id)
     if (
         not job_live
         and not owned_runtime_vms
@@ -1669,7 +534,7 @@ def _binding_release_state(
     else:
         if not release_requested_at:
             release_requested_at = _now_iso()
-        if not release_completed_at:
+        if not release_completed_at and not owned_runtime_vms and disk_vm_name is None:
             release_completed_at = _now_iso()
         binding = _binding_payload(
             binding,
@@ -1682,10 +547,15 @@ def _binding_release_state(
         refreshed_job is not None and _job_terminal_phase(refreshed_job) is None
     )
     cleaned_vm_ref = binding_vm_ref(binding)
+    remaining_runtime_vms, remaining_disk_vm_name = _owned_runtime_cleanup_state(
+        assistant_id,
+    )
     release_complete = (
         bool(binding.get("releaseCompletedAt"))
         and not refreshed_job_live
         and not cleaned_vm_ref
+        and not remaining_runtime_vms
+        and remaining_disk_vm_name is None
     )
     if release_complete:
         released_conditions = _condition_state(
@@ -1957,6 +827,33 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
 
     job = _job_for_binding(session_name, binding)
     if binding_job_ref(binding) and job is None:
+        release_phase, release_binding, release_conditions, release_error = (
+            _binding_release_state(
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding=binding,
+                existing_conditions=existing_conditions,
+                desktop_required=desktop_required,
+                source_reason="job_missing",
+            )
+        )
+        if release_phase != "Released":
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase=release_phase,
+                observed_activation_id=activation_id,
+                binding=release_binding if release_binding else None,
+                last_error=release_error
+                or "Recorded binding Job disappeared before runtime cleanup completed",
+                source="controller.reconcile",
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                desktop_probe_failures=0,
+                conditions=release_conditions,
+            )
+            return
         decision = _restart_binding_decision(
             assistant_id=assistant_id,
             activation_id=activation_id,
@@ -1978,7 +875,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             vm_retries=vm_retries,
             desktop_probe_failures=0,
             conditions=_condition_state(
-                existing_conditions,
+                release_conditions,
                 decision["phase"],
                 desktop_required,
                 container_assigned=False,

@@ -361,3 +361,257 @@ def test_reconcile_releases_failed_stopped_session_without_binding(monkeypatch):
 
     assert patch_status.call_args.kwargs["phase"] == "Released"
     assert patch_status.call_args.kwargs["binding"] is None
+
+
+def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "PendingGuest"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+        vmAssignedAt="2026-04-03T00:00:05+00:00",
+    )
+    patch_status = MagicMock()
+    release_pool_vm = MagicMock(
+        return_value={"released": True, "pool_role": "releasing"},
+    )
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "list_pool_vms",
+        lambda *_args, **_kwargs: [
+            {
+                "assistant_id": "1207",
+                "pool_role": "assigned",
+                "vm_name": "unity-pool-ubuntu-1",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        controller,
+        "find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+    )
+    monkeypatch.setattr(controller, "release_pool_vm", release_pool_vm)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    release_pool_vm.assert_called_once_with(
+        "1207",
+        "binding-1",
+        vm_name="unity-pool-ubuntu-1",
+    )
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+    assert "Job disappeared" in patch_status.call_args.kwargs["last_error"]
+
+
+def test_reconcile_job_missing_restarts_only_after_cleanup_finishes(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "PendingContainer"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+    )
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "list_pool_vms", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+    assert patch_status.call_args.kwargs["binding"]["id"] != "binding-1"
+    assert patch_status.call_args.kwargs["last_error"] == (
+        "Recorded binding Job disappeared before runtime became ready"
+    )
+
+
+def test_reconcile_waits_for_vm_capacity_when_assignment_fails(monkeypatch):
+    body = _base_session()
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+    )
+    patch_status = MagicMock()
+    replenish_pool = MagicMock()
+    assign_pool_vm = MagicMock(side_effect=ValueError("Waiting for VM capacity"))
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(),
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "read_bootstrap_secret",
+        lambda *_args, **_kwargs: {"api_key": "key"},
+    )
+    monkeypatch.setattr(controller, "assign_pool_vm", assign_pool_vm)
+    monkeypatch.setattr(controller, "replenish_pool", replenish_pool)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    replenish_pool.assert_called_once_with("ubuntu")
+    assert patch_status.call_args.kwargs["phase"] == "PendingVM"
+    assert patch_status.call_args.kwargs["last_error"] == "Waiting for VM capacity"
+    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+
+
+def test_reconcile_waits_for_disk_release_before_assigning_vm(monkeypatch):
+    body = _base_session()
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+    )
+    patch_status = MagicMock()
+    assign_pool_vm = MagicMock(
+        side_effect=controller.AssistantDiskInUseError("assistant disk still attached"),
+    )
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(),
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "read_bootstrap_secret",
+        lambda *_args, **_kwargs: {"api_key": "key"},
+    )
+    monkeypatch.setattr(controller, "assign_pool_vm", assign_pool_vm)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "PendingVM"
+    assert (
+        patch_status.call_args.kwargs["last_error"] == "assistant disk still attached"
+    )
+    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+
+
+def test_reconcile_activation_replacement_waits_for_release(monkeypatch):
+    body = _base_session()
+    body["spec"]["activationId"] = "act-2"
+    body["status"]["phase"] = "Active"
+    body["status"]["observedActivationId"] = "act-1"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+        vmAssignedAt="2026-04-03T00:00:05+00:00",
+    )
+    patch_status = MagicMock()
+    release_pool_vm = MagicMock(
+        return_value={"released": True, "pool_role": "releasing"},
+    )
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "list_pool_vms",
+        lambda *_args, **_kwargs: [
+            {
+                "assistant_id": "1207",
+                "pool_role": "assigned",
+                "vm_name": "unity-pool-ubuntu-1",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        controller,
+        "find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+    )
+    monkeypatch.setattr(controller, "release_pool_vm", release_pool_vm)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    release_pool_vm.assert_called_once_with(
+        "1207",
+        "binding-1",
+        vm_name="unity-pool-ubuntu-1",
+    )
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+    assert patch_status.call_args.kwargs["observed_activation_id"] == "act-1"
+    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+
+
+def test_reconcile_does_not_mark_released_while_disk_is_still_attached(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+    )
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "list_pool_vms", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        controller,
+        "find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
