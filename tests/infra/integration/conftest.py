@@ -47,6 +47,8 @@ GKE_CLUSTER = os.getenv("TEST_GKE_CLUSTER", "unity")
 GKE_REGION = os.getenv("TEST_GKE_REGION", "us-central1")
 NAMESPACE = os.getenv("TEST_NAMESPACE", "staging")
 VM_ZONE = os.getenv("TEST_VM_ZONE", "us-central1-a")
+ASSISTANT_SESSION_REF_LABEL = "assistantsession.unify.ai/name"
+ASSISTANT_SESSION_REF_ANNOTATION = "assistantsession.unify.ai/name"
 
 COMMS_APP_URL = os.getenv(
     "TEST_COMMS_APP_URL",
@@ -1003,8 +1005,13 @@ class JobTracker:
             except Exception:
                 continue
             labels = dict(job.metadata.labels or {})
+            annotations = dict(job.metadata.annotations or {})
             assistant_id = str(labels.get("assistant-id", "") or "").strip()
-            if assistant_id:
+            session_backed = bool(
+                labels.get(ASSISTANT_SESSION_REF_LABEL)
+                or annotations.get(ASSISTANT_SESSION_REF_ANNOTATION),
+            )
+            if assistant_id and session_backed:
                 assistant_ids.add(assistant_id)
                 continue
             try:
