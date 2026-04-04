@@ -509,7 +509,9 @@ def create_or_update_assistant_session(
                 existing = get_assistant_session(custom_api, namespace, assistant_id)
                 if existing is None:
                     continue
-                continue
+                if _assistant_session_spec_matches(existing, spec):
+                    return existing
+                raise e
 
         rv = existing.get("metadata", {}).get("resourceVersion")
         patch: dict[str, Any] = {"spec": spec}

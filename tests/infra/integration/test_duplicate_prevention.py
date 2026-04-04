@@ -70,6 +70,17 @@ def test_concurrent_startups_produce_at_most_one_container(
         session = get_assistant_session(comms, assistant_id)
         assert session is not None
         session_name = session["metadata"]["name"]
+        session_activation_id = str(
+            (session.get("spec") or {}).get("activationId", "") or "",
+        )
+        response_activation_ids = {
+            r.get("activation_id") for r in responses if r.get("activation_id")
+        }
+        assert response_activation_ids == {session_activation_id}, (
+            f"Expected both responses to return canonical activation_id "
+            f"{session_activation_id}, got {response_activation_ids}. "
+            f"Duplicate callers did not converge on the same runtime intent."
+        )
         bound_jobs = list_jobs_with_session_ref(batch_api, session_name)
         for job in bound_jobs:
             job_tracker.track(job.metadata.name)

@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from communication.infra import assistant_sessions as assistant_sessions_module
@@ -496,7 +497,7 @@ def test_create_or_update_assistant_session_retries_when_create_conflict_reread_
     assert session is existing_session
 
 
-def test_create_or_update_assistant_session_reconciles_create_conflict_to_requested_spec(
+def test_create_or_update_assistant_session_raises_on_create_conflict_when_spec_differs(
     monkeypatch,
 ):
     desired_spec = build_assistant_session_spec(
@@ -526,25 +527,30 @@ def test_create_or_update_assistant_session_reconciles_create_conflict_to_reques
         "get_assistant_session",
         _get_session,
     )
+    patch_calls = {"count": 0}
 
     class FakeCustomApi:
         def create_namespaced_custom_object(self, **_kwargs):
             raise ApiException(status=409)
 
         def patch_namespaced_custom_object(self, **kwargs):
+            patch_calls["count"] += 1
             stored_session["spec"] = deepcopy(kwargs["body"]["spec"])
             stored_session["metadata"]["resourceVersion"] = "2"
             return deepcopy(stored_session)
 
-    session = create_or_update_assistant_session(
-        FakeCustomApi(),
-        "preview",
-        "1207",
-        desired_spec,
-    )
+    with pytest.raises(ApiException) as exc_info:
+        create_or_update_assistant_session(
+            FakeCustomApi(),
+            "preview",
+            "1207",
+            desired_spec,
+        )
 
-    assert session["spec"]["medium"] == "unify_message"
-    assert session["spec"]["activationId"] == "act-1"
+    assert exc_info.value.status == 409
+    assert patch_calls["count"] == 0
+    assert stored_session["spec"]["medium"] == "email"
+    assert stored_session["spec"]["activationId"] == "act-1"
 
 
 def test_create_or_update_assistant_session_applies_requested_activation(
