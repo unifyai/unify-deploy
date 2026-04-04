@@ -958,12 +958,25 @@ async def stop_current_assistant_session(assistant_id: str):
             "reason": "not_found",
         }
 
+    binding = session_binding(session)
+    emit_observability_event(
+        "infra.session.stop.requested",
+        **assistant_session_observability_fields(session, assistant_id=assistant_id),
+        release_requested_at=binding.get("releaseRequestedAt"),
+        release_completed_at=binding.get("releaseCompletedAt"),
+    )
     updated = await asyncio.to_thread(
         patch_assistant_session_spec,
         custom_api,
         SETTINGS.default_namespace,
         assistant_id,
         desired_state=DESIRED_STATE_STOPPED,
+    )
+    emit_observability_event(
+        "infra.session.stop.accepted",
+        **assistant_session_observability_fields(updated, assistant_id=assistant_id),
+        previous_phase=((session.get("status") or {}).get("phase") or None),
+        previous_binding_id=binding_id_from_status(binding) or None,
     )
     return {
         "success": True,
@@ -1796,10 +1809,15 @@ async def _resolve_release_vm_name(
     if not vm_name:
         emit_observability_event(
             "infra.vm_release.skipped",
-            assistant_id=request.assistant_id,
-            binding_id=request.binding_id,
-            job_name=request.job_name,
+            **assistant_session_observability_fields(
+                session,
+                assistant_id=request.assistant_id,
+            ),
+            requested_binding_id=request.binding_id,
+            requested_job_name=request.job_name,
             reason="no_vm_ref",
+            release_requested_at=binding.get("releaseRequestedAt"),
+            release_completed_at=binding.get("releaseCompletedAt"),
         )
         return None, {
             "released": False,
@@ -1829,6 +1847,14 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
         if skipped is not None:
             return skipped
 
+        emit_observability_event(
+            "infra.vm_release.requested",
+            assistant_id=request.assistant_id,
+            binding_id=request.binding_id,
+            job_name=request.job_name,
+            requested_vm_name=request.vm_name,
+            resolved_vm_name=resolved_vm_name,
+        )
         result = await asyncio.to_thread(
             release_pool_vm,
             request.assistant_id,

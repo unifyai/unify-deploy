@@ -92,7 +92,7 @@ def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._update_instance_metadata",
-        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+        lambda vm_name, updates, **_kwargs: metadata_updates.append((vm_name, updates)),
     )
 
     assert _start_one_stopped_vm(client, vm)
@@ -207,7 +207,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._update_instance_metadata",
-        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+        lambda vm_name, updates, **_kwargs: metadata_updates.append((vm_name, updates)),
     )
 
     result = release_pool_vm("assistant-123", "binding-123")
@@ -252,7 +252,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._update_instance_metadata",
-        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+        lambda vm_name, updates, **_kwargs: metadata_updates.append((vm_name, updates)),
     )
 
     result = release_pool_vm(
@@ -339,7 +339,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._update_instance_metadata",
-        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+        lambda vm_name, updates, **_kwargs: metadata_updates.append((vm_name, updates)),
     )
 
     result = release_pool_vm("assistant-123", "binding-123")
@@ -424,7 +424,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._update_instance_metadata",
-        lambda vm_name, updates: metadata_updates.append((vm_name, updates)),
+        lambda vm_name, updates, **_kwargs: metadata_updates.append((vm_name, updates)),
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._set_pool_labels",

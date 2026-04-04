@@ -265,6 +265,15 @@ def _release_metadata_updates(*, clear_assignment: bool) -> Dict[str, str]:
     return updates
 
 
+def _metadata_update_actions(updates: Dict[str, str]) -> Dict[str, str]:
+    """Return a value-safe summary of metadata writes."""
+
+    return {
+        key: ("cleared" if value in ("", None) else "set")
+        for key, value in updates.items()
+    }
+
+
 def _release_metadata_still_present(instance) -> bool:
     """Return whether the watcher-triggering release metadata is still present."""
     return any(
@@ -1487,6 +1496,10 @@ def _update_instance_metadata(
     vm_name: str,
     updates: Dict[str, str],
     max_retries: int = 3,
+    *,
+    source: str | None = None,
+    assistant_id: str | None = None,
+    binding_id: str | None = None,
 ) -> None:
     """Update metadata on a running instance (merge with existing).
 
@@ -1521,11 +1534,31 @@ def _update_instance_metadata(
                 metadata_resource=metadata,
             )
             op.result()
+            refreshed = client.get(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                instance=vm_name,
+            )
+            tracked_keys = sorted(
+                set(
+                    updates.keys()
+                    | set(RELEASE_TRIGGER_METADATA_KEYS)
+                    | {ASSISTANT_ID_LABEL, BINDING_ID_LABEL, "disk-device"},
+                ),
+            )
             logger.info(f"Updated metadata on {vm_name}: {list(updates.keys())}")
             _log_vm_pool_event(
                 "metadata_update",
                 vm_name=vm_name,
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                source=source,
                 metadata_keys=sorted(updates.keys()),
+                metadata_actions=_metadata_update_actions(updates),
+                metadata_presence={
+                    key: bool(_read_instance_metadata(refreshed, key))
+                    for key in tracked_keys
+                },
             )
             return
         except PreconditionFailed:
@@ -1664,7 +1697,13 @@ def assign_pool_vm(
         }
         if vm_type == "windows" and MAK_KEY:
             metadata["office-mak-key"] = MAK_KEY
-        _update_instance_metadata(vm_name, metadata)
+        _update_instance_metadata(
+            vm_name,
+            metadata,
+            source="assign_pool_vm.assignment",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+        )
 
         logger.info(
             f"Pool assignment complete: {vm_name} -> assistant {assistant_id}",
@@ -2072,10 +2111,21 @@ def release_pool_vm(
 
     if current_role == POOL_ROLE_RELEASING:
         resumed = False
-        if _release_metadata_still_present(vm):
+        release_metadata_present = _release_metadata_still_present(vm)
+        _log_vm_pool_event(
+            "release_resume_check",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=vm_name,
+            release_metadata_present=release_metadata_present,
+        )
+        if release_metadata_present:
             _update_instance_metadata(
                 vm_name,
                 _release_metadata_updates(clear_assignment=False),
+                source="release_pool_vm.resume",
+                assistant_id=assistant_id,
+                binding_id=binding_id,
             )
             resumed = True
             _log_vm_pool_event(
@@ -2135,6 +2185,9 @@ def release_pool_vm(
     _update_instance_metadata(
         vm_name,
         _release_metadata_updates(clear_assignment=False),
+        source="release_pool_vm.request",
+        assistant_id=assistant_id,
+        binding_id=binding_id,
     )
 
     logger.info(
@@ -2199,7 +2252,13 @@ def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
         }
 
     detached, disk_name = _detach_attached_assistant_disk(vm_name)
-    _update_instance_metadata(vm_name, _release_metadata_updates(clear_assignment=True))
+    _update_instance_metadata(
+        vm_name,
+        _release_metadata_updates(clear_assignment=True),
+        source="complete_pool_vm_release.clear_assignment",
+        assistant_id=assistant_id or None,
+        binding_id=current_binding_id or None,
+    )
 
     if not _has_current_pool_contract(vm):
         _recycle_pool_vm_instance(

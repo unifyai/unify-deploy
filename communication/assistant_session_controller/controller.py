@@ -446,6 +446,44 @@ def _owned_runtime_cleanup_state(assistant_id: str) -> tuple[list[dict], str | N
     return owned_runtime_vms, find_vm_with_disk(assistant_id)
 
 
+def _release_observability_fields(
+    *,
+    assistant_id: str,
+    session_name: str,
+    binding: dict,
+    source_reason: str,
+    job_live: bool,
+    release_requested_at: str,
+    release_completed_at: str,
+    owned_runtime_vms: list[dict],
+    disk_vm_name: str | None,
+) -> dict:
+    """Return consistent release-state observability fields."""
+
+    return {
+        "assistant_id": assistant_id,
+        "session_name": session_name,
+        "binding_id": binding_id_from_status(binding),
+        "job_name": binding_job_ref(binding).get("name"),
+        "pod_name": binding_pod_ref(binding).get("name"),
+        "vm_name": binding_vm_ref(binding).get("name"),
+        "vm_hostname": binding_vm_ref(binding).get("hostname"),
+        "source_reason": source_reason,
+        "job_live": job_live,
+        "release_requested_at": release_requested_at or None,
+        "release_completed_at": release_completed_at or None,
+        "owned_runtime_vm_names": [
+            str(vm.get("vm_name", "") or "") for vm in owned_runtime_vms
+        ],
+        "owned_runtime_vm_roles": {
+            str(vm.get("vm_name", "") or ""): str(vm.get("pool_role", "") or "")
+            for vm in owned_runtime_vms
+            if vm.get("vm_name")
+        },
+        "disk_vm_name": disk_vm_name or None,
+    }
+
+
 def _binding_release_state(
     *,
     assistant_id: str,
@@ -477,6 +515,20 @@ def _binding_release_state(
             last_error = str(exc)
 
     owned_runtime_vms, disk_vm_name = _owned_runtime_cleanup_state(assistant_id)
+    emit_observability_event(
+        "controller.release_state.enter",
+        **_release_observability_fields(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding=binding,
+            source_reason=source_reason,
+            job_live=job_live,
+            release_requested_at=release_requested_at,
+            release_completed_at=release_completed_at,
+            owned_runtime_vms=owned_runtime_vms,
+            disk_vm_name=disk_vm_name,
+        ),
+    )
     if (
         not job_live
         and not owned_runtime_vms
@@ -496,7 +548,36 @@ def _binding_release_state(
 
     if vm_name:
         if release_completed_at:
+            emit_observability_event(
+                "controller.release_state.awaiting_release_completion",
+                **_release_observability_fields(
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    source_reason=source_reason,
+                    job_live=job_live,
+                    release_requested_at=release_requested_at,
+                    release_completed_at=release_completed_at,
+                    owned_runtime_vms=owned_runtime_vms,
+                    disk_vm_name=disk_vm_name,
+                ),
+            )
             result = complete_pool_vm_release(vm_name, current_binding_id)
+            emit_observability_event(
+                "controller.release_state.complete_release_result",
+                **_release_observability_fields(
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    source_reason=source_reason,
+                    job_live=job_live,
+                    release_requested_at=release_requested_at,
+                    release_completed_at=release_completed_at,
+                    owned_runtime_vms=owned_runtime_vms,
+                    disk_vm_name=disk_vm_name,
+                ),
+                release_result=result,
+            )
             if not result.get("skipped"):
                 binding = _binding_payload(
                     binding,
@@ -511,10 +592,39 @@ def _binding_release_state(
                     desktop_url=None,
                 )
         elif not release_requested_at:
+            emit_observability_event(
+                "controller.release_state.request_vm_release",
+                **_release_observability_fields(
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    source_reason=source_reason,
+                    job_live=job_live,
+                    release_requested_at=release_requested_at,
+                    release_completed_at=release_completed_at,
+                    owned_runtime_vms=owned_runtime_vms,
+                    disk_vm_name=disk_vm_name,
+                ),
+            )
             result = release_pool_vm(
                 assistant_id,
                 current_binding_id,
                 vm_name=vm_name,
+            )
+            emit_observability_event(
+                "controller.release_state.request_vm_release_result",
+                **_release_observability_fields(
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    source_reason=source_reason,
+                    job_live=job_live,
+                    release_requested_at=release_requested_at,
+                    release_completed_at=release_completed_at,
+                    owned_runtime_vms=owned_runtime_vms,
+                    disk_vm_name=disk_vm_name,
+                ),
+                release_result=result,
             )
             if result.get("released") or result.get("pool_role") == "releasing":
                 release_requested_at = _now_iso()
@@ -531,7 +641,36 @@ def _binding_release_state(
                     release_requested_at=release_requested_at,
                     release_completed_at=release_completed_at,
                 )
+        else:
+            emit_observability_event(
+                "controller.release_state.vm_release_already_requested",
+                **_release_observability_fields(
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    source_reason=source_reason,
+                    job_live=job_live,
+                    release_requested_at=release_requested_at,
+                    release_completed_at=release_completed_at,
+                    owned_runtime_vms=owned_runtime_vms,
+                    disk_vm_name=disk_vm_name,
+                ),
+            )
     else:
+        emit_observability_event(
+            "controller.release_state.no_vm_ref",
+            **_release_observability_fields(
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding=binding,
+                source_reason=source_reason,
+                job_live=job_live,
+                release_requested_at=release_requested_at,
+                release_completed_at=release_completed_at,
+                owned_runtime_vms=owned_runtime_vms,
+                disk_vm_name=disk_vm_name,
+            ),
+        )
         if not release_requested_at:
             release_requested_at = _now_iso()
         if not release_completed_at and not owned_runtime_vms and disk_vm_name is None:
@@ -556,6 +695,22 @@ def _binding_release_state(
         and not cleaned_vm_ref
         and not remaining_runtime_vms
         and remaining_disk_vm_name is None
+    )
+    emit_observability_event(
+        "controller.release_state.result",
+        **_release_observability_fields(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding=binding,
+            source_reason=source_reason,
+            job_live=refreshed_job_live,
+            release_requested_at=str(binding.get("releaseRequestedAt", "") or ""),
+            release_completed_at=str(binding.get("releaseCompletedAt", "") or ""),
+            owned_runtime_vms=remaining_runtime_vms,
+            disk_vm_name=remaining_disk_vm_name,
+        ),
+        release_complete=release_complete,
+        cleaned_vm_name=cleaned_vm_ref.get("name"),
     )
     if release_complete:
         released_conditions = _condition_state(
@@ -1196,6 +1351,47 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 ),
             )
             return
+        latest_after_assign = get_assistant_session(
+            _custom_api,
+            WATCH_NAMESPACE,
+            assistant_id,
+        )
+        latest_after_assign_spec = (latest_after_assign or {}).get("spec") or {}
+        latest_after_assign_status = (latest_after_assign or {}).get("status") or {}
+        latest_after_assign_binding = session_binding(latest_after_assign)
+        emit_observability_event(
+            "controller.vm_assignment.completed",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding_id=current_binding_id,
+            assigned_vm_name=result["vm_name"],
+            assigned_vm_hostname=result["hostname"],
+            latest_session_present=latest_after_assign is not None,
+            latest_desired_state=(
+                str(latest_after_assign_spec.get("desiredState", "") or "") or None
+            ),
+            latest_phase=str(latest_after_assign_status.get("phase", "") or "") or None,
+            latest_observed_activation_id=(
+                str(latest_after_assign_status.get("observedActivationId", "") or "")
+                or None
+            ),
+            latest_binding_id=binding_id_from_status(latest_after_assign_binding)
+            or None,
+            latest_job_name=(
+                binding_job_ref(latest_after_assign_binding).get("name") or None
+            ),
+            latest_vm_name=(
+                binding_vm_ref(latest_after_assign_binding).get("name") or None
+            ),
+            desired_state_drifted=(
+                str(latest_after_assign_spec.get("desiredState", "") or "")
+                not in ("", assistant_session_desired_state(body))
+            ),
+            binding_superseded=(
+                binding_id_from_status(latest_after_assign_binding)
+                not in ("", current_binding_id)
+            ),
+        )
         binding = _binding_payload(
             binding,
             vm_ref={
