@@ -830,13 +830,63 @@ async def start_job(
             startup_secret_ref=secret_name,
             activation_id=activation_id,
         )
-        session = await asyncio.to_thread(
-            create_or_update_assistant_session,
-            custom_api,
-            SETTINGS.default_namespace,
-            assistant_id,
-            spec,
-        )
+        try:
+            session = await asyncio.to_thread(
+                create_or_update_assistant_session,
+                custom_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+                spec,
+            )
+        except ApiException as exc:
+            if exc.status != 409 or reused_active_session or restart_in_progress:
+                raise
+            conflicting_session = await asyncio.to_thread(
+                get_assistant_session,
+                custom_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+            )
+            conflicting_spec = (conflicting_session or {}).get("spec") or {}
+            conflicting_status = (conflicting_session or {}).get("status") or {}
+            conflicting_activation_id = str(
+                conflicting_spec.get("activationId", "") or "",
+            )
+            if (
+                conflicting_session is None
+                or not conflicting_activation_id
+                or conflicting_activation_id == activation_id
+                or conflicting_activation_id == existing_activation_id
+            ):
+                raise
+            emit_observability_event(
+                "infra.job_start.adopted_winner",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                requested_activation_id=activation_id,
+                winner_activation_id=conflicting_activation_id,
+                conflicting_phase=str(conflicting_status.get("phase", "") or "")
+                or None,
+                conflicting_desired_state=(
+                    str(conflicting_spec.get("desiredState", "") or "") or None
+                ),
+            )
+            activation_id = conflicting_activation_id
+            spec = build_assistant_session_spec(
+                assistant_id=assistant_id,
+                user_id=user_id,
+                medium=medium,
+                desktop_mode=desktop_mode,
+                startup_secret_ref=secret_name,
+                activation_id=activation_id,
+            )
+            session = await asyncio.to_thread(
+                create_or_update_assistant_session,
+                custom_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+                spec,
+            )
         if reused_active_session:
             existing_secret_name = str(
                 existing_session.get("spec", {}).get("startupSecretRef", ""),

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from kubernetes.client.rest import ApiException
 
 from common.settings import SETTINGS
 
@@ -365,3 +366,67 @@ def test_start_job_mints_new_activation_after_released_session_cleanup(client):
     assert response.json()["activation_id"] == "activation-new"
     refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
     assert refreshed_spec["activationId"] == "activation-new"
+
+
+def test_start_job_adopts_winner_activation_after_first_create_conflict(client):
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    winner_session = _existing_session(
+        phase="PendingJob",
+        activation_id="activation-winner",
+        observed_activation_id="activation-winner",
+    )
+    winner_session["metadata"]["name"] = "assistant-session-assistant-123"
+    create_specs: list[dict] = []
+    reads = {"count": 0}
+
+    def _get_session(*_args, **_kwargs):
+        reads["count"] += 1
+        if reads["count"] == 1:
+            return None
+        return winner_session
+
+    def _create_or_update(_custom_api, _namespace, _assistant_id, spec):
+        create_specs.append(spec)
+        if len(create_specs) == 1:
+            raise ApiException(status=409)
+        return {
+            "metadata": winner_session["metadata"],
+            "spec": spec,
+            "status": winner_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            side_effect=_get_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value="assistant-session-bootstrap-assistant-123",
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_create_or_update,
+        ),
+        patch(
+            "communication.infra.views.uuid.uuid4",
+            return_value=SimpleNamespace(hex="activation-loser"),
+        ),
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 200
+    assert response.json()["activation_id"] == "activation-winner"
+    assert len(create_specs) == 2
+    assert create_specs[0]["activationId"] == "activation-loser"
+    assert create_specs[1]["activationId"] == "activation-winner"
