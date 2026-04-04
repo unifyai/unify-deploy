@@ -1804,7 +1804,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     phase = str(status.get("phase", "") or "")
 
     if (
-        phase == "Failed"
+        desired_state != DESIRED_STATE_STOPPED
+        and phase == "Failed"
         and not current_binding_id
         and observed_activation_id == activation_id
     ):
@@ -1855,6 +1856,13 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             source="controller.reconcile",
             conditions=release_conditions,
         )
+        return
+
+    if (
+        phase == "Failed"
+        and not current_binding_id
+        and observed_activation_id == activation_id
+    ):
         return
 
     if (

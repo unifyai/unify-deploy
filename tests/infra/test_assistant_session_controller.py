@@ -341,3 +341,23 @@ def test_reconcile_finishes_release_when_runtime_artifacts_are_already_gone(
 
     assert patch_status.call_args.kwargs["phase"] == "Released"
     assert patch_status.call_args.kwargs["binding"] is None
+
+
+def test_reconcile_releases_failed_stopped_session_without_binding(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Failed"
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "Released"
+    assert patch_status.call_args.kwargs["binding"] is None
