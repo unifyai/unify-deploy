@@ -457,11 +457,10 @@ def test_overflow_startups_all_eventually_served(comms, batch_api, poll):
     retain overflow as durable session intent and reconcile it once
     capacity becomes available.
 
-    Reproduces a regression in the K8s Lease-based assignment flow: when
-    the pool has N idle containers and N+M requests arrive concurrently,
-    M requests get 503 and their startup configs are permanently lost.
-    No retry or queuing mechanism exists to fulfil them when new idle
-    containers appear via replenishment.
+    Reproduces a regression where concurrent start requests outran durable
+    session-backed backlog handling: when the pool has N idle containers and
+    N+M requests arrive concurrently, overflow requests could be accepted but
+    never converge onto a real runtime once new capacity appeared.
     """
     assistants = _fetch_user_assistants(max_count=10)
     idle_before = count_idle_jobs(batch_api)

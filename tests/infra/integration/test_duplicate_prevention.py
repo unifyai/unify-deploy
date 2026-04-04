@@ -1,8 +1,8 @@
 """
 Integration tests for duplicate startup prevention.
 
-Verifies that the K8s Lease-based atomic assignment in /infra/job/start
-prevents multiple containers from being assigned to the same assistant,
+Verifies that the AssistantSession-backed /infra/job/start convergence path
+prevents multiple runtimes from being established for the same assistant,
 even under concurrent requests.
 
 Invariants covered: INV-1, INV-2
@@ -38,9 +38,9 @@ def test_concurrent_startups_produce_at_most_one_container(
     """Two concurrent /infra/job/start calls for the same assistant must
     result in at most one container being assigned.
 
-    The Lease-based lock in /infra/job/start serializes concurrent callers:
-    only the Lease holder proceeds to claim an idle container. The second
-    caller gets 409 on Lease creation and returns early.
+    The concurrent callers may race while ensuring the AssistantSession, but
+    they must converge onto the same session/activation instead of creating
+    split-brain runtime intent.
     """
     test_assistant = _create_test_assistant(int(time.time() * 1000) % 1000000)
     assistant_id = str(test_assistant["assistant_id"])
