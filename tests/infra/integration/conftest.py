@@ -664,6 +664,78 @@ def _recent_controller_logs(
     return lines[-80:]
 
 
+def _recent_unity_container_logs(pod_names: list[str]) -> list[str]:
+    if not pod_names:
+        return []
+    since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        output = subprocess.check_output(
+            [
+                "gcloud",
+                "logging",
+                "read",
+                (
+                    'resource.type="k8s_container" AND '
+                    f'resource.labels.namespace_name="{NAMESPACE}" AND '
+                    f'timestamp >= "{since}"'
+                ),
+                "--project=gcp-project-runtime",
+                "--limit=200",
+                "--format=value(timestamp,resource.labels.pod_name,textPayload)",
+            ],
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return [f"unity log collection failed: {exc}"]
+
+    pod_terms = [str(name) for name in pod_names if name]
+    lines = []
+    for line in output.splitlines():
+        if not any(term in line for term in pod_terms):
+            continue
+        if len(line) > 2000:
+            line = line[:2000] + "... [truncated]"
+        lines.append(line)
+    return lines[-80:]
+
+
+def _recent_k8s_pod_events(pod_names: list[str]) -> list[str]:
+    if not pod_names:
+        return []
+    since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        output = subprocess.check_output(
+            [
+                "gcloud",
+                "logging",
+                "read",
+                (
+                    'resource.type="k8s_pod" AND '
+                    f'resource.labels.namespace_name="{NAMESPACE}" AND '
+                    f'timestamp >= "{since}"'
+                ),
+                "--project=gcp-project-runtime",
+                "--limit=200",
+                "--format=value(timestamp,resource.labels.pod_name,jsonPayload.reason,jsonPayload.message)",
+            ],
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return [f"pod event collection failed: {exc}"]
+
+    pod_terms = [str(name) for name in pod_names if name]
+    lines = []
+    for line in output.splitlines():
+        if not any(term in line for term in pod_terms):
+            continue
+        if len(line) > 2000:
+            line = line[:2000] + "... [truncated]"
+        lines.append(line)
+    return lines[-80:]
+
+
 def _write_failure_artifact(bundle: dict[str, Any]) -> str:
     timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
     artifact_dir = Path("logs/pytest/integration-failures")
@@ -701,6 +773,12 @@ def _build_failure_artifact(
         for state in runtime.values()
         if state.get("session")
     ]
+    pod_names = [
+        pod.get("pod_name")
+        for state in runtime.values()
+        for pod in state.get("pods", [])
+        if pod.get("pod_name")
+    ]
     bundle = {
         "test_nodeid": request.node.nodeid,
         "timestamp": datetime.now(UTC).isoformat(),
@@ -726,6 +804,8 @@ def _build_failure_artifact(
                 assistant_ids,
                 session_names,
             ),
+            "unity": _recent_unity_container_logs(pod_names),
+            "pod_events": _recent_k8s_pod_events(pod_names),
         },
         "active_jobs_overview": [
             {
@@ -1836,6 +1916,117 @@ def wait_for_container_running(
             None,
             str(assistant_id),
         ),
+    )
+
+
+def _assistant_readiness_snapshot(
+    assistant_id: str,
+    *,
+    batch_api,
+    core_api=None,
+    gce_client=None,
+) -> dict[str, Any]:
+    try:
+        runtime = describe_runtime_state(
+            batch_api,
+            core_api,
+            gce_client,
+            str(assistant_id),
+        )
+    except Exception as exc:
+        runtime = {"error": f"describe_runtime_state failed: {exc}"}
+    session = runtime.get("session") or {}
+    session_name = (session.get("metadata") or {}).get("name") or ""
+    pod_names = [
+        pod.get("pod_name") for pod in runtime.get("pods", []) if pod.get("pod_name")
+    ]
+    try:
+        runtime_status = _read_runtime_status_http(str(assistant_id))
+    except Exception as exc:
+        runtime_status = {"error": f"runtime status read failed: {exc}"}
+    return {
+        "assistant_id": str(assistant_id),
+        "runtime_status": runtime_status,
+        "runtime": runtime,
+        "recent_logs": {
+            "controller": _recent_controller_logs(
+                [str(assistant_id)],
+                [session_name] if session_name else [],
+            ),
+            "comms": _recent_cloud_run_logs(
+                COMMS_APP_URL,
+                [str(assistant_id)],
+                [session_name] if session_name else [],
+            ),
+            "adapters": _recent_cloud_run_logs(
+                ADAPTERS_URL,
+                [str(assistant_id)],
+                [session_name] if session_name else [],
+            ),
+            "unity": _recent_unity_container_logs(pod_names),
+            "pod_events": _recent_k8s_pod_events(pod_names),
+        },
+    }
+
+
+def wait_for_assistant_container_ready(
+    assistant_id: str,
+    *,
+    batch_api,
+    core_api=None,
+    gce_client=None,
+    timeout: float = 300,
+    interval: float = 5,
+) -> dict[str, Any]:
+    """Wait until AssistantSession reports ContainerReady=True.
+
+    This is a stronger readiness gate than ``job.status.active``. It proves
+    Unity successfully discovered the AssistantSession binding, read the
+    bootstrap Secret, published the StartupEvent, and patched the Job's
+    container-ready annotation.
+    """
+
+    deadline = time.monotonic() + timeout
+    last_phase = ""
+    last_error = ""
+    while time.monotonic() < deadline:
+        session = _read_assistant_session_http(str(assistant_id))
+        if session is not None:
+            status = session.get("status") or {}
+            last_phase = str(status.get("phase", "") or "")
+            last_error = str(status.get("lastError", "") or "")
+            conditions = status.get("conditions") or []
+            container_ready = any(
+                cond.get("type") == "ContainerReady" and cond.get("status") == "True"
+                for cond in conditions
+            )
+            if container_ready:
+                return session
+            if last_phase == "Failed":
+                snapshot = _assistant_readiness_snapshot(
+                    str(assistant_id),
+                    batch_api=batch_api,
+                    core_api=core_api,
+                    gce_client=gce_client,
+                )
+                raise AssertionError(
+                    f"Assistant {assistant_id} reached Failed before ContainerReady. "
+                    f"lastError={last_error or '(empty)'}\n"
+                    f"Failure snapshot:\n{json.dumps(snapshot, indent=2, sort_keys=True, default=str)}",
+                )
+        time.sleep(interval)
+
+    snapshot = _assistant_readiness_snapshot(
+        str(assistant_id),
+        batch_api=batch_api,
+        core_api=core_api,
+        gce_client=gce_client,
+    )
+    raise TimeoutError(
+        f"Timed out after {timeout}s waiting for assistant {assistant_id} to reach "
+        f"ContainerReady=True. Last phase={last_phase or '(none)'} "
+        f"lastError={last_error or '(empty)'}.\n"
+        f"Failure snapshot:\n{json.dumps(snapshot, indent=2, sort_keys=True, default=str)}",
     )
 
 

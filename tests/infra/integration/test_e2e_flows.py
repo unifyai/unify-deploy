@@ -28,6 +28,7 @@ from .conftest import (
     replenish_pool,
     send_test_message,
     wait_for_assistant_runtime_stopped,
+    wait_for_assistant_container_ready,
     wait_for_container_running,
 )
 
@@ -260,6 +261,8 @@ class TestE2EFlows:
         self,
         real_assistant_data,
         batch_api,
+        core_api,
+        gce_client,
         comms,
     ):
         """After wakeup, a message sent via /unify/message must produce a reply.
@@ -297,9 +300,22 @@ class TestE2EFlows:
             job_name = jobs[0].metadata.name
 
             print(
-                f"[Message] Container {job_name} running, waiting 45s for Unity init...",
+                f"[Message] Container {job_name} running, waiting for ContainerReady...",
             )
-            time.sleep(45)
+            ready_session = wait_for_assistant_container_ready(
+                assistant_id,
+                batch_api=batch_api,
+                core_api=core_api,
+                gce_client=gce_client,
+                timeout=300,
+                interval=5,
+            )
+            ready_phase = (ready_session.get("status") or {}).get("phase") or ""
+            print(
+                f"[Message] AssistantSession ContainerReady reached "
+                f"(phase={ready_phase or 'unknown'}), waiting 15s for manager init...",
+            )
+            time.sleep(15)
 
             token = f"E2E_ACK_{int(time.time())}"
             msg_body = (
