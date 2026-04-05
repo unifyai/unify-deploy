@@ -121,12 +121,27 @@ steps:
   args:
   - '-c'
   - |
-    for job in jobs-create-preview jobs-cleanup-preview stale-jobs-expire-preview; do
+    for job in jobs-create-preview jobs-cleanup-preview stale-jobs-expire-preview \
+               pending-startups-preview pending-vm-assignments-preview; do
       gcloud scheduler jobs delete "$job" --location="${_REGION}" --quiet 2>/dev/null \
         && echo "Deleted legacy scheduler: $job" \
         || echo "Legacy scheduler $job already removed or not found"
     done
   waitFor: ['update-scheduler-infra-maintenance']
+
+  # Remove legacy pending PubSub topics (replaced by AssistantSession CRD phases)
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'remove-legacy-pending-pubsub'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    for topic in unity-pending-startups-preview unity-pending-vm-assignments-preview unity-startup-preview; do
+      gcloud pubsub topics delete "$topic" --project="${PROJECT_ID}" --quiet 2>/dev/null \
+        && echo "Deleted legacy topic: $topic" \
+        || echo "Legacy topic $topic already removed or not found"
+    done
+  waitFor: ['deploy']
 
   # Update Cloud Scheduler: Microsoft Token Refresh Preview
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
