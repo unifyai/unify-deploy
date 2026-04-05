@@ -153,6 +153,79 @@ def test_claim_idle_job_for_binding_reuses_existing_job_for_same_binding(monkeyp
     batch_api.patch_namespaced_job.assert_not_called()
 
 
+def test_claim_idle_job_filters_by_current_image_hash(monkeypatch):
+    binding = _binding("binding-1")
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.side_effect = [
+        MagicMock(items=[]),
+        MagicMock(items=[]),
+    ]
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+    monkeypatch.setattr(controller, "_get_current_image_hash", lambda: "abc123")
+
+    job = controller._claim_idle_job_for_binding(
+        "1207",
+        "assistant-session-1207",
+        binding,
+    )
+
+    assert job is None
+    selector = batch_api.list_namespaced_job.call_args_list[-1].kwargs["label_selector"]
+    assert "unity-image-hash=abc123" in selector
+
+
+def test_claim_idle_job_skips_hash_filter_when_gcs_unavailable(monkeypatch):
+    binding = _binding("binding-1")
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.side_effect = [
+        MagicMock(items=[]),
+        MagicMock(items=[]),
+    ]
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+    monkeypatch.setattr(controller, "_get_current_image_hash", lambda: None)
+
+    controller._claim_idle_job_for_binding(
+        "1207",
+        "assistant-session-1207",
+        binding,
+    )
+
+    selector = batch_api.list_namespaced_job.call_args_list[-1].kwargs["label_selector"]
+    assert selector == "app=unity,unity-status=idle"
+    assert "unity-image-hash" not in selector
+
+
+def test_claim_idle_job_prefers_newest_job(monkeypatch):
+    binding = _binding("binding-1")
+    old_job = _job(name="unity-2026-01-01-00-00-00-aaa", container_ready=False)
+    old_job.status.active = 1
+    old_job.metadata.deletion_timestamp = None
+    new_job = _job(name="unity-2026-04-05-12-00-00-bbb", container_ready=False)
+    new_job.status.active = 1
+    new_job.metadata.deletion_timestamp = None
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.side_effect = [
+        MagicMock(items=[]),
+        MagicMock(items=[old_job, new_job]),
+    ]
+    batch_api.read_namespaced_job.return_value = new_job
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+    monkeypatch.setattr(controller, "_get_current_image_hash", lambda: None)
+
+    job = controller._claim_idle_job_for_binding(
+        "1207",
+        "assistant-session-1207",
+        binding,
+    )
+
+    assert job is new_job
+    patched_name = batch_api.patch_namespaced_job.call_args.kwargs["name"]
+    assert patched_name == "unity-2026-04-05-12-00-00-bbb"
+
+
 def test_job_for_binding_lists_by_binding_when_jobref_missing(monkeypatch):
     binding = _binding("binding-1")
     existing_job = _job(name="unity-job-1", container_ready=False)

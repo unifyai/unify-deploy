@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import os
+import time
 import uuid
 
 import kopf  # type: ignore[import-not-found]
@@ -67,6 +68,44 @@ MAX_VM_READINESS_RETRIES = int(os.environ.get("MAX_VM_READINESS_RETRIES", "2"))
 _batch_api: k8s_client.BatchV1Api | None = None
 _core_api: k8s_client.CoreV1Api | None = None
 _custom_api: k8s_client.CustomObjectsApi | None = None
+
+_IMAGE_HASH_BUCKET = "unity-image-hash"
+_IMAGE_HASH_CACHE_TTL = float(os.environ.get("IMAGE_HASH_CACHE_TTL", "60"))
+_cached_image_hash: str | None = None
+_image_hash_fetched_at: float = 0
+
+
+def _get_current_image_hash() -> str | None:
+    """Return the latest Unity image commit hash from GCS, cached for TTL seconds.
+
+    The controller only claims idle Jobs whose ``unity-image-hash`` label
+    matches this value, preventing stale-image containers from being
+    assigned to users after a Unity image deployment.
+
+    Returns ``None`` (disabling the filter) if GCS is unreachable and no
+    cached value is available.
+    """
+    global _cached_image_hash, _image_hash_fetched_at
+    now = time.monotonic()
+    if _cached_image_hash and (now - _image_hash_fetched_at) < _IMAGE_HASH_CACHE_TTL:
+        return _cached_image_hash
+
+    try:
+        from google.cloud import storage  # deferred to avoid import-time cost
+
+        client = storage.Client()
+        blob = client.bucket(_IMAGE_HASH_BUCKET).blob(SETTINGS.image_hash_blob)
+        content = blob.download_as_text()
+        _cached_image_hash = content.strip()
+        _image_hash_fetched_at = now
+        logger.info("Refreshed current image hash: %s", _cached_image_hash)
+        return _cached_image_hash
+    except Exception:
+        logger.warning(
+            "Failed to read image hash from GCS; using cached value: %s",
+            _cached_image_hash,
+        )
+        return _cached_image_hash
 
 
 def _now_iso() -> str:
@@ -303,9 +342,15 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
         return existing_job
 
     sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
+    current_hash = _get_current_image_hash()
+
+    label_selector = "app=unity,unity-status=idle"
+    if current_hash:
+        label_selector += f",unity-image-hash={current_hash}"
+
     jobs = _batch_api.list_namespaced_job(
         namespace=WATCH_NAMESPACE,
-        label_selector="app=unity,unity-status=idle",
+        label_selector=label_selector,
     )
     idle_jobs = sorted(
         (
@@ -316,6 +361,7 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
             and not job.metadata.deletion_timestamp
         ),
         key=lambda job: str(job.metadata.name or ""),
+        reverse=True,
     )
 
     for job in idle_jobs:
