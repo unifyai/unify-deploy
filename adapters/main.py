@@ -3195,9 +3195,9 @@ def scheduled_jobs_cleanup():
 
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
-def scheduled_jobs_expire_stale():
+def scheduled_jobs_expire_stale(max_age_hours: int = 12):
     """Stop stale assistant runtimes (utility — use /scheduled/infra/maintenance for cron)."""
-    result = expire_all_stale_jobs(max_age_hours=12)
+    result = expire_all_stale_jobs(max_age_hours=max_age_hours)
     try:
         orphan_resp = requests.post(
             f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",

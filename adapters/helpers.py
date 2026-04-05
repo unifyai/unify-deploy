@@ -420,14 +420,14 @@ def check_valid_contact(
 
 
 def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
-    """Stop stale assistant runtimes that have been running too long.
+    """Clean up stale K8s Job objects and stop genuinely stale runtimes.
 
-    Also sweeps ``unity-status=done`` jobs that were unbound by the
-    controller but may predate the suspend-on-unbind fix.
+    Stale ``done`` jobs (finished, pod gone) are deleted — their logs are
+    preserved in Cloud Logging and GCS independently of the Job object.
 
-    Uses the current K8s Job inventory as the signal for staleness, then
-    declares the corresponding ``AssistantSession`` desired state stopped so
-    the binding-authoritative controller owns runtime shutdown.
+    Stale ``running`` jobs (active >max_age_hours) are deleted, and the
+    session is stopped **only if** it is currently bound to one of the
+    stale jobs.  Sessions bound to a fresh job are never touched.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not SETTINGS.comms_url:
@@ -480,54 +480,154 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     if not stale:
         return {"total_running": len(all_jobs), "expired": 0}
 
-    stale_assistants = []
+    stale_running = []
+    stale_done = []
     for job in stale:
         job_name = job.get("job_name")
         assistant_id = job.get("assistant_id", "unknown")
+        unity_status = job.get("labels", {}).get("unity-status", "")
         logger.info(
-            f"[expire_all_stale_jobs] Stale job: {job_name} "
-            f"assistant_id={assistant_id} "
-            f"created={job.get('creation_timestamp')}",
+            "[expire_all_stale_jobs] Stale job: %s assistant_id=%s status=%s created=%s",
+            job_name,
+            assistant_id,
+            unity_status,
+            job.get("creation_timestamp"),
         )
-        if assistant_id and assistant_id != "unknown":
-            stale_assistants.append(str(assistant_id))
+        if unity_status == "done":
+            stale_done.append(job)
+        else:
+            stale_running.append(job)
 
-    stopped_assistants = []
+    cleaned_jobs: list[str] = []
 
-    def _stop_session(aid: str):
+    def _delete_stale_job(job_name: str):
+        """Delete a stale Job object.
+
+        Logs are preserved in Cloud Logging (GKE) and GCS (Unity upload).
+        The Job object itself is only K8s metadata — deleting it frees
+        API-server resources and ensures the job doesn't reappear in the
+        next sweep.
+        """
         try:
-            resp = requests.post(
-                f"{SETTINGS.comms_url}/infra/session/{aid}/stop",
+            resp = requests.delete(
+                f"{SETTINGS.comms_url}/infra/job/delete",
+                data={"job_name": job_name},
                 headers=headers,
                 timeout=10,
             )
             if resp.status_code in (200, 404):
-                logger.info(
-                    f"[expire_all_stale_jobs] Declared stale runtime stopped for {aid}",
-                )
-                return aid
-            logger.info(
-                "[expire_all_stale_jobs] Session stop non-fatal for %s: %s %s",
-                aid,
-                resp.status_code,
-                resp.text[:200],
-            )
+                return job_name
         except Exception as exc:
             logger.info(
-                f"[expire_all_stale_jobs] Session stop non-fatal for {aid}: {exc}",
+                "[expire_all_stale_jobs] Delete non-fatal for %s: %s",
+                job_name,
+                exc,
             )
-            return None
         return None
 
-    deduped_assistants = list(dict.fromkeys(stale_assistants))
-    if deduped_assistants:
-        with ThreadPoolExecutor(max_workers=len(deduped_assistants)) as pool:
-            results = list(pool.map(_stop_session, deduped_assistants))
-        stopped_assistants = [r for r in results if r is not None]
+    if stale_done:
+        done_names = [j["job_name"] for j in stale_done if j.get("job_name")]
+        logger.info(
+            "[expire_all_stale_jobs] Deleting %d stale done jobs",
+            len(done_names),
+        )
+        with ThreadPoolExecutor(max_workers=max(len(done_names), 1)) as executor:
+            results = list(executor.map(_delete_stale_job, done_names))
+        cleaned_jobs.extend(r for r in results if r is not None)
+
+    stopped_assistants: list[str] = []
+
+    if stale_running:
+        running_names = [j["job_name"] for j in stale_running if j.get("job_name")]
+        logger.info(
+            "[expire_all_stale_jobs] Deleting %d stale running jobs",
+            len(running_names),
+        )
+        with ThreadPoolExecutor(max_workers=max(len(running_names), 1)) as executor:
+            results = list(executor.map(_delete_stale_job, running_names))
+        cleaned_jobs.extend(r for r in results if r is not None)
+
+        stale_aids = list(
+            dict.fromkeys(
+                str(j.get("assistant_id"))
+                for j in stale_running
+                if j.get("assistant_id") and j.get("assistant_id") != "unknown"
+            ),
+        )
+
+        def _stop_session_if_bound_to_stale(aid: str):
+            """Stop the session only if its current binding points to a stale job."""
+            try:
+                session_resp = requests.get(
+                    f"{SETTINGS.comms_url}/infra/session/{aid}",
+                    headers=headers,
+                    timeout=10,
+                )
+                if session_resp.status_code == 404:
+                    return None
+                if session_resp.status_code != 200:
+                    return None
+                session = session_resp.json()
+                bound_job = (
+                    ((session.get("status") or {}).get("binding") or {})
+                    .get("jobRef", {})
+                    .get("name", "")
+                )
+                stale_names_for_aid = {
+                    j["job_name"]
+                    for j in stale_running
+                    if str(j.get("assistant_id")) == aid and j.get("job_name")
+                }
+                if not bound_job or bound_job not in stale_names_for_aid:
+                    logger.info(
+                        "[expire_all_stale_jobs] Session %s bound to %s "
+                        "(not a stale job) — skipping stop",
+                        aid,
+                        bound_job or "(none)",
+                    )
+                    return None
+
+                resp = requests.post(
+                    f"{SETTINGS.comms_url}/infra/session/{aid}/stop",
+                    headers=headers,
+                    timeout=10,
+                )
+                if resp.status_code in (200, 404):
+                    logger.info(
+                        "[expire_all_stale_jobs] Stopped session %s "
+                        "(bound to stale job %s)",
+                        aid,
+                        bound_job,
+                    )
+                    return aid
+            except Exception as exc:
+                logger.info(
+                    "[expire_all_stale_jobs] Session stop non-fatal for %s: %s",
+                    aid,
+                    exc,
+                )
+            return None
+
+        if stale_aids:
+            with ThreadPoolExecutor(max_workers=len(stale_aids)) as executor:
+                results = list(
+                    executor.map(_stop_session_if_bound_to_stale, stale_aids),
+                )
+            stopped_assistants = [r for r in results if r is not None]
+
+    logger.info(
+        "[expire_all_stale_jobs] Summary: cleaned=%d stale jobs "
+        "(%d done + %d running), stopped=%d sessions",
+        len(cleaned_jobs),
+        len(stale_done),
+        len(stale_running),
+        len(stopped_assistants),
+    )
 
     return {
         "total_running": len(all_jobs),
         "expired": len(stale),
+        "cleaned_jobs": cleaned_jobs,
         "stopped_assistants": stopped_assistants,
     }
 
