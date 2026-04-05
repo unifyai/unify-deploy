@@ -5,7 +5,9 @@ from tests.infra.integration import conftest as integration_conftest
 
 
 def _job(
-    *, labels: dict[str, str] | None = None, annotations: dict[str, str] | None = None
+    *,
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
 ):
     return SimpleNamespace(
         metadata=SimpleNamespace(

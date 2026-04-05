@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 import base64
 import json
@@ -678,40 +679,51 @@ def patch_assistant_session_status(
     vm_retries: int | None | object = _STATUS_UNSET,
     desktop_probe_failures: int | None | object = _STATUS_UNSET,
 ) -> dict[str, Any]:
-    name = assistant_session_name(assistant_id)
-    status_fields: dict[str, Any] = {}
-    if phase is not None:
-        status_fields["phase"] = phase
-    if observed_activation_id is not None:
-        status_fields["observedActivationId"] = observed_activation_id
-    if binding is not _STATUS_UNSET:
-        status_fields["binding"] = binding
-    if last_error is not _STATUS_UNSET:
-        status_fields["lastError"] = last_error
-    if conditions is not _STATUS_UNSET:
-        status_fields["conditions"] = conditions
-    if bootstrap_retries is not _STATUS_UNSET:
-        status_fields["bootstrapRetries"] = bootstrap_retries
-    if vm_retries is not _STATUS_UNSET:
-        status_fields["vmRetries"] = vm_retries
-    if desktop_probe_failures is not _STATUS_UNSET:
-        status_fields["desktopProbeFailures"] = desktop_probe_failures
+    """Replace the persisted AssistantSession status with the next canonical state.
 
+    Custom resource status patches use JSON merge semantics, which recursively
+    merge nested objects. That is unsafe for ``status.binding`` because a fresh
+    binding generation must atomically replace every runtime reference from the
+    previous generation. This helper therefore reads the current object,
+    materializes the full next ``status`` payload, and replaces the status
+    subresource with optimistic concurrency via ``resourceVersion``.
+    """
+
+    name = assistant_session_name(assistant_id)
     current: dict[str, Any] = {}
     for _attempt in range(_MAX_CAS_RETRIES):
         current = get_assistant_session(custom_api, namespace, assistant_id) or {}
-        current_status = current.get("status", {})
-        if all(
-            current_status.get(key) == value for key, value in status_fields.items()
-        ):
+        current_status = deepcopy(current.get("status") or {})
+        next_status = deepcopy(current_status)
+        if phase is not None:
+            next_status["phase"] = phase
+        if observed_activation_id is not None:
+            next_status["observedActivationId"] = observed_activation_id
+        if binding is not _STATUS_UNSET:
+            next_status["binding"] = deepcopy(binding)
+        if last_error is not _STATUS_UNSET:
+            next_status["lastError"] = last_error
+        if conditions is not _STATUS_UNSET:
+            next_status["conditions"] = deepcopy(conditions)
+        if bootstrap_retries is not _STATUS_UNSET:
+            next_status["bootstrapRetries"] = bootstrap_retries
+        if vm_retries is not _STATUS_UNSET:
+            next_status["vmRetries"] = vm_retries
+        if desktop_probe_failures is not _STATUS_UNSET:
+            next_status["desktopProbeFailures"] = desktop_probe_failures
+
+        if current_status == next_status:
             return current
 
         rv = current.get("metadata", {}).get("resourceVersion")
-        body: dict[str, Any] = {"status": status_fields}
+        body = deepcopy(current) if current else {"metadata": {"name": name}}
+        body["status"] = next_status
+        metadata = body.setdefault("metadata", {})
+        metadata["name"] = name
         if rv:
-            body["metadata"] = {"resourceVersion": rv}
+            metadata["resourceVersion"] = rv
         try:
-            result = custom_api.patch_namespaced_custom_object_status(
+            result = custom_api.replace_namespaced_custom_object_status(
                 group=SETTINGS.assistant_session_group,
                 version=SETTINGS.assistant_session_version,
                 namespace=namespace,

@@ -201,7 +201,12 @@ def _wait_for_vm_assigned(gce_client, assistant_id, timeout=120, interval=10):
     )
 
 
-def _assistant_duplicate_job_snapshot(comms, batch_api, core_api, assistant_id: str) -> dict:
+def _assistant_duplicate_job_snapshot(
+    comms,
+    batch_api,
+    core_api,
+    assistant_id: str,
+) -> dict:
     """Capture enough evidence to reconstruct an INV-1 duplicate-job failure."""
     sanitized = assistant_id.lower().replace("_", "-")
     job_items = batch_api.list_namespaced_job(
@@ -275,9 +280,12 @@ def _assistant_duplicate_job_snapshot(comms, batch_api, core_api, assistant_id: 
         )
         session_binding = str(
             (
-                (((session.get("status") or {}).get("binding") or {}).get("jobRef") or {})
+                (
+                    ((session.get("status") or {}).get("binding") or {}).get("jobRef")
+                    or {}
+                )
             ).get("name", "")
-            or ""
+            or "",
         )
 
     return {

@@ -190,7 +190,7 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
     )
 
     class FakeCustomApi:
-        def patch_namespaced_custom_object_status(self, **kwargs):
+        def replace_namespaced_custom_object_status(self, **kwargs):
             captured.update(kwargs)
             return kwargs["body"]
 
@@ -217,11 +217,14 @@ def test_patch_assistant_session_status_preserves_retry_counters(monkeypatch):
     )
 
     class FakeCustomApi:
-        def patch_namespaced_custom_object_status(self, **kwargs):
-            session["status"].update(kwargs["body"]["status"])
-            session["metadata"]["resourceVersion"] = str(
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
                 int(session["metadata"]["resourceVersion"]) + 1,
             )
+            session.clear()
+            session.update(next_session)
             return deepcopy(session)
 
     custom_api = FakeCustomApi()
@@ -247,6 +250,77 @@ def test_patch_assistant_session_status_preserves_retry_counters(monkeypatch):
     assert session["status"]["desktopProbeFailures"] == 1
     assert session["status"]["phase"] == "PendingVM"
     assert session["status"]["observedActivationId"] == "act-2"
+
+
+def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch):
+    session = {
+        "metadata": {"name": "assistant-session-1207", "resourceVersion": "7"},
+        "status": {
+            "phase": "Active",
+            "binding": build_binding(
+                binding_id="binding-1",
+                job_ref={"name": "unity-job-1", "namespace": "preview"},
+                pod_ref={"name": "unity-pod-1", "namespace": "preview"},
+                vm_ref={
+                    "name": "unity-pool-ubuntu-10-preview",
+                    "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+                },
+                desktop_url="https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+            ),
+        },
+    }
+    replace_calls = 0
+    patch_calls = 0
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def patch_namespaced_custom_object_status(self, **kwargs):
+            nonlocal patch_calls
+            patch_calls += 1
+            binding = session.setdefault("status", {}).setdefault("binding", {})
+            binding.update(deepcopy(kwargs["body"]["status"].get("binding") or {}))
+            return deepcopy(session)
+
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            nonlocal replace_calls
+            replace_calls += 1
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    patch_assistant_session_status(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        phase="PendingJob",
+        binding=build_binding(
+            binding_id="binding-2",
+            created_at="2026-04-06T00:00:00+00:00",
+        ),
+        last_error="Recorded binding Job disappeared before runtime became ready",
+    )
+
+    assert replace_calls == 1
+    assert patch_calls == 0
+    assert session["status"]["phase"] == "PendingJob"
+    assert session["status"]["binding"] == {
+        "id": "binding-2",
+        "createdAt": "2026-04-06T00:00:00+00:00",
+    }
+    assert "jobRef" not in session["status"]["binding"]
+    assert "podRef" not in session["status"]["binding"]
+    assert "vmRef" not in session["status"]["binding"]
+    assert "desktopUrl" not in session["status"]["binding"]
 
 
 def test_crd_status_schema_covers_all_persisted_status_fields():
