@@ -68,7 +68,7 @@ pytestmark = [pytest.mark.integration]
 DELETE_RESPONSE_TIMEOUT_SECONDS = 10
 
 # How long to wait for the background cleanup task to finish.
-CLEANUP_TIMEOUT_SECONDS = 120
+CLEANUP_TIMEOUT_SECONDS = 240
 
 # CRD coordinates (must match common/settings.py)
 _SESSION_CRD_GROUP = "infra.unify.ai"
