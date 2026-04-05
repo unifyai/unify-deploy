@@ -90,5 +90,8 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["communication", "communication.*", "adapters", "adapters.*", "common", "common.*"]
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.uv.sources]
 unillm = { path = "../unillm", editable = true }

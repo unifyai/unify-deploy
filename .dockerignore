@@ -11,6 +11,7 @@ cloudbuild/
 
 # Documentation
 *.md
+!README.md
 
 # IDE
 .vscode/

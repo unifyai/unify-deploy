@@ -27,6 +27,8 @@ Driven by the ``test_assistants`` session fixture — set
     TEST_CREATE_ASSISTANT_COUNT=20 pytest tests/infra/integration/test_stress.py -v -s
 """
 
+import json
+
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -38,9 +40,11 @@ from .conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
     NAMESPACE,
+    add_failure_context,
     check_invariants,
     cleanup_assistant_jobs,
     count_idle_jobs,
+    get_assistant_session,
     list_assigned_vms,
     list_idle_vms,
     list_jobs_with_assistant_id,
@@ -89,19 +93,21 @@ def _trigger_vm_reconciliation():
 
 
 def _trigger_cleanup():
-    """Trigger the idle pool cleanup on the adapters (same call as the cron)."""
+    """Trigger the idle-pool cleanup utility behind unified maintenance."""
     try:
-        requests.post(
+        resp = requests.post(
             f"{ADAPTERS_URL}/scheduled/jobs/cleanup",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             timeout=30,
         )
+        if resp.status_code == 200:
+            print("    [scheduler] Cleanup fired")
     except Exception:
         pass
 
 
 def _trigger_pool_refresh():
-    """Trigger a pool refresh (same call as the hourly cron / post-deploy).
+    """Trigger the pool-refresh utility behind unified maintenance.
 
     Creates new idle containers with the latest image regardless of current
     pool size.  The cleanup cron (10 min later) would normally delete the
@@ -124,7 +130,7 @@ def _trigger_pool_refresh():
 
 
 def _trigger_stale_expire():
-    """Trigger the stale jobs sweep (same call as the 6-hourly cron).
+    """Trigger the stale-job utility behind unified maintenance.
 
     Suspends K8s jobs running >12h and releases their VMs.  Our test
     containers are minutes old so they won't be affected, but the sweep
@@ -195,11 +201,134 @@ def _wait_for_vm_assigned(gce_client, assistant_id, timeout=120, interval=10):
     )
 
 
-class _SchedulerNoise:
-    """Background thread that fires scheduler endpoints at random intervals.
+def _assistant_duplicate_job_snapshot(comms, batch_api, core_api, assistant_id: str) -> dict:
+    """Capture enough evidence to reconstruct an INV-1 duplicate-job failure."""
+    sanitized = assistant_id.lower().replace("_", "-")
+    job_items = batch_api.list_namespaced_job(
+        namespace=NAMESPACE,
+        label_selector=f"app=unity,assistant-id={sanitized}",
+    ).items
+    active_jobs = []
+    for job in job_items:
+        if not (job.status.active and job.status.active > 0):
+            continue
+        labels = dict(job.metadata.labels or {})
+        annotations = dict(job.metadata.annotations or {})
+        pods = []
+        try:
+            pod_items = core_api.list_namespaced_pod(
+                namespace=NAMESPACE,
+                label_selector=f"job-name={job.metadata.name}",
+            ).items
+            for pod in pod_items:
+                pods.append(
+                    {
+                        "pod_name": pod.metadata.name,
+                        "phase": pod.status.phase,
+                        "node_name": pod.spec.node_name,
+                        "start_time": pod.status.start_time,
+                        "deletion_timestamp": pod.metadata.deletion_timestamp,
+                    },
+                )
+        except Exception as exc:
+            pods.append({"pod_collection_error": f"{type(exc).__name__}: {exc}"})
 
-    Simulates production crons firing at unpredictable times relative to
-    user traffic.  Runs throughout the entire test and logs each firing.
+        active_jobs.append(
+            {
+                "job_name": job.metadata.name,
+                "creation_timestamp": job.metadata.creation_timestamp,
+                "resource_version": job.metadata.resource_version,
+                "active": job.status.active,
+                "ready": getattr(job.status, "ready", None),
+                "start_time": job.status.start_time,
+                "labels": labels,
+                "annotations": annotations,
+                "pods": pods,
+            },
+        )
+
+    active_jobs.sort(key=lambda job: str(job.get("creation_timestamp") or ""))
+
+    try:
+        session = get_assistant_session(comms, assistant_id)
+    except Exception as exc:
+        session = {
+            "session_read_error": f"{type(exc).__name__}: {exc}",
+        }
+
+    runtime_resp = comms.get(f"/infra/runtime/{assistant_id}")
+    if runtime_resp.status_code == 200:
+        runtime_status = runtime_resp.json()
+    else:
+        runtime_status = {
+            "status_code": runtime_resp.status_code,
+            "text": runtime_resp.text[:1000],
+        }
+
+    session_binding = ""
+    session_activation_id = ""
+    session_name = ""
+    if isinstance(session, dict):
+        session_name = str(((session.get("metadata") or {}).get("name") or ""))
+        session_activation_id = str(
+            (((session.get("spec") or {}).get("activationId")) or ""),
+        )
+        session_binding = str(
+            (
+                (((session.get("status") or {}).get("binding") or {}).get("jobRef") or {})
+            ).get("name", "")
+            or ""
+        )
+
+    return {
+        "assistant_id": assistant_id,
+        "active_job_count": len(active_jobs),
+        "active_jobs": active_jobs,
+        "session_name": session_name,
+        "session_activation_id": session_activation_id,
+        "session_bound_job_name": session_binding,
+        "session": session,
+        "runtime_status": runtime_status,
+    }
+
+
+def _record_duplicate_job_snapshot(request, snapshot: dict) -> None:
+    """Persist duplicate-job evidence into the pytest failure artifact."""
+    snapshots = dict(
+        getattr(request.node, "_extra_failure_context", {}).get(
+            "duplicate_job_snapshots",
+            {},
+        ),
+    )
+    snapshots[str(snapshot["assistant_id"])] = snapshot
+    add_failure_context(request, "duplicate_job_snapshots", snapshots)
+
+    tracker = getattr(request.node, "_runtime_identity_tracker", None)
+    if tracker is None:
+        return
+    tracker.track(
+        assistant_id=str(snapshot["assistant_id"]),
+        session_name=snapshot.get("session_name") or None,
+        activation_id=snapshot.get("session_activation_id") or None,
+    )
+    if snapshot.get("session_bound_job_name"):
+        tracker.track(job_name=str(snapshot["session_bound_job_name"]))
+    for job in snapshot.get("active_jobs", []):
+        tracker.track(job_name=str(job["job_name"]))
+        for pod in job.get("pods", []):
+            pod_name = pod.get("pod_name")
+            if pod_name:
+                tracker.track(pod_name=str(pod_name))
+
+
+class _SchedulerNoise:
+    """Background thread that fires lightweight scheduler utilities.
+
+    Production now routes cron traffic through ``/scheduled/infra/maintenance``,
+    but that endpoint performs the full shared-environment sweep and can block
+    for minutes while VM rebalance completes. The stress test instead injects
+    the underlying utility endpoints individually so it still exercises pool
+    churn and stale-runtime races without folding in unrelated global latency.
     """
 
     def __init__(self, min_interval=20, max_interval=45):
@@ -252,6 +381,7 @@ def test_production_traffic_stress(
     core_api,
     gce_client,
     poll,
+    request,
 ):
     """Simulate a product launch: N simultaneous users with diverse traffic.
 
@@ -294,7 +424,12 @@ def test_production_traffic_stress(
         },
     )
     if active_assistant_ids:
-        cleanup_assistant_jobs(batch_api, active_assistant_ids)
+        cleanup_assistant_jobs(
+            batch_api,
+            active_assistant_ids,
+            strict=True,
+            context="stress setup clean slate",
+        )
         print(f"[Setup] Stopped {len(active_assistant_ids)} live assistant runtime(s)")
         time.sleep(10)
 
@@ -500,10 +635,20 @@ def test_production_traffic_stress(
 
         for aid in all_ids:
             jobs = list_jobs_with_assistant_id(batch_api, aid)
-            assert len(jobs) <= 1, (
-                f"INV-1: assistant {aid} has {len(jobs)} containers "
-                f"({[j.metadata.name for j in jobs]})"
-            )
+            if len(jobs) > 1:
+                snapshot = _assistant_duplicate_job_snapshot(
+                    comms,
+                    batch_api,
+                    core_api,
+                    aid,
+                )
+                _record_duplicate_job_snapshot(request, snapshot)
+                raise AssertionError(
+                    f"INV-1: assistant {aid} has {len(jobs)} containers "
+                    f"({[j.metadata.name for j in jobs]})\n"
+                    f"Duplicate job snapshot:\n"
+                    f"{json.dumps(snapshot, indent=2, sort_keys=True, default=str)}",
+                )
 
         if gce_client is not None:
             print(f"[Phase 3] Polling for VM assignments (up to 300s)...")
@@ -689,11 +834,21 @@ def test_production_traffic_stress(
         print(f"  {provoke_aid}: 3 concurrent start_job → {dup_statuses}")
 
         dup_jobs = list_jobs_with_assistant_id(batch_api, provoke_aid)
-        assert len(dup_jobs) <= 1, (
-            f"INV-1 PROVOKED: assistant {provoke_aid} has {len(dup_jobs)} containers "
-            f"after 3 concurrent start_job calls: "
-            f"{[j.metadata.name for j in dup_jobs]}"
-        )
+        if len(dup_jobs) > 1:
+            snapshot = _assistant_duplicate_job_snapshot(
+                comms,
+                batch_api,
+                core_api,
+                provoke_aid,
+            )
+            _record_duplicate_job_snapshot(request, snapshot)
+            raise AssertionError(
+                f"INV-1 PROVOKED: assistant {provoke_aid} has {len(dup_jobs)} containers "
+                f"after 3 concurrent start_job calls: "
+                f"{[j.metadata.name for j in dup_jobs]}\n"
+                f"Duplicate job snapshot:\n"
+                f"{json.dumps(snapshot, indent=2, sort_keys=True, default=str)}",
+            )
         print(f"  INV-1 provocation: {len(dup_jobs)} container(s) — safe")
 
         # Check outbound messages now — containers have been running through
@@ -866,7 +1021,12 @@ def test_production_traffic_stress(
 
         for race_round in range(1, 4):
             # Delete the target's job so there's an idle-looking container
-            cleanup_assistant_jobs(batch_api, [target_aid])
+            cleanup_assistant_jobs(
+                batch_api,
+                [target_aid],
+                strict=True,
+                context=f"stress phase 6 round {race_round} pre-race cleanup",
+            )
             time.sleep(3)
 
             # Race: cleanup vs re-start
@@ -926,7 +1086,12 @@ def test_production_traffic_stress(
         # Delete jobs (triggers VM release + disk detach) and wait for
         # K8s Foreground deletion to complete so start_job doesn't see
         # the dying container as "already running".
-        cleanup_assistant_jobs(batch_api, restart_ids)
+        cleanup_assistant_jobs(
+            batch_api,
+            restart_ids,
+            strict=True,
+            context="stress phase 7 pre-restart cleanup",
+        )
         for aid in restart_ids:
             try:
                 poll_until(
@@ -999,7 +1164,12 @@ def test_production_traffic_stress(
         print(f"[Phase 8] Cleaning up {N} assistants...")
         print(f"{'—' * 70}")
 
-        cleanup_assistant_jobs(batch_api, all_ids)
+        cleanup_assistant_jobs(
+            batch_api,
+            all_ids,
+            strict=True,
+            context="stress phase 8 wind-down cleanup",
+        )
         print(f"[Phase 8] Requested AssistantSession cleanup for all runtimes")
         print(f"[Phase 8] Waiting 15s for cleanup to propagate...")
         time.sleep(15)
@@ -1044,5 +1214,10 @@ def test_production_traffic_stress(
 
     finally:
         scheduler_noise.stop()
-        cleanup_assistant_jobs(batch_api, all_ids)
+        cleanup_assistant_jobs(
+            batch_api,
+            all_ids,
+            strict=False,
+            context="stress finally cleanup",
+        )
         replenish_pool()

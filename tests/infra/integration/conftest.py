@@ -805,6 +805,15 @@ def _track_runtime_identity(
     )
 
 
+def add_failure_context(request, key: str, value: Any) -> None:
+    """Attach structured test-specific evidence to the failure artifact."""
+    current = getattr(request.node, "_extra_failure_context", None)
+    if current is None:
+        current = {}
+        request.node._extra_failure_context = current
+    current[key] = value
+
+
 def _write_failure_artifact(bundle: dict[str, Any]) -> str:
     timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
     artifact_dir = Path("logs/pytest/integration-failures")
@@ -849,6 +858,7 @@ def _build_failure_artifact(
     )
     tracked_job_names = sorted(getattr(tracker, "job_names", set())) if tracker else []
     tracked_pod_names = sorted(getattr(tracker, "pod_names", set())) if tracker else []
+    extra_failure_context = getattr(request.node, "_extra_failure_context", None)
     pod_names = [
         pod.get("pod_name")
         for state in runtime.values()
@@ -915,6 +925,8 @@ def _build_failure_artifact(
             if job.status.active and job.status.active > 0
         ],
     }
+    if extra_failure_context:
+        bundle["extra_failure_context"] = extra_failure_context
     return _write_failure_artifact(bundle)
 
 
@@ -924,6 +936,7 @@ def runtime_identity_tracker(request):
     previous = _CURRENT_RUNTIME_IDENTITY_TRACKER
     tracker = RuntimeIdentityTracker()
     request.node._runtime_identity_tracker = tracker
+    request.node._extra_failure_context = {}
     _CURRENT_RUNTIME_IDENTITY_TRACKER = tracker
     try:
         yield tracker
@@ -1093,8 +1106,20 @@ def stop_assistant_runtime(
     *,
     batch_api=None,
     timeout: float = 240,
+    strict: bool = False,
+    context: str | None = None,
 ) -> None:
-    """Stop an assistant runtime through AssistantSession desired state."""
+    """Stop an assistant runtime through AssistantSession desired state.
+
+    Args:
+        assistant_id: Assistant whose runtime should be stopped.
+        batch_api: Optional BatchV1Api for richer timeout snapshots.
+        timeout: How long to wait for ``/infra/runtime`` cleanup convergence.
+        strict: When True, request or convergence failures raise immediately
+            instead of being logged and swallowed.
+        context: Short label describing the cleanup phase for diagnostics.
+    """
+    prefix = "[Cleanup]" if not context else f"[Cleanup:{context}]"
 
     try:
         resp = requests.post(
@@ -1103,14 +1128,20 @@ def stop_assistant_runtime(
             timeout=30,
         )
     except Exception as exc:
-        print(f"[Cleanup] Failed to request session stop for {assistant_id}: {exc}")
+        message = f"{prefix} Failed to request session stop for {assistant_id}: {exc}"
+        if strict:
+            raise AssertionError(message) from exc
+        print(message)
         return
 
     if resp.status_code not in (200, 404):
-        print(
-            f"[Cleanup] Session stop for {assistant_id} returned "
-            f"{resp.status_code}: {resp.text[:200]}",
+        message = (
+            f"{prefix} Session stop for {assistant_id} returned "
+            f"{resp.status_code}: {resp.text[:200]}"
         )
+        if strict:
+            raise AssertionError(message)
+        print(message)
         return
 
     try:
@@ -1120,7 +1151,9 @@ def stop_assistant_runtime(
             timeout=timeout,
         )
     except Exception as exc:
-        print(f"[Cleanup] Runtime stop wait failed for {assistant_id}: {exc}")
+        if strict:
+            raise
+        print(f"{prefix} Runtime stop wait failed for {assistant_id}: {exc}")
 
 
 def replenish_pool():
@@ -1353,10 +1386,29 @@ def expire_test_assistant_records(assistant_id: str):
 # ---------------------------------------------------------------------------
 
 
-def cleanup_assistant_jobs(batch_api, assistant_ids: list[str]):
-    """Stop assistant runtimes through AssistantSession and expire test records."""
+def cleanup_assistant_jobs(
+    batch_api,
+    assistant_ids: list[str],
+    *,
+    strict: bool = False,
+    context: str | None = None,
+):
+    """Stop assistant runtimes through AssistantSession and expire test records.
+
+    Args:
+        batch_api: BatchV1Api used for runtime-status snapshots.
+        assistant_ids: Assistants whose runtimes should be stopped.
+        strict: When True, stop failures raise immediately.
+        context: Short label describing the caller's cleanup phase.
+    """
     for aid in dict.fromkeys(str(aid) for aid in assistant_ids):
-        stop_assistant_runtime(aid, batch_api=batch_api, timeout=180)
+        stop_assistant_runtime(
+            aid,
+            batch_api=batch_api,
+            timeout=180,
+            strict=strict,
+            context=context,
+        )
         try:
             expire_test_assistant_records(aid)
         except Exception:
