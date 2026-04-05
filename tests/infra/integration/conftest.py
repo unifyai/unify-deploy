@@ -24,6 +24,8 @@ import pytest
 import requests
 from dotenv import load_dotenv
 
+_CURRENT_RUNTIME_IDENTITY_TRACKER = None
+
 # Load env vars from (in priority order):
 # 1. tests/infra/integration/.env (local test config, gitignored)
 # 2. The unity repo's .env (fallback for shared keys)
@@ -664,8 +666,11 @@ def _recent_controller_logs(
     return lines[-80:]
 
 
-def _recent_unity_container_logs(pod_names: list[str]) -> list[str]:
-    if not pod_names:
+def _recent_unity_container_logs(
+    pod_names: list[str],
+    job_names: list[str] | None = None,
+) -> list[str]:
+    if not pod_names and not job_names:
         return []
     since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
@@ -689,10 +694,12 @@ def _recent_unity_container_logs(pod_names: list[str]) -> list[str]:
     except Exception as exc:
         return [f"unity log collection failed: {exc}"]
 
-    pod_terms = [str(name) for name in pod_names if name]
+    terms = [str(name) for name in pod_names if name]
+    if job_names:
+        terms.extend(str(name) for name in job_names if name)
     lines = []
     for line in output.splitlines():
-        if not any(term in line for term in pod_terms):
+        if not any(term in line for term in terms):
             continue
         if len(line) > 2000:
             line = line[:2000] + "... [truncated]"
@@ -700,8 +707,11 @@ def _recent_unity_container_logs(pod_names: list[str]) -> list[str]:
     return lines[-80:]
 
 
-def _recent_k8s_pod_events(pod_names: list[str]) -> list[str]:
-    if not pod_names:
+def _recent_k8s_pod_events(
+    pod_names: list[str],
+    job_names: list[str] | None = None,
+) -> list[str]:
+    if not pod_names and not job_names:
         return []
     since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
@@ -725,15 +735,74 @@ def _recent_k8s_pod_events(pod_names: list[str]) -> list[str]:
     except Exception as exc:
         return [f"pod event collection failed: {exc}"]
 
-    pod_terms = [str(name) for name in pod_names if name]
+    terms = [str(name) for name in pod_names if name]
+    if job_names:
+        terms.extend(str(name) for name in job_names if name)
     lines = []
     for line in output.splitlines():
-        if not any(term in line for term in pod_terms):
+        if not any(term in line for term in terms):
             continue
         if len(line) > 2000:
             line = line[:2000] + "... [truncated]"
         lines.append(line)
     return lines[-80:]
+
+
+@dataclass
+class RuntimeIdentityTracker:
+    """Tracks concrete runtime identities for richer failure artifacts.
+
+    The live runtime may be torn down by a test's finally block before the
+    artifact is assembled. Persisting the observed session/job/pod names lets
+    us fetch Unity logs and Pod events by historical job prefix even after the
+    current runtime snapshot is empty.
+    """
+
+    assistant_ids: set[str] = field(default_factory=set)
+    session_names: set[str] = field(default_factory=set)
+    job_names: set[str] = field(default_factory=set)
+    pod_names: set[str] = field(default_factory=set)
+    activation_ids: set[str] = field(default_factory=set)
+
+    def track(
+        self,
+        *,
+        assistant_id: str | None = None,
+        session_name: str | None = None,
+        job_name: str | None = None,
+        pod_name: str | None = None,
+        activation_id: str | None = None,
+    ) -> None:
+        if assistant_id:
+            self.assistant_ids.add(str(assistant_id))
+        if session_name:
+            self.session_names.add(str(session_name))
+        if job_name:
+            self.job_names.add(str(job_name))
+        if pod_name:
+            self.pod_names.add(str(pod_name))
+        if activation_id:
+            self.activation_ids.add(str(activation_id))
+
+
+def _track_runtime_identity(
+    *,
+    assistant_id: str | None = None,
+    session_name: str | None = None,
+    job_name: str | None = None,
+    pod_name: str | None = None,
+    activation_id: str | None = None,
+) -> None:
+    tracker = _CURRENT_RUNTIME_IDENTITY_TRACKER
+    if tracker is None:
+        return
+    tracker.track(
+        assistant_id=assistant_id,
+        session_name=session_name,
+        job_name=job_name,
+        pod_name=pod_name,
+        activation_id=activation_id,
+    )
 
 
 def _write_failure_artifact(bundle: dict[str, Any]) -> str:
@@ -755,9 +824,11 @@ def _build_failure_artifact(
     gce_client,
     new_violations,
 ) -> str:
+    tracker = getattr(request.node, "_runtime_identity_tracker", None)
     assistant_ids = sorted(
         set(_assistant_ids_from_request(request, batch_api))
-        | set(_assistant_ids_from_violation_messages(new_violations)),
+        | set(_assistant_ids_from_violation_messages(new_violations))
+        | (set(getattr(tracker, "assistant_ids", set())) if tracker else set()),
     )
     runtime = {
         assistant_id: describe_runtime_state(
@@ -773,16 +844,34 @@ def _build_failure_artifact(
         for state in runtime.values()
         if state.get("session")
     ]
+    tracked_session_names = (
+        sorted(getattr(tracker, "session_names", set())) if tracker else []
+    )
+    tracked_job_names = sorted(getattr(tracker, "job_names", set())) if tracker else []
+    tracked_pod_names = sorted(getattr(tracker, "pod_names", set())) if tracker else []
     pod_names = [
         pod.get("pod_name")
         for state in runtime.values()
         for pod in state.get("pods", [])
         if pod.get("pod_name")
     ]
+    session_names = sorted(set(session_names) | set(tracked_session_names))
+    pod_names = sorted(set(pod_names) | set(tracked_pod_names))
     bundle = {
         "test_nodeid": request.node.nodeid,
         "timestamp": datetime.now(UTC).isoformat(),
         "assistant_ids": assistant_ids,
+        "tracked_runtime_identities": {
+            "assistant_ids": (
+                sorted(getattr(tracker, "assistant_ids", set())) if tracker else []
+            ),
+            "session_names": tracked_session_names,
+            "job_names": tracked_job_names,
+            "pod_names": tracked_pod_names,
+            "activation_ids": (
+                sorted(getattr(tracker, "activation_ids", set())) if tracker else []
+            ),
+        },
         "runtime": runtime,
         "pool_state": describe_pool_state(gce_client),
         "new_invariant_violations": [
@@ -804,8 +893,14 @@ def _build_failure_artifact(
                 assistant_ids,
                 session_names,
             ),
-            "unity": _recent_unity_container_logs(pod_names),
-            "pod_events": _recent_k8s_pod_events(pod_names),
+            "unity": _recent_unity_container_logs(
+                pod_names,
+                tracked_job_names,
+            ),
+            "pod_events": _recent_k8s_pod_events(
+                pod_names,
+                tracked_job_names,
+            ),
         },
         "active_jobs_overview": [
             {
@@ -821,6 +916,19 @@ def _build_failure_artifact(
         ],
     }
     return _write_failure_artifact(bundle)
+
+
+@pytest.fixture(autouse=True)
+def runtime_identity_tracker(request):
+    global _CURRENT_RUNTIME_IDENTITY_TRACKER
+    previous = _CURRENT_RUNTIME_IDENTITY_TRACKER
+    tracker = RuntimeIdentityTracker()
+    request.node._runtime_identity_tracker = tracker
+    _CURRENT_RUNTIME_IDENTITY_TRACKER = tracker
+    try:
+        yield tracker
+    finally:
+        _CURRENT_RUNTIME_IDENTITY_TRACKER = previous
 
 
 # ---------------------------------------------------------------------------
@@ -1905,7 +2013,7 @@ def wait_for_container_running(
     interval: float = 10,
 ) -> list:
     """Poll until a Job with assistant-id={id} and active pods appears."""
-    return poll_until(
+    jobs = poll_until(
         lambda: list_jobs_with_assistant_id(batch_api, str(assistant_id)),
         timeout=timeout,
         interval=interval,
@@ -1917,6 +2025,17 @@ def wait_for_container_running(
             str(assistant_id),
         ),
     )
+    for job in jobs:
+        annotations = dict(job.metadata.annotations or {})
+        _track_runtime_identity(
+            assistant_id=str(assistant_id),
+            session_name=(
+                annotations.get(ASSISTANT_SESSION_REF_LABEL)
+                or annotations.get(ASSISTANT_SESSION_REF_ANNOTATION)
+            ),
+            job_name=job.metadata.name,
+        )
+    return jobs
 
 
 def _assistant_readiness_snapshot(
@@ -1937,9 +2056,21 @@ def _assistant_readiness_snapshot(
         runtime = {"error": f"describe_runtime_state failed: {exc}"}
     session = runtime.get("session") or {}
     session_name = (session.get("metadata") or {}).get("name") or ""
+    tracker = _CURRENT_RUNTIME_IDENTITY_TRACKER
+    tracked_job_names = [
+        name
+        for name in sorted(getattr(tracker, "job_names", set()) if tracker else set())
+        if name
+    ]
+    tracked_pod_names = [
+        name
+        for name in sorted(getattr(tracker, "pod_names", set()) if tracker else set())
+        if name
+    ]
     pod_names = [
         pod.get("pod_name") for pod in runtime.get("pods", []) if pod.get("pod_name")
     ]
+    pod_names = sorted(set(pod_names) | set(tracked_pod_names))
     try:
         runtime_status = _read_runtime_status_http(str(assistant_id))
     except Exception as exc:
@@ -1963,8 +2094,14 @@ def _assistant_readiness_snapshot(
                 [str(assistant_id)],
                 [session_name] if session_name else [],
             ),
-            "unity": _recent_unity_container_logs(pod_names),
-            "pod_events": _recent_k8s_pod_events(pod_names),
+            "unity": _recent_unity_container_logs(
+                pod_names,
+                tracked_job_names,
+            ),
+            "pod_events": _recent_k8s_pod_events(
+                pod_names,
+                tracked_job_names,
+            ),
         },
     }
 
@@ -1993,6 +2130,18 @@ def wait_for_assistant_container_ready(
         session = _read_assistant_session_http(str(assistant_id))
         if session is not None:
             status = session.get("status") or {}
+            binding = status.get("binding") or {}
+            job_ref = binding.get("jobRef") or {}
+            pod_ref = binding.get("podRef") or {}
+            _track_runtime_identity(
+                assistant_id=str(assistant_id),
+                session_name=((session.get("metadata") or {}).get("name") or ""),
+                activation_id=str(
+                    (session.get("spec") or {}).get("activationId", "") or "",
+                ),
+                job_name=str(job_ref.get("name", "") or ""),
+                pod_name=str(pod_ref.get("name", "") or ""),
+            )
             last_phase = str(status.get("phase", "") or "")
             last_error = str(status.get("lastError", "") or "")
             conditions = status.get("conditions") or []

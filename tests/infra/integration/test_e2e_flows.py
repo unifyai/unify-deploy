@@ -20,6 +20,7 @@ import requests
 from .conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
+    _assistant_readiness_snapshot,
     cleanup_assistant_jobs,
     expire_test_assistant_records,
     list_assigned_vms,
@@ -356,6 +357,7 @@ class TestE2EFlows:
         self,
         real_assistant_data,
         batch_api,
+        core_api,
         gce_client,
         comms,
     ):
@@ -393,12 +395,31 @@ class TestE2EFlows:
                 timeout=180,
                 interval=10,
             )
+            ready_session = wait_for_assistant_container_ready(
+                assistant_id,
+                batch_api=batch_api,
+                core_api=core_api,
+                gce_client=gce_client,
+                timeout=300,
+                interval=5,
+            )
+            ready_phase = (ready_session.get("status") or {}).get("phase") or ""
+            print(
+                f"[VM] AssistantSession ContainerReady reached "
+                f"(phase={ready_phase or 'unknown'}), waiting for VM assignment...",
+            )
 
             vms = poll_until(
                 lambda: list_assigned_vms(gce_client, assistant_id),
                 timeout=180,
                 interval=15,
                 description=f"VM assignment for assistant {assistant_id}",
+                failure_snapshot=lambda: _assistant_readiness_snapshot(
+                    assistant_id,
+                    batch_api=batch_api,
+                    core_api=core_api,
+                    gce_client=gce_client,
+                ),
             )
 
             assert (
