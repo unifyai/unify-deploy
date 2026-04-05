@@ -63,61 +63,99 @@ def test_vm_mark_idle_uses_role_cas_and_skips_if_role_changed(client):
 
 
 def test_vm_release_complete_triggers_trim_after_idle_transition(client):
-    from communication.infra import views as views_module
-
-    loop = MagicMock()
+    vm = _make_vm(pool_role="releasing")
+    vm.labels.update(
+        {
+            "assistant-id": "1207",
+            "binding-id": "binding-123",
+        },
+    )
+    session = {
+        "status": {
+            "binding": {
+                "id": "binding-123",
+                "jobRef": {"name": "unity-job-1"},
+                "vmRef": {"name": "unity-pool-ubuntu-1-preview"},
+                "releaseRequestedAt": "2026-04-05T15:39:57Z",
+            },
+        },
+    }
 
     with (
         patch(
-            "communication.infra.views.complete_pool_vm_release",
-            return_value={
-                "vm_name": "unity-pool-ubuntu-1-preview",
-                "vm_type": "ubuntu",
-                "pool_role": "idle",
-            },
-        ) as mock_complete_release,
+            "communication.infra.views.compute_v1.InstancesClient",
+        ) as mock_client_cls,
         patch(
-            "communication.infra.views.asyncio.get_running_loop",
-            return_value=loop,
+            "communication.infra.views.get_custom_objects_api",
+            return_value=object(),
         ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=session,
+        ),
+        patch(
+            "communication.infra.views.patch_assistant_session_status",
+        ) as patch_status,
     ):
-        resp = client.post("/infra/vm/release-complete")
+        mock_client_cls.return_value.get.return_value = vm
+        resp = client.post(
+            "/infra/vm/release-complete",
+            json={"binding_id": "binding-123"},
+        )
 
     assert resp.status_code == 200
-    assert resp.json()["pool_role"] == "idle"
-    mock_complete_release.assert_called_once_with("unity-pool-ubuntu-1-preview")
-    loop.run_in_executor.assert_called_once()
-    scheduled = loop.run_in_executor.call_args.args[1]
-    assert scheduled.func is views_module.trim_pool
-    assert scheduled.args == ("ubuntu",)
+    assert resp.json() == {
+        "vm_name": "unity-pool-ubuntu-1-preview",
+        "assistant_id": "1207",
+        "binding_id": "binding-123",
+        "accepted": True,
+    }
+    updated_binding = patch_status.call_args.kwargs["binding"]
+    assert updated_binding["id"] == "binding-123"
+    assert updated_binding["jobRef"]["name"] == "unity-job-1"
+    assert updated_binding["vmRef"]["name"] == "unity-pool-ubuntu-1-preview"
+    assert updated_binding["releaseRequestedAt"] == "2026-04-05T15:39:57Z"
+    assert updated_binding["releaseCompletedAt"]
+    assert patch_status.call_args.kwargs["source"] == "views.release_complete"
 
 
 def test_vm_release_complete_triggers_replenish_after_retirement(client):
-    from communication.infra import views as views_module
-
-    loop = MagicMock()
+    vm = _make_vm(pool_role="releasing")
+    vm.labels.update(
+        {
+            "assistant-id": "1207",
+            "binding-id": "binding-123",
+        },
+    )
 
     with (
         patch(
-            "communication.infra.views.complete_pool_vm_release",
-            return_value={
-                "vm_name": "unity-pool-ubuntu-1-preview",
-                "vm_type": "ubuntu",
-                "pool_role": "retired",
-                "retired": True,
-            },
-        ) as mock_complete_release,
+            "communication.infra.views.compute_v1.InstancesClient",
+        ) as mock_client_cls,
         patch(
-            "communication.infra.views.asyncio.get_running_loop",
-            return_value=loop,
+            "communication.infra.views.get_custom_objects_api",
+            return_value=object(),
         ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=None,
+        ),
+        patch(
+            "communication.infra.views.patch_assistant_session_status",
+        ) as patch_status,
     ):
-        resp = client.post("/infra/vm/release-complete")
+        mock_client_cls.return_value.get.return_value = vm
+        resp = client.post(
+            "/infra/vm/release-complete",
+            json={"binding_id": "binding-123"},
+        )
 
     assert resp.status_code == 200
-    assert resp.json()["retired"] is True
-    mock_complete_release.assert_called_once_with("unity-pool-ubuntu-1-preview")
-    loop.run_in_executor.assert_called_once()
-    scheduled = loop.run_in_executor.call_args.args[1]
-    assert scheduled.func is views_module.replenish_pool
-    assert scheduled.args == ("ubuntu",)
+    assert resp.json() == {
+        "vm_name": "unity-pool-ubuntu-1-preview",
+        "assistant_id": "1207",
+        "binding_id": "binding-123",
+        "skipped": True,
+        "reason": "session_missing",
+    }
+    patch_status.assert_not_called()

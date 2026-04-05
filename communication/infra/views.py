@@ -24,6 +24,7 @@ from .helpers import (
 from .assistant_sessions import (
     ACTIVE_PHASES,
     DESIRED_STATE_STOPPED,
+    assistant_session_desired_state,
     assistant_session_observability_fields,
     assistant_session_name,
     binding_desktop_url,
@@ -963,7 +964,7 @@ async def read_assistant_session(assistant_id: str):
 
 @router.delete("/session/{assistant_id}")
 async def delete_current_assistant_session(assistant_id: str):
-    """Delete the current AssistantSession for an assistant."""
+    """Request deletion of the current AssistantSession for an assistant."""
     custom_api = await asyncio.to_thread(get_custom_objects_api)
     if custom_api is None:
         raise HTTPException(
@@ -2008,8 +2009,10 @@ async def runtime_status_endpoint(assistant_id: str):
     session_phase = str(
         ((assistant_session or {}).get("status") or {}).get("phase", "") or "",
     )
-    session_desired_state = str(
-        ((assistant_session or {}).get("spec") or {}).get("desiredState", "") or "",
+    session_desired_state = (
+        assistant_session_desired_state(assistant_session)
+        if assistant_session is not None
+        else ""
     )
     current_binding_id = binding_id_from_status(session_binding(assistant_session))
 

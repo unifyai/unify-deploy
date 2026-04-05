@@ -1782,30 +1782,79 @@ def reconcile_session(body, **_):
     _update_status_for_session(body)
 
 
+def _session_delete_cleanup_complete(body: dict) -> bool:
+    """Return whether a terminating session has released all runtime artifacts."""
+
+    session_name = str(body.get("metadata", {}).get("name", "") or "")
+    spec = body.get("spec", {})
+    status = body.get("status", {})
+    assistant_id = str(spec.get("assistantId", "") or "")
+    if not assistant_id:
+        return True
+
+    binding = session_binding(body)
+    current_binding_id = binding_id_from_status(binding)
+    phase = str(status.get("phase", "") or "")
+
+    try:
+        job = _job_for_binding(session_name, binding) if current_binding_id else None
+    except Exception:  # pragma: no cover - best effort retry on transient API errors
+        logger.exception(
+            "Failed to inspect bound Job while finalizing AssistantSession deletion",
+        )
+        return False
+
+    job_live = job is not None and _job_terminal_phase(job) is None
+    try:
+        owned_runtime_vms, other_runtime_vms, disk_vm_name = (
+            _owned_runtime_cleanup_state(
+                assistant_id,
+                current_binding_id or None,
+            )
+        )
+    except Exception:  # pragma: no cover - best effort retry on transient API errors
+        logger.exception(
+            "Failed to inspect runtime VMs while finalizing AssistantSession deletion",
+        )
+        return False
+
+    return (
+        phase == "Released"
+        and not current_binding_id
+        and not job_live
+        and not owned_runtime_vms
+        and not other_runtime_vms
+        and disk_vm_name is None
+    )
+
+
 @kopf.on.delete(
     SETTINGS.assistant_session_group,
     SETTINGS.assistant_session_version,
     SETTINGS.assistant_session_plural,
 )
 def delete_session(body, **_):
-    assert _batch_api is not None
     assert _core_api is not None
-    session_name = str(body.get("metadata", {}).get("name", ""))
-    spec = body.get("spec", {})
-    assistant_id = str(spec.get("assistantId", ""))
-    secret_name = spec.get("startupSecretRef")
-    binding = session_binding(body)
-    current_binding_id = binding_id_from_status(binding)
-    try:
-        job = _job_for_binding(session_name, binding)
-    except Exception:  # pragma: no cover - best effort cleanup
-        logger.exception("Failed to load bound job for deleted AssistantSession")
-        job = None
-    if job is not None:
-        try:
-            _suspend_bound_job(job, source="controller.session_delete")
-        except Exception:  # pragma: no cover - best effort cleanup
-            logger.exception("Failed to suspend job for deleted AssistantSession")
+    latest_body = _refresh_session_snapshot(body)
+    if latest_body is None:
+        return
+
+    session_name = str(latest_body.get("metadata", {}).get("name", "") or "")
+    spec = latest_body.get("spec", {})
+    assistant_id = str(spec.get("assistantId", "") or "")
+    secret_name = str(spec.get("startupSecretRef", "") or "")
+
+    if assistant_id:
+        _update_status_for_session(latest_body)
+        latest_body = _refresh_session_snapshot(latest_body)
+        if latest_body is not None and not _session_delete_cleanup_complete(
+            latest_body,
+        ):
+            raise kopf.TemporaryError(
+                "AssistantSession runtime cleanup still in progress",
+                delay=RECONCILE_INTERVAL_SECONDS,
+            )
+
     if secret_name:
         try:
             _core_api.delete_namespaced_secret(
@@ -1817,17 +1866,16 @@ def delete_session(body, **_):
                 logger.exception(
                     "Failed deleting bootstrap secret for deleted AssistantSession",
                 )
-    if assistant_id and current_binding_id:
-        current_vm_ref = binding_vm_ref(binding)
-        try:
-            if current_vm_ref.get("name"):
-                release_pool_vm(
-                    assistant_id,
-                    current_binding_id,
-                    vm_name=current_vm_ref["name"],
-                )
-        except Exception:  # pragma: no cover - best effort cleanup
-            logger.exception("Failed releasing VM for deleted AssistantSession")
+                raise kopf.TemporaryError(
+                    "AssistantSession bootstrap secret cleanup failed",
+                    delay=RECONCILE_INTERVAL_SECONDS,
+                ) from e
+
+    emit_observability_event(
+        "controller.session_delete.finalized",
+        assistant_id=assistant_id or None,
+        session_name=session_name or None,
+    )
 
 
 @kopf.on.probe(id="health")

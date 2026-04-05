@@ -48,9 +48,24 @@ def assistant_session_secret_name(assistant_id: str) -> str:
     return f"assistant-session-bootstrap-{_sanitize_for_k8s(assistant_id)}"
 
 
-def assistant_session_desired_state(session: dict[str, Any] | None) -> str:
-    """Return the desired runtime state for a session, defaulting to Running."""
+def assistant_session_is_terminating(session: dict[str, Any] | None) -> bool:
+    """Return whether Kubernetes has started deleting the session object."""
 
+    metadata = (session or {}).get("metadata") or {}
+    return bool(metadata.get("deletionTimestamp"))
+
+
+def assistant_session_desired_state(session: dict[str, Any] | None) -> str:
+    """Return the effective desired runtime state for a session.
+
+    A terminating AssistantSession behaves like ``Stopped`` even if its stored
+    spec still says ``Running``. This lets the controller and runtime status
+    checks treat Kubernetes deletion as authoritative termination intent while
+    the object remains visible behind the finalizer.
+    """
+
+    if assistant_session_is_terminating(session):
+        return DESIRED_STATE_STOPPED
     spec = (session or {}).get("spec", {})
     desired_state = str(spec.get("desiredState", "") or "")
     return desired_state or DESIRED_STATE_RUNNING
@@ -183,7 +198,7 @@ def assistant_session_observability_fields(
         "activation_id": overrides.pop("activation_id", spec.get("activationId")),
         "desired_state": overrides.pop(
             "desired_state",
-            spec.get("desiredState", DESIRED_STATE_RUNNING),
+            assistant_session_desired_state(session) if session else None,
         ),
         "observed_activation_id": overrides.pop(
             "observed_activation_id",
@@ -316,7 +331,7 @@ def delete_assistant_session(
             name=name,
         )
         emit_observability_event(
-            "assistantsession.deleted",
+            "assistantsession.delete_requested",
             assistant_id=assistant_id,
             session_name=name,
         )

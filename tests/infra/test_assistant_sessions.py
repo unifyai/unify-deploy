@@ -8,6 +8,8 @@ import yaml
 
 from communication.infra import assistant_sessions as assistant_sessions_module
 from communication.infra.assistant_sessions import (
+    assistant_session_desired_state,
+    assistant_session_is_terminating,
     assistant_session_name,
     assistant_session_observability_fields,
     assistant_session_secret_name,
@@ -67,6 +69,16 @@ def test_build_assistant_session_spec_sets_desktop_required():
     assert spec["desktop"] == {"required": True, "mode": "ubuntu"}
     assert spec["startupSecretRef"] == "session-bootstrap-42"
     assert spec["activationId"] == "act-1"
+
+
+def test_terminating_session_is_treated_as_stopped():
+    session = {
+        "metadata": {"deletionTimestamp": "2026-04-05T15:39:56Z"},
+        "spec": {"desiredState": "Running"},
+    }
+
+    assert assistant_session_is_terminating(session) is True
+    assert assistant_session_desired_state(session) == "Stopped"
 
 
 def test_merge_conditions_replaces_by_type():

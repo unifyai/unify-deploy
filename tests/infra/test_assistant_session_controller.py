@@ -4,6 +4,7 @@ import types
 from unittest.mock import MagicMock
 
 from kubernetes.client.rest import ApiException
+import pytest
 
 fake_kopf = types.SimpleNamespace()
 
@@ -24,6 +25,15 @@ fake_kopf.on = types.SimpleNamespace(
 )
 fake_kopf.timer = _identity_decorator
 fake_kopf.OperatorSettings = type("OperatorSettings", (), {})
+
+
+class _TemporaryError(Exception):
+    def __init__(self, *args, delay=None):
+        super().__init__(*args)
+        self.delay = delay
+
+
+fake_kopf.TemporaryError = _TemporaryError
 sys.modules.setdefault("kopf", fake_kopf)
 
 from communication.assistant_session_controller import controller
@@ -687,6 +697,34 @@ def test_reconcile_releases_failed_stopped_session_without_binding(monkeypatch):
     assert patch_status.call_args.kwargs["binding"] is None
 
 
+def test_reconcile_treats_terminating_session_as_stopped(monkeypatch):
+    body = _base_session()
+    body["metadata"]["deletionTimestamp"] = "2026-04-05T15:39:56Z"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+    )
+    patch_status = MagicMock()
+    release_state = MagicMock(
+        return_value=("Releasing", body["status"]["binding"], [], ""),
+    )
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_binding_release_state", release_state)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert release_state.call_args.kwargs["source_reason"] == "desired_stop"
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+
+
 def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeypatch):
     body = _base_session()
     body["status"]["phase"] = "PendingGuest"
@@ -1204,3 +1242,59 @@ def test_reconcile_does_not_mark_released_while_other_assistant_vm_exists(monkey
 
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
     assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+
+
+def test_delete_handler_waits_for_runtime_cleanup_before_finalizing(monkeypatch):
+    body = _base_session()
+    body["metadata"]["deletionTimestamp"] = "2026-04-05T15:39:56Z"
+    update_status = MagicMock()
+    core_api = MagicMock()
+
+    snapshots = [deepcopy(body), deepcopy(body)]
+    monkeypatch.setattr(controller, "_core_api", core_api)
+    monkeypatch.setattr(
+        controller,
+        "_refresh_session_snapshot",
+        lambda *_args: snapshots.pop(0),
+    )
+    monkeypatch.setattr(controller, "_update_status_for_session", update_status)
+    monkeypatch.setattr(
+        controller,
+        "_session_delete_cleanup_complete",
+        lambda *_args: False,
+    )
+
+    with pytest.raises(controller.kopf.TemporaryError):
+        controller.delete_session(deepcopy(body))
+
+    update_status.assert_called_once()
+    core_api.delete_namespaced_secret.assert_not_called()
+
+
+def test_delete_handler_deletes_secret_after_runtime_cleanup_completes(monkeypatch):
+    body = _base_session()
+    body["metadata"]["deletionTimestamp"] = "2026-04-05T15:39:56Z"
+    update_status = MagicMock()
+    core_api = MagicMock()
+
+    snapshots = [deepcopy(body), deepcopy(body)]
+    monkeypatch.setattr(controller, "_core_api", core_api)
+    monkeypatch.setattr(
+        controller,
+        "_refresh_session_snapshot",
+        lambda *_args: snapshots.pop(0),
+    )
+    monkeypatch.setattr(controller, "_update_status_for_session", update_status)
+    monkeypatch.setattr(
+        controller,
+        "_session_delete_cleanup_complete",
+        lambda *_args: True,
+    )
+
+    controller.delete_session(deepcopy(body))
+
+    update_status.assert_called_once()
+    core_api.delete_namespaced_secret.assert_called_once_with(
+        name="assistant-session-bootstrap-1207",
+        namespace=controller.WATCH_NAMESPACE,
+    )
