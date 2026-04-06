@@ -3096,9 +3096,10 @@ def scheduled_infra_maintenance():
 
     Runs hourly via Cloud Scheduler.  Consolidates container pool
     replenishment, excess-idle cleanup, stale-job expiry, orphaned-VM
-    reconciliation, quarantined-VM purge, and VM pool health (scrub +
-    probe + replenish) into a single scheduled endpoint so pool-health
-    concerns live in one place.
+    reconciliation, quarantined-VM purge, VM pool health (scrub +
+    probe + replenish), and bounded terminal AssistantSession pruning
+    into a single scheduled endpoint so runtime cleanup concerns live
+    in one place.
     """
     results: dict = {}
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
@@ -3172,6 +3173,21 @@ def scheduled_infra_maintenance():
         except Exception as exc:
             logger.exception("maintenance: VM rebalance failed for %s", vm_type)
             results[f"{key}_error"] = str(exc)
+
+    # 7 — Delete terminal AssistantSession CRs whose runtime is already gone.
+    try:
+        resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/sessions/prune-terminal",
+            headers=headers,
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            results["assistant_session_prune"] = resp.json()
+        else:
+            results["assistant_session_prune_error"] = resp.text
+    except Exception as exc:
+        logger.exception("maintenance: terminal session prune failed")
+        results["assistant_session_prune_error"] = str(exc)
 
     return results
 

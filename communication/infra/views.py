@@ -1,7 +1,8 @@
 import asyncio
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from functools import partial
 from google.api_core.exceptions import Conflict, NotFound as GcpNotFound
 from google.cloud import compute_v1, pubsub_v1, storage
@@ -26,6 +27,7 @@ from .assistant_sessions import (
     DESIRED_STATE_STOPPED,
     SIGNAL_DESKTOP_READY,
     SIGNAL_VM_RELEASE_COMPLETE,
+    TERMINAL_PHASES,
     assistant_session_desired_state,
     assistant_session_observability_fields,
     assistant_session_name,
@@ -105,6 +107,10 @@ from communication.dependencies import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_UNITY_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest"
+TERMINAL_SESSION_PRUNE_DEFAULT_LIMIT = 50
+TERMINAL_SESSION_PRUNE_MAX_LIMIT = 200
+TERMINAL_SESSION_PRUNE_PREVIEW_RETENTION_HOURS = 6.0
+TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS = 24.0
 
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
 POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
@@ -2090,10 +2096,36 @@ async def detach_pool_disk_endpoint(assistant_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/runtime/{assistant_id}")
-async def runtime_status_endpoint(assistant_id: str):
-    """Report whether an assistant still has live runtime resources."""
-    batch_api, _, _, _ = await _get_k8s_clients()
+def _parse_utc_timestamp(value: str | None) -> datetime | None:
+    """Parse an ISO8601 timestamp into a timezone-aware UTC datetime."""
+
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _default_terminal_session_prune_retention_hours() -> float:
+    """Return the environment-specific retention window for terminal sessions."""
+
+    if SETTINGS.deploy_env == "preview":
+        return TERMINAL_SESSION_PRUNE_PREVIEW_RETENTION_HOURS
+    return TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS
+
+
+async def _runtime_resource_state(
+    assistant_id: str,
+    *,
+    batch_api,
+    assistant_session: dict | None,
+) -> dict[str, object]:
+    """Return the live runtime resources currently owned by an assistant."""
+
     sanitized = assistant_id.lower().replace("_", "-")
     jobs = await asyncio.to_thread(
         batch_api.list_namespaced_job,
@@ -2107,7 +2139,172 @@ async def runtime_status_endpoint(assistant_id: str):
         and job.status.active > 0
         and not job.metadata.deletion_timestamp
     ]
+    current_binding_id = binding_id_from_status(session_binding(assistant_session))
+    owned_vms, other_owned_vms = await asyncio.to_thread(
+        split_binding_runtime_vms,
+        assistant_id,
+        binding_id=current_binding_id or None,
+    )
+    disk_vm_name = await asyncio.to_thread(find_vm_with_disk, assistant_id)
+    return {
+        "active_job_names": active_job_names,
+        "owned_vms": owned_vms,
+        "other_owned_vms": other_owned_vms,
+        "disk_vm_name": disk_vm_name,
+        "current_binding_id": current_binding_id,
+    }
 
+
+def _terminal_session_prune_ready(
+    assistant_session: dict | None,
+    runtime_state: dict[str, object],
+) -> bool:
+    """Return whether a terminal session can be safely deleted."""
+
+    phase = str(((assistant_session or {}).get("status") or {}).get("phase", "") or "")
+    return (
+        phase in TERMINAL_PHASES
+        and not runtime_state["current_binding_id"]
+        and not runtime_state["active_job_names"]
+        and not runtime_state["owned_vms"]
+        and not runtime_state["other_owned_vms"]
+        and runtime_state["disk_vm_name"] is None
+    )
+
+
+@router.post("/sessions/prune-terminal")
+async def prune_terminal_assistant_sessions(
+    retention_hours: float | None = Query(default=None, gt=0),
+    limit: int = Query(
+        default=TERMINAL_SESSION_PRUNE_DEFAULT_LIMIT,
+        ge=1,
+        le=TERMINAL_SESSION_PRUNE_MAX_LIMIT,
+    ),
+):
+    """Delete old terminal sessions whose runtime resources are already gone.
+
+    This is a bounded maintenance safety net for ``Released`` / ``Failed``
+    AssistantSession CRs that are no longer needed but were left behind by
+    stop-only or incomplete delete flows.
+    """
+
+    batch_api, _, _, _ = await _get_k8s_clients()
+    custom_api = await asyncio.to_thread(get_custom_objects_api)
+    if custom_api is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize AssistantSession API client",
+        )
+
+    effective_retention_hours = (
+        retention_hours or _default_terminal_session_prune_retention_hours()
+    )
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=effective_retention_hours)
+    listed = await asyncio.to_thread(
+        custom_api.list_namespaced_custom_object,
+        group=SETTINGS.assistant_session_group,
+        version=SETTINGS.assistant_session_version,
+        namespace=SETTINGS.default_namespace,
+        plural=SETTINGS.assistant_session_plural,
+    )
+    sessions = list((listed or {}).get("items") or [])
+    skip_reasons: Counter[str] = Counter()
+    terminal_sessions_found = 0
+    prune_candidates: list[tuple[datetime, str, dict]] = []
+
+    for session in sessions:
+        phase = str(((session.get("status") or {}).get("phase", "") or ""))
+        if phase not in TERMINAL_PHASES:
+            continue
+        terminal_sessions_found += 1
+
+        metadata = session.get("metadata") or {}
+        if metadata.get("deletionTimestamp"):
+            skip_reasons["already_terminating"] += 1
+            continue
+
+        assistant_id = str(((session.get("spec") or {}).get("assistantId")) or "")
+        if not assistant_id:
+            skip_reasons["missing_assistant_id"] += 1
+            continue
+
+        created_at = _parse_utc_timestamp(metadata.get("creationTimestamp"))
+        if created_at is None:
+            skip_reasons["missing_creation_timestamp"] += 1
+            continue
+        if created_at > cutoff:
+            skip_reasons["within_retention"] += 1
+            continue
+
+        prune_candidates.append((created_at, assistant_id, session))
+
+    prune_candidates.sort(key=lambda item: item[0])
+    considered_candidates = prune_candidates[:limit]
+    deleted_assistant_ids: list[str] = []
+    delete_errors: dict[str, str] = {}
+
+    for _, assistant_id, session in considered_candidates:
+        runtime_state = await _runtime_resource_state(
+            assistant_id,
+            batch_api=batch_api,
+            assistant_session=session,
+        )
+        if not _terminal_session_prune_ready(session, runtime_state):
+            skip_reasons["runtime_resources_present"] += 1
+            continue
+
+        try:
+            deleted = await asyncio.to_thread(
+                delete_assistant_session,
+                custom_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+            )
+        except Exception as exc:
+            logger.exception(
+                "terminal session prune failed for assistant %s",
+                assistant_id,
+            )
+            delete_errors[assistant_id] = str(exc)
+            skip_reasons["delete_failed"] += 1
+            continue
+
+        if deleted:
+            deleted_assistant_ids.append(assistant_id)
+        else:
+            skip_reasons["already_deleted"] += 1
+
+    remaining_candidates = max(len(prune_candidates) - len(considered_candidates), 0)
+    emit_observability_event(
+        "infra.session.prune_terminal.completed",
+        retention_hours=effective_retention_hours,
+        limit=limit,
+        terminal_sessions_found=terminal_sessions_found,
+        prune_candidates=len(prune_candidates),
+        considered_candidates=len(considered_candidates),
+        remaining_candidates=remaining_candidates,
+        deleted_count=len(deleted_assistant_ids),
+        delete_error_count=len(delete_errors),
+        skip_reasons=dict(skip_reasons),
+    )
+    return {
+        "retention_hours": effective_retention_hours,
+        "limit": limit,
+        "terminal_sessions_found": terminal_sessions_found,
+        "prune_candidates": len(prune_candidates),
+        "considered_candidates": len(considered_candidates),
+        "remaining_candidates": remaining_candidates,
+        "deleted_count": len(deleted_assistant_ids),
+        "deleted_assistant_ids": deleted_assistant_ids,
+        "skip_reasons": dict(skip_reasons),
+        "delete_errors": delete_errors,
+    }
+
+
+@router.get("/runtime/{assistant_id}")
+async def runtime_status_endpoint(assistant_id: str):
+    """Report whether an assistant still has live runtime resources."""
+    batch_api, _, _, _ = await _get_k8s_clients()
     custom_api = await asyncio.to_thread(get_custom_objects_api)
     assistant_session = None
     if custom_api is not None:
@@ -2117,6 +2314,11 @@ async def runtime_status_endpoint(assistant_id: str):
             SETTINGS.default_namespace,
             assistant_id,
         )
+    runtime_state = await _runtime_resource_state(
+        assistant_id,
+        batch_api=batch_api,
+        assistant_session=assistant_session,
+    )
     session_phase = str(
         ((assistant_session or {}).get("status") or {}).get("phase", "") or "",
     )
@@ -2125,23 +2327,15 @@ async def runtime_status_endpoint(assistant_id: str):
         if assistant_session is not None
         else ""
     )
-    current_binding_id = binding_id_from_status(session_binding(assistant_session))
-
-    owned_vms, other_owned_vms = await asyncio.to_thread(
-        split_binding_runtime_vms,
-        assistant_id,
-        binding_id=current_binding_id or None,
-    )
-    disk_vm_name = await asyncio.to_thread(find_vm_with_disk, assistant_id)
     session_cleanup_complete = assistant_session is None or (
         session_desired_state == DESIRED_STATE_STOPPED and session_phase == "Released"
     )
     runtime_cleanup_complete = (
         session_cleanup_complete
-        and not active_job_names
-        and not owned_vms
-        and not other_owned_vms
-        and disk_vm_name is None
+        and not runtime_state["active_job_names"]
+        and not runtime_state["owned_vms"]
+        and not runtime_state["other_owned_vms"]
+        and runtime_state["disk_vm_name"] is None
     )
 
     return {
@@ -2149,10 +2343,10 @@ async def runtime_status_endpoint(assistant_id: str):
         "assistant_session_exists": assistant_session is not None,
         "assistant_session_phase": session_phase or None,
         "assistant_session_desired_state": session_desired_state or None,
-        "active_job_names": active_job_names,
-        "owned_vms": owned_vms,
-        "other_owned_vms": other_owned_vms,
-        "disk_vm_name": disk_vm_name,
+        "active_job_names": runtime_state["active_job_names"],
+        "owned_vms": runtime_state["owned_vms"],
+        "other_owned_vms": runtime_state["other_owned_vms"],
+        "disk_vm_name": runtime_state["disk_vm_name"],
         "runtime_cleanup_complete": runtime_cleanup_complete,
     }
 
