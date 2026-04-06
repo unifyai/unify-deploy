@@ -135,21 +135,37 @@ wipe_metadata_key() {
 }
 
 notify_release_complete() {
-    local binding_id comms_url id_token
+    local binding_id comms_url id_token response http_status response_body
     binding_id=$(get_metadata "binding-id")
     comms_url=$(get_metadata "comms-url")
     id_token=$(curl -sf -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
         2>/dev/null || true)
-    [[ -z "$binding_id" || -z "$comms_url" || -z "$id_token" ]] && return 1
+    if [[ -z "$binding_id" || -z "$comms_url" || -z "$id_token" ]]; then
+        log "WARNING: missing release completion metadata (binding-id/comms-url/id-token)"
+        return 1
+    fi
 
     for attempt in $(seq 1 10); do
-        if curl -sf -X POST "$comms_url/infra/vm/release-complete" \
+        response=$(curl -sS -X POST "$comms_url/infra/vm/release-complete" \
             -H "Authorization: Bearer $id_token" \
             -H "Content-Type: application/json" \
-            -d "{\"binding_id\": \"$binding_id\"}" >/dev/null 2>&1; then
-            log "Reported release completion to Comms"
+            -d "{\"binding_id\": \"$binding_id\"}" \
+            -w $'\n%{http_code}' 2>&1)
+        http_status=$(printf '%s\n' "$response" | tail -n 1)
+        response_body=$(printf '%s\n' "$response" | sed '$d')
+        if [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+            if [[ -n "$response_body" ]]; then
+                log "Reported release completion to Comms: status=$http_status body=$response_body"
+            else
+                log "Reported release completion to Comms: status=$http_status"
+            fi
             return 0
+        fi
+        if [[ -n "$response_body" ]]; then
+            log "Release completion attempt $attempt failed: status=${http_status:-curl_error} body=$response_body"
+        else
+            log "Release completion attempt $attempt failed: status=${http_status:-curl_error}"
         fi
         sleep 3
     done

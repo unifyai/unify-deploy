@@ -163,6 +163,29 @@ def build_binding(
     return {key: value for key, value in fields.items() if value not in (None, "")}
 
 
+def _binding_release_field_regressions(
+    current_binding: dict[str, Any] | None,
+    next_binding: dict[str, Any] | None,
+) -> dict[str, dict[str, str | None]]:
+    """Return release lifecycle fields that would be cleared on the same binding."""
+
+    current_binding_id = binding_id(current_binding)
+    next_binding_id = binding_id(next_binding)
+    if not current_binding_id or current_binding_id != next_binding_id:
+        return {}
+
+    regressions: dict[str, dict[str, str | None]] = {}
+    for field_name in ("releaseRequestedAt", "releaseCompletedAt"):
+        current_value = str((current_binding or {}).get(field_name, "") or "")
+        next_value = str((next_binding or {}).get(field_name, "") or "")
+        if current_value and not next_value:
+            regressions[field_name] = {
+                "before": current_value,
+                "after": None,
+            }
+    return regressions
+
+
 def _compact_observability_fields(fields: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
@@ -695,6 +718,7 @@ def patch_assistant_session_status(
         current = get_assistant_session(custom_api, namespace, assistant_id) or {}
         current_status = deepcopy(current.get("status") or {})
         next_status = deepcopy(current_status)
+        current_binding = session_binding(current)
         if phase is not None:
             next_status["phase"] = phase
         if observed_activation_id is not None:
@@ -711,6 +735,29 @@ def patch_assistant_session_status(
             next_status["vmRetries"] = vm_retries
         if desktop_probe_failures is not _STATUS_UNSET:
             next_status["desktopProbeFailures"] = desktop_probe_failures
+
+        next_binding = session_binding({"status": next_status})
+        release_field_regressions = (
+            _binding_release_field_regressions(current_binding, next_binding)
+            if binding is not _STATUS_UNSET
+            else {}
+        )
+        if release_field_regressions:
+            current_binding_name = binding_id(current_binding) or None
+            emit_observability_event(
+                "assistantsession.binding_release_fields_cleared",
+                assistant_id=assistant_id,
+                session_name=name,
+                source=source,
+                binding_id=current_binding_name,
+                current_phase=current_status.get("phase"),
+                next_phase=next_status.get("phase"),
+                current_release_requested_at=current_binding.get("releaseRequestedAt"),
+                next_release_requested_at=next_binding.get("releaseRequestedAt"),
+                current_release_completed_at=current_binding.get("releaseCompletedAt"),
+                next_release_completed_at=next_binding.get("releaseCompletedAt"),
+                cleared_fields=release_field_regressions,
+            )
 
         if current_status == next_status:
             return current

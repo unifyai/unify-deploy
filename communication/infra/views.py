@@ -2222,7 +2222,26 @@ async def vm_release_complete_endpoint(
     labels = dict(vm.labels) if vm.labels else {}
     assistant_id = str(labels.get("assistant-id", "") or "")
     current_binding_id = str(labels.get("binding-id", "") or "")
+    pool_role = str(labels.get("pool-role", "") or "")
+    emit_observability_event(
+        "infra.vm_release_complete.received",
+        vm_name=vm_name,
+        assistant_id=assistant_id or None,
+        binding_id=body.binding_id,
+        current_binding_id=current_binding_id or None,
+        pool_role=pool_role or None,
+    )
     if not assistant_id or current_binding_id != body.binding_id:
+        emit_observability_event(
+            "infra.vm_release_complete.skipped",
+            vm_name=vm_name,
+            assistant_id=assistant_id or None,
+            binding_id=body.binding_id,
+            current_binding_id=current_binding_id or None,
+            pool_role=pool_role or None,
+            reason="binding_changed",
+            skip_stage="vm_labels",
+        )
         return {
             "vm_name": vm_name,
             "assistant_id": assistant_id or None,
@@ -2237,6 +2256,7 @@ async def vm_release_complete_endpoint(
             status_code=500,
             detail="Failed to initialize AssistantSession API client",
         )
+    session_name = assistant_session_name(assistant_id)
     session = await asyncio.to_thread(
         get_assistant_session,
         custom_api,
@@ -2244,6 +2264,17 @@ async def vm_release_complete_endpoint(
         assistant_id,
     )
     if session is None:
+        emit_observability_event(
+            "infra.vm_release_complete.skipped",
+            vm_name=vm_name,
+            assistant_id=assistant_id,
+            binding_id=body.binding_id,
+            current_binding_id=current_binding_id or None,
+            session_name=session_name,
+            pool_role=pool_role or None,
+            reason="session_missing",
+            skip_stage="session_lookup",
+        )
         return {
             "vm_name": vm_name,
             "assistant_id": assistant_id,
@@ -2253,7 +2284,28 @@ async def vm_release_complete_endpoint(
         }
 
     binding = session_binding(session)
+    session_fields = assistant_session_observability_fields(
+        session,
+        source="views.release_complete",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        vm_name=vm_name,
+    )
     if binding_id_from_status(binding) != body.binding_id:
+        skipped_fields = {
+            **session_fields,
+            "binding_id": body.binding_id,
+            "current_binding_id": binding_id_from_status(binding) or None,
+            "current_release_requested_at": binding.get("releaseRequestedAt"),
+            "current_release_completed_at": binding.get("releaseCompletedAt"),
+            "pool_role": pool_role or None,
+            "reason": "binding_changed",
+            "skip_stage": "session_status",
+        }
+        emit_observability_event(
+            "infra.vm_release_complete.skipped",
+            **skipped_fields,
+        )
         return {
             "vm_name": vm_name,
             "assistant_id": assistant_id,
@@ -2263,6 +2315,7 @@ async def vm_release_complete_endpoint(
             "reason": "binding_changed",
         }
 
+    next_release_completed_at = datetime.now(timezone.utc).isoformat()
     updated_binding = build_binding(
         binding_id=body.binding_id,
         job_ref=binding_job_ref(binding) or None,
@@ -2276,15 +2329,42 @@ async def vm_release_complete_endpoint(
         vm_ready_hostname=binding.get("vmReadyHostname"),
         vm_ready_message_id=binding.get("vmReadyMessageId"),
         release_requested_at=binding.get("releaseRequestedAt"),
-        release_completed_at=datetime.now(timezone.utc).isoformat(),
+        release_completed_at=next_release_completed_at,
     )
-    await asyncio.to_thread(
+    accepted_fields = {
+        **session_fields,
+        "binding_id": body.binding_id,
+        "current_binding_id": binding_id_from_status(binding) or None,
+        "current_release_requested_at": binding.get("releaseRequestedAt"),
+        "current_release_completed_at": binding.get("releaseCompletedAt"),
+        "next_release_completed_at": next_release_completed_at,
+        "pool_role": pool_role or None,
+    }
+    emit_observability_event(
+        "infra.vm_release_complete.accepted",
+        **accepted_fields,
+    )
+    updated_session = await asyncio.to_thread(
         patch_assistant_session_status,
         custom_api,
         SETTINGS.default_namespace,
         assistant_id,
         binding=updated_binding,
         source="views.release_complete",
+    )
+    persisted_fields = assistant_session_observability_fields(
+        updated_session,
+        source="views.release_complete",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        vm_name=vm_name,
+    )
+    emit_observability_event(
+        "infra.vm_release_complete.persisted",
+        **persisted_fields,
+        release_requested_at=updated_binding.get("releaseRequestedAt"),
+        release_completed_at=updated_binding.get("releaseCompletedAt"),
+        pool_role=pool_role or None,
     )
     return {
         "vm_name": vm_name,
