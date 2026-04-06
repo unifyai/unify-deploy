@@ -75,6 +75,7 @@ from .helpers import (
     get_outlook_thread_id,
     get_pubsub_client,
     get_thread_id,
+    get_twilio_wa_client,
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
@@ -674,6 +675,144 @@ async def twilio_whatsapp_webhook(request: Request):
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     logger.info("Returning TwiML response")
+    return Response(content=str(resp_user), media_type="text/xml")
+
+
+# =============================================================================
+# WhatsApp Business Calling Webhook
+# =============================================================================
+
+
+@app.post(
+    "/twilio/whatsapp-call",
+    dependencies=[Depends(validate_twilio_wa_signature)],
+)
+async def twilio_whatsapp_call_webhook(request: Request):
+    """Inbound WhatsApp Business Calling webhook.
+
+    Triggered by a TwiML Voice Application attached to a WhatsApp sender.
+    Bridges the WhatsApp VoIP caller into a Twilio Conference and connects
+    a SIP leg to LiveKit so the voice agent can participate.
+    """
+    logger.info("twilio_whatsapp_call_webhook function started")
+    form_data = await request.form()
+
+    to_raw = form_data.get("To", "") or ""
+    from_raw = form_data.get("From", "") or ""
+    pool_number = to_raw.replace("whatsapp:", "").strip()
+    caller_number = from_raw.replace("whatsapp:", "").strip()
+    logger.info(
+        f"Received WhatsApp call from {_redact_phone(caller_number)} "
+        f"to {_redact_phone(pool_number)}",
+    )
+
+    # Resolve assistant via the shared WhatsApp pool routing
+    resolve_data = await asyncio.to_thread(
+        resolve_whatsapp_route, pool_number, caller_number,
+    )
+    if resolve_data is None or resolve_data.get("action") in (
+        "auto_reply",
+        "reject_cold",
+    ):
+        resp = VoiceResponse()
+        resp.say(
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details.",
+        )
+        resp.hangup()
+        return Response(content=str(resp), media_type="text/xml")
+
+    resolved_assistant_id = str(resolve_data["assistant_id"])
+
+    context = await asyncio.to_thread(
+        build_webhook_context,
+        "whatsapp_call",
+        to_raw,
+        from_raw,
+        assistant_id=resolved_assistant_id,
+        validate_contact=False,
+    )
+    assistant_data = context["assistant"]
+    assistant_id = assistant_data["assistant_id"]
+    contacts = context["contacts"]
+
+    # Conference + LiveKit room
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_WA_{pool_number[1:]}_{date_time}"
+    room_name = make_room_name(assistant_id, "whatsapp_call")
+    sip_uri = make_sip_uri(pool_number)
+    logger.info(f"Setting up WhatsApp call conference {conference_name}")
+    logger.info(f"LiveKit room: {room_name}")
+
+    await ensure_phone_dispatch_rule(pool_number, room_name)
+
+    # Publish to Pub/Sub
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    logger.info(f"Publishing WhatsApp call to Pub/Sub at path: {topic_path}")
+    try:
+        pubsub_message = {
+            "thread": "whatsapp_call",
+            "publish_timestamp": time.time(),
+            "event": {
+                "contacts": contacts,
+                "conference_name": conference_name,
+                "caller_number": caller_number,
+                "sip_uri": sip_uri,
+                "livekit_room": room_name,
+                "assistant_id": assistant_id,
+                "action": "start_worker",
+                "timestamp": int(time.time() * 1000),
+                "call_metadata": {
+                    "whatsapp_number": pool_number,
+                    "call_type": "inbound",
+                    "room_created": True,
+                    "bridge_established": True,
+                },
+            },
+        }
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(pubsub_message).encode("utf-8"),
+            thread="inbound",
+        )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            logger.info(f"Message ID: {message_id}")
+        logger.info("WhatsApp call published to Pub/Sub successfully")
+    except Exception as e:
+        logger.error(f"Error publishing WhatsApp call to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    # Bridge: put the WhatsApp caller in a conference and dial SIP to LiveKit.
+    # Both legs must use the WA Twilio account so they share the same
+    # conference namespace as the inbound WhatsApp call.
+    try:
+        resp_user = create_conference_response(conference_name)
+
+        wa_client = get_twilio_wa_client()
+        sip_twiml = str(create_conference_response(conference_name))
+        call = wa_client.calls.create(
+            to=sip_uri,
+            from_=pool_number,
+            twiml=sip_twiml,
+        )
+        logger.info(f"SIP leg created for WhatsApp call. Call SID: {call.sid}")
+    except Exception as e:
+        logger.error(f"Error during WhatsApp call conference setup: {e}")
+        return Response(content="Error setting up conference", status_code=500)
+
+    # Recording via LiveKit Egress (fire-and-forget)
+    try:
+        user_id = assistant_data["user_id"]
+        await start_room_egress(room_name, assistant_id, user_id)
+    except Exception as e:
+        logger.error(
+            f"[Egress] Non-fatal: failed to start egress for WhatsApp call: {e}",
+        )
+
+    logger.info("Returning TwiML response for WhatsApp call")
     return Response(content=str(resp_user), media_type="text/xml")
 
 
@@ -2789,6 +2928,7 @@ if __name__ == "__main__":
     logger.info("    - POST /twilio/call-status")
     logger.info("    - POST /twilio/sms")
     logger.info("    - POST /twilio/whatsapp")
+    logger.info("    - POST /twilio/whatsapp-call")
     logger.info("  Unify:")
     logger.info("    - POST /unify/message")
     logger.info("    - POST /unify/meet")

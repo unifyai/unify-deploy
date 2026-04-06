@@ -5,8 +5,13 @@ import os
 
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Query, Request
+from livekit.api import (
+    LiveKitAPI,
+    SIPInboundTrunkInfo,
+    CreateSIPInboundTrunkRequest,
+)
 
-from communication.helpers import get_twilio_wa_client
+from communication.helpers import get_twilio_client, get_twilio_wa_client
 from common.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -194,12 +199,83 @@ async def send(request: Request):
     return {"success": True, "method": method}
 
 
+WHATSAPP_VOICE_APP_SID = "APbf0903608f1a02e93bebcc90e2ea17db" if os.getenv("DEPLOY_ENV") == "staging" else "AP5e48f55135a987a482661a37db8ac68f"
+WHATSAPP_GB_BUNDLE_SID = "BUd85f47e01a9d85003c364f400105a8da"
+
+
+async def _provision_gb_phone_number() -> str:
+    """Buy a GB mobile number with voice + SMS, configure webhooks,
+    add to the Unity messaging service, and create a LiveKit SIP trunk.
+
+    Returns the purchased E.164 number.
+    """
+    twilio_client = get_twilio_client()
+
+    numbers: list = []
+    try:
+        numbers += twilio_client.available_phone_numbers("GB").mobile.list(
+            limit=1, sms_enabled=True, voice_enabled=True, beta=False,
+        )
+    except Exception:
+        pass
+    try:
+        numbers += twilio_client.available_phone_numbers("GB").local.list(
+            limit=1, sms_enabled=True, voice_enabled=True, beta=False,
+        )
+    except Exception:
+        pass
+    if not numbers:
+        raise HTTPException(
+            status_code=404,
+            detail="No suitable GB phone numbers available",
+        )
+
+    record = numbers[0]
+    incoming = twilio_client.incoming_phone_numbers.create(
+        phone_number=record.phone_number,
+        voice_url=SETTINGS.adapters_url + "/twilio/call",
+        voice_method="POST",
+        sms_url=SETTINGS.adapters_url + "/twilio/sms",
+        sms_method="POST",
+        status_callback=SETTINGS.adapters_url + "/twilio/call-status",
+        status_callback_method="POST",
+        bundle_sid=WHATSAPP_GB_BUNDLE_SID,
+    )
+
+    for service in twilio_client.messaging.v1.services.list():
+        if service.friendly_name == "Unity":
+            service.phone_numbers.create(phone_number_sid=incoming.sid)
+            break
+
+    lkapi = LiveKitAPI(
+        url=os.getenv("LIVEKIT_URL"),
+        api_key=os.getenv("LIVEKIT_API_KEY"),
+        api_secret=os.getenv("LIVEKIT_API_SECRET"),
+    )
+    trunk = SIPInboundTrunkInfo(
+        name=f"Unity_WA_{record.phone_number[1:]}",
+        numbers=[record.phone_number],
+        krisp_enabled=True,
+    )
+    await lkapi.sip.create_sip_inbound_trunk(
+        CreateSIPInboundTrunkRequest(trunk=trunk),
+    )
+    await lkapi.aclose()
+
+    logger.info(f"Provisioned GB number {record.phone_number} for WhatsApp sender")
+    return record.phone_number
+
+
 @auth_router.post("/create")
 async def create_whatsapp_sender(request: Request):
     data = await request.json()
-    url = "https://messaging.twilio.com/v2/Channels/Senders"
-    payload = {
-        "sender_id": f"whatsapp:{data['phone_number']}",
+    phone_number = data.get("phone_number")
+
+    if not phone_number:
+        phone_number = await _provision_gb_phone_number()
+
+    payload: dict = {
+        "sender_id": f"whatsapp:{phone_number}",
         "profile": {
             "name": "Unify Assistant",
             "logo_url": "https://console.unify.ai/ivy_logo_only.png",
@@ -214,15 +290,28 @@ async def create_whatsapp_sender(request: Request):
             "status_callback_method": "POST",
         },
     }
+
+    if WHATSAPP_VOICE_APP_SID:
+        payload["configuration"] = {
+            "voice_application_sid": WHATSAPP_VOICE_APP_SID,
+        }
+
     headers = _twilio_whatsapp_auth_headers()
     async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, headers=headers)
+        resp = await client.post(
+            "https://messaging.twilio.com/v2/Channels/Senders",
+            json=payload,
+            headers=headers,
+        )
     if resp.status_code >= 400:
         raise HTTPException(
             status_code=resp.status_code,
             detail=f"Failed to create WhatsApp sender: {resp.text}",
         )
-    return {"sid": resp.json().get("sid")}
+    return {
+        "sid": resp.json().get("sid"),
+        "phone_number": phone_number,
+    }
 
 
 @auth_router.delete("/delete")

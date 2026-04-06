@@ -1046,7 +1046,9 @@ def build_webhook_context(
     # normalize identifiers and resolve assistant by channel
     is_email = channel in ["email", "teams"]
     normalized_sender = (
-        sender.replace("whatsapp:", "") if channel == "whatsapp" else sender
+        sender.replace("whatsapp:", "")
+        if channel in ("whatsapp", "whatsapp_call")
+        else sender
     ).strip()
 
     # get assistant data (skip if pre-fetched)
@@ -1137,6 +1139,14 @@ def get_twilio_client():
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
     if not account_sid or not auth_token:
         raise RuntimeError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set")
+    return TwilioClient(account_sid, auth_token)
+
+
+def get_twilio_wa_client():
+    account_sid = os.getenv("TWILIO_WA_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_WA_AUTH_TOKEN")
+    if not account_sid or not auth_token:
+        raise RuntimeError("TWILIO_WA_ACCOUNT_SID and TWILIO_WA_AUTH_TOKEN must be set")
     return TwilioClient(account_sid, auth_token)
 
 
