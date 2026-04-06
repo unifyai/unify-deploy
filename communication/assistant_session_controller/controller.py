@@ -41,6 +41,7 @@ from communication.infra.vm_helpers import (
     assign_pool_vm,
     complete_pool_vm_release,
     find_vm_with_disk,
+    POOL_ROLE_RELEASING,
     probe_vm_agent_service,
     release_pool_vm,
     replenish_pool,
@@ -493,6 +494,30 @@ def _owned_runtime_cleanup_state(
     return current_binding_vms, other_binding_vms, find_vm_with_disk(assistant_id)
 
 
+def _stale_other_binding_release_candidate(
+    other_runtime_vms: list[dict],
+    disk_vm_name: str | None,
+) -> dict | None:
+    """Return a stale releasing VM that is safe to finalize for cleanup."""
+
+    if len(other_runtime_vms) != 1:
+        return None
+
+    candidate = other_runtime_vms[0]
+    candidate_vm_name = str(candidate.get("vm_name", "") or "")
+    candidate_binding_id = str(candidate.get("binding_id", "") or "")
+    candidate_role = str(candidate.get("pool_role", "") or "")
+    if (
+        not candidate_vm_name
+        or not candidate_binding_id
+        or candidate_role != POOL_ROLE_RELEASING
+    ):
+        return None
+    if disk_vm_name not in (None, candidate_vm_name):
+        return None
+    return candidate
+
+
 def _release_observability_fields(
     *,
     assistant_id: str,
@@ -607,6 +632,13 @@ def _binding_release_state(
         )
         vm_name = ""
 
+    stale_other_vm = None
+    if not vm_name and not job_live and not owned_runtime_vms:
+        stale_other_vm = _stale_other_binding_release_candidate(
+            other_runtime_vms,
+            disk_vm_name,
+        )
+
     if vm_name:
         if release_completed_at:
             emit_observability_event(
@@ -710,6 +742,52 @@ def _binding_release_state(
                     release_completed_at=release_completed_at,
                 )
     else:
+        if stale_other_vm is not None:
+            emit_observability_event(
+                "controller.release_state.complete_other_binding_release",
+                **_release_observability_fields(
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    source_reason=source_reason,
+                    job_live=job_live,
+                    release_requested_at=release_requested_at,
+                    release_completed_at=release_completed_at,
+                    owned_runtime_vms=owned_runtime_vms,
+                    other_runtime_vms=other_runtime_vms,
+                    disk_vm_name=disk_vm_name,
+                ),
+                stale_vm_name=stale_other_vm["vm_name"],
+                stale_binding_id=stale_other_vm["binding_id"],
+            )
+            result = complete_pool_vm_release(
+                str(stale_other_vm["vm_name"]),
+                str(stale_other_vm["binding_id"]),
+            )
+            emit_observability_event(
+                "controller.release_state.complete_other_binding_release_result",
+                **_release_observability_fields(
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    source_reason=source_reason,
+                    job_live=job_live,
+                    release_requested_at=release_requested_at,
+                    release_completed_at=release_completed_at,
+                    owned_runtime_vms=owned_runtime_vms,
+                    other_runtime_vms=other_runtime_vms,
+                    disk_vm_name=disk_vm_name,
+                ),
+                release_result=result,
+            )
+            if not result.get("skipped"):
+                release_requested_at = release_requested_at or _now_iso()
+                owned_runtime_vms, other_runtime_vms, disk_vm_name = (
+                    _owned_runtime_cleanup_state(
+                        assistant_id,
+                        current_binding_id,
+                    )
+                )
         emit_observability_event(
             "controller.release_state.no_vm_ref",
             **_release_observability_fields(

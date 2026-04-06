@@ -1279,6 +1279,63 @@ def test_reconcile_does_not_mark_released_while_other_assistant_vm_exists(monkey
     assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
 
 
+def test_reconcile_finishes_stale_other_binding_release_without_current_vm_ref(
+    monkeypatch,
+):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+    )
+    patch_status = MagicMock()
+    complete_release = MagicMock(
+        return_value={
+            "vm_name": "unity-pool-ubuntu-2",
+            "binding_id": "binding-old",
+            "pool_role": "idle",
+        },
+    )
+    cleanup_states = [
+        (
+            [],
+            [
+                {
+                    "assistant_id": "1207",
+                    "binding_id": "binding-old",
+                    "pool_role": "releasing",
+                    "vm_name": "unity-pool-ubuntu-2",
+                },
+            ],
+            "unity-pool-ubuntu-2",
+        ),
+        ([], [], None),
+        ([], [], None),
+    ]
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "_owned_runtime_cleanup_state",
+        lambda *_args, **_kwargs: cleanup_states.pop(0),
+    )
+    monkeypatch.setattr(controller, "complete_pool_vm_release", complete_release)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    complete_release.assert_called_once_with("unity-pool-ubuntu-2", "binding-old")
+    assert patch_status.call_args.kwargs["phase"] == "Released"
+    assert patch_status.call_args.kwargs["binding"] is None
+
+
 def test_delete_handler_waits_for_runtime_cleanup_before_finalizing(monkeypatch):
     body = _base_session()
     body["metadata"]["deletionTimestamp"] = "2026-04-05T15:39:56Z"
