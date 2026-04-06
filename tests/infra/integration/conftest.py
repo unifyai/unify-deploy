@@ -52,6 +52,7 @@ NAMESPACE = os.getenv("TEST_NAMESPACE", "staging")
 VM_ZONE = os.getenv("TEST_VM_ZONE", "us-central1-a")
 ASSISTANT_SESSION_REF_LABEL = "assistantsession.unify.ai/name"
 ASSISTANT_SESSION_REF_ANNOTATION = "assistantsession.unify.ai/name"
+ASSISTANT_SESSION_BINDING_LABEL = "assistantsession.unify.ai/binding-id"
 
 COMMS_APP_URL = os.getenv(
     "TEST_COMMS_APP_URL",
@@ -1071,6 +1072,11 @@ def wait_for_assistant_runtime_stopped(
         runtime_status = _read_runtime_status_http(str(assistant_id))
         if not runtime_status.get("runtime_cleanup_complete"):
             return None
+        if runtime_status.get("assistant_session_exists"):
+            if runtime_status.get("assistant_session_phase") != "Released":
+                return None
+            if runtime_status.get("assistant_session_desired_state") != "Stopped":
+                return None
         return runtime_status
 
     return poll_until(
@@ -2648,13 +2654,25 @@ def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
     ).items
 
     assistant_jobs_map = {}
+    binding_jobs_map = {}
     idle_count = 0
 
     for job in jobs:
         labels = job.metadata.labels or {}
         status = labels.get("unity-status", "")
         aid = labels.get("assistant-id", "")
+        session_name = labels.get(ASSISTANT_SESSION_REF_LABEL, "")
+        binding_id = labels.get(ASSISTANT_SESSION_BINDING_LABEL, "")
         has_active = job.status.active and job.status.active > 0
+
+        if job.metadata.deletion_timestamp and (aid or status not in ("", "idle")):
+            violations.append(
+                InvariantViolation(
+                    "INV-8",
+                    f"Deleting Job {job.metadata.name} still looks live "
+                    f"(assistant-id={aid or 'empty'}, unity-status={status or 'empty'})",
+                ),
+            )
 
         if not has_active:
             continue
@@ -2671,6 +2689,19 @@ def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
                     ),
                 )
             assistant_jobs_map[aid] = job.metadata.name
+
+            if session_name and binding_id:
+                binding_key = (session_name, binding_id)
+                if binding_key in binding_jobs_map:
+                    violations.append(
+                        InvariantViolation(
+                            "INV-1",
+                            "Duplicate binding: "
+                            f"{session_name}/{binding_id} has Jobs "
+                            f"{binding_jobs_map[binding_key]} and {job.metadata.name}",
+                        ),
+                    )
+                binding_jobs_map[binding_key] = job.metadata.name
 
             if status not in ("running", "live", "done"):
                 violations.append(

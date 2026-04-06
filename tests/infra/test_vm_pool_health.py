@@ -12,6 +12,7 @@ from communication.infra.vm_helpers import (
     _is_stale_inflight_vm,
     _quarantine_pool_vm,
     _start_one_stopped_vm,
+    assign_pool_vm,
     delete_assistant_disk,
     release_pool_vm,
     replenish_pool,
@@ -484,6 +485,131 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
             },
         ),
     ]
+
+
+def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkeypatch):
+    claim_idle = MagicMock(
+        return_value={
+            "vm_name": "unity-pool-ubuntu-4-preview",
+            "ip_address": "34.0.0.4",
+            "hostname": "unity-pool-ubuntu-4-preview.vm.unify.ai",
+            "desktop_url": "https://unity-pool-ubuntu-4-preview.vm.unify.ai",
+            "status": "RUNNING",
+        },
+    )
+    complete_release = MagicMock(
+        return_value={"vm_name": "unity-pool-ubuntu-3-preview", "pool_role": "idle"},
+    )
+    find_disk_owner = MagicMock(
+        side_effect=["unity-pool-ubuntu-3-preview", None],
+    )
+
+    monkeypatch.setattr(
+        "communication.infra.helpers.setup_kubernetes_client",
+        lambda: (None, None, None, object()),
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.acquire_assignment_lease",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.release_assignment_lease",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.find_vm_with_disk",
+        find_disk_owner,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._attached_disk_vm_state",
+        lambda *_args, **_kwargs: {
+            "vm_name": "unity-pool-ubuntu-3-preview",
+            "binding_id": "binding-old",
+            "pool_role": "releasing",
+        },
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.complete_pool_vm_release",
+        complete_release,
+    )
+    monkeypatch.setattr("communication.infra.vm_helpers.claim_idle_vm", claim_idle)
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.create_assistant_disk",
+        lambda *_args, **_kwargs: "disk-self-link",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.attach_assistant_disk",
+        lambda *_args, **_kwargs: "unity-disk-assistant-123",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._fetch_existing_ssh_key",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.generate_ssh_keypair",
+        lambda: ("PRIVATE", "PUBLIC"),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.store_ssh_private_key",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.get_secret",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = assign_pool_vm("assistant-123", "binding-new", "unify-key")
+
+    complete_release.assert_called_once_with(
+        "unity-pool-ubuntu-3-preview",
+        "binding-old",
+    )
+    claim_idle.assert_called_once_with(
+        "assistant-123",
+        "binding-new",
+        "ubuntu",
+        vm_number=None,
+    )
+    assert result["vm_name"] == "unity-pool-ubuntu-4-preview"
+
+
+def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypatch):
+    claim_idle = MagicMock()
+
+    monkeypatch.setattr(
+        "communication.infra.helpers.setup_kubernetes_client",
+        lambda: (None, None, None, object()),
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.acquire_assignment_lease",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.release_assignment_lease",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-3-preview",
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._attached_disk_vm_state",
+        lambda *_args, **_kwargs: {
+            "vm_name": "unity-pool-ubuntu-3-preview",
+            "binding_id": "binding-old",
+            "pool_role": "assigned",
+        },
+    )
+    monkeypatch.setattr("communication.infra.vm_helpers.claim_idle_vm", claim_idle)
+
+    with pytest.raises(AssistantDiskInUseError, match="binding-old"):
+        assign_pool_vm("assistant-123", "binding-new", "unify-key")
+
+    claim_idle.assert_not_called()
 
 
 def test_delete_assistant_disk_raises_when_disk_still_attached(monkeypatch):

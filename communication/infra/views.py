@@ -1994,7 +1994,9 @@ async def runtime_status_endpoint(assistant_id: str):
     active_job_names = [
         job.metadata.name
         for job in jobs.items
-        if job.status.active and job.status.active > 0
+        if job.status.active
+        and job.status.active > 0
+        and not job.metadata.deletion_timestamp
     ]
 
     custom_api = await asyncio.to_thread(get_custom_objects_api)

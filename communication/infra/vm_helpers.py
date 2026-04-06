@@ -840,6 +840,75 @@ def find_vm_with_disk(assistant_id: str) -> Optional[str]:
     return None
 
 
+def _attached_disk_vm_state(vm_name: str) -> Dict[str, Any]:
+    """Return the current runtime ownership state for a VM that holds a disk."""
+
+    client = compute_v1.InstancesClient()
+    vm = client.get(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+        instance=vm_name,
+    )
+    labels = dict(vm.labels) if vm.labels else {}
+    external_ip = None
+    if vm.network_interfaces:
+        for ni in vm.network_interfaces:
+            if ni.access_configs:
+                for ac in ni.access_configs:
+                    if ac.nat_i_p:
+                        external_ip = ac.nat_i_p
+                        break
+    return {
+        "vm_name": vm.name,
+        "assistant_id": labels.get(ASSISTANT_ID_LABEL, "") or None,
+        "binding_id": labels.get(BINDING_ID_LABEL, "") or None,
+        "pool_role": labels.get(POOL_ROLE_LABEL, "") or None,
+        "status": vm.status,
+        "hostname": _vm_ref_from_instance(vm)["hostname"],
+        "ip_address": external_ip,
+    }
+
+
+def _ensure_disk_ready_for_binding(assistant_id: str, binding_id: str) -> None:
+    """Clear a stale releasing disk owner before assigning a new binding."""
+
+    attached_vm_name = find_vm_with_disk(assistant_id)
+    if not attached_vm_name:
+        return
+
+    owner = _attached_disk_vm_state(attached_vm_name)
+    owner_binding_id = str(owner.get("binding_id", "") or "")
+    owner_pool_role = str(owner.get("pool_role", "") or "")
+    requested_binding = binding_id.lower().replace("_", "-")
+    if owner_binding_id and owner_binding_id != requested_binding:
+        if owner_pool_role == POOL_ROLE_RELEASING:
+            _log_vm_pool_event(
+                "disk_handoff_finalize_stale_release",
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                stale_binding_id=owner_binding_id,
+                vm_name=attached_vm_name,
+                stale_pool_role=owner_pool_role,
+            )
+            complete_pool_vm_release(attached_vm_name, owner_binding_id)
+            attached_vm_name = find_vm_with_disk(assistant_id)
+            if not attached_vm_name:
+                return
+            owner = _attached_disk_vm_state(attached_vm_name)
+            owner_binding_id = str(owner.get("binding_id", "") or "")
+            owner_pool_role = str(owner.get("pool_role", "") or "")
+
+    details = [attached_vm_name]
+    if owner_pool_role:
+        details.append(f"pool_role={owner_pool_role}")
+    if owner_binding_id:
+        details.append(f"binding_id={owner_binding_id}")
+    raise AssistantDiskInUseError(
+        f"Assistant disk {_assistant_disk_name(assistant_id)} is still attached to "
+        + " ".join(details),
+    )
+
+
 def list_pool_vms(vm_type: Optional[str] = None) -> list[Dict[str, Any]]:
     """List all pool VMs, optionally filtered by type."""
     client = compute_v1.InstancesClient()
@@ -1691,11 +1760,7 @@ def assign_pool_vm(
         )
 
     try:
-        attached_vm_name = find_vm_with_disk(assistant_id)
-        if attached_vm_name:
-            raise AssistantDiskInUseError(
-                f"Assistant disk {_assistant_disk_name(assistant_id)} is still attached to {attached_vm_name}",
-            )
+        _ensure_disk_ready_for_binding(assistant_id, binding_id)
         claimed = claim_idle_vm(
             assistant_id,
             binding_id,

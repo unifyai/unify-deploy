@@ -39,6 +39,25 @@ sys.modules.setdefault("kopf", fake_kopf)
 from communication.assistant_session_controller import controller
 
 
+@pytest.fixture(autouse=True)
+def _controller_runtime_defaults(monkeypatch):
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value.items = []
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+    monkeypatch.setattr(controller, "_coord_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "acquire_assignment_lease",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        controller,
+        "release_assignment_lease",
+        lambda *_args, **_kwargs: None,
+    )
+    return batch_api
+
+
 def _base_session(*, desired_state: str = "Running") -> dict:
     return {
         "metadata": {"name": "assistant-session-1207"},
@@ -86,6 +105,7 @@ def _job(
         controller.CONTAINER_READY_ANNOTATION: "true" if container_ready else "false",
     }
     job.metadata.deletion_timestamp = None
+    job.status.active = 0 if terminal_phase in {"Failed", "Succeeded"} else 1
     job.status.conditions = []
     if terminal_phase == "Failed":
         job.status.conditions = [types.SimpleNamespace(type="Failed", status="True")]
@@ -97,8 +117,10 @@ def _job(
 def test_reconcile_mints_binding_for_unbound_running_session(monkeypatch):
     body = _base_session()
     patch_status = MagicMock()
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value.items = []
 
-    monkeypatch.setattr(controller, "_batch_api", MagicMock())
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
     monkeypatch.setattr(controller, "_custom_api", object())
     monkeypatch.setattr(controller, "_core_api", MagicMock())
     monkeypatch.setattr(
@@ -121,8 +143,10 @@ def test_reconcile_records_binding_owned_job(monkeypatch):
     body["status"]["binding"] = _binding("binding-1")
     created_job = _job()
     patch_status = MagicMock()
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value.items = []
 
-    monkeypatch.setattr(controller, "_batch_api", MagicMock())
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
     monkeypatch.setattr(controller, "_custom_api", object())
     monkeypatch.setattr(controller, "_core_api", MagicMock())
     monkeypatch.setattr(
@@ -154,8 +178,10 @@ def test_reconcile_resets_binding_created_at_when_job_is_claimed(monkeypatch):
     )
     created_job = _job()
     patch_status = MagicMock()
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value.items = []
 
-    monkeypatch.setattr(controller, "_batch_api", MagicMock())
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
     monkeypatch.setattr(controller, "_custom_api", object())
     monkeypatch.setattr(controller, "_core_api", MagicMock())
     monkeypatch.setattr(
@@ -178,6 +204,79 @@ def test_reconcile_resets_binding_created_at_when_job_is_claimed(monkeypatch):
     binding = patch_status.call_args.kwargs["binding"]
     assert binding["jobRef"]["name"] == "unity-job-1"
     assert binding["createdAt"] == "2026-04-06T00:00:00+00:00"
+
+
+def test_reconcile_defers_job_claim_while_claim_transition_is_busy(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "PendingJob"
+    body["status"]["binding"] = _binding("binding-1")
+    patch_status = MagicMock()
+    claim_job = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(
+        controller,
+        "acquire_assignment_lease",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(controller, "_claim_idle_job_for_binding", claim_job)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    claim_job.assert_not_called()
+    patch_status.assert_not_called()
+
+
+def test_reconcile_suspends_newly_claimed_job_when_jobref_persist_loses(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "PendingJob"
+    body["status"]["binding"] = _binding("binding-1")
+    claimed_job = _job(name="unity-job-claimed")
+    patch_status = MagicMock(
+        side_effect=ApiException(status=409, reason="status conflict"),
+    )
+    suspend_job = MagicMock()
+    latest_body = deepcopy(body)
+    latest_body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={
+            "name": "unity-job-authoritative",
+            "namespace": controller.WATCH_NAMESPACE,
+        },
+    )
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        MagicMock(side_effect=[deepcopy(body), deepcopy(latest_body)]),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "_claim_idle_job_for_binding",
+        lambda *_args, **_kwargs: claimed_job,
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "_suspend_bound_job", suspend_job)
+
+    with pytest.raises(ApiException) as exc_info:
+        controller._update_status_for_session(deepcopy(body))
+
+    assert exc_info.value.status == 409
+    suspend_job.assert_called_once_with(
+        claimed_job,
+        source="controller.claim_conflict_cleanup",
+    )
 
 
 def test_claim_idle_job_for_binding_reuses_existing_job_for_same_binding(monkeypatch):
@@ -331,8 +430,10 @@ def test_reconcile_waits_for_idle_capacity_when_no_idle_job_available(monkeypatc
     body = _base_session()
     body["status"]["binding"] = _binding("binding-1")
     patch_status = MagicMock()
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value.items = []
 
-    monkeypatch.setattr(controller, "_batch_api", MagicMock())
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
     monkeypatch.setattr(controller, "_custom_api", object())
     monkeypatch.setattr(controller, "_core_api", MagicMock())
     monkeypatch.setattr(
@@ -709,6 +810,71 @@ def test_reconcile_finishes_release_when_runtime_artifacts_are_already_gone(
     controller._update_status_for_session(deepcopy(body))
 
     assert patch_status.call_args.kwargs["phase"] == "Released"
+    assert patch_status.call_args.kwargs["binding"] is None
+
+
+def test_reconcile_keeps_releasing_while_other_assistant_job_is_still_live(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+        releaseCompletedAt="2026-04-03T00:00:45+00:00",
+    )
+    patch_status = MagicMock()
+    stray_job = _job(name="unity-job-2")
+    stray_job.metadata.labels["assistant-id"] = "1207"
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
+    controller._batch_api.list_namespaced_job.return_value.items = [stray_job]
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+
+
+def test_reconcile_stopped_without_binding_waits_for_assistant_cleanup(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Released"
+    patch_status = MagicMock()
+    stray_job = _job(name="unity-job-2")
+    stray_job.metadata.labels["assistant-id"] = "1207"
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
+    controller._batch_api.list_namespaced_job.return_value.items = [stray_job]
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
     assert patch_status.call_args.kwargs["binding"] is None
 
 
@@ -1361,6 +1527,24 @@ def test_delete_handler_waits_for_runtime_cleanup_before_finalizing(monkeypatch)
 
     update_status.assert_called_once()
     core_api.delete_namespaced_secret.assert_not_called()
+
+
+def test_session_delete_cleanup_complete_requires_no_assistant_live_jobs(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "Released"
+    stray_job = _job(name="unity-job-2")
+    stray_job.metadata.labels["assistant-id"] = "1207"
+
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: ([], []),
+    )
+    monkeypatch.setattr(controller, "find_vm_with_disk", lambda *_args, **_kwargs: None)
+    controller._batch_api.list_namespaced_job.return_value.items = [stray_job]
+
+    assert controller._session_delete_cleanup_complete(deepcopy(body)) is False
 
 
 def test_delete_handler_deletes_secret_after_runtime_cleanup_completes(monkeypatch):

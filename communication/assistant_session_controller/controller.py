@@ -4,13 +4,19 @@ from datetime import datetime, timezone
 import logging
 import os
 import time
+from typing import Literal
 import uuid
 
+from google.api_core.exceptions import GoogleAPICallError
 import kopf  # type: ignore[import-not-found]
 from kubernetes import client as k8s_client, config as k8s_config
 from kubernetes.client.rest import ApiException
 
 from common.settings import SETTINGS
+from communication.infra.helpers import (
+    acquire_assignment_lease,
+    release_assignment_lease,
+)
 from communication.infra.assistant_sessions import (
     assistant_session_observability_fields,
     assistant_session_desired_state,
@@ -69,11 +75,26 @@ MAX_VM_READINESS_RETRIES = int(os.environ.get("MAX_VM_READINESS_RETRIES", "2"))
 _batch_api: k8s_client.BatchV1Api | None = None
 _core_api: k8s_client.CoreV1Api | None = None
 _custom_api: k8s_client.CustomObjectsApi | None = None
+_coord_api: k8s_client.CoordinationV1Api | None = None
 
 _IMAGE_HASH_BUCKET = "unity-image-hash"
 _IMAGE_HASH_CACHE_TTL = float(os.environ.get("IMAGE_HASH_CACHE_TTL", "60"))
 _cached_image_hash: str | None = None
 _image_hash_fetched_at: float = 0
+_JOB_CLAIM_LEASE_DURATION_SECONDS = int(
+    os.environ.get(
+        "JOB_CLAIM_LEASE_DURATION_SECONDS",
+        str(SETTINGS.lease_duration_seconds),
+    ),
+)
+_JOB_CLAIM_RESULT_CLAIMED = "claimed"
+_JOB_CLAIM_RESULT_CAPACITY = "capacity"
+_JOB_CLAIM_RESULT_BUSY = "busy"
+JobClaimTransitionResult = Literal[
+    "claimed",
+    "capacity",
+    "busy",
+]
 
 
 def _get_current_image_hash() -> str | None:
@@ -114,8 +135,8 @@ def _now_iso() -> str:
 
 
 def _load_clients() -> None:
-    global _batch_api, _core_api, _custom_api
-    if _batch_api and _core_api and _custom_api:
+    global _batch_api, _core_api, _custom_api, _coord_api
+    if _batch_api and _core_api and _custom_api and _coord_api:
         return
     try:
         k8s_config.load_incluster_config()
@@ -125,6 +146,7 @@ def _load_clients() -> None:
     _batch_api = k8s_client.BatchV1Api(api_client)
     _core_api = k8s_client.CoreV1Api(api_client)
     _custom_api = k8s_client.CustomObjectsApi(api_client)
+    _coord_api = k8s_client.CoordinationV1Api(api_client)
 
 
 def _sanitize_for_k8s(value: str) -> str:
@@ -330,6 +352,50 @@ def _job_for_binding(session_name: str, binding: dict | None):
     return None
 
 
+def _active_jobs_for_assistant(assistant_id: str) -> list:
+    """Return active Jobs currently labeled for an assistant."""
+
+    assert _batch_api is not None
+    sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
+    jobs = _batch_api.list_namespaced_job(
+        namespace=WATCH_NAMESPACE,
+        label_selector=f"app=unity,assistant-id={sanitized_assistant_id}",
+    )
+    return [
+        job
+        for job in jobs.items
+        if job.status.active
+        and job.status.active > 0
+        and not job.metadata.deletion_timestamp
+    ]
+
+
+def _suspend_extra_assistant_jobs(
+    assistant_id: str,
+    *,
+    current_job_name: str | None,
+    source: str,
+) -> list[str]:
+    """Best-effort suspend of non-authoritative live Jobs for an assistant."""
+
+    suspended_jobs: list[str] = []
+    for job in _active_jobs_for_assistant(assistant_id):
+        job_name = str(job.metadata.name or "")
+        if current_job_name and job_name == current_job_name:
+            continue
+        try:
+            _suspend_bound_job(job, source=source)
+        except ApiException:
+            logger.exception(
+                "Failed to suspend extra Job %s for assistant %s",
+                job_name,
+                assistant_id,
+            )
+            continue
+        suspended_jobs.append(job_name)
+    return suspended_jobs
+
+
 def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: dict):
     """Claim exactly one idle Job for the current binding."""
 
@@ -410,6 +476,108 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
         )
 
     return None
+
+
+def _claim_and_bind_pending_job(
+    *,
+    assistant_id: str,
+    session_name: str,
+    activation_id: str,
+    binding: dict,
+    existing_conditions: list[dict],
+    desktop_required: bool,
+    bootstrap_retries: int,
+    vm_retries: int,
+) -> JobClaimTransitionResult:
+    """Advance a PendingJob binding to PendingContainer under a single-flight lease.
+
+    Returns one of:
+    - ``claimed`` when the binding was persisted with a Job.
+    - ``capacity`` when no idle Job was available.
+    - ``busy`` when another reconcile currently owns the claim transition.
+    """
+
+    assert _coord_api is not None
+    current_binding_id = binding_id_from_status(binding)
+    if not current_binding_id:
+        return _JOB_CLAIM_RESULT_CAPACITY
+
+    holder_id = f"job-claim-{current_binding_id}-{uuid.uuid4().hex[:8]}"
+    acquired = acquire_assignment_lease(
+        _coord_api,
+        assistant_id,
+        WATCH_NAMESPACE,
+        holder_id,
+        duration=_JOB_CLAIM_LEASE_DURATION_SECONDS,
+    )
+    if not acquired:
+        emit_observability_event(
+            "controller.binding_job_claim_busy",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding_id=current_binding_id,
+            source="controller.reconcile",
+        )
+        return _JOB_CLAIM_RESULT_BUSY
+
+    try:
+        job = _job_for_binding(session_name, binding)
+        newly_claimed = False
+        if job is None:
+            job = _claim_idle_job_for_binding(assistant_id, session_name, binding)
+            if job is None:
+                return _JOB_CLAIM_RESULT_CAPACITY
+            newly_claimed = True
+
+        next_binding = _binding_payload(
+            binding,
+            job_ref={"name": job.metadata.name, "namespace": WATCH_NAMESPACE},
+            pod_ref=_current_pod_ref(job.metadata.name),
+            created_at=_now_iso(),
+        )
+        try:
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase="PendingContainer",
+                observed_activation_id=activation_id,
+                binding=next_binding,
+                last_error="",
+                source="controller.reconcile",
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                desktop_probe_failures=0,
+                conditions=_condition_state(
+                    existing_conditions,
+                    "PendingContainer",
+                    desktop_required,
+                    container_assigned=True,
+                    container_ready=False,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason="WaitingForUnity",
+                    message="Waiting for Unity container bootstrap",
+                ),
+            )
+        except ApiException as exc:
+            if exc.status != 409:
+                raise
+            latest_session = (
+                get_assistant_session(_custom_api, WATCH_NAMESPACE, assistant_id)
+                if _custom_api is not None
+                else None
+            )
+            latest_binding = session_binding(latest_session)
+            latest_job_name = str(binding_job_ref(latest_binding).get("name", "") or "")
+            if latest_job_name == str(job.metadata.name or ""):
+                return _JOB_CLAIM_RESULT_CLAIMED
+            if newly_claimed:
+                _suspend_bound_job(job, source="controller.claim_conflict_cleanup")
+            raise
+        return _JOB_CLAIM_RESULT_CLAIMED
+    finally:
+        release_assignment_lease(_coord_api, assistant_id, WATCH_NAMESPACE)
 
 
 def _suspend_bound_job(job, *, source: str) -> None:
@@ -577,6 +745,7 @@ def _binding_release_state(
     """Drive release until the binding is fully cleaned up."""
 
     current_binding_id = binding_id_from_status(binding)
+    current_job_name = str(binding_job_ref(binding).get("name", "") or "")
     job = _job_for_binding(session_name, binding)
     job_live = job is not None and _job_terminal_phase(job) is None
     vm_ref = binding_vm_ref(binding)
@@ -588,12 +757,28 @@ def _binding_release_state(
     if job_live:
         try:
             _suspend_bound_job(job, source=f"controller.release.{source_reason}")
-        except Exception as exc:  # pragma: no cover - best effort suspend
+        except ApiException as exc:  # pragma: no cover - best effort suspend
             logger.exception(
                 "Failed to suspend Job %s during release",
                 job.metadata.name,
             )
             last_error = str(exc)
+
+    extra_live_job_names = _suspend_extra_assistant_jobs(
+        assistant_id,
+        current_job_name=current_job_name or None,
+        source=f"controller.release.{source_reason}.extra_job",
+    )
+    if extra_live_job_names:
+        emit_observability_event(
+            "controller.release_state.suspend_extra_jobs",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding_id=current_binding_id,
+            current_job_name=current_job_name or None,
+            extra_job_names=extra_live_job_names,
+            source_reason=source_reason,
+        )
 
     owned_runtime_vms, other_runtime_vms, disk_vm_name = _owned_runtime_cleanup_state(
         assistant_id,
@@ -824,9 +1009,14 @@ def _binding_release_state(
             current_binding_id,
         )
     )
+    remaining_assistant_jobs = _active_jobs_for_assistant(assistant_id)
+    remaining_assistant_job_names = [
+        str(job.metadata.name or "") for job in remaining_assistant_jobs
+    ]
     release_complete = (
         bool(binding.get("releaseCompletedAt"))
         and not refreshed_job_live
+        and not remaining_assistant_jobs
         and not cleaned_vm_ref
         and not remaining_runtime_vms
         and not remaining_other_runtime_vms
@@ -848,6 +1038,7 @@ def _binding_release_state(
         ),
         release_complete=release_complete,
         cleaned_vm_name=cleaned_vm_ref.get("name"),
+        assistant_live_job_names=remaining_assistant_job_names,
     )
     if release_complete:
         released_conditions = _condition_state(
@@ -875,6 +1066,93 @@ def _binding_release_state(
         message="Runtime cleanup in progress",
     )
     return "Releasing", binding, releasing_conditions, last_error
+
+
+def _assistant_release_state_without_binding(
+    *,
+    assistant_id: str,
+    existing_conditions: list[dict],
+    desktop_required: bool,
+    source_reason: str,
+) -> tuple[str, list[dict], str]:
+    """Drive assistant-wide cleanup when no authoritative binding remains."""
+
+    last_error = ""
+    suspended_jobs = _suspend_extra_assistant_jobs(
+        assistant_id,
+        current_job_name=None,
+        source=f"controller.release.{source_reason}.no_binding_job",
+    )
+    runtime_vms, _, disk_vm_name = _owned_runtime_cleanup_state(assistant_id, None)
+
+    for vm in runtime_vms:
+        vm_name = str(vm.get("vm_name", "") or "")
+        binding_id = str(vm.get("binding_id", "") or "")
+        pool_role = str(vm.get("pool_role", "") or "")
+        if not vm_name or not binding_id:
+            continue
+        try:
+            if pool_role == POOL_ROLE_RELEASING:
+                complete_pool_vm_release(vm_name, binding_id)
+            else:
+                release_pool_vm(assistant_id, binding_id, vm_name=vm_name)
+        except (
+            ApiException,
+            GoogleAPICallError,
+        ) as exc:  # pragma: no cover - best effort release retry
+            logger.exception(
+                "Failed to clean runtime VM %s for assistant %s without binding",
+                vm_name,
+                assistant_id,
+            )
+            last_error = str(exc)
+
+    remaining_jobs = _active_jobs_for_assistant(assistant_id)
+    remaining_runtime_vms, _, remaining_disk_vm_name = _owned_runtime_cleanup_state(
+        assistant_id,
+        None,
+    )
+    emit_observability_event(
+        "controller.release_state.no_binding_result",
+        assistant_id=assistant_id,
+        source_reason=source_reason,
+        suspended_job_names=suspended_jobs,
+        remaining_job_names=[str(job.metadata.name or "") for job in remaining_jobs],
+        remaining_runtime_vm_names=[
+            str(vm.get("vm_name", "") or "") for vm in remaining_runtime_vms
+        ],
+        remaining_disk_vm_name=remaining_disk_vm_name,
+    )
+    if (
+        not remaining_jobs
+        and not remaining_runtime_vms
+        and remaining_disk_vm_name is None
+    ):
+        released_conditions = _condition_state(
+            existing_conditions,
+            "Released",
+            desktop_required,
+            container_assigned=False,
+            container_ready=False,
+            vm_assigned=False,
+            desktop_ready=False,
+            reason="Released",
+            message="Runtime cleanup complete",
+        )
+        return "Released", released_conditions, last_error
+
+    releasing_conditions = _condition_state(
+        existing_conditions,
+        "Releasing",
+        desktop_required,
+        container_assigned=bool(remaining_jobs),
+        container_ready=False,
+        vm_assigned=bool(remaining_runtime_vms),
+        desktop_ready=False,
+        reason="ReleaseRequested",
+        message="Runtime cleanup in progress",
+    )
+    return "Releasing", releasing_conditions, last_error
 
 
 def _restart_binding_decision(
@@ -975,26 +1253,24 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
 
     if desired_state == DESIRED_STATE_STOPPED:
         if not current_binding_id:
+            release_phase, release_conditions, release_error = (
+                _assistant_release_state_without_binding(
+                    assistant_id=assistant_id,
+                    existing_conditions=existing_conditions,
+                    desktop_required=desktop_required,
+                    source_reason="desired_stop_no_binding",
+                )
+            )
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
                 assistant_id,
-                phase="Released",
+                phase=release_phase,
                 observed_activation_id=observed_activation_id or activation_id,
                 binding=None,
-                last_error="",
+                last_error=release_error if release_error else "",
                 source="controller.reconcile",
-                conditions=_condition_state(
-                    existing_conditions,
-                    "Released",
-                    desktop_required,
-                    container_assigned=False,
-                    container_ready=False,
-                    vm_assigned=False,
-                    desktop_ready=False,
-                    reason="Released",
-                    message="Session is stopped",
-                ),
+                conditions=release_conditions,
             )
             return
         release_phase, release_binding, release_conditions, release_error = (
@@ -1181,8 +1457,19 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         return
 
     if not binding_job_ref(binding):
-        claimed_job = _claim_idle_job_for_binding(assistant_id, session_name, binding)
-        if claimed_job is None:
+        claim_result = _claim_and_bind_pending_job(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            activation_id=activation_id,
+            binding=binding,
+            existing_conditions=existing_conditions,
+            desktop_required=desktop_required,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+        )
+        if claim_result == _JOB_CLAIM_RESULT_BUSY:
+            return
+        if claim_result == _JOB_CLAIM_RESULT_CAPACITY:
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
@@ -1205,36 +1492,6 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 ),
             )
             return
-        # Container bootstrap should be timed from when this binding actually
-        # acquires a Job, not from when it first entered PendingJob while
-        # waiting for pool capacity.
-        binding = _binding_payload(
-            binding,
-            job_ref={"name": claimed_job.metadata.name, "namespace": WATCH_NAMESPACE},
-            pod_ref=_current_pod_ref(claimed_job.metadata.name),
-            created_at=_now_iso(),
-        )
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="PendingContainer",
-            observed_activation_id=activation_id,
-            binding=binding,
-            last_error="",
-            source="controller.reconcile",
-            conditions=_condition_state(
-                existing_conditions,
-                "PendingContainer",
-                desktop_required,
-                container_assigned=True,
-                container_ready=False,
-                vm_assigned=False,
-                desktop_ready=False,
-                reason="WaitingForUnity",
-                message="Waiting for Unity container bootstrap",
-            ),
-        )
         return
 
     assert job is not None
@@ -1888,6 +2145,13 @@ def _session_delete_cleanup_complete(body: dict) -> bool:
 
     job_live = job is not None and _job_terminal_phase(job) is None
     try:
+        assistant_live_jobs = _active_jobs_for_assistant(assistant_id)
+    except Exception:  # pragma: no cover - best effort retry on transient API errors
+        logger.exception(
+            "Failed to inspect assistant Jobs while finalizing AssistantSession deletion",
+        )
+        return False
+    try:
         owned_runtime_vms, other_runtime_vms, disk_vm_name = (
             _owned_runtime_cleanup_state(
                 assistant_id,
@@ -1904,6 +2168,7 @@ def _session_delete_cleanup_complete(body: dict) -> bool:
         phase == "Released"
         and not current_binding_id
         and not job_live
+        and not assistant_live_jobs
         and not owned_runtime_vms
         and not other_runtime_vms
         and disk_vm_name is None
