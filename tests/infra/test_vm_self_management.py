@@ -266,3 +266,90 @@ def test_vm_ready_records_desktop_ready_signal_for_active_binding(tunnel_client)
         == "https://vm-1.vm.unify.ai"
     )
     assert record_signal.call_args.kwargs["payload"]["messageId"] == "message-123"
+
+
+def test_vm_ready_ignores_release_in_progress_for_current_binding(tunnel_client):
+    session = {
+        "metadata": {"name": "assistant-session-1207"},
+        "spec": {
+            "assistantId": "1207",
+            "activationId": "act-1",
+            "desiredState": "Stopped",
+            "startupSecretRef": "assistant-session-bootstrap-1207",
+        },
+        "status": {
+            "observedActivationId": "act-1",
+            "conditions": [],
+            "binding": {
+                "id": "binding-123",
+                "vmRef": {
+                    "name": "unity-pool-ubuntu-1-preview",
+                    "hostname": "vm-1.vm.unify.ai",
+                },
+                "releaseRequestedAt": "2026-04-06T18:40:00Z",
+            },
+        },
+    }
+
+    with (
+        patch(
+            "communication.infra.views.extract_api_key",
+            return_value="user-key",
+        ),
+        patch(
+            "communication.infra.views.authenticate_user_api_key",
+            new=AsyncMock(),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=object(),
+        ),
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new=AsyncMock(return_value=(None, object(), None, None)),
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=session,
+        ),
+        patch(
+            "communication.infra.views.read_bootstrap_secret",
+            return_value={"api_key": "user-key"},
+        ),
+        patch(
+            "communication.infra.views.verify_vm_assignment",
+            side_effect=AssertionError(
+                "release in progress should skip vm ownership checks",
+            ),
+        ),
+        patch(
+            "communication.infra.views.probe_vm_agent_service_authenticated",
+            side_effect=AssertionError("release in progress should skip guest probing"),
+        ),
+        patch(
+            "communication.infra.views._publish_desktop_ready",
+            new=AsyncMock(),
+        ) as publish_desktop_ready,
+        patch(
+            "communication.infra.views.record_assistant_session_signal",
+        ) as record_signal,
+    ):
+        resp = tunnel_client.post(
+            "/infra/vm/ready",
+            json={
+                "assistant_id": "1207",
+                "binding_id": "binding-123",
+                "hostname": "vm-1.vm.unify.ai",
+                "vm_type": "ubuntu",
+            },
+            headers={"Authorization": "Bearer user-key"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "success": True,
+        "accepted": False,
+        "reason": "release_in_progress",
+    }
+    publish_desktop_ready.assert_not_awaited()
+    record_signal.assert_not_called()

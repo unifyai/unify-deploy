@@ -93,6 +93,9 @@ INFLIGHT_ROLE_TIMEOUT_SECONDS = {
     "starting": POOL_BOOT_TIMEOUT_SECONDS,
     POOL_ROLE_RELEASING: POOL_RELEASE_TIMEOUT_SECONDS,
 }
+VM_BINDING_LEASE_DURATION_SECONDS = SETTINGS.lease_duration_seconds
+VM_BINDING_RELEASE_LEASE_WAIT_SECONDS = 30.0
+VM_BINDING_LEASE_POLL_INTERVAL_SECONDS = 1.0
 
 
 class AssistantDiskInUseError(RuntimeError):
@@ -291,6 +294,58 @@ def _instance_boot_reference_time(instance) -> Optional[datetime]:
             or getattr(instance, "creation_timestamp", None),
         )
     )
+
+
+def _binding_vm_lease_name(binding_id: str) -> str:
+    """Return the shared lease key for binding-scoped VM mutations."""
+
+    return f"vm-{binding_id}"
+
+
+def _acquire_binding_vm_lease(
+    binding_id: str,
+    *,
+    holder_prefix: str,
+    wait_timeout_seconds: float = 0.0,
+) -> tuple[object | None, str]:
+    """Acquire the shared binding VM lease, optionally waiting for it.
+
+    Assignment and release both mutate VM labels/metadata for the same binding.
+    Serializing those writes prevents one path from resurrecting stale metadata
+    after the other has already advanced the lifecycle.
+    """
+
+    from .helpers import acquire_assignment_lease, setup_kubernetes_client
+
+    _, _, _, coord_api = setup_kubernetes_client()
+    namespace = SETTINGS.default_namespace
+    holder_id = f"{holder_prefix}-{uuid.uuid4().hex[:8]}"
+    deadline = time.monotonic() + max(wait_timeout_seconds, 0.0)
+    lease_id = _binding_vm_lease_name(binding_id)
+
+    while True:
+        acquired = acquire_assignment_lease(
+            coord_api,
+            lease_id,
+            namespace,
+            holder_id,
+            duration=VM_BINDING_LEASE_DURATION_SECONDS,
+        )
+        if acquired:
+            return coord_api, namespace
+        if wait_timeout_seconds <= 0 or time.monotonic() >= deadline:
+            return None, namespace
+        time.sleep(VM_BINDING_LEASE_POLL_INTERVAL_SECONDS)
+
+
+def _release_binding_vm_lease(coord_api, binding_id: str, namespace: str) -> None:
+    """Release the shared binding VM lease when held."""
+
+    from .helpers import release_assignment_lease
+
+    if coord_api is None:
+        return
+    release_assignment_lease(coord_api, _binding_vm_lease_name(binding_id), namespace)
 
 
 def _stopped_pool_reference_time(instance) -> Optional[datetime]:
@@ -1794,28 +1849,15 @@ def assign_pool_vm(
     vm_number: int | None = None,
 ) -> Dict[str, Any]:
     """Claim and configure exactly one VM for a specific binding."""
-    from .helpers import (
-        acquire_assignment_lease,
-        release_assignment_lease,
-        setup_kubernetes_client,
-    )
-
-    _, _, _, coord_api = setup_kubernetes_client()
-    holder_id = f"vm-assign-{uuid.uuid4().hex[:8]}"
-    namespace = SETTINGS.default_namespace
     started_at = time.monotonic()
     vm_name: str | None = None
     hostname: str | None = None
     current_stage = "acquire_assignment_lease"
-
-    acquired = acquire_assignment_lease(
-        coord_api,
-        f"vm-{binding_id}",
-        namespace,
-        holder_id,
-        duration=180,
+    coord_api, namespace = _acquire_binding_vm_lease(
+        binding_id,
+        holder_prefix="vm-assign",
     )
-    if not acquired:
+    if coord_api is None:
         raise RuntimeError(
             f"Another VM assignment is already in progress for binding {binding_id}",
         )
@@ -1826,7 +1868,6 @@ def assign_pool_vm(
         binding_id=binding_id,
         vm_type=vm_type,
         vm_number=vm_number,
-        lease_holder_id=holder_id,
     )
 
     try:
@@ -1993,7 +2034,7 @@ def assign_pool_vm(
         )
         raise
     finally:
-        release_assignment_lease(coord_api, f"vm-{binding_id}", namespace)
+        _release_binding_vm_lease(coord_api, binding_id, namespace)
 
 
 def has_assigned_vm(assistant_id: str) -> bool:
@@ -2258,12 +2299,14 @@ def release_pool_vm(
     VMs running an outdated guest contract are retired instead of being
     returned to service.
     """
-    client = compute_v1.InstancesClient()
     sanitized = assistant_id.lower().replace("_", "-")
     binding_label = binding_id.lower().replace("_", "-")
     vm = None
+    client = None
     started_at = time.monotonic()
     current_stage = "lookup_vm"
+    coord_api = None
+    lease_namespace = SETTINGS.default_namespace
 
     _log_vm_pool_event(
         "release_started",
@@ -2273,6 +2316,29 @@ def release_pool_vm(
     )
 
     try:
+        current_stage = "acquire_binding_lease"
+        coord_api, lease_namespace = _acquire_binding_vm_lease(
+            binding_id,
+            holder_prefix="vm-release",
+            wait_timeout_seconds=VM_BINDING_RELEASE_LEASE_WAIT_SECONDS,
+        )
+        if coord_api is None:
+            _log_vm_pool_event(
+                "release_skipped",
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                vm_name=vm_name,
+                reason="binding_operation_busy",
+            )
+            return {
+                "released": False,
+                "assistant_id": assistant_id,
+                "binding_id": binding_id,
+                "vm_name": vm_name,
+                "reason": "binding_operation_busy",
+                "message": "Another binding VM operation is still in progress",
+            }
+        client = compute_v1.InstancesClient()
         if vm_name:
             current_stage = "lookup_vm_by_name"
             try:
@@ -2506,6 +2572,8 @@ def release_pool_vm(
             duration_ms=int((time.monotonic() - started_at) * 1000),
         )
         raise
+    finally:
+        _release_binding_vm_lease(coord_api, binding_id, lease_namespace)
 
 
 def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:

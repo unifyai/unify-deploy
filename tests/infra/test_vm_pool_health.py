@@ -37,6 +37,30 @@ def _current_contract_labels(**labels):
     }
 
 
+def _install_binding_lease(monkeypatch, *, acquire_results=None):
+    coord_api = object()
+    acquire_iter = iter(acquire_results or [True])
+    released = []
+
+    monkeypatch.setattr(
+        "communication.infra.helpers.setup_kubernetes_client",
+        lambda: (None, None, None, coord_api),
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.acquire_assignment_lease",
+        lambda *_args, **_kwargs: next(acquire_iter),
+    )
+    monkeypatch.setattr(
+        "communication.infra.helpers.release_assignment_lease",
+        lambda *_args, **_kwargs: released.append(True),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.time.sleep",
+        lambda *_args, **_kwargs: None,
+    )
+    return released
+
+
 def test_is_stale_inflight_vm_detects_old_starting_vm():
     vm = _fake_vm(role="starting", age_seconds=1200)
     assert _is_stale_inflight_vm(vm, timeout_seconds=600)
@@ -233,6 +257,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
     client = MagicMock()
     client.list.return_value = [vm]
     metadata_updates = []
+    release_calls = _install_binding_lease(monkeypatch)
 
     monkeypatch.setattr(
         "communication.infra.vm_helpers.compute_v1.InstancesClient",
@@ -261,6 +286,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
             },
         ),
     ]
+    assert release_calls == [True]
 
 
 def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
@@ -278,6 +304,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
     client = MagicMock()
     client.get.return_value = vm
     metadata_updates = []
+    release_calls = _install_binding_lease(monkeypatch)
 
     monkeypatch.setattr(
         "communication.infra.vm_helpers.compute_v1.InstancesClient",
@@ -311,6 +338,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
             },
         ),
     ]
+    assert release_calls == [True]
 
 
 def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
@@ -327,6 +355,7 @@ def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
     )
     client = MagicMock()
     client.get.return_value = vm
+    release_calls = _install_binding_lease(monkeypatch)
 
     monkeypatch.setattr(
         "communication.infra.vm_helpers.compute_v1.InstancesClient",
@@ -347,6 +376,7 @@ def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
 
     assert result["released"] is False
     assert result["message"] == "VM is not currently owned by assistant"
+    assert release_calls == [True]
 
 
 def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
@@ -369,6 +399,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     client = MagicMock()
     client.list.return_value = [vm]
     metadata_updates = []
+    release_calls = _install_binding_lease(monkeypatch)
 
     monkeypatch.setattr(
         "communication.infra.vm_helpers.compute_v1.InstancesClient",
@@ -393,6 +424,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
             },
         ),
     ]
+    assert release_calls == [True]
 
 
 def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
@@ -410,6 +442,7 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
     client = MagicMock()
     client.list.return_value = [stale_vm]
     recycled = []
+    release_calls = _install_binding_lease(monkeypatch)
 
     monkeypatch.setattr(
         "communication.infra.vm_helpers.compute_v1.InstancesClient",
@@ -432,6 +465,82 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
     assert result["retired"] is True
     assert result["pool_role"] == "retired"
     assert recycled == ["assistant_release_with_stale_contract"]
+    assert release_calls == [True]
+
+
+def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "assigned",
+                "assistant-id": "assistant-123",
+                "binding-id": "binding-123",
+                "vm-type": "ubuntu",
+            },
+        ),
+    )
+    client = MagicMock()
+    client.list.return_value = [vm]
+    metadata_updates = []
+    release_calls = _install_binding_lease(monkeypatch, acquire_results=[False, True])
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda vm_name, updates, **_kwargs: metadata_updates.append((vm_name, updates)),
+    )
+
+    result = release_pool_vm("assistant-123", "binding-123")
+
+    assert result["released"] is True
+    assert result["pool_role"] == "releasing"
+    assert metadata_updates == [
+        (
+            "unity-pool-ubuntu-3-preview",
+            {
+                "unify-key": "",
+                "vnc-password": "",
+                "ssh-public-key": "",
+            },
+        ),
+    ]
+    assert release_calls == [True]
+
+
+def test_release_pool_vm_skips_when_binding_lease_stays_busy(monkeypatch):
+    release_calls = _install_binding_lease(monkeypatch, acquire_results=[False])
+
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "VM_BINDING_RELEASE_LEASE_WAIT_SECONDS",
+        0.0,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("busy release must not touch the compute API"),
+        ),
+    )
+
+    result = release_pool_vm("assistant-123", "binding-123")
+
+    assert result == {
+        "released": False,
+        "assistant_id": "assistant-123",
+        "binding_id": "binding-123",
+        "vm_name": None,
+        "reason": "binding_operation_busy",
+        "message": "Another binding VM operation is still in progress",
+    }
+    assert release_calls == []
 
 
 def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):

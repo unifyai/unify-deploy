@@ -1614,6 +1614,25 @@ async def vm_ready_endpoint(
                 ),
             )
 
+        if assistant_session_desired_state(fresh) == DESIRED_STATE_STOPPED:
+            emit_observability_event(
+                "infra.vm_ready.ignored",
+                **assistant_session_observability_fields(
+                    fresh,
+                    requested_binding_id=requested_binding_id,
+                    current_binding_id=current_binding_id or None,
+                    requested_hostname=requested_hostname,
+                    reason="release_in_progress",
+                    vm_type=vm_type,
+                    release_requested_at=fresh_binding.get("releaseRequestedAt"),
+                ),
+            )
+            return {
+                "success": True,
+                "accepted": False,
+                "reason": "release_in_progress",
+            }
+
         fresh_conditions = fresh_status.get("conditions", [])
         container_ready = any(
             c.get("type") == "ContainerReady" and c.get("status") == "True"
