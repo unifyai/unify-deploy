@@ -172,6 +172,60 @@ def build_binding_signal(
     return {key: value for key, value in payload.items() if value not in (None, "")}
 
 
+def resolve_current_binding_vm_ref(
+    binding: dict[str, Any] | None,
+    *,
+    assignment_signal: dict[str, Any] | None = None,
+    owned_runtime_vms: list[dict[str, Any]] | None = None,
+    disk_vm_name: str | None = None,
+) -> dict[str, Any]:
+    """Return the unambiguous VM reference for the current binding.
+
+    Release flows can run before a matching ``vmAssignment`` signal has been
+    persisted into ``status.binding.vmRef``. Recover the current VM only when
+    the binding-scoped evidence points to exactly one owner.
+    """
+
+    current_vm_ref = binding_vm_ref(binding)
+    current_vm_name = str(current_vm_ref.get("name", "") or "")
+    if current_vm_name:
+        return current_vm_ref
+
+    current_binding_id = binding_id(binding)
+    signal_binding_id = str((assignment_signal or {}).get("bindingId", "") or "")
+    if current_binding_id and signal_binding_id == current_binding_id:
+        signaled_vm_ref = (assignment_signal or {}).get("vmRef")
+        if isinstance(signaled_vm_ref, dict) and signaled_vm_ref.get("name"):
+            return signaled_vm_ref
+
+    candidates = owned_runtime_vms or []
+    if len(candidates) != 1:
+        return {}
+
+    candidate = candidates[0]
+    candidate_vm_name = str(candidate.get("vm_name", "") or "")
+    candidate_binding_id = str(candidate.get("binding_id", "") or "")
+    if not candidate_vm_name:
+        return {}
+    if (
+        current_binding_id
+        and candidate_binding_id
+        and candidate_binding_id != current_binding_id
+    ):
+        return {}
+    if disk_vm_name not in (None, candidate_vm_name):
+        return {}
+
+    resolved_vm_ref: dict[str, Any] = {"name": candidate_vm_name}
+    candidate_hostname = str(candidate.get("hostname", "") or "")
+    candidate_vm_type = str(candidate.get("vm_type", "") or "")
+    if candidate_hostname:
+        resolved_vm_ref["hostname"] = candidate_hostname
+    if candidate_vm_type:
+        resolved_vm_ref["vmType"] = candidate_vm_type
+    return resolved_vm_ref
+
+
 def build_binding(
     *,
     binding_id: str,

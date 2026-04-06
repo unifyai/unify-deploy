@@ -48,6 +48,7 @@ from communication.infra.assistant_sessions import (
     get_assistant_session,
     merge_conditions,
     patch_assistant_session_status,
+    resolve_current_binding_vm_ref,
 )
 from communication.infra.vm_helpers import (
     complete_pool_vm_release,
@@ -943,6 +944,7 @@ def _binding_release_state(
     vm_name = str(vm_ref.get("name", "") or "")
     release_requested_at = str(binding.get("releaseRequestedAt", "") or "")
     release_completed_at = str(binding.get("releaseCompletedAt", "") or "")
+    assignment_signal = _vm_assignment_signal(body)
     release_request_signal = _release_request_signal(body)
     release_complete_signal = _release_complete_signal(body)
     last_error = ""
@@ -977,6 +979,28 @@ def _binding_release_state(
         assistant_id,
         current_binding_id,
     )
+    if not vm_name:
+        resolved_vm_ref = resolve_current_binding_vm_ref(
+            binding,
+            assignment_signal=assignment_signal,
+            owned_runtime_vms=owned_runtime_vms,
+            disk_vm_name=disk_vm_name,
+        )
+        resolved_vm_name = str(resolved_vm_ref.get("name", "") or "")
+        if resolved_vm_name:
+            binding = _binding_payload(binding, vm_ref=resolved_vm_ref)
+            if not binding.get("vmAssignedAt") and _binding_signal_matches(
+                assignment_signal,
+                current_binding_id,
+            ):
+                binding = _binding_payload(
+                    binding,
+                    vm_assigned_at=str(
+                        assignment_signal.get("observedAt", "") or _now_iso(),
+                    ),
+                )
+            vm_ref = resolved_vm_ref
+            vm_name = resolved_vm_name
     emit_observability_event(
         "controller.release_state.enter",
         **_release_observability_fields(

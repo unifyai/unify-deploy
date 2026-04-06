@@ -1298,6 +1298,82 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
     assert "Job disappeared" in patch_status.call_args.kwargs["last_error"]
 
 
+def test_reconcile_stopped_binding_recovers_vm_ref_from_assignment_signal(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+    )
+    body["status"]["signals"] = {
+        controller.SIGNAL_VM_ASSIGNMENT: build_binding_signal(
+            binding_id="binding-1",
+            observed_at="2026-04-03T00:00:05+00:00",
+            state="assigned",
+            vmRef={
+                "name": "unity-pool-ubuntu-1",
+                "hostname": "vm-1.vm.unify.ai",
+                "vmType": "ubuntu",
+            },
+        ),
+    }
+    patch_status = MagicMock()
+    queue_vm_release = MagicMock(return_value=True)
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "assistant_id": "1207",
+                    "binding_id": "binding-1",
+                    "pool_role": "assigned",
+                    "vm_name": "unity-pool-ubuntu-1",
+                    "hostname": "vm-1.vm.unify.ai",
+                    "vm_type": "ubuntu",
+                },
+            ],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+    )
+    monkeypatch.setattr(controller, "schedule_vm_release_request", queue_vm_release)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    queue_vm_release.assert_called_once_with(
+        custom_api=controller._custom_api,
+        namespace=controller.WATCH_NAMESPACE,
+        assistant_id="1207",
+        binding_id="binding-1",
+        vm_name="unity-pool-ubuntu-1",
+    )
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+    binding = patch_status.call_args.kwargs["binding"]
+    assert binding["id"] == "binding-1"
+    assert binding["vmRef"] == {
+        "name": "unity-pool-ubuntu-1",
+        "hostname": "vm-1.vm.unify.ai",
+        "vmType": "ubuntu",
+    }
+    assert binding["vmAssignedAt"] == "2026-04-03T00:00:05+00:00"
+
+
 def test_reconcile_job_missing_restarts_only_after_cleanup_finishes(monkeypatch):
     body = _base_session()
     body["status"]["phase"] = "PendingContainer"

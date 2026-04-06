@@ -26,6 +26,7 @@ from .assistant_sessions import (
     ACTIVE_PHASES,
     DESIRED_STATE_STOPPED,
     SIGNAL_DESKTOP_READY,
+    SIGNAL_VM_ASSIGNMENT,
     SIGNAL_VM_RELEASE_COMPLETE,
     TERMINAL_PHASES,
     assistant_session_desired_state,
@@ -47,7 +48,9 @@ from .assistant_sessions import (
     patch_assistant_session_spec,
     read_bootstrap_secret,
     record_assistant_session_signal,
+    resolve_current_binding_vm_ref,
     session_binding,
+    session_signal,
     vm_refs_match,
 )
 from .observability import (
@@ -1972,7 +1975,30 @@ async def _resolve_release_vm_name(
             "message": "Job no longer owns the current session VM",
         }
 
-    vm_name = str(binding_vm_ref(binding).get("name", "") or "")
+    assignment_signal = session_signal(session, SIGNAL_VM_ASSIGNMENT)
+    resolved_vm_ref = resolve_current_binding_vm_ref(
+        binding,
+        assignment_signal=assignment_signal,
+    )
+    vm_name = str(resolved_vm_ref.get("name", "") or "")
+    owned_runtime_vms: list[dict[str, object]] = []
+    disk_vm_name: str | None = None
+    if not vm_name:
+        (owned_runtime_vms, _), disk_vm_name = await asyncio.gather(
+            asyncio.to_thread(
+                split_binding_runtime_vms,
+                request.assistant_id,
+                binding_id=request.binding_id,
+            ),
+            asyncio.to_thread(find_vm_with_disk, request.assistant_id),
+        )
+        resolved_vm_ref = resolve_current_binding_vm_ref(
+            binding,
+            assignment_signal=assignment_signal,
+            owned_runtime_vms=owned_runtime_vms,
+            disk_vm_name=disk_vm_name,
+        )
+        vm_name = str(resolved_vm_ref.get("name", "") or "")
     if not vm_name:
         emit_observability_event(
             "infra.vm_release.skipped",
@@ -1985,6 +2011,12 @@ async def _resolve_release_vm_name(
             reason="no_vm_ref",
             release_requested_at=binding.get("releaseRequestedAt"),
             release_completed_at=binding.get("releaseCompletedAt"),
+            owned_runtime_vm_names=[
+                str(vm.get("vm_name", "") or "")
+                for vm in owned_runtime_vms
+                if vm.get("vm_name")
+            ],
+            disk_vm_name=disk_vm_name,
         )
         return None, {
             "released": False,
