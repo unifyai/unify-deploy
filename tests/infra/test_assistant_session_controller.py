@@ -145,6 +145,41 @@ def test_reconcile_records_binding_owned_job(monkeypatch):
     assert binding["jobRef"]["name"] == "unity-job-1"
 
 
+def test_reconcile_resets_binding_created_at_when_job_is_claimed(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "PendingJob"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        createdAt="2026-04-03T00:00:00+00:00",
+    )
+    created_job = _job()
+    patch_status = MagicMock()
+
+    monkeypatch.setattr(controller, "_batch_api", MagicMock())
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_claim_idle_job_for_binding",
+        lambda *_args, **_kwargs: created_job,
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "_now_iso", lambda: "2026-04-06T00:00:00+00:00")
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert patch_status.call_args.kwargs["phase"] == "PendingContainer"
+    binding = patch_status.call_args.kwargs["binding"]
+    assert binding["jobRef"]["name"] == "unity-job-1"
+    assert binding["createdAt"] == "2026-04-06T00:00:00+00:00"
+
+
 def test_claim_idle_job_for_binding_reuses_existing_job_for_same_binding(monkeypatch):
     binding = _binding("binding-1")
     existing_job = _job(name="unity-job-1", container_ready=False)

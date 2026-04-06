@@ -612,22 +612,35 @@ def test_production_traffic_stress(
 
         t0 = time.monotonic()
         containers_up = {}
-        containers_failed = {}
+        pending_container_ids = {a["assistant_id"] for a in assistants}
+        container_deadline = time.monotonic() + 300
+        container_poll_round = 0
 
-        for a in assistants:
-            aid = a["assistant_id"]
-            try:
-                jobs = wait_for_container_running(
-                    batch_api,
-                    aid,
-                    timeout=300,
-                    interval=10,
-                )
+        while pending_container_ids and time.monotonic() < container_deadline:
+            ready_now = []
+            for aid in sorted(pending_container_ids):
+                jobs = list_jobs_with_assistant_id(batch_api, aid)
+                if not jobs:
+                    continue
                 containers_up[aid] = jobs[0].metadata.name
                 print(f"  {aid}: container running ({containers_up[aid]})")
-            except TimeoutError:
-                containers_failed[aid] = "timeout"
-                print(f"  {aid}: TIMEOUT — no container after 300s")
+                ready_now.append(aid)
+
+            for aid in ready_now:
+                pending_container_ids.discard(aid)
+
+            if not pending_container_ids:
+                break
+
+            container_poll_round += 1
+            if container_poll_round % 3 == 0:
+                _trigger_pool_refresh()
+            time.sleep(10)
+
+        containers_failed = {}
+        for aid in sorted(pending_container_ids):
+            containers_failed[aid] = "timeout"
+            print(f"  {aid}: TIMEOUT — no container after 300s")
 
         elapsed_containers = time.monotonic() - t0
         print(

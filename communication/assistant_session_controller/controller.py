@@ -1127,10 +1127,14 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 ),
             )
             return
+        # Container bootstrap should be timed from when this binding actually
+        # acquires a Job, not from when it first entered PendingJob while
+        # waiting for pool capacity.
         binding = _binding_payload(
             binding,
             job_ref={"name": claimed_job.metadata.name, "namespace": WATCH_NAMESPACE},
             pod_ref=_current_pod_ref(claimed_job.metadata.name),
+            created_at=_now_iso(),
         )
         patch_assistant_session_status(
             _custom_api,
