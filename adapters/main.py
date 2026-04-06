@@ -708,7 +708,9 @@ async def twilio_whatsapp_call_webhook(request: Request):
 
     # Resolve assistant via the shared WhatsApp pool routing
     resolve_data = await asyncio.to_thread(
-        resolve_whatsapp_route, pool_number, caller_number,
+        resolve_whatsapp_route,
+        pool_number,
+        caller_number,
     )
     if resolve_data is None or resolve_data.get("action") in (
         "auto_reply",

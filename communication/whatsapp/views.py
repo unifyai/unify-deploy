@@ -199,7 +199,11 @@ async def send(request: Request):
     return {"success": True, "method": method}
 
 
-WHATSAPP_VOICE_APP_SID = "APbf0903608f1a02e93bebcc90e2ea17db" if os.getenv("DEPLOY_ENV") == "staging" else "AP5e48f55135a987a482661a37db8ac68f"
+WHATSAPP_VOICE_APP_SID = (
+    "APbf0903608f1a02e93bebcc90e2ea17db"
+    if os.getenv("DEPLOY_ENV") == "staging"
+    else "AP5e48f55135a987a482661a37db8ac68f"
+)
 WHATSAPP_GB_BUNDLE_SID = "BUd85f47e01a9d85003c364f400105a8da"
 
 
@@ -214,13 +218,19 @@ async def _provision_gb_phone_number() -> str:
     numbers: list = []
     try:
         numbers += twilio_client.available_phone_numbers("GB").mobile.list(
-            limit=1, sms_enabled=True, voice_enabled=True, beta=False,
+            limit=1,
+            sms_enabled=True,
+            voice_enabled=True,
+            beta=False,
         )
     except Exception:
         pass
     try:
         numbers += twilio_client.available_phone_numbers("GB").local.list(
-            limit=1, sms_enabled=True, voice_enabled=True, beta=False,
+            limit=1,
+            sms_enabled=True,
+            voice_enabled=True,
+            beta=False,
         )
     except Exception:
         pass
