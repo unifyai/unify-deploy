@@ -213,7 +213,7 @@ async def _provision_gb_phone_number() -> str:
 
     Returns the purchased E.164 number.
     """
-    twilio_client = get_twilio_client()
+    twilio_client = get_twilio_wa_client()
 
     numbers: list = []
     try:
