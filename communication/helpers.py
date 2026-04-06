@@ -74,3 +74,11 @@ def get_twilio_client():
     if not account_sid or not auth_token:
         raise RuntimeError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set")
     return TwilioClient(account_sid, auth_token)
+
+
+def get_twilio_wa_client():
+    account_sid = os.getenv("TWILIO_WA_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_WA_AUTH_TOKEN")
+    if not account_sid or not auth_token:
+        raise RuntimeError("TWILIO_WA_ACCOUNT_SID and TWILIO_WA_AUTH_TOKEN must be set")
+    return TwilioClient(account_sid, auth_token)

@@ -99,6 +99,7 @@ setup_metrics(app, service_name="adapters")
 # =============================================================================
 
 _twilio_validator = None
+_twilio_wa_validator = None
 
 
 def _get_twilio_validator() -> RequestValidator:
@@ -111,14 +112,23 @@ def _get_twilio_validator() -> RequestValidator:
     return _twilio_validator
 
 
-async def validate_twilio_signature(request: Request):
-    """FastAPI dependency that validates the X-Twilio-Signature header.
+def _get_twilio_wa_validator() -> RequestValidator:
+    global _twilio_wa_validator
+    if _twilio_wa_validator is None:
+        auth_token = os.environ.get("TWILIO_WA_AUTH_TOKEN")
+        if not auth_token:
+            raise RuntimeError("TWILIO_WA_AUTH_TOKEN is required but not set")
+        _twilio_wa_validator = RequestValidator(auth_token)
+    return _twilio_wa_validator
+
+
+async def _validate_twilio_sig(request: Request, validator: RequestValidator):
+    """Shared logic for Twilio signature validation.
 
     Cloud Run proxies rewrite the Host header, so ``str(request.url)``
     returns an internal URL that differs from the public URL Twilio signed
     against. Reconstruct the original URL from forwarded headers.
     """
-    validator = _get_twilio_validator()
     signature = request.headers.get("X-Twilio-Signature", "")
     proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
     host = request.headers.get("X-Forwarded-Host", request.headers.get("Host", ""))
@@ -129,6 +139,14 @@ async def validate_twilio_signature(request: Request):
     params = {k: v for k, v in form_data.items()}
     if not validator.validate(url, params, signature):
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+
+
+async def validate_twilio_signature(request: Request):
+    await _validate_twilio_sig(request, _get_twilio_validator())
+
+
+async def validate_twilio_wa_signature(request: Request):
+    await _validate_twilio_sig(request, _get_twilio_wa_validator())
 
 
 # =============================================================================
@@ -573,7 +591,7 @@ async def twilio_sms_webhook(request: Request):
     return Response(content=str(resp_user), media_type="text/xml")
 
 
-@app.post("/twilio/whatsapp", dependencies=[Depends(validate_twilio_signature)])
+@app.post("/twilio/whatsapp", dependencies=[Depends(validate_twilio_wa_signature)])
 async def twilio_whatsapp_webhook(request: Request):
     """WhatsApp webhook endpoint - handles incoming Twilio WhatsApp messages."""
     logger.info("twilio_whatsapp_webhook function started")

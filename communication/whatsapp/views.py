@@ -6,7 +6,7 @@ import os
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Query, Request
 
-from communication.helpers import get_twilio_client
+from communication.helpers import get_twilio_wa_client
 from common.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -19,9 +19,9 @@ def _admin_headers() -> dict:
     return {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
 
 
-def _twilio_basic_auth_headers() -> dict:
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+def _twilio_whatsapp_auth_headers() -> dict:
+    account_sid = os.getenv("TWILIO_WA_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_WA_AUTH_TOKEN")
     auth_str = f"{account_sid}:{auth_token}"
     b64_auth = base64.b64encode(auth_str.encode()).decode()
     return {"Authorization": f"Basic {b64_auth}", "Content-Type": "application/json"}
@@ -111,8 +111,8 @@ async def _forward_notification_status(
 # ---------------------------------------------------------------------------
 
 
-GREETING_TEMPLATE_SID = "HX8f626deb83316ab8fd355a2866dddc24"
-NUMBER_CHANGE_TEMPLATE_SID = "HX0e3c42c95cbd14786060fceedad3de2a"
+GREETING_TEMPLATE_SID = "HX002f6aeb3b4e5a79b693fa7190196612"
+NUMBER_CHANGE_TEMPLATE_SID = "HXd9c362371aefe97f10526f1c0974f7a2"
 
 
 @auth_router.post("/notify")
@@ -129,7 +129,7 @@ async def notify(request: Request):
     if callback_id:
         status_callback += f"?callback_id={callback_id}"
 
-    twilio_client = get_twilio_client()
+    twilio_client = get_twilio_wa_client()
     results = {}
     for r in recipients:
         to = r["to"]
@@ -167,7 +167,7 @@ async def send(request: Request):
     pool_number = route["pool_number"]
     window_open = route["window_open"]
 
-    twilio_client = get_twilio_client()
+    twilio_client = get_twilio_wa_client()
     if window_open:
         twilio_client.messages.create(
             to=f"whatsapp:{to}",
@@ -211,9 +211,11 @@ async def create_whatsapp_sender(request: Request):
                 "callback_url",
                 SETTINGS.adapters_url + "/twilio/whatsapp",
             ),
+            "status_callback_url": SETTINGS.comms_url + "/whatsapp/status",
+            "status_callback_method": "POST",
         },
     }
-    headers = _twilio_basic_auth_headers()
+    headers = _twilio_whatsapp_auth_headers()
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers)
     if resp.status_code >= 400:
@@ -229,7 +231,7 @@ async def delete_whatsapp_sender(request: Request):
     data = await request.json()
     sid = data["sid"]
     url = f"https://messaging.twilio.com/v2/Channels/Senders/{sid}"
-    headers = _twilio_basic_auth_headers()
+    headers = _twilio_whatsapp_auth_headers()
     async with httpx.AsyncClient() as client:
         resp = await client.delete(url, headers=headers)
     if resp.status_code >= 400:
