@@ -185,7 +185,6 @@ async def send(request: Request):
                 {
                     "user_name": user_name,
                     "agent_name": agent_name,
-                    "message": body,
                 },
             ),
             status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
