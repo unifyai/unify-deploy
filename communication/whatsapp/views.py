@@ -121,6 +121,7 @@ async def _forward_notification_status(
 GREETING_TEMPLATE_SID = "HX002f6aeb3b4e5a79b693fa7190196612"
 NUMBER_CHANGE_TEMPLATE_SID = "HXd9c362371aefe97f10526f1c0974f7a2"
 VOICE_CALL_TEMPLATE_SID = "HX885d46e6ccb82e4313ef1a42181c142d"
+VOICE_CALL_REQUEST_TEMPLATE_SID = "HX67bc29b24fb597e6fad501ea68d2566e"
 
 
 @auth_router.post("/notify")
@@ -290,13 +291,12 @@ async def send_call(request: Request):
         }
 
     wa_client.messages.create(
-        content_sid=VOICE_CALL_TEMPLATE_SID,
+        content_sid=VOICE_CALL_REQUEST_TEMPLATE_SID,
         to=f"whatsapp:{to}",
         from_=f"whatsapp:{pool_number}",
-        content_variables=json.dumps({"1": agent_name}),
         status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
     )
-    logger.info(f"WhatsApp call invite template sent to {to} (no call permission)")
+    logger.info(f"WhatsApp call permission request sent to {to}")
     return {"success": True, "method": "invite"}
 
 
