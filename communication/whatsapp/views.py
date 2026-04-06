@@ -1,7 +1,9 @@
+import asyncio
 import base64
 import json
 import logging
 import os
+import time
 
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Query, Request
@@ -305,6 +307,68 @@ WHATSAPP_VOICE_APP_SID = (
 )
 WHATSAPP_GB_BUNDLE_SID = "BUd85f47e01a9d85003c364f400105a8da"
 
+_SENDER_BASE = "https://messaging.twilio.com/v2/Channels/Senders"
+
+
+async def _attach_voice_app(sender_sid: str, timeout: float = 60.0) -> bool:
+    """Poll until the sender is ONLINE, then attach the TwiML Voice App.
+
+    Returns True if the voice app was successfully attached, False on timeout
+    or error.  Failures are non-fatal — the sender is still usable for
+    messaging, just without WhatsApp Business Calling.
+    """
+    if not WHATSAPP_VOICE_APP_SID:
+        return False
+
+    headers = _twilio_whatsapp_auth_headers()
+    sender_url = f"{_SENDER_BASE}/{sender_sid}"
+    deadline = time.monotonic() + timeout
+
+    async with httpx.AsyncClient() as client:
+        while time.monotonic() < deadline:
+            try:
+                resp = await client.get(sender_url, headers=headers, timeout=10.0)
+                if resp.status_code < 400:
+                    status = resp.json().get("status", "")
+                    if status == "ONLINE":
+                        break
+                    logger.info(
+                        f"Sender {sender_sid} status: {status}, waiting for ONLINE",
+                    )
+            except Exception:
+                logger.exception(f"Error polling sender {sender_sid} status")
+            await asyncio.sleep(5)
+        else:
+            logger.warning(
+                f"Sender {sender_sid} did not reach ONLINE within {timeout}s",
+            )
+            return False
+
+        try:
+            update_resp = await client.post(
+                sender_url,
+                json={
+                    "configuration": {
+                        "voice_application_sid": WHATSAPP_VOICE_APP_SID,
+                    }
+                },
+                headers=headers,
+                timeout=10.0,
+            )
+            if update_resp.status_code >= 400:
+                logger.error(
+                    f"Failed to attach voice app to {sender_sid}: "
+                    f"{update_resp.status_code} {update_resp.text}",
+                )
+                return False
+            logger.info(
+                f"Attached voice app {WHATSAPP_VOICE_APP_SID} to sender {sender_sid}",
+            )
+            return True
+        except Exception:
+            logger.exception(f"Error attaching voice app to sender {sender_sid}")
+            return False
+
 
 async def _provision_gb_phone_number() -> str:
     """Buy a GB mobile number with voice + SMS, configure webhooks,
@@ -400,11 +464,6 @@ async def create_whatsapp_sender(request: Request):
         },
     }
 
-    if WHATSAPP_VOICE_APP_SID:
-        payload["configuration"] = {
-            "voice_application_sid": WHATSAPP_VOICE_APP_SID,
-        }
-
     headers = _twilio_whatsapp_auth_headers()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -417,9 +476,14 @@ async def create_whatsapp_sender(request: Request):
             status_code=resp.status_code,
             detail=f"Failed to create WhatsApp sender: {resp.text}",
         )
+
+    sid = resp.json().get("sid")
+    calling_enabled = await _attach_voice_app(sid)
+
     return {
-        "sid": resp.json().get("sid"),
+        "sid": sid,
         "phone_number": phone_number,
+        "calling_enabled": calling_enabled,
     }
 
 
