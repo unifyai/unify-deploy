@@ -273,7 +273,7 @@ async def send_call(request: Request):
             from_=f"whatsapp:{pool_number}",
             twiml=_conference_twiml(conference_name),
             status_callback=SETTINGS.adapters_url + "/twilio/whatsapp-call-status",
-            status_callback_event="initiated ringing answered completed",
+            status_callback_event=["initiated", "ringing", "answered", "completed"],
         )
         wa_client.calls.create(
             to=sip_uri,
