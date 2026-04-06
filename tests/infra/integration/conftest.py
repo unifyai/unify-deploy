@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1202,6 +1203,30 @@ def wait_for_idle_pool(batch_api, min_idle: int = 1, timeout: float = 90):
     )
 
 
+def wait_for_idle_vm_pool(
+    gce_client,
+    min_idle: int = 1,
+    *,
+    vm_type: str = "ubuntu",
+    timeout: float = 180,
+):
+    """Wait until the VM pool has at least min_idle idle VMs."""
+    poll_until(
+        lambda: len(list_idle_vms(gce_client, vm_type=vm_type)) >= min_idle,
+        timeout=timeout,
+        interval=10,
+        description=f"Idle VM pool to have >= {min_idle} {vm_type} VMs",
+        failure_snapshot=lambda: {
+            "idle_vm_names": [
+                vm.name for vm in list_idle_vms(gce_client, vm_type=vm_type)
+            ],
+            "stopped_vm_names": [
+                vm.name for vm in list_stopped_vms(gce_client, vm_type=vm_type)
+            ],
+        },
+    )
+
+
 @dataclass
 class JobTracker:
     """Tracks created Jobs and cleans them up via the correct authority."""
@@ -1392,6 +1417,8 @@ def cleanup_assistant_jobs(
     *,
     strict: bool = False,
     context: str | None = None,
+    timeout: float = 180,
+    parallelism: int = 1,
 ):
     """Stop assistant runtimes through AssistantSession and expire test records.
 
@@ -1400,12 +1427,16 @@ def cleanup_assistant_jobs(
         assistant_ids: Assistants whose runtimes should be stopped.
         strict: When True, stop failures raise immediately.
         context: Short label describing the caller's cleanup phase.
+        timeout: Per-assistant runtime cleanup wait timeout in seconds.
+        parallelism: Maximum number of assistants to clean up concurrently.
     """
-    for aid in dict.fromkeys(str(aid) for aid in assistant_ids):
+    unique_ids = [str(aid) for aid in dict.fromkeys(str(aid) for aid in assistant_ids)]
+
+    def _cleanup_one(aid: str) -> None:
         stop_assistant_runtime(
             aid,
             batch_api=batch_api,
-            timeout=180,
+            timeout=timeout,
             strict=strict,
             context=context,
         )
@@ -1413,6 +1444,33 @@ def cleanup_assistant_jobs(
             expire_test_assistant_records(aid)
         except Exception:
             pass
+
+    if parallelism <= 1 or len(unique_ids) <= 1:
+        for aid in unique_ids:
+            _cleanup_one(aid)
+        return
+
+    max_workers = max(1, min(len(unique_ids), parallelism))
+    failures: list[tuple[str, Exception]] = []
+    with ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="assistant-runtime-cleanup",
+    ) as pool:
+        future_to_id = {pool.submit(_cleanup_one, aid): aid for aid in unique_ids}
+        for future in as_completed(future_to_id):
+            aid = future_to_id[future]
+            try:
+                future.result()
+            except Exception as exc:  # pragma: no cover - unexpected helper failure
+                if strict:
+                    failures.append((aid, exc))
+                else:
+                    prefix = "[Cleanup]" if not context else f"[Cleanup:{context}]"
+                    print(f"{prefix} Unexpected cleanup error for {aid}: {exc}")
+
+    if failures:
+        aid, exc = failures[0]
+        raise AssertionError(f"Cleanup failed for {aid}: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -1496,6 +1554,63 @@ def _ensure_credits(min_credits: float):
 # ---------------------------------------------------------------------------
 
 ASSISTANT_CREATION_COST = 10.0
+TEST_ASSISTANT_FACTORY_FIRST_NAME = "InfraTest"
+TEST_ASSISTANT_FACTORY_ABOUT = (
+    "Stress test assistant (auto-created by integration tests)"
+)
+TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS = 60
+TEST_ASSISTANT_CLEANUP_PARALLELISM = 6
+
+
+def _list_owned_assistants() -> list[dict]:
+    """Return assistants visible to the current test user."""
+    if not UNIFY_KEY:
+        return []
+    try:
+        resp = requests.get(
+            f"{ORCHESTRA_URL}/assistant",
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            timeout=20,
+        )
+    except Exception:
+        return []
+    if resp.status_code != 200:
+        return []
+    data = resp.json()
+    assistants = data.get("info", data) if isinstance(data, dict) else data
+    return assistants if isinstance(assistants, list) else []
+
+
+def _is_factory_test_assistant(assistant: dict) -> bool:
+    """Return whether an Orchestra record belongs to the test factory."""
+    if not isinstance(assistant, dict):
+        return False
+    if str(assistant.get("first_name") or "") != TEST_ASSISTANT_FACTORY_FIRST_NAME:
+        return False
+    is_local = assistant.get("is_local")
+    if is_local not in (None, True):
+        return False
+    deploy_env = str(assistant.get("deploy_env") or "")
+    if deploy_env and deploy_env != NAMESPACE:
+        return False
+    about = str(assistant.get("about") or "")
+    surname = str(assistant.get("surname") or "")
+    return about == TEST_ASSISTANT_FACTORY_ABOUT or (
+        is_local is True and bool(surname.isdigit())
+    )
+
+
+def _stale_factory_test_assistant_ids(*, keep_ids: set[str] | None = None) -> list[str]:
+    """Return prior-run factory assistants that should be deleted."""
+    keep = {str(aid) for aid in (keep_ids or set())}
+    stale_ids = []
+    for assistant in _list_owned_assistants():
+        agent_id = str(assistant.get("agent_id") or assistant.get("id") or "").strip()
+        if not agent_id or agent_id in keep:
+            continue
+        if _is_factory_test_assistant(assistant):
+            stale_ids.append(agent_id)
+    return sorted(dict.fromkeys(stale_ids))
 
 
 def _admin_record_to_data(a: dict) -> dict:
@@ -1549,11 +1664,11 @@ def _create_test_assistant(index: int) -> dict:
     assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
 
     payload = {
-        "first_name": "InfraTest",
+        "first_name": TEST_ASSISTANT_FACTORY_FIRST_NAME,
         "surname": f"{index:03d}",
         "age": 25,
         "nationality": "North America",
-        "about": "Stress test assistant (auto-created by integration tests)",
+        "about": TEST_ASSISTANT_FACTORY_ABOUT,
         "desktop_mode": "ubuntu",
         "is_local": True,
         "create_infra": True,
@@ -1645,7 +1760,11 @@ def _create_preview_managed_assistant() -> dict:
     return _admin_record_to_data(a)
 
 
-def _delete_test_assistant(agent_id: str, batch_api=None):
+def _delete_test_assistant(
+    agent_id: str,
+    batch_api=None,
+    runtime_timeout: float = TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
+):
     """Delete a test assistant from Orchestra and clean up infra resources.
 
     Calls DELETE /v0/assistant/{id} which handles Pub/Sub, disks, phones,
@@ -1682,11 +1801,50 @@ def _delete_test_assistant(agent_id: str, batch_api=None):
             wait_for_assistant_runtime_stopped(
                 str(agent_id),
                 batch_api=batch_api,
-                timeout=180,
+                timeout=runtime_timeout,
                 interval=5,
             )
         except Exception:
             pass
+
+
+def _delete_test_assistants(
+    assistant_ids: list[str],
+    *,
+    batch_api=None,
+    runtime_timeout: float = TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
+    parallelism: int = TEST_ASSISTANT_CLEANUP_PARALLELISM,
+) -> None:
+    """Delete multiple test assistants concurrently."""
+    unique_ids = [str(aid) for aid in dict.fromkeys(str(aid) for aid in assistant_ids)]
+    if not unique_ids:
+        return
+
+    max_workers = max(1, min(len(unique_ids), parallelism))
+    if max_workers == 1:
+        for agent_id in unique_ids:
+            _delete_test_assistant(
+                agent_id,
+                batch_api=batch_api,
+                runtime_timeout=runtime_timeout,
+            )
+        return
+
+    with ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="test-assistant-delete",
+    ) as pool:
+        futures = [
+            pool.submit(
+                _delete_test_assistant,
+                agent_id,
+                batch_api,
+                runtime_timeout,
+            )
+            for agent_id in unique_ids
+        ]
+        for future in as_completed(futures):
+            future.result()
 
 
 # ---------------------------------------------------------------------------
@@ -1721,6 +1879,19 @@ def test_assistants(k8s_clients):
 
     _ensure_credits(min_credits=count * (ASSISTANT_CREATION_COST + 5))
 
+    batch_api = k8s_clients[0]
+    stale_assistant_ids = _stale_factory_test_assistant_ids()
+    if stale_assistant_ids:
+        print(
+            f"\n[Setup] Deleting {len(stale_assistant_ids)} stale test assistant(s) "
+            "from prior runs...",
+        )
+        _delete_test_assistants(
+            stale_assistant_ids,
+            batch_api=batch_api,
+            runtime_timeout=TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
+        )
+
     created: list[dict] = []
     for i in range(count):
         try:
@@ -1739,10 +1910,12 @@ def test_assistants(k8s_clients):
     print(f"\n[Factory] Created {len(created)}/{count} test assistants")
     yield created
 
-    batch_api = k8s_clients[0]
     print(f"\n[Teardown] Deleting {len(created)} test assistants...")
-    for a in created:
-        _delete_test_assistant(a["assistant_id"], batch_api)
+    _delete_test_assistants(
+        [a["assistant_id"] for a in created],
+        batch_api=batch_api,
+        runtime_timeout=TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
+    )
     if created:
         replenish_pool()
     print(f"[Teardown] Done")
