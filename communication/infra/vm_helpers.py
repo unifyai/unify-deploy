@@ -293,6 +293,14 @@ def _instance_boot_reference_time(instance) -> Optional[datetime]:
     )
 
 
+def _stopped_pool_reference_time(instance) -> Optional[datetime]:
+    """Return the best timestamp for deciding stopped reserve retention."""
+
+    return _parse_gce_timestamp(getattr(instance, "last_stop_timestamp", None)) or (
+        _instance_boot_reference_time(instance)
+    )
+
+
 def _release_metadata_updates(*, clear_assignment: bool) -> Dict[str, str]:
     """Return the metadata keys that must be cleared during VM release."""
     updates = {key: "" for key in RELEASE_TRIGGER_METADATA_KEYS}
@@ -3102,6 +3110,98 @@ def _trim_pool_inner(vm_type: str) -> Dict[str, Any]:
     return {"vm_type": vm_type, "idle_count": len(final_idle), "actions": actions}
 
 
+def trim_stopped_pool_reserve(vm_type: str) -> Dict[str, Any]:
+    """Delete excess stopped reserve VMs to maintain ``POOL_TARGET_STOPPED``.
+
+    Uses the replenish lock because this cleanup mutates the same stopped
+    reserve that ``replenish_pool()`` consumes to satisfy fresh demand.
+    """
+
+    lock = _get_replenish_lock(vm_type)
+    if not lock.acquire(blocking=False):
+        return {
+            "vm_type": vm_type,
+            "found": 0,
+            "kept": [],
+            "deleted": [],
+            "errors": [],
+            "actions": [],
+            "skipped": True,
+        }
+    try:
+        return _trim_stopped_pool_reserve_inner(vm_type)
+    finally:
+        lock.release()
+
+
+def _trim_stopped_pool_reserve_inner(vm_type: str) -> Dict[str, Any]:
+    """Delete older stopped reserve VMs beyond ``POOL_TARGET_STOPPED``."""
+
+    client, _, _, stopped_vms, _, _ = _list_pool_state(vm_type)
+    ranked = sorted(
+        stopped_vms,
+        key=lambda vm: (
+            _stopped_pool_reference_time(vm)
+            or datetime.min.replace(tzinfo=timezone.utc),
+            vm.name,
+        ),
+        reverse=True,
+    )
+    kept = [vm.name for vm in ranked[:POOL_TARGET_STOPPED]]
+    to_delete = ranked[POOL_TARGET_STOPPED:]
+    if not to_delete:
+        return {
+            "vm_type": vm_type,
+            "found": len(ranked),
+            "kept": kept,
+            "deleted": [],
+            "errors": [],
+            "actions": [],
+        }
+
+    deleted: list[str] = []
+    errors: list[dict[str, str]] = []
+
+    def _delete_one(vm) -> str | None:
+        reference_time = _stopped_pool_reference_time(vm)
+        try:
+            _delete_pool_vm_instance(client, vm.name)
+            _log_vm_pool_event(
+                "stopped_reserve_pruned",
+                vm_name=vm.name,
+                vm_type=vm_type,
+                retained_target=POOL_TARGET_STOPPED,
+                stopped_reference_time=(
+                    reference_time.isoformat() if reference_time else None
+                ),
+            )
+            logger.info("Pruned excess stopped reserve VM %s", vm.name)
+            return vm.name
+        except Exception as exc:
+            logger.error("Failed to prune stopped reserve VM %s: %s", vm.name, exc)
+            errors.append({"vm_name": vm.name, "error": str(exc)})
+            return None
+
+    with ThreadPoolExecutor(
+        max_workers=min(len(to_delete), 5),
+        thread_name_prefix="reserve-prune",
+    ) as pool:
+        for result in pool.map(_delete_one, to_delete):
+            if result:
+                deleted.append(result)
+
+    return {
+        "vm_type": vm_type,
+        "found": len(ranked),
+        "kept": kept,
+        "deleted": deleted,
+        "errors": errors,
+        "actions": [
+            f"Deleted excess stopped reserve VM {vm_name}" for vm_name in deleted
+        ],
+    }
+
+
 def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
     """Detect and fix label/status mismatches across all pool VMs.
 
@@ -3222,13 +3322,21 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
 
 
 def rebalance_pool(vm_type: str) -> Dict[str, Any]:
-    """Full rebalance: scrub ghosts, replenish, then trim. For manual use."""
+    """Full rebalance: scrub ghosts, replenish, trim, then prune excess reserve."""
     scrub_actions = _scrub_inconsistent_vms(vm_type)
     replenish_result = replenish_pool(vm_type)
     trim_result = trim_pool(vm_type)
+    reserve_trim_result = trim_stopped_pool_reserve(vm_type)
     return {
         "vm_type": vm_type,
-        "actions": scrub_actions + replenish_result["actions"] + trim_result["actions"],
+        "actions": (
+            scrub_actions
+            + replenish_result["actions"]
+            + trim_result["actions"]
+            + reserve_trim_result["actions"]
+        ),
+        "stopped_reserve_deleted": reserve_trim_result["deleted"],
+        "stopped_reserve_kept": reserve_trim_result["kept"],
     }
 
 

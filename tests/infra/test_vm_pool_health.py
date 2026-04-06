@@ -712,3 +712,115 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
 
     assert result["vm_type"] == "ubuntu"
     assert result["actions"] == ["Started stopped VM unity-pool-ubuntu-6-preview"]
+
+
+def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
+    client = MagicMock()
+    client.delete.return_value = SimpleNamespace(result=lambda: None)
+    stopped_vms = [
+        SimpleNamespace(
+            name="unity-pool-ubuntu-14-preview",
+            labels=_current_contract_labels(
+                **{"pool-role": "stopped", "vm-type": "ubuntu"},
+            ),
+            status="TERMINATED",
+            last_stop_timestamp="2026-04-06T09:00:00+00:00",
+        ),
+        SimpleNamespace(
+            name="unity-pool-ubuntu-15-preview",
+            labels=_current_contract_labels(
+                **{"pool-role": "stopped", "vm-type": "ubuntu"},
+            ),
+            status="TERMINATED",
+            last_stop_timestamp="2026-04-06T08:59:00+00:00",
+        ),
+        SimpleNamespace(
+            name="unity-pool-ubuntu-16-preview",
+            labels=_current_contract_labels(
+                **{"pool-role": "stopped", "vm-type": "ubuntu"},
+            ),
+            status="TERMINATED",
+            last_stop_timestamp="2026-04-06T08:58:00+00:00",
+        ),
+        SimpleNamespace(
+            name="unity-pool-ubuntu-17-preview",
+            labels=_current_contract_labels(
+                **{"pool-role": "stopped", "vm-type": "ubuntu"},
+            ),
+            status="TERMINATED",
+            last_stop_timestamp="2026-04-06T08:57:00+00:00",
+        ),
+    ]
+
+    monkeypatch.setattr(vm_helpers_module, "POOL_TARGET_STOPPED", 2)
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_list_pool_state",
+        lambda *_args, **_kwargs: (client, [], [], stopped_vms, [], set()),
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_log_vm_pool_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = vm_helpers_module.trim_stopped_pool_reserve("ubuntu")
+
+    assert result["kept"] == [
+        "unity-pool-ubuntu-14-preview",
+        "unity-pool-ubuntu-15-preview",
+    ]
+    assert result["deleted"] == [
+        "unity-pool-ubuntu-16-preview",
+        "unity-pool-ubuntu-17-preview",
+    ]
+    assert result["actions"] == [
+        "Deleted excess stopped reserve VM unity-pool-ubuntu-16-preview",
+        "Deleted excess stopped reserve VM unity-pool-ubuntu-17-preview",
+    ]
+    assert result["errors"] == []
+    assert [call.kwargs["instance"] for call in client.delete.call_args_list] == [
+        "unity-pool-ubuntu-16-preview",
+        "unity-pool-ubuntu-17-preview",
+    ]
+
+
+def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_scrub_inconsistent_vms",
+        lambda *_args, **_kwargs: ["scrubbed ghost"],
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "replenish_pool",
+        lambda *_args, **_kwargs: {"actions": ["replenished idle"]},
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "trim_pool",
+        lambda *_args, **_kwargs: {"actions": ["trimmed idle"]},
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "trim_stopped_pool_reserve",
+        lambda *_args, **_kwargs: {
+            "actions": ["deleted old reserve"],
+            "deleted": ["unity-pool-ubuntu-17-preview"],
+            "kept": ["unity-pool-ubuntu-14-preview"],
+        },
+    )
+
+    result = vm_helpers_module.rebalance_pool("ubuntu")
+
+    assert result == {
+        "vm_type": "ubuntu",
+        "actions": [
+            "scrubbed ghost",
+            "replenished idle",
+            "trimmed idle",
+            "deleted old reserve",
+        ],
+        "stopped_reserve_deleted": ["unity-pool-ubuntu-17-preview"],
+        "stopped_reserve_kept": ["unity-pool-ubuntu-14-preview"],
+    }
