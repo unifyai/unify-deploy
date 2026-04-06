@@ -32,6 +32,7 @@ class SessionSnapshot:
     bootstrap_retries: int
     vm_retries: int
     desktop_probe_failures: int
+    last_error: str
 
     @classmethod
     def from_body(cls, body: dict[str, Any]) -> "SessionSnapshot":
@@ -58,4 +59,5 @@ class SessionSnapshot:
             desktop_probe_failures=int(
                 status.get("desktopProbeFailures", 0) or 0,
             ),
+            last_error=str(status.get("lastError", "") or ""),
         )

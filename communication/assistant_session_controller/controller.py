@@ -206,6 +206,24 @@ def _release_complete_signal(body: dict) -> dict:
     return _signal_by_name(body, SIGNAL_VM_RELEASE_COMPLETE)
 
 
+def _remaining_signals(
+    assistant_id: str,
+    body: dict,
+    *consumed_signal_names: str,
+) -> dict:
+    """Return latest signals minus any controller-consumed names.
+
+    Reconcile may enqueue a background worker that records a fresh signal before
+    the controller's own status patch executes. Reading the latest stored
+    session here preserves those newly-written signals instead of replacing them
+    with the stale signal set from the original reconcile snapshot.
+    """
+
+    assert _custom_api is not None
+    current = get_assistant_session(_custom_api, WATCH_NAMESPACE, assistant_id) or body
+    return _signals_without(current, *consumed_signal_names)
+
+
 def _job_matches_binding(job, session_name: str, binding_id: str) -> bool:
     """Return whether a Job belongs to the current session binding."""
 
@@ -1118,6 +1136,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     bootstrap_retries = session.bootstrap_retries
     vm_retries = session.vm_retries
     desktop_probe_failures = session.desktop_probe_failures
+    persisted_last_error = session.last_error
+    pending_binding_last_error = ""
 
     emit_observability_event(
         "controller.session_reconcile",
@@ -1270,11 +1290,12 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 phase=release_phase,
                 observed_activation_id=observed_activation_id or activation_id,
                 binding=release_binding if release_binding else None,
-                last_error=release_error or "",
+                last_error=release_error or persisted_last_error,
                 source="controller.reconcile",
                 conditions=release_conditions,
             )
             return
+        pending_binding_last_error = persisted_last_error
         binding = {}
         current_binding_id = ""
         existing_conditions = release_conditions
@@ -1288,7 +1309,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             phase="PendingJob",
             observed_activation_id=activation_id,
             binding=_mint_binding_payload(),
-            last_error="",
+            last_error=pending_binding_last_error,
             source="controller.reconcile",
             bootstrap_retries=bootstrap_retries,
             vm_retries=vm_retries,
@@ -1329,7 +1350,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 observed_activation_id=activation_id,
                 binding=release_binding if release_binding else None,
                 last_error=release_error
-                or "Recorded binding Job disappeared before runtime cleanup completed",
+                or "Recorded binding Job disappeared before runtime became ready",
                 source="controller.reconcile",
                 bootstrap_retries=bootstrap_retries,
                 vm_retries=vm_retries,
@@ -1615,7 +1636,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                         binding=binding,
                         last_error="",
                         source="controller.reconcile",
-                        signals=_signals_without(body, SIGNAL_VM_ASSIGNMENT),
+                        signals=_remaining_signals(
+                            assistant_id,
+                            body,
+                            SIGNAL_VM_ASSIGNMENT,
+                        ),
                         conditions=_condition_state(
                             existing_conditions,
                             "PendingGuest",
@@ -1768,7 +1793,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         if guest_state == "ready":
             patch_kwargs = {}
             if consumed_signals:
-                patch_kwargs["signals"] = _signals_without(body, *consumed_signals)
+                patch_kwargs["signals"] = _remaining_signals(
+                    assistant_id,
+                    body,
+                    *consumed_signals,
+                )
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
@@ -1812,7 +1841,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 if release_phase != "Released":
                     patch_kwargs = {}
                     if consumed_signals:
-                        patch_kwargs["signals"] = _signals_without(
+                        patch_kwargs["signals"] = _remaining_signals(
+                            assistant_id,
                             body,
                             *consumed_signals,
                         )
@@ -1824,7 +1854,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                         observed_activation_id=activation_id,
                         binding=release_binding if release_binding else None,
                         last_error=release_error
-                        or "Desktop liveness failed; replacing binding",
+                        or "Desktop VM became unreachable after readiness",
                         source="controller.reconcile",
                         bootstrap_retries=bootstrap_retries,
                         vm_retries=vm_retries + 1,
@@ -1843,7 +1873,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 )
                 patch_kwargs = {}
                 if consumed_signals:
-                    patch_kwargs["signals"] = _signals_without(body, *consumed_signals)
+                    patch_kwargs["signals"] = _remaining_signals(
+                        assistant_id,
+                        body,
+                        *consumed_signals,
+                    )
                 patch_assistant_session_status(
                     _custom_api,
                     WATCH_NAMESPACE,
@@ -1872,7 +1906,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 return
             patch_kwargs = {}
             if consumed_signals:
-                patch_kwargs["signals"] = _signals_without(body, *consumed_signals)
+                patch_kwargs["signals"] = _remaining_signals(
+                    assistant_id,
+                    body,
+                    *consumed_signals,
+                )
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
@@ -1910,7 +1948,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         )
         patch_kwargs = {}
         if consumed_signals:
-            patch_kwargs["signals"] = _signals_without(body, *consumed_signals)
+            patch_kwargs["signals"] = _remaining_signals(
+                assistant_id,
+                body,
+                *consumed_signals,
+            )
         patch_assistant_session_status(
             _custom_api,
             WATCH_NAMESPACE,
@@ -1966,7 +2008,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 phase=release_phase,
                 observed_activation_id=activation_id,
                 binding=release_binding if release_binding else None,
-                last_error=release_error or "Waiting for desktop readiness timed out",
+                last_error=release_error
+                or (
+                    f"VM did not become ready within "
+                    f"{int(VM_READINESS_DEADLINE_SECONDS)}s"
+                ),
                 source="controller.reconcile",
                 bootstrap_retries=bootstrap_retries,
                 vm_retries=vm_retries + 1,
