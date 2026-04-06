@@ -20,6 +20,12 @@ from communication.infra.assistant_sessions import (
     record_assistant_session_signal,
     session_binding,
 )
+from communication.infra.observability import (
+    bind_causal_context,
+    build_causal_context,
+    causal_log_fields,
+    current_causal_context,
+)
 from communication.infra.vm_helpers import (
     AssistantDiskInUseError,
     assign_pool_vm,
@@ -56,8 +62,19 @@ class _TaskRuntime:
         **kwargs: Any,
     ) -> bool:
         key = (task_type, task_assistant_id, task_binding_id)
+        worker_context = build_causal_context(
+            caller=f"worker.{task_type}",
+            parent=current_causal_context(),
+        )
         with self._lock:
             if key in self._inflight:
+                emit_observability_event(
+                    "controller.worker.deduplicated",
+                    task_type=task_type,
+                    assistant_id=task_assistant_id,
+                    binding_id=task_binding_id,
+                    **causal_log_fields(worker_context),
+                )
                 return False
             self._inflight.add(key)
             inflight_count = len(self._inflight)
@@ -67,21 +84,67 @@ class _TaskRuntime:
             assistant_id=task_assistant_id,
             binding_id=task_binding_id,
             inflight_count=inflight_count,
+            **causal_log_fields(worker_context),
         )
-        future = self._executor.submit(fn, **kwargs)
-        future.add_done_callback(lambda _future: self._finish(key, task_type))
+        future = self._executor.submit(
+            self._run_task,
+            key,
+            task_type,
+            worker_context,
+            fn,
+            kwargs,
+        )
+        future.add_done_callback(
+            lambda _future: self._finish(key, task_type, worker_context, _future),
+        )
         return True
 
-    def _finish(self, key: tuple[str, str, str], task_type: str) -> None:
+    def _run_task(
+        self,
+        key: tuple[str, str, str],
+        task_type: str,
+        worker_context: dict[str, Any],
+        fn: Callable[..., Any],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        with bind_causal_context(worker_context):
+            emit_observability_event(
+                "controller.worker.started",
+                task_type=task_type,
+                assistant_id=key[1],
+                binding_id=key[2],
+            )
+            return fn(**kwargs)
+
+    def _finish(
+        self,
+        key: tuple[str, str, str],
+        task_type: str,
+        worker_context: dict[str, Any],
+        future,
+    ) -> None:
         with self._lock:
             self._inflight.discard(key)
             inflight_count = len(self._inflight)
+        exception = future.exception()
+        if exception is not None:
+            emit_observability_event(
+                "controller.worker.failed",
+                task_type=task_type,
+                assistant_id=key[1],
+                binding_id=key[2],
+                inflight_count=inflight_count,
+                error_type=type(exception).__name__,
+                error=str(exception),
+                **causal_log_fields(worker_context),
+            )
         emit_observability_event(
             "controller.worker.completed",
             task_type=task_type,
             assistant_id=key[1],
             binding_id=key[2],
             inflight_count=inflight_count,
+            **causal_log_fields(worker_context),
         )
 
     def stats(self) -> dict[str, int]:

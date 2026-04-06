@@ -13,6 +13,7 @@ from kubernetes.client.rest import ApiException
 
 from common.settings import SETTINGS
 from .helpers import setup_kubernetes_client
+from .observability import causal_log_fields, causal_signal_payload
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,7 @@ def emit_observability_event(event: str, **fields: Any) -> None:
         json.dumps(
             {
                 "event": event,
+                **causal_log_fields(),
                 **_compact_observability_fields(fields),
             },
             sort_keys=True,
@@ -885,17 +887,65 @@ def record_assistant_session_signal(
 
     current = get_assistant_session(custom_api, namespace, assistant_id) or {}
     signals = deepcopy(session_signals(current))
+    stored_payload = deepcopy(payload) if payload is not None else None
+    if stored_payload is not None:
+        if source and "source" not in stored_payload:
+            stored_payload["source"] = source
+        signal_causal = causal_signal_payload()
+        if signal_causal and "causal" not in stored_payload:
+            stored_payload["causal"] = signal_causal
     if payload is None:
         signals.pop(signal_name, None)
     else:
-        signals[signal_name] = deepcopy(payload)
-    return patch_assistant_session_status(
+        signals[signal_name] = stored_payload
+    updated = patch_assistant_session_status(
         custom_api,
         namespace,
         assistant_id,
         signals=signals,
         source=source,
     )
+    signal_binding_id = None
+    signal_state = None
+    signal_observed_at = None
+    signal_vm_name = None
+    signal_vm_hostname = None
+    signal_caller = None
+    if stored_payload is not None:
+        signal_binding_id = stored_payload.get("bindingId")
+        signal_state = stored_payload.get("state")
+        signal_observed_at = stored_payload.get("observedAt")
+        signal_vm_name = (
+            str(((stored_payload.get("vmRef") or {}).get("name")) or "")
+            or str(stored_payload.get("vmName") or "")
+            or None
+        )
+        signal_vm_hostname = (
+            str(((stored_payload.get("vmRef") or {}).get("hostname")) or "")
+            or str(stored_payload.get("hostname") or "")
+            or None
+        )
+        signal_caller = (
+            str(((stored_payload.get("causal") or {}).get("caller")) or "") or None
+        )
+    emit_observability_event(
+        (
+            "assistantsession.signal_persisted"
+            if stored_payload is not None
+            else "assistantsession.signal_cleared"
+        ),
+        assistant_id=assistant_id,
+        session_name=assistant_session_name(assistant_id),
+        signal_name=signal_name,
+        signal_source=source,
+        signal_binding_id=signal_binding_id,
+        signal_state=signal_state,
+        signal_observed_at=signal_observed_at,
+        signal_vm_name=signal_vm_name,
+        signal_vm_hostname=signal_vm_hostname,
+        signal_caller=signal_caller,
+    )
+    return updated
 
 
 def get_phase(session: dict[str, Any] | None) -> str:

@@ -1,6 +1,7 @@
 import base64
 from copy import deepcopy
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from communication.infra.assistant_sessions import (
     session_signal,
     vm_refs_match,
 )
+from communication.infra.observability import bind_causal_context, build_causal_context
 from kubernetes.client.rest import ApiException
 
 
@@ -352,6 +354,84 @@ def test_record_assistant_session_signal_merges_into_status(monkeypatch):
 
     assert session_signal(updated, "vmAssignment")["state"] == "assigned"
     assert session_signal(updated, "desktopReady")["hostname"].startswith("unity-pool")
+
+
+def test_emit_observability_event_includes_bound_causal_context(caplog):
+    with caplog.at_level(logging.INFO, logger=assistant_sessions_module.logger.name):
+        with bind_causal_context(
+            build_causal_context(
+                caller="tests.assistant_sessions",
+                reason="unit_test",
+            ),
+        ):
+            assistant_sessions_module.emit_observability_event(
+                "tests.observability",
+                assistant_id="1207",
+            )
+
+    event_payload = json.loads(caplog.records[-1].message.removeprefix("OBS_EVENT "))
+    assert event_payload["event"] == "tests.observability"
+    assert event_payload["assistant_id"] == "1207"
+    assert event_payload["caller"] == "tests.assistant_sessions"
+    assert event_payload["root_caller"] == "tests.assistant_sessions"
+    assert event_payload["reason"] == "unit_test"
+    assert event_payload["operation_id"]
+
+
+def test_record_assistant_session_signal_persists_source_and_causal_context(
+    monkeypatch,
+):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "status": {
+            "phase": "PendingGuest",
+            "binding": build_binding(binding_id="binding-1"),
+            "signals": {},
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    with bind_causal_context(
+        build_causal_context(
+            caller="tests.assistant_sessions",
+            reason="unit_test",
+        ),
+    ):
+        updated = record_assistant_session_signal(
+            FakeCustomApi(),
+            "preview",
+            "1207",
+            signal_name="desktopReady",
+            payload=build_binding_signal(
+                binding_id="binding-1",
+                state="ready",
+                hostname="unity-pool-ubuntu-10-preview.vm.unify.ai",
+            ),
+            source="test",
+        )
+
+    signal = session_signal(updated, "desktopReady")
+    assert signal["source"] == "test"
+    assert signal["causal"]["caller"] == "tests.assistant_sessions"
+    assert signal["causal"]["rootCaller"] == "tests.assistant_sessions"
+    assert signal["causal"]["reason"] == "unit_test"
+    assert signal["causal"]["operationId"]
 
 
 def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch):

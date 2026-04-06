@@ -14,9 +14,10 @@ import json
 import logging
 import random
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Dict, Any, Tuple
+from typing import Callable, Optional, Dict, Any, Tuple
 
 import requests
 from google.cloud import compute_v1
@@ -27,6 +28,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from common.settings import SETTINGS
+from .observability import causal_log_fields
 
 
 from .vm_config import (
@@ -111,12 +113,52 @@ def _log_vm_pool_event(event: str, **fields: Any) -> None:
         json.dumps(
             {
                 "event": f"vm_pool.{event}",
+                **causal_log_fields(),
                 **_compact_vm_log_fields(fields),
             },
             sort_keys=True,
             default=str,
         ),
     )
+
+
+def _run_vm_pool_stage(
+    *,
+    operation: str,
+    stage: str,
+    fn: Callable[[], Any],
+    **fields: Any,
+) -> Any:
+    """Emit stage-scoped observability for long-running VM pool operations."""
+
+    started_at = time.monotonic()
+    _log_vm_pool_event(
+        f"{operation}_stage",
+        stage=stage,
+        stage_state="started",
+        **fields,
+    )
+    try:
+        result = fn()
+    except Exception as exc:
+        _log_vm_pool_event(
+            f"{operation}_stage",
+            stage=stage,
+            stage_state="failed",
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+            error_type=type(exc).__name__,
+            error=str(exc),
+            **fields,
+        )
+        raise
+    _log_vm_pool_event(
+        f"{operation}_stage",
+        stage=stage,
+        stage_state="completed",
+        duration_ms=int((time.monotonic() - started_at) * 1000),
+        **fields,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1365,6 +1407,7 @@ def _claim_idle_vm_inner(
                 _log_vm_pool_event(
                     "claim",
                     assistant_id=assistant_id,
+                    binding_id=binding_id,
                     vm_name=candidate_name,
                     vm_type=vm_type,
                     hostname=hostname,
@@ -1435,7 +1478,12 @@ def create_assistant_disk(assistant_id: str) -> str:
     return result.self_link
 
 
-def attach_assistant_disk(vm_name: str, assistant_id: str) -> str:
+def attach_assistant_disk(
+    vm_name: str,
+    assistant_id: str,
+    *,
+    binding_id: str | None = None,
+) -> str:
     """Attach an assistant's persistent disk to a pool VM.
 
     Returns the device name used for mounting.
@@ -1467,6 +1515,7 @@ def attach_assistant_disk(vm_name: str, assistant_id: str) -> str:
     _log_vm_pool_event(
         "attach_disk",
         assistant_id=assistant_id,
+        binding_id=binding_id,
         vm_name=vm_name,
         disk_name=disk_name,
         device_name=device_name,
@@ -1746,6 +1795,10 @@ def assign_pool_vm(
     _, _, _, coord_api = setup_kubernetes_client()
     holder_id = f"vm-assign-{uuid.uuid4().hex[:8]}"
     namespace = SETTINGS.default_namespace
+    started_at = time.monotonic()
+    vm_name: str | None = None
+    hostname: str | None = None
+    current_stage = "acquire_assignment_lease"
 
     acquired = acquire_assignment_lease(
         coord_api,
@@ -1759,26 +1812,111 @@ def assign_pool_vm(
             f"Another VM assignment is already in progress for binding {binding_id}",
         )
 
+    _log_vm_pool_event(
+        "assign_started",
+        assistant_id=assistant_id,
+        binding_id=binding_id,
+        vm_type=vm_type,
+        vm_number=vm_number,
+        lease_holder_id=holder_id,
+    )
+
     try:
-        _ensure_disk_ready_for_binding(assistant_id, binding_id)
-        claimed = claim_idle_vm(
-            assistant_id,
-            binding_id,
-            vm_type,
+        current_stage = "ensure_disk_ready"
+        _run_vm_pool_stage(
+            operation="assign",
+            stage=current_stage,
+            fn=lambda: _ensure_disk_ready_for_binding(assistant_id, binding_id),
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_type=vm_type,
+        )
+        current_stage = "claim_idle_vm"
+        claimed = _run_vm_pool_stage(
+            operation="assign",
+            stage=current_stage,
+            fn=lambda: claim_idle_vm(
+                assistant_id,
+                binding_id,
+                vm_type,
+                vm_number=vm_number,
+            ),
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_type=vm_type,
             vm_number=vm_number,
         )
         vm_name = claimed["vm_name"]
-        create_assistant_disk(assistant_id)
-        device_name = attach_assistant_disk(vm_name, assistant_id)
-        existing_key = _fetch_existing_ssh_key(assistant_id)
+        hostname = claimed["hostname"]
+        current_stage = "create_assistant_disk"
+        _run_vm_pool_stage(
+            operation="assign",
+            stage=current_stage,
+            fn=lambda: create_assistant_disk(assistant_id),
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=vm_name,
+            vm_type=vm_type,
+        )
+        current_stage = "attach_assistant_disk"
+        device_name = _run_vm_pool_stage(
+            operation="assign",
+            stage=current_stage,
+            fn=lambda: attach_assistant_disk(
+                vm_name,
+                assistant_id,
+                binding_id=binding_id,
+            ),
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=vm_name,
+            vm_type=vm_type,
+        )
+        current_stage = "load_ssh_key"
+        existing_key = _run_vm_pool_stage(
+            operation="assign",
+            stage=current_stage,
+            fn=lambda: _fetch_existing_ssh_key(assistant_id),
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=vm_name,
+            vm_type=vm_type,
+        )
         if existing_key:
             private_key = existing_key
             public_key = _derive_public_key(existing_key)
         else:
-            private_key, public_key = generate_ssh_keypair()
-            store_ssh_private_key(assistant_id, private_key)
+            current_stage = "generate_ssh_keypair"
+            private_key, public_key = _run_vm_pool_stage(
+                operation="assign",
+                stage=current_stage,
+                fn=generate_ssh_keypair,
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                vm_name=vm_name,
+                vm_type=vm_type,
+            )
+            current_stage = "store_ssh_private_key"
+            _run_vm_pool_stage(
+                operation="assign",
+                stage=current_stage,
+                fn=lambda: store_ssh_private_key(assistant_id, private_key),
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                vm_name=vm_name,
+                vm_type=vm_type,
+            )
 
-        github_token = get_secret("DEVBOT_GITHUB_TOKEN") or ""
+        current_stage = "load_github_token"
+        github_token = _run_vm_pool_stage(
+            operation="assign",
+            stage=current_stage,
+            fn=lambda: get_secret("DEVBOT_GITHUB_TOKEN") or "",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=vm_name,
+            vm_type=vm_type,
+        )
         metadata = {
             "unify-key": unify_apikey,
             "vnc-password": unify_apikey,
@@ -1790,12 +1928,21 @@ def assign_pool_vm(
         }
         if vm_type == "windows" and MAK_KEY:
             metadata["office-mak-key"] = MAK_KEY
-        _update_instance_metadata(
-            vm_name,
-            metadata,
-            source="assign_pool_vm.assignment",
+        current_stage = "update_instance_metadata"
+        _run_vm_pool_stage(
+            operation="assign",
+            stage=current_stage,
+            fn=lambda: _update_instance_metadata(
+                vm_name,
+                metadata,
+                source="assign_pool_vm.assignment",
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+            ),
             assistant_id=assistant_id,
             binding_id=binding_id,
+            vm_name=vm_name,
+            vm_type=vm_type,
         )
 
         logger.info(
@@ -1809,6 +1956,7 @@ def assign_pool_vm(
             vm_type=vm_type,
             hostname=claimed["hostname"],
             disk_device=device_name,
+            duration_ms=int((time.monotonic() - started_at) * 1000),
         )
         return {
             "vm_name": vm_name,
@@ -1821,6 +1969,21 @@ def assign_pool_vm(
             "ssh_username": POOL_SSH_USERNAME,
             "ssh_port": SSH_SYNC_PORT,
         }
+    except Exception as exc:
+        _log_vm_pool_event(
+            "assign_failed",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=vm_name,
+            vm_hostname=hostname,
+            vm_type=vm_type,
+            vm_number=vm_number,
+            failed_stage=current_stage,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
+        raise
     finally:
         release_assignment_lease(coord_api, f"vm-{binding_id}", namespace)
 
@@ -2091,174 +2254,162 @@ def release_pool_vm(
     sanitized = assistant_id.lower().replace("_", "-")
     binding_label = binding_id.lower().replace("_", "-")
     vm = None
+    started_at = time.monotonic()
+    current_stage = "lookup_vm"
 
-    if vm_name:
-        try:
-            candidate = client.get(
+    _log_vm_pool_event(
+        "release_started",
+        assistant_id=assistant_id,
+        binding_id=binding_id,
+        vm_name=vm_name,
+    )
+
+    try:
+        if vm_name:
+            current_stage = "lookup_vm_by_name"
+            try:
+                candidate = client.get(
+                    project=SETTINGS.vm_project_id,
+                    zone=SETTINGS.vm_zone,
+                    instance=vm_name,
+                )
+            except NotFound:
+                _log_vm_pool_event(
+                    "release_skipped",
+                    assistant_id=assistant_id,
+                    vm_name=vm_name,
+                    reason="vm_not_found",
+                )
+                return {
+                    "released": False,
+                    "assistant_id": assistant_id,
+                    "vm_name": vm_name,
+                    "message": "VM not found",
+                }
+
+            candidate_labels = dict(candidate.labels) if candidate.labels else {}
+            candidate_role = candidate_labels.get(POOL_ROLE_LABEL, "")
+            if (
+                candidate_labels.get(ASSISTANT_ID_LABEL) != sanitized
+                or candidate_labels.get(BINDING_ID_LABEL) != binding_label
+                or candidate_role not in ("assigned", POOL_ROLE_RELEASING)
+            ):
+                _log_vm_pool_event(
+                    "release_skipped",
+                    assistant_id=assistant_id,
+                    binding_id=binding_id,
+                    vm_name=vm_name,
+                    current_role=candidate_role or None,
+                    current_assistant_id=candidate_labels.get(ASSISTANT_ID_LABEL)
+                    or None,
+                    current_binding_id=candidate_labels.get(BINDING_ID_LABEL) or None,
+                    reason="vm_not_owned",
+                )
+                return {
+                    "released": False,
+                    "assistant_id": assistant_id,
+                    "binding_id": binding_id,
+                    "vm_name": vm_name,
+                    "message": "VM is not currently owned by assistant",
+                }
+            vm = candidate
+        else:
+            current_stage = "lookup_vm_by_binding"
+            label_filter = f"labels.{BINDING_ID_LABEL}={binding_label}"
+            request = compute_v1.ListInstancesRequest(
                 project=SETTINGS.vm_project_id,
                 zone=SETTINGS.vm_zone,
-                instance=vm_name,
+                filter=label_filter,
             )
-        except NotFound:
-            _log_vm_pool_event(
-                "release_skipped",
-                assistant_id=assistant_id,
-                vm_name=vm_name,
-                reason="vm_not_found",
-            )
-            return {
-                "released": False,
-                "assistant_id": assistant_id,
-                "vm_name": vm_name,
-                "message": "VM not found",
-            }
-
-        candidate_labels = dict(candidate.labels) if candidate.labels else {}
-        candidate_role = candidate_labels.get(POOL_ROLE_LABEL, "")
-        if (
-            candidate_labels.get(ASSISTANT_ID_LABEL) != sanitized
-            or candidate_labels.get(BINDING_ID_LABEL) != binding_label
-            or candidate_role not in ("assigned", POOL_ROLE_RELEASING)
-        ):
-            _log_vm_pool_event(
-                "release_skipped",
-                assistant_id=assistant_id,
-                binding_id=binding_id,
-                vm_name=vm_name,
-                current_role=candidate_role or None,
-                current_assistant_id=candidate_labels.get(ASSISTANT_ID_LABEL) or None,
-                current_binding_id=candidate_labels.get(BINDING_ID_LABEL) or None,
-                reason="vm_not_owned",
-            )
-            return {
-                "released": False,
-                "assistant_id": assistant_id,
-                "binding_id": binding_id,
-                "vm_name": vm_name,
-                "message": "VM is not currently owned by assistant",
-            }
-        vm = candidate
-    else:
-        label_filter = f"labels.{BINDING_ID_LABEL}={binding_label}"
-        request = compute_v1.ListInstancesRequest(
-            project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
-            filter=label_filter,
-        )
-        candidates = [
-            candidate
-            for candidate in client.list(request=request)
-            if (dict(candidate.labels) if candidate.labels else {}).get(POOL_ROLE_LABEL)
-            in ("assigned", POOL_ROLE_RELEASING)
-        ]
-        if not candidates:
-            logger.info(
-                f"No pool VM assigned to assistant {assistant_id} — nothing to release",
-            )
-            _log_vm_pool_event(
-                "release_skipped",
-                assistant_id=assistant_id,
-                binding_id=binding_id,
-                reason="no_assigned_vm",
-            )
-            return {
-                "released": False,
-                "assistant_id": assistant_id,
-                "binding_id": binding_id,
-                "message": "No VM assigned",
-            }
-
-        vm = next(
-            (
+            candidates = [
                 candidate
-                for candidate in candidates
+                for candidate in client.list(request=request)
                 if (dict(candidate.labels) if candidate.labels else {}).get(
                     POOL_ROLE_LABEL,
                 )
-                == "assigned"
-            ),
-            candidates[0],
-        )
+                in ("assigned", POOL_ROLE_RELEASING)
+            ]
+            if not candidates:
+                logger.info(
+                    f"No pool VM assigned to assistant {assistant_id} — nothing to release",
+                )
+                _log_vm_pool_event(
+                    "release_skipped",
+                    assistant_id=assistant_id,
+                    binding_id=binding_id,
+                    reason="no_assigned_vm",
+                )
+                return {
+                    "released": False,
+                    "assistant_id": assistant_id,
+                    "binding_id": binding_id,
+                    "message": "No VM assigned",
+                }
 
-    vm_name = vm.name
-    labels = dict(vm.labels) if vm.labels else {}
-    current_role = labels.get(POOL_ROLE_LABEL, "")
-    vm_type = labels.get("vm-type", "ubuntu")
-
-    if not _has_current_pool_contract(vm):
-        _recycle_pool_vm_instance(
-            client,
-            vm,
-            reason="assistant_release_with_stale_contract",
-        )
-        return {
-            "released": True,
-            "assistant_id": assistant_id,
-            "binding_id": binding_id,
-            "vm_name": vm_name,
-            "vm_type": vm_type,
-            "pool_role": "retired",
-            "retired": True,
-            "message": "Retired stale-contract VM",
-        }
-
-    if current_role == POOL_ROLE_RELEASING:
-        resumed = False
-        release_metadata_present = _release_metadata_still_present(vm)
-        _log_vm_pool_event(
-            "release_resume_check",
-            assistant_id=assistant_id,
-            binding_id=binding_id,
-            vm_name=vm_name,
-            release_metadata_present=release_metadata_present,
-        )
-        if release_metadata_present:
-            _update_instance_metadata(
-                vm_name,
-                _release_metadata_updates(clear_assignment=False),
-                source="release_pool_vm.resume",
-                assistant_id=assistant_id,
-                binding_id=binding_id,
+            vm = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if (dict(candidate.labels) if candidate.labels else {}).get(
+                        POOL_ROLE_LABEL,
+                    )
+                    == "assigned"
+                ),
+                candidates[0],
             )
-            resumed = True
+
+        vm_name = vm.name
+        labels = dict(vm.labels) if vm.labels else {}
+        current_role = labels.get(POOL_ROLE_LABEL, "")
+        vm_type = labels.get("vm-type", "ubuntu")
+
+        if not _has_current_pool_contract(vm):
+            current_stage = "retire_stale_contract_vm"
+            _recycle_pool_vm_instance(
+                client,
+                vm,
+                reason="assistant_release_with_stale_contract",
+            )
+            return {
+                "released": True,
+                "assistant_id": assistant_id,
+                "binding_id": binding_id,
+                "vm_name": vm_name,
+                "vm_type": vm_type,
+                "pool_role": "retired",
+                "retired": True,
+                "message": "Retired stale-contract VM",
+            }
+
+        if current_role == POOL_ROLE_RELEASING:
+            resumed = False
+            release_metadata_present = _release_metadata_still_present(vm)
             _log_vm_pool_event(
-                "release_resumed",
+                "release_resume_check",
                 assistant_id=assistant_id,
                 binding_id=binding_id,
                 vm_name=vm_name,
+                release_metadata_present=release_metadata_present,
             )
-        logger.info("Release already in progress for pool VM %s", vm_name)
-        return {
-            "released": resumed,
-            "assistant_id": assistant_id,
-            "binding_id": binding_id,
-            "vm_name": vm_name,
-            "vm_type": vm_type,
-            "pool_role": POOL_ROLE_RELEASING,
-            "message": "Release already in progress",
-        }
-
-    updated = _set_pool_labels(
-        client,
-        vm_name,
-        {POOL_ROLE_LABEL: POOL_ROLE_RELEASING},
-        expected_role="assigned",
-    )
-    if not updated:
-        refreshed = client.get(
-            project=SETTINGS.vm_project_id,
-            zone=SETTINGS.vm_zone,
-            instance=vm_name,
-        )
-        refreshed_labels = dict(refreshed.labels) if refreshed.labels else {}
-        refreshed_role = refreshed_labels.get(POOL_ROLE_LABEL, "")
-        if (
-            refreshed_role == POOL_ROLE_RELEASING
-            and refreshed_labels.get(ASSISTANT_ID_LABEL) == sanitized
-            and refreshed_labels.get(BINDING_ID_LABEL) == binding_label
-        ):
+            if release_metadata_present:
+                current_stage = "resume_release_metadata"
+                _update_instance_metadata(
+                    vm_name,
+                    _release_metadata_updates(clear_assignment=False),
+                    source="release_pool_vm.resume",
+                    assistant_id=assistant_id,
+                    binding_id=binding_id,
+                )
+                resumed = True
+                _log_vm_pool_event(
+                    "release_resumed",
+                    assistant_id=assistant_id,
+                    binding_id=binding_id,
+                    vm_name=vm_name,
+                )
+            logger.info("Release already in progress for pool VM %s", vm_name)
             return {
-                "released": False,
+                "released": resumed,
                 "assistant_id": assistant_id,
                 "binding_id": binding_id,
                 "vm_name": vm_name,
@@ -2266,153 +2417,221 @@ def release_pool_vm(
                 "pool_role": POOL_ROLE_RELEASING,
                 "message": "Release already in progress",
             }
+
+        current_stage = "mark_releasing"
+        updated = _set_pool_labels(
+            client,
+            vm_name,
+            {POOL_ROLE_LABEL: POOL_ROLE_RELEASING},
+            expected_role="assigned",
+        )
+        if not updated:
+            refreshed = client.get(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                instance=vm_name,
+            )
+            refreshed_labels = dict(refreshed.labels) if refreshed.labels else {}
+            refreshed_role = refreshed_labels.get(POOL_ROLE_LABEL, "")
+            if (
+                refreshed_role == POOL_ROLE_RELEASING
+                and refreshed_labels.get(ASSISTANT_ID_LABEL) == sanitized
+                and refreshed_labels.get(BINDING_ID_LABEL) == binding_label
+            ):
+                return {
+                    "released": False,
+                    "assistant_id": assistant_id,
+                    "binding_id": binding_id,
+                    "vm_name": vm_name,
+                    "vm_type": vm_type,
+                    "pool_role": POOL_ROLE_RELEASING,
+                    "message": "Release already in progress",
+                }
+            return {
+                "released": False,
+                "assistant_id": assistant_id,
+                "binding_id": binding_id,
+                "vm_name": vm_name,
+                "vm_type": vm_type,
+                "message": "VM role changed before release could start",
+            }
+
+        current_stage = "update_release_metadata"
+        _update_instance_metadata(
+            vm_name,
+            _release_metadata_updates(clear_assignment=False),
+            source="release_pool_vm.request",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+        )
+
+        logger.info(
+            "Release requested for pool VM %s from assistant %s",
+            vm_name,
+            assistant_id,
+        )
+        _log_vm_pool_event(
+            "release_requested",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=vm_name,
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
+
         return {
-            "released": False,
+            "released": True,
             "assistant_id": assistant_id,
             "binding_id": binding_id,
             "vm_name": vm_name,
             "vm_type": vm_type,
-            "message": "VM role changed before release could start",
+            "pool_role": POOL_ROLE_RELEASING,
         }
-
-    _update_instance_metadata(
-        vm_name,
-        _release_metadata_updates(clear_assignment=False),
-        source="release_pool_vm.request",
-        assistant_id=assistant_id,
-        binding_id=binding_id,
-    )
-
-    logger.info(
-        "Release requested for pool VM %s from assistant %s",
-        vm_name,
-        assistant_id,
-    )
-    _log_vm_pool_event(
-        "release_requested",
-        assistant_id=assistant_id,
-        binding_id=binding_id,
-        vm_name=vm_name,
-    )
-
-    return {
-        "released": True,
-        "assistant_id": assistant_id,
-        "binding_id": binding_id,
-        "vm_name": vm_name,
-        "vm_type": vm_type,
-        "pool_role": POOL_ROLE_RELEASING,
-    }
+    except Exception as exc:
+        _log_vm_pool_event(
+            "release_failed",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=vm_name,
+            failed_stage=current_stage,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
+        raise
 
 
 def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
     """Finalize release by idling current VMs or retiring stale-contract ones."""
     client = compute_v1.InstancesClient()
-    vm = client.get(
-        project=SETTINGS.vm_project_id,
-        zone=SETTINGS.vm_zone,
-        instance=vm_name,
+    started_at = time.monotonic()
+    current_stage = "load_vm"
+    _log_vm_pool_event(
+        "release_complete_started",
+        vm_name=vm_name,
+        binding_id=binding_id,
     )
-    labels = dict(vm.labels) if vm.labels else {}
-    current_role = labels.get(POOL_ROLE_LABEL, "")
-    assistant_id = labels.get(ASSISTANT_ID_LABEL, "")
-    current_binding_id = labels.get(BINDING_ID_LABEL, "")
-    binding_label = binding_id.lower().replace("_", "-")
-    vm_type = labels.get("vm-type", "ubuntu")
-
-    if vm.status != "RUNNING":
-        return {
-            "vm_name": vm_name,
-            "status": vm.status,
-            "pool_role": current_role,
-            "skipped": True,
-            "reason": "vm_not_running",
-        }
-    if current_role != POOL_ROLE_RELEASING:
-        return {
-            "vm_name": vm_name,
-            "pool_role": current_role,
-            "skipped": True,
-            "reason": "not_releasing",
-        }
-    if current_binding_id != binding_label:
-        return {
-            "vm_name": vm_name,
-            "pool_role": current_role,
-            "binding_id": current_binding_id or None,
-            "skipped": True,
-            "reason": "binding_changed",
-        }
-
-    detached, disk_name = _detach_attached_assistant_disk(vm_name)
-    _update_instance_metadata(
-        vm_name,
-        _release_metadata_updates(clear_assignment=True),
-        source="complete_pool_vm_release.clear_assignment",
-        assistant_id=assistant_id or None,
-        binding_id=current_binding_id or None,
-    )
-
-    if not _has_current_pool_contract(vm):
-        _recycle_pool_vm_instance(
-            client,
-            vm,
-            reason="release_complete_with_stale_contract",
-        )
-        return {
-            "vm_name": vm_name,
-            "vm_type": vm_type,
-            "pool_role": "retired",
-            "assistant_id": assistant_id or None,
-            "binding_id": current_binding_id or None,
-            "disk_name": disk_name,
-            "detached": detached,
-            "retired": True,
-        }
-
-    updated = _set_pool_labels(
-        client,
-        vm_name,
-        {
-            POOL_ROLE_LABEL: "idle",
-            ASSISTANT_ID_LABEL: "",
-            BINDING_ID_LABEL: "",
-        },
-        expected_role=POOL_ROLE_RELEASING,
-    )
-    if not updated:
-        refreshed = client.get(
+    try:
+        vm = client.get(
             project=SETTINGS.vm_project_id,
             zone=SETTINGS.vm_zone,
             instance=vm_name,
         )
+        labels = dict(vm.labels) if vm.labels else {}
+        current_role = labels.get(POOL_ROLE_LABEL, "")
+        assistant_id = labels.get(ASSISTANT_ID_LABEL, "")
+        current_binding_id = labels.get(BINDING_ID_LABEL, "")
+        binding_label = binding_id.lower().replace("_", "-")
+        vm_type = labels.get("vm-type", "ubuntu")
+
+        if vm.status != "RUNNING":
+            return {
+                "vm_name": vm_name,
+                "status": vm.status,
+                "pool_role": current_role,
+                "skipped": True,
+                "reason": "vm_not_running",
+            }
+        if current_role != POOL_ROLE_RELEASING:
+            return {
+                "vm_name": vm_name,
+                "pool_role": current_role,
+                "skipped": True,
+                "reason": "not_releasing",
+            }
+        if current_binding_id != binding_label:
+            return {
+                "vm_name": vm_name,
+                "pool_role": current_role,
+                "binding_id": current_binding_id or None,
+                "skipped": True,
+                "reason": "binding_changed",
+            }
+
+        current_stage = "detach_assistant_disk"
+        detached, disk_name = _detach_attached_assistant_disk(vm_name)
+        current_stage = "clear_assignment_metadata"
+        _update_instance_metadata(
+            vm_name,
+            _release_metadata_updates(clear_assignment=True),
+            source="complete_pool_vm_release.clear_assignment",
+            assistant_id=assistant_id or None,
+            binding_id=current_binding_id or None,
+        )
+
+        if not _has_current_pool_contract(vm):
+            current_stage = "retire_stale_contract_vm"
+            _recycle_pool_vm_instance(
+                client,
+                vm,
+                reason="release_complete_with_stale_contract",
+            )
+            return {
+                "vm_name": vm_name,
+                "vm_type": vm_type,
+                "pool_role": "retired",
+                "assistant_id": assistant_id or None,
+                "binding_id": current_binding_id or None,
+                "disk_name": disk_name,
+                "detached": detached,
+                "retired": True,
+            }
+
+        current_stage = "mark_idle"
+        updated = _set_pool_labels(
+            client,
+            vm_name,
+            {
+                POOL_ROLE_LABEL: "idle",
+                ASSISTANT_ID_LABEL: "",
+                BINDING_ID_LABEL: "",
+            },
+            expected_role=POOL_ROLE_RELEASING,
+        )
+        if not updated:
+            refreshed = client.get(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                instance=vm_name,
+            )
+            return {
+                "vm_name": vm_name,
+                "pool_role": (dict(refreshed.labels) if refreshed.labels else {}).get(
+                    POOL_ROLE_LABEL,
+                    "",
+                ),
+                "skipped": True,
+                "reason": "role_changed",
+            }
+
+        _log_vm_pool_event(
+            "release_complete",
+            assistant_id=assistant_id or None,
+            binding_id=current_binding_id or None,
+            vm_name=vm_name,
+            disk_name=disk_name,
+            detached=detached,
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
         return {
             "vm_name": vm_name,
-            "pool_role": (dict(refreshed.labels) if refreshed.labels else {}).get(
-                POOL_ROLE_LABEL,
-                "",
-            ),
-            "skipped": True,
-            "reason": "role_changed",
+            "vm_type": vm_type,
+            "pool_role": "idle",
+            "assistant_id": assistant_id or None,
+            "binding_id": current_binding_id or None,
+            "disk_name": disk_name,
+            "detached": detached,
         }
-
-    _log_vm_pool_event(
-        "release_complete",
-        assistant_id=assistant_id or None,
-        binding_id=current_binding_id or None,
-        vm_name=vm_name,
-        disk_name=disk_name,
-        detached=detached,
-    )
-    return {
-        "vm_name": vm_name,
-        "vm_type": vm_type,
-        "pool_role": "idle",
-        "assistant_id": assistant_id or None,
-        "binding_id": current_binding_id or None,
-        "disk_name": disk_name,
-        "detached": detached,
-    }
+    except Exception as exc:
+        _log_vm_pool_event(
+            "release_complete_failed",
+            vm_name=vm_name,
+            binding_id=binding_id,
+            failed_stage=current_stage,
+            error_type=type(exc).__name__,
+            error=str(exc),
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
+        raise
 
 
 def _list_pool_state(vm_type: str):

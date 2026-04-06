@@ -15,6 +15,7 @@ from communication.infra.helpers import (
     acquire_assignment_lease,
     release_assignment_lease,
 )
+from communication.infra.observability import bind_causal_context, build_causal_context
 from communication.infra.assistant_sessions import (
     assistant_session_observability_fields,
     BINDING_ID_ANNOTATION,
@@ -2101,7 +2102,13 @@ def configure(settings: kopf.OperatorSettings, **_):
     SETTINGS.assistant_session_plural,
 )
 def on_session_change(body, **_):
-    _update_status_for_session(body)
+    with bind_causal_context(
+        build_causal_context(
+            caller="controller.on_session_change",
+            reason="watch_event",
+        ),
+    ):
+        _update_status_for_session(body)
 
 
 @kopf.timer(
@@ -2111,7 +2118,13 @@ def on_session_change(body, **_):
     interval=RECONCILE_INTERVAL_SECONDS,
 )
 def reconcile_session(body, **_):
-    _update_status_for_session(body)
+    with bind_causal_context(
+        build_causal_context(
+            caller="controller.reconcile_timer",
+            reason="timer",
+        ),
+    ):
+        _update_status_for_session(body)
 
 
 def _session_delete_cleanup_complete(body: dict) -> bool:
@@ -2174,48 +2187,54 @@ def _session_delete_cleanup_complete(body: dict) -> bool:
     SETTINGS.assistant_session_plural,
 )
 def delete_session(body, **_):
-    assert _core_api is not None
-    latest_body = _refresh_session_snapshot(body)
-    if latest_body is None:
-        return
+    with bind_causal_context(
+        build_causal_context(
+            caller="controller.session_delete",
+            reason="delete_handler",
+        ),
+    ):
+        assert _core_api is not None
+        latest_body = _refresh_session_snapshot(body)
+        if latest_body is None:
+            return
 
-    session_name = str(latest_body.get("metadata", {}).get("name", "") or "")
-    spec = latest_body.get("spec", {})
-    assistant_id = str(spec.get("assistantId", "") or "")
-    secret_name = str(spec.get("startupSecretRef", "") or "")
+        session_name = str(latest_body.get("metadata", {}).get("name", "") or "")
+        spec = latest_body.get("spec", {})
+        assistant_id = str(spec.get("assistantId", "") or "")
+        secret_name = str(spec.get("startupSecretRef", "") or "")
 
-    if assistant_id:
-        _update_status_for_session(latest_body)
-        latest_body = _refresh_session_snapshot(latest_body)
-        if latest_body is not None and not _session_delete_cleanup_complete(
-            latest_body,
-        ):
-            raise kopf.TemporaryError(
-                "AssistantSession runtime cleanup still in progress",
-                delay=RECONCILE_INTERVAL_SECONDS,
-            )
-
-    if secret_name:
-        try:
-            _core_api.delete_namespaced_secret(
-                name=secret_name,
-                namespace=WATCH_NAMESPACE,
-            )
-        except ApiException as e:
-            if e.status != 404:
-                logger.exception(
-                    "Failed deleting bootstrap secret for deleted AssistantSession",
-                )
+        if assistant_id:
+            _update_status_for_session(latest_body)
+            latest_body = _refresh_session_snapshot(latest_body)
+            if latest_body is not None and not _session_delete_cleanup_complete(
+                latest_body,
+            ):
                 raise kopf.TemporaryError(
-                    "AssistantSession bootstrap secret cleanup failed",
+                    "AssistantSession runtime cleanup still in progress",
                     delay=RECONCILE_INTERVAL_SECONDS,
-                ) from e
+                )
 
-    emit_observability_event(
-        "controller.session_delete.finalized",
-        assistant_id=assistant_id or None,
-        session_name=session_name or None,
-    )
+        if secret_name:
+            try:
+                _core_api.delete_namespaced_secret(
+                    name=secret_name,
+                    namespace=WATCH_NAMESPACE,
+                )
+            except ApiException as e:
+                if e.status != 404:
+                    logger.exception(
+                        "Failed deleting bootstrap secret for deleted AssistantSession",
+                    )
+                    raise kopf.TemporaryError(
+                        "AssistantSession bootstrap secret cleanup failed",
+                        delay=RECONCILE_INTERVAL_SECONDS,
+                    ) from e
+
+        emit_observability_event(
+            "controller.session_delete.finalized",
+            assistant_id=assistant_id or None,
+            session_name=session_name or None,
+        )
 
 
 @kopf.on.probe(id="health")
