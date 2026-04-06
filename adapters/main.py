@@ -608,6 +608,87 @@ async def twilio_whatsapp_webhook(request: Request):
     pool_number = to_number.replace("whatsapp:", "").strip()
     sender = from_number.replace("whatsapp:", "").strip()
 
+    # Handle VOICE_CALL_REQUEST permission responses before normal routing.
+    # When a user responds to a call permission request, Twilio sends a
+    # webhook with Body="VOICE_CALL_REQUEST" and ButtonPayload=ACCEPTED|REJECTED.
+    if body == "VOICE_CALL_REQUEST":
+        button_payload = form_data.get("ButtonPayload", "")
+        logger.info(
+            f"WhatsApp call permission response from {_redact_phone(sender)}: "
+            f"{button_payload}",
+        )
+        status = "accepted" if button_payload == "ACCEPTED" else "rejected"
+
+        # Forward permission state to Orchestra
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{SETTINGS.orchestra_url}/admin/whatsapp/call-permission",
+                    headers={
+                        "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                    },
+                    json={
+                        "pool_number": pool_number,
+                        "contact_number": sender,
+                        "status": status,
+                    },
+                    timeout=10.0,
+                )
+        except Exception:
+            logger.exception("Failed to forward call permission to Orchestra")
+
+        # Resolve assistant so we can publish to the right Pub/Sub topic
+        resolve_data = await asyncio.to_thread(
+            resolve_whatsapp_route,
+            pool_number,
+            sender,
+        )
+        if resolve_data and "assistant_id" in resolve_data:
+            resolved_id = str(resolve_data["assistant_id"])
+            context = await asyncio.to_thread(
+                build_webhook_context,
+                "whatsapp",
+                to_number,
+                from_number,
+                assistant_id=resolved_id,
+                validate_contact=False,
+            )
+            assistant_id = context["assistant"]["assistant_id"]
+            contacts = context["contacts"]
+
+            pubsub_client = get_pubsub_client()
+            topic_name = SETTINGS.assistant_topic(assistant_id)
+            topic_path = pubsub_client.topic_path(
+                SETTINGS.gcp_project_id,
+                topic_name,
+            )
+            try:
+                pubsub_client.publish(
+                    topic_path,
+                    json.dumps(
+                        {
+                            "thread": "whatsapp",
+                            "publish_timestamp": time.time(),
+                            "event": {
+                                "contacts": contacts,
+                                "to_number": to_number,
+                                "from_number": from_number,
+                                "body": body,
+                                "role": resolve_data.get("role", "contact"),
+                                "type": "call_permission_response",
+                                "payload": button_payload,
+                            },
+                        },
+                    ).encode("utf-8"),
+                    thread="inbound",
+                )
+                logger.info("Call permission response published to Pub/Sub")
+            except Exception as e:
+                logger.error(f"Error publishing permission response: {e}")
+
+        resp_user = MessagingResponse()
+        return Response(content=str(resp_user), media_type="text/xml")
+
     resolve_data = await asyncio.to_thread(resolve_whatsapp_route, pool_number, sender)
 
     action = resolve_data.get("action") if resolve_data else None
@@ -816,6 +897,93 @@ async def twilio_whatsapp_call_webhook(request: Request):
 
     logger.info("Returning TwiML response for WhatsApp call")
     return Response(content=str(resp_user), media_type="text/xml")
+
+
+@app.post(
+    "/twilio/whatsapp-call-status",
+    dependencies=[Depends(validate_twilio_wa_signature)],
+)
+async def twilio_whatsapp_call_status_webhook(request: Request):
+    """Status callback for outbound WhatsApp Business Calling.
+
+    Publishes whatsapp_call_answered / whatsapp_call_not_answered events
+    to Pub/Sub so Unity can track the call lifecycle.
+    """
+    form_data = await request.form()
+    call_status = form_data.get("CallStatus")
+    from_raw = form_data.get("From", "") or ""
+    to_raw = form_data.get("To", "") or ""
+    pool_number = from_raw.replace("whatsapp:", "").strip()
+    user_number = to_raw.replace("whatsapp:", "").strip()
+    logger.info(
+        f"twilio_whatsapp_call_status_webhook: {call_status} "
+        f"from {_redact_phone(pool_number)} to {_redact_phone(user_number)}",
+    )
+
+    if call_status not in (
+        "in-progress",
+        "no-answer",
+        "busy",
+        "canceled",
+        "failed",
+    ):
+        return Response(status_code=200)
+
+    resolve_data = await asyncio.to_thread(
+        resolve_whatsapp_route,
+        pool_number,
+        user_number,
+    )
+    if not resolve_data or "assistant_id" not in resolve_data:
+        logger.warning("Could not resolve assistant for WhatsApp call status")
+        return Response(status_code=200)
+
+    resolved_id = str(resolve_data["assistant_id"])
+    context = await asyncio.to_thread(
+        build_webhook_context,
+        "whatsapp_call",
+        from_raw,
+        to_raw,
+        assistant_id=resolved_id,
+        validate_contact=False,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
+
+    thread = (
+        "whatsapp_call_answered"
+        if call_status == "in-progress"
+        else "whatsapp_call_not_answered"
+    )
+
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    logger.info(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
+    try:
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": thread,
+                    "publish_timestamp": time.time(),
+                    "event": {
+                        "contacts": contacts,
+                        "assistant_id": assistant_id,
+                        "user_number": user_number,
+                        "assistant_number": pool_number,
+                        "call_status": call_status,
+                        "timestamp": int(time.time() * 1000),
+                    },
+                },
+            ).encode("utf-8"),
+            thread="inbound",
+        )
+        logger.info(f"{thread} published to Pub/Sub successfully")
+    except Exception as e:
+        logger.error(f"Error publishing WhatsApp call status to Pub/Sub: {e}")
+
+    return Response(status_code=200)
 
 
 # =============================================================================
@@ -2931,6 +3099,7 @@ if __name__ == "__main__":
     logger.info("    - POST /twilio/sms")
     logger.info("    - POST /twilio/whatsapp")
     logger.info("    - POST /twilio/whatsapp-call")
+    logger.info("    - POST /twilio/whatsapp-call-status")
     logger.info("  Unify:")
     logger.info("    - POST /unify/message")
     logger.info("    - POST /unify/meet")

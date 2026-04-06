@@ -118,6 +118,7 @@ async def _forward_notification_status(
 
 GREETING_TEMPLATE_SID = "HX002f6aeb3b4e5a79b693fa7190196612"
 NUMBER_CHANGE_TEMPLATE_SID = "HXd9c362371aefe97f10526f1c0974f7a2"
+VOICE_CALL_TEMPLATE_SID = "HX885d46e6ccb82e4313ef1a42181c142d"
 
 
 @auth_router.post("/notify")
@@ -197,6 +198,104 @@ async def send(request: Request):
         method = "template"
 
     return {"success": True, "method": method}
+
+
+async def _check_call_permission(pool_number: str, contact_number: str) -> bool:
+    """Check with Orchestra whether outbound WhatsApp calling is permitted."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{SETTINGS.orchestra_url}/admin/whatsapp/call-permission",
+                params={
+                    "pool_number": pool_number,
+                    "contact_number": contact_number,
+                },
+                headers=_admin_headers(),
+                timeout=10.0,
+            )
+        if resp.status_code >= 400:
+            return False
+        return resp.json().get("permitted", False)
+    except Exception:
+        logger.exception("Error checking WhatsApp call permission")
+        return False
+
+
+@auth_router.post("/send-call")
+async def send_call(request: Request):
+    """Place an outbound WhatsApp call or fall back to a call invite template.
+
+    If the contact has granted call permission, places a direct outbound call
+    via a Twilio Conference bridged to LiveKit.  Otherwise sends a VOICE_CALL
+    template so the user can tap "Call now" to initiate an inbound call.
+    """
+    from datetime import datetime
+    from common.livekit import ensure_phone_dispatch_rule, make_sip_uri
+
+    data = await request.json()
+    to = data["to"]
+    assistant_id = data["assistant_id"]
+    agent_name = data.get("agent_name", "")
+    room_name = data["room_name"]
+
+    route = await _resolve_route(assistant_id, to)
+    pool_number = route["pool_number"]
+
+    permitted = await _check_call_permission(pool_number, to)
+    wa_client = get_twilio_wa_client()
+
+    if permitted:
+        sip_uri = make_sip_uri(pool_number)
+        await ensure_phone_dispatch_rule(pool_number, room_name)
+
+        date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+        conference_name = f"Unity_WA_{pool_number[1:]}_{date_time}"
+
+        from twilio.twiml.voice_response import VoiceResponse
+
+        def _conference_twiml(conf_name: str) -> str:
+            resp = VoiceResponse()
+            dial = resp.dial()
+            dial.conference(
+                conf_name,
+                startConferenceOnEnter=True,
+                endConferenceOnExit=True,
+                muted=False,
+                wait_url="https://auburn-eagle-6359.twil.io/assets/ring-tone-68676.mp3",
+            )
+            return str(resp)
+
+        user_call = wa_client.calls.create(
+            to=f"whatsapp:{to}",
+            from_=f"whatsapp:{pool_number}",
+            twiml=_conference_twiml(conference_name),
+            status_callback=SETTINGS.adapters_url + "/twilio/whatsapp-call-status",
+            status_callback_event="initiated ringing answered completed",
+        )
+        wa_client.calls.create(
+            to=sip_uri,
+            from_=pool_number,
+            twiml=_conference_twiml(conference_name),
+        )
+        logger.info(
+            f"Outbound WhatsApp call placed to {to}. "
+            f"Call SID: {user_call.sid}, Conference: {conference_name}",
+        )
+        return {
+            "success": True,
+            "method": "direct",
+            "conference_name": conference_name,
+        }
+
+    wa_client.messages.create(
+        content_sid=VOICE_CALL_TEMPLATE_SID,
+        to=f"whatsapp:{to}",
+        from_=f"whatsapp:{pool_number}",
+        content_variables=json.dumps({"1": agent_name}),
+        status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
+    )
+    logger.info(f"WhatsApp call invite template sent to {to} (no call permission)")
+    return {"success": True, "method": "invite"}
 
 
 WHATSAPP_VOICE_APP_SID = (
