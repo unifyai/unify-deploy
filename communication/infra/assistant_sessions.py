@@ -32,6 +32,12 @@ ACTIVE_PHASES = {
     "PendingGuest",
     "Active",
 }
+SIGNAL_JOB_BINDING = "jobBinding"
+SIGNAL_VM_ASSIGNMENT = "vmAssignment"
+SIGNAL_DESKTOP_READY = "desktopReady"
+SIGNAL_VM_GUEST_HEALTH = "vmGuestHealth"
+SIGNAL_VM_RELEASE_REQUEST = "vmReleaseRequest"
+SIGNAL_VM_RELEASE_COMPLETE = "vmReleaseComplete"
 _STATUS_UNSET = object()
 _MAX_CAS_RETRIES = 3
 _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS = frozenset({"requestedAt"})
@@ -125,6 +131,44 @@ def binding_id(binding: dict[str, Any] | None) -> str:
     """Return the immutable binding identifier."""
 
     return str((binding or {}).get("id", "") or "")
+
+
+def session_signals(session: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the latest binding-scoped signals recorded for a session."""
+
+    status = (session or {}).get("status", {})
+    signals = status.get("signals")
+    return signals if isinstance(signals, dict) else {}
+
+
+def session_signal(
+    session: dict[str, Any] | None,
+    signal_name: str,
+) -> dict[str, Any]:
+    """Return one binding-scoped signal payload from ``status.signals``."""
+
+    value = session_signals(session).get(signal_name)
+    return value if isinstance(value, dict) else {}
+
+
+def build_binding_signal(
+    *,
+    binding_id: str,
+    observed_at: str | None = None,
+    state: str | None = None,
+    message: str | None = None,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Build a canonical payload for a binding-scoped runtime signal."""
+
+    payload = {
+        "bindingId": binding_id,
+        "observedAt": observed_at or datetime.now(timezone.utc).isoformat(),
+        "state": state,
+        "message": message,
+        **fields,
+    }
+    return {key: value for key, value in payload.items() if value not in (None, "")}
 
 
 def build_binding(
@@ -701,6 +745,7 @@ def patch_assistant_session_status(
     bootstrap_retries: int | None | object = _STATUS_UNSET,
     vm_retries: int | None | object = _STATUS_UNSET,
     desktop_probe_failures: int | None | object = _STATUS_UNSET,
+    signals: dict[str, Any] | None | object = _STATUS_UNSET,
 ) -> dict[str, Any]:
     """Replace the persisted AssistantSession status with the next canonical state.
 
@@ -735,8 +780,18 @@ def patch_assistant_session_status(
             next_status["vmRetries"] = vm_retries
         if desktop_probe_failures is not _STATUS_UNSET:
             next_status["desktopProbeFailures"] = desktop_probe_failures
+        if signals is not _STATUS_UNSET:
+            next_status["signals"] = deepcopy(signals)
 
         next_binding = session_binding({"status": next_status})
+        current_binding_id = binding_id(current_binding)
+        next_binding_id = binding_id(next_binding)
+        if (
+            binding is not _STATUS_UNSET
+            and current_binding_id != next_binding_id
+            and signals is _STATUS_UNSET
+        ):
+            next_status["signals"] = {}
         release_field_regressions = (
             _binding_release_field_regressions(current_binding, next_binding)
             if binding is not _STATUS_UNSET
@@ -815,6 +870,32 @@ def patch_assistant_session_status(
         return result
 
     return current
+
+
+def record_assistant_session_signal(
+    custom_api: k8s_client.CustomObjectsApi,
+    namespace: str,
+    assistant_id: str,
+    *,
+    signal_name: str,
+    payload: dict[str, Any] | None,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """Persist or clear a binding-scoped signal without changing controller state."""
+
+    current = get_assistant_session(custom_api, namespace, assistant_id) or {}
+    signals = deepcopy(session_signals(current))
+    if payload is None:
+        signals.pop(signal_name, None)
+    else:
+        signals[signal_name] = deepcopy(payload)
+    return patch_assistant_session_status(
+        custom_api,
+        namespace,
+        assistant_id,
+        signals=signals,
+        source=source,
+    )
 
 
 def get_phase(session: dict[str, Any] | None) -> str:

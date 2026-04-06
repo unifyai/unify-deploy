@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -26,6 +26,15 @@ def client():
             },
         },
     }
+    return TestClient(app)
+
+
+@pytest.fixture
+def tunnel_client():
+    from communication.infra.views import tunnel_router
+
+    app = FastAPI()
+    app.include_router(tunnel_router, prefix="/infra")
     return TestClient(app)
 
 
@@ -62,7 +71,7 @@ def test_vm_mark_idle_uses_role_cas_and_skips_if_role_changed(client):
     )
 
 
-def test_vm_release_complete_triggers_trim_after_idle_transition(client):
+def test_vm_release_complete_records_signal_for_active_binding(client):
     vm = _make_vm(pool_role="releasing")
     vm.labels.update(
         {
@@ -94,8 +103,8 @@ def test_vm_release_complete_triggers_trim_after_idle_transition(client):
             return_value=session,
         ),
         patch(
-            "communication.infra.views.patch_assistant_session_status",
-        ) as patch_status,
+            "communication.infra.views.record_assistant_session_signal",
+        ) as record_signal,
     ):
         mock_client_cls.return_value.get.return_value = vm
         resp = client.post(
@@ -110,16 +119,16 @@ def test_vm_release_complete_triggers_trim_after_idle_transition(client):
         "binding_id": "binding-123",
         "accepted": True,
     }
-    updated_binding = patch_status.call_args.kwargs["binding"]
-    assert updated_binding["id"] == "binding-123"
-    assert updated_binding["jobRef"]["name"] == "unity-job-1"
-    assert updated_binding["vmRef"]["name"] == "unity-pool-ubuntu-1-preview"
-    assert updated_binding["releaseRequestedAt"] == "2026-04-05T15:39:57Z"
-    assert updated_binding["releaseCompletedAt"]
-    assert patch_status.call_args.kwargs["source"] == "views.release_complete"
+    assert record_signal.call_args.kwargs["signal_name"] == "vmReleaseComplete"
+    assert record_signal.call_args.kwargs["payload"]["bindingId"] == "binding-123"
+    assert (
+        record_signal.call_args.kwargs["payload"]["vmName"]
+        == "unity-pool-ubuntu-1-preview"
+    )
+    assert record_signal.call_args.kwargs["source"] == "views.release_complete"
 
 
-def test_vm_release_complete_triggers_replenish_after_retirement(client):
+def test_vm_release_complete_skips_signal_when_session_is_missing(client):
     vm = _make_vm(pool_role="releasing")
     vm.labels.update(
         {
@@ -141,8 +150,8 @@ def test_vm_release_complete_triggers_replenish_after_retirement(client):
             return_value=None,
         ),
         patch(
-            "communication.infra.views.patch_assistant_session_status",
-        ) as patch_status,
+            "communication.infra.views.record_assistant_session_signal",
+        ) as record_signal,
     ):
         mock_client_cls.return_value.get.return_value = vm
         resp = client.post(
@@ -158,4 +167,102 @@ def test_vm_release_complete_triggers_replenish_after_retirement(client):
         "skipped": True,
         "reason": "session_missing",
     }
-    patch_status.assert_not_called()
+    record_signal.assert_not_called()
+
+
+def test_vm_ready_records_desktop_ready_signal_for_active_binding(tunnel_client):
+    session = {
+        "metadata": {"name": "assistant-session-1207"},
+        "spec": {
+            "assistantId": "1207",
+            "activationId": "act-1",
+            "startupSecretRef": "assistant-session-bootstrap-1207",
+        },
+        "status": {
+            "observedActivationId": "act-1",
+            "conditions": [{"type": "ContainerReady", "status": "True"}],
+            "binding": {
+                "id": "binding-123",
+                "vmRef": {
+                    "name": "unity-pool-ubuntu-1-preview",
+                    "hostname": "vm-1.vm.unify.ai",
+                },
+            },
+        },
+    }
+
+    with (
+        patch(
+            "communication.infra.views.extract_api_key",
+            return_value="user-key",
+        ),
+        patch(
+            "communication.infra.views.authenticate_user_api_key",
+            new=AsyncMock(),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=object(),
+        ),
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new=AsyncMock(return_value=(None, object(), None, None)),
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=session,
+        ),
+        patch(
+            "communication.infra.views.read_bootstrap_secret",
+            return_value={"api_key": "user-key"},
+        ),
+        patch(
+            "communication.infra.views.verify_vm_assignment",
+            return_value={
+                "name": "unity-pool-ubuntu-1-preview",
+                "hostname": "vm-1.vm.unify.ai",
+            },
+        ),
+        patch(
+            "communication.infra.views.probe_vm_agent_service_authenticated",
+            return_value=True,
+        ),
+        patch(
+            "communication.infra.views._publish_desktop_ready",
+            new=AsyncMock(return_value="message-123"),
+        ) as publish_desktop_ready,
+        patch(
+            "communication.infra.views.record_assistant_session_signal",
+        ) as record_signal,
+    ):
+        resp = tunnel_client.post(
+            "/infra/vm/ready",
+            json={
+                "assistant_id": "1207",
+                "binding_id": "binding-123",
+                "hostname": "vm-1.vm.unify.ai",
+                "vm_type": "ubuntu",
+            },
+            headers={"Authorization": "Bearer user-key"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "success": True,
+        "message_id": "message-123",
+        "assistant_id": "1207",
+        "mode": "session",
+    }
+    publish_desktop_ready.assert_awaited_once_with(
+        "1207",
+        "vm-1.vm.unify.ai",
+        "ubuntu",
+        binding_id="binding-123",
+    )
+    assert record_signal.call_args.kwargs["signal_name"] == "desktopReady"
+    assert record_signal.call_args.kwargs["payload"]["bindingId"] == "binding-123"
+    assert (
+        record_signal.call_args.kwargs["payload"]["desktopUrl"]
+        == "https://vm-1.vm.unify.ai"
+    )
+    assert record_signal.call_args.kwargs["payload"]["messageId"] == "message-123"

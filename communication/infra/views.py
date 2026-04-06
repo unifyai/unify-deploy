@@ -24,6 +24,8 @@ from .helpers import (
 from .assistant_sessions import (
     ACTIVE_PHASES,
     DESIRED_STATE_STOPPED,
+    SIGNAL_DESKTOP_READY,
+    SIGNAL_VM_RELEASE_COMPLETE,
     assistant_session_desired_state,
     assistant_session_observability_fields,
     assistant_session_name,
@@ -32,8 +34,8 @@ from .assistant_sessions import (
     binding_job_ref,
     binding_pod_ref,
     binding_vm_ref,
-    build_binding,
     build_assistant_session_spec,
+    build_binding_signal,
     delete_assistant_session,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
@@ -41,8 +43,8 @@ from .assistant_sessions import (
     get_assistant_session,
     get_custom_objects_api,
     patch_assistant_session_spec,
-    patch_assistant_session_status,
     read_bootstrap_secret,
+    record_assistant_session_signal,
     session_binding,
     vm_refs_match,
 )
@@ -1612,28 +1614,19 @@ async def vm_ready_endpoint(
         vm_type,
         binding_id=current_binding_id,
     )
-    updated_binding = build_binding(
-        binding_id=current_binding_id,
-        job_ref=binding_job_ref(fresh_binding) or None,
-        pod_ref=binding_pod_ref(fresh_binding) or None,
-        vm_ref=assigned_vm_ref,
-        desktop_url=f"https://{hostname}",
-        created_at=fresh_binding.get("createdAt"),
-        container_ready_at=fresh_binding.get("containerReadyAt"),
-        vm_assigned_at=fresh_binding.get("vmAssignedAt"),
-        vm_ready_observed_at=datetime.now(timezone.utc).isoformat(),
-        vm_ready_hostname=hostname,
-        vm_ready_message_id=message_id,
-        release_requested_at=fresh_binding.get("releaseRequestedAt"),
-        release_completed_at=fresh_binding.get("releaseCompletedAt"),
-    )
     await asyncio.to_thread(
-        patch_assistant_session_status,
+        record_assistant_session_signal,
         custom_api,
         SETTINGS.default_namespace,
         assistant_id,
-        observed_activation_id=activation_id,
-        binding=updated_binding,
+        signal_name=SIGNAL_DESKTOP_READY,
+        payload=build_binding_signal(
+            binding_id=current_binding_id,
+            state="ready",
+            hostname=hostname,
+            desktopUrl=f"https://{hostname}",
+            messageId=message_id,
+        ),
         source="views.vm_ready",
     )
     emit_observability_event(
@@ -2316,21 +2309,6 @@ async def vm_release_complete_endpoint(
         }
 
     next_release_completed_at = datetime.now(timezone.utc).isoformat()
-    updated_binding = build_binding(
-        binding_id=body.binding_id,
-        job_ref=binding_job_ref(binding) or None,
-        pod_ref=binding_pod_ref(binding) or None,
-        vm_ref=binding_vm_ref(binding) or None,
-        desktop_url=binding_desktop_url(binding) or None,
-        created_at=binding.get("createdAt"),
-        container_ready_at=binding.get("containerReadyAt"),
-        vm_assigned_at=binding.get("vmAssignedAt"),
-        vm_ready_observed_at=binding.get("vmReadyObservedAt"),
-        vm_ready_hostname=binding.get("vmReadyHostname"),
-        vm_ready_message_id=binding.get("vmReadyMessageId"),
-        release_requested_at=binding.get("releaseRequestedAt"),
-        release_completed_at=next_release_completed_at,
-    )
     accepted_fields = {
         **session_fields,
         "binding_id": body.binding_id,
@@ -2345,11 +2323,17 @@ async def vm_release_complete_endpoint(
         **accepted_fields,
     )
     updated_session = await asyncio.to_thread(
-        patch_assistant_session_status,
+        record_assistant_session_signal,
         custom_api,
         SETTINGS.default_namespace,
         assistant_id,
-        binding=updated_binding,
+        signal_name=SIGNAL_VM_RELEASE_COMPLETE,
+        payload=build_binding_signal(
+            binding_id=body.binding_id,
+            state="completed",
+            observed_at=next_release_completed_at,
+            vmName=vm_name,
+        ),
         source="views.release_complete",
     )
     persisted_fields = assistant_session_observability_fields(
@@ -2362,8 +2346,8 @@ async def vm_release_complete_endpoint(
     emit_observability_event(
         "infra.vm_release_complete.persisted",
         **persisted_fields,
-        release_requested_at=updated_binding.get("releaseRequestedAt"),
-        release_completed_at=updated_binding.get("releaseCompletedAt"),
+        release_requested_at=binding.get("releaseRequestedAt"),
+        release_completed_at=next_release_completed_at,
         pool_role=pool_role or None,
     )
     return {

@@ -92,6 +92,9 @@ spec:
                 type: integer
               desktopProbeFailures:
                 type: integer
+              signals:
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               binding:
                 type: object
                 properties:

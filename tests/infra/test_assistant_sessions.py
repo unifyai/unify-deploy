@@ -16,6 +16,7 @@ from communication.infra.assistant_sessions import (
     build_binding,
     build_assistant_session_spec,
     build_condition,
+    build_binding_signal,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
     delete_assistant_session,
@@ -23,6 +24,8 @@ from communication.infra.assistant_sessions import (
     get_latest_unity_image,
     merge_conditions,
     patch_assistant_session_status,
+    record_assistant_session_signal,
+    session_signal,
     vm_refs_match,
 )
 from kubernetes.client.rest import ApiException
@@ -252,6 +255,105 @@ def test_patch_assistant_session_status_preserves_retry_counters(monkeypatch):
     assert session["status"]["observedActivationId"] == "act-2"
 
 
+def test_patch_assistant_session_status_replaces_signals_without_touching_binding(
+    monkeypatch,
+):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "status": {
+            "phase": "PendingGuest",
+            "binding": build_binding(
+                binding_id="binding-1",
+                vm_ref={"name": "unity-pool-ubuntu-10-preview"},
+            ),
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    patch_assistant_session_status(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        signals={
+            "desktopReady": build_binding_signal(
+                binding_id="binding-1",
+                state="ready",
+                hostname="unity-pool-ubuntu-10-preview.vm.unify.ai",
+            ),
+        },
+    )
+
+    assert session["status"]["phase"] == "PendingGuest"
+    assert session["status"]["binding"]["id"] == "binding-1"
+    assert session["status"]["signals"]["desktopReady"]["state"] == "ready"
+
+
+def test_record_assistant_session_signal_merges_into_status(monkeypatch):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "status": {
+            "phase": "PendingGuest",
+            "binding": build_binding(binding_id="binding-1"),
+            "signals": {
+                "vmAssignment": build_binding_signal(
+                    binding_id="binding-1",
+                    state="assigned",
+                    vmRef={"name": "unity-pool-ubuntu-10-preview"},
+                ),
+            },
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    updated = record_assistant_session_signal(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        signal_name="desktopReady",
+        payload=build_binding_signal(
+            binding_id="binding-1",
+            state="ready",
+            hostname="unity-pool-ubuntu-10-preview.vm.unify.ai",
+        ),
+        source="test",
+    )
+
+    assert session_signal(updated, "vmAssignment")["state"] == "assigned"
+    assert session_signal(updated, "desktopReady")["hostname"].startswith("unity-pool")
+
+
 def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch):
     session = {
         "metadata": {"name": "assistant-session-1207", "resourceVersion": "7"},
@@ -344,6 +446,7 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
         "bootstrapRetries",
         "vmRetries",
         "desktopProbeFailures",
+        "signals",
     }
     assert expected_fields.issubset(status_properties.keys())
     binding_properties = status_properties["binding"]["properties"]
