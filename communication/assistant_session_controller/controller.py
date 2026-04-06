@@ -857,6 +857,25 @@ def _stale_other_binding_release_candidate(
     return candidate
 
 
+def _current_binding_release_completion_candidate(
+    owned_runtime_vms: list[dict],
+    disk_vm_name: str | None,
+) -> dict | None:
+    """Return the current-binding releasing VM that is safe to finalize."""
+
+    if len(owned_runtime_vms) != 1:
+        return None
+
+    candidate = owned_runtime_vms[0]
+    candidate_vm_name = str(candidate.get("vm_name", "") or "")
+    candidate_role = str(candidate.get("pool_role", "") or "")
+    if not candidate_vm_name or candidate_role != POOL_ROLE_RELEASING:
+        return None
+    if disk_vm_name not in (None, candidate_vm_name):
+        return None
+    return candidate
+
+
 def _release_observability_fields(
     *,
     assistant_id: str,
@@ -991,6 +1010,29 @@ def _binding_release_state(
         )
         vm_name = ""
 
+    if not release_completed_at and _binding_signal_matches(
+        release_complete_signal,
+        current_binding_id,
+    ):
+        release_completed_at = str(
+            release_complete_signal.get("observedAt", "") or _now_iso(),
+        )
+        binding = _binding_payload(
+            binding,
+            release_completed_at=release_completed_at,
+        )
+
+    release_completion_vm_name = vm_name
+    if not release_completion_vm_name and release_completed_at:
+        completion_candidate = _current_binding_release_completion_candidate(
+            owned_runtime_vms,
+            disk_vm_name,
+        )
+        if completion_candidate is not None:
+            release_completion_vm_name = str(
+                completion_candidate.get("vm_name", "") or "",
+            )
+
     stale_other_vm = None
     if not vm_name and not job_live and not owned_runtime_vms:
         stale_other_vm = _stale_other_binding_release_candidate(
@@ -998,18 +1040,7 @@ def _binding_release_state(
             disk_vm_name,
         )
 
-    if vm_name:
-        if not release_completed_at and _binding_signal_matches(
-            release_complete_signal,
-            current_binding_id,
-        ):
-            release_completed_at = str(
-                release_complete_signal.get("observedAt", "") or _now_iso(),
-            )
-            binding = _binding_payload(
-                binding,
-                release_completed_at=release_completed_at,
-            )
+    if vm_name or release_completion_vm_name:
         if release_completed_at:
             emit_observability_event(
                 "controller.release_state.awaiting_release_completion",
@@ -1025,8 +1056,12 @@ def _binding_release_state(
                     other_runtime_vms=other_runtime_vms,
                     disk_vm_name=disk_vm_name,
                 ),
+                completion_vm_name=release_completion_vm_name or None,
             )
-            result = complete_pool_vm_release(vm_name, current_binding_id)
+            result = complete_pool_vm_release(
+                release_completion_vm_name,
+                current_binding_id,
+            )
             emit_observability_event(
                 "controller.release_state.complete_release_result",
                 **_release_observability_fields(
@@ -1041,6 +1076,7 @@ def _binding_release_state(
                     other_runtime_vms=other_runtime_vms,
                     disk_vm_name=disk_vm_name,
                 ),
+                completion_vm_name=release_completion_vm_name or None,
                 release_result=result,
             )
             if not result.get("skipped"):
