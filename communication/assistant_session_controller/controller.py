@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
+from datetime import datetime, timezone
 import logging
 import time
 from typing import Literal
@@ -15,7 +17,13 @@ from communication.infra.helpers import (
     acquire_assignment_lease,
     release_assignment_lease,
 )
-from communication.infra.observability import bind_causal_context, build_causal_context
+from communication.infra.observability import (
+    bind_causal_context,
+    build_causal_context,
+    child_causal_context,
+    current_causal_context,
+    signal_causal_context,
+)
 from communication.infra.assistant_sessions import (
     assistant_session_observability_fields,
     BINDING_ID_ANNOTATION,
@@ -58,6 +66,7 @@ from communication.assistant_session_controller.workers import (
 from communication.assistant_session_controller.binding_ops import (
     binding_deadline_exceeded as _binding_deadline_exceeded,
     binding_payload as _binding_payload,
+    parse_iso_or_none as _parse_iso_or_none,
     binding_signal_matches as _binding_signal_matches,
     mint_binding_payload as _mint_binding_payload,
     now_iso as _now_iso,
@@ -225,6 +234,154 @@ def _remaining_signals(
     return _signals_without(current, *consumed_signal_names)
 
 
+def _matched_signal(
+    body: dict,
+    current_binding_id: str,
+    *signal_names: str,
+) -> tuple[str | None, dict]:
+    """Return the first named signal that still belongs to the current binding."""
+
+    for signal_name in signal_names:
+        signal = _signal_by_name(body, signal_name)
+        if _binding_signal_matches(signal, current_binding_id):
+            return signal_name, signal
+    return None, {}
+
+
+def _signal_observability_fields(
+    signal_name: str | None,
+    signal: dict | None,
+    *,
+    prefix: str = "signal",
+) -> dict[str, object]:
+    """Return structured fields describing a persisted binding-scoped signal."""
+
+    if not signal_name or not isinstance(signal, dict):
+        return {}
+    causal_fields = signal_causal_context(signal)
+    return {
+        f"{prefix}_name": signal_name,
+        f"{prefix}_binding_id": str(signal.get("bindingId", "") or "") or None,
+        f"{prefix}_state": str(signal.get("state", "") or "") or None,
+        f"{prefix}_source": str(signal.get("source", "") or "") or None,
+        f"{prefix}_observed_at": str(signal.get("observedAt", "") or "") or None,
+        f"{prefix}_message": str(signal.get("message", "") or "") or None,
+        f"{prefix}_caller": causal_fields.get("caller"),
+        f"{prefix}_root_caller": causal_fields.get("root_caller"),
+        f"{prefix}_operation_id": causal_fields.get("operation_id"),
+        f"{prefix}_root_operation_id": causal_fields.get("root_operation_id"),
+    }
+
+
+@contextmanager
+def _bind_signal_reconcile_context(
+    signal_name: str | None,
+    signal: dict | None,
+    *,
+    caller: str,
+):
+    """Bind a child causal context when reconcile is driven by a persisted signal."""
+
+    if not signal_name or not isinstance(signal, dict):
+        yield {}
+        return
+    parent_context = signal_causal_context(signal) or current_causal_context()
+    with bind_causal_context(
+        child_causal_context(
+            caller=caller,
+            parent=parent_context,
+            reason=f"persisted_signal:{signal_name}",
+        ),
+    ):
+        emit_observability_event(
+            "controller.signal_consumed",
+            caller=caller,
+            **_signal_observability_fields(signal_name, signal),
+        )
+        yield parent_context
+
+
+def _binding_stage_observability_fields(
+    *,
+    assistant_id: str,
+    session_name: str,
+    phase: str,
+    binding: dict | None,
+    desktop_required: bool,
+    bootstrap_retries: int,
+    vm_retries: int,
+    job=None,
+    pod_ref: dict | None = None,
+) -> dict[str, object]:
+    """Return consistent observability fields for binding bootstrap stages."""
+
+    metadata = getattr(job, "metadata", None)
+    annotations = dict(getattr(metadata, "annotations", None) or {})
+    created_at = str((binding or {}).get("createdAt", "") or "")
+    created_at_dt = _parse_iso_or_none(created_at)
+    binding_age_seconds = None
+    if created_at_dt is not None:
+        binding_age_seconds = int(
+            (datetime.now(timezone.utc) - created_at_dt).total_seconds(),
+        )
+    resolved_pod_ref = (
+        pod_ref if isinstance(pod_ref, dict) else binding_pod_ref(binding)
+    )
+    return {
+        "assistant_id": assistant_id,
+        "session_name": session_name,
+        "phase": phase,
+        "binding_id": binding_id_from_status(binding),
+        "job_name": str(
+            getattr(metadata, "name", "") or binding_job_ref(binding).get("name") or "",
+        )
+        or None,
+        "pod_name": str((resolved_pod_ref or {}).get("name", "") or "") or None,
+        "desktop_required": desktop_required,
+        "bootstrap_retries": bootstrap_retries,
+        "vm_retries": vm_retries,
+        "binding_created_at": created_at or None,
+        "binding_age_seconds": binding_age_seconds,
+        "container_ready_at": str((binding or {}).get("containerReadyAt", "") or "")
+        or None,
+        "container_ready_annotation": annotations.get(CONTAINER_READY_ANNOTATION)
+        or None,
+    }
+
+
+def _emit_binding_stage_event(
+    event: str,
+    *,
+    assistant_id: str,
+    session_name: str,
+    phase: str,
+    binding: dict | None,
+    desktop_required: bool,
+    bootstrap_retries: int,
+    vm_retries: int,
+    job=None,
+    pod_ref: dict | None = None,
+    **fields: object,
+) -> None:
+    """Emit a structured binding bootstrap stage event."""
+
+    emit_observability_event(
+        event,
+        **_binding_stage_observability_fields(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            phase=phase,
+            binding=binding,
+            desktop_required=desktop_required,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+            job=job,
+            pod_ref=pod_ref,
+        ),
+        **fields,
+    )
+
+
 def _job_matches_binding(job, session_name: str, binding_id: str) -> bool:
     """Return whether a Job belongs to the current session binding."""
 
@@ -324,6 +481,16 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
 
     existing_job = _job_for_binding(session_name, binding)
     if existing_job is not None:
+        emit_observability_event(
+            "controller.pending_job_stage",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding_id=current_binding_id,
+            job_name=existing_job.metadata.name,
+            stage="reuse_existing_job",
+            stage_state="completed",
+            source="controller.reconcile",
+        )
         return existing_job
 
     sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
@@ -347,6 +514,18 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
         ),
         key=lambda job: str(job.metadata.name or ""),
         reverse=True,
+    )
+    emit_observability_event(
+        "controller.pending_job_stage",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        binding_id=current_binding_id,
+        stage="scan_idle_jobs",
+        stage_state="completed",
+        source="controller.reconcile",
+        label_selector=label_selector,
+        current_image_hash=current_hash or None,
+        idle_job_candidates=len(idle_jobs),
     )
 
     for job in idle_jobs:
@@ -374,12 +553,32 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
             )
         except ApiException as exc:
             if exc.status == 409:
+                emit_observability_event(
+                    "controller.pending_job_stage",
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding_id=current_binding_id,
+                    job_name=job.metadata.name,
+                    stage="claim_idle_job",
+                    stage_state="conflict",
+                    source="controller.reconcile",
+                )
                 existing_job = _job_for_binding(session_name, binding)
                 if existing_job is not None:
                     return existing_job
                 continue
             raise
 
+        emit_observability_event(
+            "controller.pending_job_stage",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding_id=current_binding_id,
+            job_name=job.metadata.name,
+            stage="claim_idle_job",
+            stage_state="completed",
+            source="controller.reconcile",
+        )
         emit_observability_event(
             "controller.binding_job_claimed",
             assistant_id=assistant_id,
@@ -393,6 +592,17 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
             namespace=WATCH_NAMESPACE,
         )
 
+    emit_observability_event(
+        "controller.pending_job_stage",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        binding_id=current_binding_id,
+        stage="waiting_for_capacity",
+        stage_state="blocked",
+        source="controller.reconcile",
+        label_selector=label_selector,
+        current_image_hash=current_hash or None,
+    )
     return None
 
 
@@ -438,6 +648,19 @@ def _claim_and_bind_pending_job(
         )
         return _JOB_CLAIM_RESULT_BUSY
 
+    _emit_binding_stage_event(
+        "controller.pending_job_stage",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        phase="PendingJob",
+        binding=binding,
+        desktop_required=desktop_required,
+        bootstrap_retries=bootstrap_retries,
+        vm_retries=vm_retries,
+        stage="claim_lease",
+        stage_state="acquired",
+        holder_id=holder_id,
+    )
     try:
         job = _job_for_binding(session_name, binding)
         newly_claimed = False
@@ -447,6 +670,7 @@ def _claim_and_bind_pending_job(
                 return _JOB_CLAIM_RESULT_CAPACITY
             newly_claimed = True
 
+        claim_origin = "claimed_idle" if newly_claimed else "existing_binding_job"
         next_binding = _binding_payload(
             binding,
             job_ref={"name": job.metadata.name, "namespace": WATCH_NAMESPACE},
@@ -478,6 +702,20 @@ def _claim_and_bind_pending_job(
                     message="Waiting for Unity container bootstrap",
                 ),
             )
+            _emit_binding_stage_event(
+                "controller.pending_job_stage",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                phase="PendingContainer",
+                binding=next_binding,
+                desktop_required=desktop_required,
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                job=job,
+                stage="persist_pending_container",
+                stage_state="completed",
+                claim_origin=claim_origin,
+            )
         except ApiException as exc:
             if exc.status != 409:
                 raise
@@ -488,6 +726,21 @@ def _claim_and_bind_pending_job(
             )
             latest_binding = session_binding(latest_session)
             latest_job_name = str(binding_job_ref(latest_binding).get("name", "") or "")
+            _emit_binding_stage_event(
+                "controller.pending_job_stage",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                phase="PendingContainer",
+                binding=next_binding,
+                desktop_required=desktop_required,
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                job=job,
+                stage="persist_pending_container",
+                stage_state="conflict",
+                claim_origin=claim_origin,
+                latest_job_name=latest_job_name or None,
+            )
             if latest_job_name == str(job.metadata.name or ""):
                 return _JOB_CLAIM_RESULT_CLAIMED
             if newly_claimed:
@@ -1139,12 +1392,29 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     desktop_probe_failures = session.desktop_probe_failures
     persisted_last_error = session.last_error
     pending_binding_last_error = ""
+    current_binding_id = session.current_binding_id
+    phase = session.phase
+    reconcile_signal_name, reconcile_signal = _matched_signal(
+        body,
+        current_binding_id,
+        SIGNAL_VM_RELEASE_COMPLETE,
+        SIGNAL_VM_RELEASE_REQUEST,
+        SIGNAL_VM_GUEST_HEALTH,
+        SIGNAL_DESKTOP_READY,
+        SIGNAL_VM_ASSIGNMENT,
+    )
+    continued_signal_parent_context: dict | None = None
 
     emit_observability_event(
         "controller.session_reconcile",
         **assistant_session_observability_fields(
             body,
             source="controller.reconcile",
+        ),
+        **_signal_observability_fields(
+            reconcile_signal_name,
+            reconcile_signal,
+            prefix="matched_signal",
         ),
         worker_stats=worker_runtime_stats(),
     )
@@ -1171,9 +1441,6 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             ),
         )
         return
-
-    current_binding_id = session.current_binding_id
-    phase = session.phase
 
     if (
         desired_state != DESIRED_STATE_STOPPED
@@ -1205,28 +1472,39 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 conditions=release_conditions,
             )
             return
-        release_phase, release_binding, release_conditions, release_error = (
-            _binding_release_state(
-                body=body,
-                assistant_id=assistant_id,
-                session_name=session_name,
-                binding=binding,
-                existing_conditions=existing_conditions,
-                desktop_required=desktop_required,
-                source_reason="desired_stop",
+        release_signal_name, release_signal = _matched_signal(
+            body,
+            current_binding_id,
+            SIGNAL_VM_RELEASE_COMPLETE,
+            SIGNAL_VM_RELEASE_REQUEST,
+        )
+        with _bind_signal_reconcile_context(
+            release_signal_name,
+            release_signal,
+            caller="controller.reconcile.release_state",
+        ):
+            release_phase, release_binding, release_conditions, release_error = (
+                _binding_release_state(
+                    body=body,
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    existing_conditions=existing_conditions,
+                    desktop_required=desktop_required,
+                    source_reason="desired_stop",
+                )
             )
-        )
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase=release_phase,
-            observed_activation_id=observed_activation_id or activation_id,
-            binding=release_binding if release_binding else None,
-            last_error=release_error if release_error else "",
-            source="controller.reconcile",
-            conditions=release_conditions,
-        )
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase=release_phase,
+                observed_activation_id=observed_activation_id or activation_id,
+                binding=release_binding if release_binding else None,
+                last_error=release_error if release_error else "",
+                source="controller.reconcile",
+                conditions=release_conditions,
+            )
         return
 
     if (
@@ -1241,61 +1519,87 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         and observed_activation_id
         and observed_activation_id != activation_id
     ):
-        release_phase, release_binding, release_conditions, release_error = (
-            _binding_release_state(
-                body=body,
-                assistant_id=assistant_id,
-                session_name=session_name,
-                binding=binding,
-                existing_conditions=existing_conditions,
-                desktop_required=desktop_required,
-                source_reason="activation_replacement",
-            )
+        release_signal_name, release_signal = _matched_signal(
+            body,
+            current_binding_id,
+            SIGNAL_VM_RELEASE_COMPLETE,
+            SIGNAL_VM_RELEASE_REQUEST,
         )
-        if release_phase != "Released":
-            patch_assistant_session_status(
-                _custom_api,
-                WATCH_NAMESPACE,
-                assistant_id,
-                phase=release_phase,
-                observed_activation_id=observed_activation_id,
-                binding=release_binding if release_binding else None,
-                last_error=release_error
-                or "Releasing prior binding for activation replacement",
-                source="controller.reconcile",
-                conditions=release_conditions,
+        with _bind_signal_reconcile_context(
+            release_signal_name,
+            release_signal,
+            caller="controller.reconcile.release_state",
+        ) as release_parent_context:
+            release_phase, release_binding, release_conditions, release_error = (
+                _binding_release_state(
+                    body=body,
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    existing_conditions=existing_conditions,
+                    desktop_required=desktop_required,
+                    source_reason="activation_replacement",
+                )
             )
-            return
+            if release_phase != "Released":
+                patch_assistant_session_status(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    phase=release_phase,
+                    observed_activation_id=observed_activation_id,
+                    binding=release_binding if release_binding else None,
+                    last_error=release_error
+                    or "Releasing prior binding for activation replacement",
+                    source="controller.reconcile",
+                    conditions=release_conditions,
+                )
+                return
+            if release_parent_context:
+                continued_signal_parent_context = release_parent_context
         binding = {}
         current_binding_id = ""
         existing_conditions = release_conditions
         phase = "Released"
 
     if phase == "Releasing" and current_binding_id:
-        release_phase, release_binding, release_conditions, release_error = (
-            _binding_release_state(
-                body=body,
-                assistant_id=assistant_id,
-                session_name=session_name,
-                binding=binding,
-                existing_conditions=existing_conditions,
-                desktop_required=desktop_required,
-                source_reason="continue_release",
-            )
+        release_signal_name, release_signal = _matched_signal(
+            body,
+            current_binding_id,
+            SIGNAL_VM_RELEASE_COMPLETE,
+            SIGNAL_VM_RELEASE_REQUEST,
         )
-        if release_phase != "Released":
-            patch_assistant_session_status(
-                _custom_api,
-                WATCH_NAMESPACE,
-                assistant_id,
-                phase=release_phase,
-                observed_activation_id=observed_activation_id or activation_id,
-                binding=release_binding if release_binding else None,
-                last_error=release_error or persisted_last_error,
-                source="controller.reconcile",
-                conditions=release_conditions,
+        with _bind_signal_reconcile_context(
+            release_signal_name,
+            release_signal,
+            caller="controller.reconcile.release_state",
+        ) as release_parent_context:
+            release_phase, release_binding, release_conditions, release_error = (
+                _binding_release_state(
+                    body=body,
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    existing_conditions=existing_conditions,
+                    desktop_required=desktop_required,
+                    source_reason="continue_release",
+                )
             )
-            return
+            if release_phase != "Released":
+                patch_assistant_session_status(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    phase=release_phase,
+                    observed_activation_id=observed_activation_id or activation_id,
+                    binding=release_binding if release_binding else None,
+                    last_error=release_error or persisted_last_error,
+                    source="controller.reconcile",
+                    conditions=release_conditions,
+                )
+                return
+            if release_parent_context:
+                continued_signal_parent_context = release_parent_context
         pending_binding_last_error = persisted_last_error
         binding = {}
         current_binding_id = ""
@@ -1303,94 +1607,144 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         phase = "Released"
 
     if not current_binding_id:
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="PendingJob",
-            observed_activation_id=activation_id,
-            binding=_mint_binding_payload(),
-            last_error=pending_binding_last_error,
-            source="controller.reconcile",
-            bootstrap_retries=bootstrap_retries,
-            vm_retries=vm_retries,
-            desktop_probe_failures=0,
-            conditions=_condition_state(
-                [],
-                "PendingJob",
-                desktop_required,
-                container_assigned=False,
-                container_ready=False,
-                vm_assigned=False,
-                desktop_ready=False,
-                reason="BindingCreated",
-                message="Waiting to claim an idle Unity container",
-            ),
+        next_binding = _mint_binding_payload()
+        pending_job_context = (
+            bind_causal_context(
+                child_causal_context(
+                    caller="controller.reconcile.pending_job",
+                    parent=continued_signal_parent_context,
+                    reason="post_release_signal",
+                ),
+            )
+            if continued_signal_parent_context
+            else nullcontext()
         )
-        return
-
-    job = _job_for_binding(session_name, binding)
-    if binding_job_ref(binding) and job is None:
-        release_phase, release_binding, release_conditions, release_error = (
-            _binding_release_state(
-                body=body,
+        with pending_job_context:
+            _emit_binding_stage_event(
+                "controller.pending_job_stage",
                 assistant_id=assistant_id,
                 session_name=session_name,
-                binding=binding,
-                existing_conditions=existing_conditions,
+                phase="PendingJob",
+                binding=next_binding,
                 desktop_required=desktop_required,
-                source_reason="job_missing",
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                stage="mint_binding",
+                stage_state="completed",
+                previous_phase=phase or None,
+                carried_signal_context=bool(continued_signal_parent_context),
             )
-        )
-        if release_phase != "Released":
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
                 assistant_id,
-                phase=release_phase,
+                phase="PendingJob",
                 observed_activation_id=activation_id,
-                binding=release_binding if release_binding else None,
-                last_error=release_error
-                or "Recorded binding Job disappeared before runtime became ready",
+                binding=next_binding,
+                last_error=pending_binding_last_error,
                 source="controller.reconcile",
                 bootstrap_retries=bootstrap_retries,
                 vm_retries=vm_retries,
                 desktop_probe_failures=0,
-                conditions=release_conditions,
+                conditions=_condition_state(
+                    [],
+                    "PendingJob",
+                    desktop_required,
+                    container_assigned=False,
+                    container_ready=False,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason="BindingCreated",
+                    message="Waiting to claim an idle Unity container",
+                ),
             )
-            return
-        decision = _restart_binding_decision(
+        return
+
+    job = _job_for_binding(session_name, binding)
+    if binding_job_ref(binding) and job is None:
+        _emit_binding_stage_event(
+            "controller.pending_container_stage",
             assistant_id=assistant_id,
-            activation_id=activation_id,
-            retry_count=bootstrap_retries,
-            max_retries=MAX_BOOTSTRAP_RETRIES,
-            retry_field="bootstrap_retries",
-            message="Recorded binding Job disappeared before runtime became ready",
-        )
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase=decision["phase"],
-            observed_activation_id=activation_id,
-            binding=decision["binding"],
-            last_error=decision["last_error"],
-            source="controller.reconcile",
-            bootstrap_retries=decision["bootstrap_retries"],
+            session_name=session_name,
+            phase=phase or "PendingContainer",
+            binding=binding,
+            desktop_required=desktop_required,
+            bootstrap_retries=bootstrap_retries,
             vm_retries=vm_retries,
-            desktop_probe_failures=0,
-            conditions=_condition_state(
-                release_conditions,
-                decision["phase"],
-                desktop_required,
-                container_assigned=False,
-                container_ready=False,
-                vm_assigned=False,
-                desktop_ready=False,
-                reason="JobMissing",
-                message=decision["last_error"],
-            ),
+            stage="job_missing",
+            stage_state="failed",
         )
+        release_signal_name, release_signal = _matched_signal(
+            body,
+            current_binding_id,
+            SIGNAL_VM_RELEASE_COMPLETE,
+            SIGNAL_VM_RELEASE_REQUEST,
+        )
+        with _bind_signal_reconcile_context(
+            release_signal_name,
+            release_signal,
+            caller="controller.reconcile.release_state",
+        ):
+            release_phase, release_binding, release_conditions, release_error = (
+                _binding_release_state(
+                    body=body,
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    existing_conditions=existing_conditions,
+                    desktop_required=desktop_required,
+                    source_reason="job_missing",
+                )
+            )
+            if release_phase != "Released":
+                patch_assistant_session_status(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    phase=release_phase,
+                    observed_activation_id=activation_id,
+                    binding=release_binding if release_binding else None,
+                    last_error=release_error
+                    or "Recorded binding Job disappeared before runtime became ready",
+                    source="controller.reconcile",
+                    bootstrap_retries=bootstrap_retries,
+                    vm_retries=vm_retries,
+                    desktop_probe_failures=0,
+                    conditions=release_conditions,
+                )
+                return
+            decision = _restart_binding_decision(
+                assistant_id=assistant_id,
+                activation_id=activation_id,
+                retry_count=bootstrap_retries,
+                max_retries=MAX_BOOTSTRAP_RETRIES,
+                retry_field="bootstrap_retries",
+                message="Recorded binding Job disappeared before runtime became ready",
+            )
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase=decision["phase"],
+                observed_activation_id=activation_id,
+                binding=decision["binding"],
+                last_error=decision["last_error"],
+                source="controller.reconcile",
+                bootstrap_retries=decision["bootstrap_retries"],
+                vm_retries=vm_retries,
+                desktop_probe_failures=0,
+                conditions=_condition_state(
+                    release_conditions,
+                    decision["phase"],
+                    desktop_required,
+                    container_assigned=False,
+                    container_ready=False,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason="JobMissing",
+                    message=decision["last_error"],
+                ),
+            )
         return
 
     if not binding_job_ref(binding):
@@ -1407,6 +1761,18 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         if claim_result == _JOB_CLAIM_RESULT_BUSY:
             return
         if claim_result == _JOB_CLAIM_RESULT_CAPACITY:
+            _emit_binding_stage_event(
+                "controller.pending_job_stage",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                phase="PendingJob",
+                binding=binding,
+                desktop_required=desktop_required,
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                stage="waiting_for_capacity",
+                stage_state="blocked",
+            )
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
@@ -1440,63 +1806,89 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     )
     terminal_phase = _job_terminal_phase(job)
     if terminal_phase:
-        release_phase, release_binding, release_conditions, release_error = (
-            _binding_release_state(
-                body=body,
-                assistant_id=assistant_id,
-                session_name=session_name,
-                binding=binding,
-                existing_conditions=existing_conditions,
-                desktop_required=desktop_required,
-                source_reason=f"job_terminal_{terminal_phase.lower()}",
-            )
+        _emit_binding_stage_event(
+            "controller.pending_container_stage",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            phase=phase or "PendingContainer",
+            binding=binding,
+            desktop_required=desktop_required,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+            job=job,
+            pod_ref=pod_ref,
+            stage="job_terminal",
+            stage_state="failed",
+            terminal_phase=terminal_phase,
         )
-        if release_phase != "Released":
+        release_signal_name, release_signal = _matched_signal(
+            body,
+            current_binding_id,
+            SIGNAL_VM_RELEASE_COMPLETE,
+            SIGNAL_VM_RELEASE_REQUEST,
+        )
+        with _bind_signal_reconcile_context(
+            release_signal_name,
+            release_signal,
+            caller="controller.reconcile.release_state",
+        ):
+            release_phase, release_binding, release_conditions, release_error = (
+                _binding_release_state(
+                    body=body,
+                    assistant_id=assistant_id,
+                    session_name=session_name,
+                    binding=binding,
+                    existing_conditions=existing_conditions,
+                    desktop_required=desktop_required,
+                    source_reason=f"job_terminal_{terminal_phase.lower()}",
+                )
+            )
+            if release_phase != "Released":
+                patch_assistant_session_status(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    phase=release_phase,
+                    observed_activation_id=activation_id,
+                    binding=release_binding if release_binding else None,
+                    last_error=release_error
+                    or f"Job reached terminal phase {terminal_phase}",
+                    source="controller.reconcile",
+                    conditions=release_conditions,
+                )
+                return
+            decision = _restart_binding_decision(
+                assistant_id=assistant_id,
+                activation_id=activation_id,
+                retry_count=bootstrap_retries,
+                max_retries=MAX_BOOTSTRAP_RETRIES,
+                retry_field="bootstrap_retries",
+                message=f"Job reached terminal phase {terminal_phase}",
+            )
             patch_assistant_session_status(
                 _custom_api,
                 WATCH_NAMESPACE,
                 assistant_id,
-                phase=release_phase,
+                phase=decision["phase"],
                 observed_activation_id=activation_id,
-                binding=release_binding if release_binding else None,
-                last_error=release_error
-                or f"Job reached terminal phase {terminal_phase}",
+                binding=decision["binding"],
+                last_error=decision["last_error"],
                 source="controller.reconcile",
-                conditions=release_conditions,
+                bootstrap_retries=decision["bootstrap_retries"],
+                vm_retries=vm_retries,
+                desktop_probe_failures=0,
+                conditions=_condition_state(
+                    release_conditions,
+                    decision["phase"],
+                    desktop_required,
+                    container_assigned=False,
+                    container_ready=False,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason="JobTerminal",
+                    message=decision["last_error"],
+                ),
             )
-            return
-        decision = _restart_binding_decision(
-            assistant_id=assistant_id,
-            activation_id=activation_id,
-            retry_count=bootstrap_retries,
-            max_retries=MAX_BOOTSTRAP_RETRIES,
-            retry_field="bootstrap_retries",
-            message=f"Job reached terminal phase {terminal_phase}",
-        )
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase=decision["phase"],
-            observed_activation_id=activation_id,
-            binding=decision["binding"],
-            last_error=decision["last_error"],
-            source="controller.reconcile",
-            bootstrap_retries=decision["bootstrap_retries"],
-            vm_retries=vm_retries,
-            desktop_probe_failures=0,
-            conditions=_condition_state(
-                release_conditions,
-                decision["phase"],
-                desktop_required,
-                container_assigned=False,
-                container_ready=False,
-                vm_assigned=False,
-                desktop_ready=False,
-                reason="JobTerminal",
-                message=decision["last_error"],
-            ),
-        )
         return
 
     container_ready = (job.metadata.annotations or {}).get(
@@ -1508,6 +1900,21 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             "createdAt",
             CONTAINER_BOOTSTRAP_DEADLINE_SECONDS,
         ):
+            _emit_binding_stage_event(
+                "controller.pending_container_stage",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                phase="PendingContainer",
+                binding=binding,
+                desktop_required=desktop_required,
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                job=job,
+                pod_ref=pod_ref,
+                stage="container_ready_wait",
+                stage_state="timeout",
+                deadline_seconds=CONTAINER_BOOTSTRAP_DEADLINE_SECONDS,
+            )
             try:
                 _suspend_bound_job(job, source="controller.bootstrap_timeout")
             except Exception:  # pragma: no cover - best effort suspend
@@ -1551,6 +1958,21 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 ),
             )
             return
+        _emit_binding_stage_event(
+            "controller.pending_container_stage",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            phase="PendingContainer",
+            binding=binding,
+            desktop_required=desktop_required,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+            job=job,
+            pod_ref=pod_ref,
+            stage="container_ready_wait",
+            stage_state="pending",
+            deadline_seconds=CONTAINER_BOOTSTRAP_DEADLINE_SECONDS,
+        )
         patch_assistant_session_status(
             _custom_api,
             WATCH_NAMESPACE,
@@ -1575,12 +1997,40 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         return
 
     if not binding.get("containerReadyAt"):
+        _emit_binding_stage_event(
+            "controller.pending_container_stage",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            phase="PendingContainer",
+            binding=binding,
+            desktop_required=desktop_required,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+            job=job,
+            pod_ref=pod_ref,
+            stage="container_ready_observed",
+            stage_state="completed",
+        )
         binding = _binding_payload(
             binding,
             container_ready_at=_now_iso(),
         )
 
     if not desktop_required:
+        _emit_binding_stage_event(
+            "controller.pending_container_stage",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            phase="Active",
+            binding=binding,
+            desktop_required=desktop_required,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+            job=job,
+            pod_ref=pod_ref,
+            stage="container_active",
+            stage_state="completed",
+        )
         patch_assistant_session_status(
             _custom_api,
             WATCH_NAMESPACE,
@@ -1609,84 +2059,91 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     assignment_signal = _vm_assignment_signal(body)
     if not current_vm_ref:
         if _binding_signal_matches(assignment_signal, current_binding_id):
-            assignment_state = str(assignment_signal.get("state", "") or "")
-            assignment_message = str(assignment_signal.get("message", "") or "")
-            assignment_age = _signal_age_seconds(assignment_signal)
-            if assignment_state == "assigned":
-                signaled_vm_ref = assignment_signal.get("vmRef")
-                if isinstance(signaled_vm_ref, dict) and signaled_vm_ref.get("name"):
-                    binding = _binding_payload(
-                        binding,
-                        vm_ref=signaled_vm_ref,
-                        vm_assigned_at=str(
-                            assignment_signal.get("observedAt", "") or _now_iso(),
-                        ),
-                        desktop_url=None,
-                        vm_ready_observed_at=None,
-                        vm_ready_hostname=None,
-                        vm_ready_message_id=None,
-                        release_requested_at=None,
-                        release_completed_at=None,
-                    )
+            with _bind_signal_reconcile_context(
+                SIGNAL_VM_ASSIGNMENT,
+                assignment_signal,
+                caller="controller.reconcile.vm_assignment",
+            ):
+                assignment_state = str(assignment_signal.get("state", "") or "")
+                assignment_message = str(assignment_signal.get("message", "") or "")
+                assignment_age = _signal_age_seconds(assignment_signal)
+                if assignment_state == "assigned":
+                    signaled_vm_ref = assignment_signal.get("vmRef")
+                    if isinstance(signaled_vm_ref, dict) and signaled_vm_ref.get(
+                        "name",
+                    ):
+                        binding = _binding_payload(
+                            binding,
+                            vm_ref=signaled_vm_ref,
+                            vm_assigned_at=str(
+                                assignment_signal.get("observedAt", "") or _now_iso(),
+                            ),
+                            desktop_url=None,
+                            vm_ready_observed_at=None,
+                            vm_ready_hostname=None,
+                            vm_ready_message_id=None,
+                            release_requested_at=None,
+                            release_completed_at=None,
+                        )
+                        patch_assistant_session_status(
+                            _custom_api,
+                            WATCH_NAMESPACE,
+                            assistant_id,
+                            phase="PendingGuest",
+                            observed_activation_id=activation_id,
+                            binding=binding,
+                            last_error="",
+                            source="controller.reconcile",
+                            signals=_remaining_signals(
+                                assistant_id,
+                                body,
+                                SIGNAL_VM_ASSIGNMENT,
+                            ),
+                            conditions=_condition_state(
+                                existing_conditions,
+                                "PendingGuest",
+                                desktop_required,
+                                container_assigned=True,
+                                container_ready=True,
+                                vm_assigned=True,
+                                desktop_ready=False,
+                                reason="WaitingForDesktop",
+                                message="Waiting for authenticated desktop readiness",
+                            ),
+                        )
+                        return
+                elif assignment_state in {"capacity", "waiting_release", "error"} and (
+                    assignment_age is None
+                    or assignment_age < VM_ASSIGNMENT_RETRY_INTERVAL_SECONDS
+                ):
+                    reason = {
+                        "capacity": "WaitingForCapacity",
+                        "waiting_release": "WaitingForRelease",
+                        "error": "AssignError",
+                    }[assignment_state]
                     patch_assistant_session_status(
                         _custom_api,
                         WATCH_NAMESPACE,
                         assistant_id,
-                        phase="PendingGuest",
+                        phase="PendingVM",
                         observed_activation_id=activation_id,
                         binding=binding,
-                        last_error="",
+                        last_error=assignment_message,
                         source="controller.reconcile",
-                        signals=_remaining_signals(
-                            assistant_id,
-                            body,
-                            SIGNAL_VM_ASSIGNMENT,
-                        ),
                         conditions=_condition_state(
                             existing_conditions,
-                            "PendingGuest",
+                            "PendingVM",
                             desktop_required,
                             container_assigned=True,
                             container_ready=True,
-                            vm_assigned=True,
+                            vm_assigned=False,
                             desktop_ready=False,
-                            reason="WaitingForDesktop",
-                            message="Waiting for authenticated desktop readiness",
+                            reason=reason,
+                            message=assignment_message
+                            or "Waiting for background VM assignment retry",
                         ),
                     )
                     return
-            elif assignment_state in {"capacity", "waiting_release", "error"} and (
-                assignment_age is None
-                or assignment_age < VM_ASSIGNMENT_RETRY_INTERVAL_SECONDS
-            ):
-                reason = {
-                    "capacity": "WaitingForCapacity",
-                    "waiting_release": "WaitingForRelease",
-                    "error": "AssignError",
-                }[assignment_state]
-                patch_assistant_session_status(
-                    _custom_api,
-                    WATCH_NAMESPACE,
-                    assistant_id,
-                    phase="PendingVM",
-                    observed_activation_id=activation_id,
-                    binding=binding,
-                    last_error=assignment_message,
-                    source="controller.reconcile",
-                    conditions=_condition_state(
-                        existing_conditions,
-                        "PendingVM",
-                        desktop_required,
-                        container_assigned=True,
-                        container_ready=True,
-                        vm_assigned=False,
-                        desktop_ready=False,
-                        reason=reason,
-                        message=assignment_message
-                        or "Waiting for background VM assignment retry",
-                    ),
-                )
-                return
         schedule_vm_assignment(
             custom_api=_custom_api,
             core_api=_core_api,
@@ -1768,110 +2225,45 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
 
     binding = _binding_payload(binding, vm_ref=verified_vm_ref)
     consumed_signals: list[str] = []
+    ready_signal_parent_context: dict | None = None
     ready_signal = _desktop_ready_signal(body)
     if _binding_signal_matches(ready_signal, current_binding_id):
-        signal_hostname = str(
-            ready_signal.get("hostname", "") or verified_vm_ref.get("hostname", ""),
-        )
-        desktop_url = str(ready_signal.get("desktopUrl", "") or "")
-        if not desktop_url and signal_hostname:
-            desktop_url = f"https://{signal_hostname}"
-        binding = _binding_payload(
-            binding,
-            desktop_url=desktop_url or None,
-            vm_ready_observed_at=str(ready_signal.get("observedAt", "") or _now_iso()),
-            vm_ready_hostname=signal_hostname or None,
-            vm_ready_message_id=str(ready_signal.get("messageId", "") or ""),
-        )
-        consumed_signals.append(SIGNAL_DESKTOP_READY)
+        with _bind_signal_reconcile_context(
+            SIGNAL_DESKTOP_READY,
+            ready_signal,
+            caller="controller.reconcile.desktop_ready",
+        ) as current_ready_signal_parent_context:
+            signal_hostname = str(
+                ready_signal.get("hostname", "") or verified_vm_ref.get("hostname", ""),
+            )
+            desktop_url = str(ready_signal.get("desktopUrl", "") or "")
+            if not desktop_url and signal_hostname:
+                desktop_url = f"https://{signal_hostname}"
+            binding = _binding_payload(
+                binding,
+                desktop_url=desktop_url or None,
+                vm_ready_observed_at=str(
+                    ready_signal.get("observedAt", "") or _now_iso(),
+                ),
+                vm_ready_hostname=signal_hostname or None,
+                vm_ready_message_id=str(ready_signal.get("messageId", "") or ""),
+            )
+            consumed_signals.append(SIGNAL_DESKTOP_READY)
+            if current_ready_signal_parent_context:
+                ready_signal_parent_context = current_ready_signal_parent_context
 
     desktop_url = binding_desktop_url(binding)
     desktop_ready_signal = bool(binding.get("vmReadyObservedAt")) and bool(desktop_url)
     guest_signal = _guest_health_signal(body)
     if _binding_signal_matches(guest_signal, current_binding_id):
-        consumed_signals.append(SIGNAL_VM_GUEST_HEALTH)
-        guest_state = str(guest_signal.get("state", "") or "")
-        if guest_state == "ready":
-            patch_kwargs = {}
-            if consumed_signals:
-                patch_kwargs["signals"] = _remaining_signals(
-                    assistant_id,
-                    body,
-                    *consumed_signals,
-                )
-            patch_assistant_session_status(
-                _custom_api,
-                WATCH_NAMESPACE,
-                assistant_id,
-                phase="Active",
-                observed_activation_id=activation_id,
-                binding=binding,
-                last_error="",
-                source="controller.reconcile",
-                bootstrap_retries=bootstrap_retries,
-                vm_retries=vm_retries,
-                desktop_probe_failures=0,
-                conditions=_condition_state(
-                    existing_conditions,
-                    "Active",
-                    desktop_required,
-                    container_assigned=True,
-                    container_ready=True,
-                    vm_assigned=True,
-                    desktop_ready=True,
-                    reason="Ready",
-                    message="Desktop session active",
-                ),
-                **patch_kwargs,
-            )
-            return
-        if guest_state == "failed":
-            probe_failures = desktop_probe_failures + 1
-            if probe_failures >= DESKTOP_LIVENESS_FAILURE_THRESHOLD:
-                release_phase, release_binding, release_conditions, release_error = (
-                    _binding_release_state(
-                        body=body,
-                        assistant_id=assistant_id,
-                        session_name=session_name,
-                        binding=binding,
-                        existing_conditions=existing_conditions,
-                        desktop_required=desktop_required,
-                        source_reason="desktop_liveness_failed",
-                    )
-                )
-                if release_phase != "Released":
-                    patch_kwargs = {}
-                    if consumed_signals:
-                        patch_kwargs["signals"] = _remaining_signals(
-                            assistant_id,
-                            body,
-                            *consumed_signals,
-                        )
-                    patch_assistant_session_status(
-                        _custom_api,
-                        WATCH_NAMESPACE,
-                        assistant_id,
-                        phase=release_phase,
-                        observed_activation_id=activation_id,
-                        binding=release_binding if release_binding else None,
-                        last_error=release_error
-                        or "Desktop VM became unreachable after readiness",
-                        source="controller.reconcile",
-                        bootstrap_retries=bootstrap_retries,
-                        vm_retries=vm_retries + 1,
-                        desktop_probe_failures=0,
-                        conditions=release_conditions,
-                        **patch_kwargs,
-                    )
-                    return
-                decision = _restart_binding_decision(
-                    assistant_id=assistant_id,
-                    activation_id=activation_id,
-                    retry_count=vm_retries,
-                    max_retries=MAX_VM_READINESS_RETRIES,
-                    retry_field="vm_retries",
-                    message="Desktop VM became unreachable after readiness",
-                )
+        with _bind_signal_reconcile_context(
+            SIGNAL_VM_GUEST_HEALTH,
+            guest_signal,
+            caller="controller.reconcile.vm_guest_health",
+        ):
+            consumed_signals.append(SIGNAL_VM_GUEST_HEALTH)
+            guest_state = str(guest_signal.get("state", "") or "")
+            if guest_state == "ready":
                 patch_kwargs = {}
                 if consumed_signals:
                     patch_kwargs["signals"] = _remaining_signals(
@@ -1883,28 +2275,165 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                     _custom_api,
                     WATCH_NAMESPACE,
                     assistant_id,
-                    phase=decision["phase"],
+                    phase="Active",
                     observed_activation_id=activation_id,
-                    binding=decision["binding"],
-                    last_error=decision["last_error"],
+                    binding=binding,
+                    last_error="",
                     source="controller.reconcile",
                     bootstrap_retries=bootstrap_retries,
-                    vm_retries=decision["vm_retries"],
+                    vm_retries=vm_retries,
                     desktop_probe_failures=0,
                     conditions=_condition_state(
-                        release_conditions,
-                        decision["phase"],
+                        existing_conditions,
+                        "Active",
                         desktop_required,
-                        container_assigned=False,
-                        container_ready=False,
-                        vm_assigned=False,
-                        desktop_ready=False,
-                        reason="DesktopLost",
-                        message=decision["last_error"],
+                        container_assigned=True,
+                        container_ready=True,
+                        vm_assigned=True,
+                        desktop_ready=True,
+                        reason="Ready",
+                        message="Desktop session active",
                     ),
                     **patch_kwargs,
                 )
                 return
+            if guest_state == "failed":
+                probe_failures = desktop_probe_failures + 1
+                if probe_failures >= DESKTOP_LIVENESS_FAILURE_THRESHOLD:
+                    (
+                        release_phase,
+                        release_binding,
+                        release_conditions,
+                        release_error,
+                    ) = _binding_release_state(
+                        body=body,
+                        assistant_id=assistant_id,
+                        session_name=session_name,
+                        binding=binding,
+                        existing_conditions=existing_conditions,
+                        desktop_required=desktop_required,
+                        source_reason="desktop_liveness_failed",
+                    )
+                    if release_phase != "Released":
+                        patch_kwargs = {}
+                        if consumed_signals:
+                            patch_kwargs["signals"] = _remaining_signals(
+                                assistant_id,
+                                body,
+                                *consumed_signals,
+                            )
+                        patch_assistant_session_status(
+                            _custom_api,
+                            WATCH_NAMESPACE,
+                            assistant_id,
+                            phase=release_phase,
+                            observed_activation_id=activation_id,
+                            binding=release_binding if release_binding else None,
+                            last_error=release_error
+                            or "Desktop VM became unreachable after readiness",
+                            source="controller.reconcile",
+                            bootstrap_retries=bootstrap_retries,
+                            vm_retries=vm_retries + 1,
+                            desktop_probe_failures=0,
+                            conditions=release_conditions,
+                            **patch_kwargs,
+                        )
+                        return
+                    decision = _restart_binding_decision(
+                        assistant_id=assistant_id,
+                        activation_id=activation_id,
+                        retry_count=vm_retries,
+                        max_retries=MAX_VM_READINESS_RETRIES,
+                        retry_field="vm_retries",
+                        message="Desktop VM became unreachable after readiness",
+                    )
+                    patch_kwargs = {}
+                    if consumed_signals:
+                        patch_kwargs["signals"] = _remaining_signals(
+                            assistant_id,
+                            body,
+                            *consumed_signals,
+                        )
+                    patch_assistant_session_status(
+                        _custom_api,
+                        WATCH_NAMESPACE,
+                        assistant_id,
+                        phase=decision["phase"],
+                        observed_activation_id=activation_id,
+                        binding=decision["binding"],
+                        last_error=decision["last_error"],
+                        source="controller.reconcile",
+                        bootstrap_retries=bootstrap_retries,
+                        vm_retries=decision["vm_retries"],
+                        desktop_probe_failures=0,
+                        conditions=_condition_state(
+                            release_conditions,
+                            decision["phase"],
+                            desktop_required,
+                            container_assigned=False,
+                            container_ready=False,
+                            vm_assigned=False,
+                            desktop_ready=False,
+                            reason="DesktopLost",
+                            message=decision["last_error"],
+                        ),
+                        **patch_kwargs,
+                    )
+                    return
+                patch_kwargs = {}
+                if consumed_signals:
+                    patch_kwargs["signals"] = _remaining_signals(
+                        assistant_id,
+                        body,
+                        *consumed_signals,
+                    )
+                patch_assistant_session_status(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    phase="Active",
+                    observed_activation_id=activation_id,
+                    binding=binding,
+                    last_error="",
+                    source="controller.reconcile",
+                    bootstrap_retries=bootstrap_retries,
+                    vm_retries=vm_retries,
+                    desktop_probe_failures=probe_failures,
+                    conditions=_condition_state(
+                        existing_conditions,
+                        "Active",
+                        desktop_required,
+                        container_assigned=True,
+                        container_ready=True,
+                        vm_assigned=True,
+                        desktop_ready=True,
+                        reason="Ready",
+                        message="Desktop session active",
+                    ),
+                    **patch_kwargs,
+                )
+                return
+
+    if desktop_ready_signal:
+        ready_context = (
+            bind_causal_context(
+                child_causal_context(
+                    caller="controller.reconcile.desktop_ready",
+                    parent=ready_signal_parent_context,
+                    reason=f"persisted_signal:{SIGNAL_DESKTOP_READY}",
+                ),
+            )
+            if ready_signal_parent_context
+            else nullcontext()
+        )
+        with ready_context:
+            schedule_guest_health_probe(
+                custom_api=_custom_api,
+                namespace=WATCH_NAMESPACE,
+                assistant_id=assistant_id,
+                binding_id=current_binding_id,
+                vm_ref=verified_vm_ref,
+            )
             patch_kwargs = {}
             if consumed_signals:
                 patch_kwargs["signals"] = _remaining_signals(
@@ -1916,73 +2445,31 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 _custom_api,
                 WATCH_NAMESPACE,
                 assistant_id,
-                phase="Active",
+                phase="PendingGuest" if phase != "Active" else "Active",
                 observed_activation_id=activation_id,
                 binding=binding,
                 last_error="",
                 source="controller.reconcile",
                 bootstrap_retries=bootstrap_retries,
                 vm_retries=vm_retries,
-                desktop_probe_failures=probe_failures,
+                desktop_probe_failures=desktop_probe_failures,
                 conditions=_condition_state(
                     existing_conditions,
-                    "Active",
+                    "PendingGuest" if phase != "Active" else "Active",
                     desktop_required,
                     container_assigned=True,
                     container_ready=True,
                     vm_assigned=True,
-                    desktop_ready=True,
-                    reason="Ready",
-                    message="Desktop session active",
+                    desktop_ready=phase == "Active",
+                    reason="WaitingForDesktop" if phase != "Active" else "Ready",
+                    message=(
+                        "Waiting for authenticated desktop readiness"
+                        if phase != "Active"
+                        else "Desktop session active"
+                    ),
                 ),
                 **patch_kwargs,
             )
-            return
-
-    if desktop_ready_signal:
-        schedule_guest_health_probe(
-            custom_api=_custom_api,
-            namespace=WATCH_NAMESPACE,
-            assistant_id=assistant_id,
-            binding_id=current_binding_id,
-            vm_ref=verified_vm_ref,
-        )
-        patch_kwargs = {}
-        if consumed_signals:
-            patch_kwargs["signals"] = _remaining_signals(
-                assistant_id,
-                body,
-                *consumed_signals,
-            )
-        patch_assistant_session_status(
-            _custom_api,
-            WATCH_NAMESPACE,
-            assistant_id,
-            phase="PendingGuest" if phase != "Active" else "Active",
-            observed_activation_id=activation_id,
-            binding=binding,
-            last_error="",
-            source="controller.reconcile",
-            bootstrap_retries=bootstrap_retries,
-            vm_retries=vm_retries,
-            desktop_probe_failures=desktop_probe_failures,
-            conditions=_condition_state(
-                existing_conditions,
-                "PendingGuest" if phase != "Active" else "Active",
-                desktop_required,
-                container_assigned=True,
-                container_ready=True,
-                vm_assigned=True,
-                desktop_ready=phase == "Active",
-                reason="WaitingForDesktop" if phase != "Active" else "Ready",
-                message=(
-                    "Waiting for authenticated desktop readiness"
-                    if phase != "Active"
-                    else "Desktop session active"
-                ),
-            ),
-            **patch_kwargs,
-        )
         return
 
     if _binding_deadline_exceeded(

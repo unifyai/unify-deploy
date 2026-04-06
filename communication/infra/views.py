@@ -980,24 +980,42 @@ async def read_assistant_session(assistant_id: str):
 @router.delete("/session/{assistant_id}")
 async def delete_current_assistant_session(assistant_id: str):
     """Request deletion of the current AssistantSession for an assistant."""
-    custom_api = await asyncio.to_thread(get_custom_objects_api)
-    if custom_api is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to initialize AssistantSession API client",
-        )
-
-    deleted = await asyncio.to_thread(
-        delete_assistant_session,
-        custom_api,
-        SETTINGS.default_namespace,
-        assistant_id,
+    causal_token = push_causal_context(
+        build_causal_context(
+            caller="views.session_delete",
+            reason="http_request",
+        ),
     )
-    return {
-        "success": True,
-        "assistant_id": assistant_id,
-        "deleted": deleted,
-    }
+    try:
+        emit_observability_event(
+            "infra.session.delete.requested",
+            assistant_id=assistant_id,
+        )
+        custom_api = await asyncio.to_thread(get_custom_objects_api)
+        if custom_api is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to initialize AssistantSession API client",
+            )
+
+        deleted = await asyncio.to_thread(
+            delete_assistant_session,
+            custom_api,
+            SETTINGS.default_namespace,
+            assistant_id,
+        )
+        emit_observability_event(
+            "infra.session.delete.accepted",
+            assistant_id=assistant_id,
+            deleted=deleted,
+        )
+        return {
+            "success": True,
+            "assistant_id": assistant_id,
+            "deleted": deleted,
+        }
+    finally:
+        pop_causal_context(causal_token)
 
 
 @router.post("/session/{assistant_id}/stop")
@@ -1077,24 +1095,52 @@ async def stop_job(
     """
     Stop a Kubernetes Job for a Unity assistant.
     """
+    causal_token = push_causal_context(
+        build_causal_context(
+            caller="views.job_stop",
+            reason="http_request",
+        ),
+    )
     try:
+        emit_observability_event(
+            "infra.job_stop.requested",
+            job_name=job_name,
+            namespace=namespace,
+        )
         batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
 
         success = await asyncio.to_thread(suspend_job, batch_api, job_name, namespace)
         if success:
+            emit_observability_event(
+                "infra.job_stop.accepted",
+                job_name=job_name,
+                namespace=namespace,
+            )
             return {
                 "success": True,
                 "message": f"Job suspended successfully: {job_name}",
             }
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to suspend job: {job_name}",
-            )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to suspend job: {job_name}",
+        )
     except HTTPException:
+        emit_observability_event(
+            "infra.job_stop.failed",
+            job_name=job_name,
+            namespace=namespace,
+        )
         raise
     except Exception as e:
+        emit_observability_event(
+            "infra.job_stop.failed",
+            job_name=job_name,
+            namespace=namespace,
+            error=str(e),
+        )
         raise HTTPException(status_code=500, detail=f"Failed to suspend job: {str(e)}")
+    finally:
+        pop_causal_context(causal_token)
 
 
 def _job_started_at(job) -> datetime | None:

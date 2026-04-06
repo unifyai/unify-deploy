@@ -7,6 +7,11 @@ from kubernetes.client.rest import ApiException
 import pytest
 
 from communication.infra.assistant_sessions import build_binding_signal
+from communication.infra.observability import (
+    build_causal_context,
+    causal_signal_payload,
+    current_causal_context,
+)
 
 fake_kopf = types.SimpleNamespace()
 
@@ -557,6 +562,184 @@ def test_reconcile_applies_vm_assignment_signal(monkeypatch):
         == "unity-pool-ubuntu-1"
     )
     assert patch_status.call_args.kwargs["signals"] == {}
+
+
+def test_reconcile_applies_vm_assignment_signal_under_signal_causal_context(
+    monkeypatch,
+):
+    body = _base_session()
+    signal_context = build_causal_context(
+        caller="worker.vm_assignment",
+        reason="background_worker",
+    )
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+    )
+    body["status"]["signals"] = {
+        controller.SIGNAL_VM_ASSIGNMENT: build_binding_signal(
+            binding_id="binding-1",
+            state="assigned",
+            observed_at="2026-04-03T00:00:05+00:00",
+            vmRef={
+                "name": "unity-pool-ubuntu-1",
+                "hostname": "vm-1.vm.unify.ai",
+                "vmType": "ubuntu",
+            },
+            causal=causal_signal_payload(signal_context),
+        ),
+    }
+    captured: dict[str, object] = {}
+
+    def patch_status(*_args, **kwargs):
+        captured["context"] = current_causal_context()
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(),
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert captured["kwargs"]["phase"] == "PendingGuest"
+    context = captured["context"]
+    assert context["caller"] == "controller.reconcile.vm_assignment"
+    assert context["parent_caller"] == "worker.vm_assignment"
+    assert context["root_caller"] == "worker.vm_assignment"
+    assert context["reason"] == "persisted_signal:vmAssignment"
+
+
+def test_reconcile_carries_release_signal_context_into_next_pending_job(monkeypatch):
+    body = _base_session()
+    signal_context = build_causal_context(
+        caller="views.release_complete",
+        reason="http_request",
+    )
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        releaseRequestedAt="2026-04-03T00:00:15+00:00",
+    )
+    body["status"]["signals"] = {
+        controller.SIGNAL_VM_RELEASE_COMPLETE: build_binding_signal(
+            binding_id="binding-1",
+            state="completed",
+            observed_at="2026-04-03T00:00:20+00:00",
+            vmName="unity-pool-ubuntu-1",
+            causal=causal_signal_payload(signal_context),
+        ),
+    }
+    captured: dict[str, object] = {}
+
+    def patch_status(*_args, **kwargs):
+        captured["context"] = current_causal_context()
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_binding_release_state",
+        MagicMock(return_value=("Released", None, [], "")),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert captured["kwargs"]["phase"] == "PendingJob"
+    context = captured["context"]
+    assert context["caller"] == "controller.reconcile.pending_job"
+    assert context["parent_caller"] == "views.release_complete"
+    assert context["root_caller"] == "views.release_complete"
+    assert context["reason"] == "post_release_signal"
+
+
+def test_reconcile_emits_pending_job_stage_when_binding_is_minted(monkeypatch):
+    body = _base_session()
+    patch_status = MagicMock()
+    events: list[tuple[str, dict]] = []
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(
+        controller,
+        "emit_observability_event",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert any(
+        event == "controller.pending_job_stage"
+        and fields.get("stage") == "mint_binding"
+        and fields.get("stage_state") == "completed"
+        for event, fields in events
+    )
+
+
+def test_reconcile_emits_pending_container_wait_stage(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "PendingContainer"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        createdAt=controller._now_iso(),
+    )
+    patch_status = MagicMock()
+    events: list[tuple[str, dict]] = []
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(container_ready=False),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(
+        controller,
+        "emit_observability_event",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert any(
+        event == "controller.pending_container_stage"
+        and fields.get("stage") == "container_ready_wait"
+        and fields.get("stage_state") == "pending"
+        for event, fields in events
+    )
 
 
 def test_reconcile_consumes_desktop_ready_signal_and_queues_guest_probe(monkeypatch):
