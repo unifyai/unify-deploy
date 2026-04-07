@@ -2,6 +2,7 @@ import asyncio
 import json
 import base64
 import logging
+import mimetypes
 import time
 import uuid
 from dotenv import load_dotenv
@@ -592,6 +593,113 @@ async def twilio_sms_webhook(request: Request):
     return Response(content=str(resp_user), media_type="text/xml")
 
 
+# WhatsApp media size limits (bytes)
+_WA_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+_WA_MEDIA_MAX_BYTES = 16 * 1024 * 1024  # 16 MB
+
+
+async def _ingest_whatsapp_media(
+    form_data,
+    assistant_id: str,
+    message_sid: str | None,
+) -> list[dict]:
+    """Download media from Twilio, re-upload to GCS, delete from Twilio.
+
+    Returns a list of attachment dicts compatible with the Unify attachment
+    schema: {id, filename, gs_url, content_type, size_bytes}.
+    """
+    num_media = int(form_data.get("NumMedia", "0") or "0")
+    if num_media == 0:
+        return []
+
+    creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
+    if not creds_json:
+        logger.error("GCP_SA_KEY not configured — skipping WhatsApp media ingestion")
+        return []
+
+    account_sid = os.getenv("TWILIO_WA_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_WA_AUTH_TOKEN", "")
+    twilio_auth = (account_sid, auth_token)
+
+    creds = Credentials.from_service_account_info(creds_json)
+    storage_client = storage.Client(credentials=creds)
+    bucket = storage_client.bucket(UNIFY_ATTACHMENTS_BUCKET)
+
+    attachments: list[dict] = []
+
+    async with httpx.AsyncClient() as client:
+        for i in range(num_media):
+            media_url = form_data.get(f"MediaUrl{i}")
+            content_type = form_data.get(
+                f"MediaContentType{i}", "application/octet-stream"
+            )
+            if not media_url:
+                continue
+
+            try:
+                resp = await client.get(
+                    media_url,
+                    auth=twilio_auth,
+                    follow_redirects=True,
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+            except Exception:
+                logger.exception(f"Failed to download WhatsApp media from {media_url}")
+                continue
+
+            file_content = resp.content
+            size_bytes = len(file_content)
+
+            max_size = (
+                _WA_IMAGE_MAX_BYTES
+                if content_type.startswith("image/")
+                else _WA_MEDIA_MAX_BYTES
+            )
+            if size_bytes > max_size:
+                logger.warning(
+                    f"WhatsApp media exceeds size limit ({size_bytes} > {max_size}), skipping",
+                )
+                continue
+
+            ext = mimetypes.guess_extension(content_type) or ""
+            attachment_id = str(uuid.uuid4())
+            filename = f"whatsapp_media_{attachment_id[:8]}{ext}"
+
+            blob_path = f"{assistant_id}/whatsapp/{attachment_id}_{filename}"
+            blob = bucket.blob(blob_path)
+            await asyncio.to_thread(
+                blob.upload_from_string, file_content, content_type=content_type
+            )
+
+            gs_url = f"gs://{UNIFY_ATTACHMENTS_BUCKET}/{blob_path}"
+            logger.info(f"Uploaded WhatsApp media to {gs_url} ({size_bytes} bytes)")
+
+            attachments.append(
+                {
+                    "id": attachment_id,
+                    "filename": filename,
+                    "gs_url": gs_url,
+                    "content_type": content_type,
+                    "size_bytes": size_bytes,
+                }
+            )
+
+            # Delete media from Twilio to free storage.
+            if message_sid:
+                media_sid = media_url.rstrip("/").rsplit("/", 1)[-1]
+                try:
+                    twilio_client = get_twilio_wa_client()
+                    await asyncio.to_thread(
+                        twilio_client.messages(message_sid).media(media_sid).delete,
+                    )
+                    logger.info(f"Deleted Twilio media {media_sid}")
+                except Exception:
+                    logger.exception(f"Failed to delete Twilio media {media_sid}")
+
+    return attachments
+
+
 @app.post("/twilio/whatsapp", dependencies=[Depends(validate_twilio_wa_signature)])
 async def twilio_whatsapp_webhook(request: Request):
     """WhatsApp webhook endpoint - handles incoming Twilio WhatsApp messages."""
@@ -601,6 +709,7 @@ async def twilio_whatsapp_webhook(request: Request):
     to_number = form_data.get("To", "") or ""
     from_number = form_data.get("From", "") or ""
     body = form_data.get("Body", "") or ""
+    message_sid = form_data.get("MessageSid")
     logger.info(
         f"Received WhatsApp message from {_redact_phone(from_number)} to {_redact_phone(to_number)}",
     )
@@ -723,7 +832,19 @@ async def twilio_whatsapp_webhook(request: Request):
     assistant_id = assistant_data["assistant_id"]
     contacts = context["contacts"]
 
+    attachments = await _ingest_whatsapp_media(form_data, assistant_id, message_sid)
+
     resp_user = MessagingResponse()
+
+    event_data = {
+        "contacts": contacts,
+        "to_number": to_number,
+        "from_number": from_number,
+        "body": body,
+        "role": role,
+    }
+    if attachments:
+        event_data["attachments"] = attachments
 
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
@@ -736,13 +857,7 @@ async def twilio_whatsapp_webhook(request: Request):
                 {
                     "thread": "whatsapp",
                     "publish_timestamp": time.time(),
-                    "event": {
-                        "contacts": contacts,
-                        "to_number": to_number,
-                        "from_number": from_number,
-                        "body": body,
-                        "role": role,
-                    },
+                    "event": event_data,
                 },
             ).encode("utf-8"),
             thread="inbound",

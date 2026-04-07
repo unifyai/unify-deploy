@@ -3,10 +3,14 @@ import base64
 import json
 import logging
 import os
+import re
 import time
+from datetime import timedelta
 
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Query, Request
+from google.cloud import storage
+from google.oauth2.service_account import Credentials
 from livekit.api import (
     LiveKitAPI,
     SIPInboundTrunkInfo,
@@ -118,6 +122,35 @@ async def _forward_notification_status(
 # ---------------------------------------------------------------------------
 
 
+_GS_URL_RE = re.compile(r"^gs://([^/]+)/(.+)$")
+
+_WA_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+_WA_MEDIA_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _resolve_media_url(url: str) -> str:
+    """If *url* is a ``gs://`` URI, return a signed download URL.
+    Otherwise return the URL unchanged.
+    """
+    m = _GS_URL_RE.match(url)
+    if not m:
+        return url
+
+    bucket_name, blob_path = m.group(1), m.group(2)
+    creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
+    if not creds_json:
+        raise HTTPException(status_code=500, detail="GCP_SA_KEY not configured")
+
+    creds = Credentials.from_service_account_info(creds_json)
+    client = storage.Client(credentials=creds)
+    blob = client.bucket(bucket_name).blob(blob_path)
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(hours=1),
+        method="GET",
+    )
+
+
 GREETING_TEMPLATE_SID = "HX002f6aeb3b4e5a79b693fa7190196612"
 NUMBER_CHANGE_TEMPLATE_SID = "HXd9c362371aefe97f10526f1c0974f7a2"
 VOICE_CALL_TEMPLATE_SID = "HX885d46e6ccb82e4313ef1a42181c142d"
@@ -171,6 +204,7 @@ async def send(request: Request):
     assistant_id = data["assistant_id"]
     user_name = data.get("user_name", "")
     agent_name = data.get("agent_name", "")
+    media_url = data.get("media_url")
 
     route = await _resolve_route(assistant_id, to)
     pool_number = route["pool_number"]
@@ -178,14 +212,22 @@ async def send(request: Request):
 
     twilio_client = get_twilio_wa_client()
     if window_open:
-        twilio_client.messages.create(
-            to=f"whatsapp:{to}",
-            from_=f"whatsapp:{pool_number}",
-            body=body,
-            status_callback=f"{SETTINGS.comms_url}/whatsapp/status",
-        )
+        create_kwargs: dict = {
+            "to": f"whatsapp:{to}",
+            "from_": f"whatsapp:{pool_number}",
+            "body": body,
+            "status_callback": f"{SETTINGS.comms_url}/whatsapp/status",
+        }
+        if media_url:
+            create_kwargs["media_url"] = [_resolve_media_url(media_url)]
+        twilio_client.messages.create(**create_kwargs)
         method = "freeform"
     else:
+        if media_url:
+            logger.warning(
+                "media_url ignored for out-of-window template message "
+                f"(to={to}, assistant_id={assistant_id})",
+            )
         twilio_client.messages.create(
             content_sid=GREETING_TEMPLATE_SID,
             to=f"whatsapp:{to}",
