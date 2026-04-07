@@ -143,6 +143,33 @@ Remove-LocalGroupMember -Group "Administrators" -Member "unityuser" -ErrorAction
 Write-Host "Ensured unityuser is not in Administrators group" -ForegroundColor Green
 
 # =============================================================================
+# SSHD config convergence (unityuser is intentionally non-admin)
+# =============================================================================
+$sshdConfigPath = "C:\ProgramData\ssh\sshd_config"
+$unityUserSshDir = "C:\Users\unityuser\.ssh"
+New-Item -ItemType Directory -Force -Path "C:\ProgramData\ssh" | Out-Null
+New-Item -ItemType Directory -Force -Path $unityUserSshDir | Out-Null
+$sshdConfig = @"
+# Unity File Sync - OpenSSH Server Configuration
+
+Port 2222
+PasswordAuthentication no
+PubkeyAuthentication yes
+
+# unityuser is intentionally non-admin, so use its per-user authorized_keys
+AuthorizedKeysFile C:/Users/unityuser/.ssh/authorized_keys
+
+# Subsystem for SFTP
+Subsystem sftp sftp-server.exe
+"@
+Set-Content -Path $sshdConfigPath -Value $sshdConfig -Encoding UTF8
+C:\Windows\System32\icacls.exe $unityUserSshDir /inheritance:r /grant "unityuser:(OI)(CI)F" /grant "SYSTEM:F" /grant "Administrators:F" 2>$null | Out-Null
+Remove-Item "C:\ProgramData\ssh\administrators_authorized_keys" -Force -ErrorAction SilentlyContinue
+Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
+Restart-Service sshd -ErrorAction SilentlyContinue
+Write-Host "Converged SSHD for unityuser authorized_keys" -ForegroundColor Green
+
+# =============================================================================
 # Read Configuration
 # =============================================================================
 Write-Host "Reading GCP metadata..."

@@ -15,6 +15,7 @@ class ControllerConfig:
     container_bootstrap_deadline_seconds: float
     max_bootstrap_retries: int
     vm_readiness_deadline_seconds: float
+    windows_vm_readiness_deadline_seconds: float
     max_vm_readiness_retries: int
     vm_assignment_retry_interval_seconds: float
     vm_assignment_in_progress_timeout_seconds: float
@@ -25,6 +26,9 @@ class ControllerConfig:
 
     @classmethod
     def from_env(cls) -> "ControllerConfig":
+        vm_readiness_deadline_seconds = float(
+            os.environ.get("VM_READINESS_DEADLINE_SECONDS", "60"),
+        )
         return cls(
             watch_namespace=os.environ.get(
                 "WATCH_NAMESPACE",
@@ -37,8 +41,12 @@ class ControllerConfig:
                 os.environ.get("CONTAINER_BOOTSTRAP_DEADLINE_SECONDS", "90"),
             ),
             max_bootstrap_retries=int(os.environ.get("MAX_BOOTSTRAP_RETRIES", "2")),
-            vm_readiness_deadline_seconds=float(
-                os.environ.get("VM_READINESS_DEADLINE_SECONDS", "60"),
+            vm_readiness_deadline_seconds=vm_readiness_deadline_seconds,
+            windows_vm_readiness_deadline_seconds=float(
+                os.environ.get(
+                    "WINDOWS_VM_READINESS_DEADLINE_SECONDS",
+                    "90",
+                ),
             ),
             max_vm_readiness_retries=int(
                 os.environ.get("MAX_VM_READINESS_RETRIES", "2"),

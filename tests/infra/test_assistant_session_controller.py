@@ -1660,6 +1660,61 @@ def test_reconcile_restarts_after_vm_readiness_timeout(monkeypatch):
     )
 
 
+def test_reconcile_uses_windows_vm_readiness_timeout(monkeypatch):
+    body = _base_session()
+    body["spec"]["desktop"]["mode"] = "windows"
+    body["status"]["phase"] = "PendingGuest"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        vmRef={"name": "unity-pool-windows-1", "hostname": "vm-1.vm.unify.ai"},
+        containerReadyAt="2026-04-03T00:00:00+00:00",
+        vmAssignedAt="2026-04-03T00:00:05+00:00",
+        guestHandshakeStartedAt="2026-04-03T00:00:05+00:00",
+    )
+    patch_status = MagicMock()
+    deadline_exceeded = MagicMock(return_value=True)
+    release_state = MagicMock(return_value=("Released", None, [], ""))
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(),
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "verify_vm_assignment",
+        lambda *_args, **_kwargs: {
+            "name": "unity-pool-windows-1",
+            "hostname": "vm-1.vm.unify.ai",
+        },
+    )
+    monkeypatch.setattr(controller, "_binding_deadline_exceeded", deadline_exceeded)
+    monkeypatch.setattr(controller, "_binding_release_state", release_state)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert deadline_exceeded.call_args.args[1] == "guestHandshakeStartedAt"
+    assert (
+        deadline_exceeded.call_args.args[2]
+        == controller.WINDOWS_VM_READINESS_DEADLINE_SECONDS
+    )
+    assert release_state.call_args.kwargs["source_reason"] == "vm_readiness_timeout"
+    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+    assert patch_status.call_args.kwargs["binding"]["id"] != "binding-1"
+    assert patch_status.call_args.kwargs["vm_retries"] == 1
+    assert "90s" in patch_status.call_args.kwargs["last_error"]
+
+
 def test_reconcile_transient_desktop_liveness_failure_keeps_binding_active(
     monkeypatch,
 ):

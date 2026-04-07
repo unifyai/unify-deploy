@@ -95,6 +95,7 @@ RECONCILE_INTERVAL_SECONDS = CONFIG.reconcile_interval_seconds
 CONTAINER_BOOTSTRAP_DEADLINE_SECONDS = CONFIG.container_bootstrap_deadline_seconds
 MAX_BOOTSTRAP_RETRIES = CONFIG.max_bootstrap_retries
 VM_READINESS_DEADLINE_SECONDS = CONFIG.vm_readiness_deadline_seconds
+WINDOWS_VM_READINESS_DEADLINE_SECONDS = CONFIG.windows_vm_readiness_deadline_seconds
 MAX_VM_READINESS_RETRIES = CONFIG.max_vm_readiness_retries
 VM_ASSIGNMENT_RETRY_INTERVAL_SECONDS = CONFIG.vm_assignment_retry_interval_seconds
 VM_ASSIGNMENT_IN_PROGRESS_TIMEOUT_SECONDS = (
@@ -165,6 +166,14 @@ def _load_clients() -> None:
 
 def _sanitize_for_k8s(value: str) -> str:
     return str(value).lower().replace("_", "-")
+
+
+def _vm_readiness_deadline_seconds(desktop_mode: str) -> float:
+    """Return the guest-readiness deadline for the current desktop mode."""
+
+    if desktop_mode == "windows":
+        return WINDOWS_VM_READINESS_DEADLINE_SECONDS
+    return VM_READINESS_DEADLINE_SECONDS
 
 
 def _job_terminal_phase(job) -> str | None:
@@ -2633,10 +2642,11 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             )
         return
 
+    vm_readiness_deadline_seconds = _vm_readiness_deadline_seconds(desktop_mode)
     if _binding_deadline_exceeded(
         binding,
         "guestHandshakeStartedAt",
-        VM_READINESS_DEADLINE_SECONDS,
+        vm_readiness_deadline_seconds,
     ):
         release_phase, release_binding, release_conditions, release_error = (
             _binding_release_state(
@@ -2660,7 +2670,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 last_error=release_error
                 or (
                     f"VM did not become ready within "
-                    f"{int(VM_READINESS_DEADLINE_SECONDS)}s"
+                    f"{int(vm_readiness_deadline_seconds)}s"
                 ),
                 source="controller.reconcile",
                 bootstrap_retries=bootstrap_retries,
@@ -2677,7 +2687,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             retry_field="vm_retries",
             message=(
                 f"VM did not become ready within "
-                f"{int(VM_READINESS_DEADLINE_SECONDS)}s"
+                f"{int(vm_readiness_deadline_seconds)}s"
             ),
         )
         patch_assistant_session_status(

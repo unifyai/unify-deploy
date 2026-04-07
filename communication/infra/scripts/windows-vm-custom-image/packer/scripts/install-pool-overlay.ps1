@@ -72,8 +72,8 @@ Port 2222
 PasswordAuthentication no
 PubkeyAuthentication yes
 
-# Use administrators_authorized_keys for all users
-AuthorizedKeysFile C:/ProgramData/ssh/administrators_authorized_keys
+# unityuser is intentionally non-admin, so use its per-user authorized_keys
+AuthorizedKeysFile C:/Users/unityuser/.ssh/authorized_keys
 
 # Subsystem for SFTP
 Subsystem sftp sftp-server.exe

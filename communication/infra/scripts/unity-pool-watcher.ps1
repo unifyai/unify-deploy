@@ -41,6 +41,36 @@ function Write-Log($message) {
     Write-Host "[$ts] $message"
 }
 
+function Get-UnityUserAuthorizedKeysPath {
+    return "C:\Users\unityuser\.ssh\authorized_keys"
+}
+
+function Ensure-UnityUserSshConfig {
+    $sshProgramDataDir = "C:\ProgramData\ssh"
+    $sshDir = "C:\Users\unityuser\.ssh"
+    New-Item -ItemType Directory -Force -Path $sshProgramDataDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+
+    $sshdConfigPath = Join-Path $sshProgramDataDir "sshd_config"
+    $sshdConfig = @"
+# Unity File Sync - OpenSSH Server Configuration
+
+Port 2222
+PasswordAuthentication no
+PubkeyAuthentication yes
+
+# unityuser is intentionally non-admin, so use its per-user authorized_keys
+AuthorizedKeysFile C:/Users/unityuser/.ssh/authorized_keys
+
+# Subsystem for SFTP
+Subsystem sftp sftp-server.exe
+"@
+    Set-Content -Path $sshdConfigPath -Value $sshdConfig -Encoding UTF8
+    C:\Windows\System32\icacls.exe $sshDir /inheritance:r /grant "unityuser:(OI)(CI)F" /grant "SYSTEM:F" /grant "Administrators:F" 2>$null | Out-Null
+    Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
+    return Get-UnityUserAuthorizedKeysPath
+}
+
 # ─── Code update helpers ─────────────────────────────────────────────────
 
 function Get-RemoteCommitHash($repoUrl, $branch) {
@@ -555,10 +585,10 @@ function Invoke-Assign($unifyKey) {
     # SSH authorized_keys + restart SSHD
     try {
         if ($sshPublicKey) {
-            $sshDir = "C:\ProgramData\ssh"
-            New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
-            Set-Content -Path "$sshDir\administrators_authorized_keys" -Value $sshPublicKey -Encoding UTF8
-            icacls "$sshDir\administrators_authorized_keys" /inheritance:r /grant "SYSTEM:F" /grant "Administrators:F" 2>$null
+            $authorizedKeysPath = Ensure-UnityUserSshConfig
+            Remove-Item "C:\ProgramData\ssh\administrators_authorized_keys" -Force -ErrorAction SilentlyContinue
+            Set-Content -Path $authorizedKeysPath -Value $sshPublicKey -Encoding UTF8
+            icacls $authorizedKeysPath /inheritance:r /grant "unityuser:F" /grant "SYSTEM:F" /grant "Administrators:F" 2>$null | Out-Null
             Restart-Service sshd -ErrorAction SilentlyContinue
             Write-Log "SSH authorized_keys configured, SSHD restarted"
         }
@@ -742,6 +772,7 @@ function Invoke-Release {
     Write-Log "Agent Service .env cleared"
 
     # Clear SSH keys
+    Remove-Item (Get-UnityUserAuthorizedKeysPath) -Force -ErrorAction SilentlyContinue
     Remove-Item "C:\ProgramData\ssh\administrators_authorized_keys" -Force -ErrorAction SilentlyContinue
     Write-Log "SSH authorized_keys cleared"
 
