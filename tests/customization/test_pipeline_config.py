@@ -338,10 +338,12 @@ class TestRealConfig:
             / "customization"
             / "clients"
             / "client_alpha"
+            / "deployments"
+            / "v0"
+            / "data"
             / "pipeline_config.json"
         )
-        if not config_path.exists():
-            pytest.skip(f"Config not found at {config_path}")
+        assert config_path.exists(), f"Config not found at {config_path}"
 
         cfg = PipelineConfig.from_file(str(config_path))
 
