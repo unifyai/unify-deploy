@@ -1,0 +1,6 @@
+{
+  "extraPaths": ["../unity", "../unify", "../unillm"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportMissingImports": "warning"
+}
