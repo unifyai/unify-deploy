@@ -125,11 +125,11 @@ spec:
           value: /secrets/key.json
         resources:
           requests:
-            cpu: 2000m
-            memory: 2Gi
+            cpu: 500m
+            memory: 512Mi
           limits:
-            cpu: 2000m
-            memory: 2Gi
+            cpu: 1000m
+            memory: 1Gi
         volumeMounts:
         - name: sa-key
           mountPath: /secrets
