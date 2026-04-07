@@ -127,9 +127,13 @@ spec:
                     type: string
                   createdAt:
                     type: string
+                  containerBootstrapStartedAt:
+                    type: string
                   containerReadyAt:
                     type: string
                   vmAssignedAt:
+                    type: string
+                  guestHandshakeStartedAt:
                     type: string
                   vmReadyObservedAt:
                     type: string

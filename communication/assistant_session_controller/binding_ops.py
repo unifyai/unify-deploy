@@ -32,8 +32,10 @@ def binding_payload(
     vm_ref: dict | None | object = BINDING_UNSET,
     desktop_url: str | None | object = BINDING_UNSET,
     created_at: str | None | object = BINDING_UNSET,
+    container_bootstrap_started_at: str | None | object = BINDING_UNSET,
     container_ready_at: str | None | object = BINDING_UNSET,
     vm_assigned_at: str | None | object = BINDING_UNSET,
+    guest_handshake_started_at: str | None | object = BINDING_UNSET,
     vm_ready_observed_at: str | None | object = BINDING_UNSET,
     vm_ready_hostname: str | None | object = BINDING_UNSET,
     vm_ready_message_id: str | None | object = BINDING_UNSET,
@@ -62,6 +64,11 @@ def binding_payload(
         created_at=(
             binding.get("createdAt") if created_at is BINDING_UNSET else created_at
         ),
+        container_bootstrap_started_at=(
+            binding.get("containerBootstrapStartedAt")
+            if container_bootstrap_started_at is BINDING_UNSET
+            else container_bootstrap_started_at
+        ),
         container_ready_at=(
             binding.get("containerReadyAt")
             if container_ready_at is BINDING_UNSET
@@ -71,6 +78,11 @@ def binding_payload(
             binding.get("vmAssignedAt")
             if vm_assigned_at is BINDING_UNSET
             else vm_assigned_at
+        ),
+        guest_handshake_started_at=(
+            binding.get("guestHandshakeStartedAt")
+            if guest_handshake_started_at is BINDING_UNSET
+            else guest_handshake_started_at
         ),
         vm_ready_observed_at=(
             binding.get("vmReadyObservedAt")

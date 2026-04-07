@@ -1,4 +1,5 @@
 from copy import deepcopy
+from datetime import datetime
 import sys
 import types
 from unittest.mock import MagicMock
@@ -133,6 +134,30 @@ def _job(
     return job
 
 
+def _pod(
+    name: str = "unity-pod-1",
+    *,
+    phase: str = "Running",
+    started_at: str = "2026-04-06T00:00:00+00:00",
+):
+    pod = MagicMock()
+    pod.metadata.name = name
+    pod.status.phase = phase
+    pod.status.start_time = datetime.fromisoformat(started_at)
+    pod.status.container_statuses = []
+    if phase == "Running":
+        pod.status.container_statuses = [
+            types.SimpleNamespace(
+                state=types.SimpleNamespace(
+                    running=types.SimpleNamespace(
+                        started_at=datetime.fromisoformat(started_at),
+                    ),
+                ),
+            ),
+        ]
+    return pod
+
+
 def test_reconcile_mints_binding_for_unbound_running_session(monkeypatch):
     body = _base_session()
     patch_status = MagicMock()
@@ -188,7 +213,9 @@ def test_reconcile_records_binding_owned_job(monkeypatch):
     assert binding["jobRef"]["name"] == "unity-job-1"
 
 
-def test_reconcile_resets_binding_created_at_when_job_is_claimed(monkeypatch):
+def test_reconcile_preserves_created_at_and_starts_bootstrap_timer_on_claim(
+    monkeypatch,
+):
     body = _base_session()
     body["status"]["phase"] = "PendingJob"
     body["status"]["binding"] = _binding(
@@ -202,7 +229,9 @@ def test_reconcile_resets_binding_created_at_when_job_is_claimed(monkeypatch):
 
     monkeypatch.setattr(controller, "_batch_api", batch_api)
     monkeypatch.setattr(controller, "_custom_api", object())
-    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    core_api = MagicMock()
+    core_api.read_namespaced_pod.return_value = _pod()
+    monkeypatch.setattr(controller, "_core_api", core_api)
     monkeypatch.setattr(
         controller,
         "get_assistant_session",
@@ -213,7 +242,11 @@ def test_reconcile_resets_binding_created_at_when_job_is_claimed(monkeypatch):
         "_claim_idle_job_for_binding",
         lambda *_args, **_kwargs: created_job,
     )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "_current_pod_ref",
+        lambda *_args, **_kwargs: {"name": "unity-pod-1", "namespace": "preview"},
+    )
     monkeypatch.setattr(controller, "_now_iso", lambda: "2026-04-06T00:00:00+00:00")
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
@@ -222,7 +255,8 @@ def test_reconcile_resets_binding_created_at_when_job_is_claimed(monkeypatch):
     assert patch_status.call_args.kwargs["phase"] == "PendingContainer"
     binding = patch_status.call_args.kwargs["binding"]
     assert binding["jobRef"]["name"] == "unity-job-1"
-    assert binding["createdAt"] == "2026-04-06T00:00:00+00:00"
+    assert binding["createdAt"] == "2026-04-03T00:00:00+00:00"
+    assert binding["containerBootstrapStartedAt"] == "2026-04-06T00:00:00+00:00"
 
 
 def test_reconcile_defers_job_claim_while_claim_transition_is_busy(monkeypatch):
@@ -561,6 +595,10 @@ def test_reconcile_applies_vm_assignment_signal(monkeypatch):
         patch_status.call_args.kwargs["binding"]["vmRef"]["name"]
         == "unity-pool-ubuntu-1"
     )
+    assert (
+        patch_status.call_args.kwargs["binding"]["guestHandshakeStartedAt"]
+        == "2026-04-03T00:00:05+00:00"
+    )
     assert patch_status.call_args.kwargs["signals"] == {}
 
 
@@ -708,7 +746,7 @@ def test_reconcile_emits_pending_container_wait_stage(monkeypatch):
     body["status"]["binding"] = _binding(
         "binding-1",
         jobRef={"name": "unity-job-1", "namespace": "preview"},
-        createdAt=controller._now_iso(),
+        containerBootstrapStartedAt=controller._now_iso(),
     )
     patch_status = MagicMock()
     events: list[tuple[str, dict]] = []
@@ -725,6 +763,7 @@ def test_reconcile_emits_pending_container_wait_stage(monkeypatch):
         "_job_for_binding",
         lambda *_args, **_kwargs: _job(container_ready=False),
     )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
     monkeypatch.setattr(
         controller,
@@ -740,6 +779,55 @@ def test_reconcile_emits_pending_container_wait_stage(monkeypatch):
         and fields.get("stage_state") == "pending"
         for event, fields in events
     )
+
+
+def test_reconcile_waits_for_pod_running_before_starting_bootstrap_timer(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "PendingContainer"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+    )
+    patch_status = MagicMock()
+    deadline_exceeded = MagicMock(return_value=True)
+    core_api = MagicMock()
+    core_api.read_namespaced_pod.return_value = _pod(phase="Pending")
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", core_api)
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(container_ready=False),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_current_pod_ref",
+        lambda *_args, **_kwargs: {"name": "unity-pod-1", "namespace": "preview"},
+    )
+    monkeypatch.setattr(
+        controller,
+        "_binding_deadline_exceeded",
+        deadline_exceeded,
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    deadline_exceeded.assert_not_called()
+    assert patch_status.call_args.kwargs["phase"] == "PendingContainer"
+    assert "containerBootstrapStartedAt" not in patch_status.call_args.kwargs["binding"]
+    container_ready_condition = next(
+        condition
+        for condition in patch_status.call_args.kwargs["conditions"]
+        if condition["type"] == "ContainerReady"
+    )
+    assert container_ready_condition["reason"] == "WaitingForPodStart"
 
 
 def test_reconcile_consumes_desktop_ready_signal_and_queues_guest_probe(monkeypatch):
@@ -904,9 +992,10 @@ def test_reconcile_restarts_binding_after_bootstrap_timeout(monkeypatch):
     body["status"]["binding"] = _binding(
         "binding-1",
         jobRef={"name": "unity-job-1", "namespace": "preview"},
-        createdAt="2026-04-03T00:00:00+00:00",
+        containerBootstrapStartedAt="2026-04-03T00:00:00+00:00",
     )
     patch_status = MagicMock()
+    deadline_exceeded = MagicMock(return_value=True)
     suspend_job = MagicMock()
 
     monkeypatch.setattr(controller, "_custom_api", object())
@@ -922,16 +1011,17 @@ def test_reconcile_restarts_binding_after_bootstrap_timeout(monkeypatch):
         lambda *_args, **_kwargs: _job(container_ready=False),
     )
     monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        controller,
-        "_binding_deadline_exceeded",
-        lambda *_args, **_kwargs: True,
-    )
+    monkeypatch.setattr(controller, "_binding_deadline_exceeded", deadline_exceeded)
     monkeypatch.setattr(controller, "_suspend_bound_job", suspend_job)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
     controller._update_status_for_session(deepcopy(body))
 
+    assert deadline_exceeded.call_args.args[1] == "containerBootstrapStartedAt"
+    assert (
+        deadline_exceeded.call_args.args[2]
+        == controller.CONTAINER_BOOTSTRAP_DEADLINE_SECONDS
+    )
     suspend_job.assert_called_once()
     assert suspend_job.call_args.kwargs["source"] == "controller.bootstrap_timeout"
     assert patch_status.call_args.kwargs["phase"] == "PendingJob"
@@ -1541,8 +1631,10 @@ def test_reconcile_restarts_after_vm_readiness_timeout(monkeypatch):
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
+        guestHandshakeStartedAt="2026-04-03T00:00:05+00:00",
     )
     patch_status = MagicMock()
+    deadline_exceeded = MagicMock(return_value=True)
     release_state = MagicMock(return_value=("Released", None, [], ""))
 
     monkeypatch.setattr(controller, "_custom_api", object())
@@ -1566,16 +1658,16 @@ def test_reconcile_restarts_after_vm_readiness_timeout(monkeypatch):
             "hostname": "vm-1.vm.unify.ai",
         },
     )
-    monkeypatch.setattr(
-        controller,
-        "_binding_deadline_exceeded",
-        lambda *_args, **_kwargs: True,
-    )
+    monkeypatch.setattr(controller, "_binding_deadline_exceeded", deadline_exceeded)
     monkeypatch.setattr(controller, "_binding_release_state", release_state)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
     controller._update_status_for_session(deepcopy(body))
 
+    assert deadline_exceeded.call_args.args[1] == "guestHandshakeStartedAt"
+    assert (
+        deadline_exceeded.call_args.args[2] == controller.VM_READINESS_DEADLINE_SECONDS
+    )
     assert release_state.call_args.kwargs["source_reason"] == "vm_readiness_timeout"
     assert patch_status.call_args.kwargs["phase"] == "PendingJob"
     assert patch_status.call_args.kwargs["binding"]["id"] != "binding-1"

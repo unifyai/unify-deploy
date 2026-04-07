@@ -530,9 +530,15 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
     }
     assert expected_fields.issubset(status_properties.keys())
     binding_properties = status_properties["binding"]["properties"]
-    assert {"id", "jobRef", "podRef", "vmRef", "desktopUrl"}.issubset(
-        binding_properties.keys(),
-    )
+    assert {
+        "id",
+        "jobRef",
+        "podRef",
+        "vmRef",
+        "desktopUrl",
+        "containerBootstrapStartedAt",
+        "guestHandshakeStartedAt",
+    }.issubset(binding_properties.keys())
 
 
 def test_delete_assistant_session_treats_missing_session_as_absent():

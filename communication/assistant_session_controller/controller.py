@@ -189,6 +189,50 @@ def _current_pod_ref(job_name: str) -> dict | None:
     return None
 
 
+def _read_bound_pod(pod_ref: dict | None):
+    """Return the currently bound pod object when it still exists."""
+
+    if not isinstance(pod_ref, dict):
+        return None
+    pod_name = str(pod_ref.get("name", "") or "")
+    if not pod_name:
+        return None
+    namespace = str(pod_ref.get("namespace", "") or WATCH_NAMESPACE)
+    assert _core_api is not None
+    try:
+        return _core_api.read_namespaced_pod(name=pod_name, namespace=namespace)
+    except ApiException as exc:
+        if exc.status == 404:
+            return None
+        raise
+
+
+def _pod_running_started_at(pod_ref: dict | None) -> str | None:
+    """Return when the bound pod entered a runnable Running state."""
+
+    pod = _read_bound_pod(pod_ref)
+    status = getattr(pod, "status", None)
+    if getattr(status, "phase", "") != "Running":
+        return None
+    for container_status in getattr(status, "container_statuses", None) or []:
+        running_state = getattr(
+            getattr(container_status, "state", None),
+            "running",
+            None,
+        )
+        started_at = getattr(running_state, "started_at", None)
+        if started_at is not None:
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            return started_at.astimezone(timezone.utc).isoformat()
+    started_at = getattr(status, "start_time", None)
+    if started_at is None:
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return started_at.astimezone(timezone.utc).isoformat()
+
+
 def _refresh_session_snapshot(body: dict) -> dict | None:
     assert _custom_api is not None
     assistant_id = str((body.get("spec") or {}).get("assistantId", ""))
@@ -319,11 +363,35 @@ def _binding_stage_observability_fields(
     metadata = getattr(job, "metadata", None)
     annotations = dict(getattr(metadata, "annotations", None) or {})
     created_at = str((binding or {}).get("createdAt", "") or "")
+    container_bootstrap_started_at = str(
+        (binding or {}).get("containerBootstrapStartedAt", "") or "",
+    )
+    guest_handshake_started_at = str(
+        (binding or {}).get("guestHandshakeStartedAt", "") or "",
+    )
     created_at_dt = _parse_iso_or_none(created_at)
+    container_bootstrap_started_at_dt = _parse_iso_or_none(
+        container_bootstrap_started_at,
+    )
+    guest_handshake_started_at_dt = _parse_iso_or_none(guest_handshake_started_at)
     binding_age_seconds = None
     if created_at_dt is not None:
         binding_age_seconds = int(
             (datetime.now(timezone.utc) - created_at_dt).total_seconds(),
+        )
+    container_bootstrap_age_seconds = None
+    if container_bootstrap_started_at_dt is not None:
+        container_bootstrap_age_seconds = int(
+            (
+                datetime.now(timezone.utc) - container_bootstrap_started_at_dt
+            ).total_seconds(),
+        )
+    guest_handshake_age_seconds = None
+    if guest_handshake_started_at_dt is not None:
+        guest_handshake_age_seconds = int(
+            (
+                datetime.now(timezone.utc) - guest_handshake_started_at_dt
+            ).total_seconds(),
         )
     resolved_pod_ref = (
         pod_ref if isinstance(pod_ref, dict) else binding_pod_ref(binding)
@@ -343,8 +411,12 @@ def _binding_stage_observability_fields(
         "vm_retries": vm_retries,
         "binding_created_at": created_at or None,
         "binding_age_seconds": binding_age_seconds,
+        "container_bootstrap_started_at": container_bootstrap_started_at or None,
+        "container_bootstrap_age_seconds": container_bootstrap_age_seconds,
         "container_ready_at": str((binding or {}).get("containerReadyAt", "") or "")
         or None,
+        "guest_handshake_started_at": guest_handshake_started_at or None,
+        "guest_handshake_age_seconds": guest_handshake_age_seconds,
         "container_ready_annotation": annotations.get(CONTAINER_READY_ANNOTATION)
         or None,
     }
@@ -672,11 +744,14 @@ def _claim_and_bind_pending_job(
             newly_claimed = True
 
         claim_origin = "claimed_idle" if newly_claimed else "existing_binding_job"
+        pod_ref = _current_pod_ref(job.metadata.name)
         next_binding = _binding_payload(
             binding,
             job_ref={"name": job.metadata.name, "namespace": WATCH_NAMESPACE},
-            pod_ref=_current_pod_ref(job.metadata.name),
-            created_at=_now_iso(),
+            pod_ref=pod_ref,
+            container_bootstrap_started_at=(
+                _now_iso() if _pod_running_started_at(pod_ref) else None
+            ),
         )
         try:
             patch_assistant_session_status(
@@ -1951,13 +2026,58 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             )
         return
 
+    if not binding.get("containerBootstrapStartedAt"):
+        container_bootstrap_started_at = _pod_running_started_at(pod_ref)
+        if container_bootstrap_started_at:
+            binding = _binding_payload(
+                binding,
+                container_bootstrap_started_at=container_bootstrap_started_at,
+            )
+
     container_ready = (job.metadata.annotations or {}).get(
         CONTAINER_READY_ANNOTATION,
     ) == "true"
     if not container_ready:
+        if not binding.get("containerBootstrapStartedAt"):
+            _emit_binding_stage_event(
+                "controller.pending_container_stage",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                phase="PendingContainer",
+                binding=binding,
+                desktop_required=desktop_required,
+                bootstrap_retries=bootstrap_retries,
+                vm_retries=vm_retries,
+                job=job,
+                pod_ref=pod_ref,
+                stage="pod_running_wait",
+                stage_state="pending",
+            )
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase="PendingContainer",
+                observed_activation_id=activation_id,
+                binding=binding,
+                last_error="",
+                source="controller.reconcile",
+                conditions=_condition_state(
+                    existing_conditions,
+                    "PendingContainer",
+                    desktop_required,
+                    container_assigned=True,
+                    container_ready=False,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason="WaitingForPodStart",
+                    message="Waiting for bound Unity pod to enter Running state",
+                ),
+            )
+            return
         if _binding_deadline_exceeded(
             binding,
-            "createdAt",
+            "containerBootstrapStartedAt",
             CONTAINER_BOOTSTRAP_DEADLINE_SECONDS,
         ):
             _emit_binding_stage_event(
@@ -2132,12 +2252,14 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                     if isinstance(signaled_vm_ref, dict) and signaled_vm_ref.get(
                         "name",
                     ):
+                        guest_handshake_started_at = str(
+                            assignment_signal.get("observedAt", "") or _now_iso(),
+                        )
                         binding = _binding_payload(
                             binding,
                             vm_ref=signaled_vm_ref,
-                            vm_assigned_at=str(
-                                assignment_signal.get("observedAt", "") or _now_iso(),
-                            ),
+                            vm_assigned_at=guest_handshake_started_at,
+                            guest_handshake_started_at=guest_handshake_started_at,
                             desktop_url=None,
                             vm_ready_observed_at=None,
                             vm_ready_hostname=None,
@@ -2284,6 +2406,13 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         return
 
     binding = _binding_payload(binding, vm_ref=verified_vm_ref)
+    if not binding.get("guestHandshakeStartedAt"):
+        binding = _binding_payload(
+            binding,
+            guest_handshake_started_at=(
+                str(binding.get("vmAssignedAt", "") or "") or _now_iso()
+            ),
+        )
     consumed_signals: list[str] = []
     ready_signal_parent_context: dict | None = None
     ready_signal = _desktop_ready_signal(body)
@@ -2534,7 +2663,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
 
     if _binding_deadline_exceeded(
         binding,
-        "vmAssignedAt",
+        "guestHandshakeStartedAt",
         VM_READINESS_DEADLINE_SECONDS,
     ):
         release_phase, release_binding, release_conditions, release_error = (
