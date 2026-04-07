@@ -33,6 +33,7 @@ def app_module():
 
 @pytest.fixture
 def client(app_module):
+    app_module.SETTINGS.orchestra_admin_key = "test-admin-key"
     test_client = TestClient(app_module.app)
     test_client.headers["Authorization"] = "Bearer test-admin-key"
     return test_client
@@ -78,3 +79,16 @@ def test_infra_maintenance_calls_terminal_session_prune(client, app_module):
         call.args[0].endswith("/infra/sessions/prune-terminal")
         for call in mock_post.call_args_list
     )
+
+
+def test_scheduled_jobs_create_passes_extra_demand(client, app_module):
+    with patch.object(
+        app_module,
+        "replenish_idle_pool",
+        return_value={"status": "ok"},
+    ) as mock_replenish:
+        response = client.post("/scheduled/jobs/create", params={"extra_demand": 2})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    mock_replenish.assert_called_once_with(refresh=False, extra_demand=2)

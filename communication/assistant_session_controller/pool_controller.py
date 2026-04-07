@@ -8,6 +8,7 @@ from typing import Any
 from common.settings import SETTINGS
 from communication.infra.assistant_sessions import (
     assistant_session_desired_state,
+    binding_job_ref,
     binding_vm_ref,
     emit_observability_event,
     get_custom_objects_api,
@@ -15,6 +16,7 @@ from communication.infra.assistant_sessions import (
     session_desktop_mode,
     session_desktop_required,
 )
+from communication.infra.idle_job_pool import schedule_idle_job_pool_replenishment
 from communication.infra.vm_config import SUPPORTED_POOL_VM_TYPES
 from communication.infra.vm_helpers import replenish_pool, trim_pool
 
@@ -58,12 +60,60 @@ def pending_vm_demand(sessions: list[dict[str, Any]]) -> dict[str, int]:
     return demand
 
 
+def pending_job_demand(sessions: list[dict[str, Any]]) -> int:
+    """Return the number of sessions blocked on idle Unity container capacity."""
+
+    pending = 0
+    for session in sessions:
+        if assistant_session_desired_state(session) != "Running":
+            continue
+        if binding_job_ref(session_binding(session)):
+            continue
+        phase = str(((session.get("status") or {}).get("phase")) or "")
+        if phase != "PendingJob":
+            continue
+        pending += 1
+    return pending
+
+
 def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[str, Any]:
     """Run one pool-capacity reconciliation cycle."""
 
     sessions = _list_sessions(custom_api, namespace)
+    pending_jobs = pending_job_demand(sessions)
     demand = pending_vm_demand(sessions)
     results: dict[str, Any] = {}
+    try:
+        replenish_scheduled = (
+            schedule_idle_job_pool_replenishment(
+                extra_demand=pending_jobs,
+                source="controller.pool_reconcile",
+            )
+            if pending_jobs > 0
+            else False
+        )
+        results["unity_jobs"] = {
+            "pending_sessions": pending_jobs,
+            "replenish_scheduled": replenish_scheduled,
+        }
+        emit_observability_event(
+            "controller.job_pool.reconcile",
+            namespace=namespace,
+            pending_sessions=pending_jobs,
+            replenish_scheduled=replenish_scheduled,
+        )
+    except Exception as exc:  # pragma: no cover - safety net for live loop
+        logger.exception("Pool controller reconcile failed for unity jobs")
+        results["unity_jobs"] = {
+            "pending_sessions": pending_jobs,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        emit_observability_event(
+            "controller.job_pool.reconcile_failed",
+            namespace=namespace,
+            pending_sessions=pending_jobs,
+            error=f"{type(exc).__name__}: {exc}",
+        )
     for vm_type in SUPPORTED_POOL_VM_TYPES:
         pending = demand.get(vm_type, 0)
         try:
@@ -99,7 +149,7 @@ def reconcile_pool_once(custom_api, namespace: str = WATCH_NAMESPACE) -> dict[st
 
 
 def run_forever() -> None:
-    """Continuously reconcile generic pool supply for desktop sessions."""
+    """Continuously reconcile generic pool supply for sessions."""
 
     custom_api = get_custom_objects_api()
     if custom_api is None:

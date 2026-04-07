@@ -2183,7 +2183,6 @@ async def outlook_notification_processor(request: Request):
             is_default = "default" in assistant_id
             if not is_default:
                 start_unity_job(assistant_data, "email")
-                replenish_idle_pool(refresh=False)
 
             logger.info("Job start requested for email handler")
 
@@ -2396,7 +2395,6 @@ async def teams_notification_processor(request: Request):
             is_default = assistant_id and "default" in assistant_id
             if not is_default:
                 start_unity_job(assistant_data, "teams")
-                replenish_idle_pool(refresh=False)
             logger.info("Job start requested for teams handler")
             return contacts, True
 
@@ -3199,9 +3197,9 @@ def scheduled_infra_maintenance():
 
 
 @app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
-def scheduled_jobs_create(refresh: bool = False):
+def scheduled_jobs_create(refresh: bool = False, extra_demand: int = 0):
     """Replenish idle container pool (utility — use /scheduled/infra/maintenance for cron)."""
-    return replenish_idle_pool(refresh=refresh)
+    return replenish_idle_pool(refresh=refresh, extra_demand=extra_demand)
 
 
 @app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])

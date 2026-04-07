@@ -51,6 +51,7 @@ from .assistant_sessions import (
     session_binding,
     vm_refs_match,
 )
+from .idle_job_pool import schedule_idle_job_pool_replenishment
 from .observability import (
     build_causal_context,
     pop_causal_context,
@@ -730,6 +731,7 @@ async def start_job(
     existing_phase = None
     reused_active_session = False
     restart_in_progress = False
+    idle_pool_replenish_scheduled = False
     causal_token = push_causal_context(
         build_causal_context(
             caller="views.job_start",
@@ -927,6 +929,11 @@ async def start_job(
         activation_id = str(session.get("spec", {}).get("activationId", activation_id))
         status = session.get("status", {})
         binding = session_binding(session)
+        if not reused_active_session:
+            idle_pool_replenish_scheduled = schedule_idle_job_pool_replenishment(
+                extra_demand=1,
+                source="views.job_start",
+            )
         emit_observability_event(
             "infra.job_start.ensured",
             **assistant_session_observability_fields(
@@ -934,6 +941,7 @@ async def start_job(
                 reused_active_session=reused_active_session,
                 startup_secret_ref=secret_name,
             ),
+            idle_pool_replenish_scheduled=idle_pool_replenish_scheduled,
         )
         return {
             "success": True,

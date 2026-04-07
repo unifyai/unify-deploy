@@ -826,10 +826,10 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
     return inventory
 
 
-def replenish_idle_pool(refresh: bool = False) -> dict:
+def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     """Core logic for idle job pool replenishment.
 
-    Called by build_webhook_context() and by /scheduled/infra/maintenance.
+    Called by `/scheduled/jobs/create` and by `/scheduled/infra/maintenance`.
 
     Fill mode has two regimes:
     - Floor regime (demand_buffer <= min_idle_floor): Creates exactly 1 job per
@@ -839,6 +839,9 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     - Demand regime (demand_buffer > min_idle_floor): Checks inventory and fills
       the gap to the demand-based target. At this scale, small race-induced
       discrepancies are negligible relative to pool size.
+    - Reactive regime (`extra_demand > 0`): Ensures blocked `PendingJob`
+      sessions can be satisfied immediately while still maintaining the steady
+      warm-pool floor.
     """
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
@@ -846,34 +849,49 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     UNITY_JOBS_RUNNING.set(running_count)
     UNITY_JOBS_IDLE.set(current_idle_count)
 
+    extra_demand = max(0, int(extra_demand))
     pool_target = get_target_idle_count(running_count)
+    effective_target = max(pool_target.target, extra_demand)
 
     if refresh:
-        num_to_create = pool_target.target
+        num_to_create = effective_target
+    elif extra_demand > 0:
+        num_to_create = max(0, effective_target - current_idle_count)
     elif not pool_target.demand_exceeds_floor:
         num_to_create = 1
     else:
-        num_to_create = max(0, pool_target.target - current_idle_count)
+        num_to_create = max(0, effective_target - current_idle_count)
 
     if num_to_create == 0:
         UNITY_JOBS_RUNNING.set(running_count)
         UNITY_JOBS_IDLE.set(current_idle_count)
         logger.info(
-            f"Idle pool is healthy (current: {current_idle_count}, target: {pool_target.target}). No jobs created.",
+            "Idle pool is healthy "
+            f"(current: {current_idle_count}, target: {effective_target}, "
+            f"extra_demand: {extra_demand}). No jobs created.",
         )
         return {
             "status": "healthy",
             "current": current_idle_count,
-            "target": pool_target.target,
+            "target": effective_target,
+            "extra_demand": extra_demand,
         }
 
     mode = (
         "refresh"
         if refresh
-        else ("fill-floor" if not pool_target.demand_exceeds_floor else "fill-demand")
+        else (
+            "fill-reactive"
+            if extra_demand > 0
+            else (
+                "fill-floor" if not pool_target.demand_exceeds_floor else "fill-demand"
+            )
+        )
     )
     logger.info(
-        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {pool_target.target})...",
+        f"[{mode}] Creating {num_to_create} idle jobs "
+        f"(current: {current_idle_count}, target: {effective_target}, "
+        f"extra_demand: {extra_demand})...",
     )
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     response = requests.get(f"{SETTINGS.comms_url}/infra/image", headers=headers)
@@ -902,7 +920,8 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     return {
         "mode": mode,
         "created": len(created_jobs),
-        "target": pool_target.target,
+        "target": effective_target,
+        "extra_demand": extra_demand,
         "details": created_jobs,
     }
 
@@ -1137,10 +1156,8 @@ def build_webhook_context(
     is_valid_contact = is_valid_contact or is_local_assistant
 
     # Start a container if needed. The /infra/job/start endpoint handles
-    # deduplication atomically via K8s labels — if a container is already
-    # serving this assistant, the endpoint returns early without publishing.
-    # This replaces the previous is_job_running() + mark_job_running() flow
-    # which was non-atomic and could leave stale records.
+    # deduplication atomically and now owns the canonical idle-pool top-up for
+    # every caller, so adapters only need to submit the activation intent here.
     job_started = False
     is_running = False
     skip_auto_start = is_test_assistant or is_local_assistant
@@ -1150,7 +1167,6 @@ def build_webhook_context(
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
         _WEBHOOK_BG_POOL.submit(start_unity_job, assistant_data, channel)
-        _WEBHOOK_BG_POOL.submit(replenish_idle_pool, False)
         job_started = True
         is_running = True
 

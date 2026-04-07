@@ -15,6 +15,7 @@ from adapters.helpers import (
     get_default_contacts,
     get_unity_jobs_inventory,
     check_contact_details,
+    replenish_idle_pool,
     start_unity_job,
 )
 from common.settings import SETTINGS
@@ -275,6 +276,40 @@ def test_get_unity_jobs_inventory_uses_explicit_lookback(mock_fetch_infra_jobs):
     params = mock_fetch_infra_jobs.call_args.args[0]
     assert params["hours"] == SETTINGS.job_inventory_lookback_hours
     assert params["label_selector"] == "app=unity,unity-status!=done"
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+def test_replenish_idle_pool_honors_extra_demand(
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+    mock_requests_post,
+):
+    mock_get_unity_jobs_inventory.return_value = {
+        "running": [{"job_name": "running-1"}],
+        "idle": [{"job_name": "idle-1"}],
+    }
+    mock_get_target_idle_count.return_value = SimpleNamespace(
+        target=3,
+        demand_exceeds_floor=False,
+    )
+    mock_requests_get.return_value = MagicMock(
+        json=MagicMock(return_value={"commit_hash": "abc123"}),
+    )
+    mock_requests_post.return_value = MagicMock(
+        json=MagicMock(return_value={"status": "dispatched"}),
+    )
+
+    result = replenish_idle_pool(extra_demand=4)
+
+    assert result["mode"] == "fill-reactive"
+    assert result["created"] == 3
+    assert result["target"] == 4
+    assert result["extra_demand"] == 4
+    assert mock_requests_post.call_count == 3
 
 
 @patch("adapters.helpers.requests.get")

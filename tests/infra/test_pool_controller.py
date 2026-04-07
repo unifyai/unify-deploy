@@ -9,10 +9,13 @@ def _session(
     desktop_mode: str = "ubuntu",
     desired_state: str = "Running",
     has_vm: bool = False,
+    has_job: bool = False,
 ) -> dict:
     binding = {"id": f"binding-{assistant_id}"}
     if has_vm:
         binding["vmRef"] = {"name": f"vm-{assistant_id}"}
+    if has_job:
+        binding["jobRef"] = {"name": f"job-{assistant_id}"}
     return {
         "spec": {
             "assistantId": assistant_id,
@@ -41,14 +44,29 @@ def test_pending_vm_demand_counts_only_waiting_sessions():
     assert demand == {"ubuntu": 1, "windows": 1}
 
 
+def test_pending_job_demand_counts_only_waiting_sessions():
+    sessions = [
+        _session("1", phase="PendingJob"),
+        _session("2", phase="PendingContainer"),
+        _session("3", phase="PendingJob", desired_state="Stopped"),
+        _session("4", phase="PendingJob", has_job=True),
+    ]
+
+    demand = pool_controller.pending_job_demand(sessions)
+
+    assert demand == 1
+
+
 def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
     replenish_calls = []
     trim_calls = []
+    job_replenish_calls = []
 
     class FakeCustomApi:
         def list_namespaced_custom_object(self, **_kwargs):
             return {
                 "items": [
+                    _session("job-1", phase="PendingJob"),
                     _session("1", phase="PendingVM", desktop_mode="ubuntu"),
                     _session("2", phase="PendingVM", desktop_mode="ubuntu"),
                 ],
@@ -72,10 +90,23 @@ def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
         "emit_observability_event",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        pool_controller,
+        "schedule_idle_job_pool_replenishment",
+        lambda extra_demand, source: job_replenish_calls.append(
+            (extra_demand, source),
+        )
+        or True,
+    )
 
     result = pool_controller.reconcile_pool_once(FakeCustomApi(), "preview")
 
+    assert job_replenish_calls == [(1, "controller.pool_reconcile")]
     assert replenish_calls == [("ubuntu", 2), ("windows", 0)]
     assert trim_calls == ["windows"]
+    assert result["unity_jobs"] == {
+        "pending_sessions": 1,
+        "replenish_scheduled": True,
+    }
     assert result["ubuntu"]["pending_sessions"] == 2
     assert result["windows"]["pending_sessions"] == 0
