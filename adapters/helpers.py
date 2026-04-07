@@ -11,6 +11,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+NO_DESKTOP_MODE = "none"
+
 from common.metrics import (
     ORCHESTRA_GET_ASSISTANT_DURATION,
     BUILD_WEBHOOK_CONTEXT_DURATION,
@@ -196,7 +198,7 @@ def get_assistant(
         "voice_provider": assistants[0]["voice_provider"],
         "voice_id": assistants[0]["voice_id"],
         "secrets": assistants[0].get("secrets", {}),
-        "desktop_mode": assistants[0].get("desktop_mode", "ubuntu"),
+        "desktop_mode": assistants[0].get("desktop_mode") or NO_DESKTOP_MODE,
         "user_desktop_mode": assistants[0].get("user_desktop_mode", None),
         "user_desktop_filesys_sync": assistants[0].get(
             "user_desktop_filesys_sync",
@@ -633,7 +635,13 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
 
 
 def start_unity_job(assistant: dict, medium: str):
-    """Start the service using values from assistant dict."""
+    """Submit runtime activation intent to the comms convergence path.
+
+    This adapter call is intentionally latency-biased. Success or timeout here
+    only means the request reached the comms edge (or was dispatched
+    fire-and-forget); AssistantSession creation and runtime convergence continue
+    asynchronously inside comms.
+    """
     api_key = assistant["api_key"]
     assistant_id = assistant["assistant_id"]
 
@@ -641,14 +649,15 @@ def start_unity_job(assistant: dict, medium: str):
         logger.info(f"No user name for assistant {assistant_id}")
         return
 
-    desktop_mode = assistant.get("desktop_mode", "ubuntu")
+    desktop_mode = assistant.get("desktop_mode") or NO_DESKTOP_MODE
     user_desktop_mode = assistant.get("user_desktop_mode", None)
     user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
     user_desktop_url = assistant.get("user_desktop_url", None)
 
     demo_id = assistant.get("demo_id", None)
 
-    # start job
+    # Submit activation intent to comms. Adapters returns quickly after handing
+    # off the request; durable AssistantSession convergence happens downstream.
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     try:
         response = requests.post(
@@ -697,22 +706,24 @@ def start_unity_job(assistant: dict, medium: str):
             timeout=0.1,
         )
         if response.status_code == 200:
-            logger.info(f"Job started for assistant {assistant_id}")
+            logger.info(
+                f"Activation request accepted by comms for assistant {assistant_id}",
+            )
         elif response.status_code == 202:
             logger.info(
-                f"Job start queued for assistant {assistant_id} (pool exhausted)",
+                f"Activation request queued for assistant {assistant_id} (pool exhausted)",
             )
         else:
             logger.warning(
-                f"Job start failed for assistant {assistant_id}: "
+                f"Activation request failed for assistant {assistant_id}: "
                 f"{response.status_code} {response.text}",
             )
     except requests.exceptions.Timeout:
         logger.info(
-            f"Job start dispatched for assistant {assistant_id} (fire-and-forget)",
+            f"Activation request dispatched for assistant {assistant_id} (fire-and-forget)",
         )
     except requests.RequestException as e:
-        logger.error(f"Job start request failed for assistant {assistant_id}: {e}")
+        logger.error(f"Activation request failed for assistant {assistant_id}: {e}")
 
 
 class IdlePoolTarget:
@@ -1096,6 +1107,11 @@ def build_webhook_context(
 
     Args:
         assistant_data: Optional pre-fetched assistant data to avoid duplicate Orchestra calls.
+
+    Returns legacy ``job_started`` / ``is_job_running`` flags for northbound
+    callers. These booleans only mean adapters submitted activation intent to
+    ``/infra/job/start``; they do not prove that comms has already created or
+    observed an AssistantSession, nor that the runtime is ready.
     """
     _t0 = time.perf_counter()
     _ctx_status = "error"
@@ -1128,7 +1144,8 @@ def build_webhook_context(
     user_email = assistant_data["user_email"]
     logger.info(f"assistant_data: {assistant_data}")
 
-    # resolve contacts and check job status in parallel
+    # Resolve contacts first; activation dispatch happens later if startup
+    # should proceed for this webhook.
     logger.info(f"validate_contact: {validate_contact}")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -1155,9 +1172,10 @@ def build_webhook_context(
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_local_assistant
 
-    # Start a container if needed. The /infra/job/start endpoint handles
-    # deduplication atomically and now owns the canonical idle-pool top-up for
-    # every caller, so adapters only need to submit the activation intent here.
+    # Submit activation intent if needed. The /infra/job/start endpoint handles
+    # deduplication atomically and owns the durable convergence path plus the
+    # canonical idle-pool top-up. The legacy return flags below only report
+    # whether adapters dispatched that request, not whether runtime is ready.
     job_started = False
     is_running = False
     skip_auto_start = is_test_assistant or is_local_assistant

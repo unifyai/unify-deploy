@@ -679,7 +679,7 @@ async def start_job(
     assistant_whatsapp_number: str = Form(""),
     voice_provider: str = Form(""),
     voice_id: str = Form(""),
-    desktop_mode: str = Form("ubuntu"),
+    desktop_mode: str = Form("none"),
     desktop_url: str = Form(""),
     user_desktop_mode: str = Form(""),
     user_desktop_filesys_sync: str = Form("false"),
@@ -717,7 +717,7 @@ async def start_job(
         assistant_whatsapp_number: Assistant's WhatsApp pool number (optional, defaults to empty string)
         voice_provider: TTS provider (optional, defaults to empty string)
         voice_id: Voice ID (optional, defaults to empty string)
-        desktop_mode: Desktop mode - ubuntu/windows/macos (optional, defaults to "ubuntu")
+        desktop_mode: Desktop mode - ubuntu/windows/macos/none (optional, defaults to "none")
         desktop_url: URL to access the VM desktop (optional, defaults to empty string)
         user_desktop_mode: User's own desktop mode - ubuntu/windows/macos (optional)
         user_desktop_filesys_sync: Whether to sync user desktop filesystem (optional, defaults to "false")

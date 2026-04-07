@@ -1871,13 +1871,19 @@ async def unity_pre_hire_webhook(request: Request):
 
 @app.post("/assistant/wakeup", dependencies=[Depends(require_admin_key)])
 async def assistant_wakeup_webhook(request: Request):
-    """Assistant wakeup webhook - wakes up an assistant."""
+    """Accept a wakeup request and dispatch async activation intent.
+
+    A ``200`` here means adapters accepted the wakeup webhook and submitted the
+    downstream ``/infra/job/start`` convergence path. It does not mean the
+    AssistantSession already exists or that the runtime is ready.
+    """
     logger.info("assistant_wakeup_webhook function started")
     form_data = await request.form()
     assistant_id = form_data.get("assistant_id")
     logger.info(f"Assistant {assistant_id} woke up")
 
-    # shared context
+    # Build shared webhook context and, when needed, hand off activation intent
+    # to comms. Runtime convergence remains asynchronous after this returns.
     await asyncio.to_thread(
         build_webhook_context,
         channel="wakeup",
@@ -1894,8 +1900,11 @@ async def assistant_wakeup_webhook(request: Request):
 @app.post("/assistant/update", dependencies=[Depends(require_admin_key)])
 async def assistant_update_webhook(request: Request):
     """
-    Webhook that receives an assistant id and publishes assistant details
-    to the assistant_update topic. If no job is running, starts one first.
+    Publish an assistant update and dispatch activation intent if needed.
+
+    The returned ``200`` only confirms adapters accepted the update request and
+    submitted the legacy startup path. AssistantSession creation and runtime
+    readiness are still asynchronous downstream.
     """
     logger.info("assistant_update_webhook function started")
 
@@ -1916,7 +1925,9 @@ async def assistant_update_webhook(request: Request):
         )
         assistant_data = context["assistant"]
         logger.info(
-            f"Job running: {context['is_job_running']}, job started: {context['job_started']}",
+            "Activation dispatch state (legacy flags): is_job_running=%s, job_started=%s",
+            context["is_job_running"],
+            context["job_started"],
         )
 
         # Job is running, publish to assistant topic
