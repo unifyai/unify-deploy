@@ -250,6 +250,15 @@ class _FakeCoreApi:
                 items.append(deepcopy(pod))
         return SimpleNamespace(items=items)
 
+    def read_namespaced_pod(
+        self,
+        name: str,
+        namespace: str,
+    ):
+        if namespace != self._harness.namespace or name not in self._harness.pods:
+            raise ApiException(status=404)
+        return deepcopy(self._harness.pods[name])
+
     def read_namespaced_secret(
         self,
         name: str,

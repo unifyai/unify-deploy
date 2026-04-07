@@ -32,11 +32,12 @@ from communication.infra.assistant_sessions import (
     binding_id as binding_id_from_status,
     binding_job_ref,
     binding_pod_ref,
+    binding_vm_assignment,
     binding_vm_ref,
+    claim_binding_vm_assignment_attempt,
     CONTAINER_READY_ANNOTATION,
     DESIRED_STATE_STOPPED,
     SIGNAL_DESKTOP_READY,
-    SIGNAL_VM_ASSIGNMENT,
     SIGNAL_VM_GUEST_HEALTH,
     SIGNAL_VM_RELEASE_COMPLETE,
     SIGNAL_VM_RELEASE_REQUEST,
@@ -96,6 +97,9 @@ MAX_BOOTSTRAP_RETRIES = CONFIG.max_bootstrap_retries
 VM_READINESS_DEADLINE_SECONDS = CONFIG.vm_readiness_deadline_seconds
 MAX_VM_READINESS_RETRIES = CONFIG.max_vm_readiness_retries
 VM_ASSIGNMENT_RETRY_INTERVAL_SECONDS = CONFIG.vm_assignment_retry_interval_seconds
+VM_ASSIGNMENT_IN_PROGRESS_TIMEOUT_SECONDS = (
+    CONFIG.vm_assignment_in_progress_timeout_seconds
+)
 _IMAGE_HASH_BUCKET = CONFIG.image_hash_bucket
 _IMAGE_HASH_CACHE_TTL = CONFIG.image_hash_cache_ttl
 _cached_image_hash: str | None = None
@@ -239,10 +243,6 @@ def _refresh_session_snapshot(body: dict) -> dict | None:
     if not assistant_id:
         return body
     return get_assistant_session(_custom_api, WATCH_NAMESPACE, assistant_id)
-
-
-def _vm_assignment_signal(body: dict) -> dict:
-    return _signal_by_name(body, SIGNAL_VM_ASSIGNMENT)
 
 
 def _desktop_ready_signal(body: dict) -> dict:
@@ -1019,7 +1019,6 @@ def _binding_release_state(
     vm_name = str(vm_ref.get("name", "") or "")
     release_requested_at = str(binding.get("releaseRequestedAt", "") or "")
     release_completed_at = str(binding.get("releaseCompletedAt", "") or "")
-    assignment_signal = _vm_assignment_signal(body)
     release_request_signal = _release_request_signal(body)
     release_complete_signal = _release_complete_signal(body)
     last_error = ""
@@ -1057,25 +1056,16 @@ def _binding_release_state(
     if not vm_name:
         resolved_vm_ref = resolve_current_binding_vm_ref(
             binding,
-            assignment_signal=assignment_signal,
             owned_runtime_vms=owned_runtime_vms,
             disk_vm_name=disk_vm_name,
         )
         resolved_vm_name = str(resolved_vm_ref.get("name", "") or "")
         if resolved_vm_name:
             binding = _binding_payload(binding, vm_ref=resolved_vm_ref)
-            if not binding.get("vmAssignedAt") and _binding_signal_matches(
-                assignment_signal,
-                current_binding_id,
-            ):
-                binding = _binding_payload(
-                    binding,
-                    vm_assigned_at=str(
-                        assignment_signal.get("observedAt", "") or _now_iso(),
-                    ),
-                )
             vm_ref = resolved_vm_ref
             vm_name = resolved_vm_name
+    if binding_vm_assignment(binding):
+        binding = _binding_payload(binding, vm_assignment=None)
     emit_observability_event(
         "controller.release_state.enter",
         **_release_observability_fields(
@@ -1536,7 +1526,6 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         SIGNAL_VM_RELEASE_REQUEST,
         SIGNAL_VM_GUEST_HEALTH,
         SIGNAL_DESKTOP_READY,
-        SIGNAL_VM_ASSIGNMENT,
     )
     continued_signal_parent_context: dict | None = None
 
@@ -2236,102 +2225,84 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         return
 
     current_vm_ref = binding_vm_ref(binding)
-    assignment_signal = _vm_assignment_signal(body)
     if not current_vm_ref:
-        if _binding_signal_matches(assignment_signal, current_binding_id):
-            with _bind_signal_reconcile_context(
-                SIGNAL_VM_ASSIGNMENT,
-                assignment_signal,
-                caller="controller.reconcile.vm_assignment",
-            ):
-                assignment_state = str(assignment_signal.get("state", "") or "")
-                assignment_message = str(assignment_signal.get("message", "") or "")
-                assignment_age = _signal_age_seconds(assignment_signal)
-                if assignment_state == "assigned":
-                    signaled_vm_ref = assignment_signal.get("vmRef")
-                    if isinstance(signaled_vm_ref, dict) and signaled_vm_ref.get(
-                        "name",
-                    ):
-                        guest_handshake_started_at = str(
-                            assignment_signal.get("observedAt", "") or _now_iso(),
-                        )
-                        binding = _binding_payload(
-                            binding,
-                            vm_ref=signaled_vm_ref,
-                            vm_assigned_at=guest_handshake_started_at,
-                            guest_handshake_started_at=guest_handshake_started_at,
-                            desktop_url=None,
-                            vm_ready_observed_at=None,
-                            vm_ready_hostname=None,
-                            vm_ready_message_id=None,
-                            release_requested_at=None,
-                            release_completed_at=None,
-                        )
-                        patch_assistant_session_status(
-                            _custom_api,
-                            WATCH_NAMESPACE,
-                            assistant_id,
-                            phase="PendingGuest",
-                            observed_activation_id=activation_id,
-                            binding=binding,
-                            last_error="",
-                            source="controller.reconcile",
-                            signals=_remaining_signals(
-                                assistant_id,
-                                body,
-                                SIGNAL_VM_ASSIGNMENT,
-                            ),
-                            conditions=_condition_state(
-                                existing_conditions,
-                                "PendingGuest",
-                                desktop_required,
-                                container_assigned=True,
-                                container_ready=True,
-                                vm_assigned=True,
-                                desktop_ready=False,
-                                reason="WaitingForDesktop",
-                                message="Waiting for authenticated desktop readiness",
-                            ),
-                        )
-                        return
-                elif assignment_state in {"capacity", "waiting_release", "error"} and (
-                    assignment_age is None
-                    or assignment_age < VM_ASSIGNMENT_RETRY_INTERVAL_SECONDS
-                ):
-                    reason = {
-                        "capacity": "WaitingForCapacity",
-                        "waiting_release": "WaitingForRelease",
-                        "error": "AssignError",
-                    }[assignment_state]
-                    patch_assistant_session_status(
-                        _custom_api,
-                        WATCH_NAMESPACE,
-                        assistant_id,
-                        phase="PendingVM",
-                        observed_activation_id=activation_id,
-                        binding=binding,
-                        last_error=assignment_message,
-                        source="controller.reconcile",
-                        conditions=_condition_state(
-                            existing_conditions,
-                            "PendingVM",
-                            desktop_required,
-                            container_assigned=True,
-                            container_ready=True,
-                            vm_assigned=False,
-                            desktop_ready=False,
-                            reason=reason,
-                            message=assignment_message
-                            or "Waiting for background VM assignment retry",
-                        ),
-                    )
-                    return
+        assignment = binding_vm_assignment(binding)
+        assignment_state = str(assignment.get("state", "") or "")
+        assignment_message = str(assignment.get("message", "") or "")
+        assignment_age = _signal_age_seconds(assignment)
+        if assignment_state == "in_progress" and (
+            assignment_age is None
+            or assignment_age < VM_ASSIGNMENT_IN_PROGRESS_TIMEOUT_SECONDS
+        ):
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase="PendingVM",
+                observed_activation_id=activation_id,
+                last_error="",
+                source="controller.reconcile",
+                conditions=_condition_state(
+                    existing_conditions,
+                    "PendingVM",
+                    desktop_required,
+                    container_assigned=True,
+                    container_ready=True,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason="AssignQueued",
+                    message="Queued VM assignment in background worker",
+                ),
+            )
+            return
+        if assignment_state in {"capacity", "waiting_release", "error"} and (
+            assignment_age is None
+            or assignment_age < VM_ASSIGNMENT_RETRY_INTERVAL_SECONDS
+        ):
+            reason = {
+                "capacity": "WaitingForCapacity",
+                "waiting_release": "WaitingForRelease",
+                "error": "AssignError",
+            }[assignment_state]
+            patch_assistant_session_status(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                phase="PendingVM",
+                observed_activation_id=activation_id,
+                last_error=assignment_message,
+                source="controller.reconcile",
+                conditions=_condition_state(
+                    existing_conditions,
+                    "PendingVM",
+                    desktop_required,
+                    container_assigned=True,
+                    container_ready=True,
+                    vm_assigned=False,
+                    desktop_ready=False,
+                    reason=reason,
+                    message=assignment_message
+                    or "Waiting for background VM assignment retry",
+                ),
+            )
+            return
+        attempt_id = claim_binding_vm_assignment_attempt(
+            _custom_api,
+            WATCH_NAMESPACE,
+            assistant_id,
+            target_binding_id=current_binding_id,
+            stale_after_seconds=VM_ASSIGNMENT_IN_PROGRESS_TIMEOUT_SECONDS,
+            source="controller.reconcile",
+        )
+        if attempt_id is None:
+            return
         schedule_vm_assignment(
             custom_api=_custom_api,
             core_api=_core_api,
             namespace=WATCH_NAMESPACE,
             assistant_id=assistant_id,
             binding_id=current_binding_id,
+            attempt_id=attempt_id,
             secret_name=secret_name,
             vm_type=desktop_mode or "ubuntu",
         )
@@ -2341,7 +2312,6 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             assistant_id,
             phase="PendingVM",
             observed_activation_id=activation_id,
-            binding=binding,
             last_error="",
             source="controller.reconcile",
             conditions=_condition_state(
@@ -2358,6 +2328,8 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         )
         return
 
+    if binding_vm_assignment(binding):
+        binding = _binding_payload(binding, vm_assignment=None)
     verified_vm_ref = verify_vm_assignment(
         str(current_vm_ref.get("name", "") or ""),
         current_binding_id,

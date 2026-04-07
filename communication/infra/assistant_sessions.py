@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime, timezone
 import base64
 import json
 import logging
 import os
+import uuid
 from typing import Any
 
 from kubernetes import client as k8s_client
@@ -34,7 +36,6 @@ ACTIVE_PHASES = {
     "Active",
 }
 SIGNAL_JOB_BINDING = "jobBinding"
-SIGNAL_VM_ASSIGNMENT = "vmAssignment"
 SIGNAL_DESKTOP_READY = "desktopReady"
 SIGNAL_VM_GUEST_HEALTH = "vmGuestHealth"
 SIGNAL_VM_RELEASE_REQUEST = "vmReleaseRequest"
@@ -122,6 +123,13 @@ def binding_vm_ref(binding: dict[str, Any] | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def binding_vm_assignment(binding: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the persisted VM assignment state for a binding."""
+
+    value = (binding or {}).get("vmAssignment")
+    return value if isinstance(value, dict) else {}
+
+
 def binding_desktop_url(binding: dict[str, Any] | None) -> str:
     """Return the resolved desktop URL stored on the binding."""
 
@@ -172,18 +180,35 @@ def build_binding_signal(
     return {key: value for key, value in payload.items() if value not in (None, "")}
 
 
+def build_binding_vm_assignment(
+    *,
+    state: str,
+    attempt_id: str | None = None,
+    observed_at: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    """Build the canonical VM assignment state stored under ``status.binding``."""
+
+    fields = {
+        "state": state,
+        "attemptId": attempt_id,
+        "observedAt": observed_at or datetime.now(timezone.utc).isoformat(),
+        "message": message,
+    }
+    return {key: value for key, value in fields.items() if value not in (None, "")}
+
+
 def resolve_current_binding_vm_ref(
     binding: dict[str, Any] | None,
     *,
-    assignment_signal: dict[str, Any] | None = None,
     owned_runtime_vms: list[dict[str, Any]] | None = None,
     disk_vm_name: str | None = None,
 ) -> dict[str, Any]:
     """Return the unambiguous VM reference for the current binding.
 
-    Release flows can run before a matching ``vmAssignment`` signal has been
-    persisted into ``status.binding.vmRef``. Recover the current VM only when
-    the binding-scoped evidence points to exactly one owner.
+    Release flows can run before a successful VM assignment has been persisted
+    into ``status.binding.vmRef``. Recover the current VM only when the
+    binding-scoped evidence points to exactly one owner.
     """
 
     current_vm_ref = binding_vm_ref(binding)
@@ -191,18 +216,12 @@ def resolve_current_binding_vm_ref(
     if current_vm_name:
         return current_vm_ref
 
-    current_binding_id = binding_id(binding)
-    signal_binding_id = str((assignment_signal or {}).get("bindingId", "") or "")
-    if current_binding_id and signal_binding_id == current_binding_id:
-        signaled_vm_ref = (assignment_signal or {}).get("vmRef")
-        if isinstance(signaled_vm_ref, dict) and signaled_vm_ref.get("name"):
-            return signaled_vm_ref
-
     candidates = owned_runtime_vms or []
     if len(candidates) != 1:
         return {}
 
     candidate = candidates[0]
+    current_binding_id = binding_id(binding)
     candidate_vm_name = str(candidate.get("vm_name", "") or "")
     candidate_binding_id = str(candidate.get("binding_id", "") or "")
     if not candidate_vm_name:
@@ -231,6 +250,7 @@ def build_binding(
     binding_id: str,
     job_ref: dict[str, Any] | None = None,
     pod_ref: dict[str, Any] | None = None,
+    vm_assignment: dict[str, Any] | None = None,
     vm_ref: dict[str, Any] | None = None,
     desktop_url: str | None = None,
     created_at: str | None = None,
@@ -250,6 +270,7 @@ def build_binding(
         "id": binding_id,
         "jobRef": job_ref,
         "podRef": pod_ref,
+        "vmAssignment": vm_assignment,
         "vmRef": vm_ref,
         "desktopUrl": desktop_url,
         "createdAt": created_at,
@@ -264,6 +285,109 @@ def build_binding(
         "releaseCompletedAt": release_completed_at,
     }
     return {key: value for key, value in fields.items() if value not in (None, "")}
+
+
+def _binding_from_current(
+    current_binding: dict[str, Any] | None,
+    *,
+    binding_id_override: str | None = None,
+    job_ref: dict[str, Any] | None | object = _STATUS_UNSET,
+    pod_ref: dict[str, Any] | None | object = _STATUS_UNSET,
+    vm_assignment: dict[str, Any] | None | object = _STATUS_UNSET,
+    vm_ref: dict[str, Any] | None | object = _STATUS_UNSET,
+    desktop_url: str | None | object = _STATUS_UNSET,
+    created_at: str | None | object = _STATUS_UNSET,
+    container_bootstrap_started_at: str | None | object = _STATUS_UNSET,
+    container_ready_at: str | None | object = _STATUS_UNSET,
+    vm_assigned_at: str | None | object = _STATUS_UNSET,
+    guest_handshake_started_at: str | None | object = _STATUS_UNSET,
+    vm_ready_observed_at: str | None | object = _STATUS_UNSET,
+    vm_ready_hostname: str | None | object = _STATUS_UNSET,
+    vm_ready_message_id: str | None | object = _STATUS_UNSET,
+    release_requested_at: str | None | object = _STATUS_UNSET,
+    release_completed_at: str | None | object = _STATUS_UNSET,
+) -> dict[str, Any]:
+    """Return a canonical binding payload using the current binding as a base."""
+
+    current_binding = current_binding or {}
+    return build_binding(
+        binding_id=binding_id_override or binding_id(current_binding),
+        job_ref=(
+            binding_job_ref(current_binding) or None
+            if job_ref is _STATUS_UNSET
+            else job_ref
+        ),
+        pod_ref=(
+            binding_pod_ref(current_binding) or None
+            if pod_ref is _STATUS_UNSET
+            else pod_ref
+        ),
+        vm_assignment=(
+            binding_vm_assignment(current_binding) or None
+            if vm_assignment is _STATUS_UNSET
+            else vm_assignment
+        ),
+        vm_ref=(
+            binding_vm_ref(current_binding) or None
+            if vm_ref is _STATUS_UNSET
+            else vm_ref
+        ),
+        desktop_url=(
+            binding_desktop_url(current_binding) or None
+            if desktop_url is _STATUS_UNSET
+            else desktop_url
+        ),
+        created_at=(
+            str(current_binding.get("createdAt", "") or "") or None
+            if created_at is _STATUS_UNSET
+            else created_at
+        ),
+        container_bootstrap_started_at=(
+            str(current_binding.get("containerBootstrapStartedAt", "") or "") or None
+            if container_bootstrap_started_at is _STATUS_UNSET
+            else container_bootstrap_started_at
+        ),
+        container_ready_at=(
+            str(current_binding.get("containerReadyAt", "") or "") or None
+            if container_ready_at is _STATUS_UNSET
+            else container_ready_at
+        ),
+        vm_assigned_at=(
+            str(current_binding.get("vmAssignedAt", "") or "") or None
+            if vm_assigned_at is _STATUS_UNSET
+            else vm_assigned_at
+        ),
+        guest_handshake_started_at=(
+            str(current_binding.get("guestHandshakeStartedAt", "") or "") or None
+            if guest_handshake_started_at is _STATUS_UNSET
+            else guest_handshake_started_at
+        ),
+        vm_ready_observed_at=(
+            str(current_binding.get("vmReadyObservedAt", "") or "") or None
+            if vm_ready_observed_at is _STATUS_UNSET
+            else vm_ready_observed_at
+        ),
+        vm_ready_hostname=(
+            str(current_binding.get("vmReadyHostname", "") or "") or None
+            if vm_ready_hostname is _STATUS_UNSET
+            else vm_ready_hostname
+        ),
+        vm_ready_message_id=(
+            str(current_binding.get("vmReadyMessageId", "") or "") or None
+            if vm_ready_message_id is _STATUS_UNSET
+            else vm_ready_message_id
+        ),
+        release_requested_at=(
+            str(current_binding.get("releaseRequestedAt", "") or "") or None
+            if release_requested_at is _STATUS_UNSET
+            else release_requested_at
+        ),
+        release_completed_at=(
+            str(current_binding.get("releaseCompletedAt", "") or "") or None
+            if release_completed_at is _STATUS_UNSET
+            else release_completed_at
+        ),
+    )
 
 
 def _binding_release_field_regressions(
@@ -317,6 +441,7 @@ def assistant_session_observability_fields(
     spec = session.get("spec", {}) if session else {}
     status = session.get("status", {}) if session else {}
     binding = session_binding(session)
+    assignment = binding_vm_assignment(binding)
     vm_ref = binding_vm_ref(binding)
 
     fields = {
@@ -333,6 +458,18 @@ def assistant_session_observability_fields(
         ),
         "phase": overrides.pop("phase", status.get("phase")),
         "binding_id": overrides.pop("binding_id", binding_id(binding)),
+        "vm_assignment_state": overrides.pop(
+            "vm_assignment_state",
+            assignment.get("state"),
+        ),
+        "vm_assignment_attempt_id": overrides.pop(
+            "vm_assignment_attempt_id",
+            assignment.get("attemptId"),
+        ),
+        "vm_assignment_message": overrides.pop(
+            "vm_assignment_message",
+            assignment.get("message"),
+        ),
         "job_name": overrides.pop("job_name", binding_job_ref(binding).get("name")),
         "pod_name": overrides.pop("pod_name", binding_pod_ref(binding).get("name")),
         "vm_name": overrides.pop("vm_name", vm_ref.get("name")),
@@ -806,6 +943,15 @@ def patch_assistant_session_status(
     vm_retries: int | None | object = _STATUS_UNSET,
     desktop_probe_failures: int | None | object = _STATUS_UNSET,
     signals: dict[str, Any] | None | object = _STATUS_UNSET,
+    expected_binding_id: str | object = _STATUS_UNSET,
+    require_desired_state: str | object = _STATUS_UNSET,
+    binding_mutator: (
+        Callable[
+            [dict[str, Any], dict[str, Any]],
+            dict[str, Any] | None | object,
+        ]
+        | None
+    ) = None,
 ) -> dict[str, Any]:
     """Replace the persisted AssistantSession status with the next canonical state.
 
@@ -824,11 +970,27 @@ def patch_assistant_session_status(
         current_status = deepcopy(current.get("status") or {})
         next_status = deepcopy(current_status)
         current_binding = session_binding(current)
+        current_binding_id = binding_id(current_binding)
+        if (
+            expected_binding_id is not _STATUS_UNSET
+            and current_binding_id != expected_binding_id
+        ):
+            return current
+        if (
+            require_desired_state is not _STATUS_UNSET
+            and assistant_session_desired_state(current) != require_desired_state
+        ):
+            return current
         if phase is not None:
             next_status["phase"] = phase
         if observed_activation_id is not None:
             next_status["observedActivationId"] = observed_activation_id
-        if binding is not _STATUS_UNSET:
+        if binding_mutator is not None:
+            next_binding = binding_mutator(current, deepcopy(current_binding))
+            if next_binding is _STATUS_UNSET:
+                return current
+            next_status["binding"] = deepcopy(next_binding)
+        elif binding is not _STATUS_UNSET:
             next_status["binding"] = deepcopy(binding)
         if last_error is not _STATUS_UNSET:
             next_status["lastError"] = last_error
@@ -844,17 +1006,16 @@ def patch_assistant_session_status(
             next_status["signals"] = deepcopy(signals)
 
         next_binding = session_binding({"status": next_status})
-        current_binding_id = binding_id(current_binding)
         next_binding_id = binding_id(next_binding)
         if (
-            binding is not _STATUS_UNSET
+            (binding is not _STATUS_UNSET or binding_mutator is not None)
             and current_binding_id != next_binding_id
             and signals is _STATUS_UNSET
         ):
             next_status["signals"] = {}
         release_field_regressions = (
             _binding_release_field_regressions(current_binding, next_binding)
-            if binding is not _STATUS_UNSET
+            if (binding is not _STATUS_UNSET or binding_mutator is not None)
             else {}
         )
         if release_field_regressions:
@@ -1004,6 +1165,154 @@ def record_assistant_session_signal(
         signal_caller=signal_caller,
     )
     return updated
+
+
+def claim_binding_vm_assignment_attempt(
+    custom_api: k8s_client.CustomObjectsApi,
+    namespace: str,
+    assistant_id: str,
+    *,
+    target_binding_id: str,
+    stale_after_seconds: float,
+    source: str | None = None,
+) -> str | None:
+    """Mark the current binding as having one in-flight VM assignment attempt."""
+
+    attempt_id = uuid.uuid4().hex
+    observed_at = datetime.now(timezone.utc).isoformat()
+
+    def mutate(_current: dict[str, Any], current_binding: dict[str, Any]):
+        if binding_vm_ref(current_binding):
+            return _STATUS_UNSET
+        current_assignment = binding_vm_assignment(current_binding)
+        current_state = str(current_assignment.get("state", "") or "")
+        current_age = _signal_dict_age_seconds(current_assignment)
+        if current_state == "in_progress" and (
+            current_age is None or current_age < stale_after_seconds
+        ):
+            return _STATUS_UNSET
+        return _binding_from_current(
+            current_binding,
+            binding_id_override=target_binding_id,
+            vm_assignment=build_binding_vm_assignment(
+                attempt_id=attempt_id,
+                observed_at=observed_at,
+                state="in_progress",
+            ),
+        )
+
+    updated = patch_assistant_session_status(
+        custom_api,
+        namespace,
+        assistant_id,
+        source=source,
+        expected_binding_id=target_binding_id,
+        require_desired_state=DESIRED_STATE_RUNNING,
+        binding_mutator=mutate,
+    )
+    updated_binding = session_binding(updated)
+    updated_assignment = binding_vm_assignment(updated_binding)
+    if (
+        binding_id(updated_binding) != target_binding_id
+        or assistant_session_desired_state(updated) != DESIRED_STATE_RUNNING
+        or binding_vm_ref(updated_binding)
+    ):
+        return None
+    if (
+        str(updated_assignment.get("state", "") or "") == "in_progress"
+        and str(updated_assignment.get("attemptId", "") or "") == attempt_id
+    ):
+        return attempt_id
+    return None
+
+
+def persist_binding_vm_assignment_result(
+    custom_api: k8s_client.CustomObjectsApi,
+    namespace: str,
+    assistant_id: str,
+    *,
+    target_binding_id: str,
+    attempt_id: str,
+    state: str,
+    message: str | None = None,
+    vm_ref: dict[str, Any] | None = None,
+    source: str | None = None,
+) -> bool:
+    """Persist the outcome for the current binding VM assignment attempt."""
+
+    observed_at = datetime.now(timezone.utc).isoformat()
+
+    def mutate(_current: dict[str, Any], current_binding: dict[str, Any]):
+        current_assignment = binding_vm_assignment(current_binding)
+        if (
+            str(current_assignment.get("state", "") or "") != "in_progress"
+            or str(current_assignment.get("attemptId", "") or "") != attempt_id
+        ):
+            return _STATUS_UNSET
+        if state == "assigned":
+            if not isinstance(vm_ref, dict) or not vm_ref.get("name"):
+                raise ValueError("Assigned VM result requires a vm_ref")
+            return _binding_from_current(
+                current_binding,
+                binding_id_override=target_binding_id,
+                vm_assignment=None,
+                vm_ref=vm_ref,
+                desktop_url=None,
+                vm_assigned_at=observed_at,
+                guest_handshake_started_at=observed_at,
+                vm_ready_observed_at=None,
+                vm_ready_hostname=None,
+                vm_ready_message_id=None,
+                release_requested_at=None,
+                release_completed_at=None,
+            )
+        return _binding_from_current(
+            current_binding,
+            binding_id_override=target_binding_id,
+            vm_assignment=build_binding_vm_assignment(
+                attempt_id=attempt_id,
+                observed_at=observed_at,
+                state=state,
+                message=message,
+            ),
+        )
+
+    updated = patch_assistant_session_status(
+        custom_api,
+        namespace,
+        assistant_id,
+        source=source,
+        expected_binding_id=target_binding_id,
+        require_desired_state=DESIRED_STATE_RUNNING,
+        binding_mutator=mutate,
+    )
+    updated_binding = session_binding(updated)
+    if binding_id(updated_binding) != target_binding_id:
+        return False
+    if state == "assigned":
+        return bool(binding_vm_ref(updated_binding).get("name")) and not bool(
+            binding_vm_assignment(updated_binding),
+        )
+    updated_assignment = binding_vm_assignment(updated_binding)
+    return (
+        str(updated_assignment.get("attemptId", "") or "") == attempt_id
+        and str(updated_assignment.get("state", "") or "") == state
+    )
+
+
+def _signal_dict_age_seconds(payload: dict[str, Any] | None) -> float | None:
+    observed_at = str((payload or {}).get("observedAt", "") or "")
+    if not observed_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(observed_at)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (
+        datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+    ).total_seconds()
 
 
 def get_phase(session: dict[str, Any] | None) -> str:

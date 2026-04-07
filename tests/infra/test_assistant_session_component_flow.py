@@ -2,6 +2,7 @@ import pytest
 
 from communication.infra.assistant_sessions import (
     binding_desktop_url,
+    binding_vm_assignment,
     binding_vm_ref,
     get_phase,
     session_binding,
@@ -28,12 +29,12 @@ def test_component_desktop_ready_flow_reaches_active(monkeypatch):
 
     after_queue = harness.reconcile()
     assert get_phase(after_queue) == "PendingVM"
-    assert session_signal(after_queue, "vmAssignment")["state"] == "assigned"
+    assert binding_vm_ref(session_binding(after_queue))["name"] == harness.vm_name
+    assert binding_vm_assignment(session_binding(after_queue)) == {}
 
     after_assignment = harness.reconcile()
     assert get_phase(after_assignment) == "PendingGuest"
     assert binding_vm_ref(session_binding(after_assignment))["name"] == harness.vm_name
-    assert session_signal(after_assignment, "vmAssignment") == {}
 
     ready_response = harness.post_vm_ready()
     assert ready_response.status_code == 200
@@ -89,7 +90,9 @@ def test_component_assignment_signal_variants_keep_pending_vm(
 
     after_queue = harness.reconcile()
     assert get_phase(after_queue) == "PendingVM"
-    assert session_signal(after_queue, "vmAssignment")["state"] == expected_state
+    assert (
+        binding_vm_assignment(session_binding(after_queue))["state"] == expected_state
+    )
 
     after_signal = harness.reconcile()
     assert get_phase(after_signal) == "PendingVM"

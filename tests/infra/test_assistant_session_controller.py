@@ -7,7 +7,10 @@ from unittest.mock import MagicMock
 from kubernetes.client.rest import ApiException
 import pytest
 
-from communication.infra.assistant_sessions import build_binding_signal
+from communication.infra.assistant_sessions import (
+    build_binding_signal,
+    build_binding_vm_assignment,
+)
 from communication.infra.observability import (
     build_causal_context,
     causal_signal_payload,
@@ -532,6 +535,11 @@ def test_reconcile_queues_vm_assignment_for_binding(monkeypatch):
     monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         controller,
+        "claim_binding_vm_assignment_attempt",
+        MagicMock(return_value="attempt-1"),
+    )
+    monkeypatch.setattr(
+        controller,
         "schedule_vm_assignment",
         queue_vm_assignment,
     )
@@ -545,32 +553,30 @@ def test_reconcile_queues_vm_assignment_for_binding(monkeypatch):
         namespace=controller.WATCH_NAMESPACE,
         assistant_id="1207",
         binding_id="binding-1",
+        attempt_id="attempt-1",
         secret_name="assistant-session-bootstrap-1207",
         vm_type="ubuntu",
     )
     assert patch_status.call_args.kwargs["phase"] == "PendingVM"
-    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+    assert "binding" not in patch_status.call_args.kwargs
 
 
-def test_reconcile_applies_vm_assignment_signal(monkeypatch):
+def test_reconcile_advances_to_pending_guest_when_binding_vm_ref_present(monkeypatch):
     body = _base_session()
+    vm_assigned_at = datetime.now().astimezone().isoformat()
+    body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
         jobRef={"name": "unity-job-1", "namespace": "preview"},
+        podRef={"name": "unity-pod-1", "namespace": "preview"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
+        vmRef={
+            "name": "unity-pool-ubuntu-1",
+            "hostname": "vm-1.vm.unify.ai",
+            "vmType": "ubuntu",
+        },
+        vmAssignedAt=vm_assigned_at,
     )
-    body["status"]["signals"] = {
-        controller.SIGNAL_VM_ASSIGNMENT: build_binding_signal(
-            binding_id="binding-1",
-            state="assigned",
-            observed_at="2026-04-03T00:00:05+00:00",
-            vmRef={
-                "name": "unity-pool-ubuntu-1",
-                "hostname": "vm-1.vm.unify.ai",
-                "vmType": "ubuntu",
-            },
-        ),
-    }
     patch_status = MagicMock()
 
     monkeypatch.setattr(controller, "_custom_api", object())
@@ -585,7 +591,22 @@ def test_reconcile_applies_vm_assignment_signal(monkeypatch):
         "_job_for_binding",
         lambda *_args, **_kwargs: _job(),
     )
-    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "_read_bound_pod",
+        lambda *_args, **_kwargs: MagicMock(
+            status=MagicMock(start_time=None, container_statuses=[]),
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "verify_vm_assignment",
+        lambda *_args, **_kwargs: {
+            "name": "unity-pool-ubuntu-1",
+            "hostname": "vm-1.vm.unify.ai",
+            "vmType": "ubuntu",
+        },
+    )
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
     controller._update_status_for_session(deepcopy(body))
@@ -597,42 +618,23 @@ def test_reconcile_applies_vm_assignment_signal(monkeypatch):
     )
     assert (
         patch_status.call_args.kwargs["binding"]["guestHandshakeStartedAt"]
-        == "2026-04-03T00:00:05+00:00"
+        == vm_assigned_at
     )
-    assert patch_status.call_args.kwargs["signals"] == {}
 
 
-def test_reconcile_applies_vm_assignment_signal_under_signal_causal_context(
-    monkeypatch,
-):
+def test_reconcile_waits_for_inflight_vm_assignment_attempt(monkeypatch):
     body = _base_session()
-    signal_context = build_causal_context(
-        caller="worker.vm_assignment",
-        reason="background_worker",
-    )
     body["status"]["binding"] = _binding(
         "binding-1",
         jobRef={"name": "unity-job-1", "namespace": "preview"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
-    )
-    body["status"]["signals"] = {
-        controller.SIGNAL_VM_ASSIGNMENT: build_binding_signal(
-            binding_id="binding-1",
-            state="assigned",
-            observed_at="2026-04-03T00:00:05+00:00",
-            vmRef={
-                "name": "unity-pool-ubuntu-1",
-                "hostname": "vm-1.vm.unify.ai",
-                "vmType": "ubuntu",
-            },
-            causal=causal_signal_payload(signal_context),
+        vmAssignment=build_binding_vm_assignment(
+            attempt_id="attempt-1",
+            state="in_progress",
         ),
-    }
-    captured: dict[str, object] = {}
-
-    def patch_status(*_args, **kwargs):
-        captured["context"] = current_causal_context()
-        captured["kwargs"] = kwargs
+    )
+    patch_status = MagicMock()
+    queue_vm_assignment = MagicMock()
 
     monkeypatch.setattr(controller, "_custom_api", object())
     monkeypatch.setattr(controller, "_core_api", MagicMock())
@@ -647,16 +649,14 @@ def test_reconcile_applies_vm_assignment_signal_under_signal_causal_context(
         lambda *_args, **_kwargs: _job(),
     )
     monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(controller, "schedule_vm_assignment", queue_vm_assignment)
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
 
     controller._update_status_for_session(deepcopy(body))
 
-    assert captured["kwargs"]["phase"] == "PendingGuest"
-    context = captured["context"]
-    assert context["caller"] == "controller.reconcile.vm_assignment"
-    assert context["parent_caller"] == "worker.vm_assignment"
-    assert context["root_caller"] == "worker.vm_assignment"
-    assert context["reason"] == "persisted_signal:vmAssignment"
+    queue_vm_assignment.assert_not_called()
+    assert patch_status.call_args.kwargs["phase"] == "PendingVM"
+    assert patch_status.call_args.kwargs["last_error"] == ""
 
 
 def test_reconcile_carries_release_signal_context_into_next_pending_job(monkeypatch):
@@ -1388,7 +1388,7 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
     assert "Job disappeared" in patch_status.call_args.kwargs["last_error"]
 
 
-def test_reconcile_stopped_binding_recovers_vm_ref_from_assignment_signal(monkeypatch):
+def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatch):
     body = _base_session(desired_state="Stopped")
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
@@ -1396,18 +1396,6 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_assignment_signal(monkey
         jobRef={"name": "unity-job-1", "namespace": "preview"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
     )
-    body["status"]["signals"] = {
-        controller.SIGNAL_VM_ASSIGNMENT: build_binding_signal(
-            binding_id="binding-1",
-            observed_at="2026-04-03T00:00:05+00:00",
-            state="assigned",
-            vmRef={
-                "name": "unity-pool-ubuntu-1",
-                "hostname": "vm-1.vm.unify.ai",
-                "vmType": "ubuntu",
-            },
-        ),
-    }
     patch_status = MagicMock()
     queue_vm_release = MagicMock(return_value=True)
 
@@ -1461,7 +1449,6 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_assignment_signal(monkey
         "hostname": "vm-1.vm.unify.ai",
         "vmType": "ubuntu",
     }
-    assert binding["vmAssignedAt"] == "2026-04-03T00:00:05+00:00"
 
 
 def test_reconcile_job_missing_restarts_only_after_cleanup_finishes(monkeypatch):
@@ -1505,13 +1492,11 @@ def test_reconcile_waits_for_vm_capacity_when_assignment_fails(monkeypatch):
         jobRef={"name": "unity-job-1", "namespace": "preview"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
-    body["status"]["signals"] = {
-        controller.SIGNAL_VM_ASSIGNMENT: build_binding_signal(
-            binding_id="binding-1",
-            state="capacity",
-            message="Waiting for VM capacity",
-        ),
-    }
+    body["status"]["binding"]["vmAssignment"] = build_binding_vm_assignment(
+        attempt_id="attempt-1",
+        state="capacity",
+        message="Waiting for VM capacity",
+    )
     patch_status = MagicMock()
 
     monkeypatch.setattr(controller, "_custom_api", object())
@@ -1533,7 +1518,7 @@ def test_reconcile_waits_for_vm_capacity_when_assignment_fails(monkeypatch):
 
     assert patch_status.call_args.kwargs["phase"] == "PendingVM"
     assert patch_status.call_args.kwargs["last_error"] == "Waiting for VM capacity"
-    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+    assert "binding" not in patch_status.call_args.kwargs
 
 
 def test_reconcile_waits_for_disk_release_before_assigning_vm(monkeypatch):
@@ -1543,13 +1528,11 @@ def test_reconcile_waits_for_disk_release_before_assigning_vm(monkeypatch):
         jobRef={"name": "unity-job-1", "namespace": "preview"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
-    body["status"]["signals"] = {
-        controller.SIGNAL_VM_ASSIGNMENT: build_binding_signal(
-            binding_id="binding-1",
-            state="waiting_release",
-            message="assistant disk still attached",
-        ),
-    }
+    body["status"]["binding"]["vmAssignment"] = build_binding_vm_assignment(
+        attempt_id="attempt-1",
+        state="waiting_release",
+        message="assistant disk still attached",
+    )
     patch_status = MagicMock()
 
     monkeypatch.setattr(controller, "_custom_api", object())
@@ -1573,7 +1556,7 @@ def test_reconcile_waits_for_disk_release_before_assigning_vm(monkeypatch):
     assert (
         patch_status.call_args.kwargs["last_error"] == "assistant disk still attached"
     )
-    assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+    assert "binding" not in patch_status.call_args.kwargs
 
 
 def test_reconcile_restarts_after_vm_ownership_loss(monkeypatch):

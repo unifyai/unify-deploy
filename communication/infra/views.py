@@ -26,7 +26,6 @@ from .assistant_sessions import (
     ACTIVE_PHASES,
     DESIRED_STATE_STOPPED,
     SIGNAL_DESKTOP_READY,
-    SIGNAL_VM_ASSIGNMENT,
     SIGNAL_VM_RELEASE_COMPLETE,
     TERMINAL_PHASES,
     assistant_session_desired_state,
@@ -50,7 +49,6 @@ from .assistant_sessions import (
     record_assistant_session_signal,
     resolve_current_binding_vm_ref,
     session_binding,
-    session_signal,
     vm_refs_match,
 )
 from .observability import (
@@ -1995,10 +1993,8 @@ async def _resolve_release_vm_name(
             "message": "Job no longer owns the current session VM",
         }
 
-    assignment_signal = session_signal(session, SIGNAL_VM_ASSIGNMENT)
     resolved_vm_ref = resolve_current_binding_vm_ref(
         binding,
-        assignment_signal=assignment_signal,
     )
     vm_name = str(resolved_vm_ref.get("name", "") or "")
     owned_runtime_vms: list[dict[str, object]] = []
@@ -2014,7 +2010,6 @@ async def _resolve_release_vm_name(
         )
         resolved_vm_ref = resolve_current_binding_vm_ref(
             binding,
-            assignment_signal=assignment_signal,
             owned_runtime_vms=owned_runtime_vms,
             disk_vm_name=disk_vm_name,
         )

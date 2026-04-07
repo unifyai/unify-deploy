@@ -17,6 +17,7 @@ class ControllerConfig:
     vm_readiness_deadline_seconds: float
     max_vm_readiness_retries: int
     vm_assignment_retry_interval_seconds: float
+    vm_assignment_in_progress_timeout_seconds: float
     desktop_liveness_failure_threshold: int
     image_hash_bucket: str
     image_hash_cache_ttl: float
@@ -44,6 +45,9 @@ class ControllerConfig:
             ),
             vm_assignment_retry_interval_seconds=float(
                 os.environ.get("VM_ASSIGNMENT_RETRY_INTERVAL_SECONDS", "5"),
+            ),
+            vm_assignment_in_progress_timeout_seconds=float(
+                os.environ.get("VM_ASSIGNMENT_IN_PROGRESS_TIMEOUT_SECONDS", "60"),
             ),
             desktop_liveness_failure_threshold=int(
                 os.environ.get("DESKTOP_LIVENESS_FAILURE_THRESHOLD", "3"),

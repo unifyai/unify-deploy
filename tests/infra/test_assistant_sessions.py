@@ -16,8 +16,12 @@ from communication.infra.assistant_sessions import (
     assistant_session_secret_name,
     build_binding,
     build_assistant_session_spec,
+    build_binding_vm_assignment,
     build_condition,
     build_binding_signal,
+    binding_vm_assignment,
+    binding_vm_ref,
+    claim_binding_vm_assignment_attempt,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
     delete_assistant_session,
@@ -25,6 +29,7 @@ from communication.infra.assistant_sessions import (
     get_latest_unity_image,
     merge_conditions,
     patch_assistant_session_status,
+    persist_binding_vm_assignment_result,
     record_assistant_session_signal,
     session_signal,
     vm_refs_match,
@@ -313,9 +318,9 @@ def test_record_assistant_session_signal_merges_into_status(monkeypatch):
             "phase": "PendingGuest",
             "binding": build_binding(binding_id="binding-1"),
             "signals": {
-                "vmAssignment": build_binding_signal(
+                "vmGuestHealth": build_binding_signal(
                     binding_id="binding-1",
-                    state="assigned",
+                    state="ready",
                     vmRef={"name": "unity-pool-ubuntu-10-preview"},
                 ),
             },
@@ -352,8 +357,159 @@ def test_record_assistant_session_signal_merges_into_status(monkeypatch):
         source="test",
     )
 
-    assert session_signal(updated, "vmAssignment")["state"] == "assigned"
+    assert session_signal(updated, "vmGuestHealth")["state"] == "ready"
     assert session_signal(updated, "desktopReady")["hostname"].startswith("unity-pool")
+
+
+def test_claim_binding_vm_assignment_attempt_marks_binding_in_progress(monkeypatch):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "spec": {"desiredState": "Running"},
+        "status": {
+            "phase": "PendingVM",
+            "binding": build_binding(binding_id="binding-1"),
+            "signals": {},
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    attempt_id = claim_binding_vm_assignment_attempt(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        target_binding_id="binding-1",
+        stale_after_seconds=60,
+        source="test",
+    )
+
+    assert attempt_id
+    assignment = binding_vm_assignment(session["status"]["binding"])
+    assert assignment["state"] == "in_progress"
+    assert assignment["attemptId"] == attempt_id
+
+
+def test_persist_binding_vm_assignment_result_records_success(monkeypatch):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "spec": {"desiredState": "Running"},
+        "status": {
+            "phase": "PendingVM",
+            "binding": build_binding(
+                binding_id="binding-1",
+                vm_assignment=build_binding_vm_assignment(
+                    attempt_id="attempt-1",
+                    state="in_progress",
+                ),
+            ),
+            "signals": {},
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    persisted = persist_binding_vm_assignment_result(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        target_binding_id="binding-1",
+        attempt_id="attempt-1",
+        state="assigned",
+        vm_ref={
+            "name": "unity-pool-ubuntu-10-preview",
+            "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+            "vmType": "ubuntu",
+        },
+        source="test",
+    )
+
+    assert persisted is True
+    assert (
+        binding_vm_ref(session["status"]["binding"])["name"]
+        == "unity-pool-ubuntu-10-preview"
+    )
+    assert binding_vm_assignment(session["status"]["binding"]) == {}
+
+
+def test_persist_binding_vm_assignment_result_ignores_stale_attempt(monkeypatch):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "spec": {"desiredState": "Running"},
+        "status": {
+            "phase": "PendingVM",
+            "binding": build_binding(
+                binding_id="binding-1",
+                vm_assignment=build_binding_vm_assignment(
+                    attempt_id="attempt-2",
+                    state="in_progress",
+                ),
+            ),
+            "signals": {},
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    persisted = persist_binding_vm_assignment_result(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        target_binding_id="binding-1",
+        attempt_id="attempt-1",
+        state="capacity",
+        message="Waiting for VM capacity",
+        source="test",
+    )
+
+    assert persisted is False
+    assignment = binding_vm_assignment(session["status"]["binding"])
+    assert assignment["attemptId"] == "attempt-2"
+    assert assignment["state"] == "in_progress"
 
 
 def test_emit_observability_event_includes_bound_causal_context(caplog):

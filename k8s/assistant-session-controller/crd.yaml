@@ -114,6 +114,17 @@ spec:
                         type: string
                       namespace:
                         type: string
+                  vmAssignment:
+                    type: object
+                    properties:
+                      state:
+                        type: string
+                      attemptId:
+                        type: string
+                      observedAt:
+                        type: string
+                      message:
+                        type: string
                   vmRef:
                     type: object
                     properties:

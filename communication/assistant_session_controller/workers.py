@@ -8,7 +8,6 @@ from typing import Any, Callable
 
 from communication.infra.assistant_sessions import (
     DESIRED_STATE_STOPPED,
-    SIGNAL_VM_ASSIGNMENT,
     SIGNAL_VM_GUEST_HEALTH,
     SIGNAL_VM_RELEASE_REQUEST,
     assistant_session_desired_state,
@@ -16,6 +15,7 @@ from communication.infra.assistant_sessions import (
     build_binding_signal,
     emit_observability_event,
     get_assistant_session,
+    persist_binding_vm_assignment_result,
     read_bootstrap_secret,
     record_assistant_session_signal,
     session_binding,
@@ -190,6 +190,7 @@ def schedule_vm_assignment(
     namespace: str,
     assistant_id: str,
     binding_id: str,
+    attempt_id: str,
     secret_name: str,
     vm_type: str,
 ) -> bool:
@@ -205,6 +206,7 @@ def schedule_vm_assignment(
         namespace=namespace,
         assistant_id=assistant_id,
         binding_id=binding_id,
+        attempt_id=attempt_id,
         secret_name=secret_name,
         vm_type=vm_type,
     )
@@ -217,6 +219,7 @@ def _run_vm_assignment(
     namespace: str,
     assistant_id: str,
     binding_id: str,
+    attempt_id: str,
     secret_name: str,
     vm_type: str,
 ) -> None:
@@ -238,44 +241,73 @@ def _run_vm_assignment(
             unify_apikey=api_key,
             vm_type=vm_type,
         )
-        payload = build_binding_signal(
-            binding_id=binding_id,
+        persisted = persist_binding_vm_assignment_result(
+            custom_api,
+            namespace,
+            assistant_id,
+            target_binding_id=binding_id,
+            attempt_id=attempt_id,
             state="assigned",
-            vmRef={
+            vm_ref={
                 "name": result["vm_name"],
                 "hostname": result["hostname"],
                 "vmType": vm_type,
             },
-            desktopUrl=result.get("desktop_url"),
+            source="worker.vm_assignment",
         )
+        if persisted:
+            return
+        emit_observability_event(
+            "controller.worker.vm_assignment.release_stale_result",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            vm_name=result["vm_name"],
+        )
+        try:
+            release_pool_vm(assistant_id, binding_id, vm_name=result["vm_name"])
+        except Exception:
+            logger.exception(
+                "Failed releasing stale VM assignment for %s",
+                assistant_id,
+            )
+        return
     except ValueError as exc:
         replenish_pool(vm_type)
-        payload = build_binding_signal(
-            binding_id=binding_id,
+        persist_binding_vm_assignment_result(
+            custom_api,
+            namespace,
+            assistant_id,
+            target_binding_id=binding_id,
+            attempt_id=attempt_id,
             state="capacity",
             message=str(exc),
+            source="worker.vm_assignment",
         )
+        return
     except AssistantDiskInUseError as exc:
-        payload = build_binding_signal(
-            binding_id=binding_id,
+        persist_binding_vm_assignment_result(
+            custom_api,
+            namespace,
+            assistant_id,
+            target_binding_id=binding_id,
+            attempt_id=attempt_id,
             state="waiting_release",
             message=str(exc),
+            source="worker.vm_assignment",
         )
+        return
     except Exception as exc:  # pragma: no cover - worker safety net
         logger.exception("Background VM assignment failed for %s", assistant_id)
-        payload = build_binding_signal(
-            binding_id=binding_id,
+        persist_binding_vm_assignment_result(
+            custom_api,
+            namespace,
+            assistant_id,
+            target_binding_id=binding_id,
+            attempt_id=attempt_id,
             state="error",
             message=f"{type(exc).__name__}: {exc}",
+            source="worker.vm_assignment",
         )
-    record_assistant_session_signal(
-        custom_api,
-        namespace,
-        assistant_id,
-        signal_name=SIGNAL_VM_ASSIGNMENT,
-        payload=payload,
-        source="worker.vm_assignment",
-    )
 
 
 def schedule_guest_health_probe(

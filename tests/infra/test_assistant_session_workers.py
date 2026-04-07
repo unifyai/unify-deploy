@@ -47,9 +47,9 @@ def test_task_runtime_deduplicates_inflight_work(monkeypatch):
     assert runtime.stats() == {"inflight": 0}
 
 
-def test_run_vm_assignment_records_assigned_signal(monkeypatch):
+def test_run_vm_assignment_persists_assigned_result(monkeypatch):
     custom_api = object()
-    record_signal = MagicMock()
+    persist_result = MagicMock(return_value=True)
 
     monkeypatch.setattr(
         workers,
@@ -70,7 +70,11 @@ def test_run_vm_assignment_records_assigned_signal(monkeypatch):
             "desktop_url": "https://vm-1.vm.unify.ai",
         },
     )
-    monkeypatch.setattr(workers, "record_assistant_session_signal", record_signal)
+    monkeypatch.setattr(
+        workers,
+        "persist_binding_vm_assignment_result",
+        persist_result,
+    )
 
     workers._run_vm_assignment(
         custom_api=custom_api,
@@ -78,27 +82,73 @@ def test_run_vm_assignment_records_assigned_signal(monkeypatch):
         namespace="preview",
         assistant_id="1207",
         binding_id="binding-1",
+        attempt_id="attempt-1",
         secret_name="assistant-session-bootstrap-1207",
         vm_type="ubuntu",
     )
 
-    assert record_signal.call_args.args[:3] == (custom_api, "preview", "1207")
-    assert record_signal.call_args.kwargs["signal_name"] == workers.SIGNAL_VM_ASSIGNMENT
-    payload = record_signal.call_args.kwargs["payload"]
-    assert payload["bindingId"] == "binding-1"
-    assert payload["state"] == "assigned"
-    assert payload["vmRef"] == {
+    assert persist_result.call_args.args[:3] == (custom_api, "preview", "1207")
+    assert persist_result.call_args.kwargs["target_binding_id"] == "binding-1"
+    assert persist_result.call_args.kwargs["attempt_id"] == "attempt-1"
+    assert persist_result.call_args.kwargs["state"] == "assigned"
+    assert persist_result.call_args.kwargs["vm_ref"] == {
         "name": "unity-pool-ubuntu-1-preview",
         "hostname": "vm-1.vm.unify.ai",
         "vmType": "ubuntu",
     }
-    assert payload["desktopUrl"] == "https://vm-1.vm.unify.ai"
-    assert payload["observedAt"]
-    assert record_signal.call_args.kwargs["source"] == "worker.vm_assignment"
+    assert persist_result.call_args.kwargs["source"] == "worker.vm_assignment"
 
 
-def test_run_vm_assignment_records_capacity_signal(monkeypatch):
-    record_signal = MagicMock()
+def test_run_vm_assignment_releases_stale_successful_result(monkeypatch):
+    persist_result = MagicMock(return_value=False)
+    release_pool_vm = MagicMock(return_value={"released": True})
+
+    monkeypatch.setattr(
+        workers,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: _session(),
+    )
+    monkeypatch.setattr(
+        workers,
+        "read_bootstrap_secret",
+        lambda *_args, **_kwargs: {"api_key": "user-key"},
+    )
+    monkeypatch.setattr(
+        workers,
+        "assign_pool_vm",
+        lambda **_kwargs: {
+            "vm_name": "unity-pool-ubuntu-1-preview",
+            "hostname": "vm-1.vm.unify.ai",
+            "desktop_url": "https://vm-1.vm.unify.ai",
+        },
+    )
+    monkeypatch.setattr(
+        workers,
+        "persist_binding_vm_assignment_result",
+        persist_result,
+    )
+    monkeypatch.setattr(workers, "release_pool_vm", release_pool_vm)
+
+    workers._run_vm_assignment(
+        custom_api=object(),
+        core_api=object(),
+        namespace="preview",
+        assistant_id="1207",
+        binding_id="binding-1",
+        attempt_id="attempt-1",
+        secret_name="assistant-session-bootstrap-1207",
+        vm_type="ubuntu",
+    )
+
+    release_pool_vm.assert_called_once_with(
+        "1207",
+        "binding-1",
+        vm_name="unity-pool-ubuntu-1-preview",
+    )
+
+
+def test_run_vm_assignment_persists_capacity_result(monkeypatch):
+    persist_result = MagicMock()
     replenish_pool = MagicMock()
 
     monkeypatch.setattr(
@@ -117,7 +167,11 @@ def test_run_vm_assignment_records_capacity_signal(monkeypatch):
         MagicMock(side_effect=ValueError("Waiting for VM capacity")),
     )
     monkeypatch.setattr(workers, "replenish_pool", replenish_pool)
-    monkeypatch.setattr(workers, "record_assistant_session_signal", record_signal)
+    monkeypatch.setattr(
+        workers,
+        "persist_binding_vm_assignment_result",
+        persist_result,
+    )
 
     workers._run_vm_assignment(
         custom_api=object(),
@@ -125,17 +179,16 @@ def test_run_vm_assignment_records_capacity_signal(monkeypatch):
         namespace="preview",
         assistant_id="1207",
         binding_id="binding-1",
+        attempt_id="attempt-1",
         secret_name="assistant-session-bootstrap-1207",
         vm_type="ubuntu",
     )
 
     replenish_pool.assert_called_once_with("ubuntu")
-    assert record_signal.call_args.kwargs["signal_name"] == workers.SIGNAL_VM_ASSIGNMENT
-    assert record_signal.call_args.kwargs["payload"]["state"] == "capacity"
-    assert (
-        record_signal.call_args.kwargs["payload"]["message"]
-        == "Waiting for VM capacity"
-    )
+    assert persist_result.call_args.kwargs["target_binding_id"] == "binding-1"
+    assert persist_result.call_args.kwargs["attempt_id"] == "attempt-1"
+    assert persist_result.call_args.kwargs["state"] == "capacity"
+    assert persist_result.call_args.kwargs["message"] == "Waiting for VM capacity"
 
 
 def test_run_guest_health_probe_records_ready_signal(monkeypatch):

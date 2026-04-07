@@ -8,6 +8,7 @@ from communication.infra.assistant_sessions import (
     binding_id as binding_id_from_status,
     binding_job_ref,
     binding_pod_ref,
+    binding_vm_assignment,
     binding_vm_ref,
     build_binding,
     session_signal,
@@ -29,6 +30,7 @@ def binding_payload(
     binding_id: str | object = BINDING_UNSET,
     job_ref: dict | None | object = BINDING_UNSET,
     pod_ref: dict | None | object = BINDING_UNSET,
+    vm_assignment: dict | None | object = BINDING_UNSET,
     vm_ref: dict | None | object = BINDING_UNSET,
     desktop_url: str | None | object = BINDING_UNSET,
     created_at: str | None | object = BINDING_UNSET,
@@ -56,6 +58,11 @@ def binding_payload(
         ),
         pod_ref=(
             binding_pod_ref(binding) or None if pod_ref is BINDING_UNSET else pod_ref
+        ),
+        vm_assignment=(
+            binding_vm_assignment(binding) or None
+            if vm_assignment is BINDING_UNSET
+            else vm_assignment
         ),
         vm_ref=binding_vm_ref(binding) or None if vm_ref is BINDING_UNSET else vm_ref,
         desktop_url=(
