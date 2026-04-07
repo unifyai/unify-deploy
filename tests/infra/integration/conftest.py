@@ -9,6 +9,7 @@ Configuration:
     credentials. The .env file is gitignored. See README.md for details.
 """
 
+import builtins
 import json
 import os
 import re
@@ -26,6 +27,7 @@ import requests
 from dotenv import load_dotenv
 
 _CURRENT_RUNTIME_IDENTITY_TRACKER = None
+_INTEGRATION_LOG_STARTED_AT_MONOTONIC = time.monotonic()
 
 # Load env vars from (in priority order):
 # 1. tests/infra/integration/.env (local test config, gitignored)
@@ -39,6 +41,52 @@ if _test_env.is_file():
 elif _unity_env.is_file():
     load_dotenv(_unity_env)
 load_dotenv()  # shell env overrides
+
+
+def _integration_log_prefix() -> str:
+    """Return the standard prefix for integration-test console output."""
+
+    wall_clock = datetime.now(UTC).strftime("%H:%M:%S")
+    elapsed_seconds = time.monotonic() - _INTEGRATION_LOG_STARTED_AT_MONOTONIC
+    return f"[{wall_clock} +{elapsed_seconds:7.1f}s]"
+
+
+def _prefix_integration_log_lines(message: str) -> str:
+    """Prefix each non-empty line while preserving blank separator lines."""
+
+    if not message:
+        return ""
+
+    prefixed_lines: list[str] = []
+    for line in message.splitlines(keepends=True):
+        line_ending = "\n" if line.endswith("\n") else ""
+        line_body = line[:-1] if line_ending else line
+        if line_body:
+            prefixed_lines.append(
+                f"{_integration_log_prefix()} {line_body}{line_ending}",
+            )
+        else:
+            prefixed_lines.append(line_ending)
+    return "".join(prefixed_lines)
+
+
+def integration_print(*args, sep: str = " ", end: str = "\n", **kwargs) -> None:
+    """Print integration-test progress with wall-clock and elapsed timestamps."""
+
+    if not args:
+        builtins.print(*args, sep=sep, end=end, flush=True, **kwargs)
+        return
+
+    message = sep.join(str(arg) for arg in args)
+    builtins.print(
+        _prefix_integration_log_lines(message),
+        end=end,
+        flush=True,
+        **kwargs,
+    )
+
+
+print = integration_print
 
 # ---------------------------------------------------------------------------
 # Deployment configuration (all overridable via env vars)
@@ -1057,6 +1105,60 @@ def _read_runtime_status_http(assistant_id: str) -> dict:
     return resp.json()
 
 
+def wait_for_assistant_runtime_quiesced(
+    assistant_id: str,
+    *,
+    batch_api=None,
+    timeout: float = 240,
+    interval: float = 5,
+) -> dict:
+    """Wait until an assistant no longer owns live jobs, VMs, or disk attachments."""
+
+    session_name = f"assistant-session-{str(assistant_id).lower().replace('_', '-')}"
+
+    def _settled():
+        runtime_status = _read_runtime_status_http(str(assistant_id))
+        if runtime_status.get("active_job_names"):
+            return None
+        if runtime_status.get("owned_vms"):
+            return None
+        if runtime_status.get("other_owned_vms"):
+            return None
+        if runtime_status.get("disk_vm_name") is not None:
+            return None
+        return runtime_status
+
+    return poll_until(
+        _settled,
+        timeout=timeout,
+        interval=interval,
+        description=(
+            f"Assistant runtime {assistant_id} to release jobs, VMs, and disk attachments"
+        ),
+        failure_snapshot=lambda: {
+            "runtime_status": _read_runtime_status_http(str(assistant_id)),
+            "session": _read_assistant_session_http(str(assistant_id)),
+            "assistant_jobs": (
+                []
+                if batch_api is None
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_assistant_id(batch_api, str(assistant_id))
+                ]
+            ),
+            "session_jobs": (
+                []
+                if batch_api is None
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_session_ref(batch_api, session_name)
+                ]
+            ),
+            "assigned_vms": assigned_vm_runtime_refs(str(assistant_id)),
+        },
+    )
+
+
 def wait_for_assistant_runtime_stopped(
     assistant_id: str,
     *,
@@ -1132,7 +1234,7 @@ def stop_assistant_runtime(
         resp = requests.post(
             f"{COMMS_APP_URL}/infra/session/{assistant_id}/stop",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=30,
+            timeout=90,
         )
     except Exception as exc:
         message = f"{prefix} Failed to request session stop for {assistant_id}: {exc}"
@@ -1161,6 +1263,59 @@ def stop_assistant_runtime(
         if strict:
             raise
         print(f"{prefix} Runtime stop wait failed for {assistant_id}: {exc}")
+
+
+def _delete_assistant_session_if_present(
+    assistant_id: str,
+    *,
+    timeout: float,
+    interval: float = 5,
+) -> bool:
+    """Delete a lingering AssistantSession object if it still exists."""
+
+    session = _read_assistant_session_http(str(assistant_id))
+    if session is None:
+        return False
+
+    resp = requests.delete(
+        f"{COMMS_APP_URL}/infra/session/{assistant_id}",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=90,
+    )
+    if resp.status_code not in (200, 404):
+        raise AssertionError(
+            f"DELETE /infra/session/{assistant_id} returned "
+            f"{resp.status_code}: {resp.text[:200]}",
+        )
+    if resp.status_code == 404:
+        return False
+
+    poll_until(
+        lambda: _read_assistant_session_http(str(assistant_id)) is None,
+        timeout=timeout,
+        interval=interval,
+        description=f"AssistantSession for {assistant_id} to be deleted",
+        failure_snapshot=lambda: _read_assistant_session_http(str(assistant_id)),
+    )
+    return True
+
+
+def _delete_assistant_disk_if_present(assistant_id: str) -> bool:
+    """Delete a lingering assistant disk if it still exists."""
+
+    resp = requests.delete(
+        f"{COMMS_APP_URL}/infra/vm/pool/disk/{assistant_id}",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=30,
+    )
+    if resp.status_code == 404:
+        return False
+    if resp.status_code != 200:
+        raise AssertionError(
+            f"DELETE /infra/vm/pool/disk/{assistant_id} returned "
+            f"{resp.status_code}: {resp.text[:200]}",
+        )
+    return True
 
 
 def replenish_pool():
@@ -1774,8 +1929,10 @@ def _delete_test_assistant(
     """Delete a test assistant from Orchestra and clean up infra resources.
 
     Calls DELETE /v0/assistant/{id} which handles Pub/Sub, disks, phones,
-    emails, and DB cleanup. Also expires AssistantJobs records and waits
-    for any AssistantSession-owned runtime to disappear.
+    emails, and DB cleanup. Tests then defensively expire AssistantJobs
+    records, wait for the Comms runtime to quiesce, and prune any lingering
+    AssistantSession or assistant-disk artifacts so repeated preview runs stay
+    idempotent even when upstream cleanup lags.
 
     Swallows all exceptions so teardown never aborts mid-way.
     """
@@ -1802,16 +1959,31 @@ def _delete_test_assistant(
     except Exception:
         pass
 
-    if batch_api is not None:
-        try:
-            wait_for_assistant_runtime_stopped(
-                str(agent_id),
-                batch_api=batch_api,
-                timeout=runtime_timeout,
-                interval=5,
-            )
-        except Exception:
-            pass
+    try:
+        wait_for_assistant_runtime_quiesced(
+            str(agent_id),
+            batch_api=batch_api,
+            timeout=runtime_timeout,
+            interval=5,
+        )
+    except Exception as exc:
+        print(f"[Teardown] Runtime quiesce wait failed for {agent_id}: {exc}")
+
+    try:
+        if _delete_assistant_session_if_present(
+            str(agent_id),
+            timeout=runtime_timeout,
+            interval=5,
+        ):
+            print(f"[Teardown] Deleted AssistantSession for {agent_id}")
+    except Exception as exc:
+        print(f"[Teardown] Session delete cleanup failed for {agent_id}: {exc}")
+
+    try:
+        if _delete_assistant_disk_if_present(str(agent_id)):
+            print(f"[Teardown] Deleted assistant disk for {agent_id}")
+    except Exception as exc:
+        print(f"[Teardown] Disk delete cleanup failed for {agent_id}: {exc}")
 
 
 def _delete_test_assistants(
@@ -1922,8 +2094,6 @@ def test_assistants(k8s_clients):
         batch_api=batch_api,
         runtime_timeout=TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
     )
-    if created:
-        replenish_pool()
     print(f"[Teardown] Done")
 
 

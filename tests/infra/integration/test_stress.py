@@ -58,12 +58,15 @@ from .conftest import (
     send_test_meet,
     send_test_message,
     send_test_system_event,
+    integration_print,
     wait_for_idle_pool,
     wait_for_idle_vm_pool,
     wait_for_container_running,
 )
 
 pytestmark = [pytest.mark.integration]
+
+print = integration_print
 
 _STRESS_IDLE_CONTAINER_TARGET = 3
 _STRESS_IDLE_VM_TARGET = VM_POOL_TARGET_IDLE
@@ -73,7 +76,9 @@ _STRESS_CLEANUP_PARALLELISM = 6
 _STRESS_CONTAINER_BASELINE_TIMEOUT_SECONDS = 120
 _STRESS_VM_BASELINE_TIMEOUT_SECONDS = 240
 _VM_DESKTOP_READY_TIMEOUT_SECONDS = 300
+_VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS = 120
 _VM_REATTACH_TIMEOUT_SECONDS = 180
+_VM_REATTACH_AFTER_ASSIGN_TIMEOUT_SECONDS = 120
 _VM_CONTRACT_POLL_INTERVAL_SECONDS = 10
 
 
@@ -220,15 +225,15 @@ def _reset_stress_baseline(
     )
     _best_effort_release_assigned_vms(assistant_ids, gce_client)
 
+    if not wait_for_baseline:
+        return
+
     for _ in range(_STRESS_IDLE_CONTAINER_TARGET):
         replenish_pool()
         time.sleep(2)
 
     if gce_client is not None:
         _trigger_vm_pool_rebalance(comms_client)
-
-    if not wait_for_baseline:
-        return
 
     wait_for_idle_pool(
         batch_api,
@@ -353,6 +358,35 @@ def _desktop_ready_signal_matches_vm(session: dict | None, vm_name: str) -> bool
     )
 
 
+def _vm_assigned_condition(session: dict | None) -> tuple[str, str]:
+    """Return the VMAssigned condition reason/message for a session."""
+    if not isinstance(session, dict):
+        return "", ""
+    conditions = (session.get("status") or {}).get("conditions") or []
+    for condition in conditions:
+        if str(condition.get("type") or "") != "VMAssigned":
+            continue
+        return (
+            str(condition.get("reason") or ""),
+            str(condition.get("message") or ""),
+        )
+    return "", ""
+
+
+def _is_waiting_for_vm_capacity(session: dict | None) -> bool:
+    """Return whether the session is explicitly queued for VM capacity."""
+    if not isinstance(session, dict):
+        return False
+    status = session.get("status") or {}
+    if str(status.get("phase") or "") != "PendingVM":
+        return False
+    reason, _message = _vm_assigned_condition(session)
+    if reason == "WaitingForCapacity":
+        return True
+    last_error = str(status.get("lastError") or "")
+    return "No idle" in last_error and "deferred retry" in last_error
+
+
 def _assistant_vm_contract_status(
     comms_client,
     gce_client,
@@ -370,29 +404,42 @@ def _assistant_vm_contract_status(
         "binding_id": "",
         "desktop_url": "",
         "vm_ready_observed_at": "",
+        "vm_assigned_at": "",
+        "vm_assigned_condition_reason": "",
+        "vm_assigned_condition_message": "",
         "last_error": "",
         "auth_status": "",
     }
-    vms = list_assigned_vms(gce_client, assistant_id)
-    if not vms:
-        return result
-
-    vm = vms[0]
-    hostname = _get_vm_hostname(vm)
     session = get_assistant_session(comms_client, assistant_id) or {}
     status = session.get("status") or {}
     binding = status.get("binding") or {}
+    vm_assigned_reason, vm_assigned_message = _vm_assigned_condition(session)
     result.update(
         {
-            "state": "assigned_waiting_for_desktop_ready",
-            "vm_name": vm.name,
-            "hostname": hostname,
             "session_phase": str(status.get("phase") or ""),
             "session_vm_name": str(((binding.get("vmRef") or {}).get("name")) or ""),
             "binding_id": str(binding.get("id") or ""),
             "desktop_url": str(binding.get("desktopUrl") or ""),
             "vm_ready_observed_at": str(binding.get("vmReadyObservedAt") or ""),
+            "vm_assigned_at": str(binding.get("vmAssignedAt") or ""),
+            "vm_assigned_condition_reason": vm_assigned_reason,
+            "vm_assigned_condition_message": vm_assigned_message,
             "last_error": str(status.get("lastError") or ""),
+        },
+    )
+    vms = list_assigned_vms(gce_client, assistant_id)
+    if not vms:
+        if _is_waiting_for_vm_capacity(session):
+            result["state"] = "queued_for_capacity"
+        return result
+
+    vm = vms[0]
+    hostname = _get_vm_hostname(vm)
+    result.update(
+        {
+            "state": "assigned_waiting_for_desktop_ready",
+            "vm_name": vm.name,
+            "hostname": hostname,
         },
     )
     if not _desktop_ready_signal_matches_vm(session, vm.name):
@@ -414,13 +461,21 @@ def _wait_for_assistant_vm_contract(
     *,
     timeout: float = _VM_DESKTOP_READY_TIMEOUT_SECONDS,
     interval: float = _VM_CONTRACT_POLL_INTERVAL_SECONDS,
+    post_assignment_timeout: float = _VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS,
 ) -> dict:
-    """Wait until an assistant satisfies the desktop-ready/auth VM contract."""
+    """Wait until an assistant satisfies the desktop-ready/auth VM contract.
+
+    The base timeout covers VM assignment. Once a VM is observed, preserve a
+    fair post-assignment window so late pool claims are not mislabeled as slow
+    desktop readiness.
+    """
     last_result = {
         "assistant_id": assistant_data["assistant_id"],
         "state": "not_assigned",
     }
-    deadline = time.monotonic() + timeout
+    assignment_observed_at = None
+    base_deadline = time.monotonic() + timeout
+    deadline = base_deadline
     while time.monotonic() < deadline:
         try:
             last_result = _assistant_vm_contract_status(
@@ -434,22 +489,64 @@ def _wait_for_assistant_vm_contract(
                 "state": "check_failed",
                 "error": f"{type(exc).__name__}: {exc}",
             }
+        if last_result.get("vm_name"):
+            if assignment_observed_at is None:
+                assignment_observed_at = time.monotonic()
+            deadline = max(
+                base_deadline,
+                assignment_observed_at + post_assignment_timeout,
+            )
         if last_result.get("state") == "ready":
             return last_result
         time.sleep(interval)
-    return {**last_result, "timed_out": True}
+    return {
+        **last_result,
+        "timed_out": True,
+        "timed_out_phase": "readiness" if last_result.get("vm_name") else "assignment",
+    }
 
 
-def _format_vm_contract_result(result: dict, *, timeout: float) -> str:
+def _format_vm_contract_result(
+    result: dict,
+    *,
+    assignment_timeout: float,
+    readiness_timeout: float,
+) -> str:
     """Format a VM contract poll result for human-readable stress output."""
     state = result.get("state")
     if state == "ready":
         return f"VM {result['vm_name']}, auth OK ({result['hostname']})"
+    if state == "queued_for_capacity":
+        phase = result.get("session_phase") or "PendingVM"
+        last_error = (
+            result.get("last_error")
+            or result.get("vm_assigned_condition_message")
+            or "waiting for VM capacity"
+        )
+        return (
+            f"Queued for VM capacity after {int(assignment_timeout)}s "
+            f"(phase={phase}) - {last_error}"
+        )
     if state == "not_assigned":
-        return f"VM not assigned after {int(timeout)}s"
+        phase = result.get("session_phase") or "unknown"
+        last_error = (
+            result.get("last_error")
+            or result.get("vm_assigned_condition_message")
+            or "no assignment observed"
+        )
+        return (
+            f"VM not assigned after {int(assignment_timeout)}s "
+            f"(phase={phase}) - {last_error}"
+        )
     if state == "assigned_waiting_for_desktop_ready":
         phase = result.get("session_phase") or "unknown"
         last_error = result.get("last_error") or "waiting for vm_ready"
+        if result.get("timed_out_phase") == "readiness":
+            return (
+                f"VM {result['vm_name']}, waiting for desktop readiness after "
+                f"{int(readiness_timeout)}s from assignment "
+                f"(phase={phase}) - {last_error}"
+            )
         return (
             f"VM {result['vm_name']}, waiting for desktop readiness "
             f"(phase={phase}) - {last_error}"
@@ -596,8 +693,8 @@ class _SchedulerNoise:
     Production now routes cron traffic through ``/scheduled/infra/maintenance``,
     but that endpoint performs the full shared-environment sweep and can block
     for minutes while VM rebalance completes. The stress test instead injects
-    the underlying utility endpoints individually so it still exercises pool
-    churn and stale-runtime races without folding in unrelated global latency.
+    the lower-cost cleanup endpoints directly so it still exercises stale-runtime
+    races without creating extra idle pool churn in preview.
     """
 
     def __init__(self, min_interval=20, max_interval=45):
@@ -628,11 +725,9 @@ class _SchedulerNoise:
             time.sleep(random.uniform(self._min, self._max))
             if self._stop:
                 break
-            action = random.choice(["cleanup", "refresh", "stale-expire"])
+            action = random.choice(["cleanup", "stale-expire"])
             if action == "cleanup":
                 _trigger_cleanup()
-            elif action == "refresh":
-                _trigger_pool_refresh()
             else:
                 _trigger_stale_expire()
             self._fire_count += 1
@@ -911,7 +1006,9 @@ def test_production_traffic_stress(
         if gce_client is not None:
             print(
                 "[Phase 3] Waiting for desktops to reach authenticated readiness "
-                f"(up to {_VM_DESKTOP_READY_TIMEOUT_SECONDS}s)...",
+                f"(up to {_VM_DESKTOP_READY_TIMEOUT_SECONDS}s for assignment, "
+                "preserving "
+                f"{_VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS}s after assignment)...",
             )
             with ThreadPoolExecutor(max_workers=min(N, 12)) as pool:
                 vm_futures = {
@@ -929,7 +1026,7 @@ def test_production_traffic_stress(
                     vm_results.append(result)
                     print(
                         f"  {result['assistant_id']}: "
-                        f"{_format_vm_contract_result(result, timeout=_VM_DESKTOP_READY_TIMEOUT_SECONDS)}",
+                        f"{_format_vm_contract_result(result, assignment_timeout=_VM_DESKTOP_READY_TIMEOUT_SECONDS, readiness_timeout=_VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS)}",
                     )
 
             vm_assigned = sum(bool(result.get("vm_name")) for result in vm_results)
@@ -944,8 +1041,15 @@ def test_production_traffic_stress(
                 for result in vm_results
                 if result["state"] in ("assigned_auth_pending", "check_failed")
             )
-            vm_not_assigned = sum(
-                result["state"] == "not_assigned" for result in vm_results
+            vm_capacity_queued_ids = sorted(
+                result["assistant_id"]
+                for result in vm_results
+                if result["state"] == "queued_for_capacity"
+            )
+            vm_assignment_stall_ids = sorted(
+                result["assistant_id"]
+                for result in vm_results
+                if result["state"] == "not_assigned"
             )
 
             print(
@@ -953,12 +1057,14 @@ def test_production_traffic_stress(
                 f"{vm_auth_ok} desktop-ready + auth OK, "
                 f"{len(vm_desktop_pending_ids)} waiting for desktop readiness, "
                 f"{len(vm_auth_fail_ids)} auth/verification FAIL, "
-                f"{vm_not_assigned} not assigned (pool had {idle_vms_before} idle)",
+                f"{len(vm_capacity_queued_ids)} queued for capacity, "
+                f"{len(vm_assignment_stall_ids)} not assigned for other reasons "
+                f"(pool had {idle_vms_before} idle)",
             )
 
             assert not vm_desktop_pending_ids, (
                 "Assigned VMs never reached desktop readiness within "
-                f"{_VM_DESKTOP_READY_TIMEOUT_SECONDS}s: "
+                f"{_VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS}s of assignment: "
                 + ", ".join(vm_desktop_pending_ids)
             )
             assert not vm_auth_fail_ids, (
@@ -966,16 +1072,26 @@ def test_production_traffic_stress(
                 + ", ".join(vm_auth_fail_ids)
             )
 
-            if vm_not_assigned > 0:
+            if vm_capacity_queued_ids or vm_assignment_stall_ids:
                 import warnings
 
-                warnings.warn(
-                    f"{vm_not_assigned}/{N} assistants have containers but no VM "
-                    f"after {_VM_DESKTOP_READY_TIMEOUT_SECONDS}s of reconciliation. "
-                    f"VM pool had {idle_vms_before} "
-                    f"idle VMs for {N} assistants. This may indicate the VM pool "
-                    f"cannot replenish fast enough for this scale.",
-                )
+                if vm_capacity_queued_ids:
+                    warnings.warn(
+                        f"{len(vm_capacity_queued_ids)}/{N} assistants remained queued "
+                        "for VM capacity after "
+                        f"{_VM_DESKTOP_READY_TIMEOUT_SECONDS}s of reconciliation: "
+                        + ", ".join(vm_capacity_queued_ids)
+                        + ". "
+                        f"VM pool had {idle_vms_before} idle VMs for {N} assistants.",
+                    )
+                if vm_assignment_stall_ids:
+                    warnings.warn(
+                        f"{len(vm_assignment_stall_ids)}/{N} assistants never received "
+                        "a VM within "
+                        f"{_VM_DESKTOP_READY_TIMEOUT_SECONDS}s without an explicit "
+                        "WaitingForCapacity signal: "
+                        + ", ".join(vm_assignment_stall_ids),
+                    )
 
         p3_invariants = check_invariants(batch_api, gce_client)
         p3_new = _new_violations(p3_invariants, baseline_violations)
@@ -1432,7 +1548,9 @@ def test_production_traffic_stress(
         if gce_client is not None and restart_assistants:
             print(
                 "[Phase 7] Waiting for re-attached desktops to reach "
-                f"authenticated readiness (up to {_VM_REATTACH_TIMEOUT_SECONDS}s)...",
+                f"authenticated readiness (up to {_VM_REATTACH_TIMEOUT_SECONDS}s "
+                "for assignment, preserving "
+                f"{_VM_REATTACH_AFTER_ASSIGN_TIMEOUT_SECONDS}s after assignment)...",
             )
             with ThreadPoolExecutor(
                 max_workers=min(len(restart_assistants), 6),
@@ -1444,6 +1562,7 @@ def test_production_traffic_stress(
                         gce_client,
                         a,
                         timeout=_VM_REATTACH_TIMEOUT_SECONDS,
+                        post_assignment_timeout=_VM_REATTACH_AFTER_ASSIGN_TIMEOUT_SECONDS,
                     ): a["assistant_id"]
                     for a in restart_assistants
                 }
@@ -1451,7 +1570,7 @@ def test_production_traffic_stress(
                     result = future.result()
                     print(
                         f"  {result['assistant_id']}: "
-                        f"{_format_vm_contract_result(result, timeout=_VM_REATTACH_TIMEOUT_SECONDS)}",
+                        f"{_format_vm_contract_result(result, assignment_timeout=_VM_REATTACH_TIMEOUT_SECONDS, readiness_timeout=_VM_REATTACH_AFTER_ASSIGN_TIMEOUT_SECONDS)}",
                     )
 
         p7_invariants = check_invariants(batch_api, gce_client)
@@ -1499,8 +1618,6 @@ def test_production_traffic_stress(
                     print(f"  {aid}: {names}")
             else:
                 print(f"[Phase 8] No orphaned VMs — clean")
-
-        replenish_pool()
 
         final_invariants = check_invariants(batch_api, gce_client)
         final_new = _new_violations(final_invariants, baseline_violations)
