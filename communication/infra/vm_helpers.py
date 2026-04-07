@@ -2608,9 +2608,20 @@ def complete_pool_vm_release(vm_name: str, binding_id: str) -> Dict[str, Any]:
                 "reason": "vm_not_running",
             }
         if current_role != POOL_ROLE_RELEASING:
+            if current_role == "idle" and not assistant_id and not current_binding_id:
+                return {
+                    "vm_name": vm_name,
+                    "vm_type": vm_type,
+                    "pool_role": current_role,
+                    "assistant_id": None,
+                    "binding_id": None,
+                    "already_released": True,
+                }
             return {
                 "vm_name": vm_name,
                 "pool_role": current_role,
+                "assistant_id": assistant_id or None,
+                "binding_id": current_binding_id or None,
                 "skipped": True,
                 "reason": "not_releasing",
             }

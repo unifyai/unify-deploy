@@ -596,6 +596,57 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
     ]
 
 
+def test_complete_pool_vm_release_is_idempotent_once_vm_is_idle(monkeypatch):
+    idle_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        status="RUNNING",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "idle",
+                "assistant-id": "",
+                "binding-id": "",
+                "vm-type": "ubuntu",
+            },
+        ),
+    )
+    client = MagicMock()
+    client.get.return_value = idle_vm
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._detach_attached_assistant_disk",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("already idle vm must not detach disks"),
+        ),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("already idle vm must not rewrite metadata"),
+        ),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("already idle vm must not rewrite labels"),
+        ),
+    )
+
+    result = complete_pool_vm_release("unity-pool-ubuntu-3-preview", "binding-123")
+
+    assert result == {
+        "vm_name": "unity-pool-ubuntu-3-preview",
+        "vm_type": "ubuntu",
+        "pool_role": "idle",
+        "assistant_id": None,
+        "binding_id": None,
+        "already_released": True,
+    }
+
+
 def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkeypatch):
     claim_idle = MagicMock(
         return_value={

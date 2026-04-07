@@ -448,6 +448,10 @@ class AssistantSessionComponentHarness:
             "communication.infra.views.compute_v1.InstancesClient",
             lambda: SimpleNamespace(get=self.get_vm_instance),
         )
+        monkeypatch.setattr(
+            "communication.infra.views.complete_pool_vm_release",
+            self.complete_pool_vm_release,
+        )
 
     def assign_pool_vm(
         self,

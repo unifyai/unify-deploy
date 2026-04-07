@@ -103,6 +103,14 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
             return_value=session,
         ),
         patch(
+            "communication.infra.views.complete_pool_vm_release",
+            return_value={
+                "vm_name": "unity-pool-ubuntu-1-preview",
+                "binding_id": "binding-123",
+                "pool_role": "idle",
+            },
+        ) as complete_release,
+        patch(
             "communication.infra.views.record_assistant_session_signal",
         ) as record_signal,
     ):
@@ -119,6 +127,10 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
         "binding_id": "binding-123",
         "accepted": True,
     }
+    complete_release.assert_called_once_with(
+        "unity-pool-ubuntu-1-preview",
+        "binding-123",
+    )
     assert record_signal.call_args.kwargs["signal_name"] == "vmReleaseComplete"
     assert record_signal.call_args.kwargs["payload"]["bindingId"] == "binding-123"
     assert (
@@ -142,6 +154,14 @@ def test_vm_release_complete_skips_signal_when_session_is_missing(client):
             "communication.infra.views.compute_v1.InstancesClient",
         ) as mock_client_cls,
         patch(
+            "communication.infra.views.complete_pool_vm_release",
+            return_value={
+                "vm_name": "unity-pool-ubuntu-1-preview",
+                "binding_id": "binding-123",
+                "pool_role": "idle",
+            },
+        ) as complete_release,
+        patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=object(),
         ),
@@ -164,9 +184,63 @@ def test_vm_release_complete_skips_signal_when_session_is_missing(client):
         "vm_name": "unity-pool-ubuntu-1-preview",
         "assistant_id": "1207",
         "binding_id": "binding-123",
-        "skipped": True,
+        "accepted": True,
         "reason": "session_missing",
     }
+    complete_release.assert_called_once_with(
+        "unity-pool-ubuntu-1-preview",
+        "binding-123",
+    )
+    record_signal.assert_not_called()
+
+
+def test_vm_release_complete_accepts_when_session_api_is_unavailable(client):
+    vm = _make_vm(pool_role="releasing")
+    vm.labels.update(
+        {
+            "assistant-id": "1207",
+            "binding-id": "binding-123",
+        },
+    )
+
+    with (
+        patch(
+            "communication.infra.views.compute_v1.InstancesClient",
+        ) as mock_client_cls,
+        patch(
+            "communication.infra.views.complete_pool_vm_release",
+            return_value={
+                "vm_name": "unity-pool-ubuntu-1-preview",
+                "binding_id": "binding-123",
+                "pool_role": "idle",
+            },
+        ) as complete_release,
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=None,
+        ),
+        patch(
+            "communication.infra.views.record_assistant_session_signal",
+        ) as record_signal,
+    ):
+        mock_client_cls.return_value.get.return_value = vm
+        resp = client.post(
+            "/infra/vm/release-complete",
+            json={"binding_id": "binding-123"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "vm_name": "unity-pool-ubuntu-1-preview",
+        "assistant_id": "1207",
+        "binding_id": "binding-123",
+        "accepted": True,
+        "reason": "session_api_unavailable",
+    }
+    complete_release.assert_called_once_with(
+        "unity-pool-ubuntu-1-preview",
+        "binding-123",
+    )
     record_signal.assert_not_called()
 
 

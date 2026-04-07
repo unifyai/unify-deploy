@@ -60,6 +60,7 @@ from .observability import (
 )
 from .vm_helpers import (
     AssistantDiskInUseError,
+    complete_pool_vm_release,
     get_dns_hostname,
     probe_vm_agent_service_authenticated,
     verify_vm_assignment,
@@ -2563,7 +2564,7 @@ async def vm_release_complete_endpoint(
     body: VMReleaseCompleteRequest,
     claims: dict = Depends(authenticate_vm_identity),
 ):
-    """Record release completion for the current binding."""
+    """Finalize pool release and record session state when available."""
     causal_token = push_causal_context(
         build_causal_context(
             caller="views.release_complete",
@@ -2611,13 +2612,62 @@ async def vm_release_complete_endpoint(
                 "reason": "binding_changed",
             }
 
+        release_result = await asyncio.to_thread(
+            complete_pool_vm_release,
+            vm_name,
+            body.binding_id,
+        )
+        release_pool_role = str(release_result.get("pool_role", "") or pool_role or "")
+        emit_observability_event(
+            "infra.vm_release_complete.pool_result",
+            vm_name=vm_name,
+            assistant_id=assistant_id or None,
+            binding_id=body.binding_id,
+            current_binding_id=current_binding_id or None,
+            pool_role=release_pool_role or None,
+            release_result=release_result,
+        )
+        if release_result.get("skipped"):
+            emit_observability_event(
+                "infra.vm_release_complete.skipped",
+                vm_name=vm_name,
+                assistant_id=assistant_id or None,
+                binding_id=body.binding_id,
+                current_binding_id=current_binding_id or None,
+                pool_role=release_pool_role or None,
+                reason=release_result.get("reason") or "pool_finalize_failed",
+                skip_stage="pool_finalize",
+            )
+            return {
+                "vm_name": vm_name,
+                "assistant_id": assistant_id or None,
+                "binding_id": body.binding_id,
+                "skipped": True,
+                "reason": release_result.get("reason") or "pool_finalize_failed",
+            }
+
+        session_name = assistant_session_name(assistant_id)
         custom_api = await asyncio.to_thread(get_custom_objects_api)
         if custom_api is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to initialize AssistantSession API client",
+            emit_observability_event(
+                "infra.vm_release_complete.signal_skipped",
+                vm_name=vm_name,
+                assistant_id=assistant_id,
+                binding_id=body.binding_id,
+                current_binding_id=current_binding_id or None,
+                session_name=session_name,
+                pool_role=release_pool_role or None,
+                reason="session_api_unavailable",
+                skip_stage="session_client",
             )
-        session_name = assistant_session_name(assistant_id)
+            return {
+                "vm_name": vm_name,
+                "assistant_id": assistant_id,
+                "binding_id": body.binding_id,
+                "accepted": True,
+                "reason": "session_api_unavailable",
+            }
+
         session = await asyncio.to_thread(
             get_assistant_session,
             custom_api,
@@ -2626,13 +2676,13 @@ async def vm_release_complete_endpoint(
         )
         if session is None:
             emit_observability_event(
-                "infra.vm_release_complete.skipped",
+                "infra.vm_release_complete.signal_skipped",
                 vm_name=vm_name,
                 assistant_id=assistant_id,
                 binding_id=body.binding_id,
                 current_binding_id=current_binding_id or None,
                 session_name=session_name,
-                pool_role=pool_role or None,
+                pool_role=release_pool_role or None,
                 reason="session_missing",
                 skip_stage="session_lookup",
             )
@@ -2640,7 +2690,7 @@ async def vm_release_complete_endpoint(
                 "vm_name": vm_name,
                 "assistant_id": assistant_id,
                 "binding_id": body.binding_id,
-                "skipped": True,
+                "accepted": True,
                 "reason": "session_missing",
             }
 
@@ -2659,12 +2709,12 @@ async def vm_release_complete_endpoint(
                 "current_binding_id": binding_id_from_status(binding) or None,
                 "current_release_requested_at": binding.get("releaseRequestedAt"),
                 "current_release_completed_at": binding.get("releaseCompletedAt"),
-                "pool_role": pool_role or None,
+                "pool_role": release_pool_role or None,
                 "reason": "binding_changed",
                 "skip_stage": "session_status",
             }
             emit_observability_event(
-                "infra.vm_release_complete.skipped",
+                "infra.vm_release_complete.signal_skipped",
                 **skipped_fields,
             )
             return {
@@ -2672,7 +2722,7 @@ async def vm_release_complete_endpoint(
                 "assistant_id": assistant_id,
                 "binding_id": body.binding_id,
                 "current_binding_id": binding_id_from_status(binding) or None,
-                "skipped": True,
+                "accepted": True,
                 "reason": "binding_changed",
             }
 
@@ -2684,7 +2734,7 @@ async def vm_release_complete_endpoint(
             "current_release_requested_at": binding.get("releaseRequestedAt"),
             "current_release_completed_at": binding.get("releaseCompletedAt"),
             "next_release_completed_at": next_release_completed_at,
-            "pool_role": pool_role or None,
+            "pool_role": release_pool_role or None,
         }
         emit_observability_event(
             "infra.vm_release_complete.accepted",
@@ -2716,7 +2766,7 @@ async def vm_release_complete_endpoint(
             **persisted_fields,
             release_requested_at=binding.get("releaseRequestedAt"),
             release_completed_at=next_release_completed_at,
-            pool_role=pool_role or None,
+            pool_role=release_pool_role or None,
         )
         return {
             "vm_name": vm_name,
