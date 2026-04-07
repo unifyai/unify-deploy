@@ -49,23 +49,6 @@ chown unityuser:unityuser /Unity/.bashrc
 echo "  /Unity/.bashrc configured"
 
 # =============================================================================
-# Disable GCE guest agent SSH key management
-#
-# Pool VMs manage their own SSH keys via the pool watcher. The guest agent's
-# accounts daemon must be disabled to prevent it from overwriting
-# authorized_keys with stale project-level ssh-keys metadata.
-# =============================================================================
-echo ""
-echo "=== Disabling GCE guest agent accounts daemon ==="
-
-mkdir -p /etc/default
-cat > /etc/default/instance_configs.cfg << 'GCEOF'
-[Daemons]
-accounts_daemon = false
-GCEOF
-echo "  Guest agent accounts daemon disabled"
-
-# =============================================================================
 # SSHD: file sync on port 2222
 # =============================================================================
 echo ""
@@ -146,7 +129,6 @@ echo "  Pool Overlay: Complete"
 echo "=========================================="
 echo ""
 echo "Added:"
-echo "  - GCE guest agent accounts daemon disabled"
 echo "  - Pool user: unityuser (SFTP on port 2222)"
 echo "  - Patchright Chromium"
 echo "  - Pool watcher: unity-pool-watcher.service (systemd)"

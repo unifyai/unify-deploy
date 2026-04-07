@@ -523,9 +523,6 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     metadata_items.append(
         compute_v1.Items(key="unity-environment", value=SETTINGS.deploy_env),
     )
-    # metadata_items.append(
-    #     compute_v1.Items(key="block-project-ssh-keys", value="TRUE"),
-    # )
 
     labels = {
         "pool-role": "provisioning",
