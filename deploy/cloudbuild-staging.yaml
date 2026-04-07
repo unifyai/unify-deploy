@@ -9,10 +9,11 @@ steps:
   - '-c'
   - |
     echo "Base image: ${_BASE_IMAGE}"
+    echo "Unity SHA:  ${_UNITY_SHA}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
       -f deploy/Dockerfile \
-      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:latest .
 
   # Push Docker Image (SHA and latest tags in parallel)
@@ -22,7 +23,7 @@ steps:
   args:
   - '-c'
   - |
-    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${SHORT_SHA}
+    docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_SHA}
   waitFor: ['build-image']
 
 - name: 'gcr.io/cloud-builders/docker'
@@ -41,7 +42,7 @@ steps:
   args:
   - '-c'
   - |
-    echo ${SHORT_SHA} | gsutil cp - gs://bucket/image_hash_staging.txt
+    echo ${_UNITY_SHA} | gsutil cp - gs://bucket/image_hash_staging.txt
   waitFor: ['push-latest-tag']
 
   # Refresh idle containers so they pick up the new image
@@ -75,6 +76,7 @@ substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'unity'
   _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest'
+  _UNITY_SHA: '${SHORT_SHA}'
 
 availableSecrets:
   secretManager:
