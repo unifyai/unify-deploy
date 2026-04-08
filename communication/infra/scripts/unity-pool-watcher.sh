@@ -80,6 +80,19 @@ current_release_token() {
     fi
 }
 
+should_trigger_release() {
+    local previous_unify_key=${1-}
+    local current_unify_key=${2-}
+    local current_release_token=${3-}
+    local last_handled_release_token=${4-}
+
+    if [[ "$current_unify_key" != "$previous_unify_key" && -z "$current_unify_key" && -z "$current_release_token" ]]; then
+        return 0
+    fi
+
+    [[ -z "$current_unify_key" && -n "$current_release_token" && "$current_release_token" != "$last_handled_release_token" ]]
+}
+
 # ─── Code update helpers ─────────────────────────────────────────────────
 
 get_remote_commit_hash() {
@@ -617,80 +630,74 @@ refresh_tls() {
     PREV_TLS_HASH="$new_hash"
 }
 
-# ─── Main watcher loop ───────────────────────────────────────────────────
+main() {
+    log "Unity Pool Watcher starting"
 
-log "Unity Pool Watcher starting"
-
-# Seed TLS hash to avoid unnecessary reload on first loop iteration
-_init_tls=$(get_metadata "tls-fullchain")
-if [[ -n "$_init_tls" ]]; then
-    PREV_TLS_HASH=$(echo -n "$_init_tls" | md5sum | cut -d' ' -f1)
-fi
-
-# Pre-fetch etag so the first long-poll has a valid value and won't block
-# on already-set metadata. Also check current state immediately to handle
-# assignments that happened before the watcher started.
-ETAG=$(curl -sf -H "$METADATA_HEADER" \
-    -o /dev/null -D - \
-    "$METADATA_URL/instance/attributes/?recursive=true" \
-    2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
-
-CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
-CURRENT_RELEASE_TOKEN=$(current_release_token)
-LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
-if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" ]]; then
-    if [[ -n "$CURRENT_UNIFY_KEY" ]]; then
-        do_assign "$CURRENT_UNIFY_KEY"
-    elif [[ -z "$CURRENT_RELEASE_TOKEN" ]]; then
-        do_release
-        LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
-    fi
-fi
-if [[ -z "$CURRENT_UNIFY_KEY" && -n "$CURRENT_RELEASE_TOKEN" && "$CURRENT_RELEASE_TOKEN" != "$LAST_HANDLED_RELEASE_TOKEN" ]]; then
-    do_release
-    LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
-fi
-PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
-
-while true; do
-    # Long-poll for metadata changes (ETAG is always valid here)
-    RESPONSE=$(curl -sf -H "$METADATA_HEADER" \
-        "$METADATA_URL/instance/attributes/?recursive=true&wait_for_change=true&last_etag=$ETAG" \
-        2>/dev/null || echo "")
-
-    if [[ -z "$RESPONSE" ]]; then
-        log "Metadata poll returned empty, retrying in 5s"
-        sleep 5
-        continue
+    # Seed TLS hash to avoid unnecessary reload on first loop iteration
+    _init_tls=$(get_metadata "tls-fullchain")
+    if [[ -n "$_init_tls" ]]; then
+        PREV_TLS_HASH=$(echo -n "$_init_tls" | md5sum | cut -d' ' -f1)
     fi
 
-    # Extract new etag from response headers (re-request with header capture)
+    # Pre-fetch etag so the first long-poll has a valid value and won't block
+    # on already-set metadata. Also check current state immediately to handle
+    # assignments that happened before the watcher started.
     ETAG=$(curl -sf -H "$METADATA_HEADER" \
         -o /dev/null -D - \
         "$METADATA_URL/instance/attributes/?recursive=true" \
         2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
 
-    # Check unify-key
     CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
     CURRENT_RELEASE_TOKEN=$(current_release_token)
     LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
-
-    if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" ]]; then
-        if [[ -n "$CURRENT_UNIFY_KEY" ]]; then
-            do_assign "$CURRENT_UNIFY_KEY"
-        elif [[ -z "$CURRENT_RELEASE_TOKEN" ]]; then
-            do_release
-            LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
-        fi
+    if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" && -n "$CURRENT_UNIFY_KEY" ]]; then
+        do_assign "$CURRENT_UNIFY_KEY"
     fi
-
-    if [[ -z "$CURRENT_UNIFY_KEY" && -n "$CURRENT_RELEASE_TOKEN" && "$CURRENT_RELEASE_TOKEN" != "$LAST_HANDLED_RELEASE_TOKEN" ]]; then
+    if should_trigger_release "$PREV_UNIFY_KEY" "$CURRENT_UNIFY_KEY" "$CURRENT_RELEASE_TOKEN" "$LAST_HANDLED_RELEASE_TOKEN"; then
         do_release
         LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
     fi
-
     PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
 
-    # Refresh TLS cert if metadata changed (handles renewal pushes)
-    refresh_tls
-done
+    while true; do
+        # Long-poll for metadata changes (ETAG is always valid here)
+        RESPONSE=$(curl -sf -H "$METADATA_HEADER" \
+            "$METADATA_URL/instance/attributes/?recursive=true&wait_for_change=true&last_etag=$ETAG" \
+            2>/dev/null || echo "")
+
+        if [[ -z "$RESPONSE" ]]; then
+            log "Metadata poll returned empty, retrying in 5s"
+            sleep 5
+            continue
+        fi
+
+        # Extract new etag from response headers (re-request with header capture)
+        ETAG=$(curl -sf -H "$METADATA_HEADER" \
+            -o /dev/null -D - \
+            "$METADATA_URL/instance/attributes/?recursive=true" \
+            2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
+
+        # Check unify-key
+        CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
+        CURRENT_RELEASE_TOKEN=$(current_release_token)
+        LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
+
+        if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" && -n "$CURRENT_UNIFY_KEY" ]]; then
+            do_assign "$CURRENT_UNIFY_KEY"
+        fi
+
+        if should_trigger_release "$PREV_UNIFY_KEY" "$CURRENT_UNIFY_KEY" "$CURRENT_RELEASE_TOKEN" "$LAST_HANDLED_RELEASE_TOKEN"; then
+            do_release
+            LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
+        fi
+
+        PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
+
+        # Refresh TLS cert if metadata changed (handles renewal pushes)
+        refresh_tls
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

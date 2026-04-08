@@ -10,6 +10,10 @@
 #   nssm set UnityPoolWatcher Start SERVICE_AUTO_START
 # =============================================================================
 
+param(
+    [switch]$SkipMain
+)
+
 $ErrorActionPreference = "Continue"
 
 $MetadataUrl = "http://metadata.google.internal/computeMetadata/v1"
@@ -70,6 +74,14 @@ function Get-CurrentReleaseToken {
         return "$bindingId`:$releaseGeneration"
     }
     return ""
+}
+
+function Should-TriggerRelease($PreviousUnifyKey, $CurrentUnifyKey, $CurrentReleaseToken, $LastHandledReleaseToken) {
+    if ($CurrentUnifyKey -ne $PreviousUnifyKey -and -not $CurrentUnifyKey -and -not $CurrentReleaseToken) {
+        return $true
+    }
+
+    return (-not $CurrentUnifyKey -and $CurrentReleaseToken -and $CurrentReleaseToken -ne $LastHandledReleaseToken)
 }
 
 function Get-UnityUserAuthorizedKeysPath {
@@ -901,87 +913,79 @@ function Invoke-RefreshTls {
     $script:PrevTlsHash = $hash
 }
 
-# ─── Main watcher loop ───────────────────────────────────────────────────
+function Start-Watcher {
+    Write-Log "Unity Pool Watcher starting"
 
-Write-Log "Unity Pool Watcher starting"
+    # Seed TLS hash to avoid unnecessary reload on first loop iteration
+    $initTls = Get-Metadata "tls-fullchain"
+    if ($initTls) {
+        $md5 = [System.Security.Cryptography.MD5]::Create()
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($initTls)
+        $PrevTlsHash = [BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").ToLower()
+    }
 
-# Seed TLS hash to avoid unnecessary reload on first loop iteration
-$initTls = Get-Metadata "tls-fullchain"
-if ($initTls) {
-    $md5 = [System.Security.Cryptography.MD5]::Create()
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($initTls)
-    $PrevTlsHash = [BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").ToLower()
-}
+    # Pre-fetch etag so the first long-poll has a valid value and won't block
+    # on already-set metadata. Also check current state immediately to handle
+    # assignments that happened before the watcher started.
+    try {
+        $initResponse = Invoke-WebRequest -Uri "$MetadataUrl/instance/attributes/?recursive=true" `
+            -Headers $MetadataHeaders -TimeoutSec 10 -UseBasicParsing
+        $Etag = $initResponse.Headers["ETag"]
+    } catch {
+        Write-Log "WARNING: Initial metadata fetch failed: $_"
+    }
 
-# Pre-fetch etag so the first long-poll has a valid value and won't block
-# on already-set metadata. Also check current state immediately to handle
-# assignments that happened before the watcher started.
-try {
-    $initResponse = Invoke-WebRequest -Uri "$MetadataUrl/instance/attributes/?recursive=true" `
-        -Headers $MetadataHeaders -TimeoutSec 10 -UseBasicParsing
-    $Etag = $initResponse.Headers["ETag"]
-} catch {
-    Write-Log "WARNING: Initial metadata fetch failed: $_"
-}
-
-$currentUnifyKey = Get-Metadata "unify-key"
-$currentReleaseToken = Get-CurrentReleaseToken
-$lastHandledReleaseToken = Get-LastReleaseToken
-if ($currentUnifyKey -ne $PrevUnifyKey) {
-    if ($currentUnifyKey) {
+    $currentUnifyKey = Get-Metadata "unify-key"
+    $currentReleaseToken = Get-CurrentReleaseToken
+    $lastHandledReleaseToken = Get-LastReleaseToken
+    if ($currentUnifyKey -ne $PrevUnifyKey -and $currentUnifyKey) {
         Invoke-Assign $currentUnifyKey
-    } elseif (-not $currentReleaseToken) {
+    }
+    if (Should-TriggerRelease $PrevUnifyKey $currentUnifyKey $currentReleaseToken $lastHandledReleaseToken) {
         Invoke-Release
         $lastHandledReleaseToken = Get-LastReleaseToken
     }
-}
-$currentReleaseToken = Get-CurrentReleaseToken
-if (-not $currentUnifyKey -and $currentReleaseToken -and $currentReleaseToken -ne $lastHandledReleaseToken) {
-    Invoke-Release
-    $lastHandledReleaseToken = Get-LastReleaseToken
-}
-$PrevUnifyKey = $currentUnifyKey
+    $PrevUnifyKey = $currentUnifyKey
 
-while ($true) {
-    try {
-        # Long-poll for metadata changes (Etag is always valid here)
-        $uri = "$MetadataUrl/instance/attributes/?recursive=true&wait_for_change=true"
-        $uri += "&last_etag=$Etag"
-
+    while ($true) {
         try {
-            $response = Invoke-WebRequest -Uri $uri -Headers $MetadataHeaders -TimeoutSec 0 -UseBasicParsing
-            $Etag = $response.Headers["ETag"]
-        } catch {
-            Write-Log "Metadata poll failed, retrying in 5s"
-            Start-Sleep -Seconds 5
-            continue
-        }
+            # Long-poll for metadata changes (Etag is always valid here)
+            $uri = "$MetadataUrl/instance/attributes/?recursive=true&wait_for_change=true"
+            $uri += "&last_etag=$Etag"
 
-        $currentUnifyKey = Get-Metadata "unify-key"
-        $currentReleaseToken = Get-CurrentReleaseToken
-        $lastHandledReleaseToken = Get-LastReleaseToken
+            try {
+                $response = Invoke-WebRequest -Uri $uri -Headers $MetadataHeaders -TimeoutSec 0 -UseBasicParsing
+                $Etag = $response.Headers["ETag"]
+            } catch {
+                Write-Log "Metadata poll failed, retrying in 5s"
+                Start-Sleep -Seconds 5
+                continue
+            }
 
-        if ($currentUnifyKey -ne $PrevUnifyKey) {
-            if ($currentUnifyKey) {
+            $currentUnifyKey = Get-Metadata "unify-key"
+            $currentReleaseToken = Get-CurrentReleaseToken
+            $lastHandledReleaseToken = Get-LastReleaseToken
+
+            if ($currentUnifyKey -ne $PrevUnifyKey -and $currentUnifyKey) {
                 Invoke-Assign $currentUnifyKey
-            } elseif (-not $currentReleaseToken) {
+            }
+
+            if (Should-TriggerRelease $PrevUnifyKey $currentUnifyKey $currentReleaseToken $lastHandledReleaseToken) {
                 Invoke-Release
                 $lastHandledReleaseToken = Get-LastReleaseToken
             }
+
+            $PrevUnifyKey = $currentUnifyKey
+
+            # Refresh TLS cert if metadata changed (handles renewal pushes)
+            Invoke-RefreshTls
+        } catch {
+            Write-Log "ERROR in watcher loop: $_"
+            Start-Sleep -Seconds 5
         }
-
-        $currentReleaseToken = Get-CurrentReleaseToken
-        if (-not $currentUnifyKey -and $currentReleaseToken -and $currentReleaseToken -ne $lastHandledReleaseToken) {
-            Invoke-Release
-            $lastHandledReleaseToken = Get-LastReleaseToken
-        }
-
-        $PrevUnifyKey = $currentUnifyKey
-
-        # Refresh TLS cert if metadata changed (handles renewal pushes)
-        Invoke-RefreshTls
-    } catch {
-        Write-Log "ERROR in watcher loop: $_"
-        Start-Sleep -Seconds 5
     }
+}
+
+if (-not $SkipMain) {
+    Start-Watcher
 }
