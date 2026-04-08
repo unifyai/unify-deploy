@@ -624,6 +624,41 @@ def test_start_job_stale_request_cannot_release_newer_start_lease():
     assert exc_info.value.status == 404
 
 
+def test_start_job_lease_recovers_when_conflicted_lease_disappears_before_read():
+    from communication.infra.helpers import acquire_named_lease
+
+    coord_api = _FakeCoordApi()
+    lease_name = "assistant-start-assistant-123"
+    namespace = SETTINGS.default_namespace
+
+    assert acquire_named_lease(
+        coord_api,
+        lease_name,
+        namespace,
+        holder_id="job-start-assistant-123-deadbeef",
+        duration=30,
+    )
+
+    original_read_namespaced_lease = coord_api.read_namespaced_lease
+
+    def _disappearing_read(name, namespace):
+        coord_api.delete_namespaced_lease(name=name, namespace=namespace)
+        raise ApiException(status=404)
+
+    coord_api.read_namespaced_lease = MagicMock(side_effect=_disappearing_read)
+
+    assert acquire_named_lease(
+        coord_api,
+        lease_name,
+        namespace,
+        holder_id="job-start-assistant-123-cafebabe",
+        duration=30,
+    )
+
+    current_lease = original_read_namespaced_lease(lease_name, namespace)
+    assert current_lease.spec.holder_identity == "job-start-assistant-123-cafebabe"
+
+
 def test_start_job_returns_503_when_new_activation_needs_control_plane(client):
     core_api = MagicMock()
 

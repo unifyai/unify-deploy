@@ -572,7 +572,28 @@ def acquire_named_lease(
         if e.status != 409:
             raise
 
-    existing = coord_api.read_namespaced_lease(name=lease_name, namespace=namespace)
+    try:
+        existing = coord_api.read_namespaced_lease(name=lease_name, namespace=namespace)
+    except ApiException as read_err:
+        if read_err.status != 404:
+            raise
+        logger.info(
+            "Lease %s disappeared after create conflict; retrying acquisition",
+            lease_name,
+        )
+        try:
+            coord_api.create_namespaced_lease(namespace=namespace, body=lease_body)
+            logger.info(
+                "Acquired lease %s (holder=%s) after conflict handoff",
+                lease_name,
+                holder_id,
+            )
+            return True
+        except ApiException as retry_err:
+            if retry_err.status == 409:
+                return False
+            raise
+
     acquire_time = existing.spec.acquire_time
     lease_dur = existing.spec.lease_duration_seconds or duration
 
