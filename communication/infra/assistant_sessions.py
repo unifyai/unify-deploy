@@ -59,8 +59,16 @@ def assistant_session_name(assistant_id: str) -> str:
     return f"assistant-session-{_sanitize_for_k8s(assistant_id)}"
 
 
-def assistant_session_secret_name(assistant_id: str) -> str:
-    return f"assistant-session-bootstrap-{_sanitize_for_k8s(assistant_id)}"
+def assistant_session_secret_name(assistant_id: str, activation_id: str) -> str:
+    """Return the activation-scoped bootstrap Secret name for a session."""
+
+    sanitized_activation_id = _sanitize_for_k8s(activation_id)
+    if not sanitized_activation_id:
+        raise ValueError("bootstrap Secret names require a non-empty activation_id")
+    return (
+        "assistant-session-bootstrap-"
+        f"{_sanitize_for_k8s(assistant_id)}-{sanitized_activation_id}"
+    )
 
 
 def _bootstrap_secret_annotations(
@@ -739,6 +747,56 @@ def bootstrap_secret_owned_by_session(
     return True
 
 
+def delete_bootstrap_secret_if_owned(
+    core_api,
+    namespace: str,
+    *,
+    assistant_id: str,
+    activation_id: str,
+    secret_name: str,
+) -> bool:
+    """Delete a bootstrap Secret only when it still belongs to that activation."""
+
+    secret = _read_secret_or_none(core_api, namespace, secret_name)
+    if secret is None:
+        return False
+    if not bootstrap_secret_owned_by_session(
+        secret,
+        assistant_id=assistant_id,
+        activation_id=activation_id,
+        secret_name=secret_name,
+    ):
+        annotations = (
+            getattr(getattr(secret, "metadata", None), "annotations", None) or {}
+        )
+        emit_observability_event(
+            "assistantsession.bootstrap_secret_delete_skipped",
+            assistant_id=assistant_id,
+            activation_id=activation_id,
+            secret_name=secret_name,
+            secret_owner_session_name=(
+                str(annotations.get(SESSION_REF_ANNOTATION, "") or "") or None
+            ),
+            secret_owner_activation_id=(
+                str(annotations.get(ACTIVATION_ID_ANNOTATION, "") or "") or None
+            ),
+        )
+        return False
+    try:
+        core_api.delete_namespaced_secret(name=secret_name, namespace=namespace)
+    except ApiException as e:
+        if e.status == 404:
+            return False
+        raise
+    emit_observability_event(
+        "assistantsession.bootstrap_secret_deleted",
+        assistant_id=assistant_id,
+        activation_id=activation_id,
+        secret_name=secret_name,
+    )
+    return True
+
+
 def delete_assistant_session(
     custom_api: k8s_client.CustomObjectsApi,
     namespace: str,
@@ -772,7 +830,7 @@ def create_or_update_bootstrap_secret(
     activation_id: str,
     payload: dict[str, Any],
 ) -> str:
-    secret_name = assistant_session_secret_name(assistant_id)
+    secret_name = assistant_session_secret_name(assistant_id, activation_id)
     body = k8s_client.V1Secret(
         metadata=k8s_client.V1ObjectMeta(
             name=secret_name,

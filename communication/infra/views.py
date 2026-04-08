@@ -45,9 +45,10 @@ from .assistant_sessions import (
     binding_vm_ref,
     build_assistant_session_spec,
     build_binding_signal,
-    delete_assistant_session,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
+    delete_assistant_session,
+    delete_bootstrap_secret_if_owned,
     emit_observability_event,
     get_assistant_session,
     get_custom_objects_api,
@@ -354,6 +355,56 @@ async def _assistant_session_control_plane_ready(
     if available_replicas < 1:
         return False, "assistant_session_controller_unavailable"
     return True, None
+
+
+async def _cleanup_superseded_bootstrap_secrets(
+    *,
+    core_api,
+    assistant_id: str,
+    existing_session: dict | None,
+    attempted_refs: list[tuple[str, str]],
+    final_secret_name: str,
+) -> None:
+    """Delete bootstrap Secrets that were superseded by a newer session ref."""
+
+    cleanup_candidates: list[tuple[str, str]] = []
+    if existing_session:
+        cleanup_candidates.append(
+            (
+                str(existing_session.get("spec", {}).get("startupSecretRef", "") or ""),
+                str(existing_session.get("spec", {}).get("activationId", "") or ""),
+            ),
+        )
+    cleanup_candidates.extend(attempted_refs)
+
+    seen: set[tuple[str, str]] = set()
+    for secret_name, activation_id in cleanup_candidates:
+        candidate = (str(secret_name or ""), str(activation_id or ""))
+        if not candidate[0] or candidate[0] == final_secret_name or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            await asyncio.to_thread(
+                delete_bootstrap_secret_if_owned,
+                core_api,
+                SETTINGS.default_namespace,
+                assistant_id=assistant_id,
+                activation_id=candidate[1],
+                secret_name=candidate[0],
+            )
+        except Exception as exc:
+            logger.exception(
+                "Failed cleaning superseded bootstrap secret %s for assistant %s",
+                candidate[0],
+                assistant_id,
+            )
+            emit_observability_event(
+                "infra.job_start.secret_cleanup_failed",
+                assistant_id=assistant_id,
+                activation_id=candidate[1] or None,
+                secret_name=candidate[0],
+                error=f"{type(exc).__name__}: {exc}",
+            )
 
 
 def _build_startup_payload(
@@ -883,6 +934,7 @@ async def start_job(
     reused_active_session = False
     restart_in_progress = False
     idle_pool_replenish_scheduled = False
+    attempted_secret_refs: list[tuple[str, str]] = []
     coord_api = None
     start_lease_name = None
     start_lease_holder_id = None
@@ -1036,6 +1088,7 @@ async def start_job(
             activation_id,
             startup_payload,
         )
+        attempted_secret_refs.append((secret_name, activation_id))
 
         spec = build_assistant_session_spec(
             assistant_id=assistant_id,
@@ -1097,6 +1150,7 @@ async def start_job(
                 activation_id,
                 startup_payload,
             )
+            attempted_secret_refs.append((secret_name, activation_id))
             spec = build_assistant_session_spec(
                 assistant_id=assistant_id,
                 user_id=user_id,
@@ -1131,6 +1185,13 @@ async def start_job(
 
         activation_id = str(session.get("spec", {}).get("activationId", activation_id))
         secret_name = str(session.get("spec", {}).get("startupSecretRef", secret_name))
+        await _cleanup_superseded_bootstrap_secrets(
+            core_api=core_api,
+            assistant_id=assistant_id,
+            existing_session=existing_session,
+            attempted_refs=attempted_secret_refs,
+            final_secret_name=secret_name,
+        )
         status = session.get("status", {})
         binding = session_binding(session)
         if not reused_active_session:

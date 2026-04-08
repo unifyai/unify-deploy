@@ -243,6 +243,63 @@ def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pendin
     assert refreshed_spec["requestedAt"]
 
 
+def test_start_job_cleans_superseded_bootstrap_secret_after_session_repoint(client):
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session(
+        secret_name="assistant-session-bootstrap-assistant-123",
+    )
+    refreshed_secret_name = (
+        "assistant-session-bootstrap-assistant-123-activation-existing"
+    )
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        _control_plane_ready_patch(),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value=refreshed_secret_name,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ),
+        patch(
+            "communication.infra.views.delete_bootstrap_secret_if_owned",
+            return_value=True,
+        ) as mock_delete_bootstrap_secret_if_owned,
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 200
+    mock_delete_bootstrap_secret_if_owned.assert_called_once_with(
+        core_api,
+        SETTINGS.default_namespace,
+        assistant_id="assistant-123",
+        activation_id=existing_session["spec"]["activationId"],
+        secret_name=existing_session["spec"]["startupSecretRef"],
+    )
+
+
 def test_start_job_reused_pending_session_picks_up_changed_desktop_mode(client):
     core_api = MagicMock()
     custom_api = MagicMock()

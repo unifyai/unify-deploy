@@ -37,7 +37,6 @@ from kubernetes.client.rest import ApiException
 
 from communication.infra.assistant_sessions import (
     assistant_session_name,
-    assistant_session_secret_name,
 )
 
 from .conftest import (
@@ -384,7 +383,6 @@ def test_delete_session_endpoint_tears_down_pending_runtime(
 
     assistant = _create_test_assistant(int(time.time() * 1000) % 1000000)
     assistant_id = str(assistant["assistant_id"])
-    secret_name = assistant_session_secret_name(assistant_id)
 
     try:
         start_real_job(comms, assistant)
@@ -411,6 +409,8 @@ def test_delete_session_endpoint_tears_down_pending_runtime(
             failure_snapshot=lambda: get_assistant_session(comms, assistant_id),
         )
         assert session is not None
+        secret_name = str((session.get("spec") or {}).get("startupSecretRef") or "")
+        assert secret_name, f"Expected startupSecretRef on session, got: {session}"
 
         job_name = (
             (((session.get("status") or {}).get("binding") or {}).get("jobRef") or {})

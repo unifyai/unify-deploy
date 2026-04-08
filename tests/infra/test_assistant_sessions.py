@@ -75,8 +75,8 @@ def _fake_secret(
 def test_assistant_session_names_are_sanitized():
     assert assistant_session_name("ABC_123") == "assistant-session-abc-123"
     assert (
-        assistant_session_secret_name("ABC_123")
-        == "assistant-session-bootstrap-abc-123"
+        assistant_session_secret_name("ABC_123", "Act_456")
+        == "assistant-session-bootstrap-abc-123-act-456"
     )
 
 
@@ -806,6 +806,7 @@ def test_create_or_update_bootstrap_secret_reconciles_create_conflict_to_latest_
             return _fake_secret(
                 self.stored_payload,
                 resource_version=self.resource_version,
+                name=assistant_session_secret_name("1207", "act-1"),
             )
 
         def create_namespaced_secret(self, **_kwargs):
@@ -825,7 +826,7 @@ def test_create_or_update_bootstrap_secret_reconciles_create_conflict_to_latest_
         requested_payload,
     )
 
-    assert secret_name == "assistant-session-bootstrap-1207"
+    assert secret_name == "assistant-session-bootstrap-1207-act-1"
     assert core_api.replace_count == 1
     assert core_api.stored_payload == requested_payload
 
@@ -841,7 +842,11 @@ def test_create_or_update_bootstrap_secret_retries_replace_conflict():
 
         def read_namespaced_secret(self, **_kwargs):
             call_log.append("read")
-            return _fake_secret(stored_payload, resource_version=self.resource_version)
+            return _fake_secret(
+                stored_payload,
+                resource_version=self.resource_version,
+                name=assistant_session_secret_name("1207", "act-1"),
+            )
 
         def replace_namespaced_secret(self, **kwargs):
             call_log.append("replace")
@@ -860,7 +865,7 @@ def test_create_or_update_bootstrap_secret_retries_replace_conflict():
         requested_payload,
     )
 
-    assert secret_name == "assistant-session-bootstrap-1207"
+    assert secret_name == "assistant-session-bootstrap-1207-act-1"
     assert call_log.count("replace") == 3
     assert call_log.count("read") == 3
     assert stored_payload == requested_payload
@@ -874,6 +879,7 @@ def test_create_or_update_bootstrap_secret_replaces_when_owner_annotations_stale
         def read_namespaced_secret(self, **_kwargs):
             return _fake_secret(
                 requested_payload,
+                name=assistant_session_secret_name("1207", "act-new"),
                 annotations={
                     SESSION_REF_ANNOTATION: assistant_session_name("1207"),
                     ACTIVATION_ID_ANNOTATION: "act-old",
@@ -891,7 +897,7 @@ def test_create_or_update_bootstrap_secret_replaces_when_owner_annotations_stale
         requested_payload,
     )
 
-    assert secret_name == "assistant-session-bootstrap-1207"
+    assert secret_name == "assistant-session-bootstrap-1207-act-new"
     assert len(replace_calls) == 1
     assert replace_calls[0].metadata.annotations == {
         SESSION_REF_ANNOTATION: assistant_session_name("1207"),
