@@ -24,6 +24,7 @@ SESSION_REF_ANNOTATION = "assistantsession.unify.ai/name"
 BINDING_ID_LABEL = "assistantsession.unify.ai/binding-id"
 BINDING_ID_ANNOTATION = "assistantsession.unify.ai/binding-id"
 CONTAINER_READY_ANNOTATION = "assistantsession.unify.ai/container-ready"
+ACTIVATION_ID_ANNOTATION = "assistantsession.unify.ai/activation-id"
 
 DESIRED_STATE_RUNNING = "Running"
 DESIRED_STATE_STOPPED = "Stopped"
@@ -46,6 +47,10 @@ _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS = frozenset({"requestedAt"})
 _RELEASED_BINDINGS_HISTORY_LIMIT = 20
 
 
+class AssistantSessionTerminatingError(RuntimeError):
+    """Raised when a caller tries to reuse a deleting AssistantSession."""
+
+
 def _sanitize_for_k8s(value: str) -> str:
     return str(value).lower().replace("_", "-")
 
@@ -56,6 +61,19 @@ def assistant_session_name(assistant_id: str) -> str:
 
 def assistant_session_secret_name(assistant_id: str) -> str:
     return f"assistant-session-bootstrap-{_sanitize_for_k8s(assistant_id)}"
+
+
+def _bootstrap_secret_annotations(
+    *,
+    assistant_id: str,
+    activation_id: str,
+) -> dict[str, str]:
+    """Return the owner annotations recorded on bootstrap secrets."""
+
+    return {
+        SESSION_REF_ANNOTATION: assistant_session_name(assistant_id),
+        ACTIVATION_ID_ANNOTATION: str(activation_id or ""),
+    }
 
 
 def assistant_session_is_terminating(session: dict[str, Any] | None) -> bool:
@@ -664,11 +682,61 @@ def _secret_startup_payload(secret) -> dict[str, Any]:
     return {}
 
 
-def _secret_matches_payload(secret, payload: dict[str, Any]) -> bool:
+def _secret_matches_bootstrap_request(
+    secret,
+    *,
+    assistant_id: str,
+    activation_id: str,
+    payload: dict[str, Any],
+) -> bool:
+    """Return whether a bootstrap secret matches both payload and owner."""
+
     try:
-        return _secret_startup_payload(secret) == payload
+        metadata = getattr(secret, "metadata", None)
+        annotations = getattr(metadata, "annotations", None) or {}
+        expected_annotations = _bootstrap_secret_annotations(
+            assistant_id=assistant_id,
+            activation_id=activation_id,
+        )
+        return _secret_startup_payload(secret) == payload and all(
+            str(annotations.get(key, "") or "") == value
+            for key, value in expected_annotations.items()
+        )
     except Exception:
         return False
+
+
+def bootstrap_secret_owned_by_session(
+    secret,
+    *,
+    assistant_id: str,
+    activation_id: str,
+    secret_name: str,
+) -> bool:
+    """Return whether a Secret still belongs to the terminating session.
+
+    Legacy secrets may predate owner annotations. For those, matching the
+    referenced Secret name is the strongest ownership signal available.
+    """
+
+    metadata = getattr(secret, "metadata", None)
+    if metadata is None:
+        return False
+
+    actual_name = str(getattr(metadata, "name", "") or secret_name)
+    if actual_name != secret_name:
+        return False
+
+    annotations = getattr(metadata, "annotations", None) or {}
+    owner_session_name = str(annotations.get(SESSION_REF_ANNOTATION, "") or "")
+    owner_activation_id = str(annotations.get(ACTIVATION_ID_ANNOTATION, "") or "")
+    if owner_session_name and owner_session_name != assistant_session_name(
+        assistant_id,
+    ):
+        return False
+    if owner_activation_id and owner_activation_id != str(activation_id or ""):
+        return False
+    return True
 
 
 def delete_assistant_session(
@@ -701,11 +769,19 @@ def create_or_update_bootstrap_secret(
     core_api,
     namespace: str,
     assistant_id: str,
+    activation_id: str,
     payload: dict[str, Any],
 ) -> str:
     secret_name = assistant_session_secret_name(assistant_id)
     body = k8s_client.V1Secret(
-        metadata=k8s_client.V1ObjectMeta(name=secret_name, namespace=namespace),
+        metadata=k8s_client.V1ObjectMeta(
+            name=secret_name,
+            namespace=namespace,
+            annotations=_bootstrap_secret_annotations(
+                assistant_id=assistant_id,
+                activation_id=activation_id,
+            ),
+        ),
         type="Opaque",
         string_data={"startup.json": json.dumps(payload)},
     )
@@ -716,6 +792,7 @@ def create_or_update_bootstrap_secret(
             emit_observability_event(
                 "assistantsession.bootstrap_secret_created",
                 assistant_id=assistant_id,
+                activation_id=activation_id,
                 secret_name=secret_name,
             )
             return secret_name
@@ -725,6 +802,7 @@ def create_or_update_bootstrap_secret(
             emit_observability_event(
                 "assistantsession.bootstrap_secret_create_conflict",
                 assistant_id=assistant_id,
+                activation_id=activation_id,
                 secret_name=secret_name,
                 error=str(e),
             )
@@ -735,10 +813,16 @@ def create_or_update_bootstrap_secret(
                 )
 
     for _attempt in range(3):
-        if _secret_matches_payload(existing_secret, payload):
+        if _secret_matches_bootstrap_request(
+            existing_secret,
+            assistant_id=assistant_id,
+            activation_id=activation_id,
+            payload=payload,
+        ):
             emit_observability_event(
                 "assistantsession.bootstrap_secret_already_current",
                 assistant_id=assistant_id,
+                activation_id=activation_id,
                 secret_name=secret_name,
             )
             return secret_name
@@ -752,6 +836,7 @@ def create_or_update_bootstrap_secret(
             emit_observability_event(
                 "assistantsession.bootstrap_secret_replaced",
                 assistant_id=assistant_id,
+                activation_id=activation_id,
                 secret_name=secret_name,
                 resource_version=body.metadata.resource_version,
             )
@@ -771,10 +856,16 @@ def create_or_update_bootstrap_secret(
                     f"Bootstrap secret {secret_name} disappeared during replace retry",
                 )
     final_secret = _read_secret_or_none(core_api, namespace, secret_name)
-    if final_secret is not None and _secret_matches_payload(final_secret, payload):
+    if final_secret is not None and _secret_matches_bootstrap_request(
+        final_secret,
+        assistant_id=assistant_id,
+        activation_id=activation_id,
+        payload=payload,
+    ):
         emit_observability_event(
             "assistantsession.bootstrap_secret_converged_after_conflicts",
             assistant_id=assistant_id,
+            activation_id=activation_id,
             secret_name=secret_name,
         )
         return secret_name
@@ -830,6 +921,28 @@ def _assistant_session_spec_matches(
     return all(current_spec.get(key) == desired_spec.get(key) for key in compare_keys)
 
 
+def _raise_if_session_terminating(
+    session: dict[str, Any] | None,
+    *,
+    assistant_id: str,
+    session_name: str,
+    activation_id: str | None,
+) -> None:
+    """Reject attempts to reuse an AssistantSession that is deleting."""
+
+    if not assistant_session_is_terminating(session):
+        return
+    emit_observability_event(
+        "assistantsession.update_blocked_terminating",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        activation_id=activation_id,
+    )
+    raise AssistantSessionTerminatingError(
+        f"AssistantSession {session_name} is deleting; retry after cleanup completes",
+    )
+
+
 def create_or_update_assistant_session(
     custom_api: k8s_client.CustomObjectsApi,
     namespace: str,
@@ -852,6 +965,12 @@ def create_or_update_assistant_session(
 
     for _attempt in range(_MAX_CAS_RETRIES):
         body["spec"] = spec
+        _raise_if_session_terminating(
+            existing,
+            assistant_id=assistant_id,
+            session_name=name,
+            activation_id=str(spec.get("activationId", "") or ""),
+        )
 
         if _assistant_session_spec_matches(existing, spec):
             return existing
@@ -879,6 +998,12 @@ def create_or_update_assistant_session(
                 existing = get_assistant_session(custom_api, namespace, assistant_id)
                 if existing is None:
                     continue
+                _raise_if_session_terminating(
+                    existing,
+                    assistant_id=assistant_id,
+                    session_name=name,
+                    activation_id=str(spec.get("activationId", "") or ""),
+                )
                 if _assistant_session_spec_matches(existing, spec):
                     return existing
                 raise e
@@ -911,6 +1036,12 @@ def create_or_update_assistant_session(
             existing = get_assistant_session(custom_api, namespace, assistant_id)
             if existing is None:
                 raise
+            _raise_if_session_terminating(
+                existing,
+                assistant_id=assistant_id,
+                session_name=name,
+                activation_id=str(spec.get("activationId", "") or ""),
+            )
     if _assistant_session_spec_matches(
         existing,
         spec,

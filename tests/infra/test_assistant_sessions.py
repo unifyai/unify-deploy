@@ -9,6 +9,9 @@ import yaml
 
 from communication.infra import assistant_sessions as assistant_sessions_module
 from communication.infra.assistant_sessions import (
+    ACTIVATION_ID_ANNOTATION,
+    AssistantSessionTerminatingError,
+    SESSION_REF_ANNOTATION,
     assistant_session_desired_state,
     assistant_session_is_terminating,
     assistant_session_name,
@@ -41,13 +44,23 @@ from communication.infra.observability import bind_causal_context, build_causal_
 from kubernetes.client.rest import ApiException
 
 
-def _fake_secret(payload: dict, resource_version: str = "1"):
+def _fake_secret(
+    payload: dict,
+    resource_version: str = "1",
+    *,
+    name: str = "assistant-session-bootstrap-1207",
+    annotations: dict | None = None,
+):
     class FakeSecret:
         def __init__(self):
             self.metadata = type(
                 "Metadata",
                 (),
-                {"resource_version": resource_version},
+                {
+                    "resource_version": resource_version,
+                    "name": name,
+                    "annotations": annotations or {},
+                },
             )()
             self.data = {
                 "startup.json": base64.b64encode(
@@ -808,6 +821,7 @@ def test_create_or_update_bootstrap_secret_reconciles_create_conflict_to_latest_
         core_api,
         "preview",
         "1207",
+        "act-1",
         requested_payload,
     )
 
@@ -842,6 +856,7 @@ def test_create_or_update_bootstrap_secret_retries_replace_conflict():
         FakeCoreApi(),
         "preview",
         "1207",
+        "act-1",
         requested_payload,
     )
 
@@ -849,6 +864,81 @@ def test_create_or_update_bootstrap_secret_retries_replace_conflict():
     assert call_log.count("replace") == 3
     assert call_log.count("read") == 3
     assert stored_payload == requested_payload
+
+
+def test_create_or_update_bootstrap_secret_replaces_when_owner_annotations_stale():
+    requested_payload = {"api_key": "latest-secret"}
+    replace_calls = []
+
+    class FakeCoreApi:
+        def read_namespaced_secret(self, **_kwargs):
+            return _fake_secret(
+                requested_payload,
+                annotations={
+                    SESSION_REF_ANNOTATION: assistant_session_name("1207"),
+                    ACTIVATION_ID_ANNOTATION: "act-old",
+                },
+            )
+
+        def replace_namespaced_secret(self, **kwargs):
+            replace_calls.append(kwargs["body"])
+
+    secret_name = create_or_update_bootstrap_secret(
+        FakeCoreApi(),
+        "preview",
+        "1207",
+        "act-new",
+        requested_payload,
+    )
+
+    assert secret_name == "assistant-session-bootstrap-1207"
+    assert len(replace_calls) == 1
+    assert replace_calls[0].metadata.annotations == {
+        SESSION_REF_ANNOTATION: assistant_session_name("1207"),
+        ACTIVATION_ID_ANNOTATION: "act-new",
+    }
+
+
+def test_create_or_update_assistant_session_rejects_terminating_existing_session(
+    monkeypatch,
+):
+    desired_spec = build_assistant_session_spec(
+        assistant_id="1207",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="assistant-session-bootstrap-1207",
+        activation_id="act-1",
+    )
+    terminating_session = {
+        "metadata": {
+            "name": "assistant-session-1207",
+            "resourceVersion": "7",
+            "deletionTimestamp": "2026-04-06T12:00:00Z",
+        },
+        "spec": {"activationId": "act-1"},
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(terminating_session),
+    )
+
+    class FakeCustomApi:
+        def create_namespaced_custom_object(self, **_kwargs):
+            raise AssertionError("terminating sessions must not be created over")
+
+        def patch_namespaced_custom_object(self, **_kwargs):
+            raise AssertionError("terminating sessions must not be patched")
+
+    with pytest.raises(AssistantSessionTerminatingError):
+        create_or_update_assistant_session(
+            FakeCustomApi(),
+            "preview",
+            "1207",
+            desired_spec,
+        )
 
 
 def test_create_or_update_assistant_session_skips_patch_when_spec_already_current(

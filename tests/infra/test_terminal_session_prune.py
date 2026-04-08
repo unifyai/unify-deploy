@@ -61,27 +61,29 @@ def _active_job(name: str = "unity-job-live"):
 
 
 def test_prune_terminal_sessions_deletes_old_terminal_crs_with_no_runtime(client):
-    custom_api = MagicMock()
-    custom_api.list_namespaced_custom_object.return_value = {
-        "items": [
-            _session("100", phase="Released", created_hours_ago=72),
-            _session(
-                "101",
-                phase="Failed",
-                created_hours_ago=48,
-                desired_state="Running",
-            ),
-            _session("102", phase="Released", created_hours_ago=2),
-            _session(
-                "103",
-                phase="Released",
-                created_hours_ago=72,
-                binding={"id": "binding-1"},
-            ),
-            _session("104", phase="Released", created_hours_ago=72, deleting=True),
-            _session("105", phase="Active", created_hours_ago=72),
-        ],
+    listed_sessions = [
+        _session("100", phase="Released", created_hours_ago=72),
+        _session(
+            "101",
+            phase="Failed",
+            created_hours_ago=48,
+            desired_state="Running",
+        ),
+        _session("102", phase="Released", created_hours_ago=2),
+        _session(
+            "103",
+            phase="Released",
+            created_hours_ago=72,
+            binding={"id": "binding-1"},
+        ),
+        _session("104", phase="Released", created_hours_ago=72, deleting=True),
+        _session("105", phase="Active", created_hours_ago=72),
+    ]
+    session_by_assistant_id = {
+        str(session["spec"]["assistantId"]): session for session in listed_sessions
     }
+    custom_api = MagicMock()
+    custom_api.list_namespaced_custom_object.return_value = {"items": listed_sessions}
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value = SimpleNamespace(items=[])
 
@@ -94,6 +96,10 @@ def test_prune_terminal_sessions_deletes_old_terminal_crs_with_no_runtime(client
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            side_effect=lambda *_args: session_by_assistant_id.get(str(_args[-1])),
         ),
         patch(
             "communication.infra.views.split_binding_runtime_vms",
@@ -114,27 +120,24 @@ def test_prune_terminal_sessions_deletes_old_terminal_crs_with_no_runtime(client
     body = response.json()
     assert body["terminal_sessions_found"] == 5
     assert body["prune_candidates"] == 3
-    assert body["deleted_count"] == 2
-    assert body["deleted_assistant_ids"] == ["100", "101"]
+    assert body["deleted_count"] == 1
+    assert body["deleted_assistant_ids"] == ["100"]
     assert body["remaining_candidates"] == 0
     assert body["skip_reasons"] == {
+        "desired_state_running": 1,
         "within_retention": 1,
         "already_terminating": 1,
         "runtime_resources_present": 1,
     }
     assert [call.args[2] for call in mock_delete_assistant_session.call_args_list] == [
         "100",
-        "101",
     ]
 
 
 def test_prune_terminal_sessions_skips_sessions_with_live_runtime_artifacts(client):
+    listed_session = _session("200", phase="Released", created_hours_ago=48)
     custom_api = MagicMock()
-    custom_api.list_namespaced_custom_object.return_value = {
-        "items": [
-            _session("200", phase="Released", created_hours_ago=48),
-        ],
-    }
+    custom_api.list_namespaced_custom_object.return_value = {"items": [listed_session]}
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value = SimpleNamespace(items=[_active_job()])
 
@@ -147,6 +150,10 @@ def test_prune_terminal_sessions_skips_sessions_with_live_runtime_artifacts(clie
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=listed_session,
         ),
         patch(
             "communication.infra.views.split_binding_runtime_vms",
@@ -167,4 +174,61 @@ def test_prune_terminal_sessions_skips_sessions_with_live_runtime_artifacts(clie
     body = response.json()
     assert body["deleted_count"] == 0
     assert body["skip_reasons"] == {"runtime_resources_present": 1}
+    mock_delete_assistant_session.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("fresh_session", "expected_reason"),
+    [
+        (_session("300", phase="Active", created_hours_ago=72), "no_longer_terminal"),
+        (
+            _session("300", phase="Released", created_hours_ago=72, deleting=True),
+            "already_terminating",
+        ),
+    ],
+)
+def test_prune_terminal_sessions_rechecks_candidate_before_delete(
+    client,
+    fresh_session,
+    expected_reason,
+):
+    listed_session = _session("300", phase="Released", created_hours_ago=72)
+    custom_api = MagicMock()
+    custom_api.list_namespaced_custom_object.return_value = {"items": [listed_session]}
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value = SimpleNamespace(items=[])
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(batch_api, MagicMock(), MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=fresh_session,
+        ),
+        patch(
+            "communication.infra.views.split_binding_runtime_vms",
+            return_value=([], []),
+        ),
+        patch("communication.infra.views.find_vm_with_disk", return_value=None),
+        patch(
+            "communication.infra.views.delete_assistant_session",
+            return_value=True,
+        ) as mock_delete_assistant_session,
+    ):
+        response = client.post(
+            "/infra/sessions/prune-terminal",
+            params={"retention_hours": 24, "limit": 10},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deleted_count"] == 0
+    assert body["skip_reasons"] == {expected_reason: 1}
     mock_delete_assistant_session.assert_not_called()

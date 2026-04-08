@@ -7,11 +7,14 @@ These tests verify:
 - Demo ID propagation for demo assistants (passed as string to Comms)
 """
 
+from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from adapters.helpers import (
     build_webhook_context,
     cleanup_idle_pool,
+    expire_all_stale_jobs,
     get_default_contacts,
     get_unity_jobs_inventory,
     check_contact_details,
@@ -417,3 +420,127 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
 
 # Wakeup dedup is now handled atomically by /infra/job/start.
 # The previous is_job_running() check-then-act flow was removed as non-atomic.
+
+
+class _Response:
+    def __init__(self, status_code: int, payload: dict | None = None):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = json.dumps(self._payload)
+
+    def json(self) -> dict:
+        return self._payload
+
+
+def _stale_job(*, job_name: str, assistant_id: str, status: str = "running") -> dict:
+    created_at = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    return {
+        "job_name": job_name,
+        "assistant_id": assistant_id,
+        "labels": {"unity-status": status},
+        "creation_timestamp": created_at,
+    }
+
+
+@patch.object(SETTINGS, "comms_url", "http://comms.test")
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
+    mock_get,
+    mock_post,
+    mock_delete,
+):
+    events = []
+
+    def _get(url, *args, **kwargs):
+        if url.endswith("/infra/jobs"):
+            return _Response(
+                200,
+                {
+                    "jobs": [
+                        _stale_job(job_name="unity-job-bound", assistant_id="aid-1"),
+                        _stale_job(job_name="unity-job-orphan", assistant_id="aid-2"),
+                    ],
+                },
+            )
+        if url.endswith("/infra/session/aid-1"):
+            return _Response(
+                200,
+                {
+                    "spec": {"desiredState": "Running"},
+                    "status": {
+                        "phase": "Active",
+                        "binding": {"jobRef": {"name": "unity-job-bound"}},
+                    },
+                },
+            )
+        if url.endswith("/infra/session/aid-2"):
+            return _Response(404, {})
+        raise AssertionError(f"unexpected GET {url}")
+
+    def _post(url, *args, **kwargs):
+        events.append(("stop", url))
+        return _Response(200, {"stopped": True})
+
+    def _delete(url, *args, **kwargs):
+        events.append(("delete", kwargs["data"]["job_name"]))
+        return _Response(200, {})
+
+    mock_get.side_effect = _get
+    mock_post.side_effect = _post
+    mock_delete.side_effect = _delete
+
+    result = expire_all_stale_jobs()
+
+    assert result["stopped_assistants"] == ["aid-1"]
+    assert result["cleaned_jobs"] == ["unity-job-orphan"]
+    assert result["deferred_jobs"] == ["unity-job-bound"]
+    assert ("delete", "unity-job-bound") not in events
+    assert events == [
+        ("stop", "http://comms.test/infra/session/aid-1/stop"),
+        ("delete", "unity-job-orphan"),
+    ]
+
+
+@patch.object(SETTINGS, "comms_url", "http://comms.test")
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+def test_expire_all_stale_jobs_defers_current_binding_already_stopping(
+    mock_get,
+    mock_post,
+    mock_delete,
+):
+    def _get(url, *args, **kwargs):
+        if url.endswith("/infra/jobs"):
+            return _Response(
+                200,
+                {
+                    "jobs": [
+                        _stale_job(job_name="unity-job-bound", assistant_id="aid-1"),
+                    ],
+                },
+            )
+        if url.endswith("/infra/session/aid-1"):
+            return _Response(
+                200,
+                {
+                    "spec": {"desiredState": "Stopped"},
+                    "status": {
+                        "phase": "Releasing",
+                        "binding": {"jobRef": {"name": "unity-job-bound"}},
+                    },
+                },
+            )
+        raise AssertionError(f"unexpected GET {url}")
+
+    mock_get.side_effect = _get
+
+    result = expire_all_stale_jobs()
+
+    assert result["stopped_assistants"] == []
+    assert result["cleaned_jobs"] == []
+    assert result["deferred_jobs"] == ["unity-job-bound"]
+    mock_post.assert_not_called()
+    mock_delete.assert_not_called()

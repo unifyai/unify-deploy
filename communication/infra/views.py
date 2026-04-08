@@ -26,12 +26,14 @@ from .helpers import (
 )
 from .assistant_sessions import (
     ACTIVE_PHASES,
+    AssistantSessionTerminatingError,
     BINDING_ID_LABEL as SESSION_BINDING_ID_LABEL,
     DESIRED_STATE_STOPPED,
     SIGNAL_DESKTOP_READY,
     SIGNAL_VM_RELEASE_COMPLETE,
     TERMINAL_PHASES,
     assistant_session_desired_state,
+    assistant_session_is_terminating,
     assistant_session_observability_fields,
     assistant_session_name,
     binding_desktop_url,
@@ -128,6 +130,7 @@ POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
 START_JOB_LEASE_DURATION_SECONDS = SETTINGS.lease_duration_seconds
 START_JOB_LEASE_WAIT_TIMEOUT_SECONDS = START_JOB_LEASE_DURATION_SECONDS + 5
 START_JOB_LEASE_POLL_INTERVAL_SECONDS = 0.2
+START_JOB_TERMINATING_SESSION_WAIT_TIMEOUT_SECONDS = 5.0
 
 
 def _service_account_credentials() -> Credentials:
@@ -250,6 +253,33 @@ async def _acquire_start_job_lease(
                 f"Timed out waiting for start lease for assistant {assistant_id}",
             )
         await asyncio.sleep(START_JOB_LEASE_POLL_INTERVAL_SECONDS)
+
+
+async def _load_startable_assistant_session(
+    custom_api,
+    assistant_id: str,
+) -> dict | None:
+    """Return the latest session snapshot after waiting out delete finalization."""
+
+    session = await asyncio.to_thread(
+        get_assistant_session,
+        custom_api,
+        SETTINGS.default_namespace,
+        assistant_id,
+    )
+    if not assistant_session_is_terminating(session):
+        return session
+
+    deadline = time.monotonic() + START_JOB_TERMINATING_SESSION_WAIT_TIMEOUT_SECONDS
+    while assistant_session_is_terminating(session) and time.monotonic() < deadline:
+        await asyncio.sleep(START_JOB_LEASE_POLL_INTERVAL_SECONDS)
+        session = await asyncio.to_thread(
+            get_assistant_session,
+            custom_api,
+            SETTINGS.default_namespace,
+            assistant_id,
+        )
+    return session
 
 
 def _build_startup_payload(
@@ -839,12 +869,23 @@ async def start_job(
                 session_name=session_name,
                 wait_ms=start_lease_wait_ms,
             )
-        existing_session = await asyncio.to_thread(
-            get_assistant_session,
+        existing_session = await _load_startable_assistant_session(
             custom_api,
-            SETTINGS.default_namespace,
             assistant_id,
         )
+        if assistant_session_is_terminating(existing_session):
+            existing_phase = (
+                str(existing_session.get("status", {}).get("phase", ""))
+                if existing_session
+                else ""
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "AssistantSession deletion is still in progress; retry the "
+                    "wake-up shortly"
+                ),
+            )
         existing_phase = (
             str(existing_session.get("status", {}).get("phase", ""))
             if existing_session
@@ -905,6 +946,7 @@ async def start_job(
             core_api,
             SETTINGS.default_namespace,
             assistant_id,
+            activation_id,
             startup_payload,
         )
 
@@ -924,6 +966,8 @@ async def start_job(
                 assistant_id,
                 spec,
             )
+        except AssistantSessionTerminatingError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ApiException as exc:
             if exc.status != 409 or reused_active_session or restart_in_progress:
                 raise
@@ -958,6 +1002,14 @@ async def start_job(
                 ),
             )
             activation_id = conflicting_activation_id
+            secret_name = await asyncio.to_thread(
+                create_or_update_bootstrap_secret,
+                core_api,
+                SETTINGS.default_namespace,
+                assistant_id,
+                activation_id,
+                startup_payload,
+            )
             spec = build_assistant_session_spec(
                 assistant_id=assistant_id,
                 user_id=user_id,
@@ -966,13 +1018,16 @@ async def start_job(
                 startup_secret_ref=secret_name,
                 activation_id=activation_id,
             )
-            session = await asyncio.to_thread(
-                create_or_update_assistant_session,
-                custom_api,
-                SETTINGS.default_namespace,
-                assistant_id,
-                spec,
-            )
+            try:
+                session = await asyncio.to_thread(
+                    create_or_update_assistant_session,
+                    custom_api,
+                    SETTINGS.default_namespace,
+                    assistant_id,
+                    spec,
+                )
+            except AssistantSessionTerminatingError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
         if reused_active_session:
             existing_secret_name = str(
                 existing_session.get("spec", {}).get("startupSecretRef", ""),
@@ -988,6 +1043,7 @@ async def start_job(
             )
 
         activation_id = str(session.get("spec", {}).get("activationId", activation_id))
+        secret_name = str(session.get("spec", {}).get("startupSecretRef", secret_name))
         status = session.get("status", {})
         binding = session_binding(session)
         if not reused_active_session:
@@ -1013,6 +1069,18 @@ async def start_job(
             "phase": status.get("phase", "PendingJob"),
             "job_name": binding_job_ref(binding).get("name"),
         }
+    except HTTPException as exc:
+        emit_observability_event(
+            "infra.job_start.failed",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            activation_id=activation_id,
+            existing_phase=existing_phase,
+            reused_active_session=reused_active_session,
+            error=str(exc.detail),
+            status_code=exc.status_code,
+        )
+        raise
     except Exception as e:
         emit_observability_event(
             "infra.job_start.failed",
@@ -2361,6 +2429,23 @@ def _terminal_session_prune_ready(
     )
 
 
+def _terminal_session_prune_recheck_skip_reason(
+    assistant_session: dict | None,
+) -> str | None:
+    """Return why a prune candidate is no longer safe to delete."""
+
+    if assistant_session is None:
+        return "already_deleted"
+    if assistant_session_is_terminating(assistant_session):
+        return "already_terminating"
+    if assistant_session_desired_state(assistant_session) != DESIRED_STATE_STOPPED:
+        return "desired_state_running"
+    phase = str(((assistant_session.get("status") or {}).get("phase", "") or ""))
+    if phase not in TERMINAL_PHASES:
+        return "no_longer_terminal"
+    return None
+
+
 @router.post("/sessions/prune-terminal")
 async def prune_terminal_assistant_sessions(
     retention_hours: float | None = Query(default=None, gt=0),
@@ -2433,6 +2518,17 @@ async def prune_terminal_assistant_sessions(
     delete_errors: dict[str, str] = {}
 
     for _, assistant_id, session in considered_candidates:
+        session = await asyncio.to_thread(
+            get_assistant_session,
+            custom_api,
+            SETTINGS.default_namespace,
+            assistant_id,
+        )
+        recheck_skip_reason = _terminal_session_prune_recheck_skip_reason(session)
+        if recheck_skip_reason is not None:
+            skip_reasons[recheck_skip_reason] += 1
+            continue
+
         runtime_state = await _runtime_resource_state(
             assistant_id,
             batch_api=batch_api,

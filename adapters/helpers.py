@@ -427,9 +427,11 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     Stale ``done`` jobs (finished, pod gone) are deleted — their logs are
     preserved in Cloud Logging and GCS independently of the Job object.
 
-    Stale ``running`` jobs (active >max_age_hours) are deleted, and the
-    session is stopped **only if** it is currently bound to one of the
-    stale jobs.  Sessions bound to a fresh job are never touched.
+    Stale ``running`` jobs (active >max_age_hours) stay session-owned. If a
+    stale Job is still the current binding of an AssistantSession, maintenance
+    asks Comms to stop the session and lets the controller tear the runtime
+    down. Direct Job deletion is reserved for stale ``done`` Jobs and stale
+    running Jobs that are no longer the current binding of any session.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not SETTINGS.comms_url:
@@ -538,17 +540,9 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         cleaned_jobs.extend(r for r in results if r is not None)
 
     stopped_assistants: list[str] = []
+    deferred_jobs: list[str] = []
 
     if stale_running:
-        running_names = [j["job_name"] for j in stale_running if j.get("job_name")]
-        logger.info(
-            "[expire_all_stale_jobs] Deleting %d stale running jobs",
-            len(running_names),
-        )
-        with ThreadPoolExecutor(max_workers=max(len(running_names), 1)) as executor:
-            results = list(executor.map(_delete_stale_job, running_names))
-        cleaned_jobs.extend(r for r in results if r is not None)
-
         stale_aids = list(
             dict.fromkeys(
                 str(j.get("assistant_id"))
@@ -557,8 +551,9 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
             ),
         )
 
-        def _stop_session_if_bound_to_stale(aid: str):
-            """Stop the session only if its current binding points to a stale job."""
+        def _read_session_state(aid: str):
+            """Read the current binding and lifecycle state for one session."""
+
             try:
                 session_resp = requests.get(
                     f"{SETTINGS.comms_url}/infra/session/{aid}",
@@ -566,40 +561,95 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
                     timeout=10,
                 )
                 if session_resp.status_code == 404:
-                    return None
+                    return aid, {"missing": True}
                 if session_resp.status_code != 200:
-                    return None
-                session = session_resp.json()
-                bound_job = (
-                    ((session.get("status") or {}).get("binding") or {})
-                    .get("jobRef", {})
-                    .get("name", "")
-                )
-                stale_names_for_aid = {
-                    j["job_name"]
-                    for j in stale_running
-                    if str(j.get("assistant_id")) == aid and j.get("job_name")
-                }
-                if not bound_job or bound_job not in stale_names_for_aid:
                     logger.info(
-                        "[expire_all_stale_jobs] Session %s bound to %s "
-                        "(not a stale job) — skipping stop",
+                        "[expire_all_stale_jobs] Session read failed for %s: %s",
                         aid,
-                        bound_job or "(none)",
+                        session_resp.status_code,
                     )
-                    return None
+                    return aid, {"inspection_failed": True}
+                session = session_resp.json()
+                phase = str(((session.get("status") or {}).get("phase", "")) or "")
+                return aid, {
+                    "bound_job": (
+                        ((session.get("status") or {}).get("binding") or {})
+                        .get("jobRef", {})
+                        .get("name", "")
+                    ),
+                    "desired_state": str(
+                        ((session.get("spec") or {}).get("desiredState", "")) or "",
+                    )
+                    or "Running",
+                    "terminal": phase in {"Released", "Failed"},
+                }
+            except Exception as exc:
+                logger.info(
+                    "[expire_all_stale_jobs] Session read non-fatal for %s: %s",
+                    aid,
+                    exc,
+                )
+                return aid, {"inspection_failed": True}
 
+        session_states: dict[str, dict] = {}
+        if stale_aids:
+            with ThreadPoolExecutor(max_workers=len(stale_aids)) as executor:
+                session_states = dict(executor.map(_read_session_state, stale_aids))
+
+        safe_delete_running_names: list[str] = []
+        assistants_to_stop: dict[str, str] = {}
+        for job in stale_running:
+            job_name = str(job.get("job_name") or "")
+            assistant_id = str(job.get("assistant_id") or "")
+            if not job_name:
+                continue
+            if not assistant_id or assistant_id == "unknown":
+                safe_delete_running_names.append(job_name)
+                continue
+
+            session_state = session_states.get(assistant_id, {})
+            if session_state.get("missing"):
+                safe_delete_running_names.append(job_name)
+                continue
+            if session_state.get("inspection_failed"):
+                deferred_jobs.append(job_name)
+                continue
+
+            bound_job = str(session_state.get("bound_job", "") or "")
+            if bound_job != job_name:
+                safe_delete_running_names.append(job_name)
+                continue
+            if session_state.get("terminal"):
+                safe_delete_running_names.append(job_name)
+                continue
+            if session_state.get("desired_state") == "Stopped":
+                logger.info(
+                    "[expire_all_stale_jobs] Session %s already stopping stale job %s",
+                    assistant_id,
+                    job_name,
+                )
+                deferred_jobs.append(job_name)
+                continue
+
+            assistants_to_stop[assistant_id] = job_name
+            deferred_jobs.append(job_name)
+
+        def _stop_bound_session(item: tuple[str, str]):
+            """Ask Comms to stop the session that still owns a stale job."""
+
+            aid, job_name = item
+            try:
                 resp = requests.post(
                     f"{SETTINGS.comms_url}/infra/session/{aid}/stop",
                     headers=headers,
                     timeout=10,
                 )
-                if resp.status_code in (200, 404):
+                if resp.status_code == 200:
                     logger.info(
-                        "[expire_all_stale_jobs] Stopped session %s "
+                        "[expire_all_stale_jobs] Stop accepted for session %s "
                         "(bound to stale job %s)",
                         aid,
-                        bound_job,
+                        job_name,
                     )
                     return aid
             except Exception as exc:
@@ -610,20 +660,35 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
                 )
             return None
 
-        if stale_aids:
-            with ThreadPoolExecutor(max_workers=len(stale_aids)) as executor:
+        if assistants_to_stop:
+            with ThreadPoolExecutor(max_workers=len(assistants_to_stop)) as executor:
                 results = list(
-                    executor.map(_stop_session_if_bound_to_stale, stale_aids),
+                    executor.map(_stop_bound_session, assistants_to_stop.items()),
                 )
             stopped_assistants = [r for r in results if r is not None]
 
+        if safe_delete_running_names:
+            logger.info(
+                "[expire_all_stale_jobs] Deleting %d stale running jobs "
+                "that are no longer session-owned",
+                len(safe_delete_running_names),
+            )
+            with ThreadPoolExecutor(
+                max_workers=max(len(safe_delete_running_names), 1),
+            ) as executor:
+                results = list(
+                    executor.map(_delete_stale_job, safe_delete_running_names),
+                )
+            cleaned_jobs.extend(r for r in results if r is not None)
+
     logger.info(
         "[expire_all_stale_jobs] Summary: cleaned=%d stale jobs "
-        "(%d done + %d running), stopped=%d sessions",
+        "(%d done + %d running), stopped=%d sessions, deferred=%d jobs",
         len(cleaned_jobs),
         len(stale_done),
         len(stale_running),
         len(stopped_assistants),
+        len(deferred_jobs),
     )
 
     return {
@@ -631,6 +696,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         "expired": len(stale),
         "cleaned_jobs": cleaned_jobs,
         "stopped_assistants": stopped_assistants,
+        "deferred_jobs": deferred_jobs,
     }
 
 

@@ -151,8 +151,9 @@ def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pendin
     assert secret_args[0] is core_api
     assert secret_args[1] == SETTINGS.default_namespace
     assert secret_args[2] == "assistant-123"
-    assert secret_args[3]["assistant_about"] == "Newest assistant bio"
-    assert secret_args[3]["voice_id"] == "voice-updated"
+    assert secret_args[3] == existing_session["spec"]["activationId"]
+    assert secret_args[4]["assistant_about"] == "Newest assistant bio"
+    assert secret_args[4]["voice_id"] == "voice-updated"
 
     mock_create_or_update_assistant_session.assert_called_once()
     session_args = mock_create_or_update_assistant_session.call_args.args
@@ -496,3 +497,80 @@ def test_start_job_waits_for_inflight_start_lease_and_reuses_winner_activation(c
         "assistant-start-assistant-123",
         SETTINGS.default_namespace,
     )
+
+
+def test_start_job_rejects_reuse_of_terminating_session(client):
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    terminating_session = _existing_session()
+    terminating_session["metadata"]["deletionTimestamp"] = "2026-04-06T12:00:00Z"
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.START_JOB_TERMINATING_SESSION_WAIT_TIMEOUT_SECONDS",
+            0.0,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=terminating_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+        ) as mock_create_or_update_bootstrap_secret,
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+        ) as mock_create_or_update_assistant_session,
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 409
+    assert "deletion is still in progress" in response.json()["detail"]
+    mock_create_or_update_bootstrap_secret.assert_not_called()
+    mock_create_or_update_assistant_session.assert_not_called()
+
+
+def test_start_job_returns_conflict_when_session_terminates_mid_write(client):
+    from communication.infra import views
+
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session()
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value="assistant-session-bootstrap-assistant-123",
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=views.AssistantSessionTerminatingError(
+                "AssistantSession assistant-session-assistant-123 is deleting",
+            ),
+        ),
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 409
+    assert "is deleting" in response.json()["detail"]

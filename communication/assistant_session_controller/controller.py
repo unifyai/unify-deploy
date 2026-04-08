@@ -25,6 +25,7 @@ from communication.infra.observability import (
     signal_causal_context,
 )
 from communication.infra.assistant_sessions import (
+    ACTIVATION_ID_ANNOTATION,
     assistant_session_observability_fields,
     BINDING_ID_ANNOTATION,
     BINDING_ID_LABEL,
@@ -35,6 +36,7 @@ from communication.infra.assistant_sessions import (
     binding_pod_ref,
     binding_vm_assignment,
     binding_vm_ref,
+    bootstrap_secret_owned_by_session,
     claim_binding_vm_assignment_attempt,
     CONTAINER_READY_ANNOTATION,
     DESIRED_STATE_STOPPED,
@@ -3056,6 +3058,7 @@ def delete_session(body, **_):
         session_name = str(latest_body.get("metadata", {}).get("name", "") or "")
         spec = latest_body.get("spec", {})
         assistant_id = str(spec.get("assistantId", "") or "")
+        activation_id = str(spec.get("activationId", "") or "")
         secret_name = str(spec.get("startupSecretRef", "") or "")
 
         if assistant_id:
@@ -3071,19 +3074,56 @@ def delete_session(body, **_):
 
         if secret_name:
             try:
-                _core_api.delete_namespaced_secret(
+                secret = _core_api.read_namespaced_secret(
                     name=secret_name,
                     namespace=WATCH_NAMESPACE,
                 )
             except ApiException as e:
-                if e.status != 404:
+                if e.status == 404:
+                    secret = None
+                else:
                     logger.exception(
-                        "Failed deleting bootstrap secret for deleted AssistantSession",
+                        "Failed reading bootstrap secret for deleted AssistantSession",
                     )
                     raise kopf.TemporaryError(
                         "AssistantSession bootstrap secret cleanup failed",
                         delay=RECONCILE_INTERVAL_SECONDS,
                     ) from e
+            if secret is not None and bootstrap_secret_owned_by_session(
+                secret,
+                assistant_id=assistant_id,
+                activation_id=activation_id,
+                secret_name=secret_name,
+            ):
+                try:
+                    _core_api.delete_namespaced_secret(
+                        name=secret_name,
+                        namespace=WATCH_NAMESPACE,
+                    )
+                except ApiException as e:
+                    if e.status != 404:
+                        logger.exception(
+                            "Failed deleting bootstrap secret for deleted AssistantSession",
+                        )
+                        raise kopf.TemporaryError(
+                            "AssistantSession bootstrap secret cleanup failed",
+                            delay=RECONCILE_INTERVAL_SECONDS,
+                        ) from e
+            elif secret is not None:
+                annotations = getattr(secret.metadata, "annotations", None) or {}
+                emit_observability_event(
+                    "controller.session_delete.secret_cleanup_skipped",
+                    assistant_id=assistant_id or None,
+                    session_name=session_name or None,
+                    activation_id=activation_id or None,
+                    secret_name=secret_name,
+                    secret_owner_session_name=(
+                        str(annotations.get(SESSION_REF_ANNOTATION, "") or "") or None
+                    ),
+                    secret_owner_activation_id=(
+                        str(annotations.get(ACTIVATION_ID_ANNOTATION, "") or "") or None
+                    ),
+                )
 
         emit_observability_event(
             "controller.session_delete.finalized",

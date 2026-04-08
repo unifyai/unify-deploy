@@ -2352,6 +2352,15 @@ def test_delete_handler_deletes_secret_after_runtime_cleanup_completes(monkeypat
     body["metadata"]["deletionTimestamp"] = "2026-04-05T15:39:56Z"
     update_status = MagicMock()
     core_api = MagicMock()
+    core_api.read_namespaced_secret.return_value = types.SimpleNamespace(
+        metadata=types.SimpleNamespace(
+            name="assistant-session-bootstrap-1207",
+            annotations={
+                "assistantsession.unify.ai/name": "assistant-session-1207",
+                "assistantsession.unify.ai/activation-id": "act-1",
+            },
+        ),
+    )
 
     snapshots = [deepcopy(body), deepcopy(body)]
     monkeypatch.setattr(controller, "_core_api", core_api)
@@ -2374,3 +2383,38 @@ def test_delete_handler_deletes_secret_after_runtime_cleanup_completes(monkeypat
         name="assistant-session-bootstrap-1207",
         namespace=controller.WATCH_NAMESPACE,
     )
+
+
+def test_delete_handler_skips_secret_when_owner_activation_changed(monkeypatch):
+    body = _base_session()
+    body["metadata"]["deletionTimestamp"] = "2026-04-05T15:39:56Z"
+    update_status = MagicMock()
+    core_api = MagicMock()
+    core_api.read_namespaced_secret.return_value = types.SimpleNamespace(
+        metadata=types.SimpleNamespace(
+            name="assistant-session-bootstrap-1207",
+            annotations={
+                "assistantsession.unify.ai/name": "assistant-session-1207",
+                "assistantsession.unify.ai/activation-id": "act-2",
+            },
+        ),
+    )
+
+    snapshots = [deepcopy(body), deepcopy(body)]
+    monkeypatch.setattr(controller, "_core_api", core_api)
+    monkeypatch.setattr(
+        controller,
+        "_refresh_session_snapshot",
+        lambda *_args: snapshots.pop(0),
+    )
+    monkeypatch.setattr(controller, "_update_status_for_session", update_status)
+    monkeypatch.setattr(
+        controller,
+        "_session_delete_cleanup_complete",
+        lambda *_args: True,
+    )
+
+    controller.delete_session(deepcopy(body))
+
+    update_status.assert_called_once()
+    core_api.delete_namespaced_secret.assert_not_called()
