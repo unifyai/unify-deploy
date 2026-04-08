@@ -578,7 +578,12 @@ def acquire_named_lease(
 
     if acquire_time and (now - acquire_time).total_seconds() > lease_dur:
         logger.info("Deleting expired lease %s (age > %ds)", lease_name, lease_dur)
-        coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
+        if not _delete_observed_lease(
+            coord_api,
+            existing,
+            reason="expired_lease_cleanup",
+        ):
+            return False
         try:
             coord_api.create_namespaced_lease(namespace=namespace, body=lease_body)
             logger.info("Re-acquired expired lease %s", lease_name)
@@ -594,6 +599,43 @@ def acquire_named_lease(
         existing.spec.holder_identity,
     )
     return False
+
+
+def _delete_observed_lease(coord_api, lease, *, reason: str) -> bool:
+    """Delete the exact Lease object that was previously observed."""
+
+    metadata = getattr(lease, "metadata", None)
+    lease_name = str(getattr(metadata, "name", "") or "")
+    namespace = str(getattr(metadata, "namespace", "") or "")
+    lease_uid = str(getattr(metadata, "uid", "") or "")
+    delete_options = None
+    if lease_uid:
+        delete_options = k8s_client.V1DeleteOptions(
+            preconditions=k8s_client.V1Preconditions(uid=lease_uid),
+        )
+
+    try:
+        if delete_options is None:
+            coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
+        else:
+            coord_api.delete_namespaced_lease(
+                name=lease_name,
+                namespace=namespace,
+                body=delete_options,
+            )
+        return True
+    except ApiException as e:
+        if e.status == 404:
+            return False
+        if e.status in {409, 422}:
+            logger.info(
+                "Skipped deleting lease %s during %s because the observed "
+                "instance changed",
+                lease_name,
+                reason,
+            )
+            return False
+        raise
 
 
 def acquire_assignment_lease(
@@ -621,24 +663,41 @@ def release_named_lease(
     coord_api,
     lease_name: str,
     namespace: str,
+    holder_id: str,
 ) -> None:
-    """Delete a named Lease. Ignores 404 (already released)."""
+    """Delete a named Lease only if it is still held by ``holder_id``."""
+
     try:
-        coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
-        logger.info("Released lease %s", lease_name)
+        existing = coord_api.read_namespaced_lease(name=lease_name, namespace=namespace)
     except ApiException as e:
         if e.status != 404:
             raise
+        return
+
+    current_holder_id = str(existing.spec.holder_identity or "")
+    if current_holder_id != holder_id:
+        logger.info(
+            "Skipped releasing lease %s because holder changed from %s to %s",
+            lease_name,
+            holder_id,
+            current_holder_id or "<none>",
+        )
+        return
+
+    if _delete_observed_lease(coord_api, existing, reason="lease_release"):
+        logger.info("Released lease %s (holder=%s)", lease_name, holder_id)
 
 
 def release_assignment_lease(
     coord_api,
     assistant_id: str,
     namespace: str,
+    holder_id: str,
 ) -> None:
-    """Delete the assignment Lease. Ignores 404 (already released)."""
+    """Delete the assignment Lease only if ``holder_id`` still owns it."""
     release_named_lease(
         coord_api=coord_api,
         lease_name=_lease_name("assistant-claim", assistant_id),
         namespace=namespace,
+        holder_id=holder_id,
     )

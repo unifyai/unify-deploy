@@ -309,7 +309,7 @@ def _acquire_binding_vm_lease(
     *,
     holder_prefix: str,
     wait_timeout_seconds: float = 0.0,
-) -> tuple[object | None, str]:
+) -> tuple[object | None, str, str | None]:
     """Acquire the shared binding VM lease, optionally waiting for it.
 
     Assignment and release both mutate VM labels/metadata for the same binding.
@@ -334,20 +334,30 @@ def _acquire_binding_vm_lease(
             duration=VM_BINDING_LEASE_DURATION_SECONDS,
         )
         if acquired:
-            return coord_api, namespace
+            return coord_api, namespace, holder_id
         if wait_timeout_seconds <= 0 or time.monotonic() >= deadline:
-            return None, namespace
+            return None, namespace, None
         time.sleep(VM_BINDING_LEASE_POLL_INTERVAL_SECONDS)
 
 
-def _release_binding_vm_lease(coord_api, binding_id: str, namespace: str) -> None:
+def _release_binding_vm_lease(
+    coord_api,
+    binding_id: str,
+    namespace: str,
+    holder_id: str | None,
+) -> None:
     """Release the shared binding VM lease when held."""
 
     from .helpers import release_assignment_lease
 
-    if coord_api is None:
+    if coord_api is None or not holder_id:
         return
-    release_assignment_lease(coord_api, _binding_vm_lease_name(binding_id), namespace)
+    release_assignment_lease(
+        coord_api,
+        _binding_vm_lease_name(binding_id),
+        namespace,
+        holder_id,
+    )
 
 
 def _stopped_pool_reference_time(instance) -> Optional[datetime]:
@@ -1901,7 +1911,7 @@ def assign_pool_vm(
     vm_name: str | None = None
     hostname: str | None = None
     current_stage = "acquire_assignment_lease"
-    coord_api, namespace = _acquire_binding_vm_lease(
+    coord_api, namespace, lease_holder_id = _acquire_binding_vm_lease(
         binding_id,
         holder_prefix="vm-assign",
     )
@@ -2083,7 +2093,12 @@ def assign_pool_vm(
         )
         raise
     finally:
-        _release_binding_vm_lease(coord_api, binding_id, namespace)
+        _release_binding_vm_lease(
+            coord_api,
+            binding_id,
+            namespace,
+            lease_holder_id,
+        )
 
 
 def has_assigned_vm(assistant_id: str) -> bool:
@@ -2431,6 +2446,7 @@ def release_pool_vm(
     current_stage = "lookup_vm"
     coord_api = None
     lease_namespace = SETTINGS.default_namespace
+    lease_holder_id = None
 
     _log_vm_pool_event(
         "release_started",
@@ -2441,7 +2457,7 @@ def release_pool_vm(
 
     try:
         current_stage = "acquire_binding_lease"
-        coord_api, lease_namespace = _acquire_binding_vm_lease(
+        coord_api, lease_namespace, lease_holder_id = _acquire_binding_vm_lease(
             binding_id,
             holder_prefix="vm-release",
             wait_timeout_seconds=VM_BINDING_RELEASE_LEASE_WAIT_SECONDS,
@@ -2729,7 +2745,12 @@ def release_pool_vm(
         )
         raise
     finally:
-        _release_binding_vm_lease(coord_api, binding_id, lease_namespace)
+        _release_binding_vm_lease(
+            coord_api,
+            binding_id,
+            lease_namespace,
+            lease_holder_id,
+        )
 
 
 def _replenish_after_retired_release(result: Dict[str, Any]) -> bool:
@@ -2756,6 +2777,7 @@ def retire_pool_vm_release(
     client = None
     coord_api = None
     lease_namespace = SETTINGS.default_namespace
+    lease_holder_id = None
     started_at = time.monotonic()
     current_stage = "acquire_binding_lease"
 
@@ -2768,7 +2790,7 @@ def retire_pool_vm_release(
     )
 
     try:
-        coord_api, lease_namespace = _acquire_binding_vm_lease(
+        coord_api, lease_namespace, lease_holder_id = _acquire_binding_vm_lease(
             binding_id,
             holder_prefix="vm-release-retire",
             wait_timeout_seconds=VM_BINDING_RELEASE_LEASE_WAIT_SECONDS,
@@ -2865,7 +2887,12 @@ def retire_pool_vm_release(
         )
         raise
     finally:
-        _release_binding_vm_lease(coord_api, binding_id, lease_namespace)
+        _release_binding_vm_lease(
+            coord_api,
+            binding_id,
+            lease_namespace,
+            lease_holder_id,
+        )
 
 
 def recover_stuck_pool_vm_release(

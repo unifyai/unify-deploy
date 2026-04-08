@@ -225,7 +225,7 @@ async def _acquire_start_job_lease(
     coord_api,
     assistant_id: str,
     namespace: str,
-) -> tuple[str, int]:
+) -> tuple[str, str, int]:
     """Acquire the per-assistant start-intent lease.
 
     Duplicate `/infra/job/start` calls must serialize before minting or
@@ -247,7 +247,7 @@ async def _acquire_start_job_lease(
             START_JOB_LEASE_DURATION_SECONDS,
         )
         if acquired:
-            return lease_name, int((time.monotonic() - wait_started) * 1000)
+            return lease_name, holder_id, int((time.monotonic() - wait_started) * 1000)
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 f"Timed out waiting for start lease for assistant {assistant_id}",
@@ -811,6 +811,7 @@ async def start_job(
     idle_pool_replenish_scheduled = False
     coord_api = None
     start_lease_name = None
+    start_lease_holder_id = None
     causal_token = push_causal_context(
         build_causal_context(
             caller="views.job_start",
@@ -857,7 +858,11 @@ async def start_job(
             team_ids=team_ids,
             org_id=org_id,
         )
-        start_lease_name, start_lease_wait_ms = await _acquire_start_job_lease(
+        (
+            start_lease_name,
+            start_lease_holder_id,
+            start_lease_wait_ms,
+        ) = await _acquire_start_job_lease(
             coord_api,
             assistant_id,
             SETTINGS.default_namespace,
@@ -1096,12 +1101,13 @@ async def start_job(
             detail=f"Failed to ensure AssistantSession: {str(e)}",
         )
     finally:
-        if start_lease_name and coord_api is not None:
+        if start_lease_name and start_lease_holder_id and coord_api is not None:
             await asyncio.to_thread(
                 release_named_lease,
                 coord_api,
                 start_lease_name,
                 SETTINGS.default_namespace,
+                start_lease_holder_id,
             )
         pop_causal_context(causal_token)
 

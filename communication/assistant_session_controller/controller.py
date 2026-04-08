@@ -854,7 +854,12 @@ def _claim_and_bind_pending_job(
             raise
         return _JOB_CLAIM_RESULT_CLAIMED
     finally:
-        release_assignment_lease(_coord_api, assistant_id, WATCH_NAMESPACE)
+        release_assignment_lease(
+            _coord_api,
+            assistant_id,
+            WATCH_NAMESPACE,
+            holder_id,
+        )
 
 
 def _suspend_bound_job(job, *, source: str) -> None:

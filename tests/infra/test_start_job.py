@@ -2,6 +2,8 @@
 Focused tests for POST /infra/job/start session reuse behavior.
 """
 
+import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -92,6 +94,55 @@ def _existing_session(
             "binding": binding or {},
         },
     }
+
+
+class _FakeCoordApi:
+    def __init__(self):
+        self._leases: dict[tuple[str, str], SimpleNamespace] = {}
+        self._uid_counter = 0
+
+    def create_namespaced_lease(self, namespace, body):
+        key = (namespace, body.metadata.name)
+        if key in self._leases:
+            raise ApiException(status=409)
+        self._uid_counter += 1
+        lease = SimpleNamespace(
+            metadata=SimpleNamespace(
+                name=body.metadata.name,
+                namespace=namespace,
+                uid=f"lease-{self._uid_counter}",
+            ),
+            spec=SimpleNamespace(
+                holder_identity=body.spec.holder_identity,
+                lease_duration_seconds=body.spec.lease_duration_seconds,
+                acquire_time=body.spec.acquire_time,
+                renew_time=body.spec.renew_time,
+            ),
+        )
+        self._leases[key] = lease
+        return lease
+
+    def read_namespaced_lease(self, name, namespace):
+        key = (namespace, name)
+        lease = self._leases.get(key)
+        if lease is None:
+            raise ApiException(status=404)
+        return lease
+
+    def delete_namespaced_lease(self, name, namespace, body=None):
+        key = (namespace, name)
+        lease = self._leases.get(key)
+        if lease is None:
+            raise ApiException(status=404)
+        expected_uid = getattr(getattr(body, "preconditions", None), "uid", None)
+        if expected_uid and expected_uid != lease.metadata.uid:
+            raise ApiException(status=409)
+        del self._leases[key]
+
+    def expire_lease(self, name: str, namespace: str, *, age_seconds: int) -> None:
+        self._leases[(namespace, name)].spec.acquire_time = datetime.now(
+            timezone.utc,
+        ) - timedelta(seconds=age_seconds)
 
 
 def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pending_session(
@@ -469,6 +520,10 @@ def test_start_job_waits_for_inflight_start_lease_and_reuses_winner_activation(c
             "communication.infra.views.release_named_lease",
         ) as mock_release_named_lease,
         patch(
+            "communication.infra.views.uuid.uuid4",
+            return_value=SimpleNamespace(hex="deadbeefcafebabe"),
+        ),
+        patch(
             "communication.infra.views.asyncio.sleep",
             new_callable=AsyncMock,
         ),
@@ -496,7 +551,49 @@ def test_start_job_waits_for_inflight_start_lease_and_reuses_winner_activation(c
         coord_api,
         "assistant-start-assistant-123",
         SETTINGS.default_namespace,
+        "job-start-assistant-123-deadbeef",
     )
+
+
+def test_start_job_stale_request_cannot_release_newer_start_lease():
+    from communication.infra import views
+
+    coord_api = _FakeCoordApi()
+    assistant_id = "assistant-123"
+    namespace = SETTINGS.default_namespace
+
+    with patch(
+        "communication.infra.views.uuid.uuid4",
+        side_effect=[
+            SimpleNamespace(hex="deadbeefcafebabe"),
+            SimpleNamespace(hex="cafebabedeadbeef"),
+        ],
+    ):
+        lease_name, holder_a, _ = asyncio.run(
+            views._acquire_start_job_lease(coord_api, assistant_id, namespace),
+        )
+        coord_api.expire_lease(
+            lease_name,
+            namespace,
+            age_seconds=views.START_JOB_LEASE_DURATION_SECONDS + 1,
+        )
+        reacquired_lease_name, holder_b, _ = asyncio.run(
+            views._acquire_start_job_lease(coord_api, assistant_id, namespace),
+        )
+
+    assert reacquired_lease_name == lease_name
+    assert holder_a == "job-start-assistant-123-deadbeef"
+    assert holder_b == "job-start-assistant-123-cafebabe"
+
+    views.release_named_lease(coord_api, lease_name, namespace, holder_a)
+
+    current_lease = coord_api.read_namespaced_lease(lease_name, namespace)
+    assert current_lease.spec.holder_identity == holder_b
+
+    views.release_named_lease(coord_api, reacquired_lease_name, namespace, holder_b)
+    with pytest.raises(ApiException) as exc_info:
+        coord_api.read_namespaced_lease(reacquired_lease_name, namespace)
+    assert exc_info.value.status == 404
 
 
 def test_start_job_rejects_reuse_of_terminating_session(client):
