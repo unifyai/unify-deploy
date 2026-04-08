@@ -143,6 +143,17 @@ def binding_id(binding: dict[str, Any] | None) -> str:
     return str((binding or {}).get("id", "") or "")
 
 
+def binding_release_generation(binding: dict[str, Any] | None) -> int:
+    """Return the current release attempt generation for a binding."""
+
+    value = (binding or {}).get("releaseGeneration")
+    try:
+        generation = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return generation if generation > 0 else 0
+
+
 def session_signals(session: dict[str, Any] | None) -> dict[str, Any]:
     """Return the latest binding-scoped signals recorded for a session."""
 
@@ -324,6 +335,7 @@ def build_binding(
     vm_ready_message_id: str | None = None,
     release_requested_at: str | None = None,
     release_completed_at: str | None = None,
+    release_generation: int | None = None,
 ) -> dict[str, Any]:
     """Build the canonical binding payload stored under ``status.binding``."""
 
@@ -344,6 +356,7 @@ def build_binding(
         "vmReadyMessageId": vm_ready_message_id,
         "releaseRequestedAt": release_requested_at,
         "releaseCompletedAt": release_completed_at,
+        "releaseGeneration": release_generation,
     }
     return {key: value for key, value in fields.items() if value not in (None, "")}
 
@@ -367,6 +380,7 @@ def _binding_from_current(
     vm_ready_message_id: str | None | object = _STATUS_UNSET,
     release_requested_at: str | None | object = _STATUS_UNSET,
     release_completed_at: str | None | object = _STATUS_UNSET,
+    release_generation: int | None | object = _STATUS_UNSET,
 ) -> dict[str, Any]:
     """Return a canonical binding payload using the current binding as a base."""
 
@@ -448,13 +462,18 @@ def _binding_from_current(
             if release_completed_at is _STATUS_UNSET
             else release_completed_at
         ),
+        release_generation=(
+            binding_release_generation(current_binding) or None
+            if release_generation is _STATUS_UNSET
+            else release_generation
+        ),
     )
 
 
 def _binding_release_field_regressions(
     current_binding: dict[str, Any] | None,
     next_binding: dict[str, Any] | None,
-) -> dict[str, dict[str, str | None]]:
+) -> dict[str, dict[str, str | int | None]]:
     """Return release lifecycle fields that would be cleared on the same binding."""
 
     current_binding_id = binding_id(current_binding)
@@ -462,10 +481,16 @@ def _binding_release_field_regressions(
     if not current_binding_id or current_binding_id != next_binding_id:
         return {}
 
-    regressions: dict[str, dict[str, str | None]] = {}
-    for field_name in ("releaseRequestedAt", "releaseCompletedAt"):
-        current_value = str((current_binding or {}).get(field_name, "") or "")
-        next_value = str((next_binding or {}).get(field_name, "") or "")
+    regressions: dict[str, dict[str, str | int | None]] = {}
+    for field_name in ("releaseRequestedAt", "releaseCompletedAt", "releaseGeneration"):
+        current_value = (current_binding or {}).get(field_name)
+        next_value = (next_binding or {}).get(field_name)
+        if field_name == "releaseGeneration":
+            current_value = binding_release_generation(current_binding) or None
+            next_value = binding_release_generation(next_binding) or None
+        else:
+            current_value = str(current_value or "") or None
+            next_value = str(next_value or "") or None
         if current_value and not next_value:
             regressions[field_name] = {
                 "before": current_value,
@@ -537,6 +562,10 @@ def assistant_session_observability_fields(
         "vm_hostname": overrides.pop(
             "vm_hostname",
             vm_ref.get("hostname"),
+        ),
+        "release_generation": overrides.pop(
+            "release_generation",
+            binding_release_generation(binding),
         ),
         "desktop_url": overrides.pop("desktop_url", binding_desktop_url(binding)),
         "last_error": overrides.pop("last_error", status.get("lastError")),
@@ -1252,10 +1281,15 @@ def record_assistant_session_signal(
     signal_vm_name = None
     signal_vm_hostname = None
     signal_caller = None
+    signal_release_generation = None
     if stored_payload is not None:
         signal_binding_id = stored_payload.get("bindingId")
         signal_state = stored_payload.get("state")
         signal_observed_at = stored_payload.get("observedAt")
+        try:
+            signal_release_generation = int(stored_payload.get("releaseGeneration"))
+        except (TypeError, ValueError):
+            signal_release_generation = None
         signal_vm_name = (
             str(((stored_payload.get("vmRef") or {}).get("name")) or "")
             or str(stored_payload.get("vmName") or "")
@@ -1282,6 +1316,7 @@ def record_assistant_session_signal(
         signal_binding_id=signal_binding_id,
         signal_state=signal_state,
         signal_observed_at=signal_observed_at,
+        signal_release_generation=signal_release_generation,
         signal_vm_name=signal_vm_name,
         signal_vm_hostname=signal_vm_hostname,
         signal_caller=signal_caller,

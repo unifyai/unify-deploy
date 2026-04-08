@@ -217,6 +217,51 @@ def test_component_release_flow_reaches_released(monkeypatch):
     assert released_binding(released, old_binding_id)["releaseCompletedAt"]
 
 
+def test_component_release_recovers_after_lost_callback(monkeypatch):
+    harness = AssistantSessionComponentHarness()
+    harness.install(monkeypatch)
+
+    active = _reach_active(harness)
+    old_binding_id = session_binding(active)["id"]
+
+    harness.session["spec"]["desiredState"] = "Stopped"
+    releasing = harness.reconcile()
+    assert get_phase(releasing) == "Releasing"
+    assert session_binding(releasing)["releaseGeneration"] == 1
+
+    release_requested = harness.reconcile()
+    assert get_phase(release_requested) == "Releasing"
+    assert session_binding(release_requested)["releaseGeneration"] == 1
+
+    monkeypatch.setattr(
+        controller,
+        "recover_stuck_pool_vm_release",
+        lambda *_args, **_kwargs: {
+            "action": "rearmed",
+            "released": True,
+            "pool_role": "releasing",
+            "release_generation": 2,
+        },
+    )
+    harness.session["status"]["binding"][
+        "releaseRequestedAt"
+    ] = "2026-04-03T00:00:30+00:00"
+
+    recovered = harness.reconcile()
+    assert get_phase(recovered) == "Releasing"
+    assert session_binding(recovered)["releaseGeneration"] == 2
+
+    response = harness.post_vm_release_complete(release_generation=2)
+    assert response.status_code == 200
+    harness.jobs.pop(harness.job_name, None)
+    harness.pods.pop(harness.pod_name, None)
+
+    released = harness.reconcile()
+    assert get_phase(released) == "Released"
+    assert harness.runtime_vm_present is False
+    assert released_binding(released, old_binding_id)["releaseCompletedAt"]
+
+
 def test_component_activation_replacement_waits_for_release_then_mints_new_binding(
     monkeypatch,
 ):

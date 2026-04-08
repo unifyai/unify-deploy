@@ -167,6 +167,8 @@ spec:
                     type: string
                   releaseCompletedAt:
                     type: string
+                  releaseGeneration:
+                    type: integer
               conditions:
                 type: array
                 items:

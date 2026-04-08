@@ -375,6 +375,7 @@ def schedule_vm_release_request(
     assistant_id: str,
     binding_id: str,
     vm_name: str,
+    release_generation: int,
 ) -> bool:
     """Queue a release request for the current binding VM."""
 
@@ -388,6 +389,7 @@ def schedule_vm_release_request(
         assistant_id=assistant_id,
         binding_id=binding_id,
         vm_name=vm_name,
+        release_generation=release_generation,
     )
 
 
@@ -398,6 +400,7 @@ def _run_vm_release_request(
     assistant_id: str,
     binding_id: str,
     vm_name: str,
+    release_generation: int,
 ) -> None:
     session = get_assistant_session(custom_api, namespace, assistant_id)
     if not session or binding_id_from_status(session_binding(session)) != binding_id:
@@ -411,7 +414,14 @@ def _run_vm_release_request(
         return
 
     try:
-        result = release_pool_vm(assistant_id, binding_id, vm_name=vm_name)
+        result = release_pool_vm(
+            assistant_id,
+            binding_id,
+            vm_name=vm_name,
+            release_generation=release_generation,
+        )
+        if result.get("retired"):
+            replenish_pool(str(result.get("vm_type", "ubuntu") or "ubuntu"))
         if result.get("retired"):
             state = "retired"
         elif result.get("released") or result.get("pool_role") == "releasing":
@@ -423,6 +433,7 @@ def _run_vm_release_request(
             state=state,
             vmName=vm_name,
             poolRole=result.get("pool_role"),
+            releaseGeneration=result.get("release_generation") or release_generation,
             message=str(result.get("reason", "") or ""),
         )
     except Exception as exc:  # pragma: no cover - worker safety net
@@ -431,6 +442,7 @@ def _run_vm_release_request(
             binding_id=binding_id,
             state="error",
             vmName=vm_name,
+            releaseGeneration=release_generation,
             message=f"{type(exc).__name__}: {exc}",
         )
     record_assistant_session_signal(

@@ -22,6 +22,8 @@ source /etc/profile.d/unity-vm.sh 2>/dev/null || true
 source /etc/profile.d/bun.sh 2>/dev/null || true
 export HOME=/root
 export PATH="/root/.bun/bin:$PATH"
+RELEASE_STATE_DIR="/var/lib/unity-pool-watcher"
+LAST_RELEASE_TOKEN_FILE="$RELEASE_STATE_DIR/last-release-token"
 
 get_metadata() {
     local key=$1
@@ -44,6 +46,38 @@ get_deploy_env() {
 
 log() {
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
+}
+
+ensure_release_state_dir() {
+    mkdir -p "$RELEASE_STATE_DIR"
+    chmod 700 "$RELEASE_STATE_DIR" 2>/dev/null || true
+}
+
+load_last_release_token() {
+    if [[ -f "$LAST_RELEASE_TOKEN_FILE" ]]; then
+        tr -d '\n' < "$LAST_RELEASE_TOKEN_FILE"
+    else
+        echo ""
+    fi
+}
+
+save_last_release_token() {
+    local token=$1
+    ensure_release_state_dir
+    if [[ -n "$token" ]]; then
+        printf '%s' "$token" > "$LAST_RELEASE_TOKEN_FILE"
+    else
+        rm -f "$LAST_RELEASE_TOKEN_FILE"
+    fi
+}
+
+current_release_token() {
+    local binding_id release_generation
+    binding_id=$(get_metadata "binding-id")
+    release_generation=$(get_metadata "release-generation")
+    if [[ -n "$binding_id" && -n "$release_generation" ]]; then
+        printf '%s:%s' "$binding_id" "$release_generation"
+    fi
 }
 
 # ─── Code update helpers ─────────────────────────────────────────────────
@@ -135,8 +169,9 @@ wipe_metadata_key() {
 }
 
 notify_release_complete() {
-    local binding_id comms_url id_token response http_status response_body
+    local binding_id release_generation comms_url id_token payload response http_status response_body
     binding_id=$(get_metadata "binding-id")
+    release_generation=$(get_metadata "release-generation")
     comms_url=$(get_metadata "comms-url")
     id_token=$(curl -sf -H "Metadata-Flavor: Google" \
         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
@@ -145,12 +180,17 @@ notify_release_complete() {
         log "WARNING: missing release completion metadata (binding-id/comms-url/id-token)"
         return 1
     fi
+    if [[ -n "$release_generation" ]]; then
+        payload=$(printf '{"binding_id": "%s", "release_generation": %s}' "$binding_id" "$release_generation")
+    else
+        payload=$(printf '{"binding_id": "%s"}' "$binding_id")
+    fi
 
     for attempt in $(seq 1 10); do
         response=$(curl -sS -X POST "$comms_url/infra/vm/release-complete" \
             -H "Authorization: Bearer $id_token" \
             -H "Content-Type: application/json" \
-            -d "{\"binding_id\": \"$binding_id\"}" \
+            -d "$payload" \
             -w $'\n%{http_code}' 2>&1)
         http_status=$(printf '%s\n' "$response" | tail -n 1)
         response_body=$(printf '%s\n' "$response" | sed '$d')
@@ -484,7 +524,9 @@ EOF
 # ─── Release: clean up VM for return to pool ─────────────────────────────
 
 do_release() {
-    log "RELEASE: cleaning up VM"
+    local release_token
+    release_token=$(current_release_token)
+    log "RELEASE: cleaning up VM${release_token:+ (token=$release_token)}"
 
     # Stop Agent Service
     kill_agent_service
@@ -533,7 +575,11 @@ PYSCRIPT
     do_update
 
     wipe_metadata_key "github-token"
-    notify_release_complete
+    if notify_release_complete; then
+        save_last_release_token "$release_token"
+    else
+        log "WARNING: release completion callback did not succeed; token remains unacked"
+    fi
 
     log "RELEASE complete"
 }
@@ -590,12 +636,19 @@ ETAG=$(curl -sf -H "$METADATA_HEADER" \
     2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
 
 CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
+CURRENT_RELEASE_TOKEN=$(current_release_token)
+LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
 if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" ]]; then
     if [[ -n "$CURRENT_UNIFY_KEY" ]]; then
         do_assign "$CURRENT_UNIFY_KEY"
-    else
+    elif [[ -z "$CURRENT_RELEASE_TOKEN" ]]; then
         do_release
+        LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
     fi
+fi
+if [[ -z "$CURRENT_UNIFY_KEY" && -n "$CURRENT_RELEASE_TOKEN" && "$CURRENT_RELEASE_TOKEN" != "$LAST_HANDLED_RELEASE_TOKEN" ]]; then
+    do_release
+    LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
 fi
 PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
 
@@ -619,13 +672,21 @@ while true; do
 
     # Check unify-key
     CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
+    CURRENT_RELEASE_TOKEN=$(current_release_token)
+    LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
 
     if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" ]]; then
         if [[ -n "$CURRENT_UNIFY_KEY" ]]; then
             do_assign "$CURRENT_UNIFY_KEY"
-        else
+        elif [[ -z "$CURRENT_RELEASE_TOKEN" ]]; then
             do_release
+            LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
         fi
+    fi
+
+    if [[ -z "$CURRENT_UNIFY_KEY" && -n "$CURRENT_RELEASE_TOKEN" && "$CURRENT_RELEASE_TOKEN" != "$LAST_HANDLED_RELEASE_TOKEN" ]]; then
+        do_release
+        LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
     fi
 
     PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"

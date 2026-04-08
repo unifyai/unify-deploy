@@ -506,6 +506,7 @@ class AssistantSessionComponentHarness:
         binding_id: str,
         *,
         vm_name: str,
+        release_generation: int | None = None,
     ) -> dict:
         assert assistant_id == self.assistant_id
         if (
@@ -520,7 +521,11 @@ class AssistantSessionComponentHarness:
             "binding-id": binding_id,
             "pool-role": self.runtime_pool_role,
         }
-        return {"released": True, "pool_role": self.runtime_pool_role}
+        return {
+            "released": True,
+            "pool_role": self.runtime_pool_role,
+            "release_generation": release_generation,
+        }
 
     def verify_vm_assignment(
         self,
@@ -622,8 +627,21 @@ class AssistantSessionComponentHarness:
             headers={"Authorization": f"Bearer {self.user_api_key}"},
         )
 
-    def post_vm_release_complete(self, *, binding_id: str | None = None):
+    def post_vm_release_complete(
+        self,
+        *,
+        binding_id: str | None = None,
+        release_generation: int | None = None,
+    ):
+        binding = (self.session.get("status") or {}).get("binding") or {}
         return self.client.post(
             "/infra/vm/release-complete",
-            json={"binding_id": binding_id or self.binding_id},
+            json={
+                "binding_id": binding_id or self.binding_id,
+                "release_generation": (
+                    release_generation
+                    if release_generation is not None
+                    else binding.get("releaseGeneration")
+                ),
+            },
         )

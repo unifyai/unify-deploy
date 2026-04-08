@@ -54,6 +54,7 @@ class PoolReleaseRequest(BaseModel):
     binding_id: str
     vm_name: Optional[str] = None
     job_name: Optional[str] = None
+    release_generation: Optional[int] = None
 
 
 class PoolDiskDeleteRequest(BaseModel):
@@ -90,6 +91,7 @@ class VMWipeMetadataKeyRequest(BaseModel):
 
 class VMReleaseCompleteRequest(BaseModel):
     binding_id: str
+    release_generation: Optional[int] = None
 
 
 class TunnelRegisterRequest(BaseModel):

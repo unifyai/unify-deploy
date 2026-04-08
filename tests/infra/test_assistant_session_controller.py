@@ -1126,6 +1126,7 @@ def test_reconcile_releases_binding_by_binding_id_when_stopped(monkeypatch):
         assistant_id="1207",
         binding_id="binding-1",
         vm_name="unity-pool-ubuntu-1",
+        release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
 
@@ -1138,7 +1139,7 @@ def test_reconcile_releasing_binding_still_requests_vm_release_after_vm_ref_appe
     body["status"]["binding"] = _binding(
         "binding-1",
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
-        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+        releaseRequestedAt=controller._now_iso(),
     )
     patch_status = MagicMock()
     queue_vm_release = MagicMock(return_value=True)
@@ -1181,11 +1182,11 @@ def test_reconcile_releasing_binding_still_requests_vm_release_after_vm_ref_appe
         assistant_id="1207",
         binding_id="binding-1",
         vm_name="unity-pool-ubuntu-1",
+        release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
-    assert patch_status.call_args.kwargs["binding"]["releaseRequestedAt"] == (
-        "2026-04-03T00:00:30+00:00"
-    )
+    assert patch_status.call_args.kwargs["binding"]["releaseRequestedAt"]
+    assert patch_status.call_args.kwargs["binding"]["releaseGeneration"] == 1
 
 
 def test_reconcile_finishes_release_when_runtime_artifacts_are_already_gone(
@@ -1387,9 +1388,11 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
         assistant_id="1207",
         binding_id="binding-1",
         vm_name="unity-pool-ubuntu-1",
+        release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
     assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+    assert patch_status.call_args.kwargs["binding"]["releaseGeneration"] == 1
     assert "Job disappeared" in patch_status.call_args.kwargs["last_error"]
 
 
@@ -1399,7 +1402,7 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatc
     body["status"]["binding"] = _binding(
         "binding-1",
         jobRef={"name": "unity-job-1", "namespace": "preview"},
-        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+        releaseRequestedAt=controller._now_iso(),
     )
     patch_status = MagicMock()
     queue_vm_release = MagicMock(return_value=True)
@@ -1445,15 +1448,164 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatc
         assistant_id="1207",
         binding_id="binding-1",
         vm_name="unity-pool-ubuntu-1",
+        release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
     binding = patch_status.call_args.kwargs["binding"]
     assert binding["id"] == "binding-1"
+    assert binding["releaseGeneration"] == 1
     assert binding["vmRef"] == {
         "name": "unity-pool-ubuntu-1",
         "hostname": "vm-1.vm.unify.ai",
         "vmType": "ubuntu",
     }
+
+
+def test_reconcile_rearms_timed_out_release_request(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+        releaseGeneration=1,
+    )
+    patch_status = MagicMock()
+    queue_vm_release = MagicMock(return_value=True)
+    recover_release = MagicMock(
+        return_value={
+            "action": "rearmed",
+            "released": True,
+            "pool_role": "releasing",
+            "release_generation": 2,
+        },
+    )
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "split_binding_runtime_vms",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "assistant_id": "1207",
+                    "binding_id": "binding-1",
+                    "pool_role": "releasing",
+                    "vm_name": "unity-pool-ubuntu-1",
+                },
+            ],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        controller,
+        "find_vm_with_disk",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-1",
+    )
+    monkeypatch.setattr(
+        controller,
+        "recover_stuck_pool_vm_release",
+        recover_release,
+    )
+    monkeypatch.setattr(controller, "schedule_vm_release_request", queue_vm_release)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    recover_release.assert_called_once_with(
+        "1207",
+        "binding-1",
+        vm_name="unity-pool-ubuntu-1",
+        current_release_generation=1,
+        allow_rearm=True,
+        retire_reason="controller_desired_stop_release_timeout",
+    )
+    queue_vm_release.assert_not_called()
+    assert patch_status.call_args.kwargs["phase"] == "Releasing"
+    binding = patch_status.call_args.kwargs["binding"]
+    assert binding["releaseGeneration"] == 2
+    assert binding["releaseRequestedAt"] != "2026-04-03T00:00:30+00:00"
+    assert "releaseCompletedAt" not in binding
+
+
+def test_reconcile_retires_release_after_hard_timeout(monkeypatch):
+    body = _base_session(desired_state="Stopped")
+    body["status"]["phase"] = "Releasing"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
+        releaseRequestedAt="2026-04-03T00:00:30+00:00",
+        releaseGeneration=2,
+    )
+    patch_status = MagicMock()
+    queue_vm_release = MagicMock(return_value=True)
+    recover_release = MagicMock(
+        return_value={
+            "action": "retired",
+            "retired": True,
+            "pool_role": "retired",
+            "release_generation": 2,
+        },
+    )
+    cleanup_states = [
+        (
+            [
+                {
+                    "assistant_id": "1207",
+                    "binding_id": "binding-1",
+                    "pool_role": "releasing",
+                    "vm_name": "unity-pool-ubuntu-1",
+                },
+            ],
+            [],
+            "unity-pool-ubuntu-1",
+        ),
+        ([], [], None),
+    ]
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "_owned_runtime_cleanup_state",
+        lambda *_args, **_kwargs: cleanup_states.pop(0),
+    )
+    monkeypatch.setattr(
+        controller,
+        "recover_stuck_pool_vm_release",
+        recover_release,
+    )
+    monkeypatch.setattr(controller, "schedule_vm_release_request", queue_vm_release)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    recover_release.assert_called_once_with(
+        "1207",
+        "binding-1",
+        vm_name="unity-pool-ubuntu-1",
+        current_release_generation=2,
+        allow_rearm=False,
+        retire_reason="controller_desired_stop_release_timeout",
+    )
+    queue_vm_release.assert_not_called()
+    assert patch_status.call_args.kwargs["phase"] == "Released"
+    assert patch_status.call_args.kwargs["binding"] is None
 
 
 def test_reconcile_job_missing_restarts_only_after_cleanup_finishes(monkeypatch):
@@ -1884,10 +2036,12 @@ def test_reconcile_activation_replacement_waits_for_release(monkeypatch):
         assistant_id="1207",
         binding_id="binding-1",
         vm_name="unity-pool-ubuntu-1",
+        release_generation=1,
     )
     assert patch_status.call_args.kwargs["phase"] == "Releasing"
     assert patch_status.call_args.kwargs["observed_activation_id"] == "act-1"
     assert patch_status.call_args.kwargs["binding"]["id"] == "binding-1"
+    assert patch_status.call_args.kwargs["binding"]["releaseGeneration"] == 1
 
 
 def test_reconcile_does_not_mark_released_while_disk_is_still_attached(monkeypatch):

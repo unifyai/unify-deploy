@@ -17,6 +17,8 @@ $MetadataHeaders = @{"Metadata-Flavor" = "Google"}
 $Etag = ""
 $PrevUnifyKey = ""
 $PrevTlsHash = ""
+$ReleaseStateDir = "C:\ProgramData\UnityPoolWatcher"
+$LastReleaseTokenPath = Join-Path $ReleaseStateDir "last-release-token.txt"
 
 function Get-Metadata($key) {
     try {
@@ -39,6 +41,35 @@ function Get-DeployEnv {
 function Write-Log($message) {
     $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     Write-Host "[$ts] $message"
+}
+
+function Ensure-ReleaseStateDir {
+    New-Item -ItemType Directory -Force -Path $ReleaseStateDir -ErrorAction SilentlyContinue | Out-Null
+}
+
+function Get-LastReleaseToken {
+    if (Test-Path $LastReleaseTokenPath) {
+        return (Get-Content $LastReleaseTokenPath -Raw).Trim()
+    }
+    return ""
+}
+
+function Save-LastReleaseToken($token) {
+    Ensure-ReleaseStateDir
+    if ($token) {
+        Set-Content -Path $LastReleaseTokenPath -Value $token -Encoding ASCII -NoNewline
+    } else {
+        Remove-Item $LastReleaseTokenPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-CurrentReleaseToken {
+    $bindingId = Get-Metadata "binding-id"
+    $releaseGeneration = Get-Metadata "release-generation"
+    if ($bindingId -and $releaseGeneration) {
+        return "$bindingId`:$releaseGeneration"
+    }
+    return ""
 }
 
 function Get-UnityUserAuthorizedKeysPath {
@@ -292,6 +323,7 @@ function Invoke-JsonPostWithRetry {
 
 function Notify-ReleaseComplete {
     $bindingId = Get-Metadata "binding-id"
+    $releaseGeneration = Get-Metadata "release-generation"
     $commsUrl = Get-Metadata "comms-url"
     $idToken = Get-VMIdentityToken
     $missing = @()
@@ -303,10 +335,15 @@ function Notify-ReleaseComplete {
         return $false
     }
 
+    $payload = @{ binding_id = $bindingId }
+    if ($releaseGeneration) {
+        $payload.release_generation = [int]$releaseGeneration
+    }
+
     $reported = Invoke-JsonPostWithRetry `
         -Uri "$commsUrl/infra/vm/release-complete" `
         -Headers @{ Authorization = "Bearer $idToken" } `
-        -Payload @{ binding_id = $bindingId } `
+        -Payload $payload `
         -SuccessPrefix "Reported release completion to Comms" `
         -FailurePrefix "Release completion" `
         -Attempts 10 `
@@ -760,7 +797,12 @@ npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
 # ─── Release: clean up VM for return to pool ─────────────────────────────
 
 function Invoke-Release {
-    Write-Log "RELEASE: cleaning up VM"
+    $releaseToken = Get-CurrentReleaseToken
+    if ($releaseToken) {
+        Write-Log "RELEASE: cleaning up VM (token=$releaseToken)"
+    } else {
+        Write-Log "RELEASE: cleaning up VM"
+    }
 
     # Stop Agent Service
     Stop-AgentService
@@ -810,7 +852,11 @@ function Invoke-Release {
     Invoke-Update
 
     Wipe-MetadataKey "github-token"
-    Notify-ReleaseComplete | Out-Null
+    if (Notify-ReleaseComplete) {
+        Save-LastReleaseToken $releaseToken
+    } else {
+        Write-Log "WARNING: release completion callback did not succeed; token remains unacked"
+    }
 
     Write-Log "RELEASE complete"
 }
@@ -879,12 +925,20 @@ try {
 }
 
 $currentUnifyKey = Get-Metadata "unify-key"
+$currentReleaseToken = Get-CurrentReleaseToken
+$lastHandledReleaseToken = Get-LastReleaseToken
 if ($currentUnifyKey -ne $PrevUnifyKey) {
     if ($currentUnifyKey) {
         Invoke-Assign $currentUnifyKey
-    } else {
+    } elseif (-not $currentReleaseToken) {
         Invoke-Release
+        $lastHandledReleaseToken = Get-LastReleaseToken
     }
+}
+$currentReleaseToken = Get-CurrentReleaseToken
+if (-not $currentUnifyKey -and $currentReleaseToken -and $currentReleaseToken -ne $lastHandledReleaseToken) {
+    Invoke-Release
+    $lastHandledReleaseToken = Get-LastReleaseToken
 }
 $PrevUnifyKey = $currentUnifyKey
 
@@ -904,13 +958,22 @@ while ($true) {
         }
 
         $currentUnifyKey = Get-Metadata "unify-key"
+        $currentReleaseToken = Get-CurrentReleaseToken
+        $lastHandledReleaseToken = Get-LastReleaseToken
 
         if ($currentUnifyKey -ne $PrevUnifyKey) {
             if ($currentUnifyKey) {
                 Invoke-Assign $currentUnifyKey
-            } else {
+            } elseif (-not $currentReleaseToken) {
                 Invoke-Release
+                $lastHandledReleaseToken = Get-LastReleaseToken
             }
+        }
+
+        $currentReleaseToken = Get-CurrentReleaseToken
+        if (-not $currentUnifyKey -and $currentReleaseToken -and $currentReleaseToken -ne $lastHandledReleaseToken) {
+            Invoke-Release
+            $lastHandledReleaseToken = Get-LastReleaseToken
         }
 
         $PrevUnifyKey = $currentUnifyKey

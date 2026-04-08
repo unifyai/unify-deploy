@@ -6,6 +6,7 @@ import uuid
 
 from communication.infra.assistant_sessions import (
     binding_id as binding_id_from_status,
+    binding_release_generation,
     binding_job_ref,
     binding_pod_ref,
     binding_vm_assignment,
@@ -43,6 +44,7 @@ def binding_payload(
     vm_ready_message_id: str | None | object = BINDING_UNSET,
     release_requested_at: str | None | object = BINDING_UNSET,
     release_completed_at: str | None | object = BINDING_UNSET,
+    release_generation: int | None | object = BINDING_UNSET,
 ) -> dict:
     """Return the canonical binding payload with selective field overrides."""
 
@@ -116,6 +118,11 @@ def binding_payload(
             if release_completed_at is BINDING_UNSET
             else release_completed_at
         ),
+        release_generation=(
+            binding_release_generation(binding) or None
+            if release_generation is BINDING_UNSET
+            else release_generation
+        ),
     )
 
 
@@ -153,12 +160,25 @@ def binding_deadline_exceeded(
     return elapsed > timeout_seconds
 
 
-def binding_signal_matches(signal: dict | None, binding_id: str) -> bool:
+def binding_signal_matches(
+    signal: dict | None,
+    binding_id: str,
+    *,
+    release_generation: int | None = None,
+) -> bool:
     """Return whether a signal still belongs to the current binding."""
 
     if not binding_id or not isinstance(signal, dict):
         return False
-    return str(signal.get("bindingId", "") or "") == binding_id
+    if str(signal.get("bindingId", "") or "") != binding_id:
+        return False
+    if release_generation is None or release_generation <= 0:
+        return True
+    try:
+        signal_generation = int(signal.get("releaseGeneration"))
+    except (TypeError, ValueError):
+        return False
+    return signal_generation == release_generation
 
 
 def signal_age_seconds(signal: dict | None) -> float | None:

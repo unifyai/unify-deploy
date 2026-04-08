@@ -30,6 +30,7 @@ from communication.infra.assistant_sessions import (
     BINDING_ID_LABEL,
     binding_desktop_url,
     binding_id as binding_id_from_status,
+    binding_release_generation,
     binding_job_ref,
     binding_pod_ref,
     binding_vm_assignment,
@@ -53,9 +54,12 @@ from communication.infra.assistant_sessions import (
     resolve_current_binding_vm_ref,
 )
 from communication.infra.vm_helpers import (
+    MAX_RELEASE_GENERATION,
+    POOL_RELEASE_TIMEOUT_SECONDS,
     complete_pool_vm_release,
     find_vm_with_disk,
     POOL_ROLE_RELEASING,
+    recover_stuck_pool_vm_release,
     release_pool_vm,
     split_binding_runtime_vms,
     verify_vm_assignment,
@@ -85,6 +89,7 @@ CONFIG = ControllerConfig.from_env()
 logger = logging.getLogger(__name__)
 
 DESKTOP_LIVENESS_FAILURE_THRESHOLD = CONFIG.desktop_liveness_failure_threshold
+RELEASE_REQUEST_TIMEOUT_SECONDS = POOL_RELEASE_TIMEOUT_SECONDS
 
 _batch_api: k8s_client.BatchV1Api | None = None
 _core_api: k8s_client.CoreV1Api | None = None
@@ -317,6 +322,7 @@ def _signal_observability_fields(
     return {
         f"{prefix}_name": signal_name,
         f"{prefix}_binding_id": str(signal.get("bindingId", "") or "") or None,
+        f"{prefix}_release_generation": _signal_release_generation(signal),
         f"{prefix}_state": str(signal.get("state", "") or "") or None,
         f"{prefix}_source": str(signal.get("source", "") or "") or None,
         f"{prefix}_observed_at": str(signal.get("observedAt", "") or "") or None,
@@ -326,6 +332,18 @@ def _signal_observability_fields(
         f"{prefix}_operation_id": causal_fields.get("operation_id"),
         f"{prefix}_root_operation_id": causal_fields.get("root_operation_id"),
     }
+
+
+def _signal_release_generation(signal: dict | None) -> int | None:
+    """Return the release generation recorded on a persisted signal."""
+
+    if not isinstance(signal, dict):
+        return None
+    try:
+        generation = int(signal.get("releaseGeneration"))
+    except (TypeError, ValueError):
+        return None
+    return generation if generation > 0 else None
 
 
 @contextmanager
@@ -989,6 +1007,7 @@ def _release_observability_fields(
         "job_live": job_live,
         "release_requested_at": release_requested_at or None,
         "release_completed_at": release_completed_at or None,
+        "release_generation": binding_release_generation(binding) or None,
         "owned_runtime_vm_names": [
             str(vm.get("vm_name", "") or "") for vm in owned_runtime_vms
         ],
@@ -1007,6 +1026,105 @@ def _release_observability_fields(
         },
         "disk_vm_name": disk_vm_name or None,
     }
+
+
+def _recover_timed_out_release_request(
+    *,
+    assistant_id: str,
+    session_name: str,
+    binding: dict,
+    source_reason: str,
+    job_live: bool,
+    release_requested_at: str,
+    release_completed_at: str,
+    owned_runtime_vms: list[dict],
+    other_runtime_vms: list[dict],
+    disk_vm_name: str | None,
+) -> tuple[dict, str, str, str]:
+    """Recover a timed-out release by re-arming once, then retiring the VM."""
+
+    current_binding_id = binding_id_from_status(binding)
+    vm_name = str(binding_vm_ref(binding).get("name", "") or "")
+    if not current_binding_id or not vm_name:
+        return binding, release_requested_at, release_completed_at, ""
+
+    current_release_generation = binding_release_generation(binding)
+    allow_rearm = current_release_generation < MAX_RELEASE_GENERATION
+    emit_observability_event(
+        "controller.release_state.timeout_recovery",
+        **_release_observability_fields(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding=binding,
+            source_reason=source_reason,
+            job_live=job_live,
+            release_requested_at=release_requested_at,
+            release_completed_at=release_completed_at,
+            owned_runtime_vms=owned_runtime_vms,
+            other_runtime_vms=other_runtime_vms,
+            disk_vm_name=disk_vm_name,
+        ),
+        recovery_action="rearm" if allow_rearm else "retire",
+        recovery_vm_name=vm_name,
+    )
+    result = recover_stuck_pool_vm_release(
+        assistant_id,
+        current_binding_id,
+        vm_name=vm_name,
+        current_release_generation=current_release_generation or None,
+        allow_rearm=allow_rearm,
+        retire_reason=f"controller_{source_reason}_release_timeout",
+    )
+    emit_observability_event(
+        "controller.release_state.timeout_recovery_result",
+        **_release_observability_fields(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding=binding,
+            source_reason=source_reason,
+            job_live=job_live,
+            release_requested_at=release_requested_at,
+            release_completed_at=release_completed_at,
+            owned_runtime_vms=owned_runtime_vms,
+            other_runtime_vms=other_runtime_vms,
+            disk_vm_name=disk_vm_name,
+        ),
+        recovery_action=result.get("action"),
+        recovery_result=result,
+    )
+
+    next_release_generation = current_release_generation
+    try:
+        next_release_generation = int(result.get("release_generation"))
+    except (TypeError, ValueError):
+        pass
+
+    if result.get("retired"):
+        release_requested_at = release_requested_at or _now_iso()
+        release_completed_at = release_requested_at
+        binding = _binding_payload(
+            binding,
+            vm_ref=None,
+            desktop_url=None,
+            release_requested_at=release_requested_at,
+            release_completed_at=release_completed_at,
+            release_generation=next_release_generation
+            or current_release_generation
+            or None,
+        )
+    elif result.get("action") == "rearmed":
+        release_requested_at = _now_iso()
+        release_completed_at = ""
+        binding = _binding_payload(
+            binding,
+            release_requested_at=release_requested_at,
+            release_completed_at=None,
+            release_generation=next_release_generation
+            or current_release_generation + 1,
+        )
+
+    message = str(result.get("message", "") or result.get("reason", "") or "")
+    return binding, release_requested_at, release_completed_at, message
 
 
 def _binding_release_state(
@@ -1029,9 +1147,22 @@ def _binding_release_state(
     vm_name = str(vm_ref.get("name", "") or "")
     release_requested_at = str(binding.get("releaseRequestedAt", "") or "")
     release_completed_at = str(binding.get("releaseCompletedAt", "") or "")
+    release_generation = binding_release_generation(binding)
     release_request_signal = _release_request_signal(body)
     release_complete_signal = _release_complete_signal(body)
     last_error = ""
+
+    if release_generation <= 0:
+        release_generation = (
+            _signal_release_generation(release_request_signal)
+            or _signal_release_generation(release_complete_signal)
+            or 0
+        )
+        if release_generation > 0:
+            binding = _binding_payload(
+                binding,
+                release_generation=release_generation,
+            )
 
     if job_live:
         try:
@@ -1112,6 +1243,7 @@ def _binding_release_state(
     if not release_completed_at and _binding_signal_matches(
         release_complete_signal,
         current_binding_id,
+        release_generation=release_generation or None,
     ):
         release_completed_at = str(
             release_complete_signal.get("observedAt", "") or _now_iso(),
@@ -1193,22 +1325,60 @@ def _binding_release_state(
                 )
         else:
             request_signal_state = str(release_request_signal.get("state", "") or "")
-            if _binding_signal_matches(
+            request_signal_matches = _binding_signal_matches(
                 release_request_signal,
                 current_binding_id,
-            ) and request_signal_state in {"requested", "retired"}:
+                release_generation=release_generation or None,
+            )
+            if request_signal_matches and request_signal_state in {
+                "requested",
+                "retired",
+            }:
                 if not release_requested_at:
                     release_requested_at = str(
                         release_request_signal.get("observedAt", "") or _now_iso(),
                     )
-                    binding = _binding_payload(
+                if not release_generation:
+                    release_generation = (
+                        _signal_release_generation(
+                            release_request_signal,
+                        )
+                        or 0
+                    )
+                binding = _binding_payload(
+                    binding,
+                    release_requested_at=release_requested_at,
+                    release_generation=release_generation or None,
+                )
+            if request_signal_matches and request_signal_state == "retired":
+                release_completed_at = release_requested_at or _now_iso()
+                binding = _binding_payload(
+                    binding,
+                    vm_ref=None,
+                    desktop_url=None,
+                    release_requested_at=release_requested_at,
+                    release_completed_at=release_completed_at,
+                    release_generation=release_generation or None,
+                )
+            else:
+                request_timed_out = bool(
+                    release_requested_at,
+                ) and _binding_deadline_exceeded(
+                    _binding_payload(
                         binding,
                         release_requested_at=release_requested_at,
-                    )
-            else:
-                emit_observability_event(
-                    "controller.release_state.queue_vm_release",
-                    **_release_observability_fields(
+                        release_generation=release_generation or None,
+                    ),
+                    "releaseRequestedAt",
+                    RELEASE_REQUEST_TIMEOUT_SECONDS,
+                )
+                if request_timed_out:
+                    (
+                        binding,
+                        release_requested_at,
+                        release_completed_at,
+                        recovery_error,
+                    ) = _recover_timed_out_release_request(
                         assistant_id=assistant_id,
                         session_name=session_name,
                         binding=binding,
@@ -1219,29 +1389,45 @@ def _binding_release_state(
                         owned_runtime_vms=owned_runtime_vms,
                         other_runtime_vms=other_runtime_vms,
                         disk_vm_name=disk_vm_name,
-                    ),
-                    release_retry=bool(release_requested_at),
-                )
-                schedule_vm_release_request(
-                    custom_api=_custom_api,
-                    namespace=WATCH_NAMESPACE,
-                    assistant_id=assistant_id,
-                    binding_id=current_binding_id,
-                    vm_name=vm_name,
-                )
-            if (
-                _binding_signal_matches(release_request_signal, current_binding_id)
-                and request_signal_state == "retired"
-            ):
-                release_completed_at = release_requested_at or _now_iso()
-                binding = _binding_payload(
-                    binding,
-                    vm_ref=None,
-                    desktop_url=None,
-                    release_requested_at=release_requested_at,
-                    release_completed_at=release_completed_at,
-                )
-            elif _binding_signal_matches(release_request_signal, current_binding_id):
+                    )
+                    release_generation = binding_release_generation(binding)
+                    if recovery_error:
+                        last_error = recovery_error
+                elif not release_requested_at or release_generation <= 0:
+                    release_retry = bool(release_requested_at)
+                    release_requested_at = release_requested_at or _now_iso()
+                    release_generation = release_generation or 1
+                    binding = _binding_payload(
+                        binding,
+                        release_requested_at=release_requested_at,
+                        release_completed_at=None,
+                        release_generation=release_generation,
+                    )
+                    emit_observability_event(
+                        "controller.release_state.queue_vm_release",
+                        **_release_observability_fields(
+                            assistant_id=assistant_id,
+                            session_name=session_name,
+                            binding=binding,
+                            source_reason=source_reason,
+                            job_live=job_live,
+                            release_requested_at=release_requested_at,
+                            release_completed_at=release_completed_at,
+                            owned_runtime_vms=owned_runtime_vms,
+                            other_runtime_vms=other_runtime_vms,
+                            disk_vm_name=disk_vm_name,
+                        ),
+                        release_retry=release_retry,
+                    )
+                    schedule_vm_release_request(
+                        custom_api=_custom_api,
+                        namespace=WATCH_NAMESPACE,
+                        assistant_id=assistant_id,
+                        binding_id=current_binding_id,
+                        vm_name=vm_name,
+                        release_generation=release_generation,
+                    )
+            if request_signal_matches:
                 request_error = str(release_request_signal.get("message", "") or "")
                 if request_error:
                     last_error = request_error

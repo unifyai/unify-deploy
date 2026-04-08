@@ -62,6 +62,7 @@ def test_release_endpoint_resolves_job_name_to_current_vm():
         "assistant-123",
         "binding-1",
         vm_name="unity-pool-ubuntu-3-preview",
+        release_generation=None,
     )
 
 
@@ -126,6 +127,7 @@ def test_release_endpoint_recovers_missing_binding_vm_ref_from_runtime_owner():
         "assistant-123",
         "binding-1",
         vm_name="unity-pool-ubuntu-3-preview",
+        release_generation=None,
     )
 
 

@@ -253,6 +253,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
                 "vm-type": "ubuntu",
             },
         ),
+        metadata=SimpleNamespace(items=[]),
     )
     client = MagicMock()
     client.list.return_value = [vm]
@@ -276,6 +277,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
 
     assert result["released"] is True
     assert result["pool_role"] == "releasing"
+    assert result["release_generation"] == 1
     assert metadata_updates == [
         (
             "unity-pool-ubuntu-3-preview",
@@ -283,6 +285,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
                 "unify-key": "",
                 "vnc-password": "",
                 "ssh-public-key": "",
+                vm_helpers_module.RELEASE_GENERATION_METADATA_KEY: "1",
             },
         ),
     ]
@@ -300,6 +303,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
                 "vm-type": "ubuntu",
             },
         ),
+        metadata=SimpleNamespace(items=[]),
     )
     client = MagicMock()
     client.get.return_value = vm
@@ -327,6 +331,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
 
     assert result["released"] is True
     assert result["vm_name"] == "unity-pool-ubuntu-3-preview"
+    assert result["release_generation"] == 1
     client.list.assert_not_called()
     assert metadata_updates == [
         (
@@ -335,6 +340,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
                 "unify-key": "",
                 "vnc-password": "",
                 "ssh-public-key": "",
+                vm_helpers_module.RELEASE_GENERATION_METADATA_KEY: "1",
             },
         ),
     ]
@@ -414,6 +420,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
 
     assert result["released"] is True
     assert result["pool_role"] == "releasing"
+    assert result["release_generation"] == 1
     assert metadata_updates == [
         (
             "unity-pool-ubuntu-3-preview",
@@ -421,6 +428,75 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
                 "unify-key": "",
                 "vnc-password": "",
                 "ssh-public-key": "",
+                vm_helpers_module.RELEASE_GENERATION_METADATA_KEY: "1",
+            },
+        ),
+    ]
+    assert release_calls == [True]
+
+
+def test_release_pool_vm_rearms_with_new_release_generation(monkeypatch):
+    vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "releasing",
+                "assistant-id": "assistant-123",
+                "binding-id": "binding-123",
+                "vm-type": "ubuntu",
+            },
+        ),
+        metadata=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    key=vm_helpers_module.RELEASE_GENERATION_METADATA_KEY,
+                    value="1",
+                ),
+            ],
+        ),
+    )
+    client = MagicMock()
+    client.list.return_value = [vm]
+    metadata_updates = []
+    release_calls = _install_binding_lease(monkeypatch)
+    set_pool_labels = MagicMock(return_value=True)
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._set_pool_labels",
+        set_pool_labels,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._update_instance_metadata",
+        lambda vm_name, updates, **_kwargs: metadata_updates.append((vm_name, updates)),
+    )
+
+    result = release_pool_vm(
+        "assistant-123",
+        "binding-123",
+        release_generation=2,
+    )
+
+    assert result["released"] is True
+    assert result["rearmed"] is True
+    assert result["release_generation"] == 2
+    set_pool_labels.assert_called_once_with(
+        client,
+        "unity-pool-ubuntu-3-preview",
+        {"pool-role": "releasing"},
+        expected_role="releasing",
+    )
+    assert metadata_updates == [
+        (
+            "unity-pool-ubuntu-3-preview",
+            {
+                "unify-key": "",
+                "vnc-password": "",
+                "ssh-public-key": "",
+                vm_helpers_module.RELEASE_GENERATION_METADATA_KEY: "2",
             },
         ),
     ]
@@ -438,6 +514,7 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
             "pool-contract-generation": "guest-contract-v1",
         },
         status="RUNNING",
+        metadata=SimpleNamespace(items=[]),
     )
     client = MagicMock()
     client.list.return_value = [stale_vm]
@@ -464,6 +541,7 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
     assert result["released"] is True
     assert result["retired"] is True
     assert result["pool_role"] == "retired"
+    assert result["release_generation"] == 1
     assert recycled == ["assistant_release_with_stale_contract"]
     assert release_calls == [True]
 
@@ -479,6 +557,7 @@ def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
                 "vm-type": "ubuntu",
             },
         ),
+        metadata=SimpleNamespace(items=[]),
     )
     client = MagicMock()
     client.list.return_value = [vm]
@@ -502,6 +581,7 @@ def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
 
     assert result["released"] is True
     assert result["pool_role"] == "releasing"
+    assert result["release_generation"] == 1
     assert metadata_updates == [
         (
             "unity-pool-ubuntu-3-preview",
@@ -509,6 +589,7 @@ def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
                 "unify-key": "",
                 "vnc-password": "",
                 "ssh-public-key": "",
+                vm_helpers_module.RELEASE_GENERATION_METADATA_KEY: "1",
             },
         ),
     ]
@@ -541,6 +622,76 @@ def test_release_pool_vm_skips_when_binding_lease_stays_busy(monkeypatch):
         "message": "Another binding VM operation is still in progress",
     }
     assert release_calls == []
+
+
+def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
+    releasing_vm = SimpleNamespace(
+        name="unity-pool-ubuntu-3-preview",
+        labels=_current_contract_labels(
+            **{
+                "pool-role": "releasing",
+                "assistant-id": "assistant-123",
+                "binding-id": "binding-123",
+                "vm-type": "ubuntu",
+            },
+        ),
+        metadata=SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    key=vm_helpers_module.RELEASE_GENERATION_METADATA_KEY,
+                    value="1",
+                ),
+            ],
+        ),
+        status="RUNNING",
+        last_start_timestamp=(datetime.now(UTC) - timedelta(seconds=1200)).isoformat(),
+        creation_timestamp=(datetime.now(UTC) - timedelta(seconds=1200)).isoformat(),
+    )
+    client = MagicMock()
+    client.list.side_effect = [[], [releasing_vm]]
+    client.get.return_value = releasing_vm
+    recover_release = MagicMock(
+        return_value={
+            "action": "rearmed",
+            "release_generation": 2,
+            "retired": False,
+        },
+    )
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._refresh_inflight_progress_phase",
+        lambda *_args, **_kwargs: releasing_vm,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.recover_stuck_pool_vm_release",
+        recover_release,
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_vms(MagicMock(), "ubuntu")
+
+    recover_release.assert_called_once_with(
+        "assistant-123",
+        "binding-123",
+        vm_name="unity-pool-ubuntu-3-preview",
+        current_release_generation=1,
+        allow_rearm=True,
+        retire_reason="aged_releasing_vm",
+    )
+    assert result["releasing_checked"] == 1
+    assert result["releasing_recovered"] == [
+        {
+            "vm_name": "unity-pool-ubuntu-3-preview",
+            "assistant_id": "assistant-123",
+            "binding_id": "binding-123",
+            "action": "rearmed",
+            "release_generation": 2,
+            "retired": False,
+        },
+    ]
 
 
 def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
@@ -591,6 +742,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
                 "unify-key": "",
                 "vnc-password": "",
                 "ssh-public-key": "",
+                vm_helpers_module.RELEASE_GENERATION_METADATA_KEY: "",
             },
         ),
     ]

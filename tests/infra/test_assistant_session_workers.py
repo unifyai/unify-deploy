@@ -243,6 +243,7 @@ def test_run_vm_release_request_records_requested_signal(monkeypatch):
         assistant_id="1207",
         binding_id="binding-1",
         vm_name="unity-pool-ubuntu-1-preview",
+        release_generation=1,
     )
 
     assert (
@@ -254,6 +255,7 @@ def test_run_vm_release_request_records_requested_signal(monkeypatch):
         record_signal.call_args.kwargs["payload"]["vmName"]
         == "unity-pool-ubuntu-1-preview"
     )
+    assert record_signal.call_args.kwargs["payload"]["releaseGeneration"] == 1
 
 
 def test_run_vm_release_request_skips_stale_binding(monkeypatch):
@@ -272,6 +274,7 @@ def test_run_vm_release_request_skips_stale_binding(monkeypatch):
         assistant_id="1207",
         binding_id="binding-1",
         vm_name="unity-pool-ubuntu-1-preview",
+        release_generation=1,
     )
 
     record_signal.assert_not_called()

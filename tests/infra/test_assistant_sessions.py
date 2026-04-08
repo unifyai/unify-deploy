@@ -749,6 +749,7 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
         "desktopUrl",
         "containerBootstrapStartedAt",
         "guestHandshakeStartedAt",
+        "releaseGeneration",
     }.issubset(binding_properties.keys())
     released_binding_properties = status_properties["releasedBindings"]["items"][
         "properties"

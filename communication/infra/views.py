@@ -36,6 +36,7 @@ from .assistant_sessions import (
     assistant_session_name,
     binding_desktop_url,
     binding_id as binding_id_from_status,
+    binding_release_generation,
     binding_job_ref,
     binding_pod_ref,
     binding_vm_ref,
@@ -2152,6 +2153,7 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
             request.assistant_id,
             request.binding_id,
             vm_name=resolved_vm_name,
+            release_generation=request.release_generation,
         )
         if result.get("retired"):
             asyncio.get_running_loop().run_in_executor(
@@ -2755,6 +2757,7 @@ async def vm_release_complete_endpoint(
             vm_name=vm_name,
             assistant_id=assistant_id or None,
             binding_id=body.binding_id,
+            release_generation=body.release_generation,
             current_binding_id=current_binding_id or None,
             pool_role=pool_role or None,
         )
@@ -2764,6 +2767,7 @@ async def vm_release_complete_endpoint(
                 vm_name=vm_name,
                 assistant_id=assistant_id or None,
                 binding_id=body.binding_id,
+                release_generation=body.release_generation,
                 current_binding_id=current_binding_id or None,
                 pool_role=pool_role or None,
                 reason="binding_changed",
@@ -2773,6 +2777,7 @@ async def vm_release_complete_endpoint(
                 "vm_name": vm_name,
                 "assistant_id": assistant_id or None,
                 "binding_id": body.binding_id,
+                "release_generation": body.release_generation,
                 "skipped": True,
                 "reason": "binding_changed",
             }
@@ -2788,6 +2793,7 @@ async def vm_release_complete_endpoint(
             vm_name=vm_name,
             assistant_id=assistant_id or None,
             binding_id=body.binding_id,
+            release_generation=body.release_generation,
             current_binding_id=current_binding_id or None,
             pool_role=release_pool_role or None,
             release_result=release_result,
@@ -2798,6 +2804,7 @@ async def vm_release_complete_endpoint(
                 vm_name=vm_name,
                 assistant_id=assistant_id or None,
                 binding_id=body.binding_id,
+                release_generation=body.release_generation,
                 current_binding_id=current_binding_id or None,
                 pool_role=release_pool_role or None,
                 reason=release_result.get("reason") or "pool_finalize_failed",
@@ -2807,6 +2814,7 @@ async def vm_release_complete_endpoint(
                 "vm_name": vm_name,
                 "assistant_id": assistant_id or None,
                 "binding_id": body.binding_id,
+                "release_generation": body.release_generation,
                 "skipped": True,
                 "reason": release_result.get("reason") or "pool_finalize_failed",
             }
@@ -2819,6 +2827,7 @@ async def vm_release_complete_endpoint(
                 vm_name=vm_name,
                 assistant_id=assistant_id,
                 binding_id=body.binding_id,
+                release_generation=body.release_generation,
                 current_binding_id=current_binding_id or None,
                 session_name=session_name,
                 pool_role=release_pool_role or None,
@@ -2829,6 +2838,7 @@ async def vm_release_complete_endpoint(
                 "vm_name": vm_name,
                 "assistant_id": assistant_id,
                 "binding_id": body.binding_id,
+                "release_generation": body.release_generation,
                 "accepted": True,
                 "reason": "session_api_unavailable",
             }
@@ -2845,6 +2855,7 @@ async def vm_release_complete_endpoint(
                 vm_name=vm_name,
                 assistant_id=assistant_id,
                 binding_id=body.binding_id,
+                release_generation=body.release_generation,
                 current_binding_id=current_binding_id or None,
                 session_name=session_name,
                 pool_role=release_pool_role or None,
@@ -2855,11 +2866,13 @@ async def vm_release_complete_endpoint(
                 "vm_name": vm_name,
                 "assistant_id": assistant_id,
                 "binding_id": body.binding_id,
+                "release_generation": body.release_generation,
                 "accepted": True,
                 "reason": "session_missing",
             }
 
         binding = session_binding(session)
+        current_release_generation = binding_release_generation(binding)
         session_fields = assistant_session_observability_fields(
             session,
             source="views.release_complete",
@@ -2871,6 +2884,8 @@ async def vm_release_complete_endpoint(
             skipped_fields = {
                 **session_fields,
                 "binding_id": body.binding_id,
+                "release_generation": body.release_generation,
+                "current_release_generation": current_release_generation or None,
                 "current_binding_id": binding_id_from_status(binding) or None,
                 "current_release_requested_at": binding.get("releaseRequestedAt"),
                 "current_release_completed_at": binding.get("releaseCompletedAt"),
@@ -2886,15 +2901,53 @@ async def vm_release_complete_endpoint(
                 "vm_name": vm_name,
                 "assistant_id": assistant_id,
                 "binding_id": body.binding_id,
+                "release_generation": body.release_generation,
                 "current_binding_id": binding_id_from_status(binding) or None,
                 "accepted": True,
                 "reason": "binding_changed",
             }
 
+        if (
+            body.release_generation is not None
+            and current_release_generation > 0
+            and body.release_generation != current_release_generation
+        ):
+            skipped_fields = {
+                **session_fields,
+                "binding_id": body.binding_id,
+                "release_generation": body.release_generation,
+                "current_release_generation": current_release_generation,
+                "current_binding_id": binding_id_from_status(binding) or None,
+                "current_release_requested_at": binding.get("releaseRequestedAt"),
+                "current_release_completed_at": binding.get("releaseCompletedAt"),
+                "pool_role": release_pool_role or None,
+                "reason": "release_generation_changed",
+                "skip_stage": "session_status",
+            }
+            emit_observability_event(
+                "infra.vm_release_complete.signal_skipped",
+                **skipped_fields,
+            )
+            return {
+                "vm_name": vm_name,
+                "assistant_id": assistant_id,
+                "binding_id": body.binding_id,
+                "release_generation": body.release_generation,
+                "current_release_generation": current_release_generation,
+                "accepted": True,
+                "reason": "release_generation_changed",
+            }
+
         next_release_completed_at = datetime.now(timezone.utc).isoformat()
+        signal_release_generation = (
+            body.release_generation or current_release_generation or None
+        )
         accepted_fields = {
             **session_fields,
             "binding_id": body.binding_id,
+            "release_generation": body.release_generation,
+            "current_release_generation": current_release_generation or None,
+            "signal_release_generation": signal_release_generation,
             "current_binding_id": binding_id_from_status(binding) or None,
             "current_release_requested_at": binding.get("releaseRequestedAt"),
             "current_release_completed_at": binding.get("releaseCompletedAt"),
@@ -2916,6 +2969,7 @@ async def vm_release_complete_endpoint(
                 state="completed",
                 observed_at=next_release_completed_at,
                 vmName=vm_name,
+                releaseGeneration=signal_release_generation,
             ),
             source="views.release_complete",
         )
@@ -2931,12 +2985,14 @@ async def vm_release_complete_endpoint(
             **persisted_fields,
             release_requested_at=binding.get("releaseRequestedAt"),
             release_completed_at=next_release_completed_at,
+            signal_release_generation=signal_release_generation,
             pool_role=release_pool_role or None,
         )
         return {
             "vm_name": vm_name,
             "assistant_id": assistant_id,
             "binding_id": body.binding_id,
+            "release_generation": signal_release_generation,
             "accepted": True,
         }
     finally:

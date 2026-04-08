@@ -86,6 +86,7 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
                 "jobRef": {"name": "unity-job-1"},
                 "vmRef": {"name": "unity-pool-ubuntu-1-preview"},
                 "releaseRequestedAt": "2026-04-05T15:39:57Z",
+                "releaseGeneration": 2,
             },
         },
     }
@@ -117,7 +118,7 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
         mock_client_cls.return_value.get.return_value = vm
         resp = client.post(
             "/infra/vm/release-complete",
-            json={"binding_id": "binding-123"},
+            json={"binding_id": "binding-123", "release_generation": 2},
         )
 
     assert resp.status_code == 200
@@ -125,6 +126,7 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
         "vm_name": "unity-pool-ubuntu-1-preview",
         "assistant_id": "1207",
         "binding_id": "binding-123",
+        "release_generation": 2,
         "accepted": True,
     }
     complete_release.assert_called_once_with(
@@ -137,6 +139,7 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
         record_signal.call_args.kwargs["payload"]["vmName"]
         == "unity-pool-ubuntu-1-preview"
     )
+    assert record_signal.call_args.kwargs["payload"]["releaseGeneration"] == 2
     assert record_signal.call_args.kwargs["source"] == "views.release_complete"
 
 
@@ -184,6 +187,7 @@ def test_vm_release_complete_skips_signal_when_session_is_missing(client):
         "vm_name": "unity-pool-ubuntu-1-preview",
         "assistant_id": "1207",
         "binding_id": "binding-123",
+        "release_generation": None,
         "accepted": True,
         "reason": "session_missing",
     }
@@ -234,8 +238,76 @@ def test_vm_release_complete_accepts_when_session_api_is_unavailable(client):
         "vm_name": "unity-pool-ubuntu-1-preview",
         "assistant_id": "1207",
         "binding_id": "binding-123",
+        "release_generation": None,
         "accepted": True,
         "reason": "session_api_unavailable",
+    }
+    complete_release.assert_called_once_with(
+        "unity-pool-ubuntu-1-preview",
+        "binding-123",
+    )
+    record_signal.assert_not_called()
+
+
+def test_vm_release_complete_skips_stale_release_generation(client):
+    vm = _make_vm(pool_role="releasing")
+    vm.labels.update(
+        {
+            "assistant-id": "1207",
+            "binding-id": "binding-123",
+        },
+    )
+    session = {
+        "status": {
+            "binding": {
+                "id": "binding-123",
+                "jobRef": {"name": "unity-job-1"},
+                "vmRef": {"name": "unity-pool-ubuntu-1-preview"},
+                "releaseRequestedAt": "2026-04-05T15:39:57Z",
+                "releaseGeneration": 2,
+            },
+        },
+    }
+
+    with (
+        patch(
+            "communication.infra.views.compute_v1.InstancesClient",
+        ) as mock_client_cls,
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=object(),
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=session,
+        ),
+        patch(
+            "communication.infra.views.complete_pool_vm_release",
+            return_value={
+                "vm_name": "unity-pool-ubuntu-1-preview",
+                "binding_id": "binding-123",
+                "pool_role": "idle",
+            },
+        ) as complete_release,
+        patch(
+            "communication.infra.views.record_assistant_session_signal",
+        ) as record_signal,
+    ):
+        mock_client_cls.return_value.get.return_value = vm
+        resp = client.post(
+            "/infra/vm/release-complete",
+            json={"binding_id": "binding-123", "release_generation": 1},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "vm_name": "unity-pool-ubuntu-1-preview",
+        "assistant_id": "1207",
+        "binding_id": "binding-123",
+        "release_generation": 1,
+        "current_release_generation": 2,
+        "accepted": True,
+        "reason": "release_generation_changed",
     }
     complete_release.assert_called_once_with(
         "unity-pool-ubuntu-1-preview",
