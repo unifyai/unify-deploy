@@ -24,6 +24,15 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _mock_idle_pool_replenishment():
+    with patch(
+        "communication.infra.views.schedule_idle_job_pool_replenishment",
+        return_value=True,
+    ):
+        yield
+
+
 def _start_job_payload(**overrides) -> dict[str, str]:
     payload = {
         "api_key": "test-api-key",
@@ -96,6 +105,18 @@ def _existing_session(
     }
 
 
+def _control_plane_ready_patch(
+    *,
+    ready: bool = True,
+    reason: str | None = None,
+):
+    return patch(
+        "communication.infra.views._assistant_session_control_plane_ready",
+        new_callable=AsyncMock,
+        return_value=(ready, reason),
+    )
+
+
 class _FakeCoordApi:
     def __init__(self):
         self._leases: dict[tuple[str, str], SimpleNamespace] = {}
@@ -166,6 +187,7 @@ def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pendin
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
@@ -242,6 +264,7 @@ def test_start_job_reused_pending_session_picks_up_changed_desktop_mode(client):
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
@@ -292,6 +315,7 @@ def test_start_job_reuses_inflight_restart_activation_for_terminal_session(clien
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
@@ -345,6 +369,7 @@ def test_start_job_reuses_activation_while_release_is_draining(client):
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
@@ -391,6 +416,7 @@ def test_start_job_mints_new_activation_after_released_session_cleanup(client):
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
@@ -454,6 +480,7 @@ def test_start_job_adopts_winner_activation_after_first_create_conflict(client):
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
@@ -508,6 +535,7 @@ def test_start_job_waits_for_inflight_start_lease_and_reuses_winner_activation(c
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), coord_api),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
@@ -596,6 +624,44 @@ def test_start_job_stale_request_cannot_release_newer_start_lease():
     assert exc_info.value.status == 404
 
 
+def test_start_job_returns_503_when_new_activation_needs_control_plane(client):
+    core_api = MagicMock()
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        _control_plane_ready_patch(
+            ready=False,
+            reason="assistant_session_controller_missing",
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=None,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+        ) as mock_create_or_update_bootstrap_secret,
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+        ) as mock_create_or_update_assistant_session,
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 503
+    assert (
+        "control plane is unavailable for new activations" in response.json()["detail"]
+    )
+    mock_create_or_update_bootstrap_secret.assert_not_called()
+    mock_create_or_update_assistant_session.assert_not_called()
+
+
 def test_start_job_rejects_reuse_of_terminating_session(client):
     core_api = MagicMock()
     custom_api = MagicMock()
@@ -608,6 +674,7 @@ def test_start_job_rejects_reuse_of_terminating_session(client):
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,
@@ -648,6 +715,7 @@ def test_start_job_returns_conflict_when_session_terminates_mid_write(client):
             new_callable=AsyncMock,
             return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
         ),
+        _control_plane_ready_patch(),
         patch(
             "communication.infra.views.get_custom_objects_api",
             return_value=custom_api,

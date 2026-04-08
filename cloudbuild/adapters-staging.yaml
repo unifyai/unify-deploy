@@ -34,6 +34,21 @@ steps:
   args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest']
   waitFor: ['build-image']
 
+  # Pause legacy infra schedulers before updating the unified maintenance job
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'pause-legacy-infra-schedulers'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    for job in jobs-create-staging jobs-cleanup-staging stale-jobs-expire-staging \
+               pending-startups-staging pending-vm-assignments-staging; do
+      gcloud scheduler jobs pause "$job" --location="${_REGION}" 2>/dev/null \
+        && echo "Paused legacy scheduler: $job" \
+        || echo "Legacy scheduler $job already paused, removed, or not found"
+    done
+  waitFor: ['push-sha-tag']
+
   # Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'deploy'
@@ -54,7 +69,7 @@ steps:
   - '--timeout=300'
   - '--cpu-boost'
   - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=staging,PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc'
-  waitFor: ['push-sha-tag']
+  waitFor: ['push-sha-tag', 'pause-legacy-infra-schedulers']
 
   # Update Cloud Scheduler: Email Watches Staging
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
@@ -141,7 +156,7 @@ steps:
         && echo "Deleted legacy topic: $topic" \
         || echo "Legacy topic $topic already removed or not found"
     done
-  waitFor: ['deploy']
+  waitFor: ['remove-legacy-infra-schedulers']
 
   # Update Cloud Scheduler: Microsoft Token Refresh Staging
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'

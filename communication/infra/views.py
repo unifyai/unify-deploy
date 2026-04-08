@@ -13,6 +13,7 @@ import logging
 import os
 import time
 import uuid
+from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
 from .helpers import (
     acquire_named_lease,
@@ -131,6 +132,10 @@ START_JOB_LEASE_DURATION_SECONDS = SETTINGS.lease_duration_seconds
 START_JOB_LEASE_WAIT_TIMEOUT_SECONDS = START_JOB_LEASE_DURATION_SECONDS + 5
 START_JOB_LEASE_POLL_INTERVAL_SECONDS = 0.2
 START_JOB_TERMINATING_SESSION_WAIT_TIMEOUT_SECONDS = 5.0
+ASSISTANT_SESSION_CONTROLLER_DEPLOYMENTS = {
+    "preview": "assistant-session-controller-preview",
+    "staging": "assistant-session-controller-staging",
+}
 
 
 def _service_account_credentials() -> Credentials:
@@ -280,6 +285,75 @@ async def _load_startable_assistant_session(
             assistant_id,
         )
     return session
+
+
+def _safe_int(value: object) -> int:
+    """Best-effort integer coercion for Kubernetes status fields."""
+
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _assistant_session_controller_deployment_name() -> str:
+    """Return the controller Deployment name for the current environment."""
+
+    deploy_env = str(SETTINGS.deploy_env or "").lower()
+    return ASSISTANT_SESSION_CONTROLLER_DEPLOYMENTS.get(
+        deploy_env,
+        "assistant-session-controller",
+    )
+
+
+async def _assistant_session_control_plane_ready(
+    batch_api,
+    custom_api,
+) -> tuple[bool, str | None]:
+    """Return whether new AssistantSession activations can safely proceed."""
+
+    if custom_api is None or batch_api is None:
+        return False, "assistant_session_api_unavailable"
+
+    try:
+        await asyncio.to_thread(
+            custom_api.list_namespaced_custom_object,
+            group=SETTINGS.assistant_session_group,
+            version=SETTINGS.assistant_session_version,
+            namespace=SETTINGS.default_namespace,
+            plural=SETTINGS.assistant_session_plural,
+            limit=1,
+        )
+    except ApiException as exc:
+        return False, f"assistant_session_api_error_{exc.status}"
+
+    apps_api = k8s_client.AppsV1Api(batch_api.api_client)
+    controller_name = _assistant_session_controller_deployment_name()
+    try:
+        deployment = await asyncio.to_thread(
+            apps_api.read_namespaced_deployment,
+            name=controller_name,
+            namespace=SETTINGS.default_namespace,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return False, "assistant_session_controller_missing"
+        raise
+
+    available_replicas = _safe_int(
+        getattr(getattr(deployment, "status", None), "available_replicas", 0),
+    )
+    if available_replicas < 1:
+        return False, "assistant_session_controller_unavailable"
+    return True, None
 
 
 def _build_startup_payload(
@@ -820,14 +894,8 @@ async def start_job(
     )
 
     try:
-        _, core_api, _, coord_api = await _get_k8s_clients()
+        batch_api, core_api, _, coord_api = await _get_k8s_clients()
         custom_api = await asyncio.to_thread(get_custom_objects_api)
-        if custom_api is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to initialize AssistantSession API client",
-            )
-
         startup_payload = _build_startup_payload(
             api_key=api_key,
             medium=medium,
@@ -873,6 +941,20 @@ async def start_job(
                 assistant_id=assistant_id,
                 session_name=session_name,
                 wait_ms=start_lease_wait_ms,
+            )
+        control_plane_ready, control_plane_reason = (
+            await _assistant_session_control_plane_ready(
+                batch_api,
+                custom_api,
+            )
+        )
+        if not control_plane_ready:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "AssistantSession control plane is unavailable for new "
+                    f"activations ({control_plane_reason})"
+                ),
             )
         existing_session = await _load_startable_assistant_session(
             custom_api,
@@ -2235,6 +2317,8 @@ async def release_pool_endpoint(request: PoolReleaseRequest):
                 partial(replenish_pool, result.get("vm_type", "ubuntu")),
             )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to release pool VM: {e}")
         raise HTTPException(status_code=500, detail=str(e))

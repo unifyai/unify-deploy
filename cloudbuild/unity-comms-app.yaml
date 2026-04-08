@@ -54,6 +54,21 @@ steps:
   waitFor: ['build-assistant-session-controller']
 
   # Deploy to Cloud Run
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-assistant-session-controller'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    gcloud container clusters get-credentials unity --region ${_REGION} --project ${PROJECT_ID}
+    kubectl apply -f k8s/assistant-session-controller/crd.yaml
+    kubectl wait --for=condition=Established crd/assistantsessions.infra.unify.ai --timeout=120s
+    sed "s|image:.*assistant-session-controller:latest|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller:${SHORT_SHA}|" \
+      k8s/assistant-session-controller/deployment.yaml | kubectl apply -f -
+    kubectl rollout status deployment/assistant-session-controller -n production --timeout=300s
+  waitFor: ['push-assistant-session-controller']
+
+  # Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
   - run
@@ -69,19 +84,7 @@ steps:
   - '--quiet'
   id: Deploy Unity Comms App
   entrypoint: gcloud
-  waitFor: ['push-sha-tag']
-
-- name: 'gcr.io/cloud-builders/kubectl'
-  id: 'deploy-assistant-session-controller'
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    gcloud container clusters get-credentials unity --region ${_REGION} --project ${PROJECT_ID}
-    kubectl apply -f k8s/assistant-session-controller/crd.yaml
-    sed "s|image:.*assistant-session-controller:latest|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller:${SHORT_SHA}|" \
-      k8s/assistant-session-controller/deployment.yaml | kubectl apply -f -
-  waitFor: ['push-assistant-session-controller', 'Deploy Unity Comms App']
+  waitFor: ['push-sha-tag', 'deploy-assistant-session-controller']
 
 # Options
 options:
