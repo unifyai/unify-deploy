@@ -95,3 +95,11 @@ include-package-data = true
 
 [tool.uv.sources]
 unillm = { path = "../unillm", editable = true }
+
+[tool.pytest.ini_options]
+env = [
+    "GRPC_ENABLE_FORK_SUPPORT=0",
+    "GRPC_VERBOSITY=ERROR",
+    "GRPC_POLL_STRATEGY=poll",
+]
+
