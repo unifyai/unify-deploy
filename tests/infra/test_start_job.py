@@ -430,3 +430,69 @@ def test_start_job_adopts_winner_activation_after_first_create_conflict(client):
     assert len(create_specs) == 2
     assert create_specs[0]["activationId"] == "activation-loser"
     assert create_specs[1]["activationId"] == "activation-winner"
+
+
+def test_start_job_waits_for_inflight_start_lease_and_reuses_winner_activation(client):
+    core_api = MagicMock()
+    coord_api = MagicMock()
+    custom_api = MagicMock()
+    winner_session = _existing_session(
+        phase="PendingJob",
+        activation_id="activation-winner",
+        observed_activation_id="activation-winner",
+    )
+    lease_attempts = iter([False, True])
+
+    def _create_or_update(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": winner_session["metadata"],
+            "spec": spec,
+            "status": winner_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), coord_api),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.acquire_named_lease",
+            side_effect=lambda *_args, **_kwargs: next(lease_attempts),
+        ) as mock_acquire_named_lease,
+        patch(
+            "communication.infra.views.release_named_lease",
+        ) as mock_release_named_lease,
+        patch(
+            "communication.infra.views.asyncio.sleep",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=winner_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value="assistant-session-bootstrap-assistant-123",
+        ),
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_create_or_update,
+        ) as mock_create_or_update_assistant_session,
+    ):
+        response = client.post("/infra/job/start", data=_start_job_payload())
+
+    assert response.status_code == 200
+    assert response.json()["activation_id"] == "activation-winner"
+    assert mock_acquire_named_lease.call_count == 2
+    refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
+    assert refreshed_spec["activationId"] == "activation-winner"
+    mock_release_named_lease.assert_called_once_with(
+        coord_api,
+        "assistant-start-assistant-123",
+        SETTINGS.default_namespace,
+    )

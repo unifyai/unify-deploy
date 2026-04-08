@@ -15,11 +15,13 @@ import time
 import uuid
 from kubernetes.client.rest import ApiException
 from .helpers import (
+    acquire_named_lease,
     setup_kubernetes_client,
     create_unity_job,
     delete_job,
     get_job_logs,
     patch_job_labels,
+    release_named_lease,
     suspend_job,
 )
 from .assistant_sessions import (
@@ -120,6 +122,9 @@ POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
     max_workers=4,
     thread_name_prefix="pool-maint",
 )
+START_JOB_LEASE_DURATION_SECONDS = SETTINGS.lease_duration_seconds
+START_JOB_LEASE_WAIT_TIMEOUT_SECONDS = START_JOB_LEASE_DURATION_SECONDS + 5
+START_JOB_LEASE_POLL_INTERVAL_SECONDS = 0.2
 
 
 def _service_account_credentials() -> Credentials:
@@ -203,6 +208,45 @@ def _get_pubsub_clients() -> (
         _pubsub_publisher = pubsub_v1.PublisherClient(credentials=creds)
         _pubsub_subscriber = pubsub_v1.SubscriberClient(credentials=creds)
     return _pubsub_publisher, _pubsub_subscriber
+
+
+def _start_job_lease_name(assistant_id: str) -> str:
+    """Return the Lease name used to serialize `/infra/job/start` writers."""
+    return f"assistant-start-{str(assistant_id).lower().replace('_', '-')}"
+
+
+async def _acquire_start_job_lease(
+    coord_api,
+    assistant_id: str,
+    namespace: str,
+) -> tuple[str, int]:
+    """Acquire the per-assistant start-intent lease.
+
+    Duplicate `/infra/job/start` calls must serialize before minting or
+    returning an activation, otherwise concurrent writers can each return a
+    different activation while only one `AssistantSession` survives.
+    """
+    lease_name = _start_job_lease_name(assistant_id)
+    holder_id = f"job-start-{assistant_id}-{uuid.uuid4().hex[:8]}"
+    wait_started = time.monotonic()
+    deadline = wait_started + START_JOB_LEASE_WAIT_TIMEOUT_SECONDS
+
+    while True:
+        acquired = await asyncio.to_thread(
+            acquire_named_lease,
+            coord_api,
+            lease_name,
+            namespace,
+            holder_id,
+            START_JOB_LEASE_DURATION_SECONDS,
+        )
+        if acquired:
+            return lease_name, int((time.monotonic() - wait_started) * 1000)
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Timed out waiting for start lease for assistant {assistant_id}",
+            )
+        await asyncio.sleep(START_JOB_LEASE_POLL_INTERVAL_SECONDS)
 
 
 def _build_startup_payload(
@@ -732,6 +776,8 @@ async def start_job(
     reused_active_session = False
     restart_in_progress = False
     idle_pool_replenish_scheduled = False
+    coord_api = None
+    start_lease_name = None
     causal_token = push_causal_context(
         build_causal_context(
             caller="views.job_start",
@@ -740,7 +786,7 @@ async def start_job(
     )
 
     try:
-        _, core_api, _, _ = await _get_k8s_clients()
+        _, core_api, _, coord_api = await _get_k8s_clients()
         custom_api = await asyncio.to_thread(get_custom_objects_api)
         if custom_api is None:
             raise HTTPException(
@@ -778,6 +824,18 @@ async def start_job(
             team_ids=team_ids,
             org_id=org_id,
         )
+        start_lease_name, start_lease_wait_ms = await _acquire_start_job_lease(
+            coord_api,
+            assistant_id,
+            SETTINGS.default_namespace,
+        )
+        if start_lease_wait_ms >= int(START_JOB_LEASE_POLL_INTERVAL_SECONDS * 1000):
+            emit_observability_event(
+                "infra.job_start.serialized",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                wait_ms=start_lease_wait_ms,
+            )
         existing_session = await asyncio.to_thread(
             get_assistant_session,
             custom_api,
@@ -967,6 +1025,13 @@ async def start_job(
             detail=f"Failed to ensure AssistantSession: {str(e)}",
         )
     finally:
+        if start_lease_name and coord_api is not None:
+            await asyncio.to_thread(
+                release_named_lease,
+                coord_api,
+                start_lease_name,
+                SETTINGS.default_namespace,
+            )
         pop_causal_context(causal_token)
 
 

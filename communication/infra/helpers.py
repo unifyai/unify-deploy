@@ -535,19 +535,23 @@ def _sanitize_for_k8s(value: str) -> str:
     return str(value).lower().replace("_", "-")
 
 
-def acquire_assignment_lease(
+def _lease_name(prefix: str, lease_id: str) -> str:
+    """Build a stable Kubernetes Lease name for a logical lock scope."""
+    return f"{prefix}-{_sanitize_for_k8s(lease_id)}"
+
+
+def acquire_named_lease(
     coord_api,
-    assistant_id: str,
+    lease_name: str,
     namespace: str,
     holder_id: str,
     duration: int = SETTINGS.lease_duration_seconds,
 ) -> bool:
-    """Atomically acquire a Lease for assigning a container to an assistant.
+    """Atomically acquire a named Lease in Kubernetes.
 
     Returns True if the Lease was acquired, False if another caller holds it.
     Stale Leases (older than *duration* seconds) are cleaned up automatically.
     """
-    lease_name = f"assistant-claim-{_sanitize_for_k8s(assistant_id)}"
     now = datetime.now(timezone.utc)
 
     lease_body = k8s_client.V1Lease(
@@ -562,7 +566,7 @@ def acquire_assignment_lease(
 
     try:
         coord_api.create_namespaced_lease(namespace=namespace, body=lease_body)
-        logger.info("Acquired assignment lease %s (holder=%s)", lease_name, holder_id)
+        logger.info("Acquired lease %s (holder=%s)", lease_name, holder_id)
         return True
     except ApiException as e:
         if e.status != 409:
@@ -592,16 +596,49 @@ def acquire_assignment_lease(
     return False
 
 
+def acquire_assignment_lease(
+    coord_api,
+    assistant_id: str,
+    namespace: str,
+    holder_id: str,
+    duration: int = SETTINGS.lease_duration_seconds,
+) -> bool:
+    """Atomically acquire a Lease for assigning a container to an assistant.
+
+    Returns True if the Lease was acquired, False if another caller holds it.
+    Stale Leases (older than *duration* seconds) are cleaned up automatically.
+    """
+    return acquire_named_lease(
+        coord_api=coord_api,
+        lease_name=_lease_name("assistant-claim", assistant_id),
+        namespace=namespace,
+        holder_id=holder_id,
+        duration=duration,
+    )
+
+
+def release_named_lease(
+    coord_api,
+    lease_name: str,
+    namespace: str,
+) -> None:
+    """Delete a named Lease. Ignores 404 (already released)."""
+    try:
+        coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
+        logger.info("Released lease %s", lease_name)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+
+
 def release_assignment_lease(
     coord_api,
     assistant_id: str,
     namespace: str,
 ) -> None:
     """Delete the assignment Lease. Ignores 404 (already released)."""
-    lease_name = f"assistant-claim-{_sanitize_for_k8s(assistant_id)}"
-    try:
-        coord_api.delete_namespaced_lease(name=lease_name, namespace=namespace)
-        logger.info("Released assignment lease %s", lease_name)
-    except ApiException as e:
-        if e.status != 404:
-            raise
+    release_named_lease(
+        coord_api=coord_api,
+        lease_name=_lease_name("assistant-claim", assistant_id),
+        namespace=namespace,
+    )
