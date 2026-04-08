@@ -1869,7 +1869,10 @@ def test_reconcile_uses_windows_vm_readiness_timeout(monkeypatch):
     assert patch_status.call_args.kwargs["phase"] == "PendingJob"
     assert patch_status.call_args.kwargs["binding"]["id"] != "binding-1"
     assert patch_status.call_args.kwargs["vm_retries"] == 1
-    assert "90s" in patch_status.call_args.kwargs["last_error"]
+    assert (
+        f"{int(controller.WINDOWS_VM_READINESS_DEADLINE_SECONDS)}s"
+        in patch_status.call_args.kwargs["last_error"]
+    )
 
 
 def test_reconcile_transient_desktop_liveness_failure_keeps_binding_active(

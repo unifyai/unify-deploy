@@ -45,7 +45,7 @@ class ControllerConfig:
             windows_vm_readiness_deadline_seconds=float(
                 os.environ.get(
                     "WINDOWS_VM_READINESS_DEADLINE_SECONDS",
-                    "90",
+                    "180",
                 ),
             ),
             max_vm_readiness_retries=int(
