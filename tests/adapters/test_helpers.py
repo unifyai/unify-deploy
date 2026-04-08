@@ -9,9 +9,11 @@ These tests verify:
 
 from datetime import datetime, timedelta, timezone
 import json
+import requests
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from adapters.helpers import (
+    START_INTENT_DISPATCH_TIMEOUT_SECONDS,
     build_webhook_context,
     cleanup_idle_pool,
     expire_all_stale_jobs,
@@ -368,15 +370,41 @@ def test_start_unity_job_defaults_missing_assistant_whatsapp(mock_post):
     assert data["assistant_whatsapp_number"] == ""
 
 
+@patch("adapters.helpers.logger.info")
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_timeout_is_best_effort_dispatch_only(
+    mock_post,
+    mock_logger_info,
+):
+    """Timeouts intentionally preserve webhook latency, not durable acceptance."""
+
+    mock_post.side_effect = requests.exceptions.Timeout
+
+    assistant_data = _create_mock_assistant_data()
+    start_unity_job(assistant_data, "phone")
+
+    assert (
+        mock_post.call_args.kwargs["timeout"] == START_INTENT_DISPATCH_TIMEOUT_SECONDS
+    )
+    mock_logger_info.assert_called_once_with(
+        "Activation request client timeout after %sms for assistant %s; "
+        "adapters intentionally stop waiting here to preserve webhook "
+        "latency. This does not confirm comms accepted the request.",
+        int(START_INTENT_DISPATCH_TIMEOUT_SECONDS * 1000),
+        "12345",
+    )
+
+
 # --- build_webhook_context local assistant tests ---
 
 
 @patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
+@patch("adapters.helpers._WEBHOOK_BG_POOL.submit")
 @patch("adapters.helpers._resolve_contacts", return_value=([], True))
 def test_build_webhook_context_skips_job_start_for_local_assistant(
     _mock_resolve,
-    mock_start,
+    mock_submit,
     _mock_replenish,
 ):
     """When is_local=True in assistant data, job start should be skipped."""
@@ -390,23 +418,24 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
         sender="whatsapp:+1234567890",
         assistant_data=assistant_data,
     )
-    mock_start.assert_not_called()
+    mock_submit.assert_not_called()
     assert ctx["is_valid_contact"] is True
+    assert ctx["job_started"] is False
+    assert ctx["is_job_running"] is False
 
 
 @patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
+@patch("adapters.helpers._WEBHOOK_BG_POOL.submit")
 @patch("adapters.helpers._resolve_contacts", return_value=([], True))
 def test_build_webhook_context_starts_job_for_non_local_assistant(
     _mock_resolve,
-    mock_start,
+    mock_submit,
     _mock_replenish,
 ):
-    """When is_local=False, job start should proceed normally.
+    """Legacy flags only mean the async dispatch was scheduled.
 
-    The adapter unconditionally calls start_unity_job (which hits
-    /infra/job/start). Deduplication is handled atomically by the
-    comms app via K8s Leases, not by the adapter.
+    The adapter schedules ``start_unity_job`` on the webhook pool, then returns
+    legacy compatibility flags immediately. Comms acceptance remains async.
     """
     assistant_data = _create_mock_assistant_data()
     ctx = build_webhook_context(
@@ -415,7 +444,9 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
         sender="whatsapp:+1234567890",
         assistant_data=assistant_data,
     )
-    mock_start.assert_called_once()
+    mock_submit.assert_called_once_with(start_unity_job, assistant_data, "whatsapp")
+    assert ctx["job_started"] is True
+    assert ctx["is_job_running"] is True
 
 
 # Wakeup dedup is now handled atomically by /infra/job/start.

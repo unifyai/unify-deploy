@@ -259,8 +259,10 @@ async def twilio_call_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # conference name and SIP URI
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -474,8 +476,9 @@ async def livekit_recording_complete(request: Request):
             ensure_job=True,
         )
         logger.info(
-            f"[Recording] Assistant {assistant_id} job running: "
-            f"{context['is_job_running']}",
+            "[Recording] Activation intent scheduled "
+            "(legacy is_job_running flag): %s",
+            context["is_job_running"],
         )
     except Exception as e:
         logger.error(
@@ -556,8 +559,10 @@ async def twilio_sms_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # set up response
     resp_user = MessagingResponse()
@@ -1479,8 +1484,10 @@ async def unify_message_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
@@ -1648,8 +1655,10 @@ async def unify_meet_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
@@ -1734,8 +1743,10 @@ async def unity_system_event_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
@@ -1829,8 +1840,10 @@ async def unity_pre_hire_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
@@ -1873,17 +1886,19 @@ async def unity_pre_hire_webhook(request: Request):
 async def assistant_wakeup_webhook(request: Request):
     """Accept a wakeup request and dispatch async activation intent.
 
-    A ``200`` here means adapters accepted the wakeup webhook and submitted the
-    downstream ``/infra/job/start`` convergence path. It does not mean the
-    AssistantSession already exists or that the runtime is ready.
+    A ``200`` here means adapters accepted the wakeup webhook and scheduled the
+    best-effort async ``/infra/job/start`` dispatch path. It does not mean
+    adapters observed a comms 200/202, that an AssistantSession exists, or that
+    the runtime is ready.
     """
     logger.info("assistant_wakeup_webhook function started")
     form_data = await request.form()
     assistant_id = form_data.get("assistant_id")
     logger.info(f"Assistant {assistant_id} woke up")
 
-    # Build shared webhook context and, when needed, hand off activation intent
-    # to comms. Runtime convergence remains asynchronous after this returns.
+    # Build shared webhook context and, when needed, schedule best-effort async
+    # dispatch of activation intent to comms. Runtime convergence remains
+    # asynchronous after this returns.
     await asyncio.to_thread(
         build_webhook_context,
         channel="wakeup",
@@ -1903,8 +1918,9 @@ async def assistant_update_webhook(request: Request):
     Publish an assistant update and dispatch activation intent if needed.
 
     The returned ``200`` only confirms adapters accepted the update request and
-    submitted the legacy startup path. AssistantSession creation and runtime
-    readiness are still asynchronous downstream.
+    scheduled the best-effort async startup dispatch path. It does not mean
+    adapters observed a comms 200/202, that an AssistantSession exists, or that
+    runtime is ready.
     """
     logger.info("assistant_update_webhook function started")
 
@@ -1930,7 +1946,8 @@ async def assistant_update_webhook(request: Request):
             context["job_started"],
         )
 
-        # Job is running, publish to assistant topic
+        # Publish the update after scheduling activation intent. Runtime
+        # readiness remains asynchronous downstream.
         pubsub_client = get_pubsub_client()
         topic_name = SETTINGS.assistant_topic(assistant_id)
         topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
@@ -2052,8 +2069,10 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             )
             return Response(content=error_message, status_code=500)
 
-        running = context["is_job_running"]
-        logger.info(f"Job running: {running}")
+        logger.info(
+            "Activation intent scheduled (legacy is_job_running flag): %s",
+            context["is_job_running"],
+        )
 
         logger.info(
             f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",

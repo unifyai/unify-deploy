@@ -12,6 +12,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 NO_DESKTOP_MODE = "none"
+# Adapters intentionally cap start-intent waits at the comms edge so webhook
+# handlers can return quickly. This is a best-effort handoff, not a durable
+# acceptance boundary.
+START_INTENT_DISPATCH_TIMEOUT_SECONDS = 0.1
 
 from common.metrics import (
     ORCHESTRA_GET_ASSISTANT_DURATION,
@@ -700,13 +704,14 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     }
 
 
-def start_unity_job(assistant: dict, medium: str):
-    """Submit runtime activation intent to the comms convergence path.
+def start_unity_job(assistant: dict, medium: str) -> None:
+    """Best-effort low-latency dispatch of activation intent to comms.
 
-    This adapter call is intentionally latency-biased. Success or timeout here
-    only means the request reached the comms edge (or was dispatched
-    fire-and-forget); AssistantSession creation and runtime convergence continue
-    asynchronously inside comms.
+    Adapters intentionally stop waiting after a tiny edge timeout so webhook
+    and call handlers do not block on AssistantSession convergence. A timeout
+    here means "handoff outcome unknown"; callers must not treat this helper as
+    proof that comms accepted the request, created a session, or made runtime
+    ready.
     """
     api_key = assistant["api_key"]
     assistant_id = assistant["assistant_id"]
@@ -722,8 +727,8 @@ def start_unity_job(assistant: dict, medium: str):
 
     demo_id = assistant.get("demo_id", None)
 
-    # Submit activation intent to comms. Adapters returns quickly after handing
-    # off the request; durable AssistantSession convergence happens downstream.
+    # This is intentionally a fast edge handoff. Adapters does not wait for the
+    # full /infra/job/start convergence path to complete on the webhook thread.
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     try:
         response = requests.post(
@@ -769,7 +774,7 @@ def start_unity_job(assistant: dict, medium: str):
                 ),
                 "deploy_env": assistant.get("deploy_env", ""),
             },
-            timeout=0.1,
+            timeout=START_INTENT_DISPATCH_TIMEOUT_SECONDS,
         )
         if response.status_code == 200:
             logger.info(
@@ -786,10 +791,19 @@ def start_unity_job(assistant: dict, medium: str):
             )
     except requests.exceptions.Timeout:
         logger.info(
-            f"Activation request dispatched for assistant {assistant_id} (fire-and-forget)",
+            "Activation request client timeout after %sms for assistant %s; "
+            "adapters intentionally stop waiting here to preserve webhook "
+            "latency. This does not confirm comms accepted the request.",
+            int(START_INTENT_DISPATCH_TIMEOUT_SECONDS * 1000),
+            assistant_id,
         )
     except requests.RequestException as e:
-        logger.error(f"Activation request failed for assistant {assistant_id}: {e}")
+        logger.error(
+            "Activation request failed before adapters observed comms "
+            "acceptance for assistant %s: %s",
+            assistant_id,
+            e,
+        )
 
 
 class IdlePoolTarget:
@@ -1175,9 +1189,10 @@ def build_webhook_context(
         assistant_data: Optional pre-fetched assistant data to avoid duplicate Orchestra calls.
 
     Returns legacy ``job_started`` / ``is_job_running`` flags for northbound
-    callers. These booleans only mean adapters submitted activation intent to
-    ``/infra/job/start``; they do not prove that comms has already created or
-    observed an AssistantSession, nor that the runtime is ready.
+    callers. These booleans are compatibility shims: they only mean adapters
+    scheduled best-effort dispatch of ``/infra/job/start`` onto the webhook
+    background pool. They do not mean adapters observed a comms 200/202, that
+    an AssistantSession exists, or that the runtime is ready.
     """
     _t0 = time.perf_counter()
     _ctx_status = "error"
@@ -1240,10 +1255,10 @@ def build_webhook_context(
 
     # Submit activation intent if needed. The /infra/job/start endpoint handles
     # deduplication atomically and owns the durable convergence path plus the
-    # canonical idle-pool top-up. The legacy return flags below only report
-    # whether adapters dispatched that request, not whether runtime is ready.
-    job_started = False
-    is_running = False
+    # canonical idle-pool top-up. The legacy flags below only mean "dispatch
+    # was scheduled on the adapter side", not "runtime is running".
+    activation_intent_scheduled = False
+    legacy_is_job_running = False
     skip_auto_start = is_test_assistant or is_local_assistant
     should_start_job = (
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
@@ -1251,22 +1266,22 @@ def build_webhook_context(
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
         _WEBHOOK_BG_POOL.submit(start_unity_job, assistant_data, channel)
-        job_started = True
-        is_running = True
+        activation_intent_scheduled = True
+        legacy_is_job_running = True
 
     logger.info(f"is_valid_contact: {is_valid_contact}")
     _ctx_status = "error" if assistant_data.get("assistant_id") is None else "success"
     BUILD_WEBHOOK_CONTEXT_DURATION.labels(
         channel=channel,
-        job_started=str(job_started).lower(),
+        job_started=str(activation_intent_scheduled).lower(),
         status=_ctx_status,
     ).observe(time.perf_counter() - _t0)
     return {
         "assistant": assistant_data,
         "contacts": contacts,
         "is_valid_contact": is_valid_contact,
-        "is_job_running": is_running,
-        "job_started": job_started,
+        "is_job_running": legacy_is_job_running,
+        "job_started": activation_intent_scheduled,
     }
 
 
