@@ -1094,11 +1094,16 @@ def _read_assistant_session_http(assistant_id: str) -> dict | None:
     return resp.json()
 
 
-def _read_runtime_status_http(assistant_id: str) -> dict:
+def _read_runtime_status_http(
+    assistant_id: str,
+    *,
+    binding_id: str | None = None,
+) -> dict:
     """Read the deployed runtime-cleanup status for an assistant."""
     resp = requests.get(
         f"{COMMS_APP_URL}/infra/runtime/{assistant_id}",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        params={"binding_id": binding_id} if binding_id else None,
         timeout=20,
     )
     resp.raise_for_status()
@@ -1163,15 +1168,23 @@ def wait_for_assistant_runtime_stopped(
     assistant_id: str,
     *,
     batch_api=None,
+    binding_id: str | None = None,
     timeout: float = 240,
     interval: float = 5,
 ) -> dict | None:
-    """Wait until an assistant runtime is fully released by AssistantSession."""
+    """Wait until runtime cleanup completes for an assistant or binding."""
 
     session_name = f"assistant-session-{str(assistant_id).lower().replace('_', '-')}"
 
     def _settled():
-        runtime_status = _read_runtime_status_http(str(assistant_id))
+        runtime_status = _read_runtime_status_http(
+            str(assistant_id),
+            binding_id=binding_id,
+        )
+        if binding_id:
+            if not runtime_status.get("binding_runtime_cleanup_complete"):
+                return None
+            return runtime_status
         if not runtime_status.get("runtime_cleanup_complete"):
             return None
         if runtime_status.get("assistant_session_exists"):
@@ -1185,9 +1198,20 @@ def wait_for_assistant_runtime_stopped(
         _settled,
         timeout=timeout,
         interval=interval,
-        description=f"Assistant runtime {assistant_id} to reach Released with no bound resources",
+        description=(
+            f"Binding runtime {binding_id} for assistant {assistant_id} to finish cleanup"
+            if binding_id
+            else (
+                f"Assistant runtime {assistant_id} to reach Released with no bound "
+                "resources"
+            )
+        ),
         failure_snapshot=lambda: {
-            "runtime_status": _read_runtime_status_http(str(assistant_id)),
+            "runtime_status": _read_runtime_status_http(
+                str(assistant_id),
+                binding_id=binding_id,
+            ),
+            "binding_id": binding_id,
             "session": _read_assistant_session_http(str(assistant_id)),
             "assistant_jobs": (
                 []
@@ -1195,6 +1219,14 @@ def wait_for_assistant_runtime_stopped(
                 else [
                     job.metadata.name
                     for job in list_jobs_with_assistant_id(batch_api, str(assistant_id))
+                ]
+            ),
+            "binding_jobs": (
+                []
+                if batch_api is None or not binding_id
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_binding_id(batch_api, binding_id)
                 ]
             ),
             "session_jobs": (
@@ -1253,10 +1285,18 @@ def stop_assistant_runtime(
         print(message)
         return
 
+    stop_result = {}
+    try:
+        stop_result = resp.json()
+    except Exception:
+        stop_result = {}
+    target_binding_id = str(stop_result.get("binding_id") or "") or None
+
     try:
         wait_for_assistant_runtime_stopped(
             str(assistant_id),
             batch_api=batch_api,
+            binding_id=target_binding_id,
             timeout=timeout,
         )
     except Exception as exc:
@@ -1496,6 +1536,21 @@ def list_jobs_with_assistant_id(
     return [j for j in jobs.items if j.status.active and j.status.active > 0]
 
 
+def list_jobs_with_binding_id(
+    batch_api,
+    binding_id: str,
+    namespace: str = NAMESPACE,
+) -> list:
+    """List all active Jobs with a specific binding-id label."""
+
+    sanitized = binding_id.lower().replace("_", "-")
+    jobs = batch_api.list_namespaced_job(
+        namespace=namespace,
+        label_selector=f"app=unity,{ASSISTANT_SESSION_BINDING_LABEL}={sanitized}",
+    )
+    return [j for j in jobs.items if j.status.active and j.status.active > 0]
+
+
 def list_jobs_with_session_ref(
     batch_api,
     session_name: str,
@@ -1719,7 +1774,7 @@ TEST_ASSISTANT_FACTORY_FIRST_NAME = "InfraTest"
 TEST_ASSISTANT_FACTORY_ABOUT = (
     "Stress test assistant (auto-created by integration tests)"
 )
-TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS = 60
+TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS = 120
 TEST_ASSISTANT_CLEANUP_PARALLELISM = 6
 
 

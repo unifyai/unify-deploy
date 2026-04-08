@@ -95,6 +95,17 @@ spec:
               signals:
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
+              releasedBindings:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    bindingId:
+                      type: string
+                    releaseRequestedAt:
+                      type: string
+                    releaseCompletedAt:
+                      type: string
               binding:
                 type: object
                 properties:

@@ -5,6 +5,7 @@ from communication.infra.assistant_sessions import (
     binding_vm_assignment,
     binding_vm_ref,
     get_phase,
+    released_binding,
     session_binding,
     session_signal,
 )
@@ -191,6 +192,7 @@ def test_component_release_flow_reaches_released(monkeypatch):
 
     active = _reach_active(harness)
     assert get_phase(active) == "Active"
+    old_binding_id = session_binding(active)["id"]
 
     harness.session["spec"]["desiredState"] = "Stopped"
     releasing = harness.reconcile()
@@ -212,6 +214,7 @@ def test_component_release_flow_reaches_released(monkeypatch):
     assert get_phase(released) == "Released"
     assert released["status"]["binding"] is None
     assert harness.runtime_vm_present is False
+    assert released_binding(released, old_binding_id)["releaseCompletedAt"]
 
 
 def test_component_activation_replacement_waits_for_release_then_mints_new_binding(
@@ -246,6 +249,7 @@ def test_component_activation_replacement_waits_for_release_then_mints_new_bindi
     assert restarted["status"]["observedActivationId"] == "act-2"
     assert session_binding(restarted)["id"] != old_binding_id
     assert restarted["status"]["lastError"] == ""
+    assert released_binding(restarted, old_binding_id)["releaseCompletedAt"]
 
 
 def test_component_job_missing_restarts_after_release_cleanup(monkeypatch):

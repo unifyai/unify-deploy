@@ -30,8 +30,11 @@ from communication.infra.assistant_sessions import (
     merge_conditions,
     patch_assistant_session_status,
     persist_binding_vm_assignment_result,
+    record_released_binding,
     record_assistant_session_signal,
+    released_binding,
     session_signal,
+    session_released_bindings,
     vm_refs_match,
 )
 from communication.infra.observability import bind_causal_context, build_causal_context
@@ -361,6 +364,57 @@ def test_record_assistant_session_signal_merges_into_status(monkeypatch):
     assert session_signal(updated, "desktopReady")["hostname"].startswith("unity-pool")
 
 
+def test_record_released_binding_upserts_release_ledger(monkeypatch):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "status": {
+            "phase": "PendingJob",
+            "binding": build_binding(binding_id="binding-2"),
+            "releasedBindings": [
+                {
+                    "bindingId": "binding-1",
+                    "releaseRequestedAt": "2026-04-08T00:00:00+00:00",
+                    "releaseCompletedAt": "2026-04-08T00:01:00+00:00",
+                },
+            ],
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = str(
+                int(session["metadata"]["resourceVersion"]) + 1,
+            )
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    updated = record_released_binding(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        binding_id="binding-2",
+        release_requested_at="2026-04-08T00:02:00+00:00",
+        release_completed_at="2026-04-08T00:03:00+00:00",
+        source="test",
+    )
+
+    assert len(session_released_bindings(updated)) == 2
+    assert released_binding(updated, "binding-2") == {
+        "bindingId": "binding-2",
+        "releaseRequestedAt": "2026-04-08T00:02:00+00:00",
+        "releaseCompletedAt": "2026-04-08T00:03:00+00:00",
+    }
+
+
 def test_claim_binding_vm_assignment_attempt_marks_binding_in_progress(monkeypatch):
     session = {
         "metadata": {"resourceVersion": "1"},
@@ -683,6 +737,7 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
         "vmRetries",
         "desktopProbeFailures",
         "signals",
+        "releasedBindings",
     }
     assert expected_fields.issubset(status_properties.keys())
     binding_properties = status_properties["binding"]["properties"]
@@ -695,6 +750,12 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
         "containerBootstrapStartedAt",
         "guestHandshakeStartedAt",
     }.issubset(binding_properties.keys())
+    released_binding_properties = status_properties["releasedBindings"]["items"][
+        "properties"
+    ]
+    assert {"bindingId", "releaseRequestedAt", "releaseCompletedAt"}.issubset(
+        released_binding_properties.keys(),
+    )
 
 
 def test_delete_assistant_session_treats_missing_session_as_absent():

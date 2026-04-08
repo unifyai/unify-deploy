@@ -43,6 +43,7 @@ SIGNAL_VM_RELEASE_COMPLETE = "vmReleaseComplete"
 _STATUS_UNSET = object()
 _MAX_CAS_RETRIES = 3
 _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS = frozenset({"requestedAt"})
+_RELEASED_BINDINGS_HISTORY_LIMIT = 20
 
 
 def _sanitize_for_k8s(value: str) -> str:
@@ -158,6 +159,66 @@ def session_signal(
 
     value = session_signals(session).get(signal_name)
     return value if isinstance(value, dict) else {}
+
+
+def session_released_bindings(session: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return the binding-scoped release-completion ledger from status."""
+
+    status = (session or {}).get("status", {})
+    released_bindings = status.get("releasedBindings")
+    if not isinstance(released_bindings, list):
+        return []
+    return [entry for entry in released_bindings if isinstance(entry, dict)]
+
+
+def released_binding(
+    session: dict[str, Any] | None,
+    target_binding_id: str,
+) -> dict[str, Any]:
+    """Return one persisted released-binding entry by binding id."""
+
+    target = str(target_binding_id or "")
+    if not target:
+        return {}
+    for entry in session_released_bindings(session):
+        if str(entry.get("bindingId", "") or "") == target:
+            return entry
+    return {}
+
+
+def build_released_binding(
+    *,
+    binding_id: str,
+    release_completed_at: str | None = None,
+    release_requested_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the canonical released-binding ledger entry."""
+
+    fields = {
+        "bindingId": binding_id,
+        "releaseRequestedAt": release_requested_at,
+        "releaseCompletedAt": release_completed_at
+        or datetime.now(timezone.utc).isoformat(),
+    }
+    return {key: value for key, value in fields.items() if value not in (None, "")}
+
+
+def _upsert_released_binding_entry(
+    released_bindings: list[dict[str, Any]],
+    entry: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Append or replace one released-binding entry, keeping bounded history."""
+
+    target_binding_id = str(entry.get("bindingId", "") or "")
+    if not target_binding_id:
+        return deepcopy(released_bindings)
+    merged = [
+        deepcopy(existing)
+        for existing in released_bindings
+        if str(existing.get("bindingId", "") or "") != target_binding_id
+    ]
+    merged.append(deepcopy(entry))
+    return merged[-_RELEASED_BINDINGS_HISTORY_LIMIT:]
 
 
 def build_binding_signal(
@@ -943,12 +1004,20 @@ def patch_assistant_session_status(
     vm_retries: int | None | object = _STATUS_UNSET,
     desktop_probe_failures: int | None | object = _STATUS_UNSET,
     signals: dict[str, Any] | None | object = _STATUS_UNSET,
+    released_bindings: list[dict[str, Any]] | object = _STATUS_UNSET,
     expected_binding_id: str | object = _STATUS_UNSET,
     require_desired_state: str | object = _STATUS_UNSET,
     binding_mutator: (
         Callable[
             [dict[str, Any], dict[str, Any]],
             dict[str, Any] | None | object,
+        ]
+        | None
+    ) = None,
+    released_bindings_mutator: (
+        Callable[
+            [dict[str, Any], list[dict[str, Any]]],
+            list[dict[str, Any]] | object,
         ]
         | None
     ) = None,
@@ -1004,6 +1073,16 @@ def patch_assistant_session_status(
             next_status["desktopProbeFailures"] = desktop_probe_failures
         if signals is not _STATUS_UNSET:
             next_status["signals"] = deepcopy(signals)
+        if released_bindings_mutator is not None:
+            next_released_bindings = released_bindings_mutator(
+                current,
+                deepcopy(session_released_bindings(current)),
+            )
+            if next_released_bindings is _STATUS_UNSET:
+                return current
+            next_status["releasedBindings"] = deepcopy(next_released_bindings)
+        elif released_bindings is not _STATUS_UNSET:
+            next_status["releasedBindings"] = deepcopy(released_bindings)
 
         next_binding = session_binding({"status": next_status})
         next_binding_id = binding_id(next_binding)
@@ -1091,6 +1170,49 @@ def patch_assistant_session_status(
         return result
 
     return current
+
+
+def record_released_binding(
+    custom_api: k8s_client.CustomObjectsApi,
+    namespace: str,
+    assistant_id: str,
+    *,
+    binding_id: str,
+    release_completed_at: str,
+    release_requested_at: str | None = None,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """Persist durable release completion for one binding generation.
+
+    Assistant-level phase can move on to a fresh binding immediately after
+    teardown finishes. This ledger preserves the completion fact so callers
+    can wait on the old binding by id even after the session has advanced.
+    """
+
+    entry = build_released_binding(
+        binding_id=binding_id,
+        release_completed_at=release_completed_at,
+        release_requested_at=release_requested_at,
+    )
+    updated = patch_assistant_session_status(
+        custom_api,
+        namespace,
+        assistant_id,
+        source=source,
+        released_bindings_mutator=lambda _current, current_released_bindings: (
+            _upsert_released_binding_entry(current_released_bindings, entry)
+        ),
+    )
+    emit_observability_event(
+        "assistantsession.released_binding_persisted",
+        assistant_id=assistant_id,
+        session_name=assistant_session_name(assistant_id),
+        binding_id=binding_id,
+        release_requested_at=release_requested_at,
+        release_completed_at=release_completed_at,
+        source=source,
+    )
+    return updated
 
 
 def record_assistant_session_signal(

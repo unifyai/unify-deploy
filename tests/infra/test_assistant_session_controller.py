@@ -81,6 +81,11 @@ def _controller_runtime_defaults(monkeypatch):
     return batch_api
 
 
+@pytest.fixture(autouse=True)
+def _stub_released_binding_ledger(monkeypatch):
+    monkeypatch.setattr(controller, "record_released_binding", MagicMock())
+
+
 def _base_session(*, desired_state: str = "Running") -> dict:
     return {
         "metadata": {"name": "assistant-session-1207"},

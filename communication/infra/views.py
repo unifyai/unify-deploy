@@ -26,6 +26,7 @@ from .helpers import (
 )
 from .assistant_sessions import (
     ACTIVE_PHASES,
+    BINDING_ID_LABEL as SESSION_BINDING_ID_LABEL,
     DESIRED_STATE_STOPPED,
     SIGNAL_DESKTOP_READY,
     SIGNAL_VM_RELEASE_COMPLETE,
@@ -49,6 +50,7 @@ from .assistant_sessions import (
     patch_assistant_session_spec,
     read_bootstrap_secret,
     record_assistant_session_signal,
+    released_binding,
     resolve_current_binding_vm_ref,
     session_binding,
     vm_refs_match,
@@ -1129,9 +1131,11 @@ async def stop_current_assistant_session(assistant_id: str):
                 "assistant_id": assistant_id,
                 "stopped": False,
                 "reason": "not_found",
+                "binding_id": None,
             }
 
         binding = session_binding(session)
+        current_binding_id = binding_id_from_status(binding) or None
         emit_observability_event(
             "infra.session.stop.requested",
             **assistant_session_observability_fields(
@@ -1155,13 +1159,14 @@ async def stop_current_assistant_session(assistant_id: str):
                 assistant_id=assistant_id,
             ),
             previous_phase=((session.get("status") or {}).get("phase") or None),
-            previous_binding_id=binding_id_from_status(binding) or None,
+            previous_binding_id=current_binding_id,
         )
         return {
             "success": True,
             "assistant_id": assistant_id,
             "stopped": True,
             "desired_state": ((updated.get("spec") or {}).get("desiredState") or ""),
+            "binding_id": current_binding_id,
         }
     finally:
         pop_causal_context(causal_token)
@@ -2275,6 +2280,68 @@ async def _runtime_resource_state(
     }
 
 
+async def _binding_runtime_resource_state(
+    assistant_id: str,
+    *,
+    binding_id: str,
+    batch_api,
+) -> dict[str, object]:
+    """Return the live runtime resources still owned by one binding."""
+
+    sanitized_assistant_id = assistant_id.lower().replace("_", "-")
+    sanitized_binding_id = binding_id.lower().replace("_", "-")
+    jobs = await asyncio.to_thread(
+        batch_api.list_namespaced_job,
+        namespace=SETTINGS.default_namespace,
+        label_selector=(
+            f"app=unity,assistant-id={sanitized_assistant_id},"
+            f"{SESSION_BINDING_ID_LABEL}={sanitized_binding_id}"
+        ),
+    )
+    active_job_names = [
+        job.metadata.name
+        for job in jobs.items
+        if job.status.active
+        and job.status.active > 0
+        and not job.metadata.deletion_timestamp
+    ]
+    owned_vms, _ = await asyncio.to_thread(
+        split_binding_runtime_vms,
+        assistant_id,
+        binding_id=binding_id,
+    )
+    return {
+        "active_job_names": active_job_names,
+        "owned_vms": owned_vms,
+    }
+
+
+def _binding_release_status(
+    assistant_session: dict | None,
+    binding_id: str,
+) -> dict[str, object]:
+    """Return the persisted release-completion state for one binding."""
+
+    binding = session_binding(assistant_session)
+    current_binding_id = binding_id_from_status(binding)
+    if current_binding_id == binding_id:
+        return {
+            "binding_release_recorded": bool(binding.get("releaseCompletedAt")),
+            "binding_release_requested_at": binding.get("releaseRequestedAt") or None,
+            "binding_release_completed_at": binding.get("releaseCompletedAt") or None,
+        }
+    recorded_release = released_binding(assistant_session, binding_id)
+    return {
+        "binding_release_recorded": bool(recorded_release),
+        "binding_release_requested_at": (
+            recorded_release.get("releaseRequestedAt") or None
+        ),
+        "binding_release_completed_at": (
+            recorded_release.get("releaseCompletedAt") or None
+        ),
+    }
+
+
 def _terminal_session_prune_ready(
     assistant_session: dict | None,
     runtime_state: dict[str, object],
@@ -2422,8 +2489,11 @@ async def prune_terminal_assistant_sessions(
 
 
 @router.get("/runtime/{assistant_id}")
-async def runtime_status_endpoint(assistant_id: str):
-    """Report whether an assistant still has live runtime resources."""
+async def runtime_status_endpoint(
+    assistant_id: str,
+    binding_id: str | None = Query(default=None),
+):
+    """Report assistant-scoped or binding-scoped runtime cleanup state."""
     batch_api, _, _, _ = await _get_k8s_clients()
     custom_api = await asyncio.to_thread(get_custom_objects_api)
     assistant_session = None
@@ -2457,8 +2527,7 @@ async def runtime_status_endpoint(assistant_id: str):
         and not runtime_state["other_owned_vms"]
         and runtime_state["disk_vm_name"] is None
     )
-
-    return {
+    response = {
         "assistant_id": assistant_id,
         "assistant_session_exists": assistant_session is not None,
         "assistant_session_phase": session_phase or None,
@@ -2469,6 +2538,34 @@ async def runtime_status_endpoint(assistant_id: str):
         "disk_vm_name": runtime_state["disk_vm_name"],
         "runtime_cleanup_complete": runtime_cleanup_complete,
     }
+    if binding_id:
+        binding_runtime_state = await _binding_runtime_resource_state(
+            assistant_id,
+            binding_id=binding_id,
+            batch_api=batch_api,
+        )
+        binding_status = _binding_release_status(assistant_session, binding_id)
+        binding_runtime_cleanup_complete = (
+            (assistant_session is None or binding_status["binding_release_recorded"])
+            and not binding_runtime_state["active_job_names"]
+            and not binding_runtime_state["owned_vms"]
+        )
+        response.update(
+            {
+                "binding_id": binding_id,
+                "binding_release_recorded": binding_status["binding_release_recorded"],
+                "binding_release_requested_at": binding_status[
+                    "binding_release_requested_at"
+                ],
+                "binding_release_completed_at": binding_status[
+                    "binding_release_completed_at"
+                ],
+                "binding_active_job_names": binding_runtime_state["active_job_names"],
+                "binding_owned_vms": binding_runtime_state["owned_vms"],
+                "binding_runtime_cleanup_complete": binding_runtime_cleanup_complete,
+            },
+        )
+    return response
 
 
 @router.get("/vm/pool/status", response_model=PoolStatusResponse)

@@ -49,6 +49,7 @@ from communication.infra.assistant_sessions import (
     get_assistant_session,
     merge_conditions,
     patch_assistant_session_status,
+    record_released_binding,
     resolve_current_binding_vm_ref,
 )
 from communication.infra.vm_helpers import (
@@ -1359,6 +1360,16 @@ def _binding_release_state(
         assistant_live_job_names=remaining_assistant_job_names,
     )
     if release_complete:
+        if current_binding_id and release_completed_at:
+            record_released_binding(
+                _custom_api,
+                WATCH_NAMESPACE,
+                assistant_id,
+                binding_id=current_binding_id,
+                release_requested_at=release_requested_at or None,
+                release_completed_at=release_completed_at,
+                source=f"controller.release.{source_reason}",
+            )
         released_conditions = _condition_state(
             existing_conditions,
             "Released",
