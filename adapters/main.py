@@ -88,6 +88,7 @@ from .helpers import (
     resolve_whatsapp_route,
     start_unity_job,
     store_microsoft_tokens,
+    uses_local_unity_runtime,
 )
 
 load_dotenv()
@@ -639,7 +640,8 @@ async def _ingest_whatsapp_media(
         for i in range(num_media):
             media_url = form_data.get(f"MediaUrl{i}")
             content_type = form_data.get(
-                f"MediaContentType{i}", "application/octet-stream"
+                f"MediaContentType{i}",
+                "application/octet-stream",
             )
             if not media_url:
                 continue
@@ -677,7 +679,9 @@ async def _ingest_whatsapp_media(
             blob_path = f"{assistant_id}/whatsapp/{attachment_id}_{filename}"
             blob = bucket.blob(blob_path)
             await asyncio.to_thread(
-                blob.upload_from_string, file_content, content_type=content_type
+                blob.upload_from_string,
+                file_content,
+                content_type=content_type,
             )
 
             gs_url = f"gs://{UNIFY_ATTACHMENTS_BUCKET}/{blob_path}"
@@ -690,7 +694,7 @@ async def _ingest_whatsapp_media(
                     "gs_url": gs_url,
                     "content_type": content_type,
                     "size_bytes": size_bytes,
-                }
+                },
             )
 
             # Delete media from Twilio to free storage.
@@ -2209,12 +2213,12 @@ async def outlook_notification_processor(request: Request):
                 )
                 return Response(content=error_message, status_code=500)
 
-            # Start a container (endpoint handles deduplication atomically)
-            is_default = "default" in assistant_id
-            if not is_default:
+            # Local assistants publish to Pub/Sub but keep runtime local.
+            if uses_local_unity_runtime(assistant_data):
+                logger.info("Skipped remote job start for local email assistant")
+            else:
                 start_unity_job(assistant_data, "email")
-
-            logger.info("Job start requested for email handler")
+                logger.info("Job start requested for email handler")
 
             logger.info(
                 f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
@@ -2421,11 +2425,12 @@ async def teams_notification_processor(request: Request):
                 logger.info(f"Invalid contact: {_redact_email(sender_email)}")
                 return None, False
 
-            # Start a container (endpoint handles deduplication atomically)
-            is_default = assistant_id and "default" in assistant_id
-            if not is_default:
+            # Local assistants publish to Pub/Sub but keep runtime local.
+            if uses_local_unity_runtime(assistant_data):
+                logger.info("Skipped remote job start for local teams assistant")
+            else:
                 start_unity_job(assistant_data, "teams")
-            logger.info("Job start requested for teams handler")
+                logger.info("Job start requested for teams handler")
             return contacts, True
 
         contacts, valid = await asyncio.to_thread(_validate_and_start)

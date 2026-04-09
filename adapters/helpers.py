@@ -806,6 +806,12 @@ def start_unity_job(assistant: dict, medium: str) -> None:
         )
 
 
+def uses_local_unity_runtime(assistant_data: dict) -> bool:
+    """Return whether inbound traffic should use a caller-local Unity runtime."""
+
+    return bool(assistant_data.get("is_local", False))
+
+
 class IdlePoolTarget:
     __slots__ = ("target", "min_floor", "demand_buffer")
 
@@ -1249,7 +1255,7 @@ def build_webhook_context(
     logger.info(f"contacts: {contacts}")
 
     # check contact validity
-    is_local_assistant = bool(assistant_data.get("is_local", False))
+    is_local_assistant = uses_local_unity_runtime(assistant_data)
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_local_assistant
 
