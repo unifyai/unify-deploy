@@ -29,9 +29,13 @@ from .assistant_sessions import (
     ACTIVE_PHASES,
     AssistantSessionTerminatingError,
     BINDING_ID_LABEL as SESSION_BINDING_ID_LABEL,
+    BINDING_ID_ANNOTATION,
     DESIRED_STATE_STOPPED,
     SIGNAL_DESKTOP_READY,
     SIGNAL_VM_RELEASE_COMPLETE,
+    SESSION_REF_ANNOTATION,
+    SESSION_REF_LABEL,
+    SUSPEND_INTENT_STOP,
     TERMINAL_PHASES,
     assistant_session_desired_state,
     assistant_session_is_terminating,
@@ -45,6 +49,7 @@ from .assistant_sessions import (
     binding_vm_ref,
     build_assistant_session_spec,
     build_binding_signal,
+    build_suspend_intent,
     create_or_update_assistant_session,
     create_or_update_bootstrap_secret,
     delete_assistant_session,
@@ -53,6 +58,7 @@ from .assistant_sessions import (
     get_assistant_session,
     get_custom_objects_api,
     patch_assistant_session_spec,
+    patch_assistant_session_status,
     read_bootstrap_secret,
     record_assistant_session_signal,
     released_binding,
@@ -123,6 +129,7 @@ TERMINAL_SESSION_PRUNE_DEFAULT_LIMIT = 50
 TERMINAL_SESSION_PRUNE_MAX_LIMIT = 200
 TERMINAL_SESSION_PRUNE_PREVIEW_RETENTION_HOURS = 6.0
 TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS = 24.0
+TERMINAL_SESSION_GHOST_HEAL_GRACE_MINUTES = 10.0
 
 ASSIGN_EXECUTOR = ThreadPoolExecutor(max_workers=15, thread_name_prefix="vm-assign")
 POOL_MAINTENANCE_EXECUTOR = ThreadPoolExecutor(
@@ -1319,6 +1326,66 @@ async def delete_current_assistant_session(assistant_id: str):
         pop_causal_context(causal_token)
 
 
+def _persist_assistant_session_stop_request(
+    custom_api: k8s_client.CustomObjectsApi,
+    namespace: str,
+    assistant_id: str,
+    session: dict,
+    *,
+    source: str,
+    source_reason: str,
+) -> tuple[dict, str | None]:
+    """Record explicit stop intent and patch the session spec to ``Stopped``."""
+
+    binding = session_binding(session)
+    current_binding_id = binding_id_from_status(binding) or None
+    current_job_name = str(binding_job_ref(binding).get("name", "") or "") or None
+    emit_observability_event(
+        "infra.session.stop.requested",
+        **assistant_session_observability_fields(
+            session,
+            assistant_id=assistant_id,
+        ),
+        release_requested_at=binding.get("releaseRequestedAt"),
+        release_completed_at=binding.get("releaseCompletedAt"),
+        source=source,
+        source_reason=source_reason,
+    )
+    if current_binding_id:
+        patch_assistant_session_status(
+            custom_api,
+            namespace,
+            assistant_id,
+            expected_binding_id=current_binding_id,
+            suspend_intent=build_suspend_intent(
+                binding_id=current_binding_id,
+                intent=SUSPEND_INTENT_STOP,
+                source=source,
+                source_reason=source_reason,
+                job_name=current_job_name,
+            ),
+            source=source,
+        )
+    updated = patch_assistant_session_spec(
+        custom_api,
+        namespace,
+        assistant_id,
+        desired_state=DESIRED_STATE_STOPPED,
+    )
+    emit_observability_event(
+        "infra.session.stop.accepted",
+        **assistant_session_observability_fields(
+            updated,
+            assistant_id=assistant_id,
+        ),
+        previous_phase=((session.get("status") or {}).get("phase") or None),
+        previous_binding_id=current_binding_id,
+        source=source,
+        source_reason=source_reason,
+    )
+    return updated, current_binding_id
+
+
 @router.post("/session/{assistant_id}/stop")
 async def stop_current_assistant_session(assistant_id: str):
     """Declare that the assistant runtime should stop."""
@@ -1352,32 +1419,14 @@ async def stop_current_assistant_session(assistant_id: str):
                 "binding_id": None,
             }
 
-        binding = session_binding(session)
-        current_binding_id = binding_id_from_status(binding) or None
-        emit_observability_event(
-            "infra.session.stop.requested",
-            **assistant_session_observability_fields(
-                session,
-                assistant_id=assistant_id,
-            ),
-            release_requested_at=binding.get("releaseRequestedAt"),
-            release_completed_at=binding.get("releaseCompletedAt"),
-        )
-        updated = await asyncio.to_thread(
-            patch_assistant_session_spec,
+        updated, current_binding_id = await asyncio.to_thread(
+            _persist_assistant_session_stop_request,
             custom_api,
             SETTINGS.default_namespace,
             assistant_id,
-            desired_state=DESIRED_STATE_STOPPED,
-        )
-        emit_observability_event(
-            "infra.session.stop.accepted",
-            **assistant_session_observability_fields(
-                updated,
-                assistant_id=assistant_id,
-            ),
-            previous_phase=((session.get("status") or {}).get("phase") or None),
-            previous_binding_id=current_binding_id,
+            session,
+            source="views.session_stop",
+            source_reason="api_session_stop",
         )
         return {
             "success": True,
@@ -1412,17 +1461,77 @@ async def stop_job(
             namespace=namespace,
         )
         batch_api, core_api, networking_api, _coord = await _get_k8s_clients()
-
+        job = await asyncio.to_thread(
+            batch_api.read_namespaced_job,
+            name=job_name,
+            namespace=namespace,
+        )
+        del core_api, networking_api, _coord
+        labels = dict(job.metadata.labels or {})
+        annotations = dict(job.metadata.annotations or {})
+        session_stop_requested = False
+        session_stop_assistant_id = None
+        session_binding_id = (
+            str(labels.get(SESSION_BINDING_ID_LABEL, "") or "")
+            or str(annotations.get(BINDING_ID_ANNOTATION, "") or "")
+            or None
+        )
+        session_name = (
+            str(labels.get(SESSION_REF_LABEL, "") or "")
+            or str(annotations.get(SESSION_REF_ANNOTATION, "") or "")
+            or None
+        )
+        owner_assistant_id = str(labels.get("assistant-id", "") or "") or None
+        if (
+            owner_assistant_id
+            and session_name == assistant_session_name(owner_assistant_id)
+            and session_binding_id
+        ):
+            custom_api = await asyncio.to_thread(get_custom_objects_api)
+            if custom_api is not None:
+                session = await asyncio.to_thread(
+                    get_assistant_session,
+                    custom_api,
+                    namespace,
+                    owner_assistant_id,
+                )
+                current_binding = session_binding(session)
+                current_binding_id = binding_id_from_status(current_binding) or None
+                current_job_name = (
+                    str(binding_job_ref(current_binding).get("name", "") or "") or None
+                )
+                if (
+                    session is not None
+                    and current_binding_id == session_binding_id
+                    and current_job_name == job_name
+                ):
+                    await asyncio.to_thread(
+                        _persist_assistant_session_stop_request,
+                        custom_api,
+                        namespace,
+                        owner_assistant_id,
+                        session,
+                        source="views.job_stop",
+                        source_reason="api_job_stop",
+                    )
+                    session_stop_requested = True
+                    session_stop_assistant_id = owner_assistant_id
         success = await asyncio.to_thread(suspend_job, batch_api, job_name, namespace)
         if success:
             emit_observability_event(
                 "infra.job_stop.accepted",
                 job_name=job_name,
                 namespace=namespace,
+                assistant_id=session_stop_assistant_id,
+                binding_id=session_binding_id,
+                session_stop_requested=session_stop_requested,
             )
             return {
                 "success": True,
                 "message": f"Job suspended successfully: {job_name}",
+                "assistant_id": session_stop_assistant_id,
+                "binding_id": session_binding_id,
+                "session_stop_requested": session_stop_requested,
             }
         raise HTTPException(
             status_code=500,
@@ -2456,6 +2565,76 @@ def _parse_utc_timestamp(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _runtime_state_empty(runtime_state: dict[str, object]) -> bool:
+    """Return whether an assistant currently owns no runtime artifacts."""
+
+    return (
+        not runtime_state["current_binding_id"]
+        and not runtime_state["active_job_names"]
+        and not runtime_state["owned_vms"]
+        and not runtime_state["other_owned_vms"]
+        and runtime_state["disk_vm_name"] is None
+    )
+
+
+def _terminal_session_ghost_transition_at(
+    assistant_session: dict | None,
+) -> datetime | None:
+    """Return the best-effort timestamp for the current ghost-shaped state."""
+
+    status = (assistant_session or {}).get("status") or {}
+    candidates = [
+        _parse_utc_timestamp(((status.get("suspendIntent") or {}).get("requestedAt"))),
+        _parse_utc_timestamp(
+            str(
+                ((assistant_session or {}).get("metadata") or {}).get(
+                    "creationTimestamp",
+                ),
+            ),
+        ),
+    ]
+    for condition in status.get("conditions") or []:
+        if not isinstance(condition, dict):
+            continue
+        candidates.append(_parse_utc_timestamp(condition.get("lastTransitionTime")))
+    observed = [candidate for candidate in candidates if candidate is not None]
+    return max(observed) if observed else None
+
+
+def _terminal_session_ghost_heal_skip_reason(
+    assistant_session: dict | None,
+    *,
+    now_utc: datetime,
+) -> str | None:
+    """Return why a session is not yet safe for ghost healing."""
+
+    if assistant_session is None:
+        return "already_deleted"
+    if assistant_session_is_terminating(assistant_session):
+        return "already_terminating"
+    if assistant_session_desired_state(assistant_session) != "Running":
+        return "desired_state_not_running"
+    status = assistant_session.get("status") or {}
+    phase = str(status.get("phase", "") or "")
+    if phase != "Failed":
+        return "phase_not_failed"
+    if binding_id_from_status(session_binding(assistant_session)):
+        return "binding_present"
+    spec = assistant_session.get("spec") or {}
+    if str(status.get("observedActivationId", "") or "") != str(
+        spec.get("activationId", "") or "",
+    ):
+        return "activation_changed"
+    transition_at = _terminal_session_ghost_transition_at(assistant_session)
+    if transition_at is None:
+        return "missing_transition_timestamp"
+    if transition_at > now_utc - timedelta(
+        minutes=TERMINAL_SESSION_GHOST_HEAL_GRACE_MINUTES,
+    ):
+        return "within_grace"
+    return None
+
+
 def _default_terminal_session_prune_retention_hours() -> float:
     """Return the environment-specific retention window for terminal sessions."""
 
@@ -2570,14 +2749,7 @@ def _terminal_session_prune_ready(
     """Return whether a terminal session can be safely deleted."""
 
     phase = str(((assistant_session or {}).get("status") or {}).get("phase", "") or "")
-    return (
-        phase in TERMINAL_PHASES
-        and not runtime_state["current_binding_id"]
-        and not runtime_state["active_job_names"]
-        and not runtime_state["owned_vms"]
-        and not runtime_state["other_owned_vms"]
-        and runtime_state["disk_vm_name"] is None
-    )
+    return phase in TERMINAL_PHASES and _runtime_state_empty(runtime_state)
 
 
 def _terminal_session_prune_recheck_skip_reason(
@@ -2624,7 +2796,8 @@ async def prune_terminal_assistant_sessions(
     effective_retention_hours = (
         retention_hours or _default_terminal_session_prune_retention_hours()
     )
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=effective_retention_hours)
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=effective_retention_hours)
     listed = await asyncio.to_thread(
         custom_api.list_namespaced_custom_object,
         group=SETTINGS.assistant_session_group,
@@ -2636,6 +2809,8 @@ async def prune_terminal_assistant_sessions(
     skip_reasons: Counter[str] = Counter()
     terminal_sessions_found = 0
     prune_candidates: list[tuple[datetime, str, dict]] = []
+    ghost_healed_assistant_ids: list[str] = []
+    runtime_state_cache: dict[str, dict[str, object]] = {}
 
     for session in sessions:
         phase = str(((session.get("status") or {}).get("phase", "") or ""))
@@ -2652,6 +2827,46 @@ async def prune_terminal_assistant_sessions(
         if not assistant_id:
             skip_reasons["missing_assistant_id"] += 1
             continue
+
+        ghost_heal_skip_reason = _terminal_session_ghost_heal_skip_reason(
+            session,
+            now_utc=now_utc,
+        )
+        if ghost_heal_skip_reason is None:
+            runtime_state = runtime_state_cache.get(assistant_id)
+            if runtime_state is None:
+                runtime_state = await _runtime_resource_state(
+                    assistant_id,
+                    batch_api=batch_api,
+                    assistant_session=session,
+                )
+                runtime_state_cache[assistant_id] = runtime_state
+            if _runtime_state_empty(runtime_state):
+                session = await asyncio.to_thread(
+                    patch_assistant_session_spec,
+                    custom_api,
+                    SETTINGS.default_namespace,
+                    assistant_id,
+                    desired_state=DESIRED_STATE_STOPPED,
+                )
+                ghost_healed_assistant_ids.append(assistant_id)
+                transition_at = _terminal_session_ghost_transition_at(session)
+                ghost_age_minutes = None
+                if transition_at is not None:
+                    ghost_age_minutes = round(
+                        (now_utc - transition_at).total_seconds() / 60,
+                        2,
+                    )
+                emit_observability_event(
+                    "infra.session.ghost_healed",
+                    **assistant_session_observability_fields(
+                        session,
+                        assistant_id=assistant_id,
+                    ),
+                    ghost_age_minutes=ghost_age_minutes,
+                )
+            else:
+                skip_reasons["ghost_runtime_resources_present"] += 1
 
         created_at = _parse_utc_timestamp(metadata.get("creationTimestamp"))
         if created_at is None:
@@ -2685,6 +2900,7 @@ async def prune_terminal_assistant_sessions(
             batch_api=batch_api,
             assistant_session=session,
         )
+        runtime_state_cache[assistant_id] = runtime_state
         if not _terminal_session_prune_ready(session, runtime_state):
             skip_reasons["runtime_resources_present"] += 1
             continue
@@ -2719,6 +2935,7 @@ async def prune_terminal_assistant_sessions(
         prune_candidates=len(prune_candidates),
         considered_candidates=len(considered_candidates),
         remaining_candidates=remaining_candidates,
+        ghost_healed_count=len(ghost_healed_assistant_ids),
         deleted_count=len(deleted_assistant_ids),
         delete_error_count=len(delete_errors),
         skip_reasons=dict(skip_reasons),
@@ -2730,6 +2947,8 @@ async def prune_terminal_assistant_sessions(
         "prune_candidates": len(prune_candidates),
         "considered_candidates": len(considered_candidates),
         "remaining_candidates": remaining_candidates,
+        "ghost_healed_count": len(ghost_healed_assistant_ids),
+        "ghost_healed_assistant_ids": ghost_healed_assistant_ids,
         "deleted_count": len(deleted_assistant_ids),
         "deleted_assistant_ids": deleted_assistant_ids,
         "skip_reasons": dict(skip_reasons),

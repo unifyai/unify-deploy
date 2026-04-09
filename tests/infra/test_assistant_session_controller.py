@@ -8,7 +8,10 @@ from kubernetes.client.rest import ApiException
 import pytest
 
 from communication.infra.assistant_sessions import (
+    SUSPEND_INTENT_REPLACE,
+    SUSPEND_INTENT_STOP,
     build_binding_signal,
+    build_suspend_intent,
     build_binding_vm_assignment,
 )
 from communication.infra.observability import (
@@ -334,10 +337,12 @@ def test_reconcile_suspends_newly_claimed_job_when_jobref_persist_loses(monkeypa
         controller._update_status_for_session(deepcopy(body))
 
     assert exc_info.value.status == 409
-    suspend_job.assert_called_once_with(
-        claimed_job,
-        source="controller.claim_conflict_cleanup",
-    )
+    suspend_job.assert_called_once()
+    assert suspend_job.call_args.args == (claimed_job,)
+    assert suspend_job.call_args.kwargs["assistant_id"] == "1207"
+    assert suspend_job.call_args.kwargs["binding_id"] == "binding-1"
+    assert suspend_job.call_args.kwargs["source"] == "controller.claim_conflict_cleanup"
+    assert suspend_job.call_args.kwargs["intent"] == SUSPEND_INTENT_REPLACE
 
 
 def test_claim_idle_job_for_binding_reuses_existing_job_for_same_binding(monkeypatch):
@@ -1029,6 +1034,7 @@ def test_reconcile_restarts_binding_after_bootstrap_timeout(monkeypatch):
     )
     suspend_job.assert_called_once()
     assert suspend_job.call_args.kwargs["source"] == "controller.bootstrap_timeout"
+    assert suspend_job.call_args.kwargs["intent"] == SUSPEND_INTENT_REPLACE
     assert patch_status.call_args.kwargs["phase"] == "PendingJob"
     assert patch_status.call_args.kwargs["binding"]["id"] != "binding-1"
     assert patch_status.call_args.kwargs["bootstrap_retries"] == 1
@@ -1754,11 +1760,160 @@ def test_reconcile_restarts_after_vm_ownership_loss(monkeypatch):
 
     suspend_job.assert_called_once()
     assert suspend_job.call_args.kwargs["source"] == "controller.vm_ownership_lost"
+    assert suspend_job.call_args.kwargs["intent"] == SUSPEND_INTENT_REPLACE
     assert patch_status.call_args.kwargs["phase"] == "PendingJob"
     assert patch_status.call_args.kwargs["binding"]["id"] != "binding-1"
     assert patch_status.call_args.kwargs["vm_retries"] == 1
     assert patch_status.call_args.kwargs["last_error"] == (
         "Binding lost VM ownership before desktop became ready"
+    )
+
+
+def test_reconcile_recovers_failed_running_session_without_binding(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "Failed"
+    body["status"]["lastError"] = "ghosted"
+    patch_status = MagicMock()
+    patch_spec = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_assistant_release_state_without_binding",
+        MagicMock(return_value=("Released", [], "")),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    patch_status.assert_called_once()
+    assert patch_status.call_args.kwargs["phase"] == "PendingJob"
+    assert patch_status.call_args.kwargs["binding"]["id"]
+    assert patch_status.call_args.kwargs["last_error"] == "ghosted"
+    patch_spec.assert_not_called()
+
+
+def test_reconcile_stops_failed_running_session_without_binding_with_stop_intent(
+    monkeypatch,
+):
+    body = _base_session()
+    body["status"]["phase"] = "Failed"
+    body["status"]["suspendIntent"] = build_suspend_intent(
+        binding_id="binding-1",
+        intent=SUSPEND_INTENT_STOP,
+        source="views.job_stop",
+    )
+    patch_status = MagicMock()
+    patch_spec = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_assistant_release_state_without_binding",
+        MagicMock(return_value=("Released", [], "")),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    patch_spec.assert_called_once_with(
+        controller._custom_api,
+        controller.WATCH_NAMESPACE,
+        "1207",
+        desired_state="Stopped",
+    )
+    patch_status.assert_not_called()
+
+
+def test_reconcile_terminal_job_stop_intent_patches_spec_stop(monkeypatch):
+    body = _base_session()
+    body["status"]["phase"] = "PendingContainer"
+    body["status"]["binding"] = _binding(
+        "binding-1",
+        jobRef={"name": "unity-job-1", "namespace": "preview"},
+    )
+    body["status"]["suspendIntent"] = build_suspend_intent(
+        binding_id="binding-1",
+        intent=SUSPEND_INTENT_STOP,
+        source="views.job_stop",
+    )
+    patch_status = MagicMock()
+    patch_spec = MagicMock()
+
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_job_for_binding",
+        lambda *_args, **_kwargs: _job(terminal_phase="Failed"),
+    )
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        controller,
+        "_binding_release_state",
+        MagicMock(return_value=("Released", {}, [], "")),
+    )
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "patch_assistant_session_spec", patch_spec)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    patch_spec.assert_called_once_with(
+        controller._custom_api,
+        controller.WATCH_NAMESPACE,
+        "1207",
+        desired_state="Stopped",
+    )
+    patch_status.assert_not_called()
+
+
+def test_suspend_bound_job_records_intent_and_emits_observability(monkeypatch):
+    job = _job()
+    batch_api = MagicMock()
+    patch_status = MagicMock()
+    emit_event = MagicMock()
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+    monkeypatch.setattr(controller, "emit_observability_event", emit_event)
+
+    controller._suspend_bound_job(
+        job,
+        assistant_id="1207",
+        binding_id="binding-1",
+        source="controller.bootstrap_timeout",
+        intent=SUSPEND_INTENT_REPLACE,
+        source_reason="bootstrap_timeout",
+    )
+
+    assert (
+        patch_status.call_args.kwargs["suspend_intent"]["intent"]
+        == SUSPEND_INTENT_REPLACE
+    )
+    batch_api.patch_namespaced_job.assert_called_once()
+    assert emit_event.call_args_list[-1].args[0] == "controller.binding_job_suspended"
+    assert (
+        emit_event.call_args_list[-1].kwargs["suspend_intent"] == SUSPEND_INTENT_REPLACE
     )
 
 

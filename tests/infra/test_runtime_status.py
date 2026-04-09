@@ -15,6 +15,11 @@ def _job(name: str, *, assistant_id: str, binding_id: str):
             labels={
                 "app": "unity",
                 "assistant-id": assistant_id,
+                "assistantsession.unify.ai/name": f"assistant-session-{assistant_id}",
+                "assistantsession.unify.ai/binding-id": binding_id,
+            },
+            annotations={
+                "assistantsession.unify.ai/name": f"assistant-session-{assistant_id}",
                 "assistantsession.unify.ai/binding-id": binding_id,
             },
             deletion_timestamp=None,
@@ -55,6 +60,9 @@ def test_stop_session_returns_current_binding_id(client):
             "communication.infra.views.patch_assistant_session_spec",
             return_value=updated,
         ),
+        patch(
+            "communication.infra.views.patch_assistant_session_status",
+        ) as patch_status,
     ):
         response = client.post("/infra/session/1207/stop")
 
@@ -66,6 +74,121 @@ def test_stop_session_returns_current_binding_id(client):
         "desired_state": "Stopped",
         "binding_id": "binding-123",
     }
+    assert patch_status.call_args.kwargs["expected_binding_id"] == "binding-123"
+    assert patch_status.call_args.kwargs["suspend_intent"]["intent"] == "stop"
+
+
+def test_stop_job_records_session_stop_for_owned_job(client):
+    batch_api = MagicMock()
+    batch_api.read_namespaced_job.return_value = _job(
+        "unity-job-1",
+        assistant_id="1207",
+        binding_id="binding-123",
+    )
+    session = {
+        "spec": {"assistantId": "1207", "desiredState": "Running"},
+        "status": {
+            "binding": build_binding(
+                binding_id="binding-123",
+                job_ref={"name": "unity-job-1", "namespace": "preview"},
+            ),
+        },
+    }
+    updated = {
+        "spec": {"assistantId": "1207", "desiredState": "Stopped"},
+        "status": session["status"],
+    }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(batch_api, MagicMock(), MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=object(),
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=session,
+        ),
+        patch(
+            "communication.infra.views.patch_assistant_session_status",
+        ) as patch_status,
+        patch(
+            "communication.infra.views.patch_assistant_session_spec",
+            return_value=updated,
+        ) as patch_spec,
+        patch(
+            "communication.infra.views.suspend_job",
+            return_value=True,
+        ) as suspend_job,
+    ):
+        response = client.post(
+            "/infra/job/stop",
+            data={"job_name": "unity-job-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "message": "Job suspended successfully: unity-job-1",
+        "assistant_id": "1207",
+        "binding_id": "binding-123",
+        "session_stop_requested": True,
+    }
+    assert patch_status.call_args.kwargs["expected_binding_id"] == "binding-123"
+    assert patch_status.call_args.kwargs["suspend_intent"]["intent"] == "stop"
+    patch_spec.assert_called_once()
+    suspend_job.assert_called_once()
+
+
+def test_stop_job_keeps_raw_suspend_for_unowned_job(client):
+    batch_api = MagicMock()
+    batch_api.read_namespaced_job.return_value = SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="unity-job-1",
+            labels={"app": "unity", "assistant-id": "1207"},
+            annotations={},
+            deletion_timestamp=None,
+        ),
+        status=SimpleNamespace(active=1),
+    )
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(batch_api, MagicMock(), MagicMock(), MagicMock()),
+        ),
+        patch(
+            "communication.infra.views.patch_assistant_session_status",
+            side_effect=AssertionError("session stop should not be patched"),
+        ),
+        patch(
+            "communication.infra.views.patch_assistant_session_spec",
+            side_effect=AssertionError("session stop should not be patched"),
+        ),
+        patch(
+            "communication.infra.views.suspend_job",
+            return_value=True,
+        ) as suspend_job,
+    ):
+        response = client.post(
+            "/infra/job/stop",
+            data={"job_name": "unity-job-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "message": "Job suspended successfully: unity-job-1",
+        "assistant_id": None,
+        "binding_id": None,
+        "session_stop_requested": False,
+    }
+    suspend_job.assert_called_once()
 
 
 def test_runtime_status_reports_binding_cleanup_after_release_while_new_binding_runs(

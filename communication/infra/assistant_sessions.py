@@ -41,6 +41,9 @@ SIGNAL_DESKTOP_READY = "desktopReady"
 SIGNAL_VM_GUEST_HEALTH = "vmGuestHealth"
 SIGNAL_VM_RELEASE_REQUEST = "vmReleaseRequest"
 SIGNAL_VM_RELEASE_COMPLETE = "vmReleaseComplete"
+SUSPEND_INTENT_STOP = "stop"
+SUSPEND_INTENT_REPLACE = "replace"
+SUSPEND_INTENT_UNKNOWN = "unknown"
 _STATUS_UNSET = object()
 _MAX_CAS_RETRIES = 3
 _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS = frozenset({"requestedAt"})
@@ -178,6 +181,76 @@ def binding_release_generation(binding: dict[str, Any] | None) -> int:
     except (TypeError, ValueError):
         return 0
     return generation if generation > 0 else 0
+
+
+def session_suspend_intent(session: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the latest persisted suspend intent recorded on session status."""
+
+    status = (session or {}).get("status", {})
+    suspend_intent = status.get("suspendIntent")
+    return suspend_intent if isinstance(suspend_intent, dict) else {}
+
+
+def suspend_intent_binding_id(suspend_intent: dict[str, Any] | None) -> str:
+    """Return the binding id attached to a persisted suspend intent."""
+
+    return str((suspend_intent or {}).get("bindingId", "") or "")
+
+
+def suspend_intent_value(
+    suspend_intent: dict[str, Any] | None,
+    *,
+    binding_id: str | None = None,
+) -> str:
+    """Return the persisted suspend intent for one binding.
+
+    When ``binding_id`` is provided, intents recorded for a different binding are
+    ignored. Invalid or missing persisted values normalize to ``unknown`` so the
+    controller can fall back to its conservative recovery behavior.
+    """
+
+    target_binding_id = str(binding_id or "")
+    recorded_binding_id = suspend_intent_binding_id(suspend_intent)
+    if (
+        target_binding_id
+        and recorded_binding_id
+        and recorded_binding_id != target_binding_id
+    ):
+        return ""
+
+    value = str((suspend_intent or {}).get("intent", "") or "").strip().lower()
+    if value == SUSPEND_INTENT_STOP:
+        return SUSPEND_INTENT_STOP
+    if value == SUSPEND_INTENT_REPLACE:
+        return SUSPEND_INTENT_REPLACE
+    if suspend_intent:
+        return SUSPEND_INTENT_UNKNOWN
+    return ""
+
+
+def build_suspend_intent(
+    *,
+    binding_id: str,
+    intent: str,
+    source: str | None = None,
+    source_reason: str | None = None,
+    requested_at: str | None = None,
+    job_name: str | None = None,
+) -> dict[str, Any]:
+    """Build the canonical persisted suspend-intent payload."""
+
+    normalized_intent = (
+        suspend_intent_value({"intent": intent}) or SUSPEND_INTENT_UNKNOWN
+    )
+    payload = {
+        "bindingId": binding_id,
+        "intent": normalized_intent,
+        "source": source,
+        "sourceReason": source_reason,
+        "requestedAt": requested_at or datetime.now(timezone.utc).isoformat(),
+        "jobName": job_name,
+    }
+    return {key: value for key, value in payload.items() if value not in (None, "")}
 
 
 def session_signals(session: dict[str, Any] | None) -> dict[str, Any]:
@@ -555,6 +628,7 @@ def assistant_session_observability_fields(
     binding = session_binding(session)
     assignment = binding_vm_assignment(binding)
     vm_ref = binding_vm_ref(binding)
+    suspend_intent = session_suspend_intent(session)
 
     fields = {
         "assistant_id": overrides.pop("assistant_id", spec.get("assistantId")),
@@ -595,6 +669,18 @@ def assistant_session_observability_fields(
         ),
         "desktop_url": overrides.pop("desktop_url", binding_desktop_url(binding)),
         "last_error": overrides.pop("last_error", status.get("lastError")),
+        "suspend_intent": overrides.pop(
+            "suspend_intent",
+            suspend_intent_value(suspend_intent),
+        ),
+        "suspend_intent_binding_id": overrides.pop(
+            "suspend_intent_binding_id",
+            suspend_intent_binding_id(suspend_intent),
+        ),
+        "suspend_intent_source": overrides.pop(
+            "suspend_intent_source",
+            suspend_intent.get("source"),
+        ),
         "condition_states": overrides.pop(
             "condition_states",
             _condition_states(status.get("conditions")),
@@ -1221,6 +1307,7 @@ def patch_assistant_session_status(
     bootstrap_retries: int | None | object = _STATUS_UNSET,
     vm_retries: int | None | object = _STATUS_UNSET,
     desktop_probe_failures: int | None | object = _STATUS_UNSET,
+    suspend_intent: dict[str, Any] | None | object = _STATUS_UNSET,
     signals: dict[str, Any] | None | object = _STATUS_UNSET,
     released_bindings: list[dict[str, Any]] | object = _STATUS_UNSET,
     expected_binding_id: str | object = _STATUS_UNSET,
@@ -1289,6 +1376,11 @@ def patch_assistant_session_status(
             next_status["vmRetries"] = vm_retries
         if desktop_probe_failures is not _STATUS_UNSET:
             next_status["desktopProbeFailures"] = desktop_probe_failures
+        if suspend_intent is not _STATUS_UNSET:
+            if suspend_intent is None:
+                next_status.pop("suspendIntent", None)
+            else:
+                next_status["suspendIntent"] = deepcopy(suspend_intent)
         if signals is not _STATUS_UNSET:
             next_status["signals"] = deepcopy(signals)
         if released_bindings_mutator is not None:

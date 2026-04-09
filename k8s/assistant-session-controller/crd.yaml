@@ -92,6 +92,21 @@ spec:
                 type: integer
               desktopProbeFailures:
                 type: integer
+              suspendIntent:
+                type: object
+                properties:
+                  bindingId:
+                    type: string
+                  intent:
+                    type: string
+                  source:
+                    type: string
+                  sourceReason:
+                    type: string
+                  requestedAt:
+                    type: string
+                  jobName:
+                    type: string
               signals:
                 type: object
                 x-kubernetes-preserve-unknown-fields: true

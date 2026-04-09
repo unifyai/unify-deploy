@@ -255,7 +255,11 @@ class TestInfraAuth:
 
 
 class TestJobStop:
-    """Contract: POST /infra/job/stop suspends a running K8s job."""
+    """Contract: POST /infra/job/stop suspends a running K8s job.
+
+    Idle pool jobs are not session-owned, so the endpoint should preserve the
+    raw suspend behavior and not report any AssistantSession stop side effect.
+    """
 
     def test_stop_job(self, comms):
         from ..conftest import create_and_cleanup_idle_job
@@ -268,6 +272,9 @@ class TestJobStop:
             ), f"job/stop failed: {resp.status_code} {resp.text}"
             body = resp.json()
             assert body["success"] is True
+            assert body["assistant_id"] is None
+            assert body["binding_id"] is None
+            assert body["session_stop_requested"] is False
         finally:
             comms.delete("/infra/job/delete", data={"job_name": job_name})
 

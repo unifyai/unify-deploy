@@ -12,6 +12,8 @@ from communication.infra.assistant_sessions import (
     ACTIVATION_ID_ANNOTATION,
     AssistantSessionTerminatingError,
     SESSION_REF_ANNOTATION,
+    SUSPEND_INTENT_REPLACE,
+    SUSPEND_INTENT_STOP,
     assistant_session_desired_state,
     assistant_session_is_terminating,
     assistant_session_name,
@@ -22,6 +24,7 @@ from communication.infra.assistant_sessions import (
     build_binding_vm_assignment,
     build_condition,
     build_binding_signal,
+    build_suspend_intent,
     binding_vm_assignment,
     binding_vm_ref,
     claim_binding_vm_assignment_attempt,
@@ -38,6 +41,8 @@ from communication.infra.assistant_sessions import (
     released_binding,
     session_signal,
     session_released_bindings,
+    session_suspend_intent,
+    suspend_intent_value,
     vm_refs_match,
 )
 from communication.infra.observability import bind_causal_context, build_causal_context
@@ -180,6 +185,11 @@ def test_assistant_session_observability_fields_summarize_runtime_state():
                 desktop_url="https://unity-pool-ubuntu-10-preview.vm.unify.ai",
             ),
             "lastError": "waiting",
+            "suspendIntent": build_suspend_intent(
+                binding_id="binding-1",
+                intent=SUSPEND_INTENT_REPLACE,
+                source="controller.bootstrap_timeout",
+            ),
             "conditions": [
                 build_condition("ContainerAssigned", True, "Bound"),
                 build_condition("DesktopReady", False, "WaitingForDesktop"),
@@ -195,6 +205,9 @@ def test_assistant_session_observability_fields_summarize_runtime_state():
     assert summary["job_name"] == "unity-job-1"
     assert summary["vm_name"] == "unity-pool-ubuntu-10-preview"
     assert summary["vm_hostname"] == "unity-pool-ubuntu-10-preview.vm.unify.ai"
+    assert summary["suspend_intent"] == SUSPEND_INTENT_REPLACE
+    assert summary["suspend_intent_binding_id"] == "binding-1"
+    assert summary["suspend_intent_source"] == "controller.bootstrap_timeout"
     assert summary["condition_states"]["ContainerAssigned"].startswith("True:")
 
 
@@ -228,6 +241,44 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
     )
 
     assert captured["body"]["status"]["binding"] is None
+
+
+def test_patch_assistant_session_status_persists_suspend_intent(monkeypatch):
+    session = {
+        "metadata": {"resourceVersion": "1"},
+        "status": {
+            "binding": build_binding(binding_id="binding-1"),
+        },
+    }
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(session),
+    )
+
+    class FakeCustomApi:
+        def replace_namespaced_custom_object_status(self, **kwargs):
+            next_session = deepcopy(kwargs["body"])
+            next_session.setdefault("metadata", {})
+            next_session["metadata"]["resourceVersion"] = "2"
+            session.clear()
+            session.update(next_session)
+            return deepcopy(session)
+
+    updated = patch_assistant_session_status(
+        FakeCustomApi(),
+        "preview",
+        "1207",
+        suspend_intent=build_suspend_intent(
+            binding_id="binding-1",
+            intent=SUSPEND_INTENT_STOP,
+            source="views.session_stop",
+        ),
+    )
+
+    assert session_suspend_intent(updated)["bindingId"] == "binding-1"
+    assert suspend_intent_value(session_suspend_intent(updated)) == SUSPEND_INTENT_STOP
 
 
 def test_patch_assistant_session_status_preserves_retry_counters(monkeypatch):
@@ -749,10 +800,20 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
         "bootstrapRetries",
         "vmRetries",
         "desktopProbeFailures",
+        "suspendIntent",
         "signals",
         "releasedBindings",
     }
     assert expected_fields.issubset(status_properties.keys())
+    suspend_intent_properties = status_properties["suspendIntent"]["properties"]
+    assert {
+        "bindingId",
+        "intent",
+        "source",
+        "sourceReason",
+        "requestedAt",
+        "jobName",
+    }.issubset(suspend_intent_properties.keys())
     binding_properties = status_properties["binding"]["properties"]
     assert {
         "id",

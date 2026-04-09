@@ -40,6 +40,8 @@ from communication.infra.assistant_sessions import (
     claim_binding_vm_assignment_attempt,
     CONTAINER_READY_ANNOTATION,
     DESIRED_STATE_STOPPED,
+    build_suspend_intent,
+    patch_assistant_session_spec,
     SIGNAL_DESKTOP_READY,
     SIGNAL_VM_GUEST_HEALTH,
     SIGNAL_VM_RELEASE_COMPLETE,
@@ -47,6 +49,11 @@ from communication.infra.assistant_sessions import (
     SESSION_REF_ANNOTATION,
     SESSION_REF_LABEL,
     session_binding,
+    session_suspend_intent,
+    SUSPEND_INTENT_REPLACE,
+    SUSPEND_INTENT_STOP,
+    SUSPEND_INTENT_UNKNOWN,
+    suspend_intent_value,
     build_condition,
     emit_observability_event,
     get_assistant_session,
@@ -562,7 +569,17 @@ def _suspend_extra_assistant_jobs(
         if current_job_name and job_name == current_job_name:
             continue
         try:
-            _suspend_bound_job(job, source=source)
+            binding_id = str(
+                (job.metadata.labels or {}).get(BINDING_ID_LABEL, "") or "",
+            )
+            _suspend_bound_job(
+                job,
+                assistant_id=assistant_id,
+                binding_id=binding_id,
+                source=source,
+                intent=SUSPEND_INTENT_REPLACE,
+                source_reason="extra_job_cleanup",
+            )
         except ApiException:
             logger.exception(
                 "Failed to suspend extra Job %s for assistant %s",
@@ -849,7 +866,14 @@ def _claim_and_bind_pending_job(
             if latest_job_name == str(job.metadata.name or ""):
                 return _JOB_CLAIM_RESULT_CLAIMED
             if newly_claimed:
-                _suspend_bound_job(job, source="controller.claim_conflict_cleanup")
+                _suspend_bound_job(
+                    job,
+                    assistant_id=assistant_id,
+                    binding_id=current_binding_id,
+                    source="controller.claim_conflict_cleanup",
+                    intent=SUSPEND_INTENT_REPLACE,
+                    source_reason="claim_conflict_cleanup",
+                )
             raise
         return _JOB_CLAIM_RESULT_CLAIMED
     finally:
@@ -861,10 +885,79 @@ def _claim_and_bind_pending_job(
         )
 
 
-def _suspend_bound_job(job, *, source: str) -> None:
+def _release_suspend_intent(source_reason: str) -> str:
+    """Return the persisted suspend intent for a release-driven suspend."""
+
+    if source_reason.startswith("desired_stop"):
+        return SUSPEND_INTENT_STOP
+    return SUSPEND_INTENT_REPLACE
+
+
+def _record_binding_suspend_intent(
+    *,
+    assistant_id: str,
+    binding_id: str,
+    job_name: str,
+    intent: str,
+    source: str,
+    source_reason: str | None = None,
+) -> None:
+    """Persist one binding-scoped suspend intent before the Job is suspended."""
+
+    if _custom_api is None or not binding_id:
+        return
+    try:
+        patch_assistant_session_status(
+            _custom_api,
+            WATCH_NAMESPACE,
+            assistant_id,
+            expected_binding_id=binding_id,
+            suspend_intent=build_suspend_intent(
+                binding_id=binding_id,
+                intent=intent,
+                source=source,
+                source_reason=source_reason,
+                job_name=job_name,
+            ),
+            source=source,
+        )
+    except Exception:  # pragma: no cover - best effort status breadcrumb
+        logger.exception(
+            "Failed to record suspend intent for binding %s before suspending %s",
+            binding_id,
+            job_name,
+        )
+        emit_observability_event(
+            "controller.binding_suspend_intent_record_failed",
+            assistant_id=assistant_id,
+            binding_id=binding_id,
+            job_name=job_name,
+            source=source,
+            suspend_intent=intent,
+            source_reason=source_reason,
+        )
+
+
+def _suspend_bound_job(
+    job,
+    *,
+    assistant_id: str,
+    binding_id: str,
+    source: str,
+    intent: str,
+    source_reason: str | None = None,
+) -> None:
     """Stop a binding-owned Job without mutating binding ownership."""
 
     assert _batch_api is not None
+    _record_binding_suspend_intent(
+        assistant_id=assistant_id,
+        binding_id=binding_id,
+        job_name=str(job.metadata.name or ""),
+        intent=intent,
+        source=source,
+        source_reason=source_reason,
+    )
     labels = dict(job.metadata.labels or {})
     labels["unity-status"] = "done"
     body = {
@@ -881,8 +974,12 @@ def _suspend_bound_job(job, *, source: str) -> None:
     )
     emit_observability_event(
         "controller.binding_job_suspended",
+        assistant_id=assistant_id,
+        binding_id=binding_id,
         job_name=job.metadata.name,
         source=source,
+        suspend_intent=intent,
+        source_reason=source_reason,
     )
 
 
@@ -1172,7 +1269,14 @@ def _binding_release_state(
 
     if job_live:
         try:
-            _suspend_bound_job(job, source=f"controller.release.{source_reason}")
+            _suspend_bound_job(
+                job,
+                assistant_id=assistant_id,
+                binding_id=current_binding_id,
+                source=f"controller.release.{source_reason}",
+                intent=_release_suspend_intent(source_reason),
+                source_reason=source_reason,
+            )
         except ApiException as exc:  # pragma: no cover - best effort suspend
             logger.exception(
                 "Failed to suspend Job %s during release",
@@ -1676,6 +1780,91 @@ def _assistant_release_state_without_binding(
     return "Releasing", releasing_conditions, last_error
 
 
+def _recover_failed_running_session_without_binding(
+    *,
+    body: dict,
+    assistant_id: str,
+    activation_id: str,
+    existing_conditions: list[dict],
+    desktop_required: bool,
+    bootstrap_retries: int,
+    vm_retries: int,
+    last_error: str,
+) -> None:
+    """Recover or stop a failed running session that no longer has a binding."""
+
+    release_phase, release_conditions, release_error = (
+        _assistant_release_state_without_binding(
+            assistant_id=assistant_id,
+            existing_conditions=existing_conditions,
+            desktop_required=desktop_required,
+            source_reason="failed_running_no_binding",
+        )
+    )
+    persisted_suspend_intent = suspend_intent_value(session_suspend_intent(body))
+    if release_phase != "Released":
+        patch_assistant_session_status(
+            _custom_api,
+            WATCH_NAMESPACE,
+            assistant_id,
+            phase=release_phase,
+            observed_activation_id=activation_id,
+            binding=None,
+            last_error=release_error if release_error else last_error,
+            source="controller.reconcile",
+            conditions=release_conditions,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+        )
+        return
+
+    if persisted_suspend_intent == SUSPEND_INTENT_STOP:
+        patch_assistant_session_spec(
+            _custom_api,
+            WATCH_NAMESPACE,
+            assistant_id,
+            desired_state=DESIRED_STATE_STOPPED,
+        )
+        emit_observability_event(
+            "controller.failed_running_no_binding_stopped",
+            assistant_id=assistant_id,
+            activation_id=activation_id,
+            suspend_intent=persisted_suspend_intent,
+        )
+        return
+
+    patch_assistant_session_status(
+        _custom_api,
+        WATCH_NAMESPACE,
+        assistant_id,
+        phase="PendingJob",
+        observed_activation_id=activation_id,
+        binding=_mint_binding_payload(),
+        last_error=release_error or last_error,
+        source="controller.reconcile",
+        bootstrap_retries=bootstrap_retries,
+        vm_retries=vm_retries,
+        desktop_probe_failures=0,
+        conditions=_condition_state(
+            release_conditions,
+            "PendingJob",
+            desktop_required,
+            container_assigned=False,
+            container_ready=False,
+            vm_assigned=False,
+            desktop_ready=False,
+            reason="RecoveredFailedState",
+            message="Recovered failed running session without a binding",
+        ),
+    )
+    emit_observability_event(
+        "controller.failed_running_no_binding_recovered",
+        assistant_id=assistant_id,
+        activation_id=activation_id,
+        suspend_intent=persisted_suspend_intent or SUSPEND_INTENT_UNKNOWN,
+    )
+
+
 def _restart_binding_decision(
     *,
     assistant_id: str,
@@ -1778,14 +1967,6 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         )
         return
 
-    if (
-        desired_state != DESIRED_STATE_STOPPED
-        and phase == "Failed"
-        and not current_binding_id
-        and observed_activation_id == activation_id
-    ):
-        return
-
     if desired_state == DESIRED_STATE_STOPPED:
         if not current_binding_id:
             release_phase, release_conditions, release_error = (
@@ -1848,6 +2029,16 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
         and not current_binding_id
         and observed_activation_id == activation_id
     ):
+        _recover_failed_running_session_without_binding(
+            body=body,
+            assistant_id=assistant_id,
+            activation_id=activation_id,
+            existing_conditions=existing_conditions,
+            desktop_required=desktop_required,
+            bootstrap_retries=bootstrap_retries,
+            vm_retries=vm_retries,
+            last_error=persisted_last_error,
+        )
         return
 
     if (
@@ -2142,6 +2333,10 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     )
     terminal_phase = _job_terminal_phase(job)
     if terminal_phase:
+        binding_suspend_intent = suspend_intent_value(
+            session_suspend_intent(body),
+            binding_id=current_binding_id,
+        )
         _emit_binding_stage_event(
             "controller.pending_container_stage",
             assistant_id=assistant_id,
@@ -2191,6 +2386,25 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                     or f"Job reached terminal phase {terminal_phase}",
                     source="controller.reconcile",
                     conditions=release_conditions,
+                )
+                return
+            if (
+                binding_suspend_intent == SUSPEND_INTENT_STOP
+                and desired_state != DESIRED_STATE_STOPPED
+            ):
+                patch_assistant_session_spec(
+                    _custom_api,
+                    WATCH_NAMESPACE,
+                    assistant_id,
+                    desired_state=DESIRED_STATE_STOPPED,
+                )
+                emit_observability_event(
+                    "controller.pending_container_terminal_job_stop_intent",
+                    assistant_id=assistant_id,
+                    activation_id=activation_id,
+                    binding_id=current_binding_id,
+                    job_name=job.metadata.name,
+                    terminal_phase=terminal_phase,
                 )
                 return
             decision = _restart_binding_decision(
@@ -2297,7 +2511,14 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
                 deadline_seconds=CONTAINER_BOOTSTRAP_DEADLINE_SECONDS,
             )
             try:
-                _suspend_bound_job(job, source="controller.bootstrap_timeout")
+                _suspend_bound_job(
+                    job,
+                    assistant_id=assistant_id,
+                    binding_id=current_binding_id,
+                    source="controller.bootstrap_timeout",
+                    intent=SUSPEND_INTENT_REPLACE,
+                    source_reason="bootstrap_timeout",
+                )
             except Exception:  # pragma: no cover - best effort suspend
                 logger.exception(
                     "Failed to suspend bootstrap-timed-out job %s",
@@ -2549,7 +2770,14 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
     )
     if verified_vm_ref is None:
         try:
-            _suspend_bound_job(job, source="controller.vm_ownership_lost")
+            _suspend_bound_job(
+                job,
+                assistant_id=assistant_id,
+                binding_id=current_binding_id,
+                source="controller.vm_ownership_lost",
+                intent=SUSPEND_INTENT_REPLACE,
+                source_reason="vm_ownership_lost",
+            )
         except Exception:  # pragma: no cover - best effort suspend
             logger.exception(
                 "Failed to suspend Job %s after VM ownership loss",
