@@ -5,9 +5,7 @@ Unity calls POST /discord/send for outbound DMs. Orchestra calls
 POST /discord/create during assistant contact provisioning.
 """
 
-import json
 import logging
-import os
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -30,16 +28,6 @@ def _bot_headers(bot_token: str) -> dict:
         "Authorization": f"Bot {bot_token}",
         "Content-Type": "application/json",
     }
-
-
-def _load_bot_tokens() -> dict[str, str]:
-    """Load bot tokens from the DISCORD_BOT_TOKENS env var.
-
-    Expected format: JSON object mapping bot ID → token, e.g.
-    {"123456789": "MTIz...abc", "987654321": "OTg3...xyz"}
-    """
-    raw = os.environ.get("DISCORD_BOT_TOKENS", "{}")
-    return json.loads(raw)
 
 
 async def _resolve_route(assistant_id: int, contact_discord_id: str) -> dict:
@@ -138,18 +126,15 @@ async def register_bot(request: Request):
     assigns the pool bot via its DAO first, then calls this endpoint to
     ensure the bot has an active Gateway connection.
 
-    Body: {"bot_id": "<discord bot user ID>", "assistant_id": <int>}
+    Body: {"bot_id": str, "assistant_id": int, "bot_token": str}
     """
     data = await request.json()
     bot_id = data["bot_id"]
-
-    tokens = _load_bot_tokens()
-    bot_token = tokens.get(bot_id)
+    bot_token = data.get("bot_token")
     if not bot_token:
         raise HTTPException(
-            status_code=500,
-            detail=f"No token configured for bot {bot_id}. "
-            "Add it to the DISCORD_BOT_TOKENS env var.",
+            status_code=400,
+            detail="bot_token is required",
         )
 
     await bot_manager.connect_bot(bot_id, bot_token)
