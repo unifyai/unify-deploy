@@ -402,7 +402,7 @@ def test_claim_idle_job_skips_hash_filter_when_gcs_unavailable(monkeypatch):
     assert "unity-image-hash" not in selector
 
 
-def test_claim_idle_job_prefers_newest_job(monkeypatch):
+def test_claim_idle_job_claims_jobs_in_name_order(monkeypatch):
     binding = _binding("binding-1")
     old_job = _job(name="unity-2026-01-01-00-00-00-aaa", container_ready=False)
     old_job.status.active = 1
@@ -415,7 +415,7 @@ def test_claim_idle_job_prefers_newest_job(monkeypatch):
         MagicMock(items=[]),
         MagicMock(items=[old_job, new_job]),
     ]
-    batch_api.read_namespaced_job.return_value = new_job
+    batch_api.read_namespaced_job.return_value = old_job
 
     monkeypatch.setattr(controller, "_batch_api", batch_api)
     monkeypatch.setattr(controller, "_get_current_image_hash", lambda: None)
@@ -426,9 +426,9 @@ def test_claim_idle_job_prefers_newest_job(monkeypatch):
         binding,
     )
 
-    assert job is new_job
+    assert job is old_job
     patched_name = batch_api.patch_namespaced_job.call_args.kwargs["name"]
-    assert patched_name == "unity-2026-04-05-12-00-00-bbb"
+    assert patched_name == "unity-2026-01-01-00-00-00-aaa"
 
 
 def test_job_for_binding_lists_by_binding_when_jobref_missing(monkeypatch):

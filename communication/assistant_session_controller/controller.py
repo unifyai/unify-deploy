@@ -616,7 +616,6 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
             and not job.metadata.deletion_timestamp
         ),
         key=lambda job: str(job.metadata.name or ""),
-        reverse=True,
     )
     emit_observability_event(
         "controller.pending_job_stage",
