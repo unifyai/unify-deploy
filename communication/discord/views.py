@@ -1,8 +1,8 @@
 """Discord Comms API endpoints.
 
 All endpoints are admin-authenticated (Bearer token via Orchestra admin key).
-Unity calls POST /discord/send for outbound DMs. Orchestra calls
-POST /discord/create during assistant contact provisioning.
+Unity calls POST /discord/send for outbound messages (DMs and channel replies).
+Orchestra calls POST /discord/create during assistant contact provisioning.
 """
 
 import logging
@@ -56,23 +56,36 @@ async def _resolve_route(assistant_id: int, contact_discord_id: str) -> dict:
 
 @router.post("/send")
 async def send_discord_message(request: Request):
-    """Send a DM to a Discord user via the assigned pool bot.
+    """Send a message to a Discord user (DM) or channel.
 
-    Body: {
-        "to": "<discord_user_id>",
-        "body": "<message content>",
-        "assistant_id": <int>,
-        "media_url": "<optional URL>"
-    }
+    DM body:      {"to": "<user_id>", "body": "...", "assistant_id": <int>}
+    Channel body: {"channel_id": "<channel_or_thread_id>", "body": "...",
+                   "assistant_id": <int>, "bot_id": "<pool_bot_id>"}
+
+    Optional: "media_url" for image embeds.
     """
     data = await request.json()
-    to = data["to"]
     body = data["body"]
     assistant_id = data["assistant_id"]
     media_url = data.get("media_url")
+    channel_id = data.get("channel_id")
+    to = data.get("to")
 
-    route = await _resolve_route(assistant_id, to)
-    pool_bot_id = route["pool_bot_id"]
+    if channel_id:
+        pool_bot_id = data.get("bot_id")
+        if not pool_bot_id:
+            raise HTTPException(
+                status_code=400,
+                detail="bot_id is required for channel messages",
+            )
+    elif to:
+        route = await _resolve_route(assistant_id, to)
+        pool_bot_id = route["pool_bot_id"]
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either 'to' (DM) or 'channel_id' (channel) is required",
+        )
 
     bot_token = bot_manager.get_bot_token(pool_bot_id)
     if not bot_token:
@@ -83,24 +96,26 @@ async def send_discord_message(request: Request):
 
     headers = _bot_headers(bot_token)
 
-    async with httpx.AsyncClient() as client:
-        ch_resp = await client.post(
-            f"{DISCORD_API_BASE}/users/@me/channels",
-            json={"recipient_id": to},
-            headers=headers,
-            timeout=10.0,
-        )
-        if ch_resp.status_code >= 400:
-            raise HTTPException(
-                status_code=ch_resp.status_code,
-                detail=f"Failed to open DM channel: {ch_resp.text}",
+    if not channel_id:
+        async with httpx.AsyncClient() as client:
+            ch_resp = await client.post(
+                f"{DISCORD_API_BASE}/users/@me/channels",
+                json={"recipient_id": to},
+                headers=headers,
+                timeout=10.0,
             )
-        channel_id = ch_resp.json()["id"]
+            if ch_resp.status_code >= 400:
+                raise HTTPException(
+                    status_code=ch_resp.status_code,
+                    detail=f"Failed to open DM channel: {ch_resp.text}",
+                )
+            channel_id = ch_resp.json()["id"]
 
-        msg_payload: dict = {"content": body}
-        if media_url:
-            msg_payload["embeds"] = [{"image": {"url": media_url}}]
+    msg_payload: dict = {"content": body}
+    if media_url:
+        msg_payload["embeds"] = [{"image": {"url": media_url}}]
 
+    async with httpx.AsyncClient() as client:
         msg_resp = await client.post(
             f"{DISCORD_API_BASE}/channels/{channel_id}/messages",
             json=msg_payload,
@@ -114,7 +129,9 @@ async def send_discord_message(request: Request):
             )
 
     message_id = msg_resp.json()["id"]
-    logger.info(f"Sent Discord DM to {to} via bot {pool_bot_id} (msg={message_id})")
+    logger.info(
+        f"Sent Discord message to {channel_id} via bot {pool_bot_id} (msg={message_id})"
+    )
     return {"success": True, "message_id": message_id, "channel_id": channel_id}
 
 

@@ -1,14 +1,15 @@
 """Persistent WebSocket connection to the Discord Gateway API.
 
-Each pool bot maintains one connection. Inbound DMs (MESSAGE_CREATE with
-guild_id=None) are resolved via Orchestra and published to the assistant's
-Pub/Sub topic — the same flow that adapters/main.py uses for WhatsApp.
+Each pool bot maintains one connection. Inbound messages — DMs and guild
+channel @mentions — are resolved via Orchestra and published to the
+assistant's Pub/Sub topic.
 """
 
 import asyncio
 import json
 import logging
 import platform
+import re
 import time
 
 import aiohttp
@@ -23,8 +24,9 @@ DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
 INTENTS_DIRECT_MESSAGES = 1 << 12
+INTENTS_GUILD_MESSAGES = 1 << 9
 INTENTS_MESSAGE_CONTENT = 1 << 15
-BOT_INTENTS = INTENTS_DIRECT_MESSAGES | INTENTS_MESSAGE_CONTENT
+BOT_INTENTS = INTENTS_DIRECT_MESSAGES | INTENTS_GUILD_MESSAGES | INTENTS_MESSAGE_CONTENT
 
 _pubsub_client: pubsub_v1.PublisherClient | None = None
 
@@ -173,9 +175,11 @@ def _publish_to_pubsub(
     assistant_id: str,
     bot_id: str,
     sender_discord_id: str,
-    dm_channel_id: str,
+    channel_id: str,
     content: str,
     role: str,
+    is_channel: bool = False,
+    guild_id: str | None = None,
     attachments: list[dict] | None = None,
 ) -> None:
     """Publish an inbound Discord message to the assistant's Pub/Sub topic."""
@@ -190,9 +194,11 @@ def _publish_to_pubsub(
         "event": {
             "bot_id": bot_id,
             "sender_discord_id": sender_discord_id,
-            "dm_channel_id": dm_channel_id,
+            "channel_id": channel_id,
             "body": content,
             "role": role,
+            "is_channel": is_channel,
+            "guild_id": guild_id,
             "attachments": attachments or [],
         },
     }
@@ -201,8 +207,9 @@ def _publish_to_pubsub(
         json.dumps(payload).encode("utf-8"),
         thread="inbound",
     )
+    kind = "channel message" if is_channel else "DM"
     logger.info(
-        f"Published Discord DM from {sender_discord_id} to assistant {assistant_id}",
+        f"Published Discord {kind} from {sender_discord_id} to assistant {assistant_id}",
     )
 
 
@@ -210,7 +217,7 @@ class GatewayConnection:
     """Manages a single bot's WebSocket to the Discord Gateway.
 
     Handles IDENTIFY, heartbeat, resume, reconnect, and dispatches
-    inbound DM events.
+    inbound DM and guild channel events.
     """
 
     def __init__(self, bot_id: str, bot_token: str) -> None:
@@ -224,6 +231,7 @@ class GatewayConnection:
         self._http_session: aiohttp.ClientSession | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._receive_task: asyncio.Task | None = None
+        self._bot_user_id: str | None = None
         self._running = False
         self._heartbeat_acked = True
 
@@ -365,25 +373,38 @@ class GatewayConnection:
             if t == "READY":
                 self._session_id = d["session_id"]
                 self._resume_url = d.get("resume_gateway_url")
+                self._bot_user_id = d["user"]["id"]
                 logger.info(
                     f"Bot {self.bot_id}: READY (session={self._session_id})",
                 )
             elif t == "RESUMED":
                 logger.info(f"Bot {self.bot_id}: RESUMED")
             elif t == "MESSAGE_CREATE":
-                asyncio.create_task(self._handle_dm(d))
+                asyncio.create_task(self._handle_message(d))
 
-    async def _handle_dm(self, data: dict) -> None:
-        """Process an inbound DM (MESSAGE_CREATE with no guild_id)."""
-        if data.get("guild_id") is not None:
-            return
+    async def _handle_message(self, data: dict) -> None:
+        """Process an inbound MESSAGE_CREATE (DM or guild channel @mention)."""
         author = data.get("author", {})
         if author.get("bot"):
             return
 
+        guild_id = data.get("guild_id")
+        is_channel = guild_id is not None
+
+        if is_channel:
+            mentions = data.get("mentions", [])
+            if not any(m["id"] == self._bot_user_id for m in mentions):
+                return
+
         sender_id = author["id"]
         content = data.get("content", "")
         channel_id = data["channel_id"]
+
+        if is_channel and self._bot_user_id:
+            content = re.sub(
+                rf"<@!?{re.escape(self._bot_user_id)}>", "", content
+            ).strip()
+
         attachments = [
             {
                 "id": a["id"],
@@ -401,19 +422,21 @@ class GatewayConnection:
 
         action = route.get("action")
         if action == "auto_reply":
-            await _send_dm(
-                self.bot_token,
-                sender_id,
-                "This bot is no longer active. Please visit console.unify.ai "
-                "to view your assistant details.",
-            )
+            if not is_channel:
+                await _send_dm(
+                    self.bot_token,
+                    sender_id,
+                    "This bot is no longer active. Please visit console.unify.ai "
+                    "to view your assistant details.",
+                )
             return
         if action == "reject_cold":
-            await _send_dm(
-                self.bot_token,
-                sender_id,
-                "This bot is not accepting new messages.",
-            )
+            if not is_channel:
+                await _send_dm(
+                    self.bot_token,
+                    sender_id,
+                    "This bot is not accepting new messages.",
+                )
             return
 
         assistant_id = str(route["assistant_id"])
@@ -427,9 +450,11 @@ class GatewayConnection:
             assistant_id=assistant_id,
             bot_id=self.bot_id,
             sender_discord_id=sender_id,
-            dm_channel_id=channel_id,
+            channel_id=channel_id,
             content=content,
             role=role,
+            is_channel=is_channel,
+            guild_id=guild_id,
             attachments=attachments,
         )
 
