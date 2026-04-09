@@ -254,8 +254,8 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
     ]
 
 
-def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
-    """Resolve an inbound WhatsApp message to an assistant via Orchestra.
+def _resolve_shared_pool_route(platform: str, pool_id: str, sender: str) -> dict | None:
+    """Resolve an inbound message on a shared-pool platform via Orchestra.
 
     Returns one of:
       - {"assistant_id": int, "role": str} — normal routed message
@@ -263,9 +263,10 @@ def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
       - {"action": "reject_cold"}          — unknown sender on shared pool
       - None                               — no route at all (404)
     """
+    param_name = "pool_number" if platform == "whatsapp" else "bot_id"
     resp = requests.get(
-        f"{SETTINGS.orchestra_url}/admin/whatsapp/resolve",
-        params={"pool_number": pool_number, "sender": sender},
+        f"{SETTINGS.orchestra_url}/admin/{platform}/resolve",
+        params={param_name: pool_id, "sender": sender},
         headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
         timeout=10,
     )
@@ -273,10 +274,20 @@ def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
         return None
     if resp.status_code >= 400:
         logger.error(
-            f"WhatsApp resolve failed: {resp.status_code} {resp.text}",
+            f"{platform} resolve failed: {resp.status_code} {resp.text}",
         )
-        raise RuntimeError(f"WhatsApp resolve error: {resp.status_code}")
+        raise RuntimeError(f"{platform} resolve error: {resp.status_code}")
     return resp.json()
+
+
+def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
+    """Resolve an inbound WhatsApp message to an assistant via Orchestra."""
+    return _resolve_shared_pool_route("whatsapp", pool_number, sender)
+
+
+def resolve_discord_route(bot_id: str, sender: str) -> dict | None:
+    """Resolve an inbound Discord DM to an assistant via Orchestra."""
+    return _resolve_shared_pool_route("discord", bot_id, sender)
 
 
 def check_contact_details(

@@ -24,6 +24,7 @@ from communication.infra.views import (
 )
 from communication.infra.helpers import setup_kubernetes_client
 from communication.social.views import router as social_router
+from communication.discord.views import router as discord_router
 from communication.sharepoint.views import router as sharepoint_router
 from communication.unillm import router as unillm_router
 from .dependencies import auth_admin_key
@@ -41,7 +42,12 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, setup_kubernetes_client)
     loop.run_in_executor(None, _get_pubsub_clients)
+
+    from communication.discord.bot_manager import start_health_check_loop
+
+    health_task = asyncio.create_task(start_health_check_loop())
     yield
+    health_task.cancel()
 
 
 admin_auth = [Depends(auth_admin_key)]
@@ -58,6 +64,7 @@ app.include_router(infra_router, prefix="/infra", dependencies=admin_auth)
 app.include_router(tunnel_router, prefix="/infra")
 app.include_router(vm_self_router, prefix="/infra")
 app.include_router(social_router, prefix="/social", dependencies=admin_auth)
+app.include_router(discord_router, prefix="/discord", dependencies=admin_auth)
 app.include_router(sharepoint_router, prefix="/sharepoint", dependencies=admin_auth)
 app.include_router(unillm_router, prefix="/unillm")
 

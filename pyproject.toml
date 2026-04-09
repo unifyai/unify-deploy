@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "communication"
 version = "0.1.0"
-description = "External communication gateway for Unity - handles Gmail, Outlook, Teams, WhatsApp, and phone integrations"
+description = "External communication gateway for Unity - handles Gmail, Outlook, Teams, WhatsApp, Discord, and phone integrations"
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
 dependencies = [
@@ -19,6 +19,7 @@ dependencies = [
     # HTTP clients
     "httpx>=0.25.0",
     "requests>=2.31.0",
+    "aiohttp>=3.9.0",
 
     # Google APIs
     "google-auth>=2.17.0",
