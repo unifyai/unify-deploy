@@ -62,6 +62,7 @@ async def _connect_discord_pool_bots() -> None:
         for bot in resp.json():
             if bot.get("auth_token") and bot.get("status") == "active":
                 await bot_manager.connect_bot(bot["bot_id"], bot["auth_token"])
+        logger.info(f"Connected {len(resp.json())} Discord pool bots")
     except Exception:
         logger.exception("Error connecting Discord pool bots at startup")
 
