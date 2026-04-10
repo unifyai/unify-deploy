@@ -1972,7 +1972,7 @@ def test_reconcile_restarts_after_vm_readiness_timeout(monkeypatch):
     )
 
 
-def test_reconcile_uses_windows_vm_readiness_timeout(monkeypatch):
+def test_reconcile_windows_uses_shared_vm_readiness_timeout(monkeypatch):
     body = _base_session()
     body["spec"]["desktop"]["mode"] = "windows"
     body["status"]["phase"] = "PendingGuest"
@@ -2017,15 +2017,14 @@ def test_reconcile_uses_windows_vm_readiness_timeout(monkeypatch):
 
     assert deadline_exceeded.call_args.args[1] == "guestHandshakeStartedAt"
     assert (
-        deadline_exceeded.call_args.args[2]
-        == controller.WINDOWS_VM_READINESS_DEADLINE_SECONDS
+        deadline_exceeded.call_args.args[2] == controller.VM_READINESS_DEADLINE_SECONDS
     )
     assert release_state.call_args.kwargs["source_reason"] == "vm_readiness_timeout"
     assert patch_status.call_args.kwargs["phase"] == "PendingJob"
     assert patch_status.call_args.kwargs["binding"]["id"] != "binding-1"
     assert patch_status.call_args.kwargs["vm_retries"] == 1
     assert (
-        f"{int(controller.WINDOWS_VM_READINESS_DEADLINE_SECONDS)}s"
+        f"{int(controller.VM_READINESS_DEADLINE_SECONDS)}s"
         in patch_status.call_args.kwargs["last_error"]
     )
 
