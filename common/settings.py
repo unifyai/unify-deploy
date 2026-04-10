@@ -8,7 +8,6 @@ from here instead of calling ``os.getenv`` directly::
     from common.settings import SETTINGS
 
     namespace = SETTINGS.default_namespace
-    topic = SETTINGS.pending_topic
 
 ``load_dotenv`` is called before ``Settings`` is instantiated so that
 ``.env`` values are available regardless of import order (the app's
@@ -98,6 +97,19 @@ class Settings:
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         self.shared_unify_key: str = os.environ.get("SHARED_UNIFY_KEY", "")
 
+        # Cleanup / Workspace integration
+        self.job_inventory_lookback_hours: int = int(
+            os.environ.get("UNITY_JOB_INVENTORY_LOOKBACK_HOURS", "36"),
+        )
+        self.workspace_email_domain: str = os.environ.get(
+            "WORKSPACE_EMAIL_DOMAIN",
+            "unify.ai",
+        )
+        self.workspace_admin_subject: str = os.environ.get(
+            "WORKSPACE_ADMIN_SUBJECT",
+            "dan@unify.ai",
+        )
+
         # K8s Lease-based assignment
         self.lease_duration_seconds: int = 60
 
@@ -109,14 +121,6 @@ class Settings:
             if not self.env_suffix
             else f"image_hash_{self.deploy_env}.txt"
         )
-
-        # Pending-startup Pub/Sub queue (overflow when container pool is exhausted)
-        self.pending_topic: str = "unity-pending-startups" + self.env_suffix
-        self.pending_sub: str = self.pending_topic + "-sub"
-
-        # Pending-VM Pub/Sub queue (overflow when VM pool is exhausted)
-        self.pending_vm_topic: str = "unity-pending-vm-assignments" + self.env_suffix
-        self.pending_vm_sub: str = self.pending_vm_topic + "-sub"
 
         # Container image registry (Artifact Registry)
         self.image_registry: str = (
@@ -142,6 +146,13 @@ class Settings:
         )
         self.tunnel_vm_name: str = f"unity-tunnel-server{self.env_suffix}"
         self.tunnel_gcs_bucket: str = f"unity-tunnel-config{self.env_suffix}"
+
+        # AssistantSession control plane
+        self.assistant_session_group: str = "infra.unify.ai"
+        self.assistant_session_version: str = "v1alpha1"
+        self.assistant_session_plural: str = "assistantsessions"
+        self.assistant_session_kind: str = "AssistantSession"
+        self.assistant_session_protocol_version: str = "v1"
 
     def assistant_topic(self, assistant_id: str) -> str:
         """Pub/Sub topic name for a specific assistant.

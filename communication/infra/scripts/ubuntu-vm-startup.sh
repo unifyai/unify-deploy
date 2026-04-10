@@ -155,16 +155,41 @@ chmod 711 /root
 chmod 711 /root/.cache 2>/dev/null || true
 echo "  /root made traversable (711)"
 
-# Fix system-wide profile: remove HOME=/root override that breaks unityuser shell sessions
-cat > /etc/profile.d/unity-vm.sh << 'EOF'
-export DISPLAY=:1
-export VNC_GEOMETRY=1920x1080
-export VNC_DEPTH=24
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
+# Single source of truth for all VM-level environment variables.
+# /etc/default/unity-vm is read by:
+#   - this startup-script (source before launching supervisord)
+#   - systemd supervisor.service (EnvironmentFile in drop-in below)
+#   - interactive shells (/etc/profile.d/unity-vm.sh sources this)
+# When adding new env vars, add them HERE and they propagate everywhere.
+cat > /etc/default/unity-vm << 'EOF'
+DISPLAY=:1
+VNC_GEOMETRY=1920x1080
+VNC_DEPTH=24
+LANG=en_US.UTF-8
+LC_ALL=en_US.UTF-8
 EOF
+chmod 644 /etc/default/unity-vm
+echo "  /etc/default/unity-vm written (canonical env vars)"
+
+cat > /etc/profile.d/unity-vm.sh << 'PROFILE'
+# Interactive shells: export all vars from the canonical env file.
+set -a
+. /etc/default/unity-vm
+set +a
+PROFILE
 chmod +x /etc/profile.d/unity-vm.sh
-echo "  /etc/profile.d/unity-vm.sh updated (removed HOME=/root)"
+echo "  /etc/profile.d/unity-vm.sh -> sources /etc/default/unity-vm"
+
+# Systemd drop-in so supervisor.service auto-restarts inherit the env vars.
+# Without this, systemd restarts supervisor without VNC_GEOMETRY/VNC_DEPTH,
+# causing a config parse error and an infinite crash loop.
+mkdir -p /etc/systemd/system/supervisor.service.d
+cat > /etc/systemd/system/supervisor.service.d/unity-env.conf << 'DROPIN'
+[Service]
+EnvironmentFile=/etc/default/unity-vm
+DROPIN
+systemctl daemon-reload
+echo "  systemd drop-in created for supervisor.service"
 
 # XFCE config via system-wide XDG fallback (read by any user, not just root)
 mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml
@@ -422,7 +447,9 @@ echo "  Inbound: ports 6080/3000 blocked (behind Caddy)"
 echo "  Outbound: metadata server blocked for unityuser"
 
 # =============================================================================
-# Start Services (before marking idle, so Caddy is ready before VM is claimable)
+# Start Services before marking idle so the desktop surface is reachable.
+# Pool idle does not mean agent-service is running yet; the watcher starts
+# agent-service only after assignment metadata appears.
 # =============================================================================
 ELAPSED=$(( $(date +%s) - START_TIME ))
 echo ""
@@ -432,8 +459,10 @@ echo "Setup complete in ${ELAPSED}s - launching supervisord"
 touch /var/log/agent-service.log
 chown unityuser:unityuser /var/log/agent-service.log
 
-export VNC_GEOMETRY=${VNC_GEOMETRY:-1920x1080}
-export VNC_DEPTH=${VNC_DEPTH:-24}
+# Source the canonical env file so supervisord inherits all vars.
+set -a
+. /etc/default/unity-vm
+set +a
 /usr/bin/supervisord -n -c /etc/supervisor/conf.d/unity-vm.conf &
 SUPERVISORD_PID=$!
 trap "kill $SUPERVISORD_PID 2>/dev/null; wait $SUPERVISORD_PID 2>/dev/null" EXIT

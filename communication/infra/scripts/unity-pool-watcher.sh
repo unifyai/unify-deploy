@@ -22,6 +22,8 @@ source /etc/profile.d/unity-vm.sh 2>/dev/null || true
 source /etc/profile.d/bun.sh 2>/dev/null || true
 export HOME=/root
 export PATH="/root/.bun/bin:$PATH"
+RELEASE_STATE_DIR="/var/lib/unity-pool-watcher"
+LAST_RELEASE_TOKEN_FILE="$RELEASE_STATE_DIR/last-release-token"
 
 get_metadata() {
     local key=$1
@@ -44,6 +46,51 @@ get_deploy_env() {
 
 log() {
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
+}
+
+ensure_release_state_dir() {
+    mkdir -p "$RELEASE_STATE_DIR"
+    chmod 700 "$RELEASE_STATE_DIR" 2>/dev/null || true
+}
+
+load_last_release_token() {
+    if [[ -f "$LAST_RELEASE_TOKEN_FILE" ]]; then
+        tr -d '\n' < "$LAST_RELEASE_TOKEN_FILE"
+    else
+        echo ""
+    fi
+}
+
+save_last_release_token() {
+    local token=$1
+    ensure_release_state_dir
+    if [[ -n "$token" ]]; then
+        printf '%s' "$token" > "$LAST_RELEASE_TOKEN_FILE"
+    else
+        rm -f "$LAST_RELEASE_TOKEN_FILE"
+    fi
+}
+
+current_release_token() {
+    local binding_id release_generation
+    binding_id=$(get_metadata "binding-id")
+    release_generation=$(get_metadata "release-generation")
+    if [[ -n "$binding_id" && -n "$release_generation" ]]; then
+        printf '%s:%s' "$binding_id" "$release_generation"
+    fi
+}
+
+should_trigger_release() {
+    local previous_unify_key=${1-}
+    local current_unify_key=${2-}
+    local current_release_token=${3-}
+    local last_handled_release_token=${4-}
+
+    if [[ "$current_unify_key" != "$previous_unify_key" && -z "$current_unify_key" && -z "$current_release_token" ]]; then
+        return 0
+    fi
+
+    [[ -z "$current_unify_key" && -n "$current_release_token" && "$current_release_token" != "$last_handled_release_token" ]]
 }
 
 # ─── Code update helpers ─────────────────────────────────────────────────
@@ -132,6 +179,52 @@ wipe_metadata_key() {
         -d "{\"key\": \"$key\"}" >/dev/null 2>&1 \
         && log "Wiped metadata key: $key" \
         || log "WARNING: failed to wipe metadata key $key via Comms API"
+}
+
+notify_release_complete() {
+    local binding_id release_generation comms_url id_token payload response http_status response_body
+    binding_id=$(get_metadata "binding-id")
+    release_generation=$(get_metadata "release-generation")
+    comms_url=$(get_metadata "comms-url")
+    id_token=$(curl -sf -H "Metadata-Flavor: Google" \
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" \
+        2>/dev/null || true)
+    if [[ -z "$binding_id" || -z "$comms_url" || -z "$id_token" ]]; then
+        log "WARNING: missing release completion metadata (binding-id/comms-url/id-token)"
+        return 1
+    fi
+    if [[ -n "$release_generation" ]]; then
+        payload=$(printf '{"binding_id": "%s", "release_generation": %s}' "$binding_id" "$release_generation")
+    else
+        payload=$(printf '{"binding_id": "%s"}' "$binding_id")
+    fi
+
+    for attempt in $(seq 1 10); do
+        response=$(curl -sS -X POST "$comms_url/infra/vm/release-complete" \
+            -H "Authorization: Bearer $id_token" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            -w $'\n%{http_code}' 2>&1)
+        http_status=$(printf '%s\n' "$response" | tail -n 1)
+        response_body=$(printf '%s\n' "$response" | sed '$d')
+        if [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+            if [[ -n "$response_body" ]]; then
+                log "Reported release completion to Comms: status=$http_status body=$response_body"
+            else
+                log "Reported release completion to Comms: status=$http_status"
+            fi
+            return 0
+        fi
+        if [[ -n "$response_body" ]]; then
+            log "Release completion attempt $attempt failed: status=${http_status:-curl_error} body=$response_body"
+        else
+            log "Release completion attempt $attempt failed: status=${http_status:-curl_error}"
+        fi
+        sleep 3
+    done
+
+    log "WARNING: failed to report release completion to Comms"
+    return 1
 }
 
 kill_agent_service() {
@@ -287,6 +380,7 @@ do_assign() {
     local ssh_public_key
     local disk_device
     local assistant_id
+    local binding_id
     local hostname
     local orchestra_url
     local comms_url
@@ -295,6 +389,7 @@ do_assign() {
     ssh_public_key=$(get_metadata "ssh-public-key")
     disk_device=$(get_metadata "disk-device")
     assistant_id=$(get_metadata "assistant-id")
+    binding_id=$(get_metadata "binding-id")
     hostname=$(get_metadata "hostname")
     orchestra_url=$(get_metadata "orchestra-url")
     comms_url=$(get_metadata "comms-url")
@@ -417,14 +512,14 @@ EOF
     fi
 
     # Send ready notification
-    if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" ]]; then
+    if [[ -n "$comms_url" && -n "$hostname" && -n "$unify_key" && -n "$assistant_id" && -n "$binding_id" ]]; then
         for attempt in $(seq 1 10); do
             local http_code
             http_code=$(curl -sf -o /dev/null -w "%{http_code}" \
                 -X POST "$comms_url/infra/vm/ready" \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer $unify_key" \
-                -d "{\"assistant_id\": \"$assistant_id\", \"vm_type\": \"ubuntu\", \"hostname\": \"$hostname\"}" \
+                -d "{\"assistant_id\": \"$assistant_id\", \"binding_id\": \"$binding_id\", \"vm_type\": \"ubuntu\", \"hostname\": \"$hostname\"}" \
                 2>/dev/null || echo "000")
 
             if [[ "$http_code" == "200" ]]; then
@@ -442,7 +537,9 @@ EOF
 # ─── Release: clean up VM for return to pool ─────────────────────────────
 
 do_release() {
-    log "RELEASE: cleaning up VM"
+    local release_token
+    release_token=$(current_release_token)
+    log "RELEASE: cleaning up VM${release_token:+ (token=$release_token)}"
 
     # Stop Agent Service
     kill_agent_service
@@ -491,6 +588,11 @@ PYSCRIPT
     do_update
 
     wipe_metadata_key "github-token"
+    if notify_release_complete; then
+        save_last_release_token "$release_token"
+    else
+        log "WARNING: release completion callback did not succeed; token remains unacked"
+    fi
 
     log "RELEASE complete"
 }
@@ -528,65 +630,74 @@ refresh_tls() {
     PREV_TLS_HASH="$new_hash"
 }
 
-# ─── Main watcher loop ───────────────────────────────────────────────────
+main() {
+    log "Unity Pool Watcher starting"
 
-log "Unity Pool Watcher starting"
-
-# Seed TLS hash to avoid unnecessary reload on first loop iteration
-_init_tls=$(get_metadata "tls-fullchain")
-if [[ -n "$_init_tls" ]]; then
-    PREV_TLS_HASH=$(echo -n "$_init_tls" | md5sum | cut -d' ' -f1)
-fi
-
-# Pre-fetch etag so the first long-poll has a valid value and won't block
-# on already-set metadata. Also check current state immediately to handle
-# assignments that happened before the watcher started.
-ETAG=$(curl -sf -H "$METADATA_HEADER" \
-    -o /dev/null -D - \
-    "$METADATA_URL/instance/attributes/?recursive=true" \
-    2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
-
-CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
-if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" ]]; then
-    if [[ -n "$CURRENT_UNIFY_KEY" ]]; then
-        do_assign "$CURRENT_UNIFY_KEY"
-    else
-        do_release
-    fi
-fi
-PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
-
-while true; do
-    # Long-poll for metadata changes (ETAG is always valid here)
-    RESPONSE=$(curl -sf -H "$METADATA_HEADER" \
-        "$METADATA_URL/instance/attributes/?recursive=true&wait_for_change=true&last_etag=$ETAG" \
-        2>/dev/null || echo "")
-
-    if [[ -z "$RESPONSE" ]]; then
-        log "Metadata poll returned empty, retrying in 5s"
-        sleep 5
-        continue
+    # Seed TLS hash to avoid unnecessary reload on first loop iteration
+    _init_tls=$(get_metadata "tls-fullchain")
+    if [[ -n "$_init_tls" ]]; then
+        PREV_TLS_HASH=$(echo -n "$_init_tls" | md5sum | cut -d' ' -f1)
     fi
 
-    # Extract new etag from response headers (re-request with header capture)
+    # Pre-fetch etag so the first long-poll has a valid value and won't block
+    # on already-set metadata. Also check current state immediately to handle
+    # assignments that happened before the watcher started.
     ETAG=$(curl -sf -H "$METADATA_HEADER" \
         -o /dev/null -D - \
         "$METADATA_URL/instance/attributes/?recursive=true" \
         2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
 
-    # Check unify-key
     CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
-
-    if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" ]]; then
-        if [[ -n "$CURRENT_UNIFY_KEY" ]]; then
-            do_assign "$CURRENT_UNIFY_KEY"
-        else
-            do_release
-        fi
+    CURRENT_RELEASE_TOKEN=$(current_release_token)
+    LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
+    if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" && -n "$CURRENT_UNIFY_KEY" ]]; then
+        do_assign "$CURRENT_UNIFY_KEY"
     fi
-
+    if should_trigger_release "$PREV_UNIFY_KEY" "$CURRENT_UNIFY_KEY" "$CURRENT_RELEASE_TOKEN" "$LAST_HANDLED_RELEASE_TOKEN"; then
+        do_release
+        LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
+    fi
     PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
 
-    # Refresh TLS cert if metadata changed (handles renewal pushes)
-    refresh_tls
-done
+    while true; do
+        # Long-poll for metadata changes (ETAG is always valid here)
+        RESPONSE=$(curl -sf -H "$METADATA_HEADER" \
+            "$METADATA_URL/instance/attributes/?recursive=true&wait_for_change=true&last_etag=$ETAG" \
+            2>/dev/null || echo "")
+
+        if [[ -z "$RESPONSE" ]]; then
+            log "Metadata poll returned empty, retrying in 5s"
+            sleep 5
+            continue
+        fi
+
+        # Extract new etag from response headers (re-request with header capture)
+        ETAG=$(curl -sf -H "$METADATA_HEADER" \
+            -o /dev/null -D - \
+            "$METADATA_URL/instance/attributes/?recursive=true" \
+            2>/dev/null | grep -i "etag:" | tr -d '\r' | awk '{print $2}' || echo "")
+
+        # Check unify-key
+        CURRENT_UNIFY_KEY=$(get_metadata "unify-key")
+        CURRENT_RELEASE_TOKEN=$(current_release_token)
+        LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
+
+        if [[ "$CURRENT_UNIFY_KEY" != "$PREV_UNIFY_KEY" && -n "$CURRENT_UNIFY_KEY" ]]; then
+            do_assign "$CURRENT_UNIFY_KEY"
+        fi
+
+        if should_trigger_release "$PREV_UNIFY_KEY" "$CURRENT_UNIFY_KEY" "$CURRENT_RELEASE_TOKEN" "$LAST_HANDLED_RELEASE_TOKEN"; then
+            do_release
+            LAST_HANDLED_RELEASE_TOKEN=$(load_last_release_token)
+        fi
+
+        PREV_UNIFY_KEY="$CURRENT_UNIFY_KEY"
+
+        # Refresh TLS cert if metadata changed (handles renewal pushes)
+        refresh_tls
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

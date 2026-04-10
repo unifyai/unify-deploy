@@ -2,39 +2,50 @@
 Unit tests for the adapters helper functions.
 
 These tests verify:
-- Contact handling logic after the whatsapp_number field was removed
+- Contact handling logic (WhatsApp is validated via Orchestra's resolve endpoint,
+  not through check_contact_details)
 - Demo ID propagation for demo assistants (passed as string to Comms)
 """
 
+from datetime import datetime, timedelta, timezone
+import json
+import requests
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 from adapters.helpers import (
+    START_INTENT_DISPATCH_TIMEOUT_SECONDS,
     build_webhook_context,
+    cleanup_idle_pool,
+    expire_all_stale_jobs,
     get_default_contacts,
+    get_unity_jobs_inventory,
     check_contact_details,
+    replenish_idle_pool,
     start_unity_job,
 )
+from common.settings import SETTINGS
 
 # --- get_default_contacts tests ---
 
 
-def test_get_default_contacts_does_not_include_whatsapp_number():
-    """Verify contacts returned don't include whatsapp_number field."""
+def test_get_default_contacts_includes_whatsapp_number():
+    """Verify contacts include whatsapp_number field from assistant data."""
     assistant_data = {
         "assistant_first_name": "Test",
         "assistant_surname": "Assistant",
         "assistant_email": "test@example.com",
         "assistant_number": "+1234567890",
+        "assistant_whatsapp_number": "+1112223333",
         "user_first_name": "Test",
         "user_surname": "User",
         "user_email": "user@example.com",
         "user_number": "+0987654321",
+        "user_whatsapp_number": "+4445556666",
     }
     contacts = get_default_contacts(assistant_data)
 
-    for contact in contacts:
-        assert (
-            "whatsapp_number" not in contact
-        ), f"Contact should not have whatsapp_number field: {contact}"
+    assert contacts[0]["whatsapp_number"] == "+1112223333"  # assistant
+    assert contacts[1]["whatsapp_number"] == "+4445556666"  # user
 
 
 def test_get_default_contacts_includes_phone_number():
@@ -59,24 +70,13 @@ def test_get_default_contacts_includes_phone_number():
 # --- check_contact_details tests ---
 
 
-def test_check_contact_details_whatsapp_uses_user_whatsapp_number():
-    """Verify WhatsApp matching uses user_whatsapp_number parameter."""
+def test_check_contact_details_whatsapp_not_handled():
+    """WhatsApp validation is handled by Orchestra's resolve endpoint, not here."""
     result = check_contact_details(
         phone_number="+1111111111",
         medium="whatsapp",
-        user_number="+2222222222",  # Different from phone_number
-        user_whatsapp_number="+1111111111",  # Matches phone_number
-    )
-    assert result is True
-
-
-def test_check_contact_details_whatsapp_does_not_match_user_number():
-    """Verify WhatsApp doesn't match against user_number."""
-    result = check_contact_details(
-        phone_number="+1111111111",
-        medium="whatsapp",
-        user_number="+1111111111",  # Matches phone_number but shouldn't be used
-        user_whatsapp_number="+2222222222",  # Different
+        user_number="+2222222222",
+        user_whatsapp_number="+1111111111",
     )
     assert result is False
 
@@ -160,6 +160,7 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "assistant_number": "+0987654321",
         "assistant_email": "assistant@example.com",
         "user_whatsapp_number": "+1234567890",
+        "assistant_whatsapp_number": "+18501234567",
         "voice_provider": "elevenlabs",
         "voice_id": "voice-123",
         "desktop_mode": desktop_mode,  # Use "none" to skip VM start
@@ -267,15 +268,143 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
         assert data["medium"] == medium, f"Expected medium={medium}"
 
 
+@patch("adapters.helpers._fetch_infra_jobs")
+def test_get_unity_jobs_inventory_uses_explicit_lookback(mock_fetch_infra_jobs):
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"jobs": []}
+    mock_fetch_infra_jobs.return_value = mock_response
+
+    inventory = get_unity_jobs_inventory()
+
+    assert inventory == {"running": [], "idle": []}
+    mock_fetch_infra_jobs.assert_called_once()
+    params = mock_fetch_infra_jobs.call_args.args[0]
+    assert params["hours"] == SETTINGS.job_inventory_lookback_hours
+    assert params["label_selector"] == "app=unity,unity-status!=done"
+
+
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+def test_replenish_idle_pool_honors_extra_demand(
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+    mock_requests_post,
+):
+    mock_get_unity_jobs_inventory.return_value = {
+        "running": [{"job_name": "running-1"}],
+        "idle": [{"job_name": "idle-1"}],
+    }
+    mock_get_target_idle_count.return_value = SimpleNamespace(
+        target=3,
+        demand_exceeds_floor=False,
+    )
+    mock_requests_get.return_value = MagicMock(
+        json=MagicMock(return_value={"commit_hash": "abc123"}),
+    )
+    mock_requests_post.return_value = MagicMock(
+        json=MagicMock(return_value={"status": "dispatched"}),
+    )
+
+    result = replenish_idle_pool(extra_demand=4)
+
+    assert result["mode"] == "fill-reactive"
+    assert result["created"] == 3
+    assert result["target"] == 4
+    assert result["extra_demand"] == 4
+    assert mock_requests_post.call_count == 3
+
+
+@patch("adapters.helpers.requests.get")
+@patch("adapters.helpers.get_target_idle_count")
+@patch("adapters.helpers.get_unity_jobs_inventory")
+def test_cleanup_idle_pool_uses_explicit_lookback_for_idle_listing(
+    mock_get_unity_jobs_inventory,
+    mock_get_target_idle_count,
+    mock_requests_get,
+):
+    mock_get_unity_jobs_inventory.return_value = {"running": [], "idle": []}
+    mock_get_target_idle_count.return_value = SimpleNamespace(target=0)
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"jobs": []}
+    mock_requests_get.return_value = mock_response
+
+    result = cleanup_idle_pool()
+
+    assert result["deleted"] == 0
+    assert result["running"] == 0
+    mock_requests_get.assert_called_once()
+    assert (
+        mock_requests_get.call_args.kwargs["params"]["hours"]
+        == SETTINGS.job_inventory_lookback_hours
+    )
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_passes_whatsapp_numbers(mock_post):
+    """Both user_whatsapp_number and assistant_whatsapp_number are forwarded."""
+    mock_post.return_value = MagicMock(status_code=200)
+
+    assistant_data = _create_mock_assistant_data()
+    start_unity_job(assistant_data, "whatsapp")
+
+    data = mock_post.call_args.kwargs.get("data") or mock_post.call_args[1]["data"]
+    assert data["user_whatsapp_number"] == "+1234567890"
+    assert data["assistant_whatsapp_number"] == "+18501234567"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_defaults_missing_assistant_whatsapp(mock_post):
+    """assistant_whatsapp_number defaults to empty when absent from assistant data."""
+    mock_post.return_value = MagicMock(status_code=200)
+
+    assistant_data = _create_mock_assistant_data()
+    del assistant_data["assistant_whatsapp_number"]
+    start_unity_job(assistant_data, "phone")
+
+    data = mock_post.call_args.kwargs.get("data") or mock_post.call_args[1]["data"]
+    assert data["assistant_whatsapp_number"] == ""
+
+
+@patch("adapters.helpers.logger.info")
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_start_unity_job_timeout_is_best_effort_dispatch_only(
+    mock_post,
+    mock_logger_info,
+):
+    """Timeouts intentionally preserve webhook latency, not durable acceptance."""
+
+    mock_post.side_effect = requests.exceptions.Timeout
+
+    assistant_data = _create_mock_assistant_data()
+    start_unity_job(assistant_data, "phone")
+
+    assert (
+        mock_post.call_args.kwargs["timeout"] == START_INTENT_DISPATCH_TIMEOUT_SECONDS
+    )
+    mock_logger_info.assert_called_once_with(
+        "Activation request client timeout after %sms for assistant %s; "
+        "adapters intentionally stop waiting here to preserve webhook "
+        "latency. This does not confirm comms accepted the request.",
+        int(START_INTENT_DISPATCH_TIMEOUT_SECONDS * 1000),
+        "12345",
+    )
+
+
 # --- build_webhook_context local assistant tests ---
 
 
 @patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
+@patch("adapters.helpers._WEBHOOK_BG_POOL.submit")
+@patch("adapters.helpers._resolve_contacts", return_value=([], True))
 def test_build_webhook_context_skips_job_start_for_local_assistant(
-    _mock_check,
-    mock_start,
+    _mock_resolve,
+    mock_submit,
     _mock_replenish,
 ):
     """When is_local=True in assistant data, job start should be skipped."""
@@ -289,23 +418,24 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
         sender="whatsapp:+1234567890",
         assistant_data=assistant_data,
     )
-    mock_start.assert_not_called()
+    mock_submit.assert_not_called()
     assert ctx["is_valid_contact"] is True
+    assert ctx["job_started"] is False
+    assert ctx["is_job_running"] is False
 
 
 @patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
+@patch("adapters.helpers._WEBHOOK_BG_POOL.submit")
+@patch("adapters.helpers._resolve_contacts", return_value=([], True))
 def test_build_webhook_context_starts_job_for_non_local_assistant(
-    _mock_check,
-    mock_start,
+    _mock_resolve,
+    mock_submit,
     _mock_replenish,
 ):
-    """When is_local=False, job start should proceed normally.
+    """Legacy flags only mean the async dispatch was scheduled.
 
-    The adapter unconditionally calls start_unity_job (which hits
-    /infra/job/start). Deduplication is handled atomically by the
-    comms app via K8s Leases, not by the adapter.
+    The adapter schedules ``start_unity_job`` on the webhook pool, then returns
+    legacy compatibility flags immediately. Comms acceptance remains async.
     """
     assistant_data = _create_mock_assistant_data()
     ctx = build_webhook_context(
@@ -314,125 +444,134 @@ def test_build_webhook_context_starts_job_for_non_local_assistant(
         sender="whatsapp:+1234567890",
         assistant_data=assistant_data,
     )
-    mock_start.assert_called_once()
-
-
-# --- Wakeup endpoint dedup tests ---
-#
-# The wakeup channel must respect is_job_running() to prevent split-brain:
-# two pods serving the same assistant after duplicate /assistant/wakeup calls.
-
-
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.is_job_running", return_value=True)
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_wakeup_skips_job_start_when_already_running(
-    _mock_check,
-    _mock_running,
-    mock_start,
-    _mock_replenish,
-):
-    """Duplicate wakeup for an already-running assistant must not start a
-    second container. This prevents the split-brain scenario where two pods
-    serve the same assistant (voice on one, desktop on the other)."""
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="wakeup",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    mock_start.assert_not_called()
-    assert ctx["job_started"] is False
+    mock_submit.assert_called_once_with(start_unity_job, assistant_data, "whatsapp")
+    assert ctx["job_started"] is True
     assert ctx["is_job_running"] is True
 
 
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.is_job_running", return_value=False)
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_wakeup_starts_job_when_not_running(
-    _mock_check,
-    _mock_running,
-    mock_start,
-    _mock_replenish,
-):
-    """First wakeup (no running pod) must start a container."""
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="wakeup",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    mock_start.assert_called_once()
-    assert ctx["job_started"] is True
+# Wakeup dedup is now handled atomically by /infra/job/start.
+# The previous is_job_running() check-then-act flow was removed as non-atomic.
 
 
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
-@patch("adapters.helpers.is_job_running", return_value=False)
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_wakeup_starts_job_when_k8s_check_fails(
-    _mock_check,
-    _mock_running,
-    mock_start,
-    _mock_replenish,
-):
-    """When is_job_running returns False (fail-open on K8s query failure),
-    wakeup must still start a job so hiring is not silently blocked."""
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="wakeup",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    mock_start.assert_called_once()
-    assert ctx["job_started"] is True
+class _Response:
+    def __init__(self, status_code: int, payload: dict | None = None):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = json.dumps(self._payload)
+
+    def json(self) -> dict:
+        return self._payload
 
 
-@patch("adapters.helpers.replenish_idle_pool")
-@patch("adapters.helpers.start_unity_job")
+def _stale_job(*, job_name: str, assistant_id: str, status: str = "running") -> dict:
+    created_at = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    return {
+        "job_name": job_name,
+        "assistant_id": assistant_id,
+        "labels": {"unity-status": status},
+        "creation_timestamp": created_at,
+    }
+
+
+@patch.object(SETTINGS, "comms_url", "http://comms.test")
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.post")
 @patch("adapters.helpers.requests.get")
-@patch("adapters.helpers.check_valid_contact", return_value=([], True))
-def test_wakeup_skips_when_k8s_reports_active_pod(
-    _mock_check,
-    mock_requests_get,
-    mock_start,
-    _mock_replenish,
+def test_expire_all_stale_jobs_stops_bound_session_before_deleting_orphans(
+    mock_get,
+    mock_post,
+    mock_delete,
 ):
-    """End-to-end: wakeup with a real K8s response showing an active pod
-    must not start a second container."""
+    events = []
 
-    def mock_get(url, **kwargs):
-        resp = MagicMock()
-        if "/infra/jobs" in url:
-            resp.status_code = 200
-            resp.json.return_value = {
-                "jobs": [{"status": "Running", "assistant_id": "12345"}],
-            }
-        else:
-            resp.status_code = 404
-        return resp
+    def _get(url, *args, **kwargs):
+        if url.endswith("/infra/jobs"):
+            return _Response(
+                200,
+                {
+                    "jobs": [
+                        _stale_job(job_name="unity-job-bound", assistant_id="aid-1"),
+                        _stale_job(job_name="unity-job-orphan", assistant_id="aid-2"),
+                    ],
+                },
+            )
+        if url.endswith("/infra/session/aid-1"):
+            return _Response(
+                200,
+                {
+                    "spec": {"desiredState": "Running"},
+                    "status": {
+                        "phase": "Active",
+                        "binding": {"jobRef": {"name": "unity-job-bound"}},
+                    },
+                },
+            )
+        if url.endswith("/infra/session/aid-2"):
+            return _Response(404, {})
+        raise AssertionError(f"unexpected GET {url}")
 
-    mock_requests_get.side_effect = mock_get
+    def _post(url, *args, **kwargs):
+        events.append(("stop", url))
+        return _Response(200, {"stopped": True})
 
-    assistant_data = _create_mock_assistant_data()
-    ctx = build_webhook_context(
-        channel="wakeup",
-        destination="",
-        sender="",
-        assistant_data=assistant_data,
-        validate_contact=False,
-        ensure_job=True,
-    )
-    mock_start.assert_not_called()
-    assert ctx["job_started"] is False
+    def _delete(url, *args, **kwargs):
+        events.append(("delete", kwargs["data"]["job_name"]))
+        return _Response(200, {})
+
+    mock_get.side_effect = _get
+    mock_post.side_effect = _post
+    mock_delete.side_effect = _delete
+
+    result = expire_all_stale_jobs()
+
+    assert result["stopped_assistants"] == ["aid-1"]
+    assert result["cleaned_jobs"] == ["unity-job-orphan"]
+    assert result["deferred_jobs"] == ["unity-job-bound"]
+    assert ("delete", "unity-job-bound") not in events
+    assert events == [
+        ("stop", "http://comms.test/infra/session/aid-1/stop"),
+        ("delete", "unity-job-orphan"),
+    ]
+
+
+@patch.object(SETTINGS, "comms_url", "http://comms.test")
+@patch("adapters.helpers.requests.delete")
+@patch("adapters.helpers.requests.post")
+@patch("adapters.helpers.requests.get")
+def test_expire_all_stale_jobs_defers_current_binding_already_stopping(
+    mock_get,
+    mock_post,
+    mock_delete,
+):
+    def _get(url, *args, **kwargs):
+        if url.endswith("/infra/jobs"):
+            return _Response(
+                200,
+                {
+                    "jobs": [
+                        _stale_job(job_name="unity-job-bound", assistant_id="aid-1"),
+                    ],
+                },
+            )
+        if url.endswith("/infra/session/aid-1"):
+            return _Response(
+                200,
+                {
+                    "spec": {"desiredState": "Stopped"},
+                    "status": {
+                        "phase": "Releasing",
+                        "binding": {"jobRef": {"name": "unity-job-bound"}},
+                    },
+                },
+            )
+        raise AssertionError(f"unexpected GET {url}")
+
+    mock_get.side_effect = _get
+
+    result = expire_all_stale_jobs()
+
+    assert result["stopped_assistants"] == []
+    assert result["cleaned_jobs"] == []
+    assert result["deferred_jobs"] == ["unity-job-bound"]
+    mock_post.assert_not_called()
+    mock_delete.assert_not_called()

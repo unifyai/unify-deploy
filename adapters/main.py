@@ -2,6 +2,7 @@ import asyncio
 import json
 import base64
 import logging
+import mimetypes
 import time
 import uuid
 from dotenv import load_dotenv
@@ -59,11 +60,14 @@ from common.livekit import (
 
 from common.settings import SETTINGS
 
+# Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
+# Duplicated here because the adapters container does not include the
+# communication package at runtime.
+SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
+
 from .helpers import (
     cleanup_idle_pool,
     replenish_idle_pool,
-    _trigger_pending_reconciliation,
-    _trigger_pending_vm_reconciliation,
     add_user_to_conference,
     build_webhook_context,
     check_valid_contact,
@@ -75,13 +79,16 @@ from .helpers import (
     get_outlook_thread_id,
     get_pubsub_client,
     get_thread_id,
+    get_twilio_wa_client,
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
     exchange_microsoft_code_for_tokens,
     get_microsoft_user_info,
+    resolve_whatsapp_route,
     start_unity_job,
     store_microsoft_tokens,
+    uses_local_unity_runtime,
 )
 
 load_dotenv()
@@ -98,6 +105,7 @@ setup_metrics(app, service_name="adapters")
 # =============================================================================
 
 _twilio_validator = None
+_twilio_wa_validator = None
 
 
 def _get_twilio_validator() -> RequestValidator:
@@ -110,14 +118,23 @@ def _get_twilio_validator() -> RequestValidator:
     return _twilio_validator
 
 
-async def validate_twilio_signature(request: Request):
-    """FastAPI dependency that validates the X-Twilio-Signature header.
+def _get_twilio_wa_validator() -> RequestValidator:
+    global _twilio_wa_validator
+    if _twilio_wa_validator is None:
+        auth_token = os.environ.get("TWILIO_WA_AUTH_TOKEN")
+        if not auth_token:
+            raise RuntimeError("TWILIO_WA_AUTH_TOKEN is required but not set")
+        _twilio_wa_validator = RequestValidator(auth_token)
+    return _twilio_wa_validator
+
+
+async def _validate_twilio_sig(request: Request, validator: RequestValidator):
+    """Shared logic for Twilio signature validation.
 
     Cloud Run proxies rewrite the Host header, so ``str(request.url)``
     returns an internal URL that differs from the public URL Twilio signed
     against. Reconstruct the original URL from forwarded headers.
     """
-    validator = _get_twilio_validator()
     signature = request.headers.get("X-Twilio-Signature", "")
     proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
     host = request.headers.get("X-Forwarded-Host", request.headers.get("Host", ""))
@@ -128,6 +145,14 @@ async def validate_twilio_signature(request: Request):
     params = {k: v for k, v in form_data.items()}
     if not validator.validate(url, params, signature):
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+
+
+async def validate_twilio_signature(request: Request):
+    await _validate_twilio_sig(request, _get_twilio_validator())
+
+
+async def validate_twilio_wa_signature(request: Request):
+    await _validate_twilio_sig(request, _get_twilio_wa_validator())
 
 
 # =============================================================================
@@ -235,8 +260,10 @@ async def twilio_call_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # conference name and SIP URI
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -450,8 +477,9 @@ async def livekit_recording_complete(request: Request):
             ensure_job=True,
         )
         logger.info(
-            f"[Recording] Assistant {assistant_id} job running: "
-            f"{context['is_job_running']}",
+            "[Recording] Activation intent scheduled "
+            "(legacy is_job_running flag): %s",
+            context["is_job_running"],
         )
     except Exception as e:
         logger.error(
@@ -532,8 +560,10 @@ async def twilio_sms_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # set up response
     resp_user = MessagingResponse()
@@ -572,32 +602,219 @@ async def twilio_sms_webhook(request: Request):
     return Response(content=str(resp_user), media_type="text/xml")
 
 
-@app.post("/twilio/whatsapp", dependencies=[Depends(validate_twilio_signature)])
+# WhatsApp media size limits (bytes)
+_WA_IMAGE_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+_WA_MEDIA_MAX_BYTES = 16 * 1024 * 1024  # 16 MB
+
+
+async def _ingest_whatsapp_media(
+    form_data,
+    assistant_id: str,
+    message_sid: str | None,
+) -> list[dict]:
+    """Download media from Twilio, re-upload to GCS, delete from Twilio.
+
+    Returns a list of attachment dicts compatible with the Unify attachment
+    schema: {id, filename, gs_url, content_type, size_bytes}.
+    """
+    num_media = int(form_data.get("NumMedia", "0") or "0")
+    if num_media == 0:
+        return []
+
+    creds_json = json.loads(os.getenv("GCP_SA_KEY", "{}"))
+    if not creds_json:
+        logger.error("GCP_SA_KEY not configured — skipping WhatsApp media ingestion")
+        return []
+
+    account_sid = os.getenv("TWILIO_WA_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_WA_AUTH_TOKEN", "")
+    twilio_auth = (account_sid, auth_token)
+
+    creds = Credentials.from_service_account_info(creds_json)
+    storage_client = storage.Client(credentials=creds)
+    bucket = storage_client.bucket(UNIFY_ATTACHMENTS_BUCKET)
+
+    attachments: list[dict] = []
+
+    async with httpx.AsyncClient() as client:
+        for i in range(num_media):
+            media_url = form_data.get(f"MediaUrl{i}")
+            content_type = form_data.get(
+                f"MediaContentType{i}",
+                "application/octet-stream",
+            )
+            if not media_url:
+                continue
+
+            try:
+                resp = await client.get(
+                    media_url,
+                    auth=twilio_auth,
+                    follow_redirects=True,
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+            except Exception:
+                logger.exception(f"Failed to download WhatsApp media from {media_url}")
+                continue
+
+            file_content = resp.content
+            size_bytes = len(file_content)
+
+            max_size = (
+                _WA_IMAGE_MAX_BYTES
+                if content_type.startswith("image/")
+                else _WA_MEDIA_MAX_BYTES
+            )
+            if size_bytes > max_size:
+                logger.warning(
+                    f"WhatsApp media exceeds size limit ({size_bytes} > {max_size}), skipping",
+                )
+                continue
+
+            ext = mimetypes.guess_extension(content_type) or ""
+            attachment_id = str(uuid.uuid4())
+            filename = f"whatsapp_media_{attachment_id[:8]}{ext}"
+
+            blob_path = f"{assistant_id}/whatsapp/{attachment_id}_{filename}"
+            blob = bucket.blob(blob_path)
+            await asyncio.to_thread(
+                blob.upload_from_string,
+                file_content,
+                content_type=content_type,
+            )
+
+            gs_url = f"gs://{UNIFY_ATTACHMENTS_BUCKET}/{blob_path}"
+            logger.info(f"Uploaded WhatsApp media to {gs_url} ({size_bytes} bytes)")
+
+            attachments.append(
+                {
+                    "id": attachment_id,
+                    "filename": filename,
+                    "gs_url": gs_url,
+                    "content_type": content_type,
+                    "size_bytes": size_bytes,
+                },
+            )
+
+            # Delete media from Twilio to free storage.
+            if message_sid:
+                media_sid = media_url.rstrip("/").rsplit("/", 1)[-1]
+                try:
+                    twilio_client = get_twilio_wa_client()
+                    await asyncio.to_thread(
+                        twilio_client.messages(message_sid).media(media_sid).delete,
+                    )
+                    logger.info(f"Deleted Twilio media {media_sid}")
+                except Exception:
+                    logger.exception(f"Failed to delete Twilio media {media_sid}")
+
+    return attachments
+
+
+@app.post("/twilio/whatsapp", dependencies=[Depends(validate_twilio_wa_signature)])
 async def twilio_whatsapp_webhook(request: Request):
     """WhatsApp webhook endpoint - handles incoming Twilio WhatsApp messages."""
     logger.info("twilio_whatsapp_webhook function started")
     form_data = await request.form()
 
-    # get twilio number and caller number
     to_number = form_data.get("To", "") or ""
     from_number = form_data.get("From", "") or ""
     body = form_data.get("Body", "") or ""
+    message_sid = form_data.get("MessageSid")
     logger.info(
         f"Received WhatsApp message from {_redact_phone(from_number)} to {_redact_phone(to_number)}",
     )
 
-    # shared context
-    context = await asyncio.to_thread(
-        build_webhook_context,
-        "whatsapp",
-        to_number,
-        from_number,
-    )
-    assistant_data = context["assistant"]
-    assistant_id = assistant_data["assistant_id"]
-    contacts = context["contacts"]
+    pool_number = to_number.replace("whatsapp:", "").strip()
+    sender = from_number.replace("whatsapp:", "").strip()
 
-    if not context["is_valid_contact"]:
+    # Handle VOICE_CALL_REQUEST permission responses before normal routing.
+    # When a user responds to a call permission request, Twilio sends a
+    # webhook with Body="VOICE_CALL_REQUEST" and ButtonPayload=ACCEPTED|REJECTED.
+    if body == "VOICE_CALL_REQUEST":
+        button_payload = form_data.get("ButtonPayload", "")
+        logger.info(
+            f"WhatsApp call permission response from {_redact_phone(sender)}: "
+            f"{button_payload}",
+        )
+        status = "accepted" if button_payload == "ACCEPTED" else "rejected"
+
+        # Forward permission state to Orchestra
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{SETTINGS.orchestra_url}/admin/whatsapp/call-permission",
+                    headers={
+                        "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                    },
+                    json={
+                        "pool_number": pool_number,
+                        "contact_number": sender,
+                        "status": status,
+                    },
+                    timeout=10.0,
+                )
+        except Exception:
+            logger.exception("Failed to forward call permission to Orchestra")
+
+        # Resolve assistant so we can publish to the right Pub/Sub topic
+        resolve_data = await asyncio.to_thread(
+            resolve_whatsapp_route,
+            pool_number,
+            sender,
+        )
+        if resolve_data and "assistant_id" in resolve_data:
+            resolved_id = str(resolve_data["assistant_id"])
+            context = await asyncio.to_thread(
+                build_webhook_context,
+                "whatsapp",
+                to_number,
+                from_number,
+                assistant_id=resolved_id,
+                validate_contact=False,
+            )
+            assistant_id = context["assistant"]["assistant_id"]
+            contacts = context["contacts"]
+
+            pubsub_client = get_pubsub_client()
+            topic_name = SETTINGS.assistant_topic(assistant_id)
+            topic_path = pubsub_client.topic_path(
+                SETTINGS.gcp_project_id,
+                topic_name,
+            )
+            try:
+                pubsub_client.publish(
+                    topic_path,
+                    json.dumps(
+                        {
+                            "thread": "whatsapp",
+                            "publish_timestamp": time.time(),
+                            "event": {
+                                "contacts": contacts,
+                                "to_number": to_number,
+                                "from_number": from_number,
+                                "body": body,
+                                "role": resolve_data.get("role", "contact"),
+                                "type": "call_permission_response",
+                                "payload": button_payload,
+                            },
+                        },
+                    ).encode("utf-8"),
+                    thread="inbound",
+                )
+                logger.info("Call permission response published to Pub/Sub")
+            except Exception as e:
+                logger.error(f"Error publishing permission response: {e}")
+
+        resp_user = MessagingResponse()
+        return Response(content=str(resp_user), media_type="text/xml")
+
+    resolve_data = await asyncio.to_thread(resolve_whatsapp_route, pool_number, sender)
+
+    action = resolve_data.get("action") if resolve_data else None
+
+    if resolve_data is None or action == "auto_reply":
         resp_user = MessagingResponse()
         resp_user.message(
             "This number is no longer active. Please visit "
@@ -605,13 +822,42 @@ async def twilio_whatsapp_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    if action == "reject_cold":
+        resp_user = MessagingResponse()
+        resp_user.message("This number is not accepting new messages.")
+        return Response(content=str(resp_user), media_type="text/xml")
 
-    # set up response
+    resolved_assistant_id = str(resolve_data["assistant_id"])
+    role = resolve_data["role"]
+
+    # Build context using the resolved assistant (skip contact validation —
+    # the resolve endpoint already confirmed this sender is valid).
+    context = await asyncio.to_thread(
+        build_webhook_context,
+        "whatsapp",
+        to_number,
+        from_number,
+        assistant_id=resolved_assistant_id,
+        validate_contact=False,
+    )
+    assistant_data = context["assistant"]
+    assistant_id = assistant_data["assistant_id"]
+    contacts = context["contacts"]
+
+    attachments = await _ingest_whatsapp_media(form_data, assistant_id, message_sid)
+
     resp_user = MessagingResponse()
 
-    # publish to pubsub
+    event_data = {
+        "contacts": contacts,
+        "to_number": to_number,
+        "from_number": from_number,
+        "body": body,
+        "role": role,
+    }
+    if attachments:
+        event_data["attachments"] = attachments
+
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
@@ -623,12 +869,7 @@ async def twilio_whatsapp_webhook(request: Request):
                 {
                     "thread": "whatsapp",
                     "publish_timestamp": time.time(),
-                    "event": {
-                        "contacts": contacts,
-                        "to_number": to_number,
-                        "from_number": from_number,
-                        "body": body,
-                    },
+                    "event": event_data,
                 },
             ).encode("utf-8"),
             thread="inbound",
@@ -643,6 +884,233 @@ async def twilio_whatsapp_webhook(request: Request):
 
     logger.info("Returning TwiML response")
     return Response(content=str(resp_user), media_type="text/xml")
+
+
+# =============================================================================
+# WhatsApp Business Calling Webhook
+# =============================================================================
+
+
+@app.post(
+    "/twilio/whatsapp-call",
+    dependencies=[Depends(validate_twilio_wa_signature)],
+)
+async def twilio_whatsapp_call_webhook(request: Request):
+    """Inbound WhatsApp Business Calling webhook.
+
+    Triggered by a TwiML Voice Application attached to a WhatsApp sender.
+    Bridges the WhatsApp VoIP caller into a Twilio Conference and connects
+    a SIP leg to LiveKit so the voice agent can participate.
+    """
+    logger.info("twilio_whatsapp_call_webhook function started")
+    form_data = await request.form()
+
+    to_raw = form_data.get("To", "") or ""
+    from_raw = form_data.get("From", "") or ""
+    pool_number = to_raw.replace("whatsapp:", "").strip()
+    caller_number = from_raw.replace("whatsapp:", "").strip()
+    logger.info(
+        f"Received WhatsApp call from {_redact_phone(caller_number)} "
+        f"to {_redact_phone(pool_number)}",
+    )
+
+    # Resolve assistant via the shared WhatsApp pool routing
+    resolve_data = await asyncio.to_thread(
+        resolve_whatsapp_route,
+        pool_number,
+        caller_number,
+    )
+    if resolve_data is None or resolve_data.get("action") in (
+        "auto_reply",
+        "reject_cold",
+    ):
+        resp = VoiceResponse()
+        resp.say(
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details.",
+        )
+        resp.hangup()
+        return Response(content=str(resp), media_type="text/xml")
+
+    resolved_assistant_id = str(resolve_data["assistant_id"])
+
+    context = await asyncio.to_thread(
+        build_webhook_context,
+        "whatsapp_call",
+        to_raw,
+        from_raw,
+        assistant_id=resolved_assistant_id,
+        validate_contact=False,
+    )
+    assistant_data = context["assistant"]
+    assistant_id = assistant_data["assistant_id"]
+    contacts = context["contacts"]
+
+    # Conference + LiveKit room
+    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    conference_name = f"Unity_WA_{pool_number[1:]}_{date_time}"
+    room_name = make_room_name(assistant_id, "whatsapp_call")
+    sip_uri = make_sip_uri(pool_number)
+    logger.info(f"Setting up WhatsApp call conference {conference_name}")
+    logger.info(f"LiveKit room: {room_name}")
+
+    await ensure_phone_dispatch_rule(pool_number, room_name)
+
+    # Publish to Pub/Sub
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    logger.info(f"Publishing WhatsApp call to Pub/Sub at path: {topic_path}")
+    try:
+        pubsub_message = {
+            "thread": "whatsapp_call",
+            "publish_timestamp": time.time(),
+            "event": {
+                "contacts": contacts,
+                "conference_name": conference_name,
+                "caller_number": caller_number,
+                "sip_uri": sip_uri,
+                "livekit_room": room_name,
+                "assistant_id": assistant_id,
+                "action": "start_worker",
+                "timestamp": int(time.time() * 1000),
+                "call_metadata": {
+                    "whatsapp_number": pool_number,
+                    "call_type": "inbound",
+                    "room_created": True,
+                    "bridge_established": True,
+                },
+            },
+        }
+        publish_future = pubsub_client.publish(
+            topic_path,
+            json.dumps(pubsub_message).encode("utf-8"),
+            thread="inbound",
+        )
+        if "test" in assistant_id:
+            message_id = publish_future.result(timeout=10)
+            logger.info(f"Message ID: {message_id}")
+        logger.info("WhatsApp call published to Pub/Sub successfully")
+    except Exception as e:
+        logger.error(f"Error publishing WhatsApp call to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    # Bridge: put the WhatsApp caller in a conference and dial SIP to LiveKit.
+    # Both legs must use the WA Twilio account so they share the same
+    # conference namespace as the inbound WhatsApp call.
+    try:
+        resp_user = create_conference_response(conference_name)
+
+        wa_client = get_twilio_wa_client()
+        sip_twiml = str(create_conference_response(conference_name))
+        call = wa_client.calls.create(
+            to=sip_uri,
+            from_=pool_number,
+            twiml=sip_twiml,
+        )
+        logger.info(f"SIP leg created for WhatsApp call. Call SID: {call.sid}")
+    except Exception as e:
+        logger.error(f"Error during WhatsApp call conference setup: {e}")
+        return Response(content="Error setting up conference", status_code=500)
+
+    # Recording via LiveKit Egress (fire-and-forget)
+    try:
+        user_id = assistant_data["user_id"]
+        await start_room_egress(room_name, assistant_id, user_id)
+    except Exception as e:
+        logger.error(
+            f"[Egress] Non-fatal: failed to start egress for WhatsApp call: {e}",
+        )
+
+    logger.info("Returning TwiML response for WhatsApp call")
+    return Response(content=str(resp_user), media_type="text/xml")
+
+
+@app.post(
+    "/twilio/whatsapp-call-status",
+    dependencies=[Depends(validate_twilio_wa_signature)],
+)
+async def twilio_whatsapp_call_status_webhook(request: Request):
+    """Status callback for outbound WhatsApp Business Calling.
+
+    Publishes whatsapp_call_answered / whatsapp_call_not_answered events
+    to Pub/Sub so Unity can track the call lifecycle.
+    """
+    form_data = await request.form()
+    call_status = form_data.get("CallStatus")
+    from_raw = form_data.get("From", "") or ""
+    to_raw = form_data.get("To", "") or ""
+    pool_number = from_raw.replace("whatsapp:", "").strip()
+    user_number = to_raw.replace("whatsapp:", "").strip()
+    logger.info(
+        f"twilio_whatsapp_call_status_webhook: {call_status} "
+        f"from {_redact_phone(pool_number)} to {_redact_phone(user_number)}",
+    )
+
+    if call_status not in (
+        "in-progress",
+        "no-answer",
+        "busy",
+        "canceled",
+        "failed",
+    ):
+        return Response(status_code=200)
+
+    resolve_data = await asyncio.to_thread(
+        resolve_whatsapp_route,
+        pool_number,
+        user_number,
+    )
+    if not resolve_data or "assistant_id" not in resolve_data:
+        logger.warning("Could not resolve assistant for WhatsApp call status")
+        return Response(status_code=200)
+
+    resolved_id = str(resolve_data["assistant_id"])
+    context = await asyncio.to_thread(
+        build_webhook_context,
+        "whatsapp_call",
+        from_raw,
+        to_raw,
+        assistant_id=resolved_id,
+        validate_contact=False,
+    )
+    assistant_id = context["assistant"]["assistant_id"]
+    contacts = context["contacts"]
+
+    thread = (
+        "whatsapp_call_answered"
+        if call_status == "in-progress"
+        else "whatsapp_call_not_answered"
+    )
+
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    logger.info(f"Publishing {thread} to Pub/Sub at path: {topic_path}")
+    try:
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(
+                {
+                    "thread": thread,
+                    "publish_timestamp": time.time(),
+                    "event": {
+                        "contacts": contacts,
+                        "assistant_id": assistant_id,
+                        "user_number": user_number,
+                        "assistant_number": pool_number,
+                        "call_status": call_status,
+                        "timestamp": int(time.time() * 1000),
+                    },
+                },
+            ).encode("utf-8"),
+            thread="inbound",
+        )
+        logger.info(f"{thread} published to Pub/Sub successfully")
+    except Exception as e:
+        logger.error(f"Error publishing WhatsApp call status to Pub/Sub: {e}")
+
+    return Response(status_code=200)
 
 
 # =============================================================================
@@ -1020,8 +1488,10 @@ async def unify_message_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
@@ -1189,8 +1659,10 @@ async def unify_meet_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
@@ -1275,8 +1747,10 @@ async def unity_system_event_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
@@ -1370,8 +1844,10 @@ async def unity_pre_hire_webhook(request: Request):
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
-    running = context["is_job_running"]
-    logger.info(f"Job running: {running}")
+    logger.info(
+        "Activation intent scheduled (legacy is_job_running flag): %s",
+        context["is_job_running"],
+    )
 
     # publish to pubsub
     pubsub_client = get_pubsub_client()
@@ -1412,13 +1888,21 @@ async def unity_pre_hire_webhook(request: Request):
 
 @app.post("/assistant/wakeup", dependencies=[Depends(require_admin_key)])
 async def assistant_wakeup_webhook(request: Request):
-    """Assistant wakeup webhook - wakes up an assistant."""
+    """Accept a wakeup request and dispatch async activation intent.
+
+    A ``200`` here means adapters accepted the wakeup webhook and scheduled the
+    best-effort async ``/infra/job/start`` dispatch path. It does not mean
+    adapters observed a comms 200/202, that an AssistantSession exists, or that
+    the runtime is ready.
+    """
     logger.info("assistant_wakeup_webhook function started")
     form_data = await request.form()
     assistant_id = form_data.get("assistant_id")
     logger.info(f"Assistant {assistant_id} woke up")
 
-    # shared context
+    # Build shared webhook context and, when needed, schedule best-effort async
+    # dispatch of activation intent to comms. Runtime convergence remains
+    # asynchronous after this returns.
     await asyncio.to_thread(
         build_webhook_context,
         channel="wakeup",
@@ -1435,8 +1919,12 @@ async def assistant_wakeup_webhook(request: Request):
 @app.post("/assistant/update", dependencies=[Depends(require_admin_key)])
 async def assistant_update_webhook(request: Request):
     """
-    Webhook that receives an assistant id and publishes assistant details
-    to the assistant_update topic. If no job is running, starts one first.
+    Publish an assistant update and dispatch activation intent if needed.
+
+    The returned ``200`` only confirms adapters accepted the update request and
+    scheduled the best-effort async startup dispatch path. It does not mean
+    adapters observed a comms 200/202, that an AssistantSession exists, or that
+    runtime is ready.
     """
     logger.info("assistant_update_webhook function started")
 
@@ -1457,13 +1945,13 @@ async def assistant_update_webhook(request: Request):
         )
         assistant_data = context["assistant"]
         logger.info(
-            f"Job running: {context['is_job_running']}, job started: {context['job_started']}",
+            "Activation dispatch state (legacy flags): is_job_running=%s, job_started=%s",
+            context["is_job_running"],
+            context["job_started"],
         )
 
-        # Prepare assistant_data for the PubSub message
-        assistant_data.pop("assistant_whatsapp_number")
-
-        # Job is running, publish to assistant topic
+        # Publish the update after scheduling activation intent. Runtime
+        # readiness remains asynchronous downstream.
         pubsub_client = get_pubsub_client()
         topic_name = SETTINGS.assistant_topic(assistant_id)
         topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
@@ -1585,8 +2073,10 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             )
             return Response(content=error_message, status_code=500)
 
-        running = context["is_job_running"]
-        logger.info(f"Job running: {running}")
+        logger.info(
+            "Activation intent scheduled (legacy is_job_running flag): %s",
+            context["is_job_running"],
+        )
 
         logger.info(
             f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
@@ -1723,13 +2213,12 @@ async def outlook_notification_processor(request: Request):
                 )
                 return Response(content=error_message, status_code=500)
 
-            # Start a container (endpoint handles deduplication atomically)
-            is_default = "default" in assistant_id
-            if not is_default:
+            # Local assistants publish to Pub/Sub but keep runtime local.
+            if uses_local_unity_runtime(assistant_data):
+                logger.info("Skipped remote job start for local email assistant")
+            else:
                 start_unity_job(assistant_data, "email")
-                replenish_idle_pool(refresh=False)
-
-            logger.info("Job start requested for email handler")
+                logger.info("Job start requested for email handler")
 
             logger.info(
                 f"Successfully processed conversation for user {_redact_email(assistant_email_address)}",
@@ -1936,12 +2425,12 @@ async def teams_notification_processor(request: Request):
                 logger.info(f"Invalid contact: {_redact_email(sender_email)}")
                 return None, False
 
-            # Start a container (endpoint handles deduplication atomically)
-            is_default = assistant_id and "default" in assistant_id
-            if not is_default:
+            # Local assistants publish to Pub/Sub but keep runtime local.
+            if uses_local_unity_runtime(assistant_data):
+                logger.info("Skipped remote job start for local teams assistant")
+            else:
                 start_unity_job(assistant_data, "teams")
-                replenish_idle_pool(refresh=False)
-            logger.info("Job start requested for teams handler")
+                logger.info("Job start requested for teams handler")
             return contacts, True
 
         contacts, valid = await asyncio.to_thread(_validate_and_start)
@@ -2634,42 +3123,130 @@ def scheduled_teams_watches(payload: ScheduledPayload):
     return results
 
 
-@app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
-def scheduled_jobs_create(refresh: bool = False):
-    """Cloud Run endpoint that creates idle jobs.
+@app.post("/scheduled/infra/maintenance", dependencies=[Depends(require_admin_key)])
+def scheduled_infra_maintenance():
+    """Unified infrastructure maintenance sweep.
 
-    Two modes of operation:
-    - **Fill mode** (default): Only creates jobs if the pool is below the target.
-      Used by reactive replenishment from build_webhook_context.
-    - **Refresh mode** (?refresh=true): Always creates `target` new jobs regardless
-      of current pool size. The cleanup endpoint (10 min later) will delete the
-      older containers, effectively rotating the pool to the latest image.
-      Used by the hourly cron and CloudBuild deployments.
+    Runs hourly via Cloud Scheduler.  Consolidates container pool
+    replenishment, excess-idle cleanup, stale-job expiry, orphaned-VM
+    reconciliation, quarantined-VM purge, VM pool health (scrub +
+    probe + replenish), and bounded terminal AssistantSession pruning
+    into a single scheduled endpoint so runtime cleanup concerns live
+    in one place.
     """
-    return replenish_idle_pool(refresh=refresh)
+    results: dict = {}
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+
+    # 1 — Replenish idle container pool (refresh=True rotates to latest image)
+    try:
+        results["pool_replenish"] = replenish_idle_pool(refresh=True)
+    except Exception as exc:
+        logger.exception("maintenance: pool replenish failed")
+        results["pool_replenish_error"] = str(exc)
+
+    # 2 — Delete excess idle containers
+    try:
+        results["pool_cleanup"] = cleanup_idle_pool()
+    except Exception as exc:
+        logger.exception("maintenance: pool cleanup failed")
+        results["pool_cleanup_error"] = str(exc)
+
+    # 3 — Stop stale assistant runtimes (running >12 h)
+    try:
+        results["stale_jobs"] = expire_all_stale_jobs(max_age_hours=12)
+    except Exception as exc:
+        logger.exception("maintenance: stale job expiry failed")
+        results["stale_jobs_error"] = str(exc)
+
+    # 4 — Release VMs assigned to assistants that no longer have running jobs
+    for vm_type in SUPPORTED_POOL_VM_TYPES:
+        key = f"orphaned_vms_{vm_type}"
+        try:
+            resp = requests.post(
+                f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",
+                params={"vm_type": vm_type},
+                headers=headers,
+                timeout=60,
+            )
+            if resp.status_code == 200:
+                results[key] = resp.json()
+        except Exception as exc:
+            logger.exception("maintenance: orphan VM reconcile failed for %s", vm_type)
+            results[f"{key}_error"] = str(exc)
+
+    # 5 — Delete quarantined VMs so replenish_pool can create fresh replacements
+    for vm_type in SUPPORTED_POOL_VM_TYPES:
+        key = f"quarantined_vms_{vm_type}"
+        try:
+            resp = requests.post(
+                f"{SETTINGS.comms_url}/infra/vm/pool/purge-quarantined",
+                params={"vm_type": vm_type},
+                headers=headers,
+                timeout=60,
+            )
+            if resp.status_code == 200:
+                results[key] = resp.json()
+        except Exception as exc:
+            logger.exception("maintenance: quarantine purge failed for %s", vm_type)
+            results[f"{key}_error"] = str(exc)
+
+    # 6 — VM pool health: scrub inconsistent labels, probe idle VMs,
+    #     quarantine unhealthy ones, and replenish to target capacity.
+    for vm_type in SUPPORTED_POOL_VM_TYPES:
+        key = f"vm_rebalance_{vm_type}"
+        try:
+            resp = requests.post(
+                f"{SETTINGS.comms_url}/infra/vm/pool/rebalance",
+                params={"vm_type": vm_type},
+                headers=headers,
+                timeout=120,
+            )
+            if resp.status_code == 200:
+                results[key] = resp.json()
+        except Exception as exc:
+            logger.exception("maintenance: VM rebalance failed for %s", vm_type)
+            results[f"{key}_error"] = str(exc)
+
+    # 7 — Delete terminal AssistantSession CRs whose runtime is already gone.
+    try:
+        resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/sessions/prune-terminal",
+            headers=headers,
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            results["assistant_session_prune"] = resp.json()
+        else:
+            results["assistant_session_prune_error"] = resp.text
+    except Exception as exc:
+        logger.exception("maintenance: terminal session prune failed")
+        results["assistant_session_prune_error"] = str(exc)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Individual infra utilities — NOT wired to Cloud Scheduler.
+# Kept for manual invocation, debugging, and integration test helpers.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/scheduled/jobs/create", dependencies=[Depends(require_admin_key)])
+def scheduled_jobs_create(refresh: bool = False, extra_demand: int = 0):
+    """Replenish idle container pool (utility — use /scheduled/infra/maintenance for cron)."""
+    return replenish_idle_pool(refresh=refresh, extra_demand=extra_demand)
 
 
 @app.post("/scheduled/jobs/cleanup", dependencies=[Depends(require_admin_key)])
 def scheduled_jobs_cleanup():
-    """Clean up old idle jobs, retaining the newest up to the target count.
-
-    Runs 10 minutes after /scheduled/jobs/create. Keeps recently-created idle
-    jobs (< 11 min old) up to the demand-aware target and deletes the rest.
-    Uses required_labels to guard against race conditions where a job
-    transitions to live between the fetch and the delete.
-    """
+    """Delete excess idle containers (utility — use /scheduled/infra/maintenance for cron)."""
     return cleanup_idle_pool()
 
 
 @app.post("/scheduled/jobs/expire-stale", dependencies=[Depends(require_admin_key)])
-def scheduled_jobs_expire_stale():
-    """Suspend K8s jobs running longer than 12h and release leaked VMs.
-
-    Also reconciles orphaned VMs (assigned but no running K8s Job).
-    Triggered by Cloud Scheduler every 6 hours.
-    """
-    result = expire_all_stale_jobs(max_age_hours=12)
-
+def scheduled_jobs_expire_stale(max_age_hours: int = 12):
+    """Stop stale assistant runtimes (utility — use /scheduled/infra/maintenance for cron)."""
+    result = expire_all_stale_jobs(max_age_hours=max_age_hours)
     try:
         orphan_resp = requests.post(
             f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphans",
@@ -2680,55 +3257,7 @@ def scheduled_jobs_expire_stale():
             result["orphaned_vms"] = orphan_resp.json()
     except Exception as e:
         result["orphaned_vms_error"] = str(e)
-
-    return Response(
-        content=json.dumps(result),
-        status_code=200,
-    )
-
-
-@app.post("/scheduled/pending-startups", dependencies=[Depends(require_admin_key)])
-def scheduled_pending_startups():
-    """Process pending startup requests from the durable Pub/Sub queue.
-
-    Forwards to the comms app's /infra/pending/process endpoint which
-    pulls queued messages and assigns them to idle containers using the
-    Lease + CAS mechanism.  Triggered every minute by Cloud Scheduler
-    and reactively after pool replenishment.
-
-    Returns non-200 on failure so Cloud Scheduler retries.
-    """
-    result = _trigger_pending_reconciliation()
-    if "error" in result:
-        return Response(
-            content=json.dumps(result),
-            status_code=502,
-            media_type="application/json",
-        )
-    return result
-
-
-@app.post(
-    "/scheduled/pending-vm-assignments",
-    dependencies=[Depends(require_admin_key)],
-)
-def scheduled_pending_vm_assignments():
-    """Process pending VM assignment requests from the durable Pub/Sub queue.
-
-    Forwards to the comms app's /infra/vm/pending/process endpoint which
-    pulls queued messages and retries VM assignment.  Triggered every minute
-    by Cloud Scheduler and reactively after pool replenishment.
-
-    Returns non-200 on failure so Cloud Scheduler retries.
-    """
-    result = _trigger_pending_vm_reconciliation()
-    if "error" in result:
-        return Response(
-            content=json.dumps(result),
-            status_code=502,
-            media_type="application/json",
-        )
-    return result
+    return Response(content=json.dumps(result), status_code=200)
 
 
 @app.post("/scheduled/cert-renewal", dependencies=[Depends(require_admin_key)])
@@ -2760,6 +3289,8 @@ if __name__ == "__main__":
     logger.info("    - POST /twilio/call-status")
     logger.info("    - POST /twilio/sms")
     logger.info("    - POST /twilio/whatsapp")
+    logger.info("    - POST /twilio/whatsapp-call")
+    logger.info("    - POST /twilio/whatsapp-call-status")
     logger.info("  Unify:")
     logger.info("    - POST /unify/message")
     logger.info("    - POST /unify/meet")
@@ -2776,10 +3307,8 @@ if __name__ == "__main__":
     logger.info("    - POST /microsoft/router")
     logger.info("    - GET  /microsoft/auth/callback")
     logger.info("  Scheduled:")
+    logger.info("    - POST /scheduled/infra/maintenance")
     logger.info("    - POST /scheduled/email-watches")
-    logger.info("    - POST /scheduled/jobs/create")
-    logger.info("    - POST /scheduled/jobs/cleanup")
-    logger.info("    - POST /scheduled/jobs/expire-stale")
     logger.info("    - POST /scheduled/cert-renewal")
     logger.info("Server running at: http://localhost:8080")
 

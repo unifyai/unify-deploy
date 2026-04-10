@@ -4,7 +4,6 @@ Integration tests for the FastAPI adapters endpoints.
 These tests require a running server and Pub/Sub access.
 """
 
-import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -374,37 +373,16 @@ def test_email_notification_processor(test_client):
     assert response.text == "No new conversations"
 
 
-def test_idle_job_adapters(test_client):
-    """Test successful idle job creation and cleanup."""
-    endpoint = "/scheduled/jobs/create"
+def test_infra_maintenance(test_client):
+    """Test the unified infra maintenance sweep endpoint."""
+    endpoint = "/scheduled/infra/maintenance"
     response = test_client.make_request("POST", endpoint, json={})
 
-    print("Idle job creator:", response.text)
-    assert response.status_code == 200
-
-    print("Waiting for 120 seconds...")
-    time.sleep(120)
-
-    endpoint = "/scheduled/jobs/cleanup"
-    response = test_client.make_request("POST", endpoint, json={})
-
-    print("Idle job cleaner:", response.text)
-    assert response.status_code == 200
-    assert len(response.json()["idle_jobs"])
-
-
-def test_stale_jobs_expire(test_client):
-    """Test the daily stale jobs sweep endpoint returns successfully."""
-    endpoint = "/scheduled/jobs/expire-stale"
-    response = test_client.make_request("POST", endpoint, json={})
-
-    print("Stale jobs expire:", response.text)
+    print("Infra maintenance:", response.text)
     assert response.status_code == 200
 
     data = response.json()
-    assert "total_running" in data
-    assert "expired" in data
-    assert isinstance(data["total_running"], int)
+    assert isinstance(data, dict)
     assert isinstance(data["expired"], int)
 
 

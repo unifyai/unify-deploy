@@ -36,6 +36,38 @@ steps:
   args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest']
   waitFor: ['build-image']
 
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-assistant-session-controller'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    DOCKER_BUILDKIT=1 docker build -f scripts/assistant-session-controller/Dockerfile \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller:latest .
+  waitFor: ['pull-cache']
+
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-assistant-session-controller'
+  args: ['push', '--all-tags', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller']
+  waitFor: ['build-assistant-session-controller']
+
+  # Deploy to Cloud Run
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-assistant-session-controller'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    gcloud container clusters get-credentials unity --region ${_REGION} --project ${PROJECT_ID}
+    kubectl apply -f k8s/assistant-session-controller/crd.yaml
+    kubectl wait --for=condition=Established crd/assistantsessions.infra.unify.ai --timeout=120s
+    sed "s|image:.*assistant-session-controller:latest|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller:${SHORT_SHA}|" \
+      k8s/assistant-session-controller/deployment.yaml | kubectl apply -f -
+    kubectl rollout status deployment/assistant-session-controller -n production --timeout=300s
+  waitFor: ['push-assistant-session-controller']
+
   # Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
@@ -52,7 +84,7 @@ steps:
   - '--quiet'
   id: Deploy Unity Comms App
   entrypoint: gcloud
-  waitFor: ['push-sha-tag']
+  waitFor: ['push-sha-tag', 'deploy-assistant-session-controller']
 
 # Options
 options:
@@ -78,3 +110,5 @@ timeout: '1200s'  # 20 minutes
 images:
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller:${SHORT_SHA}'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller:latest'

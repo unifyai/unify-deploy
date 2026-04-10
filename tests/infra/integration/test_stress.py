@@ -27,6 +27,8 @@ Driven by the ``test_assistants`` session fixture — set
     TEST_CREATE_ASSISTANT_COUNT=20 pytest tests/infra/integration/test_stress.py -v -s
 """
 
+import json
+
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -34,28 +36,50 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pytest
 import requests
 
+from communication.infra.vm_config import POOL_TARGET_IDLE as VM_POOL_TARGET_IDLE
+
 from .conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
-    COMMS_APP_URL,
     NAMESPACE,
+    add_failure_context,
     check_invariants,
     cleanup_assistant_jobs,
     count_idle_jobs,
+    get_assistant_session,
     list_assigned_vms,
     list_idle_vms,
     list_jobs_with_assistant_id,
     poll_until,
-    probe_vm_agent_service,
+    probe_vm_agent_service_authenticated,
     pull_outbound_messages,
+    release_assigned_vms,
     replenish_pool,
     send_test_meet,
     send_test_message,
     send_test_system_event,
+    integration_print,
+    wait_for_idle_pool,
+    wait_for_idle_vm_pool,
     wait_for_container_running,
 )
 
 pytestmark = [pytest.mark.integration]
+
+print = integration_print
+
+_STRESS_IDLE_CONTAINER_TARGET = 3
+_STRESS_IDLE_VM_TARGET = VM_POOL_TARGET_IDLE
+_STRESS_SETUP_CLEANUP_TIMEOUT_SECONDS = 60
+_STRESS_FAST_TEARDOWN_TIMEOUT_SECONDS = 30
+_STRESS_CLEANUP_PARALLELISM = 6
+_STRESS_CONTAINER_BASELINE_TIMEOUT_SECONDS = 120
+_STRESS_VM_BASELINE_TIMEOUT_SECONDS = 240
+_VM_DESKTOP_READY_TIMEOUT_SECONDS = 300
+_VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS = 120
+_VM_REATTACH_TIMEOUT_SECONDS = 180
+_VM_REATTACH_AFTER_ASSIGN_TIMEOUT_SECONDS = 120
+_VM_CONTRACT_POLL_INTERVAL_SECONDS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -80,51 +104,31 @@ def _start_job_tolerant(comms_client, assistant_data, medium="unify_message"):
 
 
 def _trigger_reconciliation():
-    """Trigger the pending-startup reconciler on the comms app."""
-    try:
-        requests.post(
-            f"{COMMS_APP_URL}/infra/pending/process",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=30,
-        )
-    except Exception:
-        pass
+    """No-op for AssistantSession v1 session-backed reconciliation."""
+    return None
 
 
 def _trigger_vm_reconciliation():
-    """Trigger the pending-VM-assignment reconciler on the comms app."""
-    try:
-        resp = requests.post(
-            f"{COMMS_APP_URL}/infra/vm/pending/process",
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-            timeout=60,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            pulled = data.get("pulled", 0)
-            if pulled > 0:
-                print(
-                    f"    [vm-reconciler] Processed {pulled} pending: "
-                    f"{data.get('acked', 0)} assigned, {data.get('nacked', 0)} retrying",
-                )
-    except Exception:
-        pass
+    """No-op for AssistantSession v1 session-backed reconciliation."""
+    return None
 
 
 def _trigger_cleanup():
-    """Trigger the idle pool cleanup on the adapters (same call as the cron)."""
+    """Trigger the idle-pool cleanup utility behind unified maintenance."""
     try:
-        requests.post(
+        resp = requests.post(
             f"{ADAPTERS_URL}/scheduled/jobs/cleanup",
             headers={"Authorization": f"Bearer {ADMIN_KEY}"},
             timeout=30,
         )
+        if resp.status_code == 200:
+            print("    [scheduler] Cleanup fired")
     except Exception:
         pass
 
 
 def _trigger_pool_refresh():
-    """Trigger a pool refresh (same call as the hourly cron / post-deploy).
+    """Trigger the pool-refresh utility behind unified maintenance.
 
     Creates new idle containers with the latest image regardless of current
     pool size.  The cleanup cron (10 min later) would normally delete the
@@ -146,8 +150,23 @@ def _trigger_pool_refresh():
         pass
 
 
+def _trigger_vm_pool_rebalance(comms_client):
+    """Trigger VM rebalance toward the configured idle/stopped targets."""
+    try:
+        resp = comms_client.post(
+            "/infra/vm/pool/rebalance",
+            params={"vm_type": "ubuntu"},
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            actions = (resp.json() or {}).get("actions") or []
+            print(f"    [vm-pool] Rebalance fired ({len(actions)} action(s))")
+    except Exception:
+        pass
+
+
 def _trigger_stale_expire():
-    """Trigger the stale jobs sweep (same call as the 6-hourly cron).
+    """Trigger the stale-job utility behind unified maintenance.
 
     Suspends K8s jobs running >12h and releases their VMs.  Our test
     containers are minutes old so they won't be affected, but the sweep
@@ -167,6 +186,66 @@ def _trigger_stale_expire():
             )
     except Exception:
         pass
+
+
+def _best_effort_release_assigned_vms(assistant_ids, gce_client) -> None:
+    """Nudge any still-assigned VMs into release without blocking teardown."""
+    if gce_client is None:
+        return
+    for assistant_id in dict.fromkeys(str(aid) for aid in assistant_ids):
+        try:
+            release_assigned_vms(
+                assistant_id,
+                gce_client=gce_client,
+                timeout=20,
+            )
+        except Exception:
+            pass
+
+
+def _reset_stress_baseline(
+    comms_client,
+    batch_api,
+    gce_client,
+    assistant_ids,
+    *,
+    context: str,
+    cleanup_timeout: float,
+    wait_for_baseline: bool,
+) -> None:
+    """Reset stress-test resources toward the expected idle baseline."""
+    assistant_ids = list(assistant_ids)
+    cleanup_assistant_jobs(
+        batch_api,
+        assistant_ids,
+        strict=False,
+        context=context,
+        timeout=cleanup_timeout,
+        parallelism=max(1, min(len(assistant_ids), _STRESS_CLEANUP_PARALLELISM)),
+    )
+    _best_effort_release_assigned_vms(assistant_ids, gce_client)
+
+    if not wait_for_baseline:
+        return
+
+    for _ in range(_STRESS_IDLE_CONTAINER_TARGET):
+        replenish_pool()
+        time.sleep(2)
+
+    if gce_client is not None:
+        _trigger_vm_pool_rebalance(comms_client)
+
+    wait_for_idle_pool(
+        batch_api,
+        min_idle=_STRESS_IDLE_CONTAINER_TARGET,
+        timeout=_STRESS_CONTAINER_BASELINE_TIMEOUT_SECONDS,
+    )
+    if gce_client is not None:
+        wait_for_idle_vm_pool(
+            gce_client,
+            min_idle=_STRESS_IDLE_VM_TARGET,
+            timeout=_STRESS_VM_BASELINE_TIMEOUT_SECONDS,
+        )
 
 
 def _new_violations(current, baseline):
@@ -208,6 +287,53 @@ def _kill_pod(core_api, job_name, namespace=NAMESPACE):
     return None
 
 
+def _latest_active_job(batch_api, assistant_id: str):
+    """Return the freshest active Job for an assistant, if any."""
+    jobs = list_jobs_with_assistant_id(batch_api, assistant_id)
+    if not jobs:
+        return None
+    return max(
+        jobs,
+        key=lambda job: str(getattr(job.metadata, "creation_timestamp", "") or ""),
+    )
+
+
+def _job_has_active_pods(batch_api, job_name: str, namespace=NAMESPACE) -> bool:
+    """Return whether a specific Job still has active pods."""
+    try:
+        job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
+    except Exception:
+        return False
+    return bool(job.status.active and job.status.active > 0)
+
+
+def _kill_current_runtime_pod(
+    batch_api,
+    core_api,
+    assistant_id: str,
+    namespace=NAMESPACE,
+) -> tuple[str | None, str | None]:
+    """Delete a pod from the assistant's freshest active Job."""
+    job = _latest_active_job(batch_api, assistant_id)
+    if job is None:
+        return None, None
+    job_name = str(job.metadata.name or "")
+    if not job_name:
+        return None, None
+    return job_name, _kill_pod(core_api, job_name, namespace=namespace)
+
+
+def _select_stable_assistant(batch_api, assistants, *, excluded_ids: set[str]):
+    """Return a non-excluded assistant that still has a live container."""
+    for assistant in assistants:
+        assistant_id = assistant["assistant_id"]
+        if assistant_id in excluded_ids:
+            continue
+        if _latest_active_job(batch_api, assistant_id) is not None:
+            return assistant
+    return None
+
+
 def _wait_for_vm_assigned(gce_client, assistant_id, timeout=120, interval=10):
     """Poll until a VM is assigned to this assistant."""
     return poll_until(
@@ -218,11 +344,357 @@ def _wait_for_vm_assigned(gce_client, assistant_id, timeout=120, interval=10):
     )
 
 
-class _SchedulerNoise:
-    """Background thread that fires scheduler endpoints at random intervals.
+def _desktop_ready_signal_matches_vm(session: dict | None, vm_name: str) -> bool:
+    """Return whether session status recorded desktop readiness for this VM."""
+    if not isinstance(session, dict):
+        return False
+    status = session.get("status") or {}
+    binding = status.get("binding") or {}
+    binding_vm_name = str(((binding.get("vmRef") or {}).get("name")) or "")
+    return (
+        bool(binding.get("vmReadyObservedAt"))
+        and bool(binding.get("desktopUrl"))
+        and binding_vm_name == vm_name
+    )
 
-    Simulates production crons firing at unpredictable times relative to
-    user traffic.  Runs throughout the entire test and logs each firing.
+
+def _vm_assigned_condition(session: dict | None) -> tuple[str, str]:
+    """Return the VMAssigned condition reason/message for a session."""
+    if not isinstance(session, dict):
+        return "", ""
+    conditions = (session.get("status") or {}).get("conditions") or []
+    for condition in conditions:
+        if str(condition.get("type") or "") != "VMAssigned":
+            continue
+        return (
+            str(condition.get("reason") or ""),
+            str(condition.get("message") or ""),
+        )
+    return "", ""
+
+
+def _is_waiting_for_vm_capacity(session: dict | None) -> bool:
+    """Return whether the session is explicitly queued for VM capacity."""
+    if not isinstance(session, dict):
+        return False
+    status = session.get("status") or {}
+    if str(status.get("phase") or "") != "PendingVM":
+        return False
+    reason, _message = _vm_assigned_condition(session)
+    if reason == "WaitingForCapacity":
+        return True
+    last_error = str(status.get("lastError") or "")
+    return "No idle" in last_error and "deferred retry" in last_error
+
+
+def _assistant_vm_contract_status(
+    comms_client,
+    gce_client,
+    assistant_data: dict,
+) -> dict:
+    """Describe an assistant's current desktop-ready/authenticated VM state."""
+    assistant_id = assistant_data["assistant_id"]
+    result = {
+        "assistant_id": assistant_id,
+        "state": "not_assigned",
+        "vm_name": "",
+        "hostname": "",
+        "session_phase": "",
+        "session_vm_name": "",
+        "binding_id": "",
+        "desktop_url": "",
+        "vm_ready_observed_at": "",
+        "vm_assigned_at": "",
+        "vm_assigned_condition_reason": "",
+        "vm_assigned_condition_message": "",
+        "last_error": "",
+        "auth_status": "",
+    }
+    session = get_assistant_session(comms_client, assistant_id) or {}
+    status = session.get("status") or {}
+    binding = status.get("binding") or {}
+    vm_assigned_reason, vm_assigned_message = _vm_assigned_condition(session)
+    result.update(
+        {
+            "session_phase": str(status.get("phase") or ""),
+            "session_vm_name": str(((binding.get("vmRef") or {}).get("name")) or ""),
+            "binding_id": str(binding.get("id") or ""),
+            "desktop_url": str(binding.get("desktopUrl") or ""),
+            "vm_ready_observed_at": str(binding.get("vmReadyObservedAt") or ""),
+            "vm_assigned_at": str(binding.get("vmAssignedAt") or ""),
+            "vm_assigned_condition_reason": vm_assigned_reason,
+            "vm_assigned_condition_message": vm_assigned_message,
+            "last_error": str(status.get("lastError") or ""),
+        },
+    )
+    vms = list_assigned_vms(gce_client, assistant_id)
+    if not vms:
+        if _is_waiting_for_vm_capacity(session):
+            result["state"] = "queued_for_capacity"
+        return result
+
+    vm = vms[0]
+    hostname = _get_vm_hostname(vm)
+    result.update(
+        {
+            "state": "assigned_waiting_for_desktop_ready",
+            "vm_name": vm.name,
+            "hostname": hostname,
+        },
+    )
+    if not _desktop_ready_signal_matches_vm(session, vm.name):
+        return result
+
+    resp = probe_vm_agent_service_authenticated(hostname, assistant_data["api_key"])
+    result["auth_status"] = str(resp.status_code) if resp is not None else "no response"
+    if resp is not None and resp.status_code == 200:
+        result["state"] = "ready"
+    else:
+        result["state"] = "assigned_auth_pending"
+    return result
+
+
+def _wait_for_assistant_vm_contract(
+    comms_client,
+    gce_client,
+    assistant_data: dict,
+    *,
+    timeout: float = _VM_DESKTOP_READY_TIMEOUT_SECONDS,
+    interval: float = _VM_CONTRACT_POLL_INTERVAL_SECONDS,
+    post_assignment_timeout: float = _VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS,
+) -> dict:
+    """Wait until an assistant satisfies the desktop-ready/auth VM contract.
+
+    The base timeout covers VM assignment. Once a VM is observed, preserve a
+    fair post-assignment window so late pool claims are not mislabeled as slow
+    desktop readiness.
+    """
+    last_result = {
+        "assistant_id": assistant_data["assistant_id"],
+        "state": "not_assigned",
+    }
+    assignment_observed_at = None
+    base_deadline = time.monotonic() + timeout
+    deadline = base_deadline
+    while time.monotonic() < deadline:
+        try:
+            last_result = _assistant_vm_contract_status(
+                comms_client,
+                gce_client,
+                assistant_data,
+            )
+        except Exception as exc:
+            last_result = {
+                **last_result,
+                "state": "check_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        if last_result.get("vm_name"):
+            if assignment_observed_at is None:
+                assignment_observed_at = time.monotonic()
+            deadline = max(
+                base_deadline,
+                assignment_observed_at + post_assignment_timeout,
+            )
+        if last_result.get("state") == "ready":
+            return last_result
+        time.sleep(interval)
+    return {
+        **last_result,
+        "timed_out": True,
+        "timed_out_phase": "readiness" if last_result.get("vm_name") else "assignment",
+    }
+
+
+def _format_vm_contract_result(
+    result: dict,
+    *,
+    assignment_timeout: float,
+    readiness_timeout: float,
+) -> str:
+    """Format a VM contract poll result for human-readable stress output."""
+    state = result.get("state")
+    if state == "ready":
+        return f"VM {result['vm_name']}, auth OK ({result['hostname']})"
+    if state == "queued_for_capacity":
+        phase = result.get("session_phase") or "PendingVM"
+        last_error = (
+            result.get("last_error")
+            or result.get("vm_assigned_condition_message")
+            or "waiting for VM capacity"
+        )
+        return (
+            f"Queued for VM capacity after {int(assignment_timeout)}s "
+            f"(phase={phase}) - {last_error}"
+        )
+    if state == "not_assigned":
+        phase = result.get("session_phase") or "unknown"
+        last_error = (
+            result.get("last_error")
+            or result.get("vm_assigned_condition_message")
+            or "no assignment observed"
+        )
+        return (
+            f"VM not assigned after {int(assignment_timeout)}s "
+            f"(phase={phase}) - {last_error}"
+        )
+    if state == "assigned_waiting_for_desktop_ready":
+        phase = result.get("session_phase") or "unknown"
+        last_error = result.get("last_error") or "waiting for vm_ready"
+        if result.get("timed_out_phase") == "readiness":
+            return (
+                f"VM {result['vm_name']}, waiting for desktop readiness after "
+                f"{int(readiness_timeout)}s from assignment "
+                f"(phase={phase}) - {last_error}"
+            )
+        return (
+            f"VM {result['vm_name']}, waiting for desktop readiness "
+            f"(phase={phase}) - {last_error}"
+        )
+    if state == "assigned_auth_pending":
+        return (
+            f"VM {result['vm_name']}, desktop ready but auth still failing "
+            f"({result['hostname']}) - {result.get('auth_status') or 'unknown'}"
+        )
+    return f"VM readiness check failed - {result.get('error', state)}"
+
+
+def _assistant_duplicate_job_snapshot(
+    comms,
+    batch_api,
+    core_api,
+    assistant_id: str,
+) -> dict:
+    """Capture enough evidence to reconstruct an INV-1 duplicate-job failure."""
+    sanitized = assistant_id.lower().replace("_", "-")
+    job_items = batch_api.list_namespaced_job(
+        namespace=NAMESPACE,
+        label_selector=f"app=unity,assistant-id={sanitized}",
+    ).items
+    active_jobs = []
+    for job in job_items:
+        if not (job.status.active and job.status.active > 0):
+            continue
+        labels = dict(job.metadata.labels or {})
+        annotations = dict(job.metadata.annotations or {})
+        pods = []
+        try:
+            pod_items = core_api.list_namespaced_pod(
+                namespace=NAMESPACE,
+                label_selector=f"job-name={job.metadata.name}",
+            ).items
+            for pod in pod_items:
+                pods.append(
+                    {
+                        "pod_name": pod.metadata.name,
+                        "phase": pod.status.phase,
+                        "node_name": pod.spec.node_name,
+                        "start_time": pod.status.start_time,
+                        "deletion_timestamp": pod.metadata.deletion_timestamp,
+                    },
+                )
+        except Exception as exc:
+            pods.append({"pod_collection_error": f"{type(exc).__name__}: {exc}"})
+
+        active_jobs.append(
+            {
+                "job_name": job.metadata.name,
+                "creation_timestamp": job.metadata.creation_timestamp,
+                "resource_version": job.metadata.resource_version,
+                "active": job.status.active,
+                "ready": getattr(job.status, "ready", None),
+                "start_time": job.status.start_time,
+                "labels": labels,
+                "annotations": annotations,
+                "pods": pods,
+            },
+        )
+
+    active_jobs.sort(key=lambda job: str(job.get("creation_timestamp") or ""))
+
+    try:
+        session = get_assistant_session(comms, assistant_id)
+    except Exception as exc:
+        session = {
+            "session_read_error": f"{type(exc).__name__}: {exc}",
+        }
+
+    runtime_resp = comms.get(f"/infra/runtime/{assistant_id}")
+    if runtime_resp.status_code == 200:
+        runtime_status = runtime_resp.json()
+    else:
+        runtime_status = {
+            "status_code": runtime_resp.status_code,
+            "text": runtime_resp.text[:1000],
+        }
+
+    session_binding = ""
+    session_activation_id = ""
+    session_name = ""
+    if isinstance(session, dict):
+        session_name = str(((session.get("metadata") or {}).get("name") or ""))
+        session_activation_id = str(
+            (((session.get("spec") or {}).get("activationId")) or ""),
+        )
+        session_binding = str(
+            (
+                (
+                    ((session.get("status") or {}).get("binding") or {}).get("jobRef")
+                    or {}
+                )
+            ).get("name", "")
+            or "",
+        )
+
+    return {
+        "assistant_id": assistant_id,
+        "active_job_count": len(active_jobs),
+        "active_jobs": active_jobs,
+        "session_name": session_name,
+        "session_activation_id": session_activation_id,
+        "session_bound_job_name": session_binding,
+        "session": session,
+        "runtime_status": runtime_status,
+    }
+
+
+def _record_duplicate_job_snapshot(request, snapshot: dict) -> None:
+    """Persist duplicate-job evidence into the pytest failure artifact."""
+    snapshots = dict(
+        getattr(request.node, "_extra_failure_context", {}).get(
+            "duplicate_job_snapshots",
+            {},
+        ),
+    )
+    snapshots[str(snapshot["assistant_id"])] = snapshot
+    add_failure_context(request, "duplicate_job_snapshots", snapshots)
+
+    tracker = getattr(request.node, "_runtime_identity_tracker", None)
+    if tracker is None:
+        return
+    tracker.track(
+        assistant_id=str(snapshot["assistant_id"]),
+        session_name=snapshot.get("session_name") or None,
+        activation_id=snapshot.get("session_activation_id") or None,
+    )
+    if snapshot.get("session_bound_job_name"):
+        tracker.track(job_name=str(snapshot["session_bound_job_name"]))
+    for job in snapshot.get("active_jobs", []):
+        tracker.track(job_name=str(job["job_name"]))
+        for pod in job.get("pods", []):
+            pod_name = pod.get("pod_name")
+            if pod_name:
+                tracker.track(pod_name=str(pod_name))
+
+
+class _SchedulerNoise:
+    """Background thread that fires lightweight scheduler utilities.
+
+    Production now routes cron traffic through ``/scheduled/infra/maintenance``,
+    but that endpoint performs the full shared-environment sweep and can block
+    for minutes while VM rebalance completes. The stress test instead injects
+    the lower-cost cleanup endpoints directly so it still exercises stale-runtime
+    races without creating extra idle pool churn in preview.
     """
 
     def __init__(self, min_interval=20, max_interval=45):
@@ -253,11 +725,9 @@ class _SchedulerNoise:
             time.sleep(random.uniform(self._min, self._max))
             if self._stop:
                 break
-            action = random.choice(["cleanup", "refresh", "stale-expire"])
+            action = random.choice(["cleanup", "stale-expire"])
             if action == "cleanup":
                 _trigger_cleanup()
-            elif action == "refresh":
-                _trigger_pool_refresh()
             else:
                 _trigger_stale_expire()
             self._fire_count += 1
@@ -275,13 +745,14 @@ def test_production_traffic_stress(
     core_api,
     gce_client,
     poll,
+    request,
 ):
     """Simulate a product launch: N simultaneous users with diverse traffic.
 
     Eight phases exercise the system under realistic concurrent load,
     including crash recovery, cleanup races, and rapid restarts.
-    The idle pool is intentionally NOT pre-scaled so pool exhaustion,
-    overflow queuing, and replenishment are all exercised.
+    Setup restores the expected idle baseline first, then the test drives
+    pool exhaustion, overflow queuing, and replenishment under load.
     """
     assistants = test_assistants
     if len(assistants) < 3:
@@ -297,57 +768,25 @@ def test_production_traffic_stress(
     print(f"{'=' * 70}")
 
     # ------------------------------------------------------------------
-    # Clean slate: delete all existing jobs, release orphaned VMs, then
-    # create exactly MIN_IDLE fresh containers with the latest image.
+    # Clean slate: stop any runtimes tied to these assistants, kick both
+    # pools back toward their configured idle targets, and wait for the
+    # stress baseline before issuing traffic.
     # ------------------------------------------------------------------
-    TARGET_IDLE = 3
-
-    print(f"[Setup] Cleaning previous state...")
-    existing_jobs = batch_api.list_namespaced_job(
-        namespace=NAMESPACE,
-        label_selector="app=unity",
+    print(f"[Setup] Cleaning previous state and restoring stress baseline...")
+    _reset_stress_baseline(
+        comms,
+        batch_api,
+        gce_client,
+        all_ids,
+        context="stress setup baseline reset",
+        cleanup_timeout=_STRESS_SETUP_CLEANUP_TIMEOUT_SECONDS,
+        wait_for_baseline=True,
     )
-    for job in existing_jobs.items:
-        aid = (job.metadata.labels or {}).get("assistant-id", "")
-        try:
-            batch_api.delete_namespaced_job(
-                name=job.metadata.name,
-                namespace=NAMESPACE,
-                propagation_policy="Foreground",
-            )
-        except Exception:
-            pass
-        if aid and gce_client is not None:
-            try:
-                requests.post(
-                    f"{COMMS_APP_URL}/infra/vm/pool/release",
-                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    json={"assistant_id": aid},
-                    timeout=15,
-                )
-            except Exception:
-                pass
-    if existing_jobs.items:
-        print(f"[Setup] Deleted {len(existing_jobs.items)} leftover jobs")
-        time.sleep(10)
-
-    print(f"[Setup] Creating {TARGET_IDLE} fresh idle containers...")
-    for _ in range(TARGET_IDLE):
-        replenish_pool()
-        time.sleep(2)
-
-    try:
-        poll_until(
-            lambda: count_idle_jobs(batch_api) >= TARGET_IDLE,
-            timeout=120,
-            interval=10,
-            description=f"Fresh idle pool ({TARGET_IDLE} containers)",
-        )
-    except TimeoutError:
-        pass
-
     idle_before = count_idle_jobs(batch_api)
-    print(f"[Setup] Idle pool: {idle_before} containers (target: {TARGET_IDLE})")
+    print(
+        f"[Setup] Idle pool: {idle_before} containers "
+        f"(target: {_STRESS_IDLE_CONTAINER_TARGET})",
+    )
 
     baseline_violations = check_invariants(batch_api, gce_client)
     if baseline_violations:
@@ -358,7 +797,10 @@ def test_production_traffic_stress(
     if gce_client is not None:
         try:
             idle_vms_before = len(list_idle_vms(gce_client))
-            print(f"[Setup] Idle VM pool: {idle_vms_before} ubuntu VMs")
+            print(
+                f"[Setup] Idle VM pool: {idle_vms_before} ubuntu VMs "
+                f"(target: {_STRESS_IDLE_VM_TARGET})",
+            )
         except Exception:
             pass
 
@@ -392,21 +834,21 @@ def test_production_traffic_stress(
                 results[aid] = (status, body)
 
         immediate = [aid for aid, (s, _) in results.items() if s == 200]
-        queued = [aid for aid, (s, _) in results.items() if s == 202]
-        errors = [aid for aid, (s, _) in results.items() if s not in (200, 202)]
+        queued = []
+        errors = [aid for aid, (s, _) in results.items() if s != 200]
         elapsed_p1 = time.monotonic() - t0
 
         print(f"[Phase 1] Results ({elapsed_p1:.1f}s):")
         print(f"  Immediate (200): {len(immediate)}")
-        print(f"  Queued    (202): {len(queued)}")
         print(f"  Errors:          {len(errors)}")
         for aid in errors:
             s, body = results[aid]
             print(f"    assistant {aid}: HTTP {s} — {body[:200]}")
 
-        assert not errors, (
-            f"{len(errors)} startup requests failed (expected 200 or 202): "
-            + ", ".join(f"{aid}={results[aid][0]}" for aid in errors)
+        assert (
+            not errors
+        ), f"{len(errors)} startup requests failed (expected 200): " + ", ".join(
+            f"{aid}={results[aid][0]}" for aid in errors
         )
 
         p1_invariants = check_invariants(batch_api, gce_client)
@@ -424,21 +866,7 @@ def test_production_traffic_stress(
         )
 
         if queued:
-            print(f"[Phase 1] Replenishing pool for {len(queued)} queued startups...")
-            for _ in range(len(queued)):
-                replenish_pool()
-            try:
-                poll_until(
-                    lambda: count_idle_jobs(batch_api) >= min(len(queued), 2),
-                    timeout=180,
-                    interval=10,
-                    description="Idle containers for overflow reconciliation",
-                )
-            except TimeoutError:
-                print(f"[Phase 1] Warning: idle pool slow to replenish")
-            _trigger_reconciliation()
-            time.sleep(5)
-            _trigger_reconciliation()
+            print(f"[Phase 1] Unexpected queued startups under AssistantSession v1")
 
         # ==================================================================
         # PHASE 2: Traffic Firehose — blast traffic before containers ready
@@ -516,22 +944,35 @@ def test_production_traffic_stress(
 
         t0 = time.monotonic()
         containers_up = {}
-        containers_failed = {}
+        pending_container_ids = {a["assistant_id"] for a in assistants}
+        container_deadline = time.monotonic() + 300
+        container_poll_round = 0
 
-        for a in assistants:
-            aid = a["assistant_id"]
-            try:
-                jobs = wait_for_container_running(
-                    batch_api,
-                    aid,
-                    timeout=300,
-                    interval=10,
-                )
+        while pending_container_ids and time.monotonic() < container_deadline:
+            ready_now = []
+            for aid in sorted(pending_container_ids):
+                jobs = list_jobs_with_assistant_id(batch_api, aid)
+                if not jobs:
+                    continue
                 containers_up[aid] = jobs[0].metadata.name
                 print(f"  {aid}: container running ({containers_up[aid]})")
-            except TimeoutError:
-                containers_failed[aid] = "timeout"
-                print(f"  {aid}: TIMEOUT — no container after 300s")
+                ready_now.append(aid)
+
+            for aid in ready_now:
+                pending_container_ids.discard(aid)
+
+            if not pending_container_ids:
+                break
+
+            container_poll_round += 1
+            if container_poll_round % 3 == 0:
+                _trigger_pool_refresh()
+            time.sleep(10)
+
+        containers_failed = {}
+        for aid in sorted(pending_container_ids):
+            containers_failed[aid] = "timeout"
+            print(f"  {aid}: TIMEOUT — no container after 300s")
 
         elapsed_containers = time.monotonic() - t0
         print(
@@ -547,73 +988,110 @@ def test_production_traffic_stress(
 
         for aid in all_ids:
             jobs = list_jobs_with_assistant_id(batch_api, aid)
-            assert len(jobs) <= 1, (
-                f"INV-1: assistant {aid} has {len(jobs)} containers "
-                f"({[j.metadata.name for j in jobs]})"
-            )
+            if len(jobs) > 1:
+                snapshot = _assistant_duplicate_job_snapshot(
+                    comms,
+                    batch_api,
+                    core_api,
+                    aid,
+                )
+                _record_duplicate_job_snapshot(request, snapshot)
+                raise AssertionError(
+                    f"INV-1: assistant {aid} has {len(jobs)} containers "
+                    f"({[j.metadata.name for j in jobs]})\n"
+                    f"Duplicate job snapshot:\n"
+                    f"{json.dumps(snapshot, indent=2, sort_keys=True, default=str)}",
+                )
 
         if gce_client is not None:
-            print(f"[Phase 3] Polling for VM assignments (up to 300s)...")
-            vm_deadline = time.monotonic() + 300
-            vm_assigned = 0
-            vm_poll_round = 0
-            while time.monotonic() < vm_deadline:
-                vm_assigned = 0
-                for a in assistants:
-                    vms = list_assigned_vms(gce_client, a["assistant_id"])
-                    if vms:
-                        vm_assigned += 1
-                if vm_assigned >= N:
-                    break
-                vm_poll_round += 1
-                _trigger_vm_reconciliation()
-                if vm_poll_round % 4 == 0:
-                    _trigger_pool_refresh()
-                time.sleep(15)
+            print(
+                "[Phase 3] Waiting for desktops to reach authenticated readiness "
+                f"(up to {_VM_DESKTOP_READY_TIMEOUT_SECONDS}s for assignment, "
+                "preserving "
+                f"{_VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS}s after assignment)...",
+            )
+            with ThreadPoolExecutor(max_workers=min(N, 12)) as pool:
+                vm_futures = {
+                    pool.submit(
+                        _wait_for_assistant_vm_contract,
+                        comms,
+                        gce_client,
+                        a,
+                    ): a["assistant_id"]
+                    for a in assistants
+                }
+                vm_results = []
+                for future in as_completed(vm_futures):
+                    result = future.result()
+                    vm_results.append(result)
+                    print(
+                        f"  {result['assistant_id']}: "
+                        f"{_format_vm_contract_result(result, assignment_timeout=_VM_DESKTOP_READY_TIMEOUT_SECONDS, readiness_timeout=_VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS)}",
+                    )
 
-            vm_auth_ok = 0
-            vm_auth_fail = 0
-            vm_not_assigned = 0
-            for a in assistants:
-                aid = a["assistant_id"]
-                try:
-                    vms = list_assigned_vms(gce_client, aid)
-                    if vms:
-                        hostname = _get_vm_hostname(vms[0])
-                        resp = probe_vm_agent_service(hostname, a["api_key"])
-                        if resp and resp.status_code == 200:
-                            vm_auth_ok += 1
-                        else:
-                            vm_auth_fail += 1
-                            status = resp.status_code if resp else "no response"
-                            print(
-                                f"  {aid}: VM {vms[0].name}, auth FAIL ({hostname}) — {status}",
-                            )
-                    else:
-                        vm_not_assigned += 1
-                except Exception as e:
-                    print(f"  {aid}: GCE check failed — {e}")
+            vm_assigned = sum(bool(result.get("vm_name")) for result in vm_results)
+            vm_auth_ok = sum(result["state"] == "ready" for result in vm_results)
+            vm_desktop_pending_ids = sorted(
+                result["assistant_id"]
+                for result in vm_results
+                if result["state"] == "assigned_waiting_for_desktop_ready"
+            )
+            vm_auth_fail_ids = sorted(
+                result["assistant_id"]
+                for result in vm_results
+                if result["state"] in ("assigned_auth_pending", "check_failed")
+            )
+            vm_capacity_queued_ids = sorted(
+                result["assistant_id"]
+                for result in vm_results
+                if result["state"] == "queued_for_capacity"
+            )
+            vm_assignment_stall_ids = sorted(
+                result["assistant_id"]
+                for result in vm_results
+                if result["state"] == "not_assigned"
+            )
 
             print(
                 f"[Phase 3] VMs: {vm_assigned}/{N} assigned, "
-                f"{vm_auth_ok} auth OK, {vm_auth_fail} auth FAIL, "
-                f"{vm_not_assigned} not assigned (pool had {idle_vms_before} idle)",
+                f"{vm_auth_ok} desktop-ready + auth OK, "
+                f"{len(vm_desktop_pending_ids)} waiting for desktop readiness, "
+                f"{len(vm_auth_fail_ids)} auth/verification FAIL, "
+                f"{len(vm_capacity_queued_ids)} queued for capacity, "
+                f"{len(vm_assignment_stall_ids)} not assigned for other reasons "
+                f"(pool had {idle_vms_before} idle)",
             )
 
-            assert vm_auth_fail == 0, (
-                f"INV-11: {vm_auth_fail} VMs have auth failures "
-                f"(assigned but agent-service key mismatch)"
+            assert not vm_desktop_pending_ids, (
+                "Assigned VMs never reached desktop readiness within "
+                f"{_VM_DESKTOP_READY_AFTER_ASSIGN_TIMEOUT_SECONDS}s of assignment: "
+                + ", ".join(vm_desktop_pending_ids)
+            )
+            assert not vm_auth_fail_ids, (
+                "INV-11: desktop-ready VMs failed authenticated agent probe: "
+                + ", ".join(vm_auth_fail_ids)
             )
 
-            if vm_not_assigned > 0:
+            if vm_capacity_queued_ids or vm_assignment_stall_ids:
                 import warnings
 
-                warnings.warn(
-                    f"{vm_not_assigned}/{N} assistants have containers but no VM "
-                    f"after 300s of reconciliation. VM pool had {idle_vms_before} "
-                    f"idle VMs for {N} assistants. This may indicate the VM pool "
-                    f"cannot replenish fast enough for this scale.",
-                )
+                if vm_capacity_queued_ids:
+                    warnings.warn(
+                        f"{len(vm_capacity_queued_ids)}/{N} assistants remained queued "
+                        "for VM capacity after "
+                        f"{_VM_DESKTOP_READY_TIMEOUT_SECONDS}s of reconciliation: "
+                        + ", ".join(vm_capacity_queued_ids)
+                        + ". "
+                        f"VM pool had {idle_vms_before} idle VMs for {N} assistants.",
+                    )
+                if vm_assignment_stall_ids:
+                    warnings.warn(
+                        f"{len(vm_assignment_stall_ids)}/{N} assistants never received "
+                        "a VM within "
+                        f"{_VM_DESKTOP_READY_TIMEOUT_SECONDS}s without an explicit "
+                        "WaitingForCapacity signal: "
+                        + ", ".join(vm_assignment_stall_ids),
+                    )
 
         p3_invariants = check_invariants(batch_api, gce_client)
         p3_new = _new_violations(p3_invariants, baseline_violations)
@@ -733,11 +1211,21 @@ def test_production_traffic_stress(
         print(f"  {provoke_aid}: 3 concurrent start_job → {dup_statuses}")
 
         dup_jobs = list_jobs_with_assistant_id(batch_api, provoke_aid)
-        assert len(dup_jobs) <= 1, (
-            f"INV-1 PROVOKED: assistant {provoke_aid} has {len(dup_jobs)} containers "
-            f"after 3 concurrent start_job calls: "
-            f"{[j.metadata.name for j in dup_jobs]}"
-        )
+        if len(dup_jobs) > 1:
+            snapshot = _assistant_duplicate_job_snapshot(
+                comms,
+                batch_api,
+                core_api,
+                provoke_aid,
+            )
+            _record_duplicate_job_snapshot(request, snapshot)
+            raise AssertionError(
+                f"INV-1 PROVOKED: assistant {provoke_aid} has {len(dup_jobs)} containers "
+                f"after 3 concurrent start_job calls: "
+                f"{[j.metadata.name for j in dup_jobs]}\n"
+                f"Duplicate job snapshot:\n"
+                f"{json.dumps(snapshot, indent=2, sort_keys=True, default=str)}",
+            )
         print(f"  INV-1 provocation: {len(dup_jobs)} container(s) — safe")
 
         # Check outbound messages now — containers have been running through
@@ -776,10 +1264,44 @@ def test_production_traffic_stress(
         # ==================================================================
         # PHASE 5: Crash Recovery Under Load
         # ==================================================================
-        crash_count = min(2, N // 2)
-        crash_assistants = assistants[:crash_count]
-        surviving_assistants = assistants[crash_count:]
+        desired_crash_count = min(2, N // 2)
+        # Pick only assistants with a live, killable Job so this phase measures
+        # crash recovery instead of pre-existing release/drain state.
+        crash_assistants = []
+        crash_job_names = {}
+        for assistant in assistants:
+            if len(crash_assistants) >= desired_crash_count:
+                break
+            assistant_id = assistant["assistant_id"]
+            job_name, killed_pod = _kill_current_runtime_pod(
+                batch_api,
+                core_api,
+                assistant_id,
+            )
+            if not job_name:
+                print(f"  {assistant_id}: skip crash candidate — no active job")
+                continue
+            if not killed_pod:
+                print(
+                    f"  {assistant_id}: skip crash candidate — no running pod for {job_name}",
+                )
+                continue
+            crash_assistants.append(assistant)
+            crash_job_names[assistant_id] = job_name
+            containers_up[assistant_id] = job_name
+            print(f"  {assistant_id}: killed pod {killed_pod}")
+
+        crash_count = len(crash_assistants)
         crash_ids = [a["assistant_id"] for a in crash_assistants]
+        crash_id_set = set(crash_ids)
+        surviving_assistants = [
+            assistant
+            for assistant in assistants
+            if assistant["assistant_id"] not in crash_id_set
+        ]
+        assert (
+            crash_count == desired_crash_count
+        ), f"Need {desired_crash_count} live assistants with killable pods for Phase 5"
 
         print(f"\n{'—' * 70}")
         print(
@@ -803,19 +1325,6 @@ def test_production_traffic_stress(
         bg_future = bg_thread_pool.submit(_bg_traffic)
 
         try:
-            # Kill the pods
-            for a in crash_assistants:
-                aid = a["assistant_id"]
-                job_name = containers_up.get(aid)
-                if not job_name:
-                    print(f"  {aid}: no container to kill, skipping")
-                    continue
-                killed = _kill_pod(core_api, job_name)
-                if killed:
-                    print(f"  {aid}: killed pod {killed}")
-                else:
-                    print(f"  {aid}: no running pod found for {job_name}")
-
             # Fire stale-expire while watcher is processing crashes — tests
             # whether the sweep races with the watcher on VM release / job suspend
             print(f"    [scheduler] Firing stale-expire during crash recovery...")
@@ -825,16 +1334,10 @@ def test_production_traffic_stress(
             print(f"[Phase 5] Waiting for crashed jobs to terminate...")
             time.sleep(15)
 
-            for aid in crash_ids:
-                job_name = containers_up.get(aid)
-                if not job_name:
-                    continue
+            for aid, job_name in crash_job_names.items():
                 try:
                     poll_until(
-                        lambda jn=job_name: not any(
-                            j.status.active and j.status.active > 0
-                            for j in list_jobs_with_assistant_id(batch_api, aid)
-                        ),
+                        lambda jn=job_name: not _job_has_active_pods(batch_api, jn),
                         timeout=120,
                         interval=10,
                         description=f"Job {job_name} to terminate after pod kill",
@@ -860,26 +1363,27 @@ def test_production_traffic_stress(
                 status, body = _start_job_tolerant(comms, a)
                 print(f"  {aid}: re-start → HTTP {status}")
 
-            if queued_restart := [
-                a for a in crash_assistants if _start_job_tolerant(comms, a)[0] == 202
-            ]:
-                replenish_pool()
-                _trigger_reconciliation()
-
-            # Wait for new containers
-            for a in crash_assistants:
-                aid = a["assistant_id"]
-                try:
-                    jobs = wait_for_container_running(
+            # Wait for new containers in parallel so one slow recovery does not
+            # distort the rest of the crash cohort.
+            with ThreadPoolExecutor(max_workers=max(1, crash_count)) as pool:
+                recovery_futures = {
+                    pool.submit(
+                        wait_for_container_running,
                         batch_api,
-                        aid,
+                        assistant["assistant_id"],
                         timeout=300,
                         interval=10,
-                    )
-                    containers_up[aid] = jobs[0].metadata.name
-                    print(f"  {aid}: recovered → {containers_up[aid]}")
-                except TimeoutError:
-                    print(f"  {aid}: FAILED to recover — no container after 300s")
+                    ): assistant["assistant_id"]
+                    for assistant in crash_assistants
+                }
+                for future in as_completed(recovery_futures):
+                    aid = recovery_futures[future]
+                    try:
+                        jobs = future.result()
+                        containers_up[aid] = jobs[0].metadata.name
+                        print(f"  {aid}: recovered → {containers_up[aid]}")
+                    except TimeoutError:
+                        print(f"  {aid}: FAILED to recover — no container after 300s")
 
             p5_invariants = check_invariants(batch_api, gce_client)
             p5_new = _new_violations(p5_invariants, baseline_violations)
@@ -911,12 +1415,26 @@ def test_production_traffic_stress(
         print(f"[Phase 6] Cleanup vs startup race (3 rounds)")
         print(f"{'—' * 70}")
 
-        target_assistant = assistants[0]
+        # Keep the race on a stable assistant rather than a fresh crash victim.
+        target_assistant = _select_stable_assistant(
+            batch_api,
+            assistants,
+            excluded_ids=crash_id_set,
+        )
+        assert (
+            target_assistant is not None
+        ), "Need a non-crashed assistant with a live container for Phase 6"
         target_aid = target_assistant["assistant_id"]
+        print(f"[Phase 6] Using stable target assistant {target_aid}")
 
         for race_round in range(1, 4):
             # Delete the target's job so there's an idle-looking container
-            cleanup_assistant_jobs(batch_api, [target_aid])
+            cleanup_assistant_jobs(
+                batch_api,
+                [target_aid],
+                strict=True,
+                context=f"stress phase 6 round {race_round} pre-race cleanup",
+            )
             time.sleep(3)
 
             # Race: cleanup vs re-start
@@ -926,11 +1444,6 @@ def test_production_traffic_stress(
 
             cleanup_future.result()
             start_status, start_body = start_future.result()
-
-            if start_status == 202:
-                replenish_pool()
-                time.sleep(10)
-                _trigger_reconciliation()
 
             # Verify the assistant got a container
             try:
@@ -963,7 +1476,20 @@ def test_production_traffic_stress(
         # PHASE 7: Rapid Restart With Disk Re-attachment
         # ==================================================================
         restart_count = min(2, N // 2)
-        restart_assistants = assistants[:restart_count]
+        # Prefer assistants untouched by earlier perturbation phases.
+        restart_candidates = [
+            assistant
+            for assistant in assistants
+            if assistant["assistant_id"] not in crash_id_set
+            and assistant["assistant_id"] != target_aid
+        ]
+        if len(restart_candidates) < restart_count:
+            restart_candidates = [
+                assistant
+                for assistant in assistants
+                if assistant["assistant_id"] != target_aid
+            ]
+        restart_assistants = restart_candidates[:restart_count]
         restart_ids = [a["assistant_id"] for a in restart_assistants]
 
         print(f"\n{'—' * 70}")
@@ -981,7 +1507,12 @@ def test_production_traffic_stress(
         # Delete jobs (triggers VM release + disk detach) and wait for
         # K8s Foreground deletion to complete so start_job doesn't see
         # the dying container as "already running".
-        cleanup_assistant_jobs(batch_api, restart_ids)
+        cleanup_assistant_jobs(
+            batch_api,
+            restart_ids,
+            strict=True,
+            context="stress phase 7 pre-restart cleanup",
+        )
         for aid in restart_ids:
             try:
                 poll_until(
@@ -998,10 +1529,6 @@ def test_production_traffic_stress(
             aid = a["assistant_id"]
             status, body = _start_job_tolerant(comms, a)
             print(f"  {aid}: re-start → HTTP {status}")
-            if status == 202:
-                replenish_pool()
-                _trigger_reconciliation()
-
         # Wait for new containers
         for a in restart_assistants:
             aid = a["assistant_id"]
@@ -1018,27 +1545,33 @@ def test_production_traffic_stress(
                 print(f"  {aid}: FAILED — no container after 300s")
 
         # Verify VM re-assignment + auth
-        if gce_client is not None:
-            print(f"[Phase 7] Verifying VM re-attachment (90s wait)...")
-            time.sleep(90)
-            for a in restart_assistants:
-                aid = a["assistant_id"]
-                try:
-                    vms = list_assigned_vms(gce_client, aid)
-                    if vms:
-                        hostname = _get_vm_hostname(vms[0])
-                        resp = probe_vm_agent_service(hostname, a["api_key"])
-                        if resp and resp.status_code == 200:
-                            print(f"  {aid}: VM {vms[0].name} re-attached, auth OK")
-                        else:
-                            status = resp.status_code if resp else "no response"
-                            print(
-                                f"  {aid}: VM {vms[0].name} re-attached, auth FAIL — {status}",
-                            )
-                    else:
-                        print(f"  {aid}: VM not re-assigned after 90s")
-                except Exception as e:
-                    print(f"  {aid}: GCE check failed — {e}")
+        if gce_client is not None and restart_assistants:
+            print(
+                "[Phase 7] Waiting for re-attached desktops to reach "
+                f"authenticated readiness (up to {_VM_REATTACH_TIMEOUT_SECONDS}s "
+                "for assignment, preserving "
+                f"{_VM_REATTACH_AFTER_ASSIGN_TIMEOUT_SECONDS}s after assignment)...",
+            )
+            with ThreadPoolExecutor(
+                max_workers=min(len(restart_assistants), 6),
+            ) as pool:
+                vm_futures = {
+                    pool.submit(
+                        _wait_for_assistant_vm_contract,
+                        comms,
+                        gce_client,
+                        a,
+                        timeout=_VM_REATTACH_TIMEOUT_SECONDS,
+                        post_assignment_timeout=_VM_REATTACH_AFTER_ASSIGN_TIMEOUT_SECONDS,
+                    ): a["assistant_id"]
+                    for a in restart_assistants
+                }
+                for future in as_completed(vm_futures):
+                    result = future.result()
+                    print(
+                        f"  {result['assistant_id']}: "
+                        f"{_format_vm_contract_result(result, assignment_timeout=_VM_REATTACH_TIMEOUT_SECONDS, readiness_timeout=_VM_REATTACH_AFTER_ASSIGN_TIMEOUT_SECONDS)}",
+                    )
 
         p7_invariants = check_invariants(batch_api, gce_client)
         p7_new = _new_violations(p7_invariants, baseline_violations)
@@ -1055,18 +1588,14 @@ def test_production_traffic_stress(
         print(f"[Phase 8] Cleaning up {N} assistants...")
         print(f"{'—' * 70}")
 
-        cleanup_assistant_jobs(batch_api, all_ids)
-        print(f"[Phase 8] Jobs deleted, releasing VMs...")
-        for aid in all_ids:
-            try:
-                requests.post(
-                    f"{COMMS_APP_URL}/infra/vm/pool/release",
-                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    json={"assistant_id": str(aid)},
-                    timeout=15,
-                )
-            except Exception:
-                pass
+        cleanup_assistant_jobs(
+            batch_api,
+            all_ids,
+            strict=True,
+            context="stress phase 8 wind-down cleanup",
+            parallelism=min(len(all_ids), _STRESS_CLEANUP_PARALLELISM),
+        )
+        print(f"[Phase 8] Requested AssistantSession cleanup for all runtimes")
         print(f"[Phase 8] Waiting 15s for cleanup to propagate...")
         time.sleep(15)
 
@@ -1090,8 +1619,6 @@ def test_production_traffic_stress(
             else:
                 print(f"[Phase 8] No orphaned VMs — clean")
 
-        replenish_pool()
-
         final_invariants = check_invariants(batch_api, gce_client)
         final_new = _new_violations(final_invariants, baseline_violations)
         if final_new:
@@ -1103,7 +1630,6 @@ def test_production_traffic_stress(
         print(f"\n{'=' * 70}")
         print(f"  STRESS TEST COMPLETE: {N} assistants, 8 phases")
         print(f"  Immediate starts: {len(immediate)}")
-        print(f"  Queued starts:    {len(queued)}")
         print(f"  All served:       {len(containers_up)}/{N}")
         pool_after = count_idle_jobs(batch_api)
         print(f"  Idle pool now:    {pool_after}")
@@ -1111,15 +1637,12 @@ def test_production_traffic_stress(
 
     finally:
         scheduler_noise.stop()
-        cleanup_assistant_jobs(batch_api, all_ids)
-        for aid in all_ids:
-            try:
-                requests.post(
-                    f"{COMMS_APP_URL}/infra/vm/pool/release",
-                    headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-                    json={"assistant_id": str(aid)},
-                    timeout=15,
-                )
-            except Exception:
-                pass
-        replenish_pool()
+        _reset_stress_baseline(
+            comms,
+            batch_api,
+            gce_client,
+            all_ids,
+            context="stress finally cleanup",
+            cleanup_timeout=_STRESS_FAST_TEARDOWN_TIMEOUT_SECONDS,
+            wait_for_baseline=False,
+        )

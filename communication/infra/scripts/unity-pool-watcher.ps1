@@ -10,6 +10,10 @@
 #   nssm set UnityPoolWatcher Start SERVICE_AUTO_START
 # =============================================================================
 
+param(
+    [switch]$SkipMain
+)
+
 $ErrorActionPreference = "Continue"
 
 $MetadataUrl = "http://metadata.google.internal/computeMetadata/v1"
@@ -17,6 +21,8 @@ $MetadataHeaders = @{"Metadata-Flavor" = "Google"}
 $Etag = ""
 $PrevUnifyKey = ""
 $PrevTlsHash = ""
+$ReleaseStateDir = "C:\ProgramData\UnityPoolWatcher"
+$LastReleaseTokenPath = Join-Path $ReleaseStateDir "last-release-token.txt"
 
 function Get-Metadata($key) {
     try {
@@ -39,6 +45,73 @@ function Get-DeployEnv {
 function Write-Log($message) {
     $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     Write-Host "[$ts] $message"
+}
+
+function Ensure-ReleaseStateDir {
+    New-Item -ItemType Directory -Force -Path $ReleaseStateDir -ErrorAction SilentlyContinue | Out-Null
+}
+
+function Get-LastReleaseToken {
+    if (Test-Path $LastReleaseTokenPath) {
+        return (Get-Content $LastReleaseTokenPath -Raw).Trim()
+    }
+    return ""
+}
+
+function Save-LastReleaseToken($token) {
+    Ensure-ReleaseStateDir
+    if ($token) {
+        Set-Content -Path $LastReleaseTokenPath -Value $token -Encoding ASCII -NoNewline
+    } else {
+        Remove-Item $LastReleaseTokenPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-CurrentReleaseToken {
+    $bindingId = Get-Metadata "binding-id"
+    $releaseGeneration = Get-Metadata "release-generation"
+    if ($bindingId -and $releaseGeneration) {
+        return "$bindingId`:$releaseGeneration"
+    }
+    return ""
+}
+
+function Should-TriggerRelease($PreviousUnifyKey, $CurrentUnifyKey, $CurrentReleaseToken, $LastHandledReleaseToken) {
+    if ($CurrentUnifyKey -ne $PreviousUnifyKey -and -not $CurrentUnifyKey -and -not $CurrentReleaseToken) {
+        return $true
+    }
+
+    return (-not $CurrentUnifyKey -and $CurrentReleaseToken -and $CurrentReleaseToken -ne $LastHandledReleaseToken)
+}
+
+function Get-UnityUserAuthorizedKeysPath {
+    return "C:\Users\unityuser\.ssh\authorized_keys"
+}
+
+function Ensure-UnityUserSshConfig {
+    $sshProgramDataDir = "C:\ProgramData\ssh"
+    $sshDir = "C:\Users\unityuser\.ssh"
+    New-Item -ItemType Directory -Force -Path $sshProgramDataDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+
+    $sshdConfigPath = Join-Path $sshProgramDataDir "sshd_config"
+    $sshdConfig = @"
+# Unity File Sync - OpenSSH Server Configuration
+
+Port 2222
+PasswordAuthentication no
+PubkeyAuthentication yes
+
+# unityuser is intentionally non-admin, so use its per-user authorized_keys
+AuthorizedKeysFile C:/Users/unityuser/.ssh/authorized_keys
+
+# Subsystem for SFTP
+Subsystem sftp sftp-server.exe
+"@
+    Set-Content -Path $sshdConfigPath -Value $sshdConfig -Encoding UTF8
+    C:\Windows\System32\icacls.exe $sshDir /inheritance:r /grant "unityuser:(OI)(CI)F" /grant "SYSTEM:F" /grant "Administrators:F" 2>$null | Out-Null
+    Set-Service -Name sshd -StartupType Automatic -ErrorAction SilentlyContinue
+    return Get-UnityUserAuthorizedKeysPath
 }
 
 # ─── Code update helpers ─────────────────────────────────────────────────
@@ -73,6 +146,15 @@ function Scrub-GitTokens {
             } catch {}
         }
     }
+}
+
+function Grant-ServiceDirectoryAccess {
+    foreach ($dir in @("C:\agent-service", "C:\magnitude", "C:\ms-playwright")) {
+        if (Test-Path $dir) {
+            C:\Windows\System32\icacls.exe $dir /grant "unityuser:(OI)(CI)RX" /T /Q 2>$null
+        }
+    }
+    Write-Log "unityuser ACLs set on service directories"
 }
 
 function Scrub-Filesystem {
@@ -134,9 +216,8 @@ function Scrub-Filesystem {
 
 function Wipe-MetadataKey($key) {
     try {
-        $metaHeaders = @{ "Metadata-Flavor" = "Google" }
         $commsUrl = Get-Metadata "comms-url"
-        $idToken = Invoke-RestMethod -Uri "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" -Headers $metaHeaders -TimeoutSec 5
+        $idToken = Get-VMIdentityToken
         if (-not $commsUrl -or -not $idToken) { return }
 
         $body = @{ key = $key } | ConvertTo-Json
@@ -148,6 +229,141 @@ function Wipe-MetadataKey($key) {
     } catch {
         Write-Log "WARNING: failed to wipe metadata key $key via Comms API - $_"
     }
+}
+
+function Get-VMIdentityToken {
+    try {
+        return Invoke-RestMethod -Uri "$MetadataUrl/instance/service-accounts/default/identity?audience=unity-comms-vm&format=full" `
+            -Headers $MetadataHeaders -TimeoutSec 5 -ErrorAction Stop
+    } catch {
+        return ""
+    }
+}
+
+function Get-HttpResponseDetails($response) {
+    $details = @{
+        status = ""
+        body = ""
+    }
+    if (-not $response) {
+        return $details
+    }
+
+    try {
+        $details.status = [int]$response.StatusCode
+    } catch {}
+
+    try {
+        $stream = $response.GetResponseStream()
+        if ($stream) {
+            $reader = New-Object System.IO.StreamReader($stream)
+            $details.body = $reader.ReadToEnd()
+            $reader.Close()
+            $stream.Close()
+        }
+    } catch {}
+
+    return $details
+}
+
+function Invoke-JsonPostWithRetry {
+    param(
+        [string]$Uri,
+        [hashtable]$Headers,
+        [hashtable]$Payload,
+        [string]$SuccessPrefix,
+        [string]$FailurePrefix,
+        [int]$Attempts = 10,
+        [int]$DelaySeconds = 5
+    )
+
+    $body = $Payload | ConvertTo-Json -Compress
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            $response = Invoke-WebRequest -Uri $Uri `
+                -Method POST -ContentType "application/json" `
+                -Headers $Headers -Body $body -TimeoutSec 10 `
+                -UseBasicParsing -ErrorAction Stop
+            $statusCode = ""
+            try {
+                $statusCode = [int]$response.StatusCode
+            } catch {
+                $statusCode = 200
+            }
+            $responseBody = [string]$response.Content
+            if ($responseBody) {
+                Write-Log "$SuccessPrefix (attempt $attempt): status=$statusCode body=$responseBody"
+            } else {
+                Write-Log "$SuccessPrefix (attempt $attempt): status=$statusCode"
+            }
+            return $true
+        } catch {
+            $statusCode = "request_error"
+            $responseBody = ""
+            if ($_.Exception.Response) {
+                $failure = Get-HttpResponseDetails $_.Exception.Response
+                if ($failure.status) {
+                    $statusCode = $failure.status
+                }
+                $responseBody = [string]$failure.body
+            } elseif ($_.Exception.Message) {
+                $responseBody = [string]$_.Exception.Message
+            }
+
+            if ($responseBody) {
+                if ($attempt -lt $Attempts) {
+                    Write-Log "$FailurePrefix attempt $attempt failed: status=$statusCode body=$responseBody, retrying in ${DelaySeconds}s..."
+                } else {
+                    Write-Log "$FailurePrefix attempt $attempt failed: status=$statusCode body=$responseBody"
+                }
+            } else {
+                if ($attempt -lt $Attempts) {
+                    Write-Log "$FailurePrefix attempt $attempt failed: status=$statusCode, retrying in ${DelaySeconds}s..."
+                } else {
+                    Write-Log "$FailurePrefix attempt $attempt failed: status=$statusCode"
+                }
+            }
+
+            if ($attempt -lt $Attempts) {
+                Start-Sleep -Seconds $DelaySeconds
+            }
+        }
+    }
+
+    return $false
+}
+
+function Notify-ReleaseComplete {
+    $bindingId = Get-Metadata "binding-id"
+    $releaseGeneration = Get-Metadata "release-generation"
+    $commsUrl = Get-Metadata "comms-url"
+    $idToken = Get-VMIdentityToken
+    $missing = @()
+    if (-not $bindingId) { $missing += "binding-id" }
+    if (-not $commsUrl) { $missing += "comms-url" }
+    if (-not $idToken) { $missing += "identity-token" }
+    if ($missing.Count -gt 0) {
+        Write-Log "WARNING: missing release completion metadata ($($missing -join '/'))"
+        return $false
+    }
+
+    $payload = @{ binding_id = $bindingId }
+    if ($releaseGeneration) {
+        $payload.release_generation = [int]$releaseGeneration
+    }
+
+    $reported = Invoke-JsonPostWithRetry `
+        -Uri "$commsUrl/infra/vm/release-complete" `
+        -Headers @{ Authorization = "Bearer $idToken" } `
+        -Payload $payload `
+        -SuccessPrefix "Reported release completion to Comms" `
+        -FailurePrefix "Release completion" `
+        -Attempts 10 `
+        -DelaySeconds 3
+    if (-not $reported) {
+        Write-Log "WARNING: failed to report release completion to Comms"
+    }
+    return $reported
 }
 
 function Stop-AgentService {
@@ -300,10 +516,6 @@ function Invoke-Update {
         }
 
         if (Test-Path "$tmpDir\agent-service") {
-            # Preserve node_modules
-            if (Test-Path "$agentServiceDir\node_modules") {
-                Move-Item "$agentServiceDir\node_modules" "$tmpDir\agent-service\node_modules" -Force
-            }
             # Remove old dir (rmdir + fallback to Remove-Item if locks prevented it)
             if (Test-Path $agentServiceDir) {
                 cmd /c "rmdir /s /q `"$agentServiceDir`"" 2>&1 | Out-Null
@@ -337,6 +549,7 @@ function Invoke-Update {
     }
 
     Scrub-GitTokens
+    Grant-ServiceDirectoryAccess
     Write-Log "UPDATE complete"
 }
 
@@ -354,13 +567,14 @@ function Invoke-Assign($unifyKey) {
         Write-Log "Unmounted previous disk"
     }
 
-    # Update code before configuring (skips quickly if already up-to-date)
+    # Update code before configuring
     Invoke-Update
 
     $vncPassword = Get-Metadata "vnc-password"
     $sshPublicKey = Get-Metadata "ssh-public-key"
     $diskDevice = Get-Metadata "disk-device"
     $assistantId = Get-Metadata "assistant-id"
+    $bindingId = Get-Metadata "binding-id"
     $hostname = Get-Metadata "hostname"
     $orchestraUrl = Get-Metadata "orchestra-url"
     $commsUrl = Get-Metadata "comms-url"
@@ -420,10 +634,10 @@ function Invoke-Assign($unifyKey) {
     # SSH authorized_keys + restart SSHD
     try {
         if ($sshPublicKey) {
-            $sshDir = "C:\ProgramData\ssh"
-            New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
-            Set-Content -Path "$sshDir\administrators_authorized_keys" -Value $sshPublicKey -Encoding UTF8
-            icacls "$sshDir\administrators_authorized_keys" /inheritance:r /grant "SYSTEM:F" /grant "Administrators:F" 2>$null
+            $authorizedKeysPath = Ensure-UnityUserSshConfig
+            Remove-Item "C:\ProgramData\ssh\administrators_authorized_keys" -Force -ErrorAction SilentlyContinue
+            Set-Content -Path $authorizedKeysPath -Value $sshPublicKey -Encoding UTF8
+            icacls $authorizedKeysPath /inheritance:r /grant "unityuser:F" /grant "SYSTEM:F" /grant "Administrators:F" 2>$null | Out-Null
             Restart-Service sshd -ErrorAction SilentlyContinue
             Write-Log "SSH authorized_keys configured, SSHD restarted"
         }
@@ -500,7 +714,6 @@ npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
         Start-Sleep -Seconds 1
     }
 
-    # Display resolution: run the script directly in the console session
     try {
         $resScript = "C:\novnc\set-resolution.ps1"
         if (Test-Path $resScript) {
@@ -511,7 +724,6 @@ npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
         Write-Log "WARNING: Display resolution trigger failed: $_"
     }
 
-    # Activate Office if MAK key provided and not already licensed
     $makKey = Get-Metadata "office-mak-key"
     if ($makKey) {
         $osppPath = "C:\Program Files\Microsoft Office\root\Office16\OSPP.VBS"
@@ -564,21 +776,31 @@ npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
     }
 
     # Send ready notification
-    if ($commsUrl -and $hostname -and $unifyKey -and $assistantId) {
-        for ($attempt = 1; $attempt -le 10; $attempt++) {
-            try {
-                $body = @{ assistant_id = $assistantId; vm_type = "windows"; hostname = $hostname } | ConvertTo-Json
-                $result = Invoke-RestMethod -Uri "$commsUrl/infra/vm/ready" `
-                    -Method POST -ContentType "application/json" `
-                    -Headers @{ Authorization = "Bearer $unifyKey" } `
-                    -Body $body -TimeoutSec 10
-                Write-Log "VM ready notification sent (attempt $attempt)"
-                break
-            } catch {
-                Write-Log "VM ready notification attempt $attempt failed, retrying in 5s..."
-                Start-Sleep -Seconds 5
-            }
+    if ($commsUrl -and $hostname -and $unifyKey -and $assistantId -and $bindingId) {
+        $readySent = Invoke-JsonPostWithRetry `
+            -Uri "$commsUrl/infra/vm/ready" `
+            -Headers @{ Authorization = "Bearer $unifyKey" } `
+            -Payload @{
+                assistant_id = $assistantId
+                binding_id = $bindingId
+                vm_type = "windows"
+                hostname = $hostname
+            } `
+            -SuccessPrefix "VM ready notification sent" `
+            -FailurePrefix "VM ready notification" `
+            -Attempts 10 `
+            -DelaySeconds 5
+        if (-not $readySent) {
+            Write-Log "WARNING: failed to send VM ready notification to Comms"
         }
+    } else {
+        $missing = @()
+        if (-not $assistantId) { $missing += "assistant-id" }
+        if (-not $bindingId) { $missing += "binding-id" }
+        if (-not $hostname) { $missing += "hostname" }
+        if (-not $commsUrl) { $missing += "comms-url" }
+        if (-not $unifyKey) { $missing += "unify-key" }
+        Write-Log "WARNING: skipping VM ready notification because required metadata is missing ($($missing -join '/'))"
     }
 
     Write-Log "ASSIGN complete"
@@ -587,7 +809,12 @@ npx --yes ts-node src/index.ts >> C:\Unity\agent-service.log 2>&1
 # ─── Release: clean up VM for return to pool ─────────────────────────────
 
 function Invoke-Release {
-    Write-Log "RELEASE: cleaning up VM"
+    $releaseToken = Get-CurrentReleaseToken
+    if ($releaseToken) {
+        Write-Log "RELEASE: cleaning up VM (token=$releaseToken)"
+    } else {
+        Write-Log "RELEASE: cleaning up VM"
+    }
 
     # Stop Agent Service
     Stop-AgentService
@@ -599,6 +826,7 @@ function Invoke-Release {
     Write-Log "Agent Service .env cleared"
 
     # Clear SSH keys
+    Remove-Item (Get-UnityUserAuthorizedKeysPath) -Force -ErrorAction SilentlyContinue
     Remove-Item "C:\ProgramData\ssh\administrators_authorized_keys" -Force -ErrorAction SilentlyContinue
     Write-Log "SSH authorized_keys cleared"
 
@@ -636,6 +864,11 @@ function Invoke-Release {
     Invoke-Update
 
     Wipe-MetadataKey "github-token"
+    if (Notify-ReleaseComplete) {
+        Save-LastReleaseToken $releaseToken
+    } else {
+        Write-Log "WARNING: release completion callback did not succeed; token remains unacked"
+    }
 
     Write-Log "RELEASE complete"
 }
@@ -680,70 +913,79 @@ function Invoke-RefreshTls {
     $script:PrevTlsHash = $hash
 }
 
-# ─── Main watcher loop ───────────────────────────────────────────────────
+function Start-Watcher {
+    Write-Log "Unity Pool Watcher starting"
 
-Write-Log "Unity Pool Watcher starting"
-
-# Seed TLS hash to avoid unnecessary reload on first loop iteration
-$initTls = Get-Metadata "tls-fullchain"
-if ($initTls) {
-    $md5 = [System.Security.Cryptography.MD5]::Create()
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($initTls)
-    $PrevTlsHash = [BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").ToLower()
-}
-
-# Pre-fetch etag so the first long-poll has a valid value and won't block
-# on already-set metadata. Also check current state immediately to handle
-# assignments that happened before the watcher started.
-try {
-    $initResponse = Invoke-WebRequest -Uri "$MetadataUrl/instance/attributes/?recursive=true" `
-        -Headers $MetadataHeaders -TimeoutSec 10 -UseBasicParsing
-    $Etag = $initResponse.Headers["ETag"]
-} catch {
-    Write-Log "WARNING: Initial metadata fetch failed: $_"
-}
-
-$currentUnifyKey = Get-Metadata "unify-key"
-if ($currentUnifyKey -ne $PrevUnifyKey) {
-    if ($currentUnifyKey) {
-        Invoke-Assign $currentUnifyKey
-    } else {
-        Invoke-Release
+    # Seed TLS hash to avoid unnecessary reload on first loop iteration
+    $initTls = Get-Metadata "tls-fullchain"
+    if ($initTls) {
+        $md5 = [System.Security.Cryptography.MD5]::Create()
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($initTls)
+        $PrevTlsHash = [BitConverter]::ToString($md5.ComputeHash($bytes)).Replace("-", "").ToLower()
     }
-}
-$PrevUnifyKey = $currentUnifyKey
 
-while ($true) {
+    # Pre-fetch etag so the first long-poll has a valid value and won't block
+    # on already-set metadata. Also check current state immediately to handle
+    # assignments that happened before the watcher started.
     try {
-        # Long-poll for metadata changes (Etag is always valid here)
-        $uri = "$MetadataUrl/instance/attributes/?recursive=true&wait_for_change=true"
-        $uri += "&last_etag=$Etag"
-
-        try {
-            $response = Invoke-WebRequest -Uri $uri -Headers $MetadataHeaders -TimeoutSec 0 -UseBasicParsing
-            $Etag = $response.Headers["ETag"]
-        } catch {
-            Write-Log "Metadata poll failed, retrying in 5s"
-            Start-Sleep -Seconds 5
-            continue
-        }
-
-        $currentUnifyKey = Get-Metadata "unify-key"
-
-        if ($currentUnifyKey -ne $PrevUnifyKey) {
-            if ($currentUnifyKey) {
-                Invoke-Assign $currentUnifyKey
-            } else {
-                Invoke-Release
-            }
-        }
-
-        $PrevUnifyKey = $currentUnifyKey
-
-        # Refresh TLS cert if metadata changed (handles renewal pushes)
-        Invoke-RefreshTls
+        $initResponse = Invoke-WebRequest -Uri "$MetadataUrl/instance/attributes/?recursive=true" `
+            -Headers $MetadataHeaders -TimeoutSec 10 -UseBasicParsing
+        $Etag = $initResponse.Headers["ETag"]
     } catch {
-        Write-Log "ERROR in watcher loop: $_"
-        Start-Sleep -Seconds 5
+        Write-Log "WARNING: Initial metadata fetch failed: $_"
     }
+
+    $currentUnifyKey = Get-Metadata "unify-key"
+    $currentReleaseToken = Get-CurrentReleaseToken
+    $lastHandledReleaseToken = Get-LastReleaseToken
+    if ($currentUnifyKey -ne $PrevUnifyKey -and $currentUnifyKey) {
+        Invoke-Assign $currentUnifyKey
+    }
+    if (Should-TriggerRelease $PrevUnifyKey $currentUnifyKey $currentReleaseToken $lastHandledReleaseToken) {
+        Invoke-Release
+        $lastHandledReleaseToken = Get-LastReleaseToken
+    }
+    $PrevUnifyKey = $currentUnifyKey
+
+    while ($true) {
+        try {
+            # Long-poll for metadata changes (Etag is always valid here)
+            $uri = "$MetadataUrl/instance/attributes/?recursive=true&wait_for_change=true"
+            $uri += "&last_etag=$Etag"
+
+            try {
+                $response = Invoke-WebRequest -Uri $uri -Headers $MetadataHeaders -TimeoutSec 0 -UseBasicParsing
+                $Etag = $response.Headers["ETag"]
+            } catch {
+                Write-Log "Metadata poll failed, retrying in 5s"
+                Start-Sleep -Seconds 5
+                continue
+            }
+
+            $currentUnifyKey = Get-Metadata "unify-key"
+            $currentReleaseToken = Get-CurrentReleaseToken
+            $lastHandledReleaseToken = Get-LastReleaseToken
+
+            if ($currentUnifyKey -ne $PrevUnifyKey -and $currentUnifyKey) {
+                Invoke-Assign $currentUnifyKey
+            }
+
+            if (Should-TriggerRelease $PrevUnifyKey $currentUnifyKey $currentReleaseToken $lastHandledReleaseToken) {
+                Invoke-Release
+                $lastHandledReleaseToken = Get-LastReleaseToken
+            }
+
+            $PrevUnifyKey = $currentUnifyKey
+
+            # Refresh TLS cert if metadata changed (handles renewal pushes)
+            Invoke-RefreshTls
+        } catch {
+            Write-Log "ERROR in watcher loop: $_"
+            Start-Sleep -Seconds 5
+        }
+    }
+}
+
+if (-not $SkipMain) {
+    Start-Watcher
 }

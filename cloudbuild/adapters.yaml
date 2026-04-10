@@ -34,6 +34,21 @@ steps:
   args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest']
   waitFor: ['build-image']
 
+  # Pause legacy infra schedulers before updating the unified maintenance job
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'pause-legacy-infra-schedulers'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    for job in jobs-create jobs-cleanup stale-jobs-expire \
+               pending-startups pending-vm-assignments; do
+      gcloud scheduler jobs pause "$job" --location="${_REGION}" 2>/dev/null \
+        && echo "Paused legacy scheduler: $job" \
+        || echo "Legacy scheduler $job already paused, removed, or not found"
+    done
+  waitFor: ['push-sha-tag']
+
   # Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'deploy'
@@ -54,7 +69,7 @@ steps:
   - '--timeout=300'
   - '--cpu-boost'
   - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=production,PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc'
-  waitFor: ['push-sha-tag']
+  waitFor: ['push-sha-tag', 'pause-legacy-infra-schedulers']
 
   # Update Cloud Scheduler: Email Watches
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
@@ -85,9 +100,11 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Jobs Create
+  # Update Cloud Scheduler: Infra Maintenance
+  # Unified sweep: pool replenish + cleanup + stale-job expiry +
+  # orphaned-VM reconciliation + quarantined-VM purge.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-jobs-create'
+  id: 'update-scheduler-infra-maintenance'
   entrypoint: bash
   secretEnv: ['ORCHESTRA_ADMIN_KEY']
   args:
@@ -96,15 +113,15 @@ steps:
     set -o pipefail
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
-    gcloud scheduler jobs update http "jobs-create" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
+    gcloud scheduler jobs update http "infra-maintenance" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/infra/maintenance" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --location="${_REGION}" \
     || \
-    gcloud scheduler jobs create http "jobs-create" \
+    gcloud scheduler jobs create http "infra-maintenance" \
       --schedule "0 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/create?refresh=true" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/infra/maintenance" \
       --http-method POST \
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --time-zone "UTC" \
@@ -112,60 +129,34 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Jobs Cleanup
+  # Remove legacy infra schedulers (replaced by infra-maintenance)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-jobs-cleanup'
+  id: 'remove-legacy-infra-schedulers'
   entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
   args:
   - '-c'
   - |
-    set -o pipefail
-    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-    {
-    gcloud scheduler jobs update http "jobs-cleanup" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
-      --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --location="${_REGION}" \
-    || \
-    gcloud scheduler jobs create http "jobs-cleanup" \
-      --schedule "10 * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/cleanup" \
-      --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --time-zone "UTC" \
-      --location="${_REGION}"
-    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
-  waitFor: ['deploy']
+    for job in jobs-create jobs-cleanup stale-jobs-expire \
+               pending-startups pending-vm-assignments; do
+      gcloud scheduler jobs delete "$job" --location="${_REGION}" --quiet 2>/dev/null \
+        && echo "Deleted legacy scheduler: $job" \
+        || echo "Legacy scheduler $job already removed or not found"
+    done
+  waitFor: ['update-scheduler-infra-maintenance']
 
-  # Update Cloud Scheduler: Stale Jobs Expire
+  # Remove legacy pending PubSub topics (replaced by AssistantSession CRD phases)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-stale-jobs-expire'
+  id: 'remove-legacy-pending-pubsub'
   entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
   args:
   - '-c'
   - |
-    set -o pipefail
-    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-    {
-    gcloud scheduler jobs update http "stale-jobs-expire" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
-      --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --schedule "0 1,7,13,19 * * *" \
-      --location="${_REGION}" \
-    || \
-    gcloud scheduler jobs create http "stale-jobs-expire" \
-      --schedule "0 1,7,13,19 * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/jobs/expire-stale" \
-      --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --time-zone "UTC" \
-      --location="${_REGION}"
-    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
-  waitFor: ['deploy']
+    for topic in unity-pending-startups unity-pending-vm-assignments unity-startup; do
+      gcloud pubsub topics delete "$topic" --project="${PROJECT_ID}" --quiet 2>/dev/null \
+        && echo "Deleted legacy topic: $topic" \
+        || echo "Legacy topic $topic already removed or not found"
+    done
+  waitFor: ['remove-legacy-infra-schedulers']
 
   # Update Cloud Scheduler: Microsoft Token Refresh
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
@@ -248,62 +239,6 @@ steps:
       --http-method POST \
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --message-body '{}' \
-      --time-zone "UTC" \
-      --location="${_REGION}"
-    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
-  waitFor: ['deploy']
-
-  # Update Cloud Scheduler: Pending Startups Reconciler
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-pending-startups'
-  entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  args:
-  - '-c'
-  - |
-    set -o pipefail
-    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-    {
-    gcloud scheduler jobs update http "pending-startups" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/pending-startups" \
-      --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --schedule "* * * * *" \
-      --location="${_REGION}" \
-    || \
-    gcloud scheduler jobs create http "pending-startups" \
-      --schedule "* * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/pending-startups" \
-      --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --time-zone "UTC" \
-      --location="${_REGION}"
-    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
-  waitFor: ['deploy']
-
-  # Update Cloud Scheduler: Pending VM Assignments Reconciler
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'update-scheduler-pending-vm-assignments'
-  entrypoint: bash
-  secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  args:
-  - '-c'
-  - |
-    set -o pipefail
-    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
-    {
-    gcloud scheduler jobs update http "pending-vm-assignments" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/pending-vm-assignments" \
-      --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
-      --schedule "* * * * *" \
-      --location="${_REGION}" \
-    || \
-    gcloud scheduler jobs create http "pending-vm-assignments" \
-      --schedule "* * * * *" \
-      --uri "$${CLOUD_RUN_URL}/scheduled/pending-vm-assignments" \
-      --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
       --time-zone "UTC" \
       --location="${_REGION}"
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"

@@ -23,15 +23,14 @@ RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") &
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unillm.git /tmp/unillm && \
     pip install --no-cache-dir /tmp/unillm
 
-# Copy pyproject.toml first for better caching
-COPY pyproject.toml ./
-
-# Install dependencies (comms extra includes unillm)
-RUN pip install --no-cache-dir ".[comms]"
-
-# Copy application code
+# Copy package metadata and source before install so the runtime package in
+# site-packages matches the application code and bundled script assets.
+COPY pyproject.toml README.md ./
 COPY communication/ communication/
 COPY common/ common/
+
+# Install dependencies + the local communication package (including script assets).
+RUN pip install --no-cache-dir ".[comms]"
 
 EXPOSE 8080
 

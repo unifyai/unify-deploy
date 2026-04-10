@@ -1,52 +1,70 @@
-import os
-import json
+import base64
 import logging
+import json
+import os
 import random
 import string
-from fastapi import APIRouter, HTTPException, Request, Response
-from dotenv import load_dotenv
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 import httpx
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from common.settings import SETTINGS
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
-import base64
-
-load_dotenv()
+from googleapiclient.errors import HttpError
 
 router = APIRouter()
-
-# with open(os.environ["GCP_SA_KEY"], "r") as f:
-creds_json = json.loads(os.environ["GCP_SA_KEY"])
+logger = logging.getLogger(__name__)
 
 
 # Helpers
-def get_admin_service():
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=["https://www.googleapis.com/auth/admin.directory.user"],
-        subject="dan@unify.ai",
+def _is_google_not_found_error(exc: Exception) -> bool:
+    """Return True when a Google API error represents an already-missing user."""
+    return isinstance(exc, HttpError) and getattr(exc.resp, "status", None) == 404
+
+
+def _service_account_credentials(*, scopes: list[str], subject: str) -> Credentials:
+    """Build delegated service-account credentials for Workspace operations."""
+    creds_json = os.getenv("GCP_SA_KEY")
+    if not creds_json:
+        raise RuntimeError("GCP_SA_KEY must be set for Gmail operations")
+    return Credentials.from_service_account_info(
+        json.loads(creds_json),
+        scopes=scopes,
+        subject=subject,
     )
-    service = build("admin", "directory_v1", credentials=creds)
-    return service
+
+
+def _gmail_topic_path(topic_name: str | None = None) -> str:
+    """Return the fully qualified Pub/Sub topic path used by Gmail watches."""
+    return (
+        f"projects/{SETTINGS.gcp_project_id}/topics/"
+        f"{topic_name or SETTINGS.gmail_topic}"
+    )
+
+
+def get_admin_service():
+    """Build a Directory API client with domain-wide delegation."""
+    creds = _service_account_credentials(
+        scopes=["https://www.googleapis.com/auth/admin.directory.user"],
+        subject=SETTINGS.workspace_admin_subject,
+    )
+    return build("admin", "directory_v1", credentials=creds)
 
 
 def get_gmail_service(sender_email: str):
+    """Build a Gmail API client impersonating the sender."""
     # include send and readonly scopes for reading history and replying
     scopes = [
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.modify",
     ]
-    creds = Credentials.from_service_account_info(
-        creds_json,
-        scopes=scopes,
-        subject=sender_email,
-    )
+    creds = _service_account_credentials(scopes=scopes, subject=sender_email)
     return build("gmail", "v1", credentials=creds)
 
 
@@ -62,8 +80,7 @@ async def create_email_user(request: Request):
             status_code=400,
             detail="Missing required fields: local, first_name, last_name",
         )
-    domain = "unify.ai"
-    primary_email = f"{local}@{domain}"
+    primary_email = f"{local}@{SETTINGS.workspace_email_domain}"
     # generate secure password
     password = "".join(
         random.choice(string.ascii_letters + string.digits) for _ in range(32)
@@ -77,19 +94,20 @@ async def create_email_user(request: Request):
         }
         res = service.users().insert(body=user_body).execute()
         # optional watch call
-        async with httpx.AsyncClient() as client_http:
-            watch_res = await client_http.post(
+        async with httpx.AsyncClient() as http_client:
+            await http_client.post(
                 f"{SETTINGS.comms_url}/gmail/watch",
                 json={"primary_email": primary_email},
             )
         return {"success": True, "user": res}
     except Exception as e:
-        logging.error("Failed to create user: %s", e)
+        logger.error("Failed to create user: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/delete")
 async def delete_email_user(request: Request):
+    """Delete a Workspace user, treating an already-missing user as success."""
     data = await request.json()
     primary_email = data.get("primary_email")
     if not primary_email:
@@ -97,9 +115,25 @@ async def delete_email_user(request: Request):
     try:
         service = get_admin_service()
         service.users().delete(userKey=primary_email).execute()
-        return {"success": True, "message": f"User {primary_email} deleted."}
+        return {
+            "success": True,
+            "deleted": True,
+            "already_absent": False,
+            "message": f"User {primary_email} deleted.",
+        }
     except Exception as e:
-        logging.error("Failed to delete user: %s", e)
+        if _is_google_not_found_error(e):
+            logger.info(
+                "Workspace user %s already absent during delete",
+                primary_email,
+            )
+            return {
+                "success": True,
+                "deleted": False,
+                "already_absent": True,
+                "message": f"User {primary_email} already absent.",
+            }
+        logger.error("Failed to delete user: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -151,7 +185,7 @@ async def send_email(request: Request):
             msg.attach(part)
             print(f"Attached file: {filename} ({len(file_data)} bytes)")
         except Exception as e:
-            logging.error(f"Failed to attach file: {e}")
+            logger.error("Failed to attach file: %s", e)
             raise HTTPException(status_code=400, detail=f"Failed to attach file: {e}")
 
     # add threading headers if provided
@@ -179,17 +213,15 @@ async def watch_email(request: Request):
     user_email = data.get("primary_email")
     if not user_email:
         raise HTTPException(status_code=400, detail="Missing primary_email")
-    creds = Credentials.from_service_account_info(
-        creds_json,
+    creds = _service_account_credentials(
         scopes=["https://www.googleapis.com/auth/gmail.modify"],
         subject=user_email,
     )
     gmail_service = build("gmail", "v1", credentials=creds)
-    topic_name = f"projects/{SETTINGS.gcp_project_id}/topics/" + data.get(
-        "topic_name",
-        SETTINGS.gmail_topic,
-    )
-    watch_request = {"labelIds": ["INBOX"], "topicName": topic_name}
+    watch_request = {
+        "labelIds": ["INBOX"],
+        "topicName": _gmail_topic_path(data.get("topic_name")),
+    }
     watch_resp = (
         gmail_service.users()
         .watch(

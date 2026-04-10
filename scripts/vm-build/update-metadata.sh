@@ -344,6 +344,11 @@ for vm_name in "${TARGET_VMS[@]}"; do
             ((fail_count++)) || true
             continue
         fi
+
+        if [[ "$vm_type" == "windows" && "$vm_status" == "RUNNING" && "$RESTART" == false ]]; then
+            echo "  NOTE: running Windows VMs load pool-watcher-script during startup."
+            echo "        Rerun with --restart to apply the updated watcher immediately."
+        fi
     fi
 
     # Update supervisord config (Ubuntu only)

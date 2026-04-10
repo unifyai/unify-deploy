@@ -36,6 +36,23 @@ steps:
   args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest']
   waitFor: ['build-image']
 
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-assistant-session-controller'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    DOCKER_BUILDKIT=1 docker build -f scripts/assistant-session-controller/Dockerfile \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-preview:${SHORT_SHA} \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-preview:latest .
+  waitFor: ['pull-cache']
+
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-assistant-session-controller'
+  args: ['push', '--all-tags', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-preview']
+  waitFor: ['build-assistant-session-controller']
+
   # Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
@@ -53,6 +70,18 @@ steps:
   id: Deploy Unity Comms App
   entrypoint: gcloud
   waitFor: ['push-sha-tag']
+
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-assistant-session-controller'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    gcloud container clusters get-credentials unity --region ${_REGION} --project ${PROJECT_ID}
+    kubectl apply -f k8s/assistant-session-controller/crd.yaml
+    sed "s|image:.*assistant-session-controller-preview.*|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-preview:${SHORT_SHA}|" \
+      k8s/assistant-session-controller/deployment_preview.yaml | kubectl apply -f -
+  waitFor: ['push-assistant-session-controller', 'Deploy Unity Comms App']
 
 options:
   substitutionOption: ALLOW_LOOSE
@@ -73,3 +102,5 @@ timeout: '1200s'
 images:
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
 - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-preview:${SHORT_SHA}'
+- '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/assistant-session-controller-preview:latest'

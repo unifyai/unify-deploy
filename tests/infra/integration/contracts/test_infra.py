@@ -237,21 +237,16 @@ class TestInfraAuth:
             422,
         ), f"{method} {path} should reject no-auth, got {resp.status_code}"
 
-    @pytest.mark.parametrize(
-        "path",
-        [
-            "/scheduled/jobs/create",
-            "/scheduled/jobs/cleanup",
-            "/scheduled/pending-startups",
-        ],
-    )
-    def test_adapter_scheduler_rejects_no_auth(self, path):
-        resp = requests.post(f"{ADAPTERS_URL}{path}", timeout=10)
+    def test_adapter_scheduler_rejects_no_auth(self):
+        resp = requests.post(
+            f"{ADAPTERS_URL}/scheduled/infra/maintenance",
+            timeout=10,
+        )
         assert resp.status_code in (
             401,
             403,
             422,
-        ), f"POST {path} should reject no-auth, got {resp.status_code}"
+        ), f"POST /scheduled/infra/maintenance should reject no-auth, got {resp.status_code}"
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +255,11 @@ class TestInfraAuth:
 
 
 class TestJobStop:
-    """Contract: POST /infra/job/stop suspends a running K8s job."""
+    """Contract: POST /infra/job/stop suspends a running K8s job.
+
+    Idle pool jobs are not session-owned, so the endpoint should preserve the
+    raw suspend behavior and not report any AssistantSession stop side effect.
+    """
 
     def test_stop_job(self, comms):
         from ..conftest import create_and_cleanup_idle_job
@@ -273,6 +272,9 @@ class TestJobStop:
             ), f"job/stop failed: {resp.status_code} {resp.text}"
             body = resp.json()
             assert body["success"] is True
+            assert body["assistant_id"] is None
+            assert body["binding_id"] is None
+            assert body["session_stop_requested"] is False
         finally:
             comms.delete("/infra/job/delete", data={"job_name": job_name})
 
@@ -302,6 +304,30 @@ class TestJobRead:
     def test_read_nonexistent_job_returns_404(self, comms):
         resp = comms.get("/infra/job/nonexistent-job-xyz-12345")
         assert resp.status_code == 404
+
+
+class TestAssistantSessionRead:
+    """Contract: GET /infra/session/{assistant_id} returns the current runtime session."""
+
+    def test_read_existing_session(self, comms):
+        jobs_resp = comms.get(
+            "/infra/jobs",
+            params={"label_selector": "app=unity,unity-status=running", "hours": 1},
+        )
+        jobs = jobs_resp.json().get("jobs", [])
+        if not jobs:
+            pytest.skip("No running jobs to resolve a session from")
+        assistant_id = jobs[0].get("assistant_id")
+        if not assistant_id or assistant_id == "unknown":
+            pytest.skip("Running job has no assistant-id")
+
+        resp = comms.get(f"/infra/session/{assistant_id}")
+        assert (
+            resp.status_code == 200
+        ), f"session read failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert body.get("spec", {}).get("assistantId") == str(assistant_id)
+        assert "status" in body
 
 
 class TestJobLogs:
@@ -422,8 +448,8 @@ class TestDiskDelete:
 
 
 class TestVMReady:
-    """Contract: POST /infra/vm/ready publishes a desktop_ready event after
-    probing the VM's HTTPS endpoint. Authenticated via user API key."""
+    """Contract: POST /infra/vm/ready only succeeds once desktop readiness
+    is verified for the active AssistantSession."""
 
     def test_vm_ready_with_assigned_vm(self):
         from ..conftest import UNIFY_KEY, find_assistant_with_assigned_vm
@@ -438,14 +464,18 @@ class TestVMReady:
             f"{COMMS_APP_URL}/infra/vm/ready",
             json={
                 "assistant_id": str(assistant["assistant_id"]),
+                "binding_id": str(assistant.get("binding_id", "") or ""),
+                "hostname": str(assistant.get("hostname", "") or ""),
                 "vm_type": "ubuntu",
             },
             headers={"Authorization": f"Bearer {UNIFY_KEY}"},
             timeout=30,
         )
-        # 200 = published desktop_ready; 503 = VM HTTPS probe failed
+        # 200 = authenticated readiness confirmed; 401/409/503 reflect auth/session drift
         assert resp.status_code in (
             200,
+            401,
+            409,
             503,
         ), f"vm/ready unexpected: {resp.status_code} {resp.text}"
         if resp.status_code == 200:

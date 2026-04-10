@@ -5,9 +5,6 @@ from X-Forwarded-Proto/Host headers, because Cloud Run rewrites the Host
 header internally.
 """
 
-import os
-from unittest.mock import patch
-
 from fastapi import FastAPI, Depends, Request
 from fastapi.testclient import TestClient
 from twilio.request_validator import RequestValidator
@@ -17,14 +14,12 @@ TWILIO_AUTH_TOKEN = "test_auth_token_for_validation"
 app = FastAPI()
 
 
-# Import and wire the real validator from adapters
-# We patch the env so _get_twilio_validator picks up our test token.
-with patch.dict(os.environ, {"TWILIO_AUTH_TOKEN": TWILIO_AUTH_TOKEN}):
-    # Reset the cached validator so it re-reads the env
-    import adapters.main as _adapters_mod
+# Import and wire the real validator from adapters, forcing it to use the
+# test token rather than whatever is in the real environment.
+import adapters.main as _adapters_mod
 
-    _adapters_mod._twilio_validator = None
-    from adapters.main import validate_twilio_signature
+_adapters_mod._twilio_validator = RequestValidator(TWILIO_AUTH_TOKEN)
+from adapters.main import validate_twilio_signature
 
 
 @app.post("/test-webhook", dependencies=[Depends(validate_twilio_signature)])

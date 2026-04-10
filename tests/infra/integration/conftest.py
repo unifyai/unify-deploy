@@ -9,16 +9,25 @@ Configuration:
     credentials. The .env file is gitignored. See README.md for details.
 """
 
+import builtins
 import json
 import os
+import re
+import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import pytest
 import requests
 from dotenv import load_dotenv
+
+_CURRENT_RUNTIME_IDENTITY_TRACKER = None
+_INTEGRATION_LOG_STARTED_AT_MONOTONIC = time.monotonic()
 
 # Load env vars from (in priority order):
 # 1. tests/infra/integration/.env (local test config, gitignored)
@@ -33,6 +42,52 @@ elif _unity_env.is_file():
     load_dotenv(_unity_env)
 load_dotenv()  # shell env overrides
 
+
+def _integration_log_prefix() -> str:
+    """Return the standard prefix for integration-test console output."""
+
+    wall_clock = datetime.now(UTC).strftime("%H:%M:%S")
+    elapsed_seconds = time.monotonic() - _INTEGRATION_LOG_STARTED_AT_MONOTONIC
+    return f"[{wall_clock} +{elapsed_seconds:7.1f}s]"
+
+
+def _prefix_integration_log_lines(message: str) -> str:
+    """Prefix each non-empty line while preserving blank separator lines."""
+
+    if not message:
+        return ""
+
+    prefixed_lines: list[str] = []
+    for line in message.splitlines(keepends=True):
+        line_ending = "\n" if line.endswith("\n") else ""
+        line_body = line[:-1] if line_ending else line
+        if line_body:
+            prefixed_lines.append(
+                f"{_integration_log_prefix()} {line_body}{line_ending}",
+            )
+        else:
+            prefixed_lines.append(line_ending)
+    return "".join(prefixed_lines)
+
+
+def integration_print(*args, sep: str = " ", end: str = "\n", **kwargs) -> None:
+    """Print integration-test progress with wall-clock and elapsed timestamps."""
+
+    if not args:
+        builtins.print(*args, sep=sep, end=end, flush=True, **kwargs)
+        return
+
+    message = sep.join(str(arg) for arg in args)
+    builtins.print(
+        _prefix_integration_log_lines(message),
+        end=end,
+        flush=True,
+        **kwargs,
+    )
+
+
+print = integration_print
+
 # ---------------------------------------------------------------------------
 # Deployment configuration (all overridable via env vars)
 # ---------------------------------------------------------------------------
@@ -41,30 +96,19 @@ GCP_PROJECT_ID = os.getenv("TEST_GCP_PROJECT_ID", "gcp-project-runtime")
 VM_PROJECT_ID = os.getenv("TEST_VM_PROJECT_ID", "gcp-project-vms")
 GKE_CLUSTER = os.getenv("TEST_GKE_CLUSTER", "unity")
 GKE_REGION = os.getenv("TEST_GKE_REGION", "us-central1")
-
-DEPLOY_ENV = os.getenv("TEST_DEPLOY_ENV", "staging")
-_ENV_SUFFIX = "" if DEPLOY_ENV == "production" else f"-{DEPLOY_ENV}"
-_VM_ZONE_MAP = {
-    "production": "us-central1-f",
-    "staging": "us-central1-a",
-    "preview": "us-central1-b",
-}
-_ORCHESTRA_URL_MAP = {
-    "production": "https://api.unify.ai/v0",
-    "staging": "https://internal.example.com/v0",
-    "preview": "https://internal.example.com/v0",
-}
-
-NAMESPACE = os.getenv("TEST_NAMESPACE", DEPLOY_ENV)
-VM_ZONE = os.getenv("TEST_VM_ZONE", _VM_ZONE_MAP.get(DEPLOY_ENV, "us-central1-a"))
+NAMESPACE = os.getenv("TEST_NAMESPACE", "staging")
+VM_ZONE = os.getenv("TEST_VM_ZONE", "us-central1-a")
+ASSISTANT_SESSION_REF_LABEL = "assistantsession.unify.ai/name"
+ASSISTANT_SESSION_REF_ANNOTATION = "assistantsession.unify.ai/name"
+ASSISTANT_SESSION_BINDING_LABEL = "assistantsession.unify.ai/binding-id"
 
 COMMS_APP_URL = os.getenv(
     "TEST_COMMS_APP_URL",
-    f"https://unity-comms-app{_ENV_SUFFIX}-000000000000.us-central1.run.app",
+    "https://service.a.run.app",
 )
 ADAPTERS_URL = os.getenv(
     "TEST_ADAPTERS_URL",
-    f"https://unity-adapters{_ENV_SUFFIX}-ky4ja5fxna-uc.a.run.app",
+    "https://service.a.run.app",
 )
 
 ADMIN_KEY = os.getenv("ORCHESTRA_ADMIN_KEY", "")
@@ -73,7 +117,7 @@ UNIFY_KEY = os.getenv("UNIFY_KEY", "")
 
 ORCHESTRA_URL = os.getenv(
     "TEST_ORCHESTRA_URL",
-    _ORCHESTRA_URL_MAP.get(DEPLOY_ENV, "https://internal.example.com/v0"),
+    "https://internal.example.com/v0",
 )
 
 TEST_ASSISTANT_ID = os.getenv("TEST_ASSISTANT_ID", "")
@@ -97,6 +141,13 @@ def pytest_configure(config):
         "markers",
         "slow: long-running tests (VM provision, etc.) — deselect with -m 'not slow'",
     )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    setattr(item, f"rep_{report.when}", report)
 
 
 # ---------------------------------------------------------------------------
@@ -135,10 +186,26 @@ def real_assistant_data():
         assert (
             assistants
         ), "No assistants found for this user. Hire one on the target environment first."
-        assistant_id = str(assistants[0]["agent_id"])
+        if NAMESPACE == "preview":
+            preview_candidates = [
+                a
+                for a in assistants
+                if a.get("deploy_env") == "preview" and not a.get("is_local", False)
+            ]
+            if preview_candidates:
+                chosen = preview_candidates[0]
+            else:
+                print(
+                    "\n[Setup] No non-local preview assistant found; "
+                    "creating one automatically for preview integration tests.",
+                )
+                return _create_preview_managed_assistant()
+        else:
+            chosen = assistants[0]
+        assistant_id = str(chosen["agent_id"])
         print(
-            f"\n[Setup] Auto-detected assistant: {assistants[0].get('first_name', '')} "
-            f"{assistants[0].get('surname', '')} (ID {assistant_id})",
+            f"\n[Setup] Auto-detected assistant: {chosen.get('first_name', '')} "
+            f"{chosen.get('surname', '')} (ID {assistant_id})",
         )
 
     resp = requests.get(
@@ -222,18 +289,27 @@ def gce_client():
     Returns None if GCE access fails (VM tests will skip).
     """
     from google.cloud import compute_v1
-    import subprocess
 
     try:
-        token = subprocess.check_output(
-            ["gcloud", "auth", "print-access-token"],
-            text=True,
-            timeout=10,
-        ).strip()
-
         from google.oauth2 import credentials as oauth2_credentials
 
-        creds = oauth2_credentials.Credentials(token=token)
+        def _refresh_access_token(request=None, scopes=None):
+            import subprocess
+
+            token = subprocess.check_output(
+                ["gcloud", "auth", "print-access-token"],
+                text=True,
+                timeout=10,
+            ).strip()
+            expiry = datetime.now(UTC).replace(tzinfo=None) + timedelta(minutes=50)
+            return token, expiry
+
+        token, expiry = _refresh_access_token()
+        creds = oauth2_credentials.Credentials(
+            token=token,
+            expiry=expiry,
+            refresh_handler=_refresh_access_token,
+        )
         client = compute_v1.InstancesClient(credentials=creds)
 
         request = compute_v1.ListInstancesRequest(
@@ -278,6 +354,7 @@ def poll_until(
     timeout: float = 120,
     interval: float = 5,
     description: str = "condition",
+    failure_snapshot: Callable[[], Any] | None = None,
 ) -> Any:
     """Poll until condition() returns a truthy value, or raise on timeout."""
     deadline = time.monotonic() + timeout
@@ -287,9 +364,23 @@ def poll_until(
         if last_result:
             return last_result
         time.sleep(interval)
+    snapshot_text = ""
+    if failure_snapshot is not None:
+        try:
+            snapshot = failure_snapshot()
+            snapshot_text = "\nFailure snapshot:\n" + json.dumps(
+                snapshot,
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        except Exception as exc:
+            snapshot_text = (
+                f"\nFailure snapshot unavailable: {type(exc).__name__}: {exc}"
+            )
     raise TimeoutError(
         f"Timed out after {timeout}s waiting for {description}. "
-        f"Last result: {last_result}",
+        f"Last result: {last_result}.{snapshot_text}",
     )
 
 
@@ -297,6 +388,610 @@ def poll_until(
 def poll():
     """Polling helper fixture."""
     return poll_until
+
+
+def _sanitize_artifact_name(nodeid: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", nodeid).strip("_")
+
+
+def _cloud_run_service_name(service_url: str) -> str | None:
+    hostname = urlparse(service_url).hostname or ""
+    if not hostname:
+        return None
+    first_label = hostname.split(".")[0]
+    parts = first_label.split("-")
+    if len(parts) >= 3:
+        return "-".join(parts[:-2])
+    return first_label
+
+
+def _assistant_ids_from_violation_messages(new_violations) -> list[str]:
+    assistant_ids = set()
+    patterns = [
+        r"assistant-id=([A-Za-z0-9._-]+)",
+        r"assistant ([A-Za-z0-9._-]+)",
+        r"assigned to ([A-Za-z0-9._-]+)",
+    ]
+    for violation in new_violations:
+        message = getattr(violation, "message", "")
+        for pattern in patterns:
+            assistant_ids.update(re.findall(pattern, message))
+    return sorted(assistant_ids)
+
+
+def _assistant_ids_from_request(request, batch_api) -> list[str]:
+    assistant_ids = set()
+    funcargs = getattr(request.node, "funcargs", {})
+
+    real_assistant = funcargs.get("real_assistant_data")
+    if isinstance(real_assistant, dict) and real_assistant.get("assistant_id"):
+        assistant_ids.add(str(real_assistant["assistant_id"]))
+
+    test_id = funcargs.get("test_id")
+    if test_id:
+        assistant_ids.add(str(test_id))
+
+    test_assistants = funcargs.get("test_assistants") or []
+    for assistant in test_assistants:
+        if isinstance(assistant, dict) and assistant.get("assistant_id"):
+            assistant_ids.add(str(assistant["assistant_id"]))
+
+    job_tracker = funcargs.get("job_tracker")
+    if job_tracker is not None:
+        for job_name in getattr(job_tracker, "jobs", []):
+            try:
+                job = batch_api.read_namespaced_job(name=job_name, namespace=NAMESPACE)
+            except Exception:
+                continue
+            labels = dict(job.metadata.labels or {})
+            if labels.get("assistant-id"):
+                assistant_ids.add(str(labels["assistant-id"]))
+
+    return sorted(assistant_ids)
+
+
+def _session_snapshot(assistant_id: str) -> dict[str, Any]:
+    try:
+        resp = requests.get(
+            f"{COMMS_APP_URL}/infra/session/{assistant_id}",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        return {"assistant_id": str(assistant_id), "error": str(exc)}
+    if resp.status_code == 404:
+        return {"assistant_id": str(assistant_id), "session": None}
+    if resp.status_code != 200:
+        return {
+            "assistant_id": str(assistant_id),
+            "error": f"session HTTP {resp.status_code}: {resp.text[:500]}",
+        }
+    return {"assistant_id": str(assistant_id), "session": resp.json()}
+
+
+def _job_summaries(batch_api, assistant_id: str) -> list[dict[str, Any]]:
+    sanitized = str(assistant_id).lower().replace("_", "-")
+    jobs = batch_api.list_namespaced_job(
+        namespace=NAMESPACE,
+        label_selector=f"app=unity,assistant-id={sanitized}",
+    )
+    results = []
+    for job in jobs.items:
+        labels = dict(job.metadata.labels or {})
+        annotations = dict(job.metadata.annotations or {})
+        results.append(
+            {
+                "job_name": job.metadata.name,
+                "active": job.status.active or 0,
+                "succeeded": job.status.succeeded or 0,
+                "failed": job.status.failed or 0,
+                "labels": labels,
+                "annotations": {
+                    key: value
+                    for key, value in annotations.items()
+                    if key.startswith("assistantsession.")
+                },
+                "creation_timestamp": (
+                    job.metadata.creation_timestamp.isoformat()
+                    if job.metadata.creation_timestamp
+                    else None
+                ),
+            },
+        )
+    return results
+
+
+def _pod_summaries(core_api, job_names: list[str]) -> list[dict[str, Any]]:
+    pods = []
+    if core_api is None:
+        return pods
+    for job_name in job_names:
+        try:
+            pod_list = core_api.list_namespaced_pod(
+                namespace=NAMESPACE,
+                label_selector=f"job-name={job_name}",
+            )
+        except Exception:
+            continue
+        for pod in pod_list.items:
+            pods.append(
+                {
+                    "pod_name": pod.metadata.name,
+                    "job_name": job_name,
+                    "phase": pod.status.phase,
+                    "node_name": pod.spec.node_name,
+                },
+            )
+    return pods
+
+
+def describe_pool_state(gce_client, vm_type: str = "ubuntu") -> dict[str, Any]:
+    from google.cloud import compute_v1
+
+    try:
+        client = compute_v1.InstancesClient()
+        request = compute_v1.ListInstancesRequest(
+            project=VM_PROJECT_ID,
+            zone=VM_ZONE,
+            filter=f"labels.pool-role:* AND labels.vm-type={vm_type}",
+        )
+        pool_vms = []
+        for instance in client.list(request=request):
+            labels = dict(instance.labels) if instance.labels else {}
+            entry: dict[str, Any] = {
+                "vm_name": instance.name,
+                "pool_role": labels.get("pool-role", "unknown"),
+                "assistant_id": labels.get("assistant-id", "") or None,
+                "status": instance.status,
+            }
+            if instance.last_start_timestamp:
+                entry["last_start_timestamp"] = instance.last_start_timestamp
+            if instance.last_stop_timestamp:
+                entry["last_stop_timestamp"] = instance.last_stop_timestamp
+            pool_vms.append(entry)
+    except Exception as exc:
+        return {"vm_type": vm_type, "zone": VM_ZONE, "error": str(exc)}
+
+    grouped = {
+        "idle": [],
+        "assigned": [],
+        "stopped": [],
+        "provisioning": [],
+        "starting": [],
+        "quarantined": [],
+        "other": [],
+    }
+    for vm in pool_vms:
+        role = vm.get("pool_role") or "other"
+        grouped.setdefault(role, []).append(vm)
+
+    DETAIL_ROLES = {"starting", "provisioning", "assigned"}
+
+    def _vm_summary(vm: dict) -> dict:
+        entry: dict[str, Any] = {"name": vm.get("vm_name")}
+        for ts_field in ("last_start_timestamp", "last_stop_timestamp"):
+            if vm.get(ts_field):
+                entry[ts_field] = vm[ts_field]
+        if vm.get("assistant_id"):
+            entry["assistant_id"] = vm["assistant_id"]
+        return entry
+
+    return {
+        "vm_type": vm_type,
+        "zone": VM_ZONE,
+        "counts": {role: len(vms) for role, vms in grouped.items()},
+        "vm_names": {
+            role: [vm.get("vm_name") for vm in vms]
+            for role, vms in grouped.items()
+            if vms and role not in DETAIL_ROLES
+        },
+        "vm_detail": {
+            role: [_vm_summary(vm) for vm in vms]
+            for role, vms in grouped.items()
+            if vms and role in DETAIL_ROLES
+        },
+    }
+
+
+def describe_runtime_state(
+    batch_api,
+    core_api,
+    gce_client,
+    assistant_id: str,
+) -> dict[str, Any]:
+    session_snapshot = _session_snapshot(str(assistant_id))
+    jobs = _job_summaries(batch_api, str(assistant_id))
+    job_names = [job["job_name"] for job in jobs]
+    pods = _pod_summaries(core_api, job_names)
+    assigned_vms = (
+        list_assigned_vms(gce_client, str(assistant_id)) if gce_client else []
+    )
+    records = get_assistant_jobs_records(str(assistant_id), running_only=False)
+    return {
+        "assistant_id": str(assistant_id),
+        "session": session_snapshot.get("session"),
+        "session_error": session_snapshot.get("error"),
+        "jobs": jobs,
+        "pods": pods,
+        "assigned_vms": [
+            {
+                "vm_name": vm.name,
+                "labels": dict(vm.labels or {}),
+                "status": vm.status,
+            }
+            for vm in assigned_vms
+        ],
+        "assistant_job_records": records,
+    }
+
+
+def _recent_cloud_run_logs(
+    service_url: str,
+    assistant_ids: list[str],
+    session_names: list[str],
+) -> list[str]:
+    service_name = _cloud_run_service_name(service_url)
+    if not service_name:
+        return []
+    since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        output = subprocess.check_output(
+            [
+                "gcloud",
+                "logging",
+                "read",
+                (
+                    f'resource.type="cloud_run_revision" AND '
+                    f'resource.labels.service_name="{service_name}" AND '
+                    f'timestamp >= "{since}"'
+                ),
+                "--project=gcp-project-runtime",
+                "--limit=200",
+                "--format=value(timestamp,textPayload)",
+            ],
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return [f"log collection failed for {service_name}: {exc}"]
+
+    noise_markers = ("_bio_emb", "_emb", "embedding", "derived_entries")
+    terms = [str(term) for term in assistant_ids + session_names if term]
+    lines = []
+    for line in output.splitlines():
+        if not any(term in line for term in terms):
+            continue
+        if any(marker in line for marker in noise_markers):
+            continue
+        if len(line) > 2000:
+            line = line[:2000] + "... [truncated]"
+        lines.append(line)
+    return lines[-80:]
+
+
+def _recent_controller_logs(
+    assistant_ids: list[str],
+    session_names: list[str],
+) -> list[str]:
+    try:
+        pods_output = subprocess.check_output(
+            ["kubectl", "get", "pods", "-n", NAMESPACE, "-o", "name"],
+            text=True,
+            timeout=20,
+        )
+    except Exception as exc:
+        return [f"controller pod lookup failed: {exc}"]
+
+    controller_pod = next(
+        (
+            line.split("/", 1)[1]
+            for line in pods_output.splitlines()
+            if "assistant-session-controller" in line
+        ),
+        None,
+    )
+    if controller_pod is None:
+        return []
+
+    try:
+        output = subprocess.check_output(
+            [
+                "kubectl",
+                "logs",
+                "-n",
+                NAMESPACE,
+                f"pod/{controller_pod}",
+                "--since=10m",
+            ],
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return [f"controller log collection failed: {exc}"]
+
+    terms = [str(term) for term in assistant_ids + session_names if term]
+    lines = [
+        line for line in output.splitlines() if any(term in line for term in terms)
+    ]
+    return lines[-80:]
+
+
+def _recent_unity_container_logs(
+    pod_names: list[str],
+    job_names: list[str] | None = None,
+) -> list[str]:
+    if not pod_names and not job_names:
+        return []
+    since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        output = subprocess.check_output(
+            [
+                "gcloud",
+                "logging",
+                "read",
+                (
+                    'resource.type="k8s_container" AND '
+                    f'resource.labels.namespace_name="{NAMESPACE}" AND '
+                    f'timestamp >= "{since}"'
+                ),
+                "--project=gcp-project-runtime",
+                "--limit=200",
+                "--format=value(timestamp,resource.labels.pod_name,textPayload)",
+            ],
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return [f"unity log collection failed: {exc}"]
+
+    terms = [str(name) for name in pod_names if name]
+    if job_names:
+        terms.extend(str(name) for name in job_names if name)
+    lines = []
+    for line in output.splitlines():
+        if not any(term in line for term in terms):
+            continue
+        if len(line) > 2000:
+            line = line[:2000] + "... [truncated]"
+        lines.append(line)
+    return lines[-80:]
+
+
+def _recent_k8s_pod_events(
+    pod_names: list[str],
+    job_names: list[str] | None = None,
+) -> list[str]:
+    if not pod_names and not job_names:
+        return []
+    since = (datetime.now(UTC) - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        output = subprocess.check_output(
+            [
+                "gcloud",
+                "logging",
+                "read",
+                (
+                    'resource.type="k8s_pod" AND '
+                    f'resource.labels.namespace_name="{NAMESPACE}" AND '
+                    f'timestamp >= "{since}"'
+                ),
+                "--project=gcp-project-runtime",
+                "--limit=200",
+                "--format=value(timestamp,resource.labels.pod_name,jsonPayload.reason,jsonPayload.message)",
+            ],
+            text=True,
+            timeout=30,
+        )
+    except Exception as exc:
+        return [f"pod event collection failed: {exc}"]
+
+    terms = [str(name) for name in pod_names if name]
+    if job_names:
+        terms.extend(str(name) for name in job_names if name)
+    lines = []
+    for line in output.splitlines():
+        if not any(term in line for term in terms):
+            continue
+        if len(line) > 2000:
+            line = line[:2000] + "... [truncated]"
+        lines.append(line)
+    return lines[-80:]
+
+
+@dataclass
+class RuntimeIdentityTracker:
+    """Tracks concrete runtime identities for richer failure artifacts.
+
+    The live runtime may be torn down by a test's finally block before the
+    artifact is assembled. Persisting the observed session/job/pod names lets
+    us fetch Unity logs and Pod events by historical job prefix even after the
+    current runtime snapshot is empty.
+    """
+
+    assistant_ids: set[str] = field(default_factory=set)
+    session_names: set[str] = field(default_factory=set)
+    job_names: set[str] = field(default_factory=set)
+    pod_names: set[str] = field(default_factory=set)
+    activation_ids: set[str] = field(default_factory=set)
+
+    def track(
+        self,
+        *,
+        assistant_id: str | None = None,
+        session_name: str | None = None,
+        job_name: str | None = None,
+        pod_name: str | None = None,
+        activation_id: str | None = None,
+    ) -> None:
+        if assistant_id:
+            self.assistant_ids.add(str(assistant_id))
+        if session_name:
+            self.session_names.add(str(session_name))
+        if job_name:
+            self.job_names.add(str(job_name))
+        if pod_name:
+            self.pod_names.add(str(pod_name))
+        if activation_id:
+            self.activation_ids.add(str(activation_id))
+
+
+def _track_runtime_identity(
+    *,
+    assistant_id: str | None = None,
+    session_name: str | None = None,
+    job_name: str | None = None,
+    pod_name: str | None = None,
+    activation_id: str | None = None,
+) -> None:
+    tracker = _CURRENT_RUNTIME_IDENTITY_TRACKER
+    if tracker is None:
+        return
+    tracker.track(
+        assistant_id=assistant_id,
+        session_name=session_name,
+        job_name=job_name,
+        pod_name=pod_name,
+        activation_id=activation_id,
+    )
+
+
+def add_failure_context(request, key: str, value: Any) -> None:
+    """Attach structured test-specific evidence to the failure artifact."""
+    current = getattr(request.node, "_extra_failure_context", None)
+    if current is None:
+        current = {}
+        request.node._extra_failure_context = current
+    current[key] = value
+
+
+def _write_failure_artifact(bundle: dict[str, Any]) -> str:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
+    artifact_dir = Path("logs/pytest/integration-failures")
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = (
+        artifact_dir
+        / f"{timestamp}_{_sanitize_artifact_name(bundle['test_nodeid'])}.json"
+    )
+    artifact_path.write_text(json.dumps(bundle, indent=2, sort_keys=True, default=str))
+    return str(artifact_path)
+
+
+def _build_failure_artifact(
+    request,
+    batch_api,
+    core_api,
+    gce_client,
+    new_violations,
+) -> str:
+    tracker = getattr(request.node, "_runtime_identity_tracker", None)
+    assistant_ids = sorted(
+        set(_assistant_ids_from_request(request, batch_api))
+        | set(_assistant_ids_from_violation_messages(new_violations))
+        | (set(getattr(tracker, "assistant_ids", set())) if tracker else set()),
+    )
+    runtime = {
+        assistant_id: describe_runtime_state(
+            batch_api,
+            core_api,
+            gce_client,
+            assistant_id,
+        )
+        for assistant_id in assistant_ids
+    }
+    session_names = [
+        ((state.get("session") or {}).get("metadata") or {}).get("name")
+        for state in runtime.values()
+        if state.get("session")
+    ]
+    tracked_session_names = (
+        sorted(getattr(tracker, "session_names", set())) if tracker else []
+    )
+    tracked_job_names = sorted(getattr(tracker, "job_names", set())) if tracker else []
+    tracked_pod_names = sorted(getattr(tracker, "pod_names", set())) if tracker else []
+    extra_failure_context = getattr(request.node, "_extra_failure_context", None)
+    pod_names = [
+        pod.get("pod_name")
+        for state in runtime.values()
+        for pod in state.get("pods", [])
+        if pod.get("pod_name")
+    ]
+    session_names = sorted(set(session_names) | set(tracked_session_names))
+    pod_names = sorted(set(pod_names) | set(tracked_pod_names))
+    bundle = {
+        "test_nodeid": request.node.nodeid,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "assistant_ids": assistant_ids,
+        "tracked_runtime_identities": {
+            "assistant_ids": (
+                sorted(getattr(tracker, "assistant_ids", set())) if tracker else []
+            ),
+            "session_names": tracked_session_names,
+            "job_names": tracked_job_names,
+            "pod_names": tracked_pod_names,
+            "activation_ids": (
+                sorted(getattr(tracker, "activation_ids", set())) if tracker else []
+            ),
+        },
+        "runtime": runtime,
+        "pool_state": describe_pool_state(gce_client),
+        "new_invariant_violations": [
+            {
+                "invariant_id": v.invariant_id,
+                "message": v.message,
+            }
+            for v in new_violations
+        ],
+        "recent_logs": {
+            "controller": _recent_controller_logs(assistant_ids, session_names),
+            "comms": _recent_cloud_run_logs(
+                COMMS_APP_URL,
+                assistant_ids,
+                session_names,
+            ),
+            "adapters": _recent_cloud_run_logs(
+                ADAPTERS_URL,
+                assistant_ids,
+                session_names,
+            ),
+            "unity": _recent_unity_container_logs(
+                pod_names,
+                tracked_job_names,
+            ),
+            "pod_events": _recent_k8s_pod_events(
+                pod_names,
+                tracked_job_names,
+            ),
+        },
+        "active_jobs_overview": [
+            {
+                "job_name": job.metadata.name,
+                "assistant_id": (job.metadata.labels or {}).get("assistant-id"),
+                "unity_status": (job.metadata.labels or {}).get("unity-status"),
+            }
+            for job in batch_api.list_namespaced_job(
+                namespace=NAMESPACE,
+                label_selector="app=unity",
+            ).items
+            if job.status.active and job.status.active > 0
+        ],
+    }
+    if extra_failure_context:
+        bundle["extra_failure_context"] = extra_failure_context
+    return _write_failure_artifact(bundle)
+
+
+@pytest.fixture(autouse=True)
+def runtime_identity_tracker(request):
+    global _CURRENT_RUNTIME_IDENTITY_TRACKER
+    previous = _CURRENT_RUNTIME_IDENTITY_TRACKER
+    tracker = RuntimeIdentityTracker()
+    request.node._runtime_identity_tracker = tracker
+    request.node._extra_failure_context = {}
+    _CURRENT_RUNTIME_IDENTITY_TRACKER = tracker
+    try:
+        yield tracker
+    finally:
+        _CURRENT_RUNTIME_IDENTITY_TRACKER = previous
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +1070,294 @@ def start_real_job(comms_client, assistant_data: dict, medium: str = "unify_mess
     return resp
 
 
+def get_assistant_session(comms_client, assistant_id: str) -> dict | None:
+    """Read the AssistantSession for an assistant from the Comms app."""
+    resp = comms_client.get(f"/infra/session/{assistant_id}")
+    if resp.status_code == 404:
+        return None
+    assert (
+        resp.status_code == 200
+    ), f"session read failed: {resp.status_code} {resp.text}"
+    return resp.json()
+
+
+def _read_assistant_session_http(assistant_id: str) -> dict | None:
+    """Read AssistantSession state directly from the deployed Comms app."""
+    resp = requests.get(
+        f"{COMMS_APP_URL}/infra/session/{assistant_id}",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=15,
+    )
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _read_runtime_status_http(
+    assistant_id: str,
+    *,
+    binding_id: str | None = None,
+) -> dict:
+    """Read the deployed runtime-cleanup status for an assistant."""
+    resp = requests.get(
+        f"{COMMS_APP_URL}/infra/runtime/{assistant_id}",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        params={"binding_id": binding_id} if binding_id else None,
+        timeout=20,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def wait_for_assistant_runtime_quiesced(
+    assistant_id: str,
+    *,
+    batch_api=None,
+    timeout: float = 240,
+    interval: float = 5,
+) -> dict:
+    """Wait until an assistant no longer owns live jobs, VMs, or disk attachments."""
+
+    session_name = f"assistant-session-{str(assistant_id).lower().replace('_', '-')}"
+
+    def _settled():
+        runtime_status = _read_runtime_status_http(str(assistant_id))
+        if runtime_status.get("active_job_names"):
+            return None
+        if runtime_status.get("owned_vms"):
+            return None
+        if runtime_status.get("other_owned_vms"):
+            return None
+        if runtime_status.get("disk_vm_name") is not None:
+            return None
+        return runtime_status
+
+    return poll_until(
+        _settled,
+        timeout=timeout,
+        interval=interval,
+        description=(
+            f"Assistant runtime {assistant_id} to release jobs, VMs, and disk attachments"
+        ),
+        failure_snapshot=lambda: {
+            "runtime_status": _read_runtime_status_http(str(assistant_id)),
+            "session": _read_assistant_session_http(str(assistant_id)),
+            "assistant_jobs": (
+                []
+                if batch_api is None
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_assistant_id(batch_api, str(assistant_id))
+                ]
+            ),
+            "session_jobs": (
+                []
+                if batch_api is None
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_session_ref(batch_api, session_name)
+                ]
+            ),
+            "assigned_vms": assigned_vm_runtime_refs(str(assistant_id)),
+        },
+    )
+
+
+def wait_for_assistant_runtime_stopped(
+    assistant_id: str,
+    *,
+    batch_api=None,
+    binding_id: str | None = None,
+    timeout: float = 240,
+    interval: float = 5,
+) -> dict | None:
+    """Wait until runtime cleanup completes for an assistant or binding."""
+
+    session_name = f"assistant-session-{str(assistant_id).lower().replace('_', '-')}"
+
+    def _settled():
+        runtime_status = _read_runtime_status_http(
+            str(assistant_id),
+            binding_id=binding_id,
+        )
+        if binding_id:
+            if not runtime_status.get("binding_runtime_cleanup_complete"):
+                return None
+            return runtime_status
+        if not runtime_status.get("runtime_cleanup_complete"):
+            return None
+        if runtime_status.get("assistant_session_exists"):
+            if runtime_status.get("assistant_session_phase") != "Released":
+                return None
+            if runtime_status.get("assistant_session_desired_state") != "Stopped":
+                return None
+        return runtime_status
+
+    return poll_until(
+        _settled,
+        timeout=timeout,
+        interval=interval,
+        description=(
+            f"Binding runtime {binding_id} for assistant {assistant_id} to finish cleanup"
+            if binding_id
+            else (
+                f"Assistant runtime {assistant_id} to reach Released with no bound "
+                "resources"
+            )
+        ),
+        failure_snapshot=lambda: {
+            "runtime_status": _read_runtime_status_http(
+                str(assistant_id),
+                binding_id=binding_id,
+            ),
+            "binding_id": binding_id,
+            "session": _read_assistant_session_http(str(assistant_id)),
+            "assistant_jobs": (
+                []
+                if batch_api is None
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_assistant_id(batch_api, str(assistant_id))
+                ]
+            ),
+            "binding_jobs": (
+                []
+                if batch_api is None or not binding_id
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_binding_id(batch_api, binding_id)
+                ]
+            ),
+            "session_jobs": (
+                []
+                if batch_api is None
+                else [
+                    job.metadata.name
+                    for job in list_jobs_with_session_ref(batch_api, session_name)
+                ]
+            ),
+            "assigned_vms": assigned_vm_runtime_refs(str(assistant_id)),
+        },
+    )
+
+
+def stop_assistant_runtime(
+    assistant_id: str,
+    *,
+    batch_api=None,
+    timeout: float = 240,
+    strict: bool = False,
+    context: str | None = None,
+) -> None:
+    """Stop an assistant runtime through AssistantSession desired state.
+
+    Args:
+        assistant_id: Assistant whose runtime should be stopped.
+        batch_api: Optional BatchV1Api for richer timeout snapshots.
+        timeout: How long to wait for ``/infra/runtime`` cleanup convergence.
+        strict: When True, request or convergence failures raise immediately
+            instead of being logged and swallowed.
+        context: Short label describing the cleanup phase for diagnostics.
+    """
+    prefix = "[Cleanup]" if not context else f"[Cleanup:{context}]"
+
+    try:
+        resp = requests.post(
+            f"{COMMS_APP_URL}/infra/session/{assistant_id}/stop",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            timeout=90,
+        )
+    except Exception as exc:
+        message = f"{prefix} Failed to request session stop for {assistant_id}: {exc}"
+        if strict:
+            raise AssertionError(message) from exc
+        print(message)
+        return
+
+    if resp.status_code not in (200, 404):
+        message = (
+            f"{prefix} Session stop for {assistant_id} returned "
+            f"{resp.status_code}: {resp.text[:200]}"
+        )
+        if strict:
+            raise AssertionError(message)
+        print(message)
+        return
+
+    stop_result = {}
+    try:
+        stop_result = resp.json()
+    except Exception:
+        stop_result = {}
+    target_binding_id = str(stop_result.get("binding_id") or "") or None
+
+    try:
+        wait_for_assistant_runtime_stopped(
+            str(assistant_id),
+            batch_api=batch_api,
+            binding_id=target_binding_id,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        if strict:
+            raise
+        print(f"{prefix} Runtime stop wait failed for {assistant_id}: {exc}")
+
+
+def _delete_assistant_session_if_present(
+    assistant_id: str,
+    *,
+    timeout: float,
+    interval: float = 5,
+) -> bool:
+    """Delete a lingering AssistantSession object if it still exists."""
+
+    session = _read_assistant_session_http(str(assistant_id))
+    if session is None:
+        return False
+
+    resp = requests.delete(
+        f"{COMMS_APP_URL}/infra/session/{assistant_id}",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=90,
+    )
+    if resp.status_code not in (200, 404):
+        raise AssertionError(
+            f"DELETE /infra/session/{assistant_id} returned "
+            f"{resp.status_code}: {resp.text[:200]}",
+        )
+    if resp.status_code == 404:
+        return False
+
+    poll_until(
+        lambda: _read_assistant_session_http(str(assistant_id)) is None,
+        timeout=timeout,
+        interval=interval,
+        description=f"AssistantSession for {assistant_id} to be deleted",
+        failure_snapshot=lambda: _read_assistant_session_http(str(assistant_id)),
+    )
+    return True
+
+
+def _delete_assistant_disk_if_present(assistant_id: str) -> bool:
+    """Delete a lingering assistant disk if it still exists."""
+
+    resp = requests.delete(
+        f"{COMMS_APP_URL}/infra/vm/pool/disk/{assistant_id}",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=30,
+    )
+    if resp.status_code == 404:
+        return False
+    if resp.status_code != 200:
+        raise AssertionError(
+            f"DELETE /infra/vm/pool/disk/{assistant_id} returned "
+            f"{resp.status_code}: {resp.text[:200]}",
+        )
+    return True
+
+
 def replenish_pool():
     """Trigger idle pool replenishment on the deployed adapters.
 
@@ -403,12 +1386,51 @@ def wait_for_idle_pool(batch_api, min_idle: int = 1, timeout: float = 90):
         timeout=timeout,
         interval=10,
         description=f"Idle pool to have >= {min_idle} containers",
+        failure_snapshot=lambda: {
+            "idle_count": count_idle_jobs(batch_api),
+            "active_jobs": [
+                {
+                    "job_name": job.metadata.name,
+                    "assistant_id": (job.metadata.labels or {}).get("assistant-id"),
+                    "unity_status": (job.metadata.labels or {}).get("unity-status"),
+                }
+                for job in batch_api.list_namespaced_job(
+                    namespace=NAMESPACE,
+                    label_selector="app=unity",
+                ).items
+                if job.status.active and job.status.active > 0
+            ],
+        },
+    )
+
+
+def wait_for_idle_vm_pool(
+    gce_client,
+    min_idle: int = 1,
+    *,
+    vm_type: str = "ubuntu",
+    timeout: float = 180,
+):
+    """Wait until the VM pool has at least min_idle idle VMs."""
+    poll_until(
+        lambda: len(list_idle_vms(gce_client, vm_type=vm_type)) >= min_idle,
+        timeout=timeout,
+        interval=10,
+        description=f"Idle VM pool to have >= {min_idle} {vm_type} VMs",
+        failure_snapshot=lambda: {
+            "idle_vm_names": [
+                vm.name for vm in list_idle_vms(gce_client, vm_type=vm_type)
+            ],
+            "stopped_vm_names": [
+                vm.name for vm in list_stopped_vms(gce_client, vm_type=vm_type)
+            ],
+        },
     )
 
 
 @dataclass
 class JobTracker:
-    """Tracks created Jobs for cleanup + pool replenishment."""
+    """Tracks created Jobs and cleans them up via the correct authority."""
 
     jobs: list = field(default_factory=list)
     batch_api: Any = None
@@ -420,7 +1442,25 @@ class JobTracker:
     def cleanup(self):
         if not self.batch_api:
             return
+        assistant_ids: set[str] = set()
         for name in self.jobs:
+            try:
+                job = self.batch_api.read_namespaced_job(
+                    name=name,
+                    namespace=self.namespace,
+                )
+            except Exception:
+                continue
+            labels = dict(job.metadata.labels or {})
+            annotations = dict(job.metadata.annotations or {})
+            assistant_id = str(labels.get("assistant-id", "") or "").strip()
+            session_backed = bool(
+                labels.get(ASSISTANT_SESSION_REF_LABEL)
+                or annotations.get(ASSISTANT_SESSION_REF_ANNOTATION),
+            )
+            if assistant_id and session_backed:
+                assistant_ids.add(assistant_id)
+                continue
             try:
                 self.batch_api.delete_namespaced_job(
                     name=name,
@@ -429,6 +1469,12 @@ class JobTracker:
                 )
             except Exception:
                 pass
+        for assistant_id in sorted(assistant_ids):
+            stop_assistant_runtime(
+                assistant_id,
+                batch_api=self.batch_api,
+                timeout=180,
+            )
         if self.jobs:
             replenish_pool()
 
@@ -486,6 +1532,33 @@ def list_jobs_with_assistant_id(
     jobs = batch_api.list_namespaced_job(
         namespace=namespace,
         label_selector=f"app=unity,assistant-id={sanitized}",
+    )
+    return [j for j in jobs.items if j.status.active and j.status.active > 0]
+
+
+def list_jobs_with_binding_id(
+    batch_api,
+    binding_id: str,
+    namespace: str = NAMESPACE,
+) -> list:
+    """List all active Jobs with a specific binding-id label."""
+
+    sanitized = binding_id.lower().replace("_", "-")
+    jobs = batch_api.list_namespaced_job(
+        namespace=namespace,
+        label_selector=f"app=unity,{ASSISTANT_SESSION_BINDING_LABEL}={sanitized}",
+    )
+    return [j for j in jobs.items if j.status.active and j.status.active > 0]
+
+
+def list_jobs_with_session_ref(
+    batch_api,
+    session_name: str,
+    namespace: str = NAMESPACE,
+) -> list:
+    jobs = batch_api.list_namespaced_job(
+        namespace=namespace,
+        label_selector=f"assistantsession.unify.ai/name={session_name}",
     )
     return [j for j in jobs.items if j.status.active and j.status.active > 0]
 
@@ -554,27 +1627,66 @@ def expire_test_assistant_records(assistant_id: str):
 # ---------------------------------------------------------------------------
 
 
-def cleanup_assistant_jobs(batch_api, assistant_ids: list[str]):
-    """Delete all Jobs and expire all records for a list of assistant IDs."""
-    for aid in assistant_ids:
-        expire_test_assistant_records(str(aid))
-        sanitized = str(aid).lower().replace("_", "-")
+def cleanup_assistant_jobs(
+    batch_api,
+    assistant_ids: list[str],
+    *,
+    strict: bool = False,
+    context: str | None = None,
+    timeout: float = 180,
+    parallelism: int = 1,
+):
+    """Stop assistant runtimes through AssistantSession and expire test records.
+
+    Args:
+        batch_api: BatchV1Api used for runtime-status snapshots.
+        assistant_ids: Assistants whose runtimes should be stopped.
+        strict: When True, stop failures raise immediately.
+        context: Short label describing the caller's cleanup phase.
+        timeout: Per-assistant runtime cleanup wait timeout in seconds.
+        parallelism: Maximum number of assistants to clean up concurrently.
+    """
+    unique_ids = [str(aid) for aid in dict.fromkeys(str(aid) for aid in assistant_ids)]
+
+    def _cleanup_one(aid: str) -> None:
+        stop_assistant_runtime(
+            aid,
+            batch_api=batch_api,
+            timeout=timeout,
+            strict=strict,
+            context=context,
+        )
         try:
-            jobs = batch_api.list_namespaced_job(
-                namespace=NAMESPACE,
-                label_selector=f"app=unity,assistant-id={sanitized}",
-            )
-            for job in jobs.items:
-                try:
-                    batch_api.delete_namespaced_job(
-                        name=job.metadata.name,
-                        namespace=NAMESPACE,
-                        propagation_policy="Foreground",
-                    )
-                except Exception:
-                    pass
+            expire_test_assistant_records(aid)
         except Exception:
             pass
+
+    if parallelism <= 1 or len(unique_ids) <= 1:
+        for aid in unique_ids:
+            _cleanup_one(aid)
+        return
+
+    max_workers = max(1, min(len(unique_ids), parallelism))
+    failures: list[tuple[str, Exception]] = []
+    with ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="assistant-runtime-cleanup",
+    ) as pool:
+        future_to_id = {pool.submit(_cleanup_one, aid): aid for aid in unique_ids}
+        for future in as_completed(future_to_id):
+            aid = future_to_id[future]
+            try:
+                future.result()
+            except Exception as exc:  # pragma: no cover - unexpected helper failure
+                if strict:
+                    failures.append((aid, exc))
+                else:
+                    prefix = "[Cleanup]" if not context else f"[Cleanup:{context}]"
+                    print(f"{prefix} Unexpected cleanup error for {aid}: {exc}")
+
+    if failures:
+        aid, exc = failures[0]
+        raise AssertionError(f"Cleanup failed for {aid}: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -658,6 +1770,63 @@ def _ensure_credits(min_credits: float):
 # ---------------------------------------------------------------------------
 
 ASSISTANT_CREATION_COST = 10.0
+TEST_ASSISTANT_FACTORY_FIRST_NAME = "InfraTest"
+TEST_ASSISTANT_FACTORY_ABOUT = (
+    "Stress test assistant (auto-created by integration tests)"
+)
+TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS = 120
+TEST_ASSISTANT_CLEANUP_PARALLELISM = 6
+
+
+def _list_owned_assistants() -> list[dict]:
+    """Return assistants visible to the current test user."""
+    if not UNIFY_KEY:
+        return []
+    try:
+        resp = requests.get(
+            f"{ORCHESTRA_URL}/assistant",
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            timeout=20,
+        )
+    except Exception:
+        return []
+    if resp.status_code != 200:
+        return []
+    data = resp.json()
+    assistants = data.get("info", data) if isinstance(data, dict) else data
+    return assistants if isinstance(assistants, list) else []
+
+
+def _is_factory_test_assistant(assistant: dict) -> bool:
+    """Return whether an Orchestra record belongs to the test factory."""
+    if not isinstance(assistant, dict):
+        return False
+    if str(assistant.get("first_name") or "") != TEST_ASSISTANT_FACTORY_FIRST_NAME:
+        return False
+    is_local = assistant.get("is_local")
+    if is_local not in (None, True):
+        return False
+    deploy_env = str(assistant.get("deploy_env") or "")
+    if deploy_env and deploy_env != NAMESPACE:
+        return False
+    about = str(assistant.get("about") or "")
+    surname = str(assistant.get("surname") or "")
+    return about == TEST_ASSISTANT_FACTORY_ABOUT or (
+        is_local is True and bool(surname.isdigit())
+    )
+
+
+def _stale_factory_test_assistant_ids(*, keep_ids: set[str] | None = None) -> list[str]:
+    """Return prior-run factory assistants that should be deleted."""
+    keep = {str(aid) for aid in (keep_ids or set())}
+    stale_ids = []
+    for assistant in _list_owned_assistants():
+        agent_id = str(assistant.get("agent_id") or assistant.get("id") or "").strip()
+        if not agent_id or agent_id in keep:
+            continue
+        if _is_factory_test_assistant(assistant):
+            stale_ids.append(agent_id)
+    return sorted(dict.fromkeys(stale_ids))
 
 
 def _admin_record_to_data(a: dict) -> dict:
@@ -711,11 +1880,11 @@ def _create_test_assistant(index: int) -> dict:
     assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
 
     payload = {
-        "first_name": "InfraTest",
+        "first_name": TEST_ASSISTANT_FACTORY_FIRST_NAME,
         "surname": f"{index:03d}",
         "age": 25,
         "nationality": "North America",
-        "about": "Stress test assistant (auto-created by integration tests)",
+        "about": TEST_ASSISTANT_FACTORY_ABOUT,
         "desktop_mode": "ubuntu",
         "is_local": True,
         "create_infra": True,
@@ -728,7 +1897,7 @@ def _create_test_assistant(index: int) -> dict:
         f"{ORCHESTRA_URL}/assistant",
         json=payload,
         headers={"Authorization": f"Bearer {UNIFY_KEY}"},
-        timeout=30,
+        timeout=90,
     )
     assert create_resp.status_code == 200, (
         f"Failed to create test assistant {index}: "
@@ -757,12 +1926,68 @@ def _create_test_assistant(index: int) -> dict:
     return _admin_record_to_data(a)
 
 
-def _delete_test_assistant(agent_id: str, batch_api=None):
+def _create_preview_managed_assistant() -> dict:
+    """Create a non-local preview-routed assistant for preview E2E flows."""
+    assert UNIFY_KEY, "UNIFY_KEY required to create preview assistants"
+    assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
+
+    payload = {
+        "first_name": "PreviewInfra",
+        "surname": f"{int(time.time()) % 100000:05d}",
+        "age": 25,
+        "nationality": "North America",
+        "about": "Preview integration assistant (auto-created by tests)",
+        "desktop_mode": "ubuntu",
+        "is_local": False,
+        "create_infra": True,
+        "deploy_env": "preview",
+        "timezone": "UTC",
+    }
+
+    create_resp = requests.post(
+        f"{ORCHESTRA_URL}/assistant",
+        json=payload,
+        headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+        timeout=90,
+    )
+    assert (
+        create_resp.status_code == 200
+    ), f"Failed to create preview assistant: {create_resp.status_code} {create_resp.text}"
+
+    info = create_resp.json().get("info", {})
+    agent_id = str(info.get("agent_id", ""))
+    assert (
+        agent_id
+    ), f"No agent_id in preview assistant create response: {create_resp.text}"
+
+    admin_resp = requests.get(
+        f"{ORCHESTRA_URL}/admin/assistant",
+        params={"agent_id": agent_id},
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        timeout=10,
+    )
+    assert admin_resp.status_code == 200, (
+        f"Failed to fetch admin record for preview assistant {agent_id}: "
+        f"{admin_resp.status_code} {admin_resp.text}"
+    )
+
+    admin_info = admin_resp.json()["info"]
+    a = admin_info[0] if isinstance(admin_info, list) else admin_info
+    return _admin_record_to_data(a)
+
+
+def _delete_test_assistant(
+    agent_id: str,
+    batch_api=None,
+    runtime_timeout: float = TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
+):
     """Delete a test assistant from Orchestra and clean up infra resources.
 
     Calls DELETE /v0/assistant/{id} which handles Pub/Sub, disks, phones,
-    emails, and DB cleanup.  Also expires any AssistantJobs records and
-    deletes K8s Jobs.
+    emails, and DB cleanup. Tests then defensively expire AssistantJobs
+    records, wait for the Comms runtime to quiesce, and prune any lingering
+    AssistantSession or assistant-disk artifacts so repeated preview runs stay
+    idempotent even when upstream cleanup lags.
 
     Swallows all exceptions so teardown never aborts mid-way.
     """
@@ -789,24 +2014,70 @@ def _delete_test_assistant(agent_id: str, batch_api=None):
     except Exception:
         pass
 
-    if batch_api is not None:
-        sanitized = str(agent_id).lower().replace("_", "-")
-        try:
-            jobs = batch_api.list_namespaced_job(
-                namespace=NAMESPACE,
-                label_selector=f"app=unity,assistant-id={sanitized}",
+    try:
+        wait_for_assistant_runtime_quiesced(
+            str(agent_id),
+            batch_api=batch_api,
+            timeout=runtime_timeout,
+            interval=5,
+        )
+    except Exception as exc:
+        print(f"[Teardown] Runtime quiesce wait failed for {agent_id}: {exc}")
+
+    try:
+        if _delete_assistant_session_if_present(
+            str(agent_id),
+            timeout=runtime_timeout,
+            interval=5,
+        ):
+            print(f"[Teardown] Deleted AssistantSession for {agent_id}")
+    except Exception as exc:
+        print(f"[Teardown] Session delete cleanup failed for {agent_id}: {exc}")
+
+    try:
+        if _delete_assistant_disk_if_present(str(agent_id)):
+            print(f"[Teardown] Deleted assistant disk for {agent_id}")
+    except Exception as exc:
+        print(f"[Teardown] Disk delete cleanup failed for {agent_id}: {exc}")
+
+
+def _delete_test_assistants(
+    assistant_ids: list[str],
+    *,
+    batch_api=None,
+    runtime_timeout: float = TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
+    parallelism: int = TEST_ASSISTANT_CLEANUP_PARALLELISM,
+) -> None:
+    """Delete multiple test assistants concurrently."""
+    unique_ids = [str(aid) for aid in dict.fromkeys(str(aid) for aid in assistant_ids)]
+    if not unique_ids:
+        return
+
+    max_workers = max(1, min(len(unique_ids), parallelism))
+    if max_workers == 1:
+        for agent_id in unique_ids:
+            _delete_test_assistant(
+                agent_id,
+                batch_api=batch_api,
+                runtime_timeout=runtime_timeout,
             )
-            for job in jobs.items:
-                try:
-                    batch_api.delete_namespaced_job(
-                        name=job.metadata.name,
-                        namespace=NAMESPACE,
-                        propagation_policy="Foreground",
-                    )
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        return
+
+    with ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="test-assistant-delete",
+    ) as pool:
+        futures = [
+            pool.submit(
+                _delete_test_assistant,
+                agent_id,
+                batch_api,
+                runtime_timeout,
+            )
+            for agent_id in unique_ids
+        ]
+        for future in as_completed(futures):
+            future.result()
 
 
 # ---------------------------------------------------------------------------
@@ -841,6 +2112,19 @@ def test_assistants(k8s_clients):
 
     _ensure_credits(min_credits=count * (ASSISTANT_CREATION_COST + 5))
 
+    batch_api = k8s_clients[0]
+    stale_assistant_ids = _stale_factory_test_assistant_ids()
+    if stale_assistant_ids:
+        print(
+            f"\n[Setup] Deleting {len(stale_assistant_ids)} stale test assistant(s) "
+            "from prior runs...",
+        )
+        _delete_test_assistants(
+            stale_assistant_ids,
+            batch_api=batch_api,
+            runtime_timeout=TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
+        )
+
     created: list[dict] = []
     for i in range(count):
         try:
@@ -859,12 +2143,12 @@ def test_assistants(k8s_clients):
     print(f"\n[Factory] Created {len(created)}/{count} test assistants")
     yield created
 
-    batch_api = k8s_clients[0]
     print(f"\n[Teardown] Deleting {len(created)} test assistants...")
-    for a in created:
-        _delete_test_assistant(a["assistant_id"], batch_api)
-    if created:
-        replenish_pool()
+    _delete_test_assistants(
+        [a["assistant_id"] for a in created],
+        batch_api=batch_api,
+        runtime_timeout=TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS,
+    )
     print(f"[Teardown] Done")
 
 
@@ -1025,7 +2309,11 @@ def find_assistant_with_assigned_vm() -> dict | None:
         vms = list(client.list(request=request))
         if not vms:
             return None
-        aid = vms[0].labels.get("assistant-id")
+        vm = vms[0]
+        labels = dict(vm.labels or {})
+        aid = labels.get("assistant-id")
+        binding_id = str(labels.get("binding-id", "") or "")
+        hostname = _vm_metadata_value(vm, "hostname")
         if not aid:
             return None
         resp = requests.get(
@@ -1038,7 +2326,9 @@ def find_assistant_with_assigned_vm() -> dict | None:
         if assistants:
             return {
                 "assistant_id": assistants[0]["agent_id"],
-                "vm_name": vms[0].name,
+                "vm_name": vm.name,
+                "binding_id": binding_id,
+                "hostname": hostname,
                 **{k: v for k, v in assistants[0].items() if k not in ("agent_id",)},
             }
     except Exception:
@@ -1179,11 +2469,169 @@ def wait_for_container_running(
     interval: float = 10,
 ) -> list:
     """Poll until a Job with assistant-id={id} and active pods appears."""
-    return poll_until(
+    jobs = poll_until(
         lambda: list_jobs_with_assistant_id(batch_api, str(assistant_id)),
         timeout=timeout,
         interval=interval,
         description=f"Container for assistant {assistant_id} to start",
+        failure_snapshot=lambda: describe_runtime_state(
+            batch_api,
+            None,
+            None,
+            str(assistant_id),
+        ),
+    )
+    for job in jobs:
+        annotations = dict(job.metadata.annotations or {})
+        _track_runtime_identity(
+            assistant_id=str(assistant_id),
+            session_name=(
+                annotations.get(ASSISTANT_SESSION_REF_LABEL)
+                or annotations.get(ASSISTANT_SESSION_REF_ANNOTATION)
+            ),
+            job_name=job.metadata.name,
+        )
+    return jobs
+
+
+def _assistant_readiness_snapshot(
+    assistant_id: str,
+    *,
+    batch_api,
+    core_api=None,
+    gce_client=None,
+) -> dict[str, Any]:
+    try:
+        runtime = describe_runtime_state(
+            batch_api,
+            core_api,
+            gce_client,
+            str(assistant_id),
+        )
+    except Exception as exc:
+        runtime = {"error": f"describe_runtime_state failed: {exc}"}
+    session = runtime.get("session") or {}
+    session_name = (session.get("metadata") or {}).get("name") or ""
+    tracker = _CURRENT_RUNTIME_IDENTITY_TRACKER
+    tracked_job_names = [
+        name
+        for name in sorted(getattr(tracker, "job_names", set()) if tracker else set())
+        if name
+    ]
+    tracked_pod_names = [
+        name
+        for name in sorted(getattr(tracker, "pod_names", set()) if tracker else set())
+        if name
+    ]
+    pod_names = [
+        pod.get("pod_name") for pod in runtime.get("pods", []) if pod.get("pod_name")
+    ]
+    pod_names = sorted(set(pod_names) | set(tracked_pod_names))
+    try:
+        runtime_status = _read_runtime_status_http(str(assistant_id))
+    except Exception as exc:
+        runtime_status = {"error": f"runtime status read failed: {exc}"}
+    return {
+        "assistant_id": str(assistant_id),
+        "runtime_status": runtime_status,
+        "runtime": runtime,
+        "recent_logs": {
+            "controller": _recent_controller_logs(
+                [str(assistant_id)],
+                [session_name] if session_name else [],
+            ),
+            "comms": _recent_cloud_run_logs(
+                COMMS_APP_URL,
+                [str(assistant_id)],
+                [session_name] if session_name else [],
+            ),
+            "adapters": _recent_cloud_run_logs(
+                ADAPTERS_URL,
+                [str(assistant_id)],
+                [session_name] if session_name else [],
+            ),
+            "unity": _recent_unity_container_logs(
+                pod_names,
+                tracked_job_names,
+            ),
+            "pod_events": _recent_k8s_pod_events(
+                pod_names,
+                tracked_job_names,
+            ),
+        },
+    }
+
+
+def wait_for_assistant_container_ready(
+    assistant_id: str,
+    *,
+    batch_api,
+    core_api=None,
+    gce_client=None,
+    timeout: float = 300,
+    interval: float = 5,
+) -> dict[str, Any]:
+    """Wait until AssistantSession reports ContainerReady=True.
+
+    This is a stronger readiness gate than ``job.status.active``. It proves
+    Unity successfully discovered the AssistantSession binding, read the
+    bootstrap Secret, published the StartupEvent, and patched the Job's
+    container-ready annotation.
+    """
+
+    deadline = time.monotonic() + timeout
+    last_phase = ""
+    last_error = ""
+    while time.monotonic() < deadline:
+        session = _read_assistant_session_http(str(assistant_id))
+        if session is not None:
+            status = session.get("status") or {}
+            binding = status.get("binding") or {}
+            job_ref = binding.get("jobRef") or {}
+            pod_ref = binding.get("podRef") or {}
+            _track_runtime_identity(
+                assistant_id=str(assistant_id),
+                session_name=((session.get("metadata") or {}).get("name") or ""),
+                activation_id=str(
+                    (session.get("spec") or {}).get("activationId", "") or "",
+                ),
+                job_name=str(job_ref.get("name", "") or ""),
+                pod_name=str(pod_ref.get("name", "") or ""),
+            )
+            last_phase = str(status.get("phase", "") or "")
+            last_error = str(status.get("lastError", "") or "")
+            conditions = status.get("conditions") or []
+            container_ready = any(
+                cond.get("type") == "ContainerReady" and cond.get("status") == "True"
+                for cond in conditions
+            )
+            if container_ready:
+                return session
+            if last_phase == "Failed":
+                snapshot = _assistant_readiness_snapshot(
+                    str(assistant_id),
+                    batch_api=batch_api,
+                    core_api=core_api,
+                    gce_client=gce_client,
+                )
+                raise AssertionError(
+                    f"Assistant {assistant_id} reached Failed before ContainerReady. "
+                    f"lastError={last_error or '(empty)'}\n"
+                    f"Failure snapshot:\n{json.dumps(snapshot, indent=2, sort_keys=True, default=str)}",
+                )
+        time.sleep(interval)
+
+    snapshot = _assistant_readiness_snapshot(
+        str(assistant_id),
+        batch_api=batch_api,
+        core_api=core_api,
+        gce_client=gce_client,
+    )
+    raise TimeoutError(
+        f"Timed out after {timeout}s waiting for assistant {assistant_id} to reach "
+        f"ContainerReady=True. Last phase={last_phase or '(none)'} "
+        f"lastError={last_error or '(empty)'}.\n"
+        f"Failure snapshot:\n{json.dumps(snapshot, indent=2, sort_keys=True, default=str)}",
     )
 
 
@@ -1204,6 +2652,12 @@ def wait_for_container_done(
         timeout=timeout,
         interval=interval,
         description=f"Container for assistant {assistant_id} to shut down",
+        failure_snapshot=lambda: describe_runtime_state(
+            batch_api,
+            None,
+            None,
+            str(assistant_id),
+        ),
     )
 
 
@@ -1212,21 +2666,30 @@ def wait_for_container_done(
 # ---------------------------------------------------------------------------
 
 
-def probe_vm_https(hostname: str, timeout: float = 5.0) -> bool:
-    """Check if Caddy TLS is up on the VM (HEAD https://{hostname}/)."""
+def probe_vm_agent_service(hostname: str, timeout: float = 5.0) -> bool:
+    """Check if the VM's agent-service is reachable through Caddy.
+
+    Hits ``/api/sessions`` through the Caddy reverse proxy.  A 401 from
+    the agent-service auth middleware proves it is running; a 502 from
+    Caddy or a connection error means the VM is broken.
+    """
     try:
-        r = requests.head(f"https://{hostname}/", timeout=timeout, verify=False)
+        r = requests.get(
+            f"https://{hostname}/api/sessions",
+            timeout=timeout,
+            verify=False,
+        )
         return r.status_code < 500
     except requests.RequestException:
         return False
 
 
-def probe_vm_agent_service(
+def probe_vm_agent_service_authenticated(
     hostname: str,
     api_key: str,
     command: str = "echo ok",
 ) -> requests.Response | None:
-    """Call /api/exec on the VM's agent-service. Returns the response or None."""
+    """Call `/api/exec` with auth and return the VM's response, if any."""
     try:
         return requests.post(
             f"https://{hostname}/api/exec",
@@ -1268,6 +2731,73 @@ def list_assigned_vms(gce_client, assistant_id: str) -> list:
     return list(gce_client.list(request=request))
 
 
+def _vm_metadata_value(vm, key: str) -> str:
+    """Return a metadata value from a GCE VM instance."""
+
+    for item in getattr(getattr(vm, "metadata", None), "items", []) or []:
+        if item.key == key:
+            return str(item.value or "")
+    return ""
+
+
+def assigned_vm_runtime_refs(
+    assistant_id: str,
+    *,
+    gce_client=None,
+) -> list[dict[str, str]]:
+    """Return binding-aware runtime refs for currently assigned VMs."""
+
+    try:
+        if gce_client is None:
+            from google.cloud import compute_v1
+
+            gce_client = compute_v1.InstancesClient()
+        assigned_vms = list_assigned_vms(gce_client, assistant_id)
+    except Exception:
+        return []
+
+    refs: list[dict[str, str]] = []
+    for vm in assigned_vms:
+        labels = dict(vm.labels or {})
+        binding_id = str(labels.get("binding-id", "") or "")
+        vm_name = str(getattr(vm, "name", "") or "")
+        if not binding_id or not vm_name:
+            continue
+        refs.append(
+            {
+                "binding_id": binding_id,
+                "vm_name": vm_name,
+                "hostname": _vm_metadata_value(vm, "hostname"),
+            },
+        )
+    return refs
+
+
+def release_assigned_vms(
+    assistant_id: str,
+    *,
+    gce_client=None,
+    timeout: float = 30,
+) -> list[requests.Response]:
+    """Best-effort release of all VMs currently assigned to an assistant."""
+
+    responses: list[requests.Response] = []
+    for vm_ref in assigned_vm_runtime_refs(assistant_id, gce_client=gce_client):
+        responses.append(
+            requests.post(
+                f"{COMMS_APP_URL}/infra/vm/pool/release",
+                json={
+                    "assistant_id": str(assistant_id),
+                    "binding_id": vm_ref["binding_id"],
+                    "vm_name": vm_ref["vm_name"],
+                },
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+                timeout=timeout,
+            ),
+        )
+    return responses
+
+
 def list_idle_vms(gce_client, vm_type: str = "ubuntu") -> list:
     """List idle pool VMs."""
     from google.cloud import compute_v1
@@ -1293,15 +2823,35 @@ def list_stopped_vms(gce_client, vm_type: str = "ubuntu") -> list:
 
 
 def list_ghost_vms(gce_client, vm_type: str = "ubuntu") -> list:
-    """List ghost VMs: labeled stopped but actually RUNNING."""
+    """List VMs with label/status mismatches that the scrub function fixes.
+
+    Returns VMs matching any of the anomaly patterns:
+      stopped + RUNNING, idle + TERMINATED, idle + SUSPENDED,
+      starting + TERMINATED, provisioning + TERMINATED,
+      assigned + TERMINATED, quarantined + RUNNING.
+    """
     from google.cloud import compute_v1
+
+    _ANOMALIES = {
+        ("stopped", "RUNNING"),
+        ("idle", "TERMINATED"),
+        ("idle", "SUSPENDED"),
+        ("starting", "TERMINATED"),
+        ("provisioning", "TERMINATED"),
+        ("assigned", "TERMINATED"),
+        ("quarantined", "RUNNING"),
+    }
 
     request = compute_v1.ListInstancesRequest(
         project=VM_PROJECT_ID,
         zone=VM_ZONE,
-        filter=f"labels.pool-role=stopped AND labels.vm-type={vm_type} AND status=RUNNING",
+        filter=f"labels.vm-type={vm_type}",
     )
-    return list(gce_client.list(request=request))
+    return [
+        vm
+        for vm in gce_client.list(request=request)
+        if vm.labels and (vm.labels.get("pool-role", ""), vm.status) in _ANOMALIES
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1329,13 +2879,25 @@ def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
     ).items
 
     assistant_jobs_map = {}
+    binding_jobs_map = {}
     idle_count = 0
 
     for job in jobs:
         labels = job.metadata.labels or {}
         status = labels.get("unity-status", "")
         aid = labels.get("assistant-id", "")
+        session_name = labels.get(ASSISTANT_SESSION_REF_LABEL, "")
+        binding_id = labels.get(ASSISTANT_SESSION_BINDING_LABEL, "")
         has_active = job.status.active and job.status.active > 0
+
+        if job.metadata.deletion_timestamp and (aid or status not in ("", "idle")):
+            violations.append(
+                InvariantViolation(
+                    "INV-8",
+                    f"Deleting Job {job.metadata.name} still looks live "
+                    f"(assistant-id={aid or 'empty'}, unity-status={status or 'empty'})",
+                ),
+            )
 
         if not has_active:
             continue
@@ -1352,6 +2914,19 @@ def check_invariants(batch_api, gce_client=None) -> list[InvariantViolation]:
                     ),
                 )
             assistant_jobs_map[aid] = job.metadata.name
+
+            if session_name and binding_id:
+                binding_key = (session_name, binding_id)
+                if binding_key in binding_jobs_map:
+                    violations.append(
+                        InvariantViolation(
+                            "INV-1",
+                            "Duplicate binding: "
+                            f"{session_name}/{binding_id} has Jobs "
+                            f"{binding_jobs_map[binding_key]} and {job.metadata.name}",
+                        ),
+                    )
+                binding_jobs_map[binding_key] = job.metadata.name
 
             if status not in ("running", "live", "done"):
                 violations.append(
@@ -1431,15 +3006,59 @@ def check_invariants_after_test(request, k8s_clients, gce_client, invariant_base
     """
     yield
     batch_api = k8s_clients[0]
+    core_api = k8s_clients[1]
     current = check_invariants(batch_api, gce_client)
     baseline_ids = {(v.invariant_id, v.message) for v in invariant_baseline}
     new_violations = [
         v for v in current if (v.invariant_id, v.message) not in baseline_ids
     ]
+    failed = bool(
+        getattr(request.node, "rep_call", None) and request.node.rep_call.failed,
+    )
+    artifact_path = None
+    if failed or new_violations:
+        try:
+            artifact_path = _build_failure_artifact(
+                request,
+                batch_api,
+                core_api,
+                gce_client,
+                new_violations,
+            )
+            print(f"\n[Failure Artifact] {artifact_path}")
+        except Exception as exc:
+            artifact_path = f"artifact generation failed: {type(exc).__name__}: {exc}"
     if new_violations:
         msg = "New invariant violations after test:\n"
         for v in new_violations:
             msg += f"  [{v.invariant_id}] {v.message}\n"
+        assistant_ids = sorted(
+            set(_assistant_ids_from_request(request, batch_api))
+            | set(_assistant_ids_from_violation_messages(new_violations)),
+        )
+        for assistant_id in assistant_ids:
+            runtime = describe_runtime_state(
+                batch_api,
+                core_api,
+                gce_client,
+                assistant_id,
+            )
+            session = runtime.get("session") or {}
+            status = session.get("status") or {}
+            spec = session.get("spec") or {}
+            msg += (
+                "  [SESSION] "
+                f"assistant={assistant_id} "
+                f"session={(session.get('metadata') or {}).get('name')} "
+                f"activation={spec.get('activationId')} "
+                f"phase={status.get('phase')} "
+                f"bindingId={((status.get('binding') or {}).get('id'))} "
+                f"jobRef={(((status.get('binding') or {}).get('jobRef') or {}).get('name'))} "
+                f"vmRef={(((status.get('binding') or {}).get('vmRef') or {}).get('name'))} "
+                f"lastError={status.get('lastError')}\n"
+            )
+        if artifact_path:
+            msg += f"  [ARTIFACT] {artifact_path}\n"
         import warnings
 
         warnings.warn(msg)

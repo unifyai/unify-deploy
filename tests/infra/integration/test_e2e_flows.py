@@ -20,6 +20,7 @@ import requests
 from .conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
+    _assistant_readiness_snapshot,
     cleanup_assistant_jobs,
     expire_test_assistant_records,
     list_assigned_vms,
@@ -27,7 +28,8 @@ from .conftest import (
     pull_outbound_messages,
     replenish_pool,
     send_test_message,
-    wait_for_container_done,
+    wait_for_assistant_runtime_stopped,
+    wait_for_assistant_container_ready,
     wait_for_container_running,
 )
 
@@ -50,7 +52,12 @@ class TestE2EFlows:
     """End-to-end flows exercising the adapter -> comms app -> K8s pipeline."""
 
     @pytest.mark.timeout(60)
-    def test_wakeup_responds_within_orchestra_timeout(self, real_assistant_data, comms):
+    def test_wakeup_responds_within_orchestra_timeout(
+        self,
+        real_assistant_data,
+        batch_api,
+        comms,
+    ):
         """Wakeup must return within Orchestra's httpx timeout (20s).
 
         Orchestra calls POST /assistant/wakeup with a ~20s httpx timeout.
@@ -77,27 +84,17 @@ class TestE2EFlows:
             print(f"\n[Wakeup] Responded in {elapsed:.1f}s (budget: 15s)")
         finally:
             try:
-                sanitized = assistant_id.lower().replace("_", "-")
-                jobs_resp = comms.get(
-                    "/infra/jobs",
-                    params={
-                        "label_selector": f"app=unity,assistant-id={sanitized}",
-                        "hours": 1,
-                    },
-                )
-                if jobs_resp.status_code == 200:
-                    for job in jobs_resp.json().get("jobs", []):
-                        comms.delete(
-                            "/infra/job/delete",
-                            data={"job_name": job["job_name"]},
-                        )
+                cleanup_assistant_jobs(batch_api, [assistant_id])
             except Exception:
                 pass
             replenish_pool()
 
     @pytest.mark.timeout(300)
     def test_wakeup_starts_container_for_real_assistant(
-        self, real_assistant_data, batch_api, comms
+        self,
+        real_assistant_data,
+        batch_api,
+        comms,
     ):
         """Wakeup must create a K8s Job with correct labels and startup config.
 
@@ -107,7 +104,7 @@ class TestE2EFlows:
 
         Verifies the contract between Orchestra, the adapter, and the comms
         app that the container is correctly provisioned for the preview
-        startup protocol (unity-startup-config annotation).
+        startup protocol (AssistantSession binding on the Job).
         """
         assistant_id = str(real_assistant_data["assistant_id"])
 
@@ -126,7 +123,10 @@ class TestE2EFlows:
             ), f"Wakeup took {elapsed:.1f}s, exceeding the 15s timeout budget"
 
             jobs = wait_for_container_running(
-                batch_api, assistant_id, timeout=180, interval=10
+                batch_api,
+                assistant_id,
+                timeout=180,
+                interval=10,
             )
 
             assert len(jobs) == 1, (
@@ -146,24 +146,27 @@ class TestE2EFlows:
                 f"Expected assistant-id={sanitized}, "
                 f"got {labels.get('assistant-id')}"
             )
-            assert "unity-startup-config" in annotations, (
-                f"Expected unity-startup-config annotation, "
+            assert "assistantsession.unify.ai/name" in annotations, (
+                f"Expected assistantsession annotation, "
                 f"got keys: {list(annotations.keys())}"
             )
 
             print(
                 f"\n[Wakeup->Container] Job {job.metadata.name} created in "
-                f"{elapsed:.1f}s with correct labels and startup config"
+                f"{elapsed:.1f}s with correct labels and AssistantSession binding",
             )
         finally:
             cleanup_assistant_jobs(batch_api, [assistant_id])
             replenish_pool()
 
-    @pytest.mark.timeout(600)
+    @pytest.mark.timeout(300)
     def test_session_resume_after_container_stop(
-        self, real_assistant_data, batch_api, comms
+        self,
+        real_assistant_data,
+        batch_api,
+        comms,
     ):
-        """After stopping a container, a second wakeup must start a fresh one.
+        """After stopping a runtime, a second wakeup must start a fresh one.
 
         Exercises the full session lifecycle: wakeup -> container runs -> stop
         -> wakeup again -> new container runs. The second container must be a
@@ -186,23 +189,27 @@ class TestE2EFlows:
             ), f"First wakeup failed: {resp1.status_code} {resp1.text}"
 
             jobs = wait_for_container_running(
-                batch_api, assistant_id, timeout=180, interval=10
+                batch_api,
+                assistant_id,
+                timeout=180,
+                interval=10,
             )
             assert jobs, "No container appeared after first wakeup"
             first_job_name = jobs[0].metadata.name
             print(f"\n[Resume] First container: {first_job_name}")
 
-            stop_resp = comms.post(
-                "/infra/job/stop",
-                data={"job_name": first_job_name},
-            )
+            stop_resp = comms.post(f"/infra/session/{assistant_id}/stop")
             assert (
                 stop_resp.status_code == 200
             ), f"Stop failed: {stop_resp.status_code} {stop_resp.text}"
 
-            wait_for_container_done(batch_api, assistant_id, timeout=180, interval=10)
+            wait_for_assistant_runtime_stopped(
+                assistant_id,
+                batch_api=batch_api,
+                timeout=240,
+            )
             expire_test_assistant_records(assistant_id)
-            print("[Resume] First container stopped")
+            print("[Resume] First runtime stopped")
 
             replenish_pool()
             time.sleep(10)
@@ -217,7 +224,10 @@ class TestE2EFlows:
             )
 
             jobs2 = wait_for_container_running(
-                batch_api, assistant_id, timeout=180, interval=10
+                batch_api,
+                assistant_id,
+                timeout=180,
+                interval=10,
             )
             assert jobs2, "No container appeared after second wakeup"
             second_job_name = jobs2[0].metadata.name
@@ -241,7 +251,7 @@ class TestE2EFlows:
 
             print(
                 f"[Resume] Second container: {second_job_name} "
-                f"(different from first: {first_job_name})"
+                f"(different from first: {first_job_name})",
             )
         finally:
             cleanup_assistant_jobs(batch_api, [assistant_id])
@@ -249,7 +259,12 @@ class TestE2EFlows:
 
     @pytest.mark.timeout(300)
     def test_wakeup_then_message_reaches_pubsub(
-        self, real_assistant_data, batch_api, comms
+        self,
+        real_assistant_data,
+        batch_api,
+        core_api,
+        gce_client,
+        comms,
     ):
         """After wakeup, a message sent via /unify/message must produce a reply.
 
@@ -278,14 +293,30 @@ class TestE2EFlows:
             ), f"Wakeup failed: {resp.status_code} {resp.text}"
 
             jobs = wait_for_container_running(
-                batch_api, assistant_id, timeout=180, interval=10
+                batch_api,
+                assistant_id,
+                timeout=180,
+                interval=10,
             )
             job_name = jobs[0].metadata.name
 
             print(
-                f"[Message] Container {job_name} running, waiting 45s for Unity init..."
+                f"[Message] Container {job_name} running, waiting for ContainerReady...",
             )
-            time.sleep(45)
+            ready_session = wait_for_assistant_container_ready(
+                assistant_id,
+                batch_api=batch_api,
+                core_api=core_api,
+                gce_client=gce_client,
+                timeout=300,
+                interval=5,
+            )
+            ready_phase = (ready_session.get("status") or {}).get("phase") or ""
+            print(
+                f"[Message] AssistantSession ContainerReady reached "
+                f"(phase={ready_phase or 'unknown'}), waiting 15s for manager init...",
+            )
+            time.sleep(15)
 
             token = f"E2E_ACK_{int(time.time())}"
             msg_body = (
@@ -297,7 +328,7 @@ class TestE2EFlows:
                 msg_resp.status_code == 200
             ), f"Message send failed: {msg_resp.status_code} {msg_resp.text}"
             print(
-                f"[Message] Sent token prompt '{token}', polling for outbound reply..."
+                f"[Message] Sent token prompt '{token}', polling for outbound reply...",
             )
 
             def _messages_with_token():
@@ -315,7 +346,7 @@ class TestE2EFlows:
                 messages
             ), f"No outbound reply containing {token} received within 120s"
             print(
-                f"[Message] Received {len(messages)} outbound message(s) containing {token}"
+                f"[Message] Received {len(messages)} outbound message(s) containing {token}",
             )
         finally:
             cleanup_assistant_jobs(batch_api, [assistant_id])
@@ -323,7 +354,12 @@ class TestE2EFlows:
 
     @pytest.mark.timeout(300)
     def test_wakeup_assigns_vm_for_desktop_assistant(
-        self, real_assistant_data, batch_api, gce_client, comms
+        self,
+        real_assistant_data,
+        batch_api,
+        core_api,
+        gce_client,
+        comms,
     ):
         """After wakeup, a desktop-mode assistant must get a VM assigned.
 
@@ -337,7 +373,7 @@ class TestE2EFlows:
         if desktop_mode not in ("ubuntu", "windows"):
             pytest.skip(
                 f"Assistant {assistant_id} has desktop_mode='{desktop_mode}', "
-                f"skipping VM assignment test"
+                f"skipping VM assignment test",
             )
 
         if gce_client is None:
@@ -354,7 +390,23 @@ class TestE2EFlows:
             ), f"Wakeup failed: {resp.status_code} {resp.text}"
 
             wait_for_container_running(
-                batch_api, assistant_id, timeout=180, interval=10
+                batch_api,
+                assistant_id,
+                timeout=180,
+                interval=10,
+            )
+            ready_session = wait_for_assistant_container_ready(
+                assistant_id,
+                batch_api=batch_api,
+                core_api=core_api,
+                gce_client=gce_client,
+                timeout=300,
+                interval=5,
+            )
+            ready_phase = (ready_session.get("status") or {}).get("phase") or ""
+            print(
+                f"[VM] AssistantSession ContainerReady reached "
+                f"(phase={ready_phase or 'unknown'}), waiting for VM assignment...",
             )
 
             vms = poll_until(
@@ -362,6 +414,12 @@ class TestE2EFlows:
                 timeout=180,
                 interval=15,
                 description=f"VM assignment for assistant {assistant_id}",
+                failure_snapshot=lambda: _assistant_readiness_snapshot(
+                    assistant_id,
+                    batch_api=batch_api,
+                    core_api=core_api,
+                    gce_client=gce_client,
+                ),
             )
 
             assert (
@@ -379,15 +437,8 @@ class TestE2EFlows:
             )
             print(
                 f"\n[VM] {vm.name} assigned to assistant {assistant_id} "
-                f"(pool-role=assigned)"
+                f"(pool-role=assigned)",
             )
         finally:
-            try:
-                comms.post(
-                    "/infra/vm/pool/release",
-                    json={"assistant_id": assistant_id},
-                )
-            except Exception:
-                pass
             cleanup_assistant_jobs(batch_api, [assistant_id])
             replenish_pool()

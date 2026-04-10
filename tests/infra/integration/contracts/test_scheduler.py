@@ -9,14 +9,11 @@ Each test verifies that a scheduler endpoint:
 These hit the real deployed services with real credentials.
 
 Endpoints covered:
+- POST /scheduled/infra/maintenance  (unified infra sweep)
 - POST /scheduled/email-watches
 - POST /scheduled/microsoft-tokens
 - POST /scheduled/teams-watches
 - POST /scheduled/cert-renewal
-- POST /scheduled/pending-startups
-- POST /scheduled/jobs/create
-- POST /scheduled/jobs/cleanup
-- POST /scheduled/jobs/expire-stale
 """
 
 import pytest
@@ -114,74 +111,31 @@ class TestCertRenewalScheduler:
         assert isinstance(body, dict)
 
 
-class TestPendingStartupsScheduler:
-    """Contract: POST /scheduled/pending-startups forwards to the comms app's
-    /infra/pending/process and returns success or a 502 on failure."""
+class TestInfraMaintenanceScheduler:
+    """Contract: POST /scheduled/infra/maintenance runs the unified
+    infrastructure sweep (replenish, cleanup, expire, orphan-reconcile,
+    quarantine-purge) and returns a result dict."""
 
-    def test_pending_startups_returns_json(self):
+    def test_infra_maintenance_returns_results(self):
         resp = requests.post(
-            f"{ADAPTERS_URL}/scheduled/pending-startups",
+            f"{ADAPTERS_URL}/scheduled/infra/maintenance",
             headers=_ADMIN_HEADERS,
-            timeout=30,
+            timeout=120,
         )
-        assert resp.status_code in (
-            200,
-            502,
-        ), f"pending-startups unexpected status: {resp.status_code} {resp.text}"
+        assert (
+            resp.status_code == 200
+        ), f"infra/maintenance failed: {resp.status_code} {resp.text}"
         body = resp.json()
         assert isinstance(body, dict)
-
-
-class TestJobsCreateScheduler:
-    """Contract: POST /scheduled/jobs/create replenishes the idle container
-    pool and returns creation details."""
-
-    def test_jobs_create_returns_pool_info(self):
-        resp = requests.post(
-            f"{ADAPTERS_URL}/scheduled/jobs/create",
-            headers=_ADMIN_HEADERS,
-            timeout=30,
-        )
-        assert (
-            resp.status_code == 200
-        ), f"jobs/create failed: {resp.status_code} {resp.text}"
-        body = resp.json()
-        assert "created" in body or "mode" in body, f"Unexpected response shape: {body}"
-
-
-class TestJobsCleanupScheduler:
-    """Contract: POST /scheduled/jobs/cleanup trims excess idle containers
-    and returns cleanup details."""
-
-    def test_jobs_cleanup_returns_details(self):
-        resp = requests.post(
-            f"{ADAPTERS_URL}/scheduled/jobs/cleanup",
-            headers=_ADMIN_HEADERS,
-            timeout=30,
-        )
-        assert (
-            resp.status_code == 200
-        ), f"jobs/cleanup failed: {resp.status_code} {resp.text}"
-        body = resp.json()
-        assert isinstance(body, dict)
-
-
-class TestStaleJobsExpireScheduler:
-    """Contract: POST /scheduled/jobs/expire-stale suspends K8s jobs that
-    have been running beyond the max age threshold."""
-
-    def test_stale_jobs_expire_returns_summary(self):
-        resp = requests.post(
-            f"{ADAPTERS_URL}/scheduled/jobs/expire-stale",
-            headers=_ADMIN_HEADERS,
-            timeout=30,
-        )
-        assert (
-            resp.status_code == 200
-        ), f"expire-stale failed: {resp.status_code} {resp.text}"
-        body = resp.json()
-        assert (
-            "total_running" in body or "expired" in body
+        assert any(
+            k in body
+            for k in (
+                "pool_replenish",
+                "pool_cleanup",
+                "stale_jobs",
+                "orphaned_vms",
+                "quarantined_vms",
+            )
         ), f"Unexpected response shape: {body}"
 
 

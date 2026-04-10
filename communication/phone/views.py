@@ -1,9 +1,8 @@
-import os
 from fastapi import APIRouter, Response, Request, HTTPException
 from common.settings import SETTINGS
 from twilio.twiml.voice_response import VoiceResponse
+from twilio.base.exceptions import TwilioRestException
 from livekit.api import (
-    LiveKitAPI,
     SIPInboundTrunkInfo,
     CreateSIPInboundTrunkRequest,
 )
@@ -14,20 +13,63 @@ from livekit.protocol.sip import (
 from common.livekit import (
     create_room_and_dispatch_agent,
     ensure_phone_dispatch_rule,
+    get_livekit_api,
     make_sip_uri,
 )
 from communication.helpers import get_twilio_client
-from common.settings import SETTINGS
-from dotenv import load_dotenv
-
-load_dotenv()
 
 auth_router = APIRouter()
 unauth_router = APIRouter()
 
 
 # Helpers
-def create_conference_response(conference_name, sip_uri, with_status=False):
+def _phone_country_purchase_options(phone_country: str) -> dict[str, str]:
+    """Return Twilio regulatory bundle or address overrides for a country."""
+    country_options = {
+        "GB": {"bundle_sid": "BU92b4971def01df8ce390153e23645323"},
+        "NL": {"address_sid": "AD742b83eb0aab7a249e7a3f2f5fb615c0"},
+        "FI": {"address_sid": "AD742b83eb0aab7a249e7a3f2f5fb615c0"},
+        "AU": {
+            "bundle_sid": "BUd8f2d4e2fe905d85653f738d7323c88b",
+            "address_sid": "AD828c09f385dea4f977464da90006bfd7",
+        },
+        "TH": {
+            "bundle_sid": "BUadbcfca4db22f76c6840ced254c10a11",
+            "address_sid": "ADdf839edff37d001d2634edc9b0c4a304",
+        },
+        "PL": {
+            "bundle_sid": "BU0864466d980ebd9df91768d9123110b2",
+            "address_sid": "ADdf839edff37d001d2634edc9b0c4a304",
+        },
+    }
+    return dict(country_options.get(phone_country, {}))
+
+
+def _sip_trunk_name(phone_number: str) -> str:
+    """Return the LiveKit SIP trunk name for a provisioned phone number."""
+    return f"Unity_{phone_number.lstrip('+')}"
+
+
+async def _delete_sip_trunk_for_phone_number(phone_number: str) -> bool:
+    """Delete the matching LiveKit inbound SIP trunk if it exists."""
+    livekit_api = get_livekit_api()
+    try:
+        sip_trunks = await livekit_api.sip.list_sip_inbound_trunk(
+            ListSIPInboundTrunkRequest(),
+        )
+        trunk_name = _sip_trunk_name(phone_number)
+        for item in sip_trunks.items:
+            if item.name == trunk_name:
+                await livekit_api.sip.delete_sip_trunk(
+                    DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id),
+                )
+                return True
+        return False
+    finally:
+        await livekit_api.aclose()
+
+
+def create_conference_response(sip_uri):
     resp_user = VoiceResponse()
     dial_user = resp_user.dial()
     dial_user.sip(
@@ -61,13 +103,9 @@ def add_user_to_conference(
                     participant.sid,
                 ).update(muted=True)
                 break
-        response = create_conference_response(
-            conference_name,
-            sip_uri,
-            with_status=True,
-        )
+        response = create_conference_response(sip_uri)
     else:
-        response = create_conference_response(conference_name, sip_uri)
+        response = create_conference_response(sip_uri)
 
     print("TWIML RESPONSE:", str(response))
     call = twilio_client.calls.create(
@@ -140,21 +178,7 @@ async def create_phone_number(request: Request):
     )
     phone_country = data.get("phone_country", "US")
 
-    # Additional args for phone_country
-    additional_args = {}
-    if phone_country == "GB":
-        additional_args["bundle_sid"] = "BU92b4971def01df8ce390153e23645323"
-    elif phone_country in ["NL", "FI"]:
-        additional_args["address_sid"] = "AD742b83eb0aab7a249e7a3f2f5fb615c0"
-    elif phone_country == "AU":
-        additional_args["bundle_sid"] = "BUd8f2d4e2fe905d85653f738d7323c88b"
-        additional_args["address_sid"] = "AD828c09f385dea4f977464da90006bfd7"
-    elif phone_country == "TH":
-        additional_args["bundle_sid"] = "BUadbcfca4db22f76c6840ced254c10a11"
-        additional_args["address_sid"] = "ADdf839edff37d001d2634edc9b0c4a304"
-    elif phone_country == "PL":
-        additional_args["bundle_sid"] = "BU0864466d980ebd9df91768d9123110b2"
-        additional_args["address_sid"] = "ADdf839edff37d001d2634edc9b0c4a304"
+    additional_args = _phone_country_purchase_options(phone_country)
 
     # Initialize Twilio client
     twilio_client = get_twilio_client()
@@ -205,13 +229,9 @@ async def create_phone_number(request: Request):
             break
 
     # Set up LiveKit inbound SIP trunk
-    lkapi = LiveKitAPI(
-        url=os.getenv("LIVEKIT_URL"),
-        api_key=os.getenv("LIVEKIT_API_KEY"),
-        api_secret=os.getenv("LIVEKIT_API_SECRET"),
-    )
+    lkapi = get_livekit_api()
     provider_numbers = [record.phone_number]
-    trunk_name = f"Unity_{record.phone_number[1:]}"
+    trunk_name = _sip_trunk_name(record.phone_number)
     sip_trunk = SIPInboundTrunkInfo(
         name=trunk_name,
         numbers=provider_numbers,
@@ -225,9 +245,16 @@ async def create_phone_number(request: Request):
 
 @auth_router.delete("/delete")
 async def delete_phone_number(request: Request):
+    """Delete a provisioned phone number, treating already-missing state as success.
+
+    This endpoint remains responsible for cleaning up the matching LiveKit SIP
+    trunk even if the Twilio number was already deleted in a prior attempt.
+    """
     # Expect JSON body: { "PhoneNumber": "+1234567890" }
     data = await request.json()
     phone_number = data.get("PhoneNumber")
+    if not phone_number:
+        raise HTTPException(status_code=400, detail="Missing PhoneNumber")
     twilio_client = get_twilio_client()
 
     # Find the purchased number by E.164
@@ -235,29 +262,28 @@ async def delete_phone_number(request: Request):
         phone_number=phone_number,
         limit=1,
     )
-    if not incoming_list:
-        raise HTTPException(status_code=404, detail="Phone number not found")
-    phone_sid = incoming_list[0].sid
+    phone_deleted = False
+    phone_sid = incoming_list[0].sid if incoming_list else None
 
-    # Delete the number
-    twilio_client.incoming_phone_numbers(phone_sid).delete()
+    if incoming_list:
+        try:
+            twilio_client.incoming_phone_numbers(phone_sid).delete()
+            phone_deleted = True
+        except TwilioRestException as exc:
+            if exc.status != 404:
+                raise
+    else:
+        phone_deleted = False
 
-    # Delete LiveKit SIP Trunk
-    lkapi = LiveKitAPI(
-        url=os.getenv("LIVEKIT_URL"),
-        api_key=os.getenv("LIVEKIT_API_KEY"),
-        api_secret=os.getenv("LIVEKIT_API_SECRET"),
-    )
-    sip_its = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
-    for item in sip_its.items:
-        if phone_number[1:] in item.name:
-            await lkapi.sip.delete_sip_trunk(
-                DeleteSIPTrunkRequest(sip_trunk_id=item.sip_trunk_id),
-            )
-            break
+    sip_trunk_deleted = await _delete_sip_trunk_for_phone_number(phone_number)
 
-    await lkapi.aclose()
-    return {"success": True, "sid": phone_sid}
+    return {
+        "success": True,
+        "sid": phone_sid,
+        "deleted": phone_deleted or sip_trunk_deleted,
+        "already_absent": not phone_deleted,
+        "sip_trunk_deleted": sip_trunk_deleted,
+    }
 
 
 # @router.post("/press")

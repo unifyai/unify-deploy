@@ -90,9 +90,17 @@ MAK_KEY = os.getenv("MAK_KEY", "")
 POOL_SSH_USERNAME = "unityuser"
 POOL_TARGET_IDLE = 5
 POOL_TARGET_STOPPED = 3
+POOL_BOOT_TIMEOUT_SECONDS = 120
+POOL_RELEASE_TIMEOUT_SECONDS = 600
+POOL_VM_CONTRACT_GENERATION = os.getenv(
+    "POOL_VM_CONTRACT_GENERATION",
+    "guest-contract-v3",
+)
 POOL_ASSISTANT_DISK_SIZE_GB = 64
 POOL_ASSISTANT_DISK_TYPE = "pd-standard"
 POOL_VM_NAME_PREFIX = "unity-pool"
+
+SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
 # Pool image families (separate from legacy to avoid affecting existing VMs)
 POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"

@@ -1,10 +1,11 @@
+import json
 import os
 import random
 import string
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from communication.helpers import get_twilio_client
+from communication.helpers import get_twilio_client, get_twilio_wa_client
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -78,21 +79,13 @@ async def send_verification_message(request: VerificationRequest):
     code = generate_verification_code()
 
     if platform == "whatsapp":
-        message = f"Your Unify verification code is: {code}"
         try:
-            twilio_client = get_twilio_client()
-
-            from_number = os.getenv("TWILIO_VERIFICATION_NUMBER")
-            if not from_number:
-                raise HTTPException(
-                    status_code=500,
-                    detail="TWILIO_VERIFICATION_NUMBER environment variable is not configured.",
-                )
-
+            twilio_client = get_twilio_wa_client()
             twilio_client.messages.create(
+                content_sid="HX66a14c4ec2f4e8a9d1d14ac2fa439a29",
+                content_variables=json.dumps({"1": code}),
                 to=f"whatsapp:{identifier}",
-                from_=f"whatsapp:{from_number}",
-                body=message,
+                from_=f"whatsapp:+16626772032",
             )
         except Exception as e:
             print(f"ERROR sending WhatsApp verification: {e}")

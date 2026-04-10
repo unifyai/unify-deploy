@@ -11,6 +11,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+NO_DESKTOP_MODE = "none"
+# Adapters intentionally cap start-intent waits at the comms edge so webhook
+# handlers can return quickly. This is a best-effort handoff, not a durable
+# acceptance boundary.
+START_INTENT_DISPATCH_TIMEOUT_SECONDS = 0.1
+
 from common.metrics import (
     ORCHESTRA_GET_ASSISTANT_DURATION,
     BUILD_WEBHOOK_CONTEXT_DURATION,
@@ -119,6 +125,7 @@ def get_assistant(
         "assistant_number": "",
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
+        "assistant_discord_bot_id": "",
         "desktop_mode": "ubuntu",
         "user_desktop_mode": None,
         "user_desktop_filesys_sync": False,
@@ -189,6 +196,7 @@ def get_assistant(
         "assistant_number": assistants[0]["phone"] or "",
         "assistant_whatsapp_number": assistants[0].get("assistant_whatsapp_number")
         or "",
+        "assistant_discord_bot_id": assistants[0].get("assistant_discord_bot_id", ""),
         "assistant_email": assistants[0]["email"] or "",
         "user_number": assistants[0]["user_phone"] or "",
         "user_whatsapp_number": assistants[0].get("user_whatsapp_number") or "",
@@ -196,7 +204,7 @@ def get_assistant(
         "voice_provider": assistants[0]["voice_provider"],
         "voice_id": assistants[0]["voice_id"],
         "secrets": assistants[0].get("secrets", {}),
-        "desktop_mode": assistants[0].get("desktop_mode", "ubuntu"),
+        "desktop_mode": assistants[0].get("desktop_mode") or NO_DESKTOP_MODE,
         "user_desktop_mode": assistants[0].get("user_desktop_mode", None),
         "user_desktop_filesys_sync": assistants[0].get(
             "user_desktop_filesys_sync",
@@ -227,6 +235,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "surname": assistant_data["assistant_surname"],
             "email_address": assistant_data["assistant_email"],
             "phone_number": assistant_data["assistant_number"],
+            "whatsapp_number": assistant_data.get("assistant_whatsapp_number", ""),
             "bio": "",
             "rolling_summary": "",
             "should_respond": False,
@@ -238,12 +247,49 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "surname": assistant_data["user_surname"],
             "email_address": assistant_data["user_email"],
             "phone_number": assistant_data["user_number"],
+            "whatsapp_number": assistant_data.get("user_whatsapp_number", ""),
             "bio": "",
             "rolling_summary": "",
             "should_respond": True,
             "response_policy": "",
         },
     ]
+
+
+def _resolve_shared_pool_route(platform: str, pool_id: str, sender: str) -> dict | None:
+    """Resolve an inbound message on a shared-pool platform via Orchestra.
+
+    Returns one of:
+      - {"assistant_id": int, "role": str} — normal routed message
+      - {"action": "auto_reply"}           — decommissioned route
+      - {"action": "reject_cold"}          — unknown sender on shared pool
+      - None                               — no route at all (404)
+    """
+    param_name = "pool_number" if platform == "whatsapp" else "bot_id"
+    resp = requests.get(
+        f"{SETTINGS.orchestra_url}/admin/{platform}/resolve",
+        params={param_name: pool_id, "sender": sender},
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"{platform} resolve failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"{platform} resolve error: {resp.status_code}")
+    return resp.json()
+
+
+def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
+    """Resolve an inbound WhatsApp message to an assistant via Orchestra."""
+    return _resolve_shared_pool_route("whatsapp", pool_number, sender)
+
+
+def resolve_discord_route(bot_id: str, sender: str) -> dict | None:
+    """Resolve an inbound Discord DM to an assistant via Orchestra."""
+    return _resolve_shared_pool_route("discord", bot_id, sender)
 
 
 def check_contact_details(
@@ -256,6 +302,10 @@ def check_contact_details(
 ) -> bool:
     """
     Check if the contact details are valid.
+
+    WhatsApp is handled separately via Orchestra's resolve endpoint and
+    never reaches this function (the adapter passes validate_contact=False
+    for WhatsApp).
 
     Args:
         email_address: The email address of the contact.
@@ -272,8 +322,6 @@ def check_contact_details(
     if medium == "email" and user_email == email_address:
         return True
     if medium in ["msg", "phone"] and user_number == phone_number:
-        return True
-    if medium == "whatsapp" and user_whatsapp_number == phone_number:
         return True
     return False
 
@@ -391,13 +439,16 @@ def check_valid_contact(
 
 
 def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
-    """Suspend K8s jobs that have been running longer than *max_age_hours*.
+    """Clean up stale K8s Job objects and stop genuinely stale runtimes.
 
-    For each stale job:
-    - Suspends the K8s job
-    - Releases any leaked pool VM for the assistant
+    Stale ``done`` jobs (finished, pod gone) are deleted — their logs are
+    preserved in Cloud Logging and GCS independently of the Job object.
 
-    Uses K8s as the source of truth (via /infra/jobs).
+    Stale ``running`` jobs (active >max_age_hours) stay session-owned. If a
+    stale Job is still the current binding of an AssistantSession, maintenance
+    asks Comms to stop the session and lets the controller tear the runtime
+    down. Direct Job deletion is reserved for stale ``done`` Jobs and stale
+    running Jobs that are no longer the current binding of any session.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not SETTINGS.comms_url:
@@ -410,7 +461,7 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
         resp = requests.get(
             f"{SETTINGS.comms_url}/infra/jobs",
             params={
-                "label_selector": "app=unity,unity-status=running",
+                "label_selector": "app=unity,unity-status in (running,done)",
                 "hours": max(max_age_hours + 12, 36),
             },
             headers=headers,
@@ -450,76 +501,231 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     if not stale:
         return {"total_running": len(all_jobs), "expired": 0}
 
-    jobs_to_suspend = []
-    unique_assistants = set()
+    stale_running = []
+    stale_done = []
     for job in stale:
         job_name = job.get("job_name")
         assistant_id = job.get("assistant_id", "unknown")
+        unity_status = job.get("labels", {}).get("unity-status", "")
         logger.info(
-            f"[expire_all_stale_jobs] Stale job: {job_name} "
-            f"assistant_id={assistant_id} "
-            f"created={job.get('creation_timestamp')}",
+            "[expire_all_stale_jobs] Stale job: %s assistant_id=%s status=%s created=%s",
+            job_name,
+            assistant_id,
+            unity_status,
+            job.get("creation_timestamp"),
         )
-        if job_name:
-            jobs_to_suspend.append(job_name)
-        if assistant_id and assistant_id != "unknown":
-            unique_assistants.add(assistant_id)
+        if unity_status == "done":
+            stale_done.append(job)
+        else:
+            stale_running.append(job)
 
-    suspended_jobs = []
+    cleaned_jobs: list[str] = []
 
-    def _suspend_job(jn):
+    def _delete_stale_job(job_name: str):
+        """Delete a stale Job object.
+
+        Logs are preserved in Cloud Logging (GKE) and GCS (Unity upload).
+        The Job object itself is only K8s metadata — deleting it frees
+        API-server resources and ensures the job doesn't reappear in the
+        next sweep.
+        """
         try:
-            requests.post(
-                f"{SETTINGS.comms_url}/infra/job/stop",
-                data={"job_name": jn},
+            resp = requests.delete(
+                f"{SETTINGS.comms_url}/infra/job/delete",
+                data={"job_name": job_name},
                 headers=headers,
                 timeout=10,
             )
-            logger.info(f"[expire_all_stale_jobs] Suspended K8s job: {jn}")
-            return jn
+            if resp.status_code in (200, 404):
+                return job_name
         except Exception as exc:
             logger.info(
-                f"[expire_all_stale_jobs] Job suspend non-fatal for {jn}: {exc}",
+                "[expire_all_stale_jobs] Delete non-fatal for %s: %s",
+                job_name,
+                exc,
             )
+        return None
+
+    if stale_done:
+        done_names = [j["job_name"] for j in stale_done if j.get("job_name")]
+        logger.info(
+            "[expire_all_stale_jobs] Deleting %d stale done jobs",
+            len(done_names),
+        )
+        with ThreadPoolExecutor(max_workers=max(len(done_names), 1)) as executor:
+            results = list(executor.map(_delete_stale_job, done_names))
+        cleaned_jobs.extend(r for r in results if r is not None)
+
+    stopped_assistants: list[str] = []
+    deferred_jobs: list[str] = []
+
+    if stale_running:
+        stale_aids = list(
+            dict.fromkeys(
+                str(j.get("assistant_id"))
+                for j in stale_running
+                if j.get("assistant_id") and j.get("assistant_id") != "unknown"
+            ),
+        )
+
+        def _read_session_state(aid: str):
+            """Read the current binding and lifecycle state for one session."""
+
+            try:
+                session_resp = requests.get(
+                    f"{SETTINGS.comms_url}/infra/session/{aid}",
+                    headers=headers,
+                    timeout=10,
+                )
+                if session_resp.status_code == 404:
+                    return aid, {"missing": True}
+                if session_resp.status_code != 200:
+                    logger.info(
+                        "[expire_all_stale_jobs] Session read failed for %s: %s",
+                        aid,
+                        session_resp.status_code,
+                    )
+                    return aid, {"inspection_failed": True}
+                session = session_resp.json()
+                phase = str(((session.get("status") or {}).get("phase", "")) or "")
+                return aid, {
+                    "bound_job": (
+                        ((session.get("status") or {}).get("binding") or {})
+                        .get("jobRef", {})
+                        .get("name", "")
+                    ),
+                    "desired_state": str(
+                        ((session.get("spec") or {}).get("desiredState", "")) or "",
+                    )
+                    or "Running",
+                    "terminal": phase in {"Released", "Failed"},
+                }
+            except Exception as exc:
+                logger.info(
+                    "[expire_all_stale_jobs] Session read non-fatal for %s: %s",
+                    aid,
+                    exc,
+                )
+                return aid, {"inspection_failed": True}
+
+        session_states: dict[str, dict] = {}
+        if stale_aids:
+            with ThreadPoolExecutor(max_workers=len(stale_aids)) as executor:
+                session_states = dict(executor.map(_read_session_state, stale_aids))
+
+        safe_delete_running_names: list[str] = []
+        assistants_to_stop: dict[str, str] = {}
+        for job in stale_running:
+            job_name = str(job.get("job_name") or "")
+            assistant_id = str(job.get("assistant_id") or "")
+            if not job_name:
+                continue
+            if not assistant_id or assistant_id == "unknown":
+                safe_delete_running_names.append(job_name)
+                continue
+
+            session_state = session_states.get(assistant_id, {})
+            if session_state.get("missing"):
+                safe_delete_running_names.append(job_name)
+                continue
+            if session_state.get("inspection_failed"):
+                deferred_jobs.append(job_name)
+                continue
+
+            bound_job = str(session_state.get("bound_job", "") or "")
+            if bound_job != job_name:
+                safe_delete_running_names.append(job_name)
+                continue
+            if session_state.get("terminal"):
+                safe_delete_running_names.append(job_name)
+                continue
+            if session_state.get("desired_state") == "Stopped":
+                logger.info(
+                    "[expire_all_stale_jobs] Session %s already stopping stale job %s",
+                    assistant_id,
+                    job_name,
+                )
+                deferred_jobs.append(job_name)
+                continue
+
+            assistants_to_stop[assistant_id] = job_name
+            deferred_jobs.append(job_name)
+
+        def _stop_bound_session(item: tuple[str, str]):
+            """Ask Comms to stop the session that still owns a stale job."""
+
+            aid, job_name = item
+            try:
+                resp = requests.post(
+                    f"{SETTINGS.comms_url}/infra/session/{aid}/stop",
+                    headers=headers,
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    logger.info(
+                        "[expire_all_stale_jobs] Stop accepted for session %s "
+                        "(bound to stale job %s)",
+                        aid,
+                        job_name,
+                    )
+                    return aid
+            except Exception as exc:
+                logger.info(
+                    "[expire_all_stale_jobs] Session stop non-fatal for %s: %s",
+                    aid,
+                    exc,
+                )
             return None
 
-    if jobs_to_suspend:
-        with ThreadPoolExecutor(max_workers=len(jobs_to_suspend)) as pool:
-            results = list(pool.map(_suspend_job, jobs_to_suspend))
-        suspended_jobs = [r for r in results if r is not None]
+        if assistants_to_stop:
+            with ThreadPoolExecutor(max_workers=len(assistants_to_stop)) as executor:
+                results = list(
+                    executor.map(_stop_bound_session, assistants_to_stop.items()),
+                )
+            stopped_assistants = [r for r in results if r is not None]
 
-    released_assistants = []
-
-    def _release_vm(aid):
-        try:
-            requests.post(
-                f"{SETTINGS.comms_url}/infra/vm/pool/release",
-                headers=headers,
-                json={"assistant_id": aid},
-                timeout=10,
-            )
-            return aid
-        except Exception as exc:
+        if safe_delete_running_names:
             logger.info(
-                f"[expire_all_stale_jobs] VM release non-fatal for {aid}: {exc}",
+                "[expire_all_stale_jobs] Deleting %d stale running jobs "
+                "that are no longer session-owned",
+                len(safe_delete_running_names),
             )
-            return None
+            with ThreadPoolExecutor(
+                max_workers=max(len(safe_delete_running_names), 1),
+            ) as executor:
+                results = list(
+                    executor.map(_delete_stale_job, safe_delete_running_names),
+                )
+            cleaned_jobs.extend(r for r in results if r is not None)
 
-    if unique_assistants:
-        with ThreadPoolExecutor(max_workers=len(unique_assistants)) as pool:
-            results = list(pool.map(_release_vm, unique_assistants))
-        released_assistants = [r for r in results if r is not None]
+    logger.info(
+        "[expire_all_stale_jobs] Summary: cleaned=%d stale jobs "
+        "(%d done + %d running), stopped=%d sessions, deferred=%d jobs",
+        len(cleaned_jobs),
+        len(stale_done),
+        len(stale_running),
+        len(stopped_assistants),
+        len(deferred_jobs),
+    )
 
     return {
         "total_running": len(all_jobs),
         "expired": len(stale),
-        "suspended_k8s_jobs": suspended_jobs,
-        "released_assistants": released_assistants,
+        "cleaned_jobs": cleaned_jobs,
+        "stopped_assistants": stopped_assistants,
+        "deferred_jobs": deferred_jobs,
     }
 
 
-def start_unity_job(assistant: dict, medium: str):
-    """Start the service using values from assistant dict."""
+def start_unity_job(assistant: dict, medium: str) -> None:
+    """Best-effort low-latency dispatch of activation intent to comms.
+
+    Adapters intentionally stop waiting after a tiny edge timeout so webhook
+    and call handlers do not block on AssistantSession convergence. A timeout
+    here means "handoff outcome unknown"; callers must not treat this helper as
+    proof that comms accepted the request, created a session, or made runtime
+    ready.
+    """
     api_key = assistant["api_key"]
     assistant_id = assistant["assistant_id"]
 
@@ -527,14 +733,15 @@ def start_unity_job(assistant: dict, medium: str):
         logger.info(f"No user name for assistant {assistant_id}")
         return
 
-    desktop_mode = assistant.get("desktop_mode", "ubuntu")
+    desktop_mode = assistant.get("desktop_mode") or NO_DESKTOP_MODE
     user_desktop_mode = assistant.get("user_desktop_mode", None)
     user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
     user_desktop_url = assistant.get("user_desktop_url", None)
 
     demo_id = assistant.get("demo_id", None)
 
-    # start job
+    # This is intentionally a fast edge handoff. Adapters does not wait for the
+    # full /infra/job/start convergence path to complete on the webhook thread.
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     try:
         response = requests.post(
@@ -558,6 +765,14 @@ def start_unity_job(assistant: dict, medium: str):
                 "assistant_number": assistant["assistant_number"],
                 "assistant_email": assistant["assistant_email"],
                 "user_whatsapp_number": assistant["user_whatsapp_number"],
+                "assistant_whatsapp_number": assistant.get(
+                    "assistant_whatsapp_number",
+                    "",
+                ),
+                "assistant_discord_bot_id": assistant.get(
+                    "assistant_discord_bot_id",
+                    "",
+                ),
                 "voice_provider": assistant["voice_provider"],
                 "voice_id": assistant["voice_id"],
                 "desktop_mode": desktop_mode,
@@ -576,25 +791,42 @@ def start_unity_job(assistant: dict, medium: str):
                 ),
                 "deploy_env": assistant.get("deploy_env", ""),
             },
-            timeout=0.1,
+            timeout=START_INTENT_DISPATCH_TIMEOUT_SECONDS,
         )
         if response.status_code == 200:
-            logger.info(f"Job started for assistant {assistant_id}")
+            logger.info(
+                f"Activation request accepted by comms for assistant {assistant_id}",
+            )
         elif response.status_code == 202:
             logger.info(
-                f"Job start queued for assistant {assistant_id} (pool exhausted)",
+                f"Activation request queued for assistant {assistant_id} (pool exhausted)",
             )
         else:
             logger.warning(
-                f"Job start failed for assistant {assistant_id}: "
+                f"Activation request failed for assistant {assistant_id}: "
                 f"{response.status_code} {response.text}",
             )
     except requests.exceptions.Timeout:
         logger.info(
-            f"Job start dispatched for assistant {assistant_id} (fire-and-forget)",
+            "Activation request client timeout after %sms for assistant %s; "
+            "adapters intentionally stop waiting here to preserve webhook "
+            "latency. This does not confirm comms accepted the request.",
+            int(START_INTENT_DISPATCH_TIMEOUT_SECONDS * 1000),
+            assistant_id,
         )
     except requests.RequestException as e:
-        logger.error(f"Job start request failed for assistant {assistant_id}: {e}")
+        logger.error(
+            "Activation request failed before adapters observed comms "
+            "acceptance for assistant %s: %s",
+            assistant_id,
+            e,
+        )
+
+
+def uses_local_unity_runtime(assistant_data: dict) -> bool:
+    """Return whether inbound traffic should use a caller-local Unity runtime."""
+
+    return bool(assistant_data.get("is_local", False))
 
 
 class IdlePoolTarget:
@@ -666,6 +898,19 @@ def _fetch_infra_jobs(
     return None
 
 
+def _job_inventory_params(label_selector: str) -> dict[str, str | int]:
+    """Build explicit /infra/jobs params for cleanup-sensitive job inventory calls.
+
+    The comms endpoint now returns all matching jobs by default. Adapters still
+    want a bounded inventory window so pool maintenance sees recent running and
+    idle jobs without silently dropping cross-day jobs during low traffic.
+    """
+    return {
+        "label_selector": label_selector,
+        "hours": SETTINGS.job_inventory_lookback_hours,
+    }
+
+
 def get_unity_jobs_inventory() -> dict[str, list[dict]]:
     """Get a categorized inventory of Unity jobs from GKE in a single request.
 
@@ -674,7 +919,7 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
         filtered by the current environment (staging vs production).
     """
     resp = _fetch_infra_jobs(
-        {"label_selector": "app=unity,unity-status!=done"},
+        _job_inventory_params("app=unity,unity-status!=done"),
         caller="get_unity_jobs_inventory",
     )
     if resp is None:
@@ -695,59 +940,10 @@ def get_unity_jobs_inventory() -> dict[str, list[dict]]:
     return inventory
 
 
-def _trigger_pending_reconciliation() -> dict:
-    """Call the comms app to process pending startup requests.
-
-    Returns the JSON response from the reconciler, or an error dict.
-    Logs failures so the caller (and Cloud Scheduler) can observe them.
-    """
-    try:
-        resp = requests.post(
-            f"{SETTINGS.comms_url}/infra/pending/process",
-            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning(
-            "Pending reconciliation returned %s: %s",
-            resp.status_code,
-            resp.text[:200],
-        )
-        return {"error": resp.status_code}
-    except Exception as e:
-        logger.error("Pending reconciliation failed: %s", e)
-        return {"error": str(e)}
-
-
-def _trigger_pending_vm_reconciliation() -> dict:
-    """Call the comms app to process pending VM assignment requests.
-
-    Returns the JSON response from the reconciler, or an error dict.
-    """
-    try:
-        resp = requests.post(
-            f"{SETTINGS.comms_url}/infra/vm/pending/process",
-            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-            timeout=60,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        logger.warning(
-            "Pending VM reconciliation returned %s: %s",
-            resp.status_code,
-            resp.text[:200],
-        )
-        return {"error": resp.status_code}
-    except Exception as e:
-        logger.error("Pending VM reconciliation failed: %s", e)
-        return {"error": str(e)}
-
-
-def replenish_idle_pool(refresh: bool = False) -> dict:
+def replenish_idle_pool(refresh: bool = False, extra_demand: int = 0) -> dict:
     """Core logic for idle job pool replenishment.
 
-    Called by build_webhook_context() and by the /scheduled/jobs/create endpoint.
+    Called by `/scheduled/jobs/create` and by `/scheduled/infra/maintenance`.
 
     Fill mode has two regimes:
     - Floor regime (demand_buffer <= min_idle_floor): Creates exactly 1 job per
@@ -757,6 +953,9 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     - Demand regime (demand_buffer > min_idle_floor): Checks inventory and fills
       the gap to the demand-based target. At this scale, small race-induced
       discrepancies are negligible relative to pool size.
+    - Reactive regime (`extra_demand > 0`): Ensures blocked `PendingJob`
+      sessions can be satisfied immediately while still maintaining the steady
+      warm-pool floor.
     """
     inventory = get_unity_jobs_inventory()
     running_count = len(inventory["running"])
@@ -764,34 +963,49 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
     UNITY_JOBS_RUNNING.set(running_count)
     UNITY_JOBS_IDLE.set(current_idle_count)
 
+    extra_demand = max(0, int(extra_demand))
     pool_target = get_target_idle_count(running_count)
+    effective_target = max(pool_target.target, extra_demand)
 
     if refresh:
-        num_to_create = pool_target.target
+        num_to_create = effective_target
+    elif extra_demand > 0:
+        num_to_create = max(0, effective_target - current_idle_count)
     elif not pool_target.demand_exceeds_floor:
         num_to_create = 1
     else:
-        num_to_create = max(0, pool_target.target - current_idle_count)
+        num_to_create = max(0, effective_target - current_idle_count)
 
     if num_to_create == 0:
         UNITY_JOBS_RUNNING.set(running_count)
         UNITY_JOBS_IDLE.set(current_idle_count)
         logger.info(
-            f"Idle pool is healthy (current: {current_idle_count}, target: {pool_target.target}). No jobs created.",
+            "Idle pool is healthy "
+            f"(current: {current_idle_count}, target: {effective_target}, "
+            f"extra_demand: {extra_demand}). No jobs created.",
         )
         return {
             "status": "healthy",
             "current": current_idle_count,
-            "target": pool_target.target,
+            "target": effective_target,
+            "extra_demand": extra_demand,
         }
 
     mode = (
         "refresh"
         if refresh
-        else ("fill-floor" if not pool_target.demand_exceeds_floor else "fill-demand")
+        else (
+            "fill-reactive"
+            if extra_demand > 0
+            else (
+                "fill-floor" if not pool_target.demand_exceeds_floor else "fill-demand"
+            )
+        )
     )
     logger.info(
-        f"[{mode}] Creating {num_to_create} idle jobs (current: {current_idle_count}, target: {pool_target.target})...",
+        f"[{mode}] Creating {num_to_create} idle jobs "
+        f"(current: {current_idle_count}, target: {effective_target}, "
+        f"extra_demand: {extra_demand})...",
     )
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     response = requests.get(f"{SETTINGS.comms_url}/infra/image", headers=headers)
@@ -816,24 +1030,12 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
 
     UNITY_JOBS_RUNNING.set(running_count)
     UNITY_JOBS_IDLE.set(current_idle_count + len(created_jobs))
-    reconcile_result = _trigger_pending_reconciliation()
-    if "error" in reconcile_result:
-        logger.warning(
-            "Reactive container reconciliation after replenish failed: %s",
-            reconcile_result,
-        )
-
-    vm_reconcile_result = _trigger_pending_vm_reconciliation()
-    if "error" in vm_reconcile_result:
-        logger.warning(
-            "Reactive VM reconciliation after replenish failed: %s",
-            vm_reconcile_result,
-        )
 
     return {
         "mode": mode,
         "created": len(created_jobs),
-        "target": pool_target.target,
+        "target": effective_target,
+        "extra_demand": extra_demand,
         "details": created_jobs,
     }
 
@@ -841,7 +1043,7 @@ def replenish_idle_pool(refresh: bool = False) -> dict:
 def cleanup_idle_pool() -> dict:
     """Core logic for idle job pool cleanup.
 
-    Called by the /scheduled/jobs/cleanup endpoint via run_in_executor.
+    Called by /scheduled/infra/maintenance.
     """
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
 
@@ -855,7 +1057,7 @@ def cleanup_idle_pool() -> dict:
     # Get all idle jobs via K8s label selector
     resp = requests.get(
         f"{SETTINGS.comms_url}/infra/jobs",
-        params={"label_selector": "app=unity,unity-status=idle"},
+        params=_job_inventory_params("app=unity,unity-status=idle"),
         headers=headers,
     )
     jobs = resp.json()
@@ -1008,13 +1210,21 @@ def build_webhook_context(
 
     Args:
         assistant_data: Optional pre-fetched assistant data to avoid duplicate Orchestra calls.
+
+    Returns legacy ``job_started`` / ``is_job_running`` flags for northbound
+    callers. These booleans are compatibility shims: they only mean adapters
+    scheduled best-effort dispatch of ``/infra/job/start`` onto the webhook
+    background pool. They do not mean adapters observed a comms 200/202, that
+    an AssistantSession exists, or that the runtime is ready.
     """
     _t0 = time.perf_counter()
     _ctx_status = "error"
     # normalize identifiers and resolve assistant by channel
     is_email = channel in ["email", "teams"]
     normalized_sender = (
-        sender.replace("whatsapp:", "") if channel == "whatsapp" else sender
+        sender.replace("whatsapp:", "")
+        if channel in ("whatsapp", "whatsapp_call")
+        else sender
     ).strip()
 
     # get assistant data (skip if pre-fetched)
@@ -1038,7 +1248,8 @@ def build_webhook_context(
     user_email = assistant_data["user_email"]
     logger.info(f"assistant_data: {assistant_data}")
 
-    # resolve contacts and check job status in parallel
+    # Resolve contacts first; activation dispatch happens later if startup
+    # should proceed for this webhook.
     logger.info(f"validate_contact: {validate_contact}")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -1061,17 +1272,16 @@ def build_webhook_context(
     logger.info(f"contacts: {contacts}")
 
     # check contact validity
-    is_local_assistant = bool(assistant_data.get("is_local", False))
+    is_local_assistant = uses_local_unity_runtime(assistant_data)
     is_test_assistant = "test" in assistant_id
     is_valid_contact = is_valid_contact or is_local_assistant
 
-    # Start a container if needed. The /infra/job/start endpoint handles
-    # deduplication atomically via K8s labels — if a container is already
-    # serving this assistant, the endpoint returns early without publishing.
-    # This replaces the previous is_job_running() + mark_job_running() flow
-    # which was non-atomic and could leave stale records.
-    job_started = False
-    is_running = False
+    # Submit activation intent if needed. The /infra/job/start endpoint handles
+    # deduplication atomically and owns the durable convergence path plus the
+    # canonical idle-pool top-up. The legacy flags below only mean "dispatch
+    # was scheduled on the adapter side", not "runtime is running".
+    activation_intent_scheduled = False
+    legacy_is_job_running = False
     skip_auto_start = is_test_assistant or is_local_assistant
     should_start_job = (
         ensure_job and is_valid_contact and (force_start or not skip_auto_start)
@@ -1079,23 +1289,22 @@ def build_webhook_context(
     if should_start_job:
         JOB_DEMAND_TOTAL.labels(channel=channel).inc()
         _WEBHOOK_BG_POOL.submit(start_unity_job, assistant_data, channel)
-        _WEBHOOK_BG_POOL.submit(replenish_idle_pool, False)
-        job_started = True
-        is_running = True
+        activation_intent_scheduled = True
+        legacy_is_job_running = True
 
     logger.info(f"is_valid_contact: {is_valid_contact}")
     _ctx_status = "error" if assistant_data.get("assistant_id") is None else "success"
     BUILD_WEBHOOK_CONTEXT_DURATION.labels(
         channel=channel,
-        job_started=str(job_started).lower(),
+        job_started=str(activation_intent_scheduled).lower(),
         status=_ctx_status,
     ).observe(time.perf_counter() - _t0)
     return {
         "assistant": assistant_data,
         "contacts": contacts,
         "is_valid_contact": is_valid_contact,
-        "is_job_running": is_running,
-        "job_started": job_started,
+        "is_job_running": legacy_is_job_running,
+        "job_started": activation_intent_scheduled,
     }
 
 
@@ -1105,6 +1314,14 @@ def get_twilio_client():
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
     if not account_sid or not auth_token:
         raise RuntimeError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set")
+    return TwilioClient(account_sid, auth_token)
+
+
+def get_twilio_wa_client():
+    account_sid = os.getenv("TWILIO_WA_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_WA_AUTH_TOKEN")
+    if not account_sid or not auth_token:
+        raise RuntimeError("TWILIO_WA_ACCOUNT_SID and TWILIO_WA_AUTH_TOKEN must be set")
     return TwilioClient(account_sid, auth_token)
 
 

@@ -147,6 +147,52 @@ class TestPoolVmWildcardCert:
     @patch(_COMMON_PATCHES[1])
     @patch(_COMMON_PATCHES[2])
     @patch(_COMMON_PATCHES[3])
+    def test_provision_returns_after_insert_is_accepted(
+        self,
+        mock_get_secret,
+        mock_client_cls,
+        mock_dns,
+        mock_addr,
+    ):
+        from communication.infra.vm_helpers import provision_pool_vm
+
+        def _secret(name, **kw):
+            return {
+                "VM_WILDCARD_FULLCHAIN": _FAKE_CERT,
+                "VM_WILDCARD_PRIVKEY": _FAKE_KEY,
+                "DEVBOT_GITHUB_TOKEN": "ghp_fake",
+            }.get(name)
+
+        mock_get_secret.side_effect = _secret
+
+        address_op = MagicMock()
+        mock_addr_instance = MagicMock()
+        mock_addr_instance.insert.return_value = address_op
+        mock_addr_instance.get.return_value = MagicMock(address="10.0.0.1")
+        mock_addr.return_value = mock_addr_instance
+
+        mock_zone = MagicMock()
+        mock_zone.list_resource_record_sets.return_value = []
+        mock_dns_client = MagicMock()
+        mock_dns_client.zone.return_value = mock_zone
+        mock_dns.return_value = mock_dns_client
+
+        instance_op = MagicMock()
+        instance_op.result.side_effect = AssertionError(
+            "instance provisioning should not block on op.result()",
+        )
+        mock_client_cls.return_value.insert.return_value = instance_op
+
+        result = provision_pool_vm("ubuntu", n=99)
+
+        assert result["vm_name"] == "unity-pool-ubuntu-99"
+        assert result["status"] == "PROVISIONING"
+        mock_client_cls.return_value.insert.assert_called_once()
+
+    @patch(_COMMON_PATCHES[0])
+    @patch(_COMMON_PATCHES[1])
+    @patch(_COMMON_PATCHES[2])
+    @patch(_COMMON_PATCHES[3])
     def test_windows_no_tls_when_absent(
         self,
         mock_get_secret,

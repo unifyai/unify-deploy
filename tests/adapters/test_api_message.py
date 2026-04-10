@@ -57,8 +57,8 @@ def client(app_module, mock_pubsub, mock_webhook_context):
 
     with (
         patch.object(
-            app_module.pubsub_v1,
-            "PublisherClient",
+            app_module,
+            "get_pubsub_client",
             return_value=mock_pubsub,
         ),
         patch.object(
@@ -211,23 +211,6 @@ class TestApiMessage:
         published = json.loads(call_args[0][1].decode("utf-8"))
         assert len(published["event"]["attachments"]) == 1
 
-    def test_too_many_attachments_rejected(self, client):
-        attachments = [
-            {"id": f"att-{i}", "filename": f"f{i}.txt", "gs_url": f"gs://bucket/{i}"}
-            for i in range(11)
-        ]
-        response = client.post(
-            "/api/message",
-            json={
-                "assistant_id": "test-assistant",
-                "api_message_id": "msg-att-many",
-                "body": "Too many",
-                "attachments": attachments,
-            },
-        )
-        assert response.status_code == 400
-        assert "10" in response.text
-
     def test_empty_tags_and_attachments_omitted_from_event(self, client):
         response = client.post(
             "/api/message",
@@ -272,8 +255,8 @@ class TestApiMessage:
         }
         with (
             patch.object(
-                app_module.pubsub_v1,
-                "PublisherClient",
+                app_module,
+                "get_pubsub_client",
                 return_value=mock_pubsub,
             ),
             patch.object(

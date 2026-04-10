@@ -295,7 +295,6 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
   - `POST /whatsapp/create`
   - `DELETE /whatsapp/delete`
   - `POST /whatsapp/assign`
-  - `GET /whatsapp/conflict`
 
 ### Gmail (`/gmail`)
 
