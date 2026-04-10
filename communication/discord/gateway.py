@@ -124,6 +124,9 @@ async def _ensure_job_running(assistant_data: dict, medium: str = "discord") -> 
                     "assistant_whatsapp_number": assistant_data.get(
                         "assistant_whatsapp_number", ""
                     ),
+                    "assistant_discord_bot_id": assistant_data.get(
+                        "assistant_discord_bot_id", ""
+                    ),
                     "voice_provider": assistant_data.get("voice_provider", ""),
                     "voice_id": assistant_data.get("voice_id", ""),
                     "desktop_mode": assistant_data.get("desktop_mode", "ubuntu"),
