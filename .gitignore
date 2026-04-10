@@ -6,3 +6,7 @@ build/
 .venv/
 .env
 *.secrets.json
+*.csv
+*.xlsx
+logs/*
+*Zone.Identifier
