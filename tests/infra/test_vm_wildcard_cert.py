@@ -216,3 +216,55 @@ class TestPoolVmWildcardCert:
 
         assert "tls-fullchain" not in meta
         assert "tls-privkey" not in meta
+
+    @patch(_COMMON_PATCHES[0])
+    @patch(_COMMON_PATCHES[1])
+    @patch(_COMMON_PATCHES[2])
+    @patch(_COMMON_PATCHES[3])
+    def test_provision_waits_for_static_ip_before_creating_dns_record(
+        self,
+        mock_get_secret,
+        mock_client_cls,
+        mock_dns,
+        mock_addr,
+    ):
+        from communication.infra.vm_helpers import _pool_hostname, provision_pool_vm
+
+        def _secret(name, **kw):
+            return {
+                "VM_WILDCARD_FULLCHAIN": _FAKE_CERT,
+                "VM_WILDCARD_PRIVKEY": _FAKE_KEY,
+                "DEVBOT_GITHUB_TOKEN": "ghp_fake",
+            }.get(name)
+
+        mock_get_secret.side_effect = _secret
+
+        address_op = MagicMock()
+        mock_addr_instance = MagicMock()
+        mock_addr_instance.insert.return_value = address_op
+        mock_addr_instance.get.side_effect = [
+            MagicMock(address="", status="RESERVING"),
+            MagicMock(address="10.0.0.1", status="RESERVED"),
+        ]
+        mock_addr.return_value = mock_addr_instance
+
+        mock_zone = MagicMock()
+        mock_zone.list_resource_record_sets.return_value = []
+        mock_dns_client = MagicMock()
+        mock_dns_client.zone.return_value = mock_zone
+        mock_dns.return_value = mock_dns_client
+
+        instance_op = MagicMock()
+        mock_client_cls.return_value.insert.return_value = instance_op
+
+        with patch("communication.infra.vm_helpers.time.sleep", return_value=None):
+            provision_pool_vm("ubuntu", n=99)
+
+        expected_fqdn = f"{_pool_hostname('ubuntu', 99)}."
+        mock_zone.resource_record_set.assert_called_once_with(
+            expected_fqdn,
+            "A",
+            300,
+            ["10.0.0.1"],
+        )
+        assert mock_addr_instance.get.call_count == 2
