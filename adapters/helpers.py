@@ -125,6 +125,7 @@ def get_assistant(
         "assistant_number": "",
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
+        "assistant_discord_bot_id": "",
         "desktop_mode": "ubuntu",
         "user_desktop_mode": None,
         "user_desktop_filesys_sync": False,
@@ -195,6 +196,7 @@ def get_assistant(
         "assistant_number": assistants[0]["phone"] or "",
         "assistant_whatsapp_number": assistants[0].get("assistant_whatsapp_number")
         or "",
+        "assistant_discord_bot_id": assistants[0].get("assistant_discord_bot_id", ""),
         "assistant_email": assistants[0]["email"] or "",
         "user_number": assistants[0]["user_phone"] or "",
         "user_whatsapp_number": assistants[0].get("user_whatsapp_number") or "",
@@ -765,6 +767,10 @@ def start_unity_job(assistant: dict, medium: str) -> None:
                 "user_whatsapp_number": assistant["user_whatsapp_number"],
                 "assistant_whatsapp_number": assistant.get(
                     "assistant_whatsapp_number",
+                    "",
+                ),
+                "assistant_discord_bot_id": assistant.get(
+                    "assistant_discord_bot_id",
                     "",
                 ),
                 "voice_provider": assistant["voice_provider"],
