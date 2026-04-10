@@ -1,9 +1,9 @@
 """Manages the pool of Discord bot Gateway connections.
 
-Bots are registered at runtime via the /discord/create endpoint and
-persisted as a local in-memory registry. On service startup, all
-previously registered bots are reconnected.  A periodic sync with
-Orchestra handles token rotation, deactivation, and new pool additions.
+On startup the canonical pool state is fetched from Orchestra via
+``sync_from_orchestra()``.  Orchestra also calls ``POST /discord/sync``
+after pool mutations (token rotation, deactivation, new bots).  A
+lightweight health-check loop handles transient disconnects between syncs.
 """
 
 import asyncio
@@ -104,7 +104,9 @@ async def sync_from_orchestra() -> int:
             continue
 
         existing_token = get_bot_token(bid)
-        if existing_token != token:
+        existing_entry = _bots.get(bid)
+        has_fatal = existing_entry and existing_entry[1]._fatal_close_code is not None
+        if existing_token != token or has_fatal:
             await disconnect_bot(bid)
             await connect_bot(bid, token)
 
@@ -131,9 +133,12 @@ async def health_check() -> None:
             continue
         if not conn.connected:
             logger.warning(f"Bot {bot_id} disconnected, reconnecting")
-            new_conn = GatewayConnection(bot_id, token)
-            _bots[bot_id] = (token, new_conn)
-            await new_conn.start()
+            try:
+                new_conn = GatewayConnection(bot_id, token)
+                _bots[bot_id] = (token, new_conn)
+                await new_conn.start()
+            except Exception:
+                logger.exception(f"Bot {bot_id}: health-check reconnect failed")
 
 
 async def start_health_check_loop(interval: float = 30.0) -> None:

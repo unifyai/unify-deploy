@@ -73,7 +73,7 @@ async def _fetch_assistant(assistant_id: str) -> dict | None:
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{SETTINGS.orchestra_url}/admin/assistant",
-            params={"assistant_id": assistant_id},
+            params={"agent_id": assistant_id},
             headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
             timeout=10.0,
         )
@@ -272,13 +272,18 @@ class GatewayConnection:
             self._http_session = aiohttp.ClientSession()
 
         url = self._resume_url or DISCORD_GATEWAY_URL
-        self._ws = await self._http_session.ws_connect(url)
+        self._ws = await asyncio.wait_for(
+            self._http_session.ws_connect(url), timeout=30.0
+        )
         self._heartbeat_acked = True
 
-        hello = await self._ws.receive_json()
+        hello = await asyncio.wait_for(self._ws.receive_json(), timeout=30.0)
         if hello.get("op") != 10:
             logger.error(f"Bot {self.bot_id}: expected HELLO (op 10), got {hello}")
-            return
+            await self._ws.close(code=1000)
+            raise ConnectionError(
+                f"Bot {self.bot_id}: did not receive HELLO, got op={hello.get('op')}"
+            )
         self._heartbeat_interval = hello["d"]["heartbeat_interval"] / 1000.0
 
         if resume and self._session_id:
