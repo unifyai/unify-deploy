@@ -1028,7 +1028,7 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
 
 def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
     client = MagicMock()
-    client.delete.return_value = SimpleNamespace(result=lambda: None)
+    deleted_vm_names = []
     stopped_vms = [
         SimpleNamespace(
             name="unity-pool-ubuntu-14-preview",
@@ -1075,6 +1075,13 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
         "_log_vm_pool_event",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_delete_pool_vm_instance",
+        lambda _client, vm_name, vm_type=None: deleted_vm_names.append(
+            (vm_name, vm_type),
+        ),
+    )
 
     result = vm_helpers_module.trim_stopped_pool_reserve("ubuntu")
 
@@ -1091,13 +1098,148 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
         "Deleted excess stopped reserve VM unity-pool-ubuntu-17-preview",
     ]
     assert result["errors"] == []
-    assert [call.kwargs["instance"] for call in client.delete.call_args_list] == [
-        "unity-pool-ubuntu-16-preview",
-        "unity-pool-ubuntu-17-preview",
+    assert deleted_vm_names == [
+        ("unity-pool-ubuntu-16-preview", "ubuntu"),
+        ("unity-pool-ubuntu-17-preview", "ubuntu"),
     ]
 
 
+def test_purge_quarantined_vms_releases_network_resources(monkeypatch):
+    quarantined_vm = SimpleNamespace(
+        name=vm_helpers_module._pool_vm_name("windows", 12),
+        status="TERMINATED",
+    )
+    client = MagicMock()
+    client.list.return_value = [quarantined_vm]
+    deleted = []
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: client,
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_delete_pool_vm_instance",
+        lambda _client, vm_name, vm_type=None: deleted.append((vm_name, vm_type)),
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_log_vm_pool_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = vm_helpers_module.purge_quarantined_vms("windows")
+
+    assert deleted == [(quarantined_vm.name, "windows")]
+    assert result == {"found": 1, "deleted": [quarantined_vm.name], "errors": []}
+
+
+def test_cleanup_orphaned_pool_network_resources_deletes_old_current_env_leaks(
+    monkeypatch,
+):
+    old_timestamp = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+    recent_timestamp = (datetime.now(UTC) - timedelta(minutes=2)).isoformat()
+    current_ip_name = vm_helpers_module._pool_ip_name("windows", 11)
+    current_vm_name = vm_helpers_module._pool_vm_name("windows", 11)
+    attached_ip_name = vm_helpers_module._pool_ip_name("windows", 12)
+    attached_vm_name = vm_helpers_module._pool_vm_name("windows", 12)
+    foreign_suffix = (
+        "-staging"
+        if vm_helpers_module.SETTINGS.env_suffix != "-staging"
+        else "-preview"
+    )
+    foreign_ip_name = (
+        f"{vm_helpers_module.POOL_VM_NAME_PREFIX}-windows-ip-77{foreign_suffix}"
+    )
+
+    instance_client = MagicMock()
+    instance_client.list.return_value = [SimpleNamespace(name=attached_vm_name)]
+    address_client = MagicMock()
+    address_client.list.return_value = [
+        SimpleNamespace(
+            name=current_ip_name,
+            status="RESERVED",
+            users=[],
+            creation_timestamp=old_timestamp,
+        ),
+        SimpleNamespace(
+            name=attached_ip_name,
+            status="RESERVED",
+            users=[],
+            creation_timestamp=old_timestamp,
+        ),
+        SimpleNamespace(
+            name=vm_helpers_module._pool_ip_name("windows", 13),
+            status="RESERVED",
+            users=[],
+            creation_timestamp=recent_timestamp,
+        ),
+        SimpleNamespace(
+            name=foreign_ip_name,
+            status="RESERVED",
+            users=[],
+            creation_timestamp=old_timestamp,
+        ),
+    ]
+    deleted_dns = []
+    deleted_ips = []
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.InstancesClient",
+        lambda: instance_client,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.AddressesClient",
+        lambda: address_client,
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_delete_pool_dns_record",
+        lambda hostname: deleted_dns.append(hostname) or True,
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_delete_pool_static_ip",
+        lambda ip_name: deleted_ips.append(ip_name) or True,
+    )
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "_log_vm_pool_event",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = vm_helpers_module.cleanup_orphaned_pool_network_resources("windows")
+
+    assert deleted_ips == [current_ip_name]
+    assert deleted_dns == [
+        vm_helpers_module._pool_vm_hostname(current_vm_name, "windows"),
+    ]
+    assert result == {
+        "vm_type": "windows",
+        "found": 1,
+        "deleted_addresses": [current_ip_name],
+        "deleted_dns": [
+            vm_helpers_module._pool_vm_hostname(current_vm_name, "windows"),
+        ],
+        "errors": [],
+        "actions": [
+            f"Deleted stale pool DNS {vm_helpers_module._pool_vm_hostname(current_vm_name, 'windows')}",
+            f"Deleted orphaned pool static IP {current_ip_name}",
+        ],
+    }
+
+
 def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
+    monkeypatch.setattr(
+        vm_helpers_module,
+        "cleanup_orphaned_pool_network_resources",
+        lambda *_args, **_kwargs: {
+            "actions": ["deleted orphaned IP"],
+            "deleted_addresses": ["unity-pool-ubuntu-ip-18-preview"],
+            "deleted_dns": ["unity-pool-ubuntu-18-preview.vm.unify.ai"],
+            "errors": [],
+        },
+    )
     monkeypatch.setattr(
         vm_helpers_module,
         "_scrub_inconsistent_vms",
@@ -1128,11 +1270,15 @@ def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
     assert result == {
         "vm_type": "ubuntu",
         "actions": [
+            "deleted orphaned IP",
             "scrubbed ghost",
             "replenished idle",
             "trimmed idle",
             "deleted old reserve",
         ],
+        "orphaned_static_ips_deleted": ["unity-pool-ubuntu-ip-18-preview"],
+        "orphaned_dns_deleted": ["unity-pool-ubuntu-18-preview.vm.unify.ai"],
+        "orphaned_network_errors": [],
         "stopped_reserve_deleted": ["unity-pool-ubuntu-17-preview"],
         "stopped_reserve_kept": ["unity-pool-ubuntu-14-preview"],
     }

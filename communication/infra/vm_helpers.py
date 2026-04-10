@@ -79,6 +79,11 @@ POOL_PROGRESS_EPOCH_LABEL = "pool-progress-epoch"
 RELEASE_TRIGGER_METADATA_KEYS = ("unify-key", "vnc-password", "ssh-public-key")
 RELEASE_GENERATION_METADATA_KEY = "release-generation"
 MAX_RELEASE_GENERATION = 2
+POOL_STATIC_IP_READY_TIMEOUT_SECONDS = 15.0
+POOL_STATIC_IP_READY_POLL_INTERVAL_SECONDS = 0.5
+POOL_STATIC_IP_DELETE_MAX_ATTEMPTS = 5
+POOL_STATIC_IP_DELETE_RETRY_SECONDS = 1.0
+POOL_ORPHANED_NETWORK_RESOURCE_GRACE_SECONDS = 600.0
 RECYCLEABLE_STALE_POOL_ROLES = frozenset(
     {
         "idle",
@@ -946,6 +951,34 @@ def _pool_vm_hostname(vm_name: str, vm_type: str) -> str:
     return _pool_hostname(vm_type, vm_number)
 
 
+def _pool_vm_type_from_name(vm_name: str) -> Optional[str]:
+    prefix = f"{POOL_VM_NAME_PREFIX}-"
+    if not vm_name.startswith(prefix):
+        return None
+    remainder = vm_name[len(prefix) :]
+    for vm_type in ("ubuntu", "windows"):
+        if remainder.startswith(f"{vm_type}-"):
+            return vm_type
+    return None
+
+
+def _pool_ip_name_for_vm(vm_name: str, vm_type: str) -> Optional[str]:
+    vm_number = _pool_vm_number(vm_name, vm_type)
+    if vm_number is None:
+        return None
+    return _pool_ip_name(vm_type, vm_number)
+
+
+def _current_env_pool_vm_name_from_ip_name(ip_name: str, vm_type: str) -> Optional[str]:
+    prefix = f"{POOL_VM_NAME_PREFIX}-{vm_type}-ip-"
+    if not ip_name.startswith(prefix):
+        return None
+    vm_name = ip_name.replace("-ip-", "-", 1)
+    if _pool_vm_number(vm_name, vm_type) is None:
+        return None
+    return vm_name
+
+
 def _assistant_disk_name(assistant_id: str) -> str:
     sanitized = assistant_id.lower().replace("_", "-")
     return f"unity-disk-{sanitized}{SETTINGS.env_suffix}"
@@ -978,6 +1011,141 @@ def _pool_bootstrap_metadata_updates(vm_name: str, vm_type: str) -> Dict[str, st
         metadata_updates["tls-privkey"] = tls_key
 
     return metadata_updates
+
+
+def _wait_for_pool_static_ip(ip_client, ip_name: str) -> str:
+    """Return a reserved pool IP once GCE reports a concrete address value."""
+
+    deadline = time.monotonic() + POOL_STATIC_IP_READY_TIMEOUT_SECONDS
+    last_status = "unknown"
+    while True:
+        try:
+            ip_result = ip_client.get(
+                project=SETTINGS.vm_project_id,
+                region=SETTINGS.vm_region,
+                address=ip_name,
+            )
+        except NotFound:
+            static_ip = ""
+            last_status = "not_found"
+        else:
+            static_ip = str(getattr(ip_result, "address", "") or "")
+            last_status = str(getattr(ip_result, "status", "") or "unknown")
+            if static_ip:
+                return static_ip
+
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Static IP {ip_name} did not obtain an address before timeout "
+                f"(status={last_status})",
+            )
+        time.sleep(POOL_STATIC_IP_READY_POLL_INTERVAL_SECONDS)
+
+
+def _delete_pool_dns_record(hostname: str) -> bool:
+    """Delete the pool hostname's A record if it still exists."""
+
+    dns_client = dns.Client(project=SETTINGS.dns_project_id)
+    zone = dns_client.zone(DNS_ZONE_NAME)
+    fqdn = f"{hostname}."
+    for record in zone.list_resource_record_sets():
+        if record.name == fqdn and record.record_type == "A":
+            changes = zone.changes()
+            changes.delete_record_set(record)
+            changes.create()
+            logger.info("Deleted DNS A record: %s", hostname)
+            return True
+    return False
+
+
+def _delete_pool_static_ip(ip_name: str) -> bool:
+    """Delete a pool VM's reserved static IP, retrying brief detach lag."""
+
+    ip_client = compute_v1.AddressesClient()
+    last_error: Exception | None = None
+    for attempt in range(POOL_STATIC_IP_DELETE_MAX_ATTEMPTS):
+        try:
+            ip_client.delete(
+                project=SETTINGS.vm_project_id,
+                region=SETTINGS.vm_region,
+                address=ip_name,
+            ).result()
+            logger.info("Deleted static IP: %s", ip_name)
+            return True
+        except NotFound:
+            return False
+        except Exception as exc:
+            last_error = exc
+            if attempt == POOL_STATIC_IP_DELETE_MAX_ATTEMPTS - 1:
+                break
+            logger.info(
+                "Retrying static IP delete for %s (%s/%s): %s",
+                ip_name,
+                attempt + 1,
+                POOL_STATIC_IP_DELETE_MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(POOL_STATIC_IP_DELETE_RETRY_SECONDS)
+    raise RuntimeError(f"Failed to delete static IP {ip_name}: {last_error}")
+
+
+def _cleanup_deleted_pool_vm_network_resources(
+    vm_name: str,
+    *,
+    vm_type: str | None = None,
+) -> Dict[str, Any]:
+    """Best-effort cleanup of stale DNS and static IP after deleting a pool VM."""
+
+    resolved_vm_type = vm_type or _pool_vm_type_from_name(vm_name)
+    if not resolved_vm_type:
+        return {
+            "vm_name": vm_name,
+            "vm_type": None,
+            "hostname": None,
+            "ip_name": None,
+            "dns_deleted": False,
+            "ip_deleted": False,
+            "errors": [],
+        }
+
+    hostname = _pool_vm_hostname(vm_name, resolved_vm_type)
+    ip_name = _pool_ip_name_for_vm(vm_name, resolved_vm_type)
+    errors: list[dict[str, str]] = []
+    dns_deleted = False
+    ip_deleted = False
+
+    try:
+        dns_deleted = _delete_pool_dns_record(hostname)
+    except Exception as exc:
+        logger.error("Failed to delete stale DNS record for %s: %s", hostname, exc)
+        errors.append({"resource": hostname, "error": str(exc)})
+
+    if ip_name:
+        try:
+            ip_deleted = _delete_pool_static_ip(ip_name)
+        except Exception as exc:
+            logger.error("Failed to delete stale static IP %s: %s", ip_name, exc)
+            errors.append({"resource": ip_name, "error": str(exc)})
+
+    _log_vm_pool_event(
+        "deleted_vm_network_cleanup",
+        vm_name=vm_name,
+        vm_type=resolved_vm_type,
+        hostname=hostname,
+        ip_name=ip_name,
+        dns_deleted=dns_deleted,
+        ip_deleted=ip_deleted,
+        cleanup_errors=len(errors),
+    )
+    return {
+        "vm_name": vm_name,
+        "vm_type": resolved_vm_type,
+        "hostname": hostname,
+        "ip_name": ip_name,
+        "dns_deleted": dns_deleted,
+        "ip_deleted": ip_deleted,
+        "errors": errors,
+    }
 
 
 def find_vm_with_disk(assistant_id: str) -> Optional[str]:
@@ -1174,12 +1342,7 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
     except Conflict:
         logger.info(f"Static IP {ip_name} already exists, reusing")
 
-    ip_result = ip_client.get(
-        project=SETTINGS.vm_project_id,
-        region=SETTINGS.vm_region,
-        address=ip_name,
-    )
-    static_ip = ip_result.address
+    static_ip = _wait_for_pool_static_ip(ip_client, ip_name)
 
     # Create DNS A record
     dns_client = dns.Client(project=SETTINGS.dns_project_id)
@@ -1838,12 +2001,18 @@ def _update_instance_metadata(
             raise
 
 
-def _delete_pool_vm_instance(client, vm_name: str) -> None:
+def _delete_pool_vm_instance(
+    client,
+    vm_name: str,
+    *,
+    vm_type: str | None = None,
+) -> None:
     client.delete(
         project=SETTINGS.vm_project_id,
         zone=SETTINGS.vm_zone,
         instance=vm_name,
     ).result()
+    _cleanup_deleted_pool_vm_network_resources(vm_name, vm_type=vm_type)
 
 
 def _recycle_pool_vm_instance(client, vm, *, reason: str) -> str:
@@ -1852,7 +2021,7 @@ def _recycle_pool_vm_instance(client, vm, *, reason: str) -> str:
     assistant_id = labels.get(ASSISTANT_ID_LABEL, "") or None
     contract_generation = labels.get(POOL_CONTRACT_GENERATION_LABEL, "") or None
 
-    _delete_pool_vm_instance(client, vm.name)
+    _delete_pool_vm_instance(client, vm.name, vm_type=vm_type)
     _log_vm_pool_event(
         "contract_recycled",
         vm_name=vm.name,
@@ -2390,11 +2559,7 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
 
     def _delete_one(vm) -> Optional[str]:
         try:
-            client.delete(
-                project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
-                instance=vm.name,
-            ).result()
+            _delete_pool_vm_instance(client, vm.name, vm_type=vm_type)
             _log_vm_pool_event(
                 "quarantined_purged",
                 vm_name=vm.name,
@@ -2417,6 +2582,95 @@ def purge_quarantined_vms(vm_type: str = "ubuntu") -> Dict[str, Any]:
                 deleted.append(result)
 
     return {"found": len(quarantined), "deleted": deleted, "errors": errors}
+
+
+def cleanup_orphaned_pool_network_resources(vm_type: str) -> Dict[str, Any]:
+    """Delete old reserved pool IPs and stale DNS for missing current-env VMs."""
+
+    instance_client = compute_v1.InstancesClient()
+    address_client = compute_v1.AddressesClient()
+    request = compute_v1.ListInstancesRequest(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+    )
+    existing_names = {vm.name for vm in instance_client.list(request=request)}
+    cutoff = (
+        datetime.now(timezone.utc).timestamp()
+        - POOL_ORPHANED_NETWORK_RESOURCE_GRACE_SECONDS
+    )
+
+    candidates: list[dict[str, str]] = []
+    for address in address_client.list(
+        project=SETTINGS.vm_project_id,
+        region=SETTINGS.vm_region,
+    ):
+        ip_name = str(getattr(address, "name", "") or "")
+        vm_name = _current_env_pool_vm_name_from_ip_name(ip_name, vm_type)
+        if not vm_name:
+            continue
+        if str(getattr(address, "status", "") or "") != "RESERVED":
+            continue
+        if getattr(address, "users", None):
+            continue
+        if vm_name in existing_names:
+            continue
+        created_at = _parse_gce_timestamp(getattr(address, "creation_timestamp", None))
+        if created_at and created_at.timestamp() >= cutoff:
+            continue
+        candidates.append(
+            {
+                "ip_name": ip_name,
+                "vm_name": vm_name,
+                "hostname": _pool_vm_hostname(vm_name, vm_type),
+            },
+        )
+
+    deleted_addresses: list[str] = []
+    deleted_dns: list[str] = []
+    errors: list[dict[str, str]] = []
+    actions: list[str] = []
+    for candidate in candidates:
+        hostname = candidate["hostname"]
+        ip_name = candidate["ip_name"]
+        vm_name = candidate["vm_name"]
+        try:
+            if _delete_pool_dns_record(hostname):
+                deleted_dns.append(hostname)
+                actions.append(f"Deleted stale pool DNS {hostname}")
+        except Exception as exc:
+            logger.error("Failed to delete stale pool DNS %s: %s", hostname, exc)
+            errors.append({"resource": hostname, "error": str(exc)})
+
+        try:
+            if _delete_pool_static_ip(ip_name):
+                deleted_addresses.append(ip_name)
+                actions.append(f"Deleted orphaned pool static IP {ip_name}")
+        except Exception as exc:
+            logger.error(
+                "Failed to delete orphaned pool static IP %s: %s",
+                ip_name,
+                exc,
+            )
+            errors.append({"resource": ip_name, "error": str(exc)})
+
+        _log_vm_pool_event(
+            "orphaned_network_resource_reconciled",
+            vm_name=vm_name,
+            vm_type=vm_type,
+            hostname=hostname,
+            ip_name=ip_name,
+            dns_deleted=hostname in deleted_dns,
+            ip_deleted=ip_name in deleted_addresses,
+        )
+
+    return {
+        "vm_type": vm_type,
+        "found": len(candidates),
+        "deleted_addresses": deleted_addresses,
+        "deleted_dns": deleted_dns,
+        "errors": errors,
+        "actions": actions,
+    }
 
 
 def release_pool_vm(
@@ -3598,7 +3852,7 @@ def _trim_stopped_pool_reserve_inner(vm_type: str) -> Dict[str, Any]:
     def _delete_one(vm) -> str | None:
         reference_time = _stopped_pool_reference_time(vm)
         try:
-            _delete_pool_vm_instance(client, vm.name)
+            _delete_pool_vm_instance(client, vm.name, vm_type=vm_type)
             _log_vm_pool_event(
                 "stopped_reserve_pruned",
                 vm_name=vm.name,
@@ -3755,7 +4009,9 @@ def _scrub_inconsistent_vms(vm_type: str) -> list[str]:
 
 
 def rebalance_pool(vm_type: str) -> Dict[str, Any]:
-    """Full rebalance: scrub ghosts, replenish, trim, then prune excess reserve."""
+    """Full rebalance with orphan cleanup, scrub, replenish, trim, and reserve prune."""
+
+    orphan_cleanup_result = cleanup_orphaned_pool_network_resources(vm_type)
     scrub_actions = _scrub_inconsistent_vms(vm_type)
     replenish_result = replenish_pool(vm_type)
     trim_result = trim_pool(vm_type)
@@ -3763,11 +4019,15 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
     return {
         "vm_type": vm_type,
         "actions": (
-            scrub_actions
+            orphan_cleanup_result["actions"]
+            + scrub_actions
             + replenish_result["actions"]
             + trim_result["actions"]
             + reserve_trim_result["actions"]
         ),
+        "orphaned_static_ips_deleted": orphan_cleanup_result["deleted_addresses"],
+        "orphaned_dns_deleted": orphan_cleanup_result["deleted_dns"],
+        "orphaned_network_errors": orphan_cleanup_result["errors"],
         "stopped_reserve_deleted": reserve_trim_result["deleted"],
         "stopped_reserve_kept": reserve_trim_result["kept"],
     }
