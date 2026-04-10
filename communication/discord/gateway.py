@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import platform
+import random
 import re
 import time
 
@@ -27,6 +28,11 @@ INTENTS_DIRECT_MESSAGES = 1 << 12
 INTENTS_GUILD_MESSAGES = 1 << 9
 INTENTS_MESSAGE_CONTENT = 1 << 15
 BOT_INTENTS = INTENTS_DIRECT_MESSAGES | INTENTS_GUILD_MESSAGES | INTENTS_MESSAGE_CONTENT
+
+# Discord close codes where reconnecting is pointless (config/auth errors).
+FATAL_CLOSE_CODES = {4004, 4010, 4011, 4013, 4014}
+# Close codes that require a fresh IDENTIFY (session state is invalid).
+FRESH_IDENTIFY_CODES = {4003, 4007, 4009}
 
 _pubsub_client: pubsub_v1.PublisherClient | None = None
 
@@ -237,6 +243,8 @@ class GatewayConnection:
         self._bot_user_id: str | None = None
         self._running = False
         self._heartbeat_acked = True
+        self._reconnecting = False
+        self._fatal_close_code: int | None = None
 
     @property
     def connected(self) -> bool:
@@ -310,7 +318,16 @@ class GatewayConnection:
         )
 
     async def _heartbeat_loop(self) -> None:
-        """Send periodic heartbeats; reconnect on zombie detection."""
+        """Send periodic heartbeats; reconnect on zombie detection.
+
+        The first heartbeat uses a jittered delay per Discord docs to avoid
+        thundering-herd on mass reconnect.
+        """
+        await asyncio.sleep(self._heartbeat_interval * random.random())
+        if not self._running or not self._ws or self._ws.closed:
+            return
+        await self._ws.send_json({"op": 1, "d": self._seq})
+
         while self._running:
             await asyncio.sleep(self._heartbeat_interval)
             if not self._heartbeat_acked:
@@ -332,9 +349,26 @@ class GatewayConnection:
                 aiohttp.WSMsgType.ERROR,
                 aiohttp.WSMsgType.CLOSING,
             ):
-                logger.warning(f"Bot {self.bot_id}: WebSocket closed/error")
-                if self._running:
-                    await self._reconnect()
+                close_code = self._ws.close_code
+                logger.warning(
+                    f"Bot {self.bot_id}: WebSocket closed (code={close_code})"
+                )
+                if close_code in FATAL_CLOSE_CODES:
+                    logger.error(
+                        f"Bot {self.bot_id}: fatal close code {close_code}, "
+                        "not reconnecting"
+                    )
+                    self._running = False
+                    self._fatal_close_code = close_code
+                    return
+                if not self._running:
+                    return
+                if close_code in FRESH_IDENTIFY_CODES:
+                    self._session_id = None
+                    self._seq = None
+                    await self._reconnect(resume=False)
+                else:
+                    await self._reconnect(resume=True)
                 return
 
     async def _handle_event(self, data: dict) -> None:
@@ -462,21 +496,37 @@ class GatewayConnection:
         )
 
     async def _reconnect(self, resume: bool = True) -> None:
-        """Tear down and re-establish the Gateway connection."""
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-        if self._ws and not self._ws.closed:
-            await self._ws.close(code=4000)
+        """Tear down and re-establish the Gateway connection.
 
-        backoff = 1.0
-        while self._running:
-            try:
-                await self._connect(resume=resume)
-                logger.info(f"Bot {self.bot_id}: reconnected (resume={resume})")
-                return
-            except Exception:
-                logger.exception(
-                    f"Bot {self.bot_id}: reconnect failed, retrying in {backoff}s",
-                )
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60.0)
+        Uses ``asyncio.current_task()`` to avoid cancelling the calling task
+        (e.g. heartbeat loop detecting a zombie cancelling itself before the
+        reconnect completes).  A ``_reconnecting`` flag prevents concurrent
+        reconnect attempts from racing.
+        """
+        if self._reconnecting:
+            return
+        self._reconnecting = True
+        try:
+            current = asyncio.current_task()
+            if self._heartbeat_task and self._heartbeat_task is not current:
+                self._heartbeat_task.cancel()
+            if self._receive_task and self._receive_task is not current:
+                self._receive_task.cancel()
+            if self._ws and not self._ws.closed:
+                await self._ws.close(code=4000)
+
+            backoff = 1.0
+            while self._running:
+                try:
+                    await self._connect(resume=resume)
+                    logger.info(f"Bot {self.bot_id}: reconnected (resume={resume})")
+                    return
+                except Exception:
+                    logger.exception(
+                        f"Bot {self.bot_id}: reconnect failed, "
+                        f"retrying in {backoff}s",
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60.0)
+        finally:
+            self._reconnecting = False

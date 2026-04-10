@@ -2,12 +2,16 @@
 
 Bots are registered at runtime via the /discord/create endpoint and
 persisted as a local in-memory registry. On service startup, all
-previously registered bots are reconnected.
+previously registered bots are reconnected.  A periodic sync with
+Orchestra handles token rotation, deactivation, and new pool additions.
 """
 
 import asyncio
 import logging
 
+import httpx
+
+from common.settings import SETTINGS
 from communication.discord.gateway import GatewayConnection
 
 logger = logging.getLogger(__name__)
@@ -47,19 +51,84 @@ def get_bot_token(bot_id: str) -> str | None:
     return entry[0] if entry else None
 
 
+def get_all_bot_ids() -> list[str]:
+    """Return all bot IDs currently in the local registry."""
+    return list(_bots.keys())
+
+
 def get_all_status() -> dict[str, dict]:
     """Return connection status for every bot in the pool."""
     return {
         bot_id: {
             "connected": conn.connected,
+            "fatal_close_code": conn._fatal_close_code,
         }
         for bot_id, (_, conn) in _bots.items()
     }
 
 
+async def sync_from_orchestra() -> int:
+    """Fetch the canonical bot pool from Orchestra and reconcile local state.
+
+    Connects new bots, rotates tokens, disconnects deactivated/removed bots.
+    Returns the number of bots in the Orchestra pool.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{SETTINGS.orchestra_url}/admin/discord/pool",
+                params={"include_auth": "true"},
+                headers={
+                    "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                },
+                timeout=15.0,
+            )
+        if resp.status_code >= 400:
+            logger.warning(f"Pool sync failed: {resp.status_code}")
+            return 0
+    except Exception:
+        logger.exception("Pool sync request failed")
+        return 0
+
+    orchestra_bots = resp.json()
+    orchestra_bot_ids: set[str] = set()
+
+    for bot_data in orchestra_bots:
+        bid = bot_data["bot_id"]
+        token = bot_data.get("auth_token")
+        status = bot_data.get("status", "active")
+        orchestra_bot_ids.add(bid)
+
+        if status != "active" or not token:
+            await disconnect_bot(bid)
+            continue
+
+        existing_token = get_bot_token(bid)
+        if existing_token != token:
+            await disconnect_bot(bid)
+            await connect_bot(bid, token)
+
+    for bid in list(_bots.keys()):
+        if bid not in orchestra_bot_ids:
+            await disconnect_bot(bid)
+
+    logger.info(f"Synced {len(orchestra_bot_ids)} Discord pool bots")
+    return len(orchestra_bot_ids)
+
+
 async def health_check() -> None:
-    """Reconnect any bots whose Gateway connection has dropped."""
+    """Reconnect any bots whose Gateway connection has dropped.
+
+    Skips bots that hit a fatal Discord close code (e.g. 4004 invalid token)
+    — those require operator intervention or a pool sync to fix.
+    """
     for bot_id, (token, conn) in list(_bots.items()):
+        if conn._fatal_close_code:
+            logger.error(
+                f"Bot {bot_id} has fatal close code {conn._fatal_close_code}, "
+                "skipping reconnect (needs pool sync or operator fix)"
+            )
+            continue
         if not conn.connected:
             logger.warning(f"Bot {bot_id} disconnected, reconnecting")
             new_conn = GatewayConnection(bot_id, token)
@@ -68,7 +137,12 @@ async def health_check() -> None:
 
 
 async def start_health_check_loop(interval: float = 30.0) -> None:
-    """Periodically verify all bots are connected."""
+    """Periodically verify all bots are connected.
+
+    Pool-level sync (token rotation, deactivation, new bots) is handled by
+    Orchestra calling ``POST /discord/sync`` after mutations — no polling
+    needed here.
+    """
     while True:
         await asyncio.sleep(interval)
         await health_check()

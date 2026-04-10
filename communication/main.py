@@ -24,7 +24,6 @@ from communication.infra.views import (
 )
 from communication.infra.helpers import setup_kubernetes_client
 from communication.social.views import router as social_router
-from common.settings import SETTINGS
 from communication.discord.views import router as discord_router
 from communication.sharepoint.views import router as sharepoint_router
 from communication.unillm import router as unillm_router
@@ -36,35 +35,6 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
-logger = logging.getLogger(__name__)
-
-
-async def _connect_discord_pool_bots() -> None:
-    """Fetch active Discord pool bots from Orchestra and connect them.
-
-    Called at startup so inbound DMs are handled immediately, even after
-    a cold restart of the comms service.
-    """
-    import httpx
-    from communication.discord import bot_manager
-
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"{SETTINGS.orchestra_url}/admin/discord/pool",
-                params={"include_auth": "true"},
-                headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-                timeout=15.0,
-            )
-        if resp.status_code >= 400:
-            logger.warning(f"Failed to fetch Discord pool bots: {resp.status_code}")
-            return
-        for bot in resp.json():
-            if bot.get("auth_token") and bot.get("status") == "active":
-                await bot_manager.connect_bot(bot["bot_id"], bot["auth_token"])
-        logger.info(f"Connected {len(resp.json())} Discord pool bots")
-    except Exception:
-        logger.exception("Error connecting Discord pool bots at startup")
 
 
 @asynccontextmanager
@@ -73,9 +43,12 @@ async def lifespan(app: FastAPI):
     loop.run_in_executor(None, setup_kubernetes_client)
     loop.run_in_executor(None, _get_pubsub_clients)
 
-    await _connect_discord_pool_bots()
+    from communication.discord.bot_manager import (
+        sync_from_orchestra,
+        start_health_check_loop,
+    )
 
-    from communication.discord.bot_manager import start_health_check_loop
+    await sync_from_orchestra()
 
     health_task = asyncio.create_task(start_health_check_loop())
     yield

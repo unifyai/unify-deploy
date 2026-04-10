@@ -159,6 +159,18 @@ async def register_bot(request: Request):
     return {"success": True, "bot_id": bot_id}
 
 
+@router.post("/sync")
+async def sync_pool():
+    """Re-sync bot pool state from Orchestra.
+
+    Connects new/updated bots, disconnects deactivated or removed ones.
+    Called by Orchestra after pool mutations (token rotation, deactivation,
+    new bot addition) or manually for maintenance.
+    """
+    count = await bot_manager.sync_from_orchestra()
+    return {"synced": count, "pool": bot_manager.get_all_status()}
+
+
 @router.delete("/delete")
 async def deregister_bot(request: Request):
     """Deregister a bot and disconnect from the Gateway.
