@@ -1,0 +1,84 @@
+name: Watch Unity Repo & Build Base Image
+on:
+  # Trigger when unity-deploy itself is pushed (deploy/ or base/ changes)
+  push:
+    branches: [main, staging, preview]
+    paths:
+      - 'base/**'
+      - 'deploy/**'
+
+  # Allow manual trigger with optional branch override
+  workflow_dispatch:
+    inputs:
+      unity_branch:
+        description: 'Unity branch to build from (defaults to matching branch)'
+        required: false
+
+  # Poll the Unity repo for changes every 15 minutes
+  schedule:
+    - cron: '*/15 * * * *'
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout unity-deploy
+      uses: actions/checkout@v4
+
+    - name: Authenticate to GCP
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Determine branch and trigger
+      id: config
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.unity_branch }}" ]; then
+          BRANCH="${{ github.event.inputs.unity_branch }}"
+        elif [ "${{ github.event_name }}" = "schedule" ]; then
+          BRANCH="${GITHUB_REF_NAME}"
+        else
+          BRANCH="${GITHUB_REF_NAME}"
+        fi
+
+        case "$BRANCH" in
+          main)    TRIGGER_NAME="unity" ;;
+          staging) TRIGGER_NAME="unity-staging" ;;
+          preview) TRIGGER_NAME="unity-preview" ;;
+          *)       echo "Unknown branch: $BRANCH"; exit 0 ;;
+        esac
+
+        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+        echo "trigger=$TRIGGER_NAME" >> "$GITHUB_OUTPUT"
+
+    - name: Check for new Unity commits (schedule only)
+      if: github.event_name == 'schedule'
+      id: check
+      run: |
+        BRANCH="${{ steps.config.outputs.branch }}"
+        CACHE_FILE=".last-unity-sha-${BRANCH}"
+
+        CURRENT_SHA=$(git ls-remote https://github.com/unifyai/unity.git "refs/heads/${BRANCH}" | cut -f1)
+        LAST_SHA=""
+        if [ -f "$CACHE_FILE" ]; then
+          LAST_SHA=$(cat "$CACHE_FILE")
+        fi
+
+        if [ "$CURRENT_SHA" = "$LAST_SHA" ]; then
+          echo "No new commits on unity/${BRANCH}"
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "New commits on unity/${BRANCH}: ${LAST_SHA:0:8} -> ${CURRENT_SHA:0:8}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Trigger base image build
+      if: github.event_name != 'schedule' || steps.check.outputs.changed == 'true'
+      run: |
+        echo "Triggering ${{ steps.config.outputs.trigger }} build..."
+        gcloud builds triggers run "${{ steps.config.outputs.trigger }}" \
+          --project=${{ secrets.GCP_PROJECT_ID }} \
+          --branch="${{ steps.config.outputs.branch }}"
