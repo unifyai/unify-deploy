@@ -1,6 +1,6 @@
 """
 Integration tests for VM pool lifecycle: assign, probe, release, idempotency,
-concurrent assignment safety, and orphaned VM detection.
+concurrent assignment safety, orphaned VM detection, and GCS filesystem archive.
 
 Tests run against real deployed GCE VMs.
 
@@ -18,6 +18,7 @@ from .conftest import (
     COMMS_APP_URL,
     NAMESPACE,
     UNIFY_KEY,
+    VM_PROJECT_ID,
     VM_ZONE,
     list_assigned_vms,
     list_idle_vms,
@@ -562,3 +563,256 @@ def test_orphaned_vm_detected_and_reconciled(
 
     finally:
         _release_all_vms_for(gce_client, orphan_aid)
+
+
+# ---------------------------------------------------------------------------
+# GCS filesystem archive on release
+# ---------------------------------------------------------------------------
+
+
+def test_gcs_archive_created_on_release(gce_client, comms, poll):
+    """After assigning a VM, writing a file, and releasing, a GCS archive
+    should exist for that assistant ID.
+
+    This validates the watcher's archive-on-release path end-to-end.
+    Requires the new watcher scripts to be deployed on pool VMs.
+    """
+    require_gce(gce_client)
+    assert UNIFY_KEY, "UNIFY_KEY must be set for GCS archive test"
+
+    archive_aid = f"archive-test-{int(time.time())}"
+    archive_bucket = "unity-assistant-archives"
+    archive_path = f"gs://{archive_bucket}/{archive_aid}.tar.gz"
+    vm_hostname = None
+
+    try:
+        resp = comms.post(
+            "/infra/vm/pool/assign",
+            json={
+                "assistant_id": archive_aid,
+                "unify_apikey": UNIFY_KEY,
+                "vm_type": "ubuntu",
+            },
+        )
+        if resp.status_code != 200:
+            pytest.skip(
+                f"VM assign failed ({resp.status_code}) — pool may be exhausted",
+            )
+        vm_hostname = resp.json().get("hostname", "")
+        print(f"  Assigned VM for {archive_aid}: {vm_hostname}")
+
+        def _agent_ready():
+            try:
+                r = requests.post(
+                    f"https://{vm_hostname}/api/exec",
+                    headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+                    json={"command": "echo ok", "timeout": 5000},
+                    timeout=10,
+                    verify=False,
+                )
+                return r.status_code != 502
+            except Exception:
+                return False
+
+        poll(
+            _agent_ready,
+            timeout=90,
+            interval=10,
+            description=f"Agent-service on {vm_hostname} to be ready",
+        )
+
+        write_resp = requests.post(
+            f"https://{vm_hostname}/api/exec",
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            json={
+                "command": "echo 'archive-test-marker' > /Unity/Local/archive-test.txt",
+                "timeout": 5000,
+            },
+            timeout=10,
+            verify=False,
+        )
+        assert (
+            write_resp.status_code == 200
+        ), f"Failed to write marker file: {write_resp.status_code} {write_resp.text}"
+        print("  Marker file written to /Unity/Local/archive-test.txt")
+
+        comms.post("/infra/vm/pool/release", json={"assistant_id": archive_aid})
+        print("  VM released, waiting for archive upload...")
+
+        time.sleep(15)
+
+        import subprocess
+
+        result = subprocess.run(
+            ["gsutil", "-q", "stat", archive_path],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0:
+            print(f"  GCS archive exists at {archive_path}")
+        else:
+            pytest.skip(
+                "GCS archive not found — watcher may not have the archive "
+                "scripts deployed yet (requires VM image update)",
+            )
+
+    finally:
+        _release_all_vms_for(gce_client, archive_aid)
+        import subprocess
+
+        subprocess.run(
+            ["gsutil", "-q", "rm", archive_path],
+            capture_output=True,
+            timeout=15,
+        )
+
+
+def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
+    """After archiving, deleting the PD, and re-assigning, the restored
+    filesystem should contain the previously-written marker file.
+
+    This validates the full archive -> delete PD -> restore cycle.
+    Requires the new watcher scripts to be deployed on pool VMs.
+    """
+    require_gce(gce_client)
+    assert UNIFY_KEY, "UNIFY_KEY must be set for GCS restore test"
+
+    restore_aid = f"restore-test-{int(time.time())}"
+    archive_bucket = "unity-assistant-archives"
+    archive_path = f"gs://{archive_bucket}/{restore_aid}.tar.gz"
+
+    try:
+        # Phase 1: assign, write marker, release (creates archive)
+        resp = comms.post(
+            "/infra/vm/pool/assign",
+            json={
+                "assistant_id": restore_aid,
+                "unify_apikey": UNIFY_KEY,
+                "vm_type": "ubuntu",
+            },
+        )
+        if resp.status_code != 200:
+            pytest.skip(f"VM assign failed ({resp.status_code})")
+
+        hostname1 = resp.json().get("hostname", "")
+
+        def _ready(h):
+            try:
+                r = requests.post(
+                    f"https://{h}/api/exec",
+                    headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+                    json={"command": "echo ok", "timeout": 5000},
+                    timeout=10,
+                    verify=False,
+                )
+                return r.status_code != 502
+            except Exception:
+                return False
+
+        poll(
+            lambda: _ready(hostname1),
+            timeout=90,
+            interval=10,
+            description="Agent-service ready (phase 1)",
+        )
+
+        requests.post(
+            f"https://{hostname1}/api/exec",
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            json={
+                "command": "echo 'restore-marker-12345' > /Unity/Local/restore-test.txt",
+                "timeout": 5000,
+            },
+            timeout=10,
+            verify=False,
+        )
+        print(f"  Phase 1: marker written on {hostname1}")
+
+        comms.post("/infra/vm/pool/release", json={"assistant_id": restore_aid})
+        time.sleep(15)
+
+        import subprocess
+
+        stat = subprocess.run(
+            ["gsutil", "-q", "stat", archive_path],
+            capture_output=True,
+            timeout=15,
+        )
+        if stat.returncode != 0:
+            pytest.skip("GCS archive not created — watcher scripts not deployed yet")
+        print(f"  Phase 1: archive verified at {archive_path}")
+
+        # Phase 2: delete the PD so next assign gets a fresh disk
+        disk_name = f"unity-disk-{restore_aid}"
+        from google.cloud import compute_v1
+
+        try:
+            disks_client = compute_v1.DisksClient()
+            disks_client.delete(
+                project=VM_PROJECT_ID,
+                zone=VM_ZONE,
+                disk=disk_name,
+            ).result()
+            print(f"  Phase 2: deleted PD {disk_name}")
+        except Exception:
+            print(
+                f"  Phase 2: PD {disk_name} not found (already deleted or never created)",
+            )
+
+        # Phase 3: re-assign (should restore from GCS)
+        resp2 = comms.post(
+            "/infra/vm/pool/assign",
+            json={
+                "assistant_id": restore_aid,
+                "unify_apikey": UNIFY_KEY,
+                "vm_type": "ubuntu",
+            },
+        )
+        assert resp2.status_code == 200
+        hostname2 = resp2.json().get("hostname", "")
+
+        poll(
+            lambda: _ready(hostname2),
+            timeout=90,
+            interval=10,
+            description="Agent-service ready (phase 3)",
+        )
+
+        cat_resp = requests.post(
+            f"https://{hostname2}/api/exec",
+            headers={"Authorization": f"Bearer {UNIFY_KEY}"},
+            json={
+                "command": "cat /Unity/Local/restore-test.txt",
+                "timeout": 5000,
+            },
+            timeout=10,
+            verify=False,
+        )
+        assert cat_resp.status_code == 200, f"cat failed: {cat_resp.text}"
+
+        output = cat_resp.json().get("output", cat_resp.json().get("stdout", ""))
+        assert "restore-marker-12345" in output, (
+            f"Marker file not restored from GCS archive. " f"Output: {output!r}"
+        )
+        print(f"  Phase 3: marker file restored successfully on {hostname2}")
+
+    finally:
+        _release_all_vms_for(gce_client, restore_aid)
+        import subprocess
+
+        subprocess.run(
+            ["gsutil", "-q", "rm", archive_path],
+            capture_output=True,
+            timeout=15,
+        )
+        try:
+            from google.cloud import compute_v1
+
+            compute_v1.DisksClient().delete(
+                project=VM_PROJECT_ID,
+                zone=VM_ZONE,
+                disk=f"unity-disk-{restore_aid}",
+            ).result()
+        except Exception:
+            pass

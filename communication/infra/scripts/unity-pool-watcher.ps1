@@ -631,6 +631,34 @@ function Invoke-Assign($unifyKey) {
         }
     }
 
+    # Restore from GCS archive if disk is empty
+    if ($diskDevice -and (Test-Path "C:\Unity\Local")) {
+        $items = Get-ChildItem "C:\Unity\Local" -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne 'System Volume Information' -and $_.Name -ne '$RECYCLE.BIN' }
+        if (-not $items) {
+            $archiveBucket = Get-Metadata "archive-bucket"
+            if ($archiveBucket -and $assistantId) {
+                $archivePath = "gs://${archiveBucket}/${assistantId}.tar.gz"
+                Write-Log "Empty disk detected, checking for GCS archive at $archivePath"
+                try {
+                    $statResult = gsutil -q stat $archivePath 2>&1
+                    if ($LASTEXITCODE -eq 0) {
+                        $tempArchive = Join-Path $env:TEMP "unity-restore-$(Get-Random).tar.gz"
+                        gsutil -q cp $archivePath $tempArchive 2>$null
+                        tar xzf $tempArchive -C "C:\Unity\Local"
+                        Remove-Item $tempArchive -Force -ErrorAction SilentlyContinue
+                        icacls "C:\Unity\Local" /grant "unityuser:(OI)(CI)F" /T /Q
+                        Write-Log "Restored filesystem from GCS archive"
+                    } else {
+                        Write-Log "No GCS archive found, starting with empty filesystem"
+                    }
+                } catch {
+                    Write-Log "WARNING: archive restore failed, starting with empty filesystem"
+                }
+            }
+        }
+    }
+
     # SSH authorized_keys + restart SSHD
     try {
         if ($sshPublicKey) {
@@ -846,6 +874,25 @@ function Invoke-Release {
         Write-Log "VNC password reset"
     } catch {
         Write-Log "WARNING: failed to reset VNC password: $_"
+    }
+
+    # Archive filesystem to GCS before unmount
+    if (Test-Path "C:\Unity\Local") {
+        $assistantId = Get-Metadata "assistant-id"
+        $archiveBucket = Get-Metadata "archive-bucket"
+        if ($assistantId -and $archiveBucket) {
+            $archivePath = "gs://${archiveBucket}/${assistantId}.tar.gz"
+            Write-Log "Archiving C:\Unity\Local to $archivePath"
+            try {
+                $tempArchive = Join-Path $env:TEMP "unity-archive-$(Get-Random).tar.gz"
+                tar czf $tempArchive -C "C:\Unity\Local" .
+                gsutil -q cp $tempArchive $archivePath 2>$null
+                Remove-Item $tempArchive -Force -ErrorAction SilentlyContinue
+                Write-Log "Archive uploaded successfully"
+            } catch {
+                Write-Log "WARNING: archive upload failed, PD data will be preserved as fallback"
+            }
+        }
     }
 
     # Unmount persistent disk

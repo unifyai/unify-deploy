@@ -91,6 +91,7 @@ from .vm_helpers import (
     split_binding_runtime_vms,
     detach_assistant_disk,
     delete_assistant_disk,
+    reconcile_orphaned_disks,
 )
 from .tunnel_helpers import (
     register_tunnel,
@@ -3081,6 +3082,20 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
 
     batch_api, _, _, _ = await _get_k8s_clients()
     result = await asyncio.to_thread(reconcile_orphaned_vms, batch_api, vm_type)
+    return result
+
+
+@router.post("/vm/pool/reconcile-orphan-disks")
+async def reconcile_orphaned_disks_endpoint(max_age_hours: int = 72):
+    """Delete unattached assistant disks whose assistants no longer exist.
+
+    Workspace files are archived to GCS on release, so PDs are no longer
+    the sole durable copy.  A disk is deleted when the assistant no
+    longer exists in Orchestra **and** the disk has been unattached for
+    at least *max_age_hours* (default 3 days).
+    Safe to call on a cron schedule (e.g. daily).
+    """
+    result = await asyncio.to_thread(reconcile_orphaned_disks, max_age_hours)
     return result
 
 
