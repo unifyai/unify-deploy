@@ -30,6 +30,7 @@ from .conftest import (
     poll_until,
     replenish_pool,
     start_real_job,
+    wait_for_idle_pool,
 )
 
 pytestmark = [pytest.mark.integration]
@@ -186,9 +187,14 @@ def test_simultaneous_startups_different_assistants(comms, batch_api, poll):
     used_ids = [a["assistant_id"] for a in assistants]
 
     idle_before = count_idle_jobs(batch_api)
+    if idle_before < 3:
+        print(f"  Only {idle_before} idle containers, replenishing to 3...")
+        replenish_pool()
+        wait_for_idle_pool(batch_api, min_idle=3, timeout=120)
+        idle_before = count_idle_jobs(batch_api)
     assert idle_before >= 3, (
         f"Need >= 3 idle containers for this test, have {idle_before}. "
-        "Replenish and retry."
+        "Pool did not replenish in time."
     )
 
     try:

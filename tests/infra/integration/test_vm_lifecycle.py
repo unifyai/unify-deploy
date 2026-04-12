@@ -392,6 +392,21 @@ def test_concurrent_assign_produces_at_most_one_vm(
 
     idle_before = len(list_idle_vms(gce_client))
     if idle_before < 3:
+        print(f"  Only {idle_before} idle VMs, triggering rebalance...")
+        requests.post(
+            f"{COMMS_APP_URL}/infra/vm/pool/rebalance",
+            params={"vm_type": "ubuntu"},
+            headers=_ADMIN_HEADERS,
+            timeout=120,
+        )
+        poll(
+            lambda: len(list_idle_vms(gce_client)) >= 3,
+            timeout=180,
+            interval=10,
+            description="Idle VM pool to reach 3",
+        )
+        idle_before = len(list_idle_vms(gce_client))
+    if idle_before < 3:
         pytest.skip(
             f"Need >= 3 idle VMs for concurrent assign test, have {idle_before}",
         )
