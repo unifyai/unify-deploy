@@ -581,6 +581,7 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
     assert UNIFY_KEY, "UNIFY_KEY must be set for GCS archive test"
 
     archive_aid = f"archive-test-{int(time.time())}"
+    archive_binding = _vm_test_binding_id(archive_aid)
     archive_bucket = "unity-assistant-archives"
     archive_path = f"gs://{archive_bucket}/{archive_aid}.tar.gz"
     vm_hostname = None
@@ -590,6 +591,7 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
             "/infra/vm/pool/assign",
             json={
                 "assistant_id": archive_aid,
+                "binding_id": archive_binding,
                 "unify_apikey": UNIFY_KEY,
                 "vm_type": "ubuntu",
             },
@@ -636,10 +638,13 @@ def test_gcs_archive_created_on_release(gce_client, comms, poll):
         ), f"Failed to write marker file: {write_resp.status_code} {write_resp.text}"
         print("  Marker file written to /Unity/Local/archive-test.txt")
 
-        comms.post("/infra/vm/pool/release", json={"assistant_id": archive_aid})
+        comms.post(
+            "/infra/vm/pool/release",
+            json={"assistant_id": archive_aid, "binding_id": archive_binding},
+        )
         print("  VM released, waiting for archive upload...")
 
-        time.sleep(15)
+        time.sleep(45)
 
         import subprocess
 
@@ -679,6 +684,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
     assert UNIFY_KEY, "UNIFY_KEY must be set for GCS restore test"
 
     restore_aid = f"restore-test-{int(time.time())}"
+    restore_binding = _vm_test_binding_id(restore_aid)
     archive_bucket = "unity-assistant-archives"
     archive_path = f"gs://{archive_bucket}/{restore_aid}.tar.gz"
 
@@ -688,6 +694,7 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
             "/infra/vm/pool/assign",
             json={
                 "assistant_id": restore_aid,
+                "binding_id": restore_binding,
                 "unify_apikey": UNIFY_KEY,
                 "vm_type": "ubuntu",
             },
@@ -729,8 +736,11 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
         )
         print(f"  Phase 1: marker written on {hostname1}")
 
-        comms.post("/infra/vm/pool/release", json={"assistant_id": restore_aid})
-        time.sleep(15)
+        comms.post(
+            "/infra/vm/pool/release",
+            json={"assistant_id": restore_aid, "binding_id": restore_binding},
+        )
+        time.sleep(45)
 
         import subprocess
 
@@ -761,10 +771,12 @@ def test_gcs_archive_restore_on_fresh_disk(gce_client, comms, poll):
             )
 
         # Phase 3: re-assign (should restore from GCS)
+        restore_binding2 = _vm_test_binding_id(restore_aid) + "-2"
         resp2 = comms.post(
             "/infra/vm/pool/assign",
             json={
                 "assistant_id": restore_aid,
+                "binding_id": restore_binding2,
                 "unify_apikey": UNIFY_KEY,
                 "vm_type": "ubuntu",
             },
