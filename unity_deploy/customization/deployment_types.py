@@ -228,23 +228,12 @@ class DeploymentMapping(BaseModel):
 
 
 class EnvironmentConfig(BaseModel):
-    """Per-environment deployment configuration for a client.
+    """Per-environment deployment routing for a client.
 
-    Bundles the org / user identity with the mapping targets that are
-    valid in this specific environment.  Assistant and org IDs are
-    environment-specific because staging and production databases are
-    separate — the same numeric ID can refer to completely different
-    entities.
+    Scoping (org-wide, user-wide, assistant-specific) is expressed
+    entirely through :class:`DeploymentTarget` entries in the mapping.
     """
 
-    org_id: int | None = Field(
-        default=None,
-        description="The org ID for this client in this environment.",
-    )
-    user_id: str | None = Field(
-        default=None,
-        description="The user ID for this client in this environment (alternative to org).",
-    )
     mapping: DeploymentMapping = Field(
         ...,
         description="Identity-to-deployment routing for this environment.",
@@ -373,8 +362,6 @@ def register_client(
     mapping: DeploymentMapping,
     deployments_dir: Path,
     *,
-    default_org_id: int | None = None,
-    default_user_id: str | None = None,
     environment: str | None = None,
 ) -> dict[str, DeploymentSpec]:
     """Register a client's deployment mapping for isolated resolution.
@@ -385,6 +372,9 @@ def register_client(
     :func:`~unity_deploy.customization.clients.resolve_from_deployments`
     which returns the matching spec directly.
 
+    Scoping (org-wide, user-wide, assistant-specific) is expressed
+    entirely through :class:`DeploymentTarget` entries in *mapping*.
+
     Parameters
     ----------
     client_name
@@ -393,11 +383,6 @@ def register_client(
         The :class:`DeploymentMapping` for the current environment.
     deployments_dir
         Filesystem path containing ``<name>/deployment.py`` packages.
-    default_org_id
-        The org ID that scopes this client — requests from other orgs
-        will not match.
-    default_user_id
-        Alternative to *default_org_id* for user-scoped clients.
     environment
         The deployment environment this registration applies to
         (e.g. ``"staging"``, ``"production"``).  Stored as a guardrail:
@@ -425,16 +410,13 @@ def register_client(
     _CLIENT_DEPLOYMENTS[client_name] = ClientDeploymentEntry(
         mapping=mapping,
         specs=loaded,
-        default_org_id=default_org_id,
-        default_user_id=default_user_id,
         environment=environment,
     )
     logger.info(
-        "Registered client '%s' (%d deployment(s), env=%s, org=%s)",
+        "Registered client '%s' (%d deployment(s), env=%s)",
         client_name,
         len(loaded),
         environment,
-        default_org_id,
     )
     return loaded
 

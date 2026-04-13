@@ -64,16 +64,13 @@ class ResolvedCustomization:
 class ClientDeploymentEntry:
     """A registered client with its mapping and loaded deployment specs.
 
-    ``default_org_id`` and ``default_user_id`` are metadata — they
-    record which org/user this client is intended for but do **not**
-    act as hard filters during resolution.  Routing is driven entirely
-    by the :class:`DeploymentMapping` targets.
+    Routing is driven entirely by :class:`DeploymentMapping` targets —
+    scoping (org-wide, user-wide, assistant-specific) is expressed
+    through :class:`DeploymentTarget` entries.
     """
 
     mapping: DeploymentMapping
     specs: dict[str, DeploymentSpec]
-    default_org_id: int | None = None
-    default_user_id: str | None = None
     environment: str | None = None
     layers: dict[str, SeedLayer] = field(default_factory=dict)
 
@@ -267,9 +264,6 @@ def resolve_from_deployments(
        If no target matches, move on to the next client.
     3. Return the spec converted to :class:`ResolvedCustomization`
        via :func:`_spec_to_resolved`.
-
-    ``default_org_id`` and ``default_user_id`` on the entry are
-    metadata only — routing is driven entirely by the mapping targets.
 
     Returns ``None`` when no client matches.
     """
