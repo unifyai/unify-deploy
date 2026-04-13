@@ -10,6 +10,7 @@ End-to-end tests that run against real staging K8s, GCE, and Pub/Sub infrastruct
 - **VM lifecycle**: pool VMs can be assigned, authenticated, and released correctly
 - **Invariant health**: 14 infrastructure invariants are checked for violations
 - **Duplicate prevention**: verifies whether concurrent startups produce split-brain (currently a known bug)
+- **Task activation user flows**: scheduled tasks wake assistants quietly, running assistants accept due tasks in-place, trigger candidates piggyback on real inbound traffic, and offline tasks stay invisible to the live runtime lane
 
 ## Prerequisites
 
@@ -45,7 +46,7 @@ End-to-end tests that run against real staging K8s, GCE, and Pub/Sub infrastruct
 ## Running
 
 ```bash
-# Full suite (~6 minutes)
+# Full suite (~10-12 minutes)
 pytest tests/infra/integration/ -v -s
 
 # Quick smoke test: invariant checker only (~50 seconds)
@@ -59,6 +60,9 @@ pytest tests/infra/integration/test_cleanup_safety.py -v
 
 # Just VM tests (~3 minutes)
 pytest tests/infra/integration/test_vm_lifecycle.py -v -s
+
+# Just task activation user flows (~8-10 minutes)
+pytest tests/infra/integration/test_task_activation_flows.py -v -s
 ```
 
 Note: `TEST_ORCHESTRA_URL` must be set to the staging Orchestra URL (not localhost):
@@ -81,6 +85,7 @@ Or add it to your `.env` file.
 | `test_stale_state.py` | 3 | Stale AssistantJobs records, is_job_running dead zone | INV-13 |
 | `test_concurrency.py` | 4 | Burst startups, cleanup TOCTOU, pool exhaustion, rapid restart | INV-1,5,8 |
 | `test_cross_service_contracts.py` | 3 | Label string contract, inventory accuracy, live count | INV-2,6 |
+| `test_task_activation_flows.py` | 4 | Scheduled cold start, scheduled live delivery, trigger surfacing, offline invisibility | Product flow |
 
 ## How Tests Work
 
