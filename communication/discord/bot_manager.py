@@ -133,6 +133,7 @@ async def health_check() -> None:
             continue
         if not conn.connected:
             logger.warning(f"Bot {bot_id} disconnected, reconnecting")
+            await conn.stop()
             try:
                 new_conn = GatewayConnection(bot_id, token)
                 _bots[bot_id] = (token, new_conn)
