@@ -17,7 +17,7 @@
 #
 # GCP Metadata Keys (set at pool creation):
 #   hostname, github-token, orchestra-url, comms-url, unity-environment,
-#   staging, preview,
+#   staging,
 #   tls-fullchain, tls-privkey, pool-watcher-script
 #
 # GCP Metadata Keys (set at assignment, handled by pool watcher):
@@ -55,8 +55,6 @@ get_deploy_env() {
     env_name=$(get_metadata "unity-environment")
     if [[ -n "$env_name" ]]; then
         echo "$env_name"
-    elif [[ -n "$(get_metadata "preview")" ]]; then
-        echo "preview"
     elif [[ -n "$(get_metadata "staging")" ]]; then
         echo "staging"
     else
@@ -274,7 +272,6 @@ else
     UNITY_URL="https://github.com/unifyai/unity.git"
 fi
 case "$DEPLOY_ENV" in
-    preview) UNITY_BRANCH="preview" ;;
     staging) UNITY_BRANCH="staging" ;;
     *) UNITY_BRANCH="main" ;;
 esac

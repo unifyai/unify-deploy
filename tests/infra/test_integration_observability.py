@@ -21,11 +21,11 @@ def test_poll_until_includes_failure_snapshot():
     assert '"phase": "PendingVM"' in text
 
 
-def test_cloud_run_service_name_parses_preview_url():
+def test_cloud_run_service_name_parses_staging_url():
     service_name = integration_conftest._cloud_run_service_name(
-        "https://service.a.run.app",
+        "https://unity-comms-app-staging-000000000000.us-central1.run.app",
     )
-    assert service_name == "unity-comms-app-preview"
+    assert service_name == "unity-comms-app-staging"
 
 
 def test_write_failure_artifact_writes_expected_bundle(tmp_path, monkeypatch):

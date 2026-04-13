@@ -99,7 +99,7 @@ def test_reconcile_pool_once_uses_pending_demand(monkeypatch):
         or True,
     )
 
-    result = pool_controller.reconcile_pool_once(FakeCustomApi(), "preview")
+    result = pool_controller.reconcile_pool_once(FakeCustomApi(), "staging")
 
     assert job_replenish_calls == [(1, "controller.pool_reconcile")]
     assert replenish_calls == [("ubuntu", 2), ("windows", 0)]

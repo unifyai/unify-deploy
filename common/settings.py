@@ -26,17 +26,14 @@ _SERVICE_URLS: dict[str, dict[str, str]] = {
     "orchestra": {
         "production": "https://api.unify.ai/v0",
         "staging": "https://internal.example.com/v0",
-        "preview": "https://internal.example.com/v0",
     },
     "comms": {
         "production": "https://unity-comms-app-000000000000.us-central1.run.app",
         "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
-        "preview": "https://service.a.run.app",
     },
     "adapters": {
         "production": "https://service.a.run.app",
         "staging": "https://service.a.run.app",
-        "preview": "https://service.a.run.app",
     },
 }
 
@@ -46,10 +43,10 @@ def _get_deploy_env() -> str:
 
     Checks ``DEPLOY_ENV`` first (set by Cloud Run env vars on all
     deployments), then falls back to ``STAGING=true`` (legacy).
-    Returns one of ``"production"``, ``"staging"``, or ``"preview"``.
+    Returns ``"production"`` or ``"staging"``.
     """
     deploy_env = (os.environ.get("DEPLOY_ENV") or "").strip().lower()
-    if deploy_env in ("staging", "preview"):
+    if deploy_env == "staging":
         return deploy_env
     if os.environ.get("STAGING", "false").lower() == "true":
         return "staging"
@@ -66,8 +63,8 @@ class Settings:
     """Read-only configuration populated from environment variables.
 
     ``deploy_env`` is the canonical environment identifier:
-    ``"production"``, ``"staging"``, or ``"preview"``.  Use it
-    everywhere instead of the legacy ``is_staging`` boolean.
+    ``"production"`` or ``"staging"``.  Use it everywhere instead
+    of the legacy ``is_staging`` boolean.
     """
 
     def __init__(self) -> None:
@@ -88,7 +85,7 @@ class Settings:
         self.default_region: str = "us-central1"
         self.default_namespace: str = self.deploy_env
 
-        # Service URLs (3-way: production / staging / preview)
+        # Service URLs
         self.orchestra_url: str = _service_url("ORCHESTRA_URL", "orchestra")
         self.comms_url: str = _service_url("UNITY_COMMS_URL", "comms")
         self.adapters_url: str = _service_url("UNITY_ADAPTERS_URL", "adapters")
@@ -134,7 +131,6 @@ class Settings:
         _zone_map = {
             "production": "us-central1-f",
             "staging": "us-central1-a",
-            "preview": "us-central1-b",
         }
         self.vm_zone: str = _zone_map.get(self.deploy_env, "us-central1-f")
 
@@ -158,8 +154,8 @@ class Settings:
         """Pub/Sub topic name for a specific assistant.
 
         Uses env_suffix to match the topic name created by Orchestra's
-        ``_env_suffix(deploy_env)`` (e.g., -staging, -preview, or empty
-        for production).
+        ``_env_suffix(deploy_env)`` (e.g., ``-staging`` or empty for
+        production).
         """
         return f"unity-{assistant_id}{self.env_suffix}"
 

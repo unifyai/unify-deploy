@@ -279,7 +279,7 @@ class AssistantSessionComponentHarness:
     activation_id: str = "act-1"
     job_name: str = "unity-job-1"
     pod_name: str = "unity-job-1-pod"
-    vm_name: str = "unity-pool-ubuntu-1-preview"
+    vm_name: str = "unity-pool-ubuntu-1-staging"
     vm_hostname: str = "vm-1.vm.unify.ai"
     user_api_key: str = "user-key"
     assignment_mode: str = "assigned"

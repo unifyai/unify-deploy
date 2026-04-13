@@ -62,6 +62,7 @@ from .vm_config import (
     POOL_ASSISTANT_DISK_SIZE_GB,
     POOL_ASSISTANT_DISK_TYPE,
     POOL_VM_NAME_PREFIX,
+    POOL_ASSISTANT_ARCHIVE_BUCKET,
     POOL_UBUNTU_VM_IMAGE_FAMILY,
     POOL_WINDOWS_VM_IMAGE_FAMILY,
 )
@@ -1009,6 +1010,8 @@ def _pool_bootstrap_metadata_updates(vm_name: str, vm_type: str) -> Dict[str, st
     if tls_cert and tls_key:
         metadata_updates["tls-fullchain"] = tls_cert
         metadata_updates["tls-privkey"] = tls_key
+
+    metadata_updates["archive-bucket"] = POOL_ASSISTANT_ARCHIVE_BUCKET
 
     return metadata_updates
 
@@ -4031,6 +4034,137 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
         "stopped_reserve_deleted": reserve_trim_result["deleted"],
         "stopped_reserve_kept": reserve_trim_result["kept"],
     }
+
+
+def reconcile_orphaned_disks(max_age_hours: int = 72) -> Dict[str, Any]:
+    """Delete unattached assistant disks whose assistants no longer exist.
+
+    Assistant workspace files are archived to GCS on session release, so
+    the persistent disk is no longer the sole durable copy.  This
+    function garbage-collects unattached ``unity-disk-*`` pd-standard
+    disks that are safe to remove.
+
+    For each unattached disk it extracts the assistant ID, queries
+    Orchestra to check whether the assistant still exists, and deletes
+    the disk only when **both** conditions are met:
+
+    1. The assistant no longer exists in Orchestra (i.e. was unhired), **or**
+       the disk has been unattached longer than *max_age_hours* (default
+       3 days — kept short since GCS holds the durable archive).
+    2. The disk is not currently attached to any VM.
+
+    Idempotent and safe to call on a cron schedule (e.g. daily).
+    """
+    from datetime import datetime, timezone, timedelta
+
+    client = compute_v1.DisksClient()
+    request = compute_v1.ListDisksRequest(
+        project=SETTINGS.vm_project_id,
+        zone=SETTINGS.vm_zone,
+    )
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=max_age_hours)
+
+    deleted: list[str] = []
+    skipped: list[str] = []
+    errors: list[Dict[str, str]] = []
+
+    env_suffix = SETTINGS.env_suffix  # e.g. "" / "-staging" / "-preview"
+
+    for disk in client.list(request=request):
+        if not disk.name.startswith("unity-disk-"):
+            continue
+        if disk.type_ and "pd-standard" not in disk.type_:
+            continue
+        if disk.users:
+            continue
+
+        # Extract assistant_id from disk name:
+        #   unity-disk-{sanitized_id}{env_suffix}
+        raw = disk.name[len("unity-disk-") :]
+        if env_suffix and raw.endswith(env_suffix):
+            raw = raw[: -len(env_suffix)]
+        assistant_id = raw
+
+        # Check whether the assistant still exists in Orchestra.
+        assistant_exists = _assistant_exists(assistant_id)
+
+        if assistant_exists:
+            skipped.append(disk.name)
+            continue
+
+        # Assistant does not exist (or lookup failed).  Apply an age
+        # guard so we don't race with a just-created assistant whose
+        # record might not be visible yet.
+        ref_ts = disk.last_detach_timestamp or disk.creation_timestamp
+        if ref_ts:
+            try:
+                if isinstance(ref_ts, str):
+                    ts = datetime.fromisoformat(ref_ts.replace("Z", "+00:00"))
+                else:
+                    ts = ref_ts
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts > cutoff:
+                    skipped.append(disk.name)
+                    continue
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            op = client.delete(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                disk=disk.name,
+            )
+            op.result()
+            deleted.append(disk.name)
+            logger.info(f"Deleted orphaned assistant disk: {disk.name}")
+        except NotFound:
+            logger.info(f"Orphaned disk already deleted: {disk.name}")
+        except Exception as e:
+            logger.error(f"Failed to delete orphaned disk {disk.name}: {e}")
+            errors.append({"disk": disk.name, "error": str(e)})
+
+    logger.info(
+        "Orphaned disk reconciliation complete: "
+        f"deleted={len(deleted)} skipped={len(skipped)} errors={len(errors)}",
+    )
+    return {
+        "deleted": len(deleted),
+        "skipped": len(skipped),
+        "errors": errors,
+        "deleted_disks": deleted,
+    }
+
+
+def _assistant_exists(assistant_id: str) -> bool:
+    """Check whether an assistant still exists in Orchestra.
+
+    Returns True if the assistant is found (disk must be kept), False if
+    the assistant does not exist (disk can be garbage-collected), and
+    True on any network/auth error (fail-safe: keep the disk).
+    """
+    admin_key = SETTINGS.orchestra_admin_key
+    if not admin_key:
+        return True  # cannot verify — assume it exists
+
+    url = f"{SETTINGS.orchestra_url}/admin/assistant"
+    try:
+        resp = requests.get(
+            url,
+            params={"agent_id": str(assistant_id)},
+            headers={"Authorization": f"Bearer {admin_key}"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            assistants = resp.json().get("info", [])
+            return len(assistants) > 0
+        # Non-200 likely means auth issue or server error — keep disk.
+        return True
+    except Exception:
+        return True  # network error — keep disk
 
 
 # =============================================================================

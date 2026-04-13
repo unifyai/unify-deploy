@@ -19,7 +19,7 @@
 #   --windows                  Target only Windows pool VMs
 #   --vm-number N              Target a single VM by number (e.g. --vm-number 13)
 #   --restart                  Stop+start VMs after update (only RUNNING VMs)
-#   --env ENV                  Target environment: production, staging, or preview
+#   --env ENV                  Target environment: production or staging
 #   --dry-run                  Show what would happen without making changes
 #   -h, --help                 Show this help
 #
@@ -39,8 +39,8 @@
 #   # Update orchestra URL on all pool VMs and restart them
 #   ./update-metadata.sh --metadata orchestra-url=https://new.api.url --restart
 #
-#   # Preview what would happen on preview
-#   ./update-metadata.sh --update-startup-script --env preview --dry-run
+#   # Preview what would happen on staging
+#   ./update-metadata.sh --update-startup-script --env staging --dry-run
 #
 set -euo pipefail
 
@@ -99,9 +99,7 @@ get_vm_type() {
 }
 
 get_vm_env() {
-    if [[ "$1" == *-preview ]]; then
-        echo "preview"
-    elif [[ "$1" == *-staging ]]; then
+    if [[ "$1" == *-staging ]]; then
         echo "staging"
     else
         echo "production"
@@ -127,8 +125,7 @@ while [[ $# -gt 0 ]]; do
             case "$TARGET_ENV" in
                 production) ZONE="${GCP_ZONE:-us-central1-f}" ;;
                 staging) ZONE="${GCP_ZONE:-us-central1-a}" ;;
-                preview) ZONE="${GCP_ZONE:-us-central1-b}" ;;
-                *) die "Invalid --env value: $TARGET_ENV (expected production, staging, or preview)" ;;
+                *) die "Invalid --env value: $TARGET_ENV (expected production or staging)" ;;
             esac
             shift 2
             ;;
@@ -175,7 +172,6 @@ VM_TYPE_LABEL="all"
 if [[ -n "$VM_NUMBER" ]]; then
     ENV_SUFFIX=""
     [[ "$TARGET_ENV" == "staging" ]] && ENV_SUFFIX="-staging"
-    [[ "$TARGET_ENV" == "preview" ]] && ENV_SUFFIX="-preview"
     if [[ "$ONLY_UBUNTU" == true ]]; then
         VM_NAME_FILTER="name=unity-pool-ubuntu-${VM_NUMBER}${ENV_SUFFIX}"
         VM_TYPE_LABEL="ubuntu #${VM_NUMBER}"

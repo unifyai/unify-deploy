@@ -447,6 +447,32 @@ class TestDiskDelete:
             assert body.get("deleted") is False or body.get("deleted") is True
 
 
+class TestOrphanDiskReconcile:
+    """Contract: POST /infra/vm/pool/reconcile-orphan-disks returns a
+    structured report of deleted/skipped disks."""
+
+    def test_reconcile_returns_structured_report(self, comms):
+        resp = comms.post(
+            "/infra/vm/pool/reconcile-orphan-disks",
+            params={"max_age_hours": 999999},
+        )
+        assert (
+            resp.status_code == 200
+        ), f"reconcile-orphan-disks failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert "deleted" in body, f"Missing 'deleted' in response: {body}"
+        assert "skipped" in body, f"Missing 'skipped' in response: {body}"
+        assert "errors" in body, f"Missing 'errors' in response: {body}"
+        assert isinstance(body["errors"], list)
+
+    def test_reconcile_accepts_custom_max_age(self, comms):
+        resp = comms.post(
+            "/infra/vm/pool/reconcile-orphan-disks",
+            params={"max_age_hours": 1},
+        )
+        assert resp.status_code == 200
+
+
 class TestVMReady:
     """Contract: POST /infra/vm/ready only succeeds once desktop readiness
     is verified for the active AssistantSession."""

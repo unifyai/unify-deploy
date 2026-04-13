@@ -236,6 +236,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "email_address": assistant_data["assistant_email"],
             "phone_number": assistant_data["assistant_number"],
             "whatsapp_number": assistant_data.get("assistant_whatsapp_number", ""),
+            "discord_id": assistant_data.get("assistant_discord_bot_id", ""),
             "bio": "",
             "rolling_summary": "",
             "should_respond": False,
@@ -248,6 +249,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "email_address": assistant_data["user_email"],
             "phone_number": assistant_data["user_number"],
             "whatsapp_number": assistant_data.get("user_whatsapp_number", ""),
+            "discord_id": assistant_data.get("user_discord_id", ""),
             "bio": "",
             "rolling_summary": "",
             "should_respond": True,
@@ -1067,7 +1069,7 @@ def cleanup_idle_pool() -> dict:
         if (
             job["job_name"].endswith(SETTINGS.env_suffix)
             if SETTINGS.env_suffix
-            else not any(job["job_name"].endswith(s) for s in ("-staging", "-preview"))
+            else not job["job_name"].endswith("-staging")
         )
     }
 

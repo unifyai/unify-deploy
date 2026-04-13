@@ -22,7 +22,7 @@ def client():
     app.dependency_overrides[authenticate_vm_identity] = lambda: {
         "google": {
             "compute_engine": {
-                "instance_name": "unity-pool-ubuntu-1-preview",
+                "instance_name": "unity-pool-ubuntu-1-staging",
             },
         },
     }
@@ -58,14 +58,14 @@ def test_vm_mark_idle_uses_role_cas_and_skips_if_role_changed(client):
 
     assert resp.status_code == 200
     assert resp.json() == {
-        "vm_name": "unity-pool-ubuntu-1-preview",
+        "vm_name": "unity-pool-ubuntu-1-staging",
         "pool_role": "quarantined",
         "skipped": True,
         "reason": "role_changed",
     }
     mock_set_pool_labels.assert_called_once_with(
         mock_client,
-        "unity-pool-ubuntu-1-preview",
+        "unity-pool-ubuntu-1-staging",
         {"pool-role": "idle"},
         expected_role="starting",
     )
@@ -84,7 +84,7 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
             "binding": {
                 "id": "binding-123",
                 "jobRef": {"name": "unity-job-1"},
-                "vmRef": {"name": "unity-pool-ubuntu-1-preview"},
+                "vmRef": {"name": "unity-pool-ubuntu-1-staging"},
                 "releaseRequestedAt": "2026-04-05T15:39:57Z",
                 "releaseGeneration": 2,
             },
@@ -106,7 +106,7 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
         patch(
             "communication.infra.views.complete_pool_vm_release",
             return_value={
-                "vm_name": "unity-pool-ubuntu-1-preview",
+                "vm_name": "unity-pool-ubuntu-1-staging",
                 "binding_id": "binding-123",
                 "pool_role": "idle",
             },
@@ -123,21 +123,21 @@ def test_vm_release_complete_records_signal_for_active_binding(client):
 
     assert resp.status_code == 200
     assert resp.json() == {
-        "vm_name": "unity-pool-ubuntu-1-preview",
+        "vm_name": "unity-pool-ubuntu-1-staging",
         "assistant_id": "1207",
         "binding_id": "binding-123",
         "release_generation": 2,
         "accepted": True,
     }
     complete_release.assert_called_once_with(
-        "unity-pool-ubuntu-1-preview",
+        "unity-pool-ubuntu-1-staging",
         "binding-123",
     )
     assert record_signal.call_args.kwargs["signal_name"] == "vmReleaseComplete"
     assert record_signal.call_args.kwargs["payload"]["bindingId"] == "binding-123"
     assert (
         record_signal.call_args.kwargs["payload"]["vmName"]
-        == "unity-pool-ubuntu-1-preview"
+        == "unity-pool-ubuntu-1-staging"
     )
     assert record_signal.call_args.kwargs["payload"]["releaseGeneration"] == 2
     assert record_signal.call_args.kwargs["source"] == "views.release_complete"
@@ -159,7 +159,7 @@ def test_vm_release_complete_skips_signal_when_session_is_missing(client):
         patch(
             "communication.infra.views.complete_pool_vm_release",
             return_value={
-                "vm_name": "unity-pool-ubuntu-1-preview",
+                "vm_name": "unity-pool-ubuntu-1-staging",
                 "binding_id": "binding-123",
                 "pool_role": "idle",
             },
@@ -184,7 +184,7 @@ def test_vm_release_complete_skips_signal_when_session_is_missing(client):
 
     assert resp.status_code == 200
     assert resp.json() == {
-        "vm_name": "unity-pool-ubuntu-1-preview",
+        "vm_name": "unity-pool-ubuntu-1-staging",
         "assistant_id": "1207",
         "binding_id": "binding-123",
         "release_generation": None,
@@ -192,7 +192,7 @@ def test_vm_release_complete_skips_signal_when_session_is_missing(client):
         "reason": "session_missing",
     }
     complete_release.assert_called_once_with(
-        "unity-pool-ubuntu-1-preview",
+        "unity-pool-ubuntu-1-staging",
         "binding-123",
     )
     record_signal.assert_not_called()
@@ -214,7 +214,7 @@ def test_vm_release_complete_accepts_when_session_api_is_unavailable(client):
         patch(
             "communication.infra.views.complete_pool_vm_release",
             return_value={
-                "vm_name": "unity-pool-ubuntu-1-preview",
+                "vm_name": "unity-pool-ubuntu-1-staging",
                 "binding_id": "binding-123",
                 "pool_role": "idle",
             },
@@ -235,7 +235,7 @@ def test_vm_release_complete_accepts_when_session_api_is_unavailable(client):
 
     assert resp.status_code == 200
     assert resp.json() == {
-        "vm_name": "unity-pool-ubuntu-1-preview",
+        "vm_name": "unity-pool-ubuntu-1-staging",
         "assistant_id": "1207",
         "binding_id": "binding-123",
         "release_generation": None,
@@ -243,7 +243,7 @@ def test_vm_release_complete_accepts_when_session_api_is_unavailable(client):
         "reason": "session_api_unavailable",
     }
     complete_release.assert_called_once_with(
-        "unity-pool-ubuntu-1-preview",
+        "unity-pool-ubuntu-1-staging",
         "binding-123",
     )
     record_signal.assert_not_called()
@@ -262,7 +262,7 @@ def test_vm_release_complete_skips_stale_release_generation(client):
             "binding": {
                 "id": "binding-123",
                 "jobRef": {"name": "unity-job-1"},
-                "vmRef": {"name": "unity-pool-ubuntu-1-preview"},
+                "vmRef": {"name": "unity-pool-ubuntu-1-staging"},
                 "releaseRequestedAt": "2026-04-05T15:39:57Z",
                 "releaseGeneration": 2,
             },
@@ -284,7 +284,7 @@ def test_vm_release_complete_skips_stale_release_generation(client):
         patch(
             "communication.infra.views.complete_pool_vm_release",
             return_value={
-                "vm_name": "unity-pool-ubuntu-1-preview",
+                "vm_name": "unity-pool-ubuntu-1-staging",
                 "binding_id": "binding-123",
                 "pool_role": "idle",
             },
@@ -301,7 +301,7 @@ def test_vm_release_complete_skips_stale_release_generation(client):
 
     assert resp.status_code == 200
     assert resp.json() == {
-        "vm_name": "unity-pool-ubuntu-1-preview",
+        "vm_name": "unity-pool-ubuntu-1-staging",
         "assistant_id": "1207",
         "binding_id": "binding-123",
         "release_generation": 1,
@@ -310,7 +310,7 @@ def test_vm_release_complete_skips_stale_release_generation(client):
         "reason": "release_generation_changed",
     }
     complete_release.assert_called_once_with(
-        "unity-pool-ubuntu-1-preview",
+        "unity-pool-ubuntu-1-staging",
         "binding-123",
     )
     record_signal.assert_not_called()
@@ -330,7 +330,7 @@ def test_vm_ready_records_desktop_ready_signal_for_active_binding(tunnel_client)
             "binding": {
                 "id": "binding-123",
                 "vmRef": {
-                    "name": "unity-pool-ubuntu-1-preview",
+                    "name": "unity-pool-ubuntu-1-staging",
                     "hostname": "vm-1.vm.unify.ai",
                 },
             },
@@ -365,7 +365,7 @@ def test_vm_ready_records_desktop_ready_signal_for_active_binding(tunnel_client)
         patch(
             "communication.infra.views.verify_vm_assignment",
             return_value={
-                "name": "unity-pool-ubuntu-1-preview",
+                "name": "unity-pool-ubuntu-1-staging",
                 "hostname": "vm-1.vm.unify.ai",
             },
         ),
@@ -429,7 +429,7 @@ def test_vm_ready_ignores_release_in_progress_for_current_binding(tunnel_client)
             "binding": {
                 "id": "binding-123",
                 "vmRef": {
-                    "name": "unity-pool-ubuntu-1-preview",
+                    "name": "unity-pool-ubuntu-1-staging",
                     "hostname": "vm-1.vm.unify.ai",
                 },
                 "releaseRequestedAt": "2026-04-06T18:40:00Z",

@@ -75,7 +75,7 @@ def test_is_stale_inflight_vm_prefers_explicit_transition_epoch():
     old_started_at = datetime.now(UTC) - timedelta(seconds=1200)
     recent_transition = datetime.now(UTC) - timedelta(seconds=120)
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-6-preview",
+        name="unity-pool-ubuntu-6-staging",
         labels={
             "pool-role": "starting",
             "pool-transition-epoch": str(int(recent_transition.timestamp())),
@@ -95,7 +95,7 @@ def test_is_stale_inflight_vm_ignores_non_inflight_roles():
 
 def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-6-preview",
+        name="unity-pool-ubuntu-6-staging",
         labels=_current_contract_labels(**{"vm-type": "ubuntu"}),
     )
     client = MagicMock()
@@ -125,7 +125,7 @@ def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
     client.start.assert_called_once()
     assert metadata_updates == [
         (
-            "unity-pool-ubuntu-6-preview",
+            "unity-pool-ubuntu-6-staging",
             {
                 "pool-watcher-script": "watcher",
                 "pool-contract-generation": vm_helpers_module.POOL_VM_CONTRACT_GENERATION,
@@ -136,15 +136,15 @@ def test_start_one_stopped_vm_returns_after_start_request(monkeypatch):
 
 def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypatch):
     pool_vm = SimpleNamespace(
-        name="unity-pool-ubuntu-2-preview",
+        name="unity-pool-ubuntu-2-staging",
         labels=_current_contract_labels(**{"pool-role": "idle", "vm-type": "ubuntu"}),
-        label_fingerprint="unity-pool-ubuntu-2-preview-fp",
+        label_fingerprint="unity-pool-ubuntu-2-staging-fp",
         network_interfaces=[],
         metadata=SimpleNamespace(
             items=[
                 SimpleNamespace(
                     key="hostname",
-                    value="unity-pool-ubuntu-2-preview.example.com",
+                    value="unity-pool-ubuntu-2-staging.example.com",
                 ),
             ],
         ),
@@ -174,7 +174,7 @@ def test_claim_idle_vm_does_not_require_agent_service_before_assignment(monkeypa
         vm_number=None,
     )
 
-    assert claimed["vm_name"] == "unity-pool-ubuntu-2-preview"
+    assert claimed["vm_name"] == "unity-pool-ubuntu-2-staging"
 
 
 def test_split_binding_runtime_vms_separates_current_and_other_bindings(monkeypatch):
@@ -183,19 +183,19 @@ def test_split_binding_runtime_vms_separates_current_and_other_bindings(monkeypa
         "list_pool_vms",
         lambda: [
             {
-                "vm_name": "unity-pool-ubuntu-1-preview",
+                "vm_name": "unity-pool-ubuntu-1-staging",
                 "assistant_id": "assistant-123",
                 "binding_id": "binding-current",
                 "pool_role": "assigned",
             },
             {
-                "vm_name": "unity-pool-ubuntu-2-preview",
+                "vm_name": "unity-pool-ubuntu-2-staging",
                 "assistant_id": "assistant-123",
                 "binding_id": "binding-other",
                 "pool_role": "releasing",
             },
             {
-                "vm_name": "unity-pool-ubuntu-3-preview",
+                "vm_name": "unity-pool-ubuntu-3-staging",
                 "assistant_id": "assistant-999",
                 "binding_id": "binding-current",
                 "pool_role": "assigned",
@@ -208,13 +208,13 @@ def test_split_binding_runtime_vms_separates_current_and_other_bindings(monkeypa
         binding_id="binding-current",
     )
 
-    assert [vm["vm_name"] for vm in current] == ["unity-pool-ubuntu-1-preview"]
-    assert [vm["vm_name"] for vm in other] == ["unity-pool-ubuntu-2-preview"]
+    assert [vm["vm_name"] for vm in current] == ["unity-pool-ubuntu-1-staging"]
+    assert [vm["vm_name"] for vm in other] == ["unity-pool-ubuntu-2-staging"]
 
 
 def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-2-preview",
+        name="unity-pool-ubuntu-2-staging",
         labels={"pool-role": "idle", "vm-type": "ubuntu"},
         status="RUNNING",
     )
@@ -236,7 +236,7 @@ def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
     )
 
     assert action == (
-        "Quarantined unhealthy VM unity-pool-ubuntu-2-preview: "
+        "Quarantined unhealthy VM unity-pool-ubuntu-2-staging: "
         "failed health probe during claim"
     )
     client.stop.assert_called_once()
@@ -244,7 +244,7 @@ def test_quarantine_pool_vm_returns_after_stop_request(monkeypatch):
 
 def test_release_pool_vm_transitions_to_releasing(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "assigned",
@@ -280,7 +280,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
     assert result["release_generation"] == 1
     assert metadata_updates == [
         (
-            "unity-pool-ubuntu-3-preview",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -294,7 +294,7 @@ def test_release_pool_vm_transitions_to_releasing(monkeypatch):
 
 def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "assigned",
@@ -326,16 +326,16 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
     result = release_pool_vm(
         "assistant-123",
         "binding-123",
-        vm_name="unity-pool-ubuntu-3-preview",
+        vm_name="unity-pool-ubuntu-3-staging",
     )
 
     assert result["released"] is True
-    assert result["vm_name"] == "unity-pool-ubuntu-3-preview"
+    assert result["vm_name"] == "unity-pool-ubuntu-3-staging"
     assert result["release_generation"] == 1
     client.list.assert_not_called()
     assert metadata_updates == [
         (
-            "unity-pool-ubuntu-3-preview",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -349,7 +349,7 @@ def test_release_pool_vm_targets_explicit_vm_name(monkeypatch):
 
 def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "assigned",
@@ -377,7 +377,7 @@ def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
     result = release_pool_vm(
         "assistant-123",
         "binding-123",
-        vm_name="unity-pool-ubuntu-3-preview",
+        vm_name="unity-pool-ubuntu-3-staging",
     )
 
     assert result["released"] is False
@@ -387,7 +387,7 @@ def test_release_pool_vm_skips_explicit_vm_when_not_owned(monkeypatch):
 
 def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "releasing",
@@ -423,7 +423,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
     assert result["release_generation"] == 1
     assert metadata_updates == [
         (
-            "unity-pool-ubuntu-3-preview",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -437,7 +437,7 @@ def test_release_pool_vm_retries_metadata_clear_while_releasing(monkeypatch):
 
 def test_release_pool_vm_rearms_with_new_release_generation(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "releasing",
@@ -485,13 +485,13 @@ def test_release_pool_vm_rearms_with_new_release_generation(monkeypatch):
     assert result["release_generation"] == 2
     set_pool_labels.assert_called_once_with(
         client,
-        "unity-pool-ubuntu-3-preview",
+        "unity-pool-ubuntu-3-staging",
         {"pool-role": "releasing"},
         expected_role="releasing",
     )
     assert metadata_updates == [
         (
-            "unity-pool-ubuntu-3-preview",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -505,7 +505,7 @@ def test_release_pool_vm_rearms_with_new_release_generation(monkeypatch):
 
 def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
     stale_vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         labels={
             "pool-role": "assigned",
             "assistant-id": "assistant-123",
@@ -548,7 +548,7 @@ def test_release_pool_vm_retires_stale_contract_vm(monkeypatch):
 
 def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "assigned",
@@ -584,7 +584,7 @@ def test_release_pool_vm_waits_for_binding_lease_before_releasing(monkeypatch):
     assert result["release_generation"] == 1
     assert metadata_updates == [
         (
-            "unity-pool-ubuntu-3-preview",
+            "unity-pool-ubuntu-3-staging",
             {
                 "unify-key": "",
                 "vnc-password": "",
@@ -626,7 +626,7 @@ def test_release_pool_vm_skips_when_binding_lease_stays_busy(monkeypatch):
 
 def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
     releasing_vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         labels=_current_contract_labels(
             **{
                 "pool-role": "releasing",
@@ -676,7 +676,7 @@ def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
     recover_release.assert_called_once_with(
         "assistant-123",
         "binding-123",
-        vm_name="unity-pool-ubuntu-3-preview",
+        vm_name="unity-pool-ubuntu-3-staging",
         current_release_generation=1,
         allow_rearm=True,
         retire_reason="aged_releasing_vm",
@@ -684,7 +684,7 @@ def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
     assert result["releasing_checked"] == 1
     assert result["releasing_recovered"] == [
         {
-            "vm_name": "unity-pool-ubuntu-3-preview",
+            "vm_name": "unity-pool-ubuntu-3-staging",
             "assistant_id": "assistant-123",
             "binding_id": "binding-123",
             "action": "rearmed",
@@ -696,7 +696,7 @@ def test_reconcile_orphaned_vms_recovers_aged_releasing_vm(monkeypatch):
 
 def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
     releasing_vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         status="RUNNING",
         labels=_current_contract_labels(
             **{
@@ -728,13 +728,13 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
         lambda *_args, **_kwargs: True,
     )
 
-    result = complete_pool_vm_release("unity-pool-ubuntu-3-preview", "binding-123")
+    result = complete_pool_vm_release("unity-pool-ubuntu-3-staging", "binding-123")
 
     assert result["pool_role"] == "idle"
     assert result["detached"] is True
     assert metadata_updates == [
         (
-            "unity-pool-ubuntu-3-preview",
+            "unity-pool-ubuntu-3-staging",
             {
                 "assistant-id": "",
                 "binding-id": "",
@@ -750,7 +750,7 @@ def test_complete_pool_vm_release_detaches_disk_and_marks_idle(monkeypatch):
 
 def test_complete_pool_vm_release_is_idempotent_once_vm_is_idle(monkeypatch):
     idle_vm = SimpleNamespace(
-        name="unity-pool-ubuntu-3-preview",
+        name="unity-pool-ubuntu-3-staging",
         status="RUNNING",
         labels=_current_contract_labels(
             **{
@@ -787,10 +787,10 @@ def test_complete_pool_vm_release_is_idempotent_once_vm_is_idle(monkeypatch):
         ),
     )
 
-    result = complete_pool_vm_release("unity-pool-ubuntu-3-preview", "binding-123")
+    result = complete_pool_vm_release("unity-pool-ubuntu-3-staging", "binding-123")
 
     assert result == {
-        "vm_name": "unity-pool-ubuntu-3-preview",
+        "vm_name": "unity-pool-ubuntu-3-staging",
         "vm_type": "ubuntu",
         "pool_role": "idle",
         "assistant_id": None,
@@ -802,18 +802,18 @@ def test_complete_pool_vm_release_is_idempotent_once_vm_is_idle(monkeypatch):
 def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkeypatch):
     claim_idle = MagicMock(
         return_value={
-            "vm_name": "unity-pool-ubuntu-4-preview",
+            "vm_name": "unity-pool-ubuntu-4-staging",
             "ip_address": "34.0.0.4",
-            "hostname": "unity-pool-ubuntu-4-preview.vm.unify.ai",
-            "desktop_url": "https://unity-pool-ubuntu-4-preview.vm.unify.ai",
+            "hostname": "unity-pool-ubuntu-4-staging.vm.unify.ai",
+            "desktop_url": "https://unity-pool-ubuntu-4-staging.vm.unify.ai",
             "status": "RUNNING",
         },
     )
     complete_release = MagicMock(
-        return_value={"vm_name": "unity-pool-ubuntu-3-preview", "pool_role": "idle"},
+        return_value={"vm_name": "unity-pool-ubuntu-3-staging", "pool_role": "idle"},
     )
     find_disk_owner = MagicMock(
-        side_effect=["unity-pool-ubuntu-3-preview", None],
+        side_effect=["unity-pool-ubuntu-3-staging", None],
     )
 
     monkeypatch.setattr(
@@ -835,7 +835,7 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
     monkeypatch.setattr(
         "communication.infra.vm_helpers._attached_disk_vm_state",
         lambda *_args, **_kwargs: {
-            "vm_name": "unity-pool-ubuntu-3-preview",
+            "vm_name": "unity-pool-ubuntu-3-staging",
             "binding_id": "binding-old",
             "pool_role": "releasing",
         },
@@ -877,7 +877,7 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
     result = assign_pool_vm("assistant-123", "binding-new", "unify-key")
 
     complete_release.assert_called_once_with(
-        "unity-pool-ubuntu-3-preview",
+        "unity-pool-ubuntu-3-staging",
         "binding-old",
     )
     claim_idle.assert_called_once_with(
@@ -886,7 +886,7 @@ def test_assign_pool_vm_finalizes_stale_releasing_disk_owner_before_claim(monkey
         "ubuntu",
         vm_number=None,
     )
-    assert result["vm_name"] == "unity-pool-ubuntu-4-preview"
+    assert result["vm_name"] == "unity-pool-ubuntu-4-staging"
 
 
 def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypatch):
@@ -906,12 +906,12 @@ def test_assign_pool_vm_raises_when_disk_owned_by_active_other_binding(monkeypat
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers.find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-3-preview",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-3-staging",
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers._attached_disk_vm_state",
         lambda *_args, **_kwargs: {
-            "vm_name": "unity-pool-ubuntu-3-preview",
+            "vm_name": "unity-pool-ubuntu-3-staging",
             "binding_id": "binding-old",
             "pool_role": "assigned",
         },
@@ -931,7 +931,7 @@ def test_delete_assistant_disk_raises_when_disk_still_attached(monkeypatch):
     )
     monkeypatch.setattr(
         "communication.infra.vm_helpers.find_vm_with_disk",
-        lambda *_args, **_kwargs: "unity-pool-ubuntu-3-preview",
+        lambda *_args, **_kwargs: "unity-pool-ubuntu-3-staging",
     )
 
     with pytest.raises(AssistantDiskInUseError):
@@ -940,7 +940,7 @@ def test_delete_assistant_disk_raises_when_disk_still_attached(monkeypatch):
 
 def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):
     vm = SimpleNamespace(
-        name="unity-pool-ubuntu-15-preview",
+        name="unity-pool-ubuntu-15-staging",
         labels={"pool-role": "quarantined", "vm-type": "ubuntu"},
         status="RUNNING",
     )
@@ -959,7 +959,7 @@ def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):
     actions = vm_helpers_module._scrub_inconsistent_vms("ubuntu")
 
     assert actions == [
-        "Scrub: stop requested for unity-pool-ubuntu-15-preview "
+        "Scrub: stop requested for unity-pool-ubuntu-15-staging "
         "(quarantined_but_running)",
     ]
     client.stop.assert_called_once()
@@ -967,7 +967,7 @@ def test_scrub_inconsistent_vms_submits_stop_without_waiting(monkeypatch):
 
 def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
     stopped_vm = SimpleNamespace(
-        name="unity-pool-ubuntu-6-preview",
+        name="unity-pool-ubuntu-6-staging",
         labels={"vm-type": "ubuntu"},
     )
 
@@ -1023,7 +1023,7 @@ def test_replenish_pool_hot_path_skips_bulk_idle_health_sweep(monkeypatch):
     result = replenish_pool("ubuntu")
 
     assert result["vm_type"] == "ubuntu"
-    assert result["actions"] == ["Started stopped VM unity-pool-ubuntu-6-preview"]
+    assert result["actions"] == ["Started stopped VM unity-pool-ubuntu-6-staging"]
 
 
 def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
@@ -1031,7 +1031,7 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
     deleted_vm_names = []
     stopped_vms = [
         SimpleNamespace(
-            name="unity-pool-ubuntu-14-preview",
+            name="unity-pool-ubuntu-14-staging",
             labels=_current_contract_labels(
                 **{"pool-role": "stopped", "vm-type": "ubuntu"},
             ),
@@ -1039,7 +1039,7 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
             last_stop_timestamp="2026-04-06T09:00:00+00:00",
         ),
         SimpleNamespace(
-            name="unity-pool-ubuntu-15-preview",
+            name="unity-pool-ubuntu-15-staging",
             labels=_current_contract_labels(
                 **{"pool-role": "stopped", "vm-type": "ubuntu"},
             ),
@@ -1047,7 +1047,7 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
             last_stop_timestamp="2026-04-06T08:59:00+00:00",
         ),
         SimpleNamespace(
-            name="unity-pool-ubuntu-16-preview",
+            name="unity-pool-ubuntu-16-staging",
             labels=_current_contract_labels(
                 **{"pool-role": "stopped", "vm-type": "ubuntu"},
             ),
@@ -1055,7 +1055,7 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
             last_stop_timestamp="2026-04-06T08:58:00+00:00",
         ),
         SimpleNamespace(
-            name="unity-pool-ubuntu-17-preview",
+            name="unity-pool-ubuntu-17-staging",
             labels=_current_contract_labels(
                 **{"pool-role": "stopped", "vm-type": "ubuntu"},
             ),
@@ -1086,21 +1086,21 @@ def test_trim_stopped_pool_reserve_deletes_oldest_excess_vms(monkeypatch):
     result = vm_helpers_module.trim_stopped_pool_reserve("ubuntu")
 
     assert result["kept"] == [
-        "unity-pool-ubuntu-14-preview",
-        "unity-pool-ubuntu-15-preview",
+        "unity-pool-ubuntu-14-staging",
+        "unity-pool-ubuntu-15-staging",
     ]
     assert result["deleted"] == [
-        "unity-pool-ubuntu-16-preview",
-        "unity-pool-ubuntu-17-preview",
+        "unity-pool-ubuntu-16-staging",
+        "unity-pool-ubuntu-17-staging",
     ]
     assert result["actions"] == [
-        "Deleted excess stopped reserve VM unity-pool-ubuntu-16-preview",
-        "Deleted excess stopped reserve VM unity-pool-ubuntu-17-preview",
+        "Deleted excess stopped reserve VM unity-pool-ubuntu-16-staging",
+        "Deleted excess stopped reserve VM unity-pool-ubuntu-17-staging",
     ]
     assert result["errors"] == []
     assert deleted_vm_names == [
-        ("unity-pool-ubuntu-16-preview", "ubuntu"),
-        ("unity-pool-ubuntu-17-preview", "ubuntu"),
+        ("unity-pool-ubuntu-16-staging", "ubuntu"),
+        ("unity-pool-ubuntu-17-staging", "ubuntu"),
     ]
 
 
@@ -1144,9 +1144,7 @@ def test_cleanup_orphaned_pool_network_resources_deletes_old_current_env_leaks(
     attached_ip_name = vm_helpers_module._pool_ip_name("windows", 12)
     attached_vm_name = vm_helpers_module._pool_vm_name("windows", 12)
     foreign_suffix = (
-        "-staging"
-        if vm_helpers_module.SETTINGS.env_suffix != "-staging"
-        else "-preview"
+        "-staging" if vm_helpers_module.SETTINGS.env_suffix != "-staging" else ""
     )
     foreign_ip_name = (
         f"{vm_helpers_module.POOL_VM_NAME_PREFIX}-windows-ip-77{foreign_suffix}"
@@ -1235,8 +1233,8 @@ def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
         "cleanup_orphaned_pool_network_resources",
         lambda *_args, **_kwargs: {
             "actions": ["deleted orphaned IP"],
-            "deleted_addresses": ["unity-pool-ubuntu-ip-18-preview"],
-            "deleted_dns": ["unity-pool-ubuntu-18-preview.vm.unify.ai"],
+            "deleted_addresses": ["unity-pool-ubuntu-ip-18-staging"],
+            "deleted_dns": ["unity-pool-ubuntu-18-staging.vm.unify.ai"],
             "errors": [],
         },
     )
@@ -1260,8 +1258,8 @@ def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
         "trim_stopped_pool_reserve",
         lambda *_args, **_kwargs: {
             "actions": ["deleted old reserve"],
-            "deleted": ["unity-pool-ubuntu-17-preview"],
-            "kept": ["unity-pool-ubuntu-14-preview"],
+            "deleted": ["unity-pool-ubuntu-17-staging"],
+            "kept": ["unity-pool-ubuntu-14-staging"],
         },
     )
 
@@ -1276,9 +1274,9 @@ def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
             "trimmed idle",
             "deleted old reserve",
         ],
-        "orphaned_static_ips_deleted": ["unity-pool-ubuntu-ip-18-preview"],
-        "orphaned_dns_deleted": ["unity-pool-ubuntu-18-preview.vm.unify.ai"],
+        "orphaned_static_ips_deleted": ["unity-pool-ubuntu-ip-18-staging"],
+        "orphaned_dns_deleted": ["unity-pool-ubuntu-18-staging.vm.unify.ai"],
         "orphaned_network_errors": [],
-        "stopped_reserve_deleted": ["unity-pool-ubuntu-17-preview"],
-        "stopped_reserve_kept": ["unity-pool-ubuntu-14-preview"],
+        "stopped_reserve_deleted": ["unity-pool-ubuntu-17-staging"],
+        "stopped_reserve_kept": ["unity-pool-ubuntu-14-staging"],
     }

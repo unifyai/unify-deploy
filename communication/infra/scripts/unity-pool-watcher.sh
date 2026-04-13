@@ -35,8 +35,6 @@ get_deploy_env() {
     env_name=$(get_metadata "unity-environment")
     if [[ -n "$env_name" ]]; then
         echo "$env_name"
-    elif [[ -n "$(get_metadata "preview")" ]]; then
-        echo "preview"
     elif [[ -n "$(get_metadata "staging")" ]]; then
         echo "staging"
     else
@@ -262,7 +260,6 @@ do_update() {
         unity_url="https://github.com/unifyai/unity.git"
     fi
     case "$deploy_env" in
-        preview) unity_branch="preview" ;;
         staging) unity_branch="staging" ;;
         *) unity_branch="main" ;;
     esac
@@ -414,6 +411,30 @@ do_assign() {
             log "Mounted $dev_path at /Unity/Local"
         else
             log "WARNING: disk device $dev_path not found after 30s"
+        fi
+    fi
+
+    # Restore from GCS archive if disk is empty (freshly formatted)
+    if [[ -n "$disk_device" ]] && mountpoint -q /Unity/Local 2>/dev/null; then
+        local file_count
+        file_count=$(find /Unity/Local -mindepth 1 -maxdepth 1 ! -name 'lost+found' 2>/dev/null | wc -l)
+        if [[ "$file_count" -eq 0 ]]; then
+            local archive_bucket
+            archive_bucket=$(get_metadata "archive-bucket")
+            if [[ -n "$archive_bucket" && -n "$assistant_id" ]]; then
+                local archive_path="gs://${archive_bucket}/${assistant_id}.tar.gz"
+                log "Empty disk detected, checking for GCS archive at $archive_path"
+                if gsutil -q stat "$archive_path" 2>/dev/null; then
+                    if gsutil -q cp "$archive_path" - 2>/dev/null | tar xzf - -C /Unity/Local 2>/dev/null; then
+                        chown -R unityuser:unityuser /Unity/Local
+                        log "Restored filesystem from GCS archive"
+                    else
+                        log "WARNING: archive restore failed, starting with empty filesystem"
+                    fi
+                else
+                    log "No GCS archive found, starting with empty filesystem"
+                fi
+            fi
         fi
     fi
 
@@ -569,6 +590,23 @@ os.chmod('/etc/vnc/passwd', 0o640)
 os.system('chgrp unityuser /etc/vnc/passwd')
 PYSCRIPT
     log "VNC password reset"
+
+    # Archive filesystem to GCS before unmount
+    if mountpoint -q /Unity/Local 2>/dev/null; then
+        local assistant_id
+        assistant_id=$(get_metadata "assistant-id")
+        local archive_bucket
+        archive_bucket=$(get_metadata "archive-bucket")
+        if [[ -n "$assistant_id" && -n "$archive_bucket" ]]; then
+            local archive_path="gs://${archive_bucket}/${assistant_id}.tar.gz"
+            log "Archiving /Unity/Local to $archive_path"
+            if tar czf - -C /Unity/Local . | gsutil -q cp - "$archive_path" 2>/dev/null; then
+                log "Archive uploaded successfully"
+            else
+                log "WARNING: archive upload failed, PD data will be preserved as fallback"
+            fi
+        fi
+    fi
 
     # Unmount persistent disk (kill busy processes first, then lazy fallback)
     if mountpoint -q /Unity/Local 2>/dev/null; then

@@ -256,7 +256,7 @@ def test_reconcile_preserves_created_at_and_starts_bootstrap_timer_on_claim(
     monkeypatch.setattr(
         controller,
         "_current_pod_ref",
-        lambda *_args, **_kwargs: {"name": "unity-pod-1", "namespace": "preview"},
+        lambda *_args, **_kwargs: {"name": "unity-pod-1", "namespace": "staging"},
     )
     monkeypatch.setattr(controller, "_now_iso", lambda: "2026-04-06T00:00:00+00:00")
     monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
@@ -454,7 +454,7 @@ def test_job_for_binding_lists_by_binding_when_jobref_missing(monkeypatch):
 def test_job_for_binding_does_not_rediscover_when_named_job_is_missing(monkeypatch):
     binding = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
     )
     existing_job = _job(name="unity-job-2", container_ready=False)
     batch_api = MagicMock()
@@ -473,7 +473,7 @@ def test_job_for_binding_does_not_rediscover_when_named_job_is_missing(monkeypat
 def test_job_for_binding_does_not_rediscover_when_named_job_mismatches(monkeypatch):
     binding = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
     )
     mismatched_job = _job(name="unity-job-1", container_ready=False)
     mismatched_job.metadata.labels[controller.BINDING_ID_LABEL] = "binding-other"
@@ -524,7 +524,7 @@ def test_reconcile_queues_vm_assignment_for_binding(monkeypatch):
     body = _base_session()
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
     patch_status = MagicMock()
@@ -577,8 +577,8 @@ def test_reconcile_advances_to_pending_guest_when_binding_vm_ref_present(monkeyp
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
-        podRef={"name": "unity-pod-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
+        podRef={"name": "unity-pod-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmRef={
             "name": "unity-pool-ubuntu-1",
@@ -636,7 +636,7 @@ def test_reconcile_waits_for_inflight_vm_assignment_attempt(monkeypatch):
     body = _base_session()
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignment=build_binding_vm_assignment(
             attempt_id="attempt-1",
@@ -678,7 +678,7 @@ def test_reconcile_carries_release_signal_context_into_next_pending_job(monkeypa
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt="2026-04-03T00:00:15+00:00",
     )
@@ -755,7 +755,7 @@ def test_reconcile_emits_pending_container_wait_stage(monkeypatch):
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         containerBootstrapStartedAt=controller._now_iso(),
     )
     patch_status = MagicMock()
@@ -796,7 +796,7 @@ def test_reconcile_waits_for_pod_running_before_starting_bootstrap_timer(monkeyp
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
     )
     patch_status = MagicMock()
     deadline_exceeded = MagicMock(return_value=True)
@@ -818,7 +818,7 @@ def test_reconcile_waits_for_pod_running_before_starting_bootstrap_timer(monkeyp
     monkeypatch.setattr(
         controller,
         "_current_pod_ref",
-        lambda *_args, **_kwargs: {"name": "unity-pod-1", "namespace": "preview"},
+        lambda *_args, **_kwargs: {"name": "unity-pod-1", "namespace": "staging"},
     )
     monkeypatch.setattr(
         controller,
@@ -845,7 +845,7 @@ def test_reconcile_consumes_desktop_ready_signal_and_queues_guest_probe(monkeypa
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
@@ -916,7 +916,7 @@ def test_reconcile_marks_active_from_ready_binding(monkeypatch):
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
@@ -969,7 +969,7 @@ def test_reconcile_marks_active_without_desktop_when_container_is_ready(monkeypa
     body["spec"]["desktop"] = {"required": False, "mode": "macos"}
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
     patch_status = MagicMock()
@@ -1001,7 +1001,7 @@ def test_reconcile_restarts_binding_after_bootstrap_timeout(monkeypatch):
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         containerBootstrapStartedAt="2026-04-03T00:00:00+00:00",
     )
     patch_status = MagicMock()
@@ -1049,7 +1049,7 @@ def test_reconcile_restarts_after_terminal_job_cleanup(monkeypatch):
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
     )
     patch_status = MagicMock()
     terminal_job = _job(terminal_phase="Failed")
@@ -1202,7 +1202,7 @@ def test_reconcile_finishes_release_when_runtime_artifacts_are_already_gone(
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
     )
@@ -1235,7 +1235,7 @@ def test_reconcile_keeps_releasing_while_other_assistant_job_is_still_live(monke
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
         releaseCompletedAt="2026-04-03T00:00:45+00:00",
     )
@@ -1348,7 +1348,7 @@ def test_reconcile_job_missing_keeps_releasing_until_vm_cleanup_finishes(monkeyp
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
@@ -1407,7 +1407,7 @@ def test_reconcile_stopped_binding_recovers_vm_ref_from_owned_runtime(monkeypatc
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         releaseRequestedAt=controller._now_iso(),
     )
     patch_status = MagicMock()
@@ -1472,7 +1472,7 @@ def test_reconcile_rearms_timed_out_release_request(monkeypatch):
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
         releaseGeneration=1,
@@ -1547,7 +1547,7 @@ def test_reconcile_retires_release_after_hard_timeout(monkeypatch):
     body["status"]["phase"] = "Releasing"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         releaseRequestedAt="2026-04-03T00:00:30+00:00",
         releaseGeneration=2,
@@ -1619,7 +1619,7 @@ def test_reconcile_job_missing_restarts_only_after_cleanup_finishes(monkeypatch)
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
     )
     patch_status = MagicMock()
 
@@ -1652,7 +1652,7 @@ def test_reconcile_waits_for_vm_capacity_when_assignment_fails(monkeypatch):
     body = _base_session()
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
     body["status"]["binding"]["vmAssignment"] = build_binding_vm_assignment(
@@ -1688,7 +1688,7 @@ def test_reconcile_waits_for_disk_release_before_assigning_vm(monkeypatch):
     body = _base_session()
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
     )
     body["status"]["binding"]["vmAssignment"] = build_binding_vm_assignment(
@@ -1727,7 +1727,7 @@ def test_reconcile_restarts_after_vm_ownership_loss(monkeypatch):
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
@@ -1844,7 +1844,7 @@ def test_reconcile_terminal_job_stop_intent_patches_spec_stop(monkeypatch):
     body["status"]["phase"] = "PendingContainer"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
     )
     body["status"]["suspendIntent"] = build_suspend_intent(
         binding_id="binding-1",
@@ -1922,7 +1922,7 @@ def test_reconcile_restarts_after_vm_readiness_timeout(monkeypatch):
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
@@ -1978,7 +1978,7 @@ def test_reconcile_windows_uses_shared_vm_readiness_timeout(monkeypatch):
     body["status"]["phase"] = "PendingGuest"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-windows-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
@@ -2036,7 +2036,7 @@ def test_reconcile_transient_desktop_liveness_failure_keeps_binding_active(
     body["status"]["phase"] = "Active"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
@@ -2089,7 +2089,7 @@ def test_reconcile_restarts_after_desktop_liveness_failure(monkeypatch):
     )
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",
@@ -2147,7 +2147,7 @@ def test_reconcile_activation_replacement_waits_for_release(monkeypatch):
     body["status"]["observedActivationId"] = "act-1"
     body["status"]["binding"] = _binding(
         "binding-1",
-        jobRef={"name": "unity-job-1", "namespace": "preview"},
+        jobRef={"name": "unity-job-1", "namespace": "staging"},
         vmRef={"name": "unity-pool-ubuntu-1", "hostname": "vm-1.vm.unify.ai"},
         containerReadyAt="2026-04-03T00:00:00+00:00",
         vmAssignedAt="2026-04-03T00:00:05+00:00",

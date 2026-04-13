@@ -65,7 +65,7 @@ def test_run_vm_assignment_persists_assigned_result(monkeypatch):
         workers,
         "assign_pool_vm",
         lambda **_kwargs: {
-            "vm_name": "unity-pool-ubuntu-1-preview",
+            "vm_name": "unity-pool-ubuntu-1-staging",
             "hostname": "vm-1.vm.unify.ai",
             "desktop_url": "https://vm-1.vm.unify.ai",
         },
@@ -79,7 +79,7 @@ def test_run_vm_assignment_persists_assigned_result(monkeypatch):
     workers._run_vm_assignment(
         custom_api=custom_api,
         core_api=object(),
-        namespace="preview",
+        namespace="staging",
         assistant_id="1207",
         binding_id="binding-1",
         attempt_id="attempt-1",
@@ -87,12 +87,12 @@ def test_run_vm_assignment_persists_assigned_result(monkeypatch):
         vm_type="ubuntu",
     )
 
-    assert persist_result.call_args.args[:3] == (custom_api, "preview", "1207")
+    assert persist_result.call_args.args[:3] == (custom_api, "staging", "1207")
     assert persist_result.call_args.kwargs["target_binding_id"] == "binding-1"
     assert persist_result.call_args.kwargs["attempt_id"] == "attempt-1"
     assert persist_result.call_args.kwargs["state"] == "assigned"
     assert persist_result.call_args.kwargs["vm_ref"] == {
-        "name": "unity-pool-ubuntu-1-preview",
+        "name": "unity-pool-ubuntu-1-staging",
         "hostname": "vm-1.vm.unify.ai",
         "vmType": "ubuntu",
     }
@@ -117,7 +117,7 @@ def test_run_vm_assignment_releases_stale_successful_result(monkeypatch):
         workers,
         "assign_pool_vm",
         lambda **_kwargs: {
-            "vm_name": "unity-pool-ubuntu-1-preview",
+            "vm_name": "unity-pool-ubuntu-1-staging",
             "hostname": "vm-1.vm.unify.ai",
             "desktop_url": "https://vm-1.vm.unify.ai",
         },
@@ -132,7 +132,7 @@ def test_run_vm_assignment_releases_stale_successful_result(monkeypatch):
     workers._run_vm_assignment(
         custom_api=object(),
         core_api=object(),
-        namespace="preview",
+        namespace="staging",
         assistant_id="1207",
         binding_id="binding-1",
         attempt_id="attempt-1",
@@ -143,7 +143,7 @@ def test_run_vm_assignment_releases_stale_successful_result(monkeypatch):
     release_pool_vm.assert_called_once_with(
         "1207",
         "binding-1",
-        vm_name="unity-pool-ubuntu-1-preview",
+        vm_name="unity-pool-ubuntu-1-staging",
     )
 
 
@@ -176,7 +176,7 @@ def test_run_vm_assignment_persists_capacity_result(monkeypatch):
     workers._run_vm_assignment(
         custom_api=object(),
         core_api=object(),
-        namespace="preview",
+        namespace="staging",
         assistant_id="1207",
         binding_id="binding-1",
         attempt_id="attempt-1",
@@ -193,7 +193,7 @@ def test_run_vm_assignment_persists_capacity_result(monkeypatch):
 
 def test_run_guest_health_probe_records_ready_signal(monkeypatch):
     record_signal = MagicMock()
-    vm_ref = {"name": "unity-pool-ubuntu-1-preview", "hostname": "vm-1.vm.unify.ai"}
+    vm_ref = {"name": "unity-pool-ubuntu-1-staging", "hostname": "vm-1.vm.unify.ai"}
 
     monkeypatch.setattr(
         workers,
@@ -209,7 +209,7 @@ def test_run_guest_health_probe_records_ready_signal(monkeypatch):
 
     workers._run_guest_health_probe(
         custom_api=object(),
-        namespace="preview",
+        namespace="staging",
         assistant_id="1207",
         binding_id="binding-1",
         vm_ref=vm_ref,
@@ -239,10 +239,10 @@ def test_run_vm_release_request_records_requested_signal(monkeypatch):
 
     workers._run_vm_release_request(
         custom_api=object(),
-        namespace="preview",
+        namespace="staging",
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="unity-pool-ubuntu-1-preview",
+        vm_name="unity-pool-ubuntu-1-staging",
         release_generation=1,
     )
 
@@ -253,7 +253,7 @@ def test_run_vm_release_request_records_requested_signal(monkeypatch):
     assert record_signal.call_args.kwargs["payload"]["state"] == "requested"
     assert (
         record_signal.call_args.kwargs["payload"]["vmName"]
-        == "unity-pool-ubuntu-1-preview"
+        == "unity-pool-ubuntu-1-staging"
     )
     assert record_signal.call_args.kwargs["payload"]["releaseGeneration"] == 1
 
@@ -270,10 +270,10 @@ def test_run_vm_release_request_skips_stale_binding(monkeypatch):
 
     workers._run_vm_release_request(
         custom_api=object(),
-        namespace="preview",
+        namespace="staging",
         assistant_id="1207",
         binding_id="binding-1",
-        vm_name="unity-pool-ubuntu-1-preview",
+        vm_name="unity-pool-ubuntu-1-staging",
         release_generation=1,
     )
 

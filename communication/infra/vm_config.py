@@ -102,6 +102,9 @@ POOL_VM_NAME_PREFIX = "unity-pool"
 
 SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
+# GCS bucket for archiving assistant filesystems between sessions
+POOL_ASSISTANT_ARCHIVE_BUCKET = "unity-assistant-archives"
+
 # Pool image families (separate from legacy to avoid affecting existing VMs)
 POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"
 POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"

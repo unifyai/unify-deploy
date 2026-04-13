@@ -91,6 +91,7 @@ from .vm_helpers import (
     split_binding_runtime_vms,
     detach_assistant_disk,
     delete_assistant_disk,
+    reconcile_orphaned_disks,
 )
 from .tunnel_helpers import (
     register_tunnel,
@@ -127,7 +128,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_UNITY_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest"
 TERMINAL_SESSION_PRUNE_DEFAULT_LIMIT = 50
 TERMINAL_SESSION_PRUNE_MAX_LIMIT = 200
-TERMINAL_SESSION_PRUNE_PREVIEW_RETENTION_HOURS = 6.0
 TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS = 24.0
 TERMINAL_SESSION_GHOST_HEAL_GRACE_MINUTES = 10.0
 
@@ -141,7 +141,6 @@ START_JOB_LEASE_WAIT_TIMEOUT_SECONDS = START_JOB_LEASE_DURATION_SECONDS + 5
 START_JOB_LEASE_POLL_INTERVAL_SECONDS = 0.2
 START_JOB_TERMINATING_SESSION_WAIT_TIMEOUT_SECONDS = 5.0
 ASSISTANT_SESSION_CONTROLLER_DEPLOYMENTS = {
-    "preview": "assistant-session-controller-preview",
     "staging": "assistant-session-controller-staging",
 }
 
@@ -2641,9 +2640,6 @@ def _terminal_session_ghost_heal_skip_reason(
 
 def _default_terminal_session_prune_retention_hours() -> float:
     """Return the environment-specific retention window for terminal sessions."""
-
-    if SETTINGS.deploy_env == "preview":
-        return TERMINAL_SESSION_PRUNE_PREVIEW_RETENTION_HOURS
     return TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS
 
 
@@ -3081,6 +3077,20 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
 
     batch_api, _, _, _ = await _get_k8s_clients()
     result = await asyncio.to_thread(reconcile_orphaned_vms, batch_api, vm_type)
+    return result
+
+
+@router.post("/vm/pool/reconcile-orphan-disks")
+async def reconcile_orphaned_disks_endpoint(max_age_hours: int = 72):
+    """Delete unattached assistant disks whose assistants no longer exist.
+
+    Workspace files are archived to GCS on release, so PDs are no longer
+    the sole durable copy.  A disk is deleted when the assistant no
+    longer exists in Orchestra **and** the disk has been unattached for
+    at least *max_age_hours* (default 3 days).
+    Safe to call on a cron schedule (e.g. daily).
+    """
+    result = await asyncio.to_thread(reconcile_orphaned_disks, max_age_hours)
     return result
 
 
