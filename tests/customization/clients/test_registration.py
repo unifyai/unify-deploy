@@ -2,8 +2,8 @@
 
 Tests the full pipeline: DeploymentSpec -> register_client() ->
 resolve_from_deployments() / resolve().  Verifies isolated resolution,
-environment guardrails, inheritance via derive(), and correct
-mapping-based routing.
+environment guardrails, inheritance via derive(), correct
+mapping-based routing, and shared seed-data layers.
 """
 
 from __future__ import annotations
@@ -25,9 +25,11 @@ from unity_deploy.customization.deployment_types import (
     EnvironmentConfig,
     GuidanceEntry,
     SecretEntry,
+    SeedLayer,
     _merge_actor_configs,
     detect_environment,
     register_client,
+    register_layer,
     resolve_deployment_name,
 )
 
@@ -424,7 +426,7 @@ class TestIsolatedResolution:
         assert result is not None
         assert result.config.guidelines == "Assistant v1"
         assert len(result.guidance) == 1
-        assert result.guidance[0]["title"] == "v1 guide"
+        assert result.guidance[0].title == "v1 guide"
 
     def test_default_catches_unmatched_session(self, monkeypatch):
         self._register_with_default(monkeypatch)
@@ -493,7 +495,7 @@ class TestIsolatedResolution:
         register_client("test", mapping, Path("/fake"))
 
         result = resolve(org_id=10)
-        secret_names = {s["name"] for s in result.secrets}
+        secret_names = {s.name for s in result.secrets}
         assert "KEY_A" in secret_names
 
 
@@ -594,3 +596,296 @@ class TestEnvironmentConfig:
         )
         assert cfg.user_id == "user-abc"
         assert cfg.org_id is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestSeedLayers — shared seed data layering
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestSeedLayers:
+    """Verify register_layer() and the merge behaviour in _spec_to_resolved."""
+
+    def _register(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        spec = _make_spec("v0", "Default v0")
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        register_client("test_client", mapping, Path("/fake"))
+
+    # -- registration API --
+
+    def test_register_layer_stores_on_entry(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "org",
+            "7",
+            SeedLayer(contacts=[{"first_name": "Alice", "surname": "Smith"}]),
+        )
+        entry = _CLIENT_DEPLOYMENTS["test_client"]
+        assert "org:7" in entry.layers
+        assert len(entry.layers["org:7"].contacts) == 1
+
+    def test_register_layer_requires_existing_client(self):
+        with pytest.raises(KeyError, match="not registered"):
+            register_layer(
+                "nonexistent",
+                "org",
+                "1",
+                SeedLayer(contacts=[{"first_name": "X"}]),
+            )
+
+    def test_register_layer_validates_scope(self, monkeypatch):
+        self._register(monkeypatch)
+        with pytest.raises(ValueError, match="Invalid scope"):
+            register_layer("test_client", "galaxy", "1", SeedLayer())
+
+    # -- contacts merge --
+
+    def test_org_layer_contacts_merged(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "org",
+            "10",
+            SeedLayer(contacts=[{"first_name": "Org", "surname": "Contact"}]),
+        )
+        result = resolve(org_id=10)
+        names = [(c["first_name"], c["surname"]) for c in result.contacts]
+        assert ("Org", "Contact") in names
+
+    def test_user_layer_contacts_override_org(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "org",
+            "10",
+            SeedLayer(
+                contacts=[
+                    {"first_name": "Shared", "surname": "Person", "email": "org@x.com"},
+                ],
+            ),
+        )
+        register_layer(
+            "test_client",
+            "user",
+            "user-aaa",
+            SeedLayer(
+                contacts=[
+                    {
+                        "first_name": "Shared",
+                        "surname": "Person",
+                        "email": "user@x.com",
+                    },
+                ],
+            ),
+        )
+        result = resolve(org_id=10, user_id="user-aaa")
+        by_name = {f"{c['first_name']}|{c['surname']}": c for c in result.contacts}
+        assert by_name["Shared|Person"]["email"] == "user@x.com"
+
+    # -- guidance merge --
+
+    def test_team_layer_guidance_added(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "team",
+            "100",
+            SeedLayer(
+                guidance=[
+                    GuidanceEntry(
+                        title="Team tip",
+                        content="Extra guidance " + "x" * 50,
+                    ),
+                ],
+            ),
+        )
+        result = resolve(org_id=10, team_ids=[100])
+        titles = {g.title for g in result.guidance}
+        assert "Team tip" in titles
+        assert "v0 guide" in titles
+
+    def test_guidance_overlay_wins_by_title(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "user",
+            "user-aaa",
+            SeedLayer(
+                guidance=[
+                    GuidanceEntry(
+                        title="v0 guide",
+                        content="Overridden guidance content " + "x" * 50,
+                    ),
+                ],
+            ),
+        )
+        result = resolve(org_id=10, user_id="user-aaa")
+        by_title = {g.title: g for g in result.guidance}
+        assert "Overridden" in by_title["v0 guide"].content
+
+    # -- knowledge merge --
+
+    def test_knowledge_deep_merge(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "org",
+            "10",
+            SeedLayer(
+                knowledge={
+                    "Companies": {
+                        "columns": {"name": "str"},
+                        "seed_key": "name",
+                        "rows": [{"name": "Acme"}],
+                    },
+                },
+            ),
+        )
+        register_layer(
+            "test_client",
+            "user",
+            "user-aaa",
+            SeedLayer(
+                knowledge={
+                    "Companies": {
+                        "columns": {"industry": "str"},
+                        "rows": [{"name": "Acme", "industry": "Tech"}],
+                    },
+                },
+            ),
+        )
+        result = resolve(org_id=10, user_id="user-aaa")
+        tbl = result.knowledge["Companies"]
+        assert "name" in tbl["columns"]
+        assert "industry" in tbl["columns"]
+        assert len(tbl["rows"]) == 1
+        assert tbl["rows"][0]["industry"] == "Tech"
+
+    # -- blacklist merge --
+
+    def test_blacklist_dedup_by_medium_and_detail(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "org",
+            "10",
+            SeedLayer(
+                blacklist=[
+                    {"medium": "email", "contact_detail": "spam@x", "reason": "org"},
+                ],
+            ),
+        )
+        register_layer(
+            "test_client",
+            "assistant",
+            "99",
+            SeedLayer(
+                blacklist=[
+                    {"medium": "email", "contact_detail": "spam@x", "reason": "asst"},
+                ],
+            ),
+        )
+        result = resolve(org_id=10, assistant_id=99)
+        assert len(result.blacklist) == 1
+        assert result.blacklist[0]["reason"] == "asst"
+
+    # -- secrets merge --
+
+    def test_secrets_layer_merged_with_spec(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        spec = DeploymentSpec(
+            name="v0",
+            actor_config=ActorConfig(guidelines="G"),
+            guidance=[GuidanceEntry(title="g", content="c " + "x" * 50)],
+            secrets=[SecretEntry(name="CODE_KEY", value="from-spec", description="d")],
+        )
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        register_client("sec_client", mapping, Path("/fake"))
+        register_layer(
+            "sec_client",
+            "org",
+            "10",
+            SeedLayer(
+                secrets=[
+                    SecretEntry(name="ORG_KEY", value="org-val", description="org"),
+                ],
+            ),
+        )
+        result = resolve(org_id=10)
+        names = {s.name for s in result.secrets}
+        assert "CODE_KEY" in names
+        assert "ORG_KEY" in names
+
+    # -- scope order --
+
+    def test_full_scope_order_org_team_user_assistant(self, monkeypatch):
+        self._register(monkeypatch)
+        register_layer(
+            "test_client",
+            "org",
+            "10",
+            SeedLayer(
+                contacts=[
+                    {"first_name": "Shared", "surname": "X", "level": "org"},
+                ],
+            ),
+        )
+        register_layer(
+            "test_client",
+            "team",
+            "50",
+            SeedLayer(
+                contacts=[
+                    {"first_name": "Shared", "surname": "X", "level": "team"},
+                ],
+            ),
+        )
+        register_layer(
+            "test_client",
+            "user",
+            "user-aaa",
+            SeedLayer(
+                contacts=[
+                    {"first_name": "Shared", "surname": "X", "level": "user"},
+                ],
+            ),
+        )
+        register_layer(
+            "test_client",
+            "assistant",
+            "99",
+            SeedLayer(
+                contacts=[
+                    {"first_name": "Shared", "surname": "X", "level": "asst"},
+                ],
+            ),
+        )
+        result = resolve(
+            org_id=10,
+            team_ids=[50],
+            user_id="user-aaa",
+            assistant_id=99,
+        )
+        assert len(result.contacts) == 1
+        assert result.contacts[0]["level"] == "asst"
+
+    # -- no layers = unchanged --
+
+    def test_no_layers_returns_spec_data_only(self, monkeypatch):
+        self._register(monkeypatch)
+        result = resolve(org_id=10)
+        assert result.config.guidelines == "Default v0"
+        assert len(result.guidance) == 1
+        assert result.contacts == []
