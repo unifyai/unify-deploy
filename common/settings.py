@@ -136,6 +136,24 @@ class Settings:
             "dan@unify.ai",
         )
 
+        # Microsoft 365 provisioning (tenant-level app for creating/managing users)
+        self.ms365_email_domain: str = os.environ.get(
+            "MS365_EMAIL_DOMAIN",
+            "unify.ai",
+        )
+        self.ms365_admin_tenant_id: str = os.environ.get(
+            "MS365_ADMIN_TENANT_ID",
+            "",
+        )
+        self.ms365_admin_client_id: str = os.environ.get(
+            "MS365_ADMIN_CLIENT_ID",
+            "",
+        )
+        self.ms365_license_sku_id: str = os.environ.get(
+            "MS365_LICENSE_SKU_ID",
+            "",
+        )
+
         # K8s Lease-based assignment
         self.lease_duration_seconds: int = 60
 
