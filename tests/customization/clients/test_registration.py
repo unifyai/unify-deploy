@@ -1,12 +1,9 @@
-"""Multi-deployment registration and resolution integration tests.
+"""Deployment registration and resolution tests.
 
-Tests the full pipeline: DeploymentSpec -> register_deployment() /
-register_all_deployments() -> resolve().  Verifies multi-deployment
-isolation, scoped registration across user/org/team/assistant, and
-correct cascade behaviour when multiple deployments are live.
-
-Uses the same registry snapshot/restore pattern as test_resolve.py
-so each test starts with clean global state.
+Tests the full pipeline: DeploymentSpec -> register_client() ->
+resolve_from_deployments() / resolve().  Verifies isolated resolution,
+environment guardrails, inheritance via derive(), and correct
+mapping-based routing.
 """
 
 from __future__ import annotations
@@ -17,51 +14,20 @@ import pytest
 
 from unity_deploy.customization.configs.types.actor_config import ActorConfig
 from unity_deploy.customization.clients import (
-    _ORG_CONFIGS,
-    _ORG_ENVIRONMENTS,
-    _ORG_FUNCTION_DIRS,
-    _ORG_VENV_DIRS,
-    _ORG_CONTACTS,
-    _ORG_GUIDANCE,
-    _ORG_KNOWLEDGE,
-    _ORG_BLACKLIST,
-    _ORG_SECRETS,
-    _TEAM_CONFIGS,
-    _TEAM_ENVIRONMENTS,
-    _TEAM_FUNCTION_DIRS,
-    _TEAM_VENV_DIRS,
-    _TEAM_CONTACTS,
-    _TEAM_GUIDANCE,
-    _TEAM_KNOWLEDGE,
-    _TEAM_BLACKLIST,
-    _TEAM_SECRETS,
-    _USER_CONFIGS,
-    _USER_ENVIRONMENTS,
-    _USER_FUNCTION_DIRS,
-    _USER_VENV_DIRS,
-    _USER_CONTACTS,
-    _USER_GUIDANCE,
-    _USER_KNOWLEDGE,
-    _USER_BLACKLIST,
-    _USER_SECRETS,
-    _ASSISTANT_CONFIGS,
-    _ASSISTANT_ENVIRONMENTS,
-    _ASSISTANT_FUNCTION_DIRS,
-    _ASSISTANT_VENV_DIRS,
-    _ASSISTANT_CONTACTS,
-    _ASSISTANT_GUIDANCE,
-    _ASSISTANT_KNOWLEDGE,
-    _ASSISTANT_BLACKLIST,
-    _ASSISTANT_SECRETS,
+    _CLIENT_DEPLOYMENTS,
     resolve,
+    resolve_from_deployments,
 )
 from unity_deploy.customization.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
+    EnvironmentConfig,
     GuidanceEntry,
     SecretEntry,
-    register_deployment,
+    _merge_actor_configs,
+    detect_environment,
+    register_client,
     resolve_deployment_name,
 )
 
@@ -69,56 +35,15 @@ from unity_deploy.customization.deployment_types import (
 # Registry cleanup fixture
 # ---------------------------------------------------------------------------
 
-_ALL_DICTS = [
-    _ORG_CONFIGS,
-    _ORG_ENVIRONMENTS,
-    _ORG_FUNCTION_DIRS,
-    _ORG_VENV_DIRS,
-    _ORG_CONTACTS,
-    _ORG_GUIDANCE,
-    _ORG_KNOWLEDGE,
-    _ORG_BLACKLIST,
-    _ORG_SECRETS,
-    _TEAM_CONFIGS,
-    _TEAM_ENVIRONMENTS,
-    _TEAM_FUNCTION_DIRS,
-    _TEAM_VENV_DIRS,
-    _TEAM_CONTACTS,
-    _TEAM_GUIDANCE,
-    _TEAM_KNOWLEDGE,
-    _TEAM_BLACKLIST,
-    _TEAM_SECRETS,
-    _USER_CONFIGS,
-    _USER_ENVIRONMENTS,
-    _USER_FUNCTION_DIRS,
-    _USER_VENV_DIRS,
-    _USER_CONTACTS,
-    _USER_GUIDANCE,
-    _USER_KNOWLEDGE,
-    _USER_BLACKLIST,
-    _USER_SECRETS,
-    _ASSISTANT_CONFIGS,
-    _ASSISTANT_ENVIRONMENTS,
-    _ASSISTANT_FUNCTION_DIRS,
-    _ASSISTANT_VENV_DIRS,
-    _ASSISTANT_CONTACTS,
-    _ASSISTANT_GUIDANCE,
-    _ASSISTANT_KNOWLEDGE,
-    _ASSISTANT_BLACKLIST,
-    _ASSISTANT_SECRETS,
-]
-
 
 @pytest.fixture(autouse=True)
 def _clean_registry():
-    """Snapshot and restore all 36 registry dicts so tests don't leak."""
-    saved = [dict(d) for d in _ALL_DICTS]
-    for d in _ALL_DICTS:
-        d.clear()
+    """Snapshot and restore the client deployment registry so tests don't leak."""
+    saved_clients = dict(_CLIENT_DEPLOYMENTS)
+    _CLIENT_DEPLOYMENTS.clear()
     yield
-    for d, s in zip(_ALL_DICTS, saved):
-        d.clear()
-        d.update(s)
+    _CLIENT_DEPLOYMENTS.clear()
+    _CLIENT_DEPLOYMENTS.update(saved_clients)
 
 
 # ---------------------------------------------------------------------------
@@ -149,327 +74,6 @@ def _make_spec(
 
 _FAKE_DIR_A = Path("/tmp/test_funcs_a")
 _FAKE_DIR_B = Path("/tmp/test_funcs_b")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# TestRegisterDeployment — unit tests for register_deployment()
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestRegisterDeployment:
-
-    def test_register_for_user(self):
-        spec = _make_spec("v1", "User deployment")
-        register_deployment(spec, user_id="user-aaa")
-        r = resolve(user_id="user-aaa")
-        assert r.config.guidelines == "User deployment"
-        assert len(r.guidance) == 1
-        assert r.guidance[0]["title"] == "v1 guide"
-
-    def test_register_for_org(self):
-        spec = _make_spec("v0", "Org deployment")
-        register_deployment(spec, org_id=10)
-        r = resolve(org_id=10)
-        assert r.config.guidelines == "Org deployment"
-
-    def test_register_for_team(self):
-        spec = _make_spec("v2", "Team deployment")
-        register_deployment(spec, team_id=42)
-        r = resolve(team_ids=[42])
-        assert r.config.guidelines == "Team deployment"
-
-    def test_register_for_assistant(self):
-        spec = _make_spec("v3", "Assistant deployment")
-        register_deployment(spec, assistant_id=99)
-        r = resolve(assistant_id=99)
-        assert r.config.guidelines == "Assistant deployment"
-
-    def test_function_dir_omitted_when_none(self):
-        spec = _make_spec("light", "No functions")
-        register_deployment(spec, user_id="user-bbb")
-        r = resolve(user_id="user-bbb")
-        assert r.function_dirs == []
-
-    def test_function_dir_passed_through(self):
-        spec = _make_spec("heavy", "With functions", function_dir=_FAKE_DIR_A)
-        register_deployment(spec, user_id="user-ccc")
-        r = resolve(user_id="user-ccc")
-        assert r.function_dirs == [_FAKE_DIR_A]
-
-    def test_secrets_passed_through(self):
-        secrets = [
-            SecretEntry(name="KEY_A", value="val-a", description="Secret A"),
-            SecretEntry(name="KEY_B", value="val-b", description="Secret B"),
-        ]
-        spec = _make_spec("sec", "With secrets", secrets=secrets)
-        register_deployment(spec, user_id="user-ddd")
-        r = resolve(user_id="user-ddd")
-        secret_names = {s["name"] for s in r.secrets}
-        assert "KEY_A" in secret_names
-        assert "KEY_B" in secret_names
-
-    def test_assistant_priority_over_user(self):
-        """When both assistant_id and user_id are passed, assistant wins."""
-        spec = _make_spec("v1", "Ast takes priority")
-        register_deployment(spec, assistant_id=5, user_id="user-eee")
-        assert 5 in _ASSISTANT_CONFIGS
-        assert "user-eee" not in _USER_CONFIGS
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# TestRegisterAllDeployments — needs real filesystem for load_deployment,
-# so we mock load_deployment and test the orchestration logic
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestRegisterAllDeployments:
-
-    def test_user_and_default_org_both_registered(self, monkeypatch):
-        from unity_deploy.customization import deployment_types as dt
-
-        v0 = _make_spec("v0", "Org default v0")
-        v1 = _make_spec("v1", "User v1")
-
-        def fake_load(deployments_dir, name):
-            return {"v0": v0, "v1": v1}[name]
-
-        monkeypatch.setattr(dt, "load_deployment", fake_load)
-
-        mapping = DeploymentMapping(
-            targets=[
-                DeploymentTarget(scope="user", scope_id="user-aaa", deployment="v1"),
-                DeploymentTarget(scope="default", deployment="v0"),
-            ],
-        )
-        loaded = dt.register_all_deployments(
-            mapping,
-            Path("/fake"),
-            default_org_id=10,
-        )
-
-        assert "v0" in loaded and "v1" in loaded
-
-        r_user = resolve(org_id=10, user_id="user-aaa")
-        assert "User v1" in r_user.config.guidelines
-
-        r_org = resolve(org_id=10, user_id="user-unknown")
-        assert r_org.config.guidelines == "Org default v0"
-
-    def test_team_target_registered(self, monkeypatch):
-        from unity_deploy.customization import deployment_types as dt
-
-        spec = _make_spec("team-deploy", "Team 42 deployment")
-
-        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
-
-        mapping = DeploymentMapping(
-            targets=[
-                DeploymentTarget(scope="team", scope_id="42", deployment="team-deploy"),
-            ],
-        )
-        dt.register_all_deployments(mapping, Path("/fake"))
-
-        r = resolve(team_ids=[42])
-        assert r.config.guidelines == "Team 42 deployment"
-
-    def test_assistant_target_registered(self, monkeypatch):
-        from unity_deploy.customization import deployment_types as dt
-
-        spec = _make_spec("ast-deploy", "Assistant 99 deployment")
-
-        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
-
-        mapping = DeploymentMapping(
-            targets=[
-                DeploymentTarget(
-                    scope="assistant",
-                    scope_id="99",
-                    deployment="ast-deploy",
-                ),
-            ],
-        )
-        dt.register_all_deployments(mapping, Path("/fake"))
-
-        r = resolve(assistant_id=99)
-        assert r.config.guidelines == "Assistant 99 deployment"
-
-    def test_default_skipped_without_ids(self, monkeypatch):
-        from unity_deploy.customization import deployment_types as dt
-
-        spec = _make_spec("v0", "Default")
-
-        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
-
-        mapping = DeploymentMapping(
-            targets=[
-                DeploymentTarget(scope="default", deployment="v0"),
-            ],
-        )
-        dt.register_all_deployments(mapping, Path("/fake"))
-
-        r = resolve()
-        assert r.config == ActorConfig()
-
-    def test_loaded_specs_returned(self, monkeypatch):
-        from unity_deploy.customization import deployment_types as dt
-
-        v0 = _make_spec("v0", "Zero")
-        v1 = _make_spec("v1", "One")
-
-        monkeypatch.setattr(dt, "load_deployment", lambda d, n: {"v0": v0, "v1": v1}[n])
-
-        mapping = DeploymentMapping(
-            targets=[
-                DeploymentTarget(scope="user", scope_id="u1", deployment="v1"),
-                DeploymentTarget(scope="default", deployment="v0"),
-            ],
-        )
-        loaded = dt.register_all_deployments(
-            mapping,
-            Path("/fake"),
-            default_org_id=1,
-        )
-
-        assert set(loaded.keys()) == {"v0", "v1"}
-        assert loaded["v0"].name == "v0"
-        assert loaded["v1"].name == "v1"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# TestMultiDeploymentIsolation — the critical parallel deployment tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestMultiDeploymentIsolation:
-
-    def test_user_gets_own_deployment_not_org_default(self):
-        v0 = _make_spec("v0", "Org default v0")
-        v1 = _make_spec("v1", "User A v1")
-
-        register_deployment(v0, org_id=10)
-        register_deployment(v1, user_id="user-A")
-
-        r_a = resolve(org_id=10, user_id="user-A")
-        assert "User A v1" in r_a.config.guidelines
-
-        r_b = resolve(org_id=10, user_id="user-B")
-        assert r_b.config.guidelines == "Org default v0"
-
-    def test_two_users_different_deployments(self):
-        v0 = _make_spec("v0", "Org default")
-        v1 = _make_spec("v1", "User A custom")
-        v2 = _make_spec("v2", "User B custom")
-
-        register_deployment(v0, org_id=10)
-        register_deployment(v1, user_id="user-A")
-        register_deployment(v2, user_id="user-B")
-
-        r_a = resolve(org_id=10, user_id="user-A")
-        assert "User A custom" in r_a.config.guidelines
-
-        r_b = resolve(org_id=10, user_id="user-B")
-        assert "User B custom" in r_b.config.guidelines
-
-        r_c = resolve(org_id=10, user_id="user-C")
-        assert r_c.config.guidelines == "Org default"
-
-    def test_team_deployment_does_not_leak_to_other_teams(self):
-        dep_x = _make_spec("deploy-x", "Team 10 deployment")
-        dep_y = _make_spec("deploy-y", "Team 20 deployment")
-
-        register_deployment(dep_x, team_id=10)
-        register_deployment(dep_y, team_id=20)
-
-        r_10 = resolve(team_ids=[10])
-        assert r_10.config.guidelines == "Team 10 deployment"
-
-        r_20 = resolve(team_ids=[20])
-        assert r_20.config.guidelines == "Team 20 deployment"
-
-        r_none = resolve(team_ids=[99])
-        assert r_none.config == ActorConfig()
-
-    def test_assistant_overrides_user_deployment(self):
-        v1 = _make_spec("v1", "User config")
-        v2 = _make_spec("v2", "Assistant config")
-
-        register_deployment(v1, user_id="user-A")
-        register_deployment(v2, assistant_id=55)
-
-        r = resolve(user_id="user-A", assistant_id=55)
-        assert "Assistant config" in r.config.guidelines
-        assert "User config" in r.config.guidelines
-        assert len(r.guidance) == 2
-
-    def test_function_dirs_isolated_per_scope(self):
-        v0 = _make_spec("v0", "Org", function_dir=_FAKE_DIR_A)
-        v1 = _make_spec("v1", "User", function_dir=_FAKE_DIR_B)
-
-        register_deployment(v0, org_id=10)
-        register_deployment(v1, user_id="user-A")
-
-        r_a = resolve(org_id=10, user_id="user-A")
-        assert r_a.function_dirs == [_FAKE_DIR_A, _FAKE_DIR_B]
-
-        r_b = resolve(org_id=10, user_id="user-B")
-        assert r_b.function_dirs == [_FAKE_DIR_A]
-
-    def test_secrets_isolated_per_scope(self):
-        org_secrets = [
-            SecretEntry(name="ORG_KEY", value="org-val", description="Org secret"),
-        ]
-        user_secrets = [
-            SecretEntry(name="USR_KEY", value="usr-val", description="User secret"),
-        ]
-
-        v0 = _make_spec("v0", "Org", secrets=org_secrets)
-        v1 = _make_spec("v1", "User", secrets=user_secrets)
-
-        register_deployment(v0, org_id=10)
-        register_deployment(v1, user_id="user-A")
-
-        r_a = resolve(org_id=10, user_id="user-A")
-        a_names = {s["name"] for s in r_a.secrets}
-        assert "ORG_KEY" in a_names
-        assert "USR_KEY" in a_names
-
-        r_b = resolve(org_id=10, user_id="user-B")
-        b_names = {s["name"] for s in r_b.secrets}
-        assert "ORG_KEY" in b_names
-        assert "USR_KEY" not in b_names
-
-    def test_guidance_isolated_per_scope(self):
-        v0 = _make_spec("v0", "Org")
-        v1 = _make_spec("v1", "User")
-
-        register_deployment(v0, org_id=10)
-        register_deployment(v1, user_id="user-A")
-
-        r_a = resolve(org_id=10, user_id="user-A")
-        a_titles = {g["title"] for g in r_a.guidance}
-        assert "v0 guide" in a_titles
-        assert "v1 guide" in a_titles
-
-        r_b = resolve(org_id=10, user_id="user-B")
-        b_titles = {g["title"] for g in r_b.guidance}
-        assert "v0 guide" in b_titles
-        assert "v1 guide" not in b_titles
-
-    def test_org_team_user_assistant_full_cascade(self):
-        """All four scopes registered — most specific wins on config."""
-        spec_org = _make_spec("org-dep", "Org level")
-        spec_team = _make_spec("team-dep", "Team level")
-        spec_user = _make_spec("user-dep", "User level")
-        spec_ast = _make_spec("ast-dep", "Assistant level")
-
-        register_deployment(spec_org, org_id=1)
-        register_deployment(spec_team, team_id=10)
-        register_deployment(spec_user, user_id="user-X")
-        register_deployment(spec_ast, assistant_id=77)
-
-        r = resolve(org_id=1, team_ids=[10], user_id="user-X", assistant_id=77)
-        assert "Assistant level" in r.config.guidelines
-        assert len(r.guidance) == 4
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -561,3 +165,404 @@ class TestDeploymentMappingResolution:
             ],
         )
         assert resolve_deployment_name(mapping, team_ids=[20, 10]) == "team10-dep"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestDetectEnvironment — environment detection from ORCHESTRA_URL
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestDetectEnvironment:
+
+    def test_staging_url(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRA_URL", "https://internal.example.com/v0")
+        assert detect_environment() == "staging"
+
+    def test_production_url(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRA_URL", "https://api.unify.ai/v0")
+        assert detect_environment() == "production"
+
+    def test_localhost_url(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRA_URL", "http://localhost:8000")
+        assert detect_environment() == "development"
+
+    def test_127_url(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRA_URL", "http://127.0.0.1:8000")
+        assert detect_environment() == "development"
+
+    def test_unset_defaults_to_production(self, monkeypatch):
+        monkeypatch.delenv("ORCHESTRA_URL", raising=False)
+        assert detect_environment() == "production"
+
+    def test_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv("ORCHESTRA_URL", "https://STAGING.Internal.Saas.Unify.AI/v0")
+        assert detect_environment() == "staging"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestDeploymentSpecDerive — inheritance via .derive()
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestDeploymentSpecDerive:
+
+    def test_basic_field_override(self):
+        base = _make_spec("base", "Base guidelines")
+        derived = base.derive(name="v1")
+        assert derived.name == "v1"
+        assert derived.actor_config.guidelines == "Base guidelines"
+
+    def test_actor_config_deep_merge(self):
+        base = DeploymentSpec(
+            name="base",
+            actor_config=ActorConfig(
+                guidelines="Base guidelines",
+                model="claude-4.5-opus@anthropic",
+            ),
+        )
+        derived = base.derive(
+            name="v1",
+            actor_config=ActorConfig(guidelines="Override guidelines"),
+        )
+        assert derived.actor_config.guidelines == "Override guidelines"
+        assert derived.actor_config.model == "claude-4.5-opus@anthropic"
+
+    def test_actor_config_base_preserved_when_override_none(self):
+        base = DeploymentSpec(
+            name="base",
+            actor_config=ActorConfig(can_compose=True, timeout=120.0),
+        )
+        derived = base.derive(
+            name="v1",
+            actor_config=ActorConfig(can_compose=False),
+        )
+        assert derived.actor_config.can_compose is False
+        assert derived.actor_config.timeout == 120.0
+
+    def test_guidance_replaced_wholesale(self):
+        base = _make_spec("base", "Base")
+        new_guidance = [
+            GuidanceEntry(title="New", content="New content " + "x" * 50),
+        ]
+        derived = base.derive(name="v1", guidance=new_guidance)
+        assert len(derived.guidance) == 1
+        assert derived.guidance[0].title == "New"
+
+    def test_guidance_inherited_when_not_passed(self):
+        base = _make_spec("base", "Base")
+        derived = base.derive(name="v1")
+        assert len(derived.guidance) == len(base.guidance)
+        assert derived.guidance[0].title == base.guidance[0].title
+
+    def test_function_dir_override(self):
+        base = _make_spec("base", "Base", function_dir=_FAKE_DIR_A)
+        derived = base.derive(name="v1", function_dir=_FAKE_DIR_B)
+        assert derived.function_dir == _FAKE_DIR_B
+
+    def test_secrets_inherited(self):
+        secrets = [
+            SecretEntry(name="KEY_A", value="val", description="Desc"),
+        ]
+        base = _make_spec("base", "Base", secrets=secrets)
+        derived = base.derive(name="v1")
+        assert len(derived.secrets) == 1
+        assert derived.secrets[0].name == "KEY_A"
+
+    def test_secrets_replaced_when_passed(self):
+        base_secrets = [
+            SecretEntry(name="OLD", value="old", description="Old"),
+        ]
+        new_secrets = [
+            SecretEntry(name="NEW", value="new", description="New"),
+        ]
+        base = _make_spec("base", "Base", secrets=base_secrets)
+        derived = base.derive(name="v1", secrets=new_secrets)
+        assert len(derived.secrets) == 1
+        assert derived.secrets[0].name == "NEW"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestMergeActorConfigs — the helper used by derive()
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMergeActorConfigs:
+
+    def test_override_wins(self):
+        base = ActorConfig(guidelines="base", model="gpt-4")
+        override = ActorConfig(guidelines="override")
+        merged = _merge_actor_configs(base, override)
+        assert merged.guidelines == "override"
+        assert merged.model == "gpt-4"
+
+    def test_all_none_override_keeps_base(self):
+        base = ActorConfig(guidelines="base", can_compose=True)
+        override = ActorConfig()
+        merged = _merge_actor_configs(base, override)
+        assert merged.guidelines == "base"
+        assert merged.can_compose is True
+
+    def test_both_none_stays_none(self):
+        merged = _merge_actor_configs(ActorConfig(), ActorConfig())
+        assert merged.guidelines is None
+        assert merged.model is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestRegisterClient — isolated registration path
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRegisterClient:
+
+    def test_registers_into_client_deployments(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        v0 = _make_spec("v0", "Default v0")
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: v0)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        loaded = register_client(
+            "test_client",
+            mapping,
+            Path("/fake"),
+            default_org_id=10,
+            environment="production",
+        )
+
+        assert "v0" in loaded
+        assert "test_client" in _CLIENT_DEPLOYMENTS
+        entry = _CLIENT_DEPLOYMENTS["test_client"]
+        assert entry.default_org_id == 10
+        assert entry.environment == "production"
+
+    def test_multiple_deployments_loaded_once(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        call_count = {"v0": 0, "v1": 0}
+        v0 = _make_spec("v0", "Default v0")
+        v1 = _make_spec("v1", "Assistant v1")
+
+        def counting_load(d, n):
+            call_count[n] += 1
+            return {"v0": v0, "v1": v1}[n]
+
+        monkeypatch.setattr(dt, "load_deployment", counting_load)
+
+        mapping = DeploymentMapping(
+            targets=[
+                DeploymentTarget(scope="assistant", scope_id="99", deployment="v1"),
+                DeploymentTarget(scope="assistant", scope_id="100", deployment="v1"),
+                DeploymentTarget(scope="default", deployment="v0"),
+            ],
+        )
+        loaded = register_client("test", mapping, Path("/fake"), default_org_id=10)
+
+        assert set(loaded.keys()) == {"v0", "v1"}
+        assert call_count["v1"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestIsolatedResolution — resolve_from_deployments() returns pure specs
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestIsolatedResolution:
+
+    def _register_test_client(self, monkeypatch, *, environment=None):
+        from unity_deploy.customization import deployment_types as dt
+
+        v0 = _make_spec("v0", "Default v0")
+        v1 = _make_spec("v1", "Assistant v1")
+        monkeypatch.setattr(
+            dt,
+            "load_deployment",
+            lambda d, n: {"v0": v0, "v1": v1}[n],
+        )
+
+        mapping = DeploymentMapping(
+            targets=[
+                DeploymentTarget(scope="assistant", scope_id="99", deployment="v1"),
+                DeploymentTarget(scope="default", deployment="v0"),
+            ],
+        )
+        register_client(
+            "test_client",
+            mapping,
+            Path("/fake"),
+            default_org_id=10,
+            environment=environment,
+        )
+
+    def test_assistant_gets_pure_v1(self, monkeypatch):
+        self._register_test_client(monkeypatch)
+        result = resolve_from_deployments(org_id=10, assistant_id=99)
+        assert result is not None
+        assert result.config.guidelines == "Assistant v1"
+        assert len(result.guidance) == 1
+        assert result.guidance[0]["title"] == "v1 guide"
+
+    def test_default_gets_v0(self, monkeypatch):
+        self._register_test_client(monkeypatch)
+        result = resolve_from_deployments(org_id=10, assistant_id=1)
+        assert result is not None
+        assert result.config.guidelines == "Default v0"
+
+    def test_no_cascade_bleed(self, monkeypatch):
+        """v0 org-level should NOT bleed into v1 assistant-level."""
+        self._register_test_client(monkeypatch)
+        result = resolve_from_deployments(org_id=10, assistant_id=99)
+        assert result is not None
+        assert "Default v0" not in (result.config.guidelines or "")
+        assert len(result.guidance) == 1
+
+    def test_wrong_org_returns_none(self, monkeypatch):
+        self._register_test_client(monkeypatch)
+        result = resolve_from_deployments(org_id=999, assistant_id=99)
+        assert result is None
+
+    def test_resolve_uses_isolated_path(self, monkeypatch):
+        """resolve() should use the isolated path when a client matches."""
+        self._register_test_client(monkeypatch)
+        result = resolve(org_id=10, assistant_id=99)
+        assert result.config.guidelines == "Assistant v1"
+
+    def test_resolve_returns_defaults_when_no_client(self):
+        """resolve() returns empty defaults when no client matches."""
+        result = resolve(org_id=999)
+        assert result.config == ActorConfig()
+        assert result.function_dirs == []
+        assert result.guidance == []
+
+    def test_function_dir_in_resolved(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        spec = _make_spec("v0", "With funcs", function_dir=_FAKE_DIR_A)
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        register_client("test", mapping, Path("/fake"), default_org_id=10)
+
+        result = resolve(org_id=10)
+        assert result.function_dirs == [_FAKE_DIR_A]
+
+    def test_secrets_in_resolved(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        secrets = [
+            SecretEntry(name="KEY_A", value="val-a", description="Secret A"),
+        ]
+        spec = _make_spec("v0", "With secrets", secrets=secrets)
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        register_client("test", mapping, Path("/fake"), default_org_id=10)
+
+        result = resolve(org_id=10)
+        secret_names = {s["name"] for s in result.secrets}
+        assert "KEY_A" in secret_names
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestEnvironmentGuardrail — env mismatch blocks resolution
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestEnvironmentGuardrail:
+
+    def test_env_mismatch_skips_client(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        spec = _make_spec("v0", "Staging-only")
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        register_client(
+            "staging_client",
+            mapping,
+            Path("/fake"),
+            default_org_id=10,
+            environment="staging",
+        )
+
+        monkeypatch.setenv("ORCHESTRA_URL", "https://api.unify.ai/v0")
+        result = resolve_from_deployments(org_id=10)
+        assert result is None
+
+    def test_env_match_resolves(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        spec = _make_spec("v0", "Production-only")
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        register_client(
+            "prod_client",
+            mapping,
+            Path("/fake"),
+            default_org_id=10,
+            environment="production",
+        )
+
+        monkeypatch.setenv("ORCHESTRA_URL", "https://api.unify.ai/v0")
+        result = resolve_from_deployments(org_id=10)
+        assert result is not None
+        assert result.config.guidelines == "Production-only"
+
+    def test_no_env_tag_always_matches(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        spec = _make_spec("v0", "Any env")
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        register_client(
+            "universal_client",
+            mapping,
+            Path("/fake"),
+            default_org_id=10,
+        )
+
+        monkeypatch.setenv("ORCHESTRA_URL", "https://internal.example.com/v0")
+        result = resolve_from_deployments(org_id=10)
+        assert result is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestEnvironmentConfig — model validation
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestEnvironmentConfig:
+
+    def test_org_scoped(self):
+        cfg = EnvironmentConfig(
+            org_id=7,
+            mapping=DeploymentMapping(
+                targets=[DeploymentTarget(scope="default", deployment="v0")],
+            ),
+        )
+        assert cfg.org_id == 7
+        assert cfg.user_id is None
+
+    def test_user_scoped(self):
+        cfg = EnvironmentConfig(
+            user_id="user-abc",
+            mapping=DeploymentMapping(
+                targets=[DeploymentTarget(scope="default", deployment="v0")],
+            ),
+        )
+        assert cfg.user_id == "user-abc"
+        assert cfg.org_id is None

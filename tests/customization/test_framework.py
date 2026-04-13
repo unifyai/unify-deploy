@@ -1,15 +1,13 @@
 """Tests for the customization framework infrastructure.
 
-Covers registration helpers, environment reconstruction, knowledge
-row-level dedup, ActorConfig model behavior, blacklist cascade,
-team-level customization, secrets cascade, custom function collection,
-hash behavior, and the sync_all_seed_data orchestrator.
+Covers ActorConfig model behavior, environment reconstruction helpers,
+secrets file merge order, custom function collection, hash behavior, and
+the sync_all_seed_data orchestrator.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -21,43 +19,6 @@ from unity_deploy.customization.environments.reconstruct import (
 )
 from unity_deploy.customization.clients import (
     ResolvedCustomization,
-    _ORG_CONFIGS,
-    _ORG_ENVIRONMENTS,
-    _ORG_FUNCTION_DIRS,
-    _ORG_VENV_DIRS,
-    _ORG_CONTACTS,
-    _ORG_GUIDANCE,
-    _ORG_KNOWLEDGE,
-    _ORG_BLACKLIST,
-    _TEAM_CONFIGS,
-    _TEAM_ENVIRONMENTS,
-    _TEAM_FUNCTION_DIRS,
-    _TEAM_VENV_DIRS,
-    _TEAM_CONTACTS,
-    _TEAM_GUIDANCE,
-    _TEAM_KNOWLEDGE,
-    _TEAM_BLACKLIST,
-    _USER_CONFIGS,
-    _USER_ENVIRONMENTS,
-    _USER_FUNCTION_DIRS,
-    _USER_VENV_DIRS,
-    _USER_CONTACTS,
-    _USER_GUIDANCE,
-    _USER_KNOWLEDGE,
-    _USER_BLACKLIST,
-    _ASSISTANT_CONFIGS,
-    _ASSISTANT_ENVIRONMENTS,
-    _ASSISTANT_FUNCTION_DIRS,
-    _ASSISTANT_VENV_DIRS,
-    _ASSISTANT_CONTACTS,
-    _ASSISTANT_GUIDANCE,
-    _ASSISTANT_KNOWLEDGE,
-    _ASSISTANT_BLACKLIST,
-    register_org,
-    register_team,
-    register_user,
-    register_assistant,
-    resolve,
 )
 from unity_deploy.customization.seed_sync import (
     _aggregate_hash,
@@ -66,166 +27,8 @@ from unity_deploy.customization.seed_sync import (
 )
 from unity_deploy.customization.secrets_file import load_secrets
 
-_ALL_DICTS = [
-    _ORG_CONFIGS,
-    _ORG_ENVIRONMENTS,
-    _ORG_FUNCTION_DIRS,
-    _ORG_VENV_DIRS,
-    _ORG_CONTACTS,
-    _ORG_GUIDANCE,
-    _ORG_KNOWLEDGE,
-    _ORG_BLACKLIST,
-    _TEAM_CONFIGS,
-    _TEAM_ENVIRONMENTS,
-    _TEAM_FUNCTION_DIRS,
-    _TEAM_VENV_DIRS,
-    _TEAM_CONTACTS,
-    _TEAM_GUIDANCE,
-    _TEAM_KNOWLEDGE,
-    _TEAM_BLACKLIST,
-    _USER_CONFIGS,
-    _USER_ENVIRONMENTS,
-    _USER_FUNCTION_DIRS,
-    _USER_VENV_DIRS,
-    _USER_CONTACTS,
-    _USER_GUIDANCE,
-    _USER_KNOWLEDGE,
-    _USER_BLACKLIST,
-    _ASSISTANT_CONFIGS,
-    _ASSISTANT_ENVIRONMENTS,
-    _ASSISTANT_FUNCTION_DIRS,
-    _ASSISTANT_VENV_DIRS,
-    _ASSISTANT_CONTACTS,
-    _ASSISTANT_GUIDANCE,
-    _ASSISTANT_KNOWLEDGE,
-    _ASSISTANT_BLACKLIST,
-]
-
-
-@pytest.fixture(autouse=True)
-def _clean_registry():
-    saved = [dict(d) for d in _ALL_DICTS]
-    for d in _ALL_DICTS:
-        d.clear()
-    yield
-    for d, s in zip(_ALL_DICTS, saved):
-        d.clear()
-        d.update(s)
-
-
 # ---------------------------------------------------------------------------
-# 1. Registration helpers
-# ---------------------------------------------------------------------------
-
-
-class TestRegisterOrg:
-    def test_registers_config(self):
-        register_org(1, config=ActorConfig(model="m"))
-        assert _ORG_CONFIGS[1].model == "m"
-
-    def test_registers_contacts(self):
-        register_org(1, contacts=[{"first_name": "A"}])
-        assert len(_ORG_CONTACTS[1]) == 1
-
-    def test_registers_guidance(self):
-        register_org(1, guidance=[{"title": "T", "content": "C"}])
-        assert _ORG_GUIDANCE[1][0]["title"] == "T"
-
-    def test_registers_knowledge(self):
-        register_org(
-            1,
-            knowledge={"Tbl": {"columns": {"x": "str"}, "seed_key": "x", "rows": []}},
-        )
-        assert "Tbl" in _ORG_KNOWLEDGE[1]
-
-    def test_registers_blacklist(self):
-        register_org(
-            1,
-            blacklist=[{"medium": "email", "contact_detail": "x", "reason": "y"}],
-        )
-        assert len(_ORG_BLACKLIST[1]) == 1
-
-    def test_registers_function_dir(self):
-        register_org(1, function_dir=Path("/fn"))
-        assert _ORG_FUNCTION_DIRS[1] == [Path("/fn")]
-
-    def test_registers_venv_dir(self):
-        register_org(1, venv_dir=Path("/v"))
-        assert _ORG_VENV_DIRS[1] == [Path("/v")]
-
-    def test_multiple_calls_append(self):
-        register_org(1, contacts=[{"first_name": "A"}])
-        register_org(1, contacts=[{"first_name": "B"}])
-        assert len(_ORG_CONTACTS[1]) == 2
-
-
-class TestRegisterTeam:
-    def test_registers_config(self):
-        register_team(100, config=ActorConfig(model="team-m"))
-        assert _TEAM_CONFIGS[100].model == "team-m"
-
-    def test_registers_contacts(self):
-        register_team(100, contacts=[{"first_name": "TeamAlice"}])
-        assert len(_TEAM_CONTACTS[100]) == 1
-
-    def test_registers_guidance(self):
-        register_team(100, guidance=[{"title": "TG", "content": "TC"}])
-        assert _TEAM_GUIDANCE[100][0]["title"] == "TG"
-
-    def test_registers_knowledge(self):
-        register_team(
-            100,
-            knowledge={
-                "TeamTbl": {"columns": {"k": "str"}, "seed_key": "k", "rows": []},
-            },
-        )
-        assert "TeamTbl" in _TEAM_KNOWLEDGE[100]
-
-    def test_registers_blacklist(self):
-        register_team(
-            100,
-            blacklist=[
-                {"medium": "sms_message", "contact_detail": "+1", "reason": "z"},
-            ],
-        )
-        assert len(_TEAM_BLACKLIST[100]) == 1
-
-    def test_registers_function_dir(self):
-        register_team(100, function_dir=Path("/team/fn"))
-        assert _TEAM_FUNCTION_DIRS[100] == [Path("/team/fn")]
-
-    def test_registers_venv_dir(self):
-        register_team(100, venv_dir=Path("/team/v"))
-        assert _TEAM_VENV_DIRS[100] == [Path("/team/v")]
-
-    def test_multiple_calls_append(self):
-        register_team(100, contacts=[{"first_name": "A"}])
-        register_team(100, contacts=[{"first_name": "B"}])
-        assert len(_TEAM_CONTACTS[100]) == 2
-
-
-class TestRegisterUser:
-    def test_registers_config(self):
-        register_user("u1", config=ActorConfig(timeout=30.0))
-        assert _USER_CONFIGS["u1"].timeout == 30.0
-
-    def test_registers_contacts(self):
-        register_user("u1", contacts=[{"first_name": "Z"}])
-        assert len(_USER_CONTACTS["u1"]) == 1
-
-
-class TestRegisterAssistant:
-    def test_registers_config(self):
-        register_assistant(10, config=ActorConfig(can_compose=False))
-        assert _ASSISTANT_CONFIGS[10].can_compose is False
-
-    def test_registers_guidance(self):
-        register_assistant(10, guidance=[{"title": "G", "content": "C"}])
-        assert len(_ASSISTANT_GUIDANCE[10]) == 1
-
-
-# ---------------------------------------------------------------------------
-# 2. ActorConfig model
+# 1. ActorConfig model
 # ---------------------------------------------------------------------------
 
 
@@ -258,7 +61,7 @@ class TestActorConfig:
 
 
 # ---------------------------------------------------------------------------
-# 3. Environment reconstruction helpers
+# 2. Environment reconstruction helpers
 # ---------------------------------------------------------------------------
 
 
@@ -309,127 +112,7 @@ class TestEnvironmentReconstruct:
 
 
 # ---------------------------------------------------------------------------
-# 4. Knowledge cascade: row-level dedup within same table
-# ---------------------------------------------------------------------------
-
-
-class TestKnowledgeCascade:
-    def test_same_table_rows_merged_by_seed_key(self):
-        _ORG_KNOWLEDGE[1] = {
-            "Companies": {
-                "columns": {"name": "str", "hq": "str"},
-                "seed_key": "name",
-                "rows": [
-                    {"name": "Acme", "hq": "London"},
-                    {"name": "Beta", "hq": "NYC"},
-                ],
-            },
-        }
-        _USER_KNOWLEDGE["u1"] = {
-            "Companies": {
-                "columns": {"name": "str", "hq": "str"},
-                "seed_key": "name",
-                "rows": [
-                    {"name": "Acme", "hq": "Paris"},
-                    {"name": "Gamma", "hq": "Berlin"},
-                ],
-            },
-        }
-        r = resolve(org_id=1, user_id="u1")
-        rows = r.knowledge["Companies"]["rows"]
-        names = {row["name"] for row in rows}
-        assert names == {"Acme", "Beta", "Gamma"}
-        acme = next(row for row in rows if row["name"] == "Acme")
-        assert acme["hq"] == "Paris"
-
-    def test_different_tables_from_different_levels(self):
-        _ORG_KNOWLEDGE[1] = {
-            "T1": {
-                "columns": {"a": "str"},
-                "seed_key": "a",
-                "rows": [{"a": "x"}],
-            },
-        }
-        _USER_KNOWLEDGE["u1"] = {
-            "T2": {
-                "columns": {"b": "str"},
-                "seed_key": "b",
-                "rows": [{"b": "y"}],
-            },
-        }
-        r = resolve(org_id=1, user_id="u1")
-        assert "T1" in r.knowledge
-        assert "T2" in r.knowledge
-
-    def test_empty_knowledge_returns_empty(self):
-        r = resolve(org_id=999)
-        assert r.knowledge == {}
-
-    def test_team_knowledge_inserted_between_org_and_user(self):
-        _ORG_KNOWLEDGE[1] = {
-            "Companies": {
-                "columns": {"name": "str", "source": "str"},
-                "seed_key": "name",
-                "rows": [{"name": "OrgCo", "source": "org"}],
-            },
-        }
-        _TEAM_KNOWLEDGE[100] = {
-            "Companies": {
-                "columns": {"name": "str", "source": "str"},
-                "seed_key": "name",
-                "rows": [
-                    {"name": "OrgCo", "source": "team"},
-                    {"name": "TeamCo", "source": "team"},
-                ],
-            },
-        }
-        _USER_KNOWLEDGE["u1"] = {
-            "Companies": {
-                "columns": {"name": "str", "source": "str"},
-                "seed_key": "name",
-                "rows": [{"name": "TeamCo", "source": "user"}],
-            },
-        }
-        r = resolve(org_id=1, team_ids=[100], user_id="u1")
-        rows = r.knowledge["Companies"]["rows"]
-        by_name = {row["name"]: row for row in rows}
-        assert by_name["OrgCo"]["source"] == "team"
-        assert by_name["TeamCo"]["source"] == "user"
-
-
-# ---------------------------------------------------------------------------
-# 5. Blacklist cascade dedup
-# ---------------------------------------------------------------------------
-
-
-class TestBlacklistCascade:
-    def test_dedup_by_medium_and_contact_detail(self):
-        _ORG_BLACKLIST[1] = [
-            {"medium": "email", "contact_detail": "x@x.com", "reason": "Org reason"},
-        ]
-        _USER_BLACKLIST["u1"] = [
-            {"medium": "email", "contact_detail": "x@x.com", "reason": "User reason"},
-            {"medium": "sms_message", "contact_detail": "+123", "reason": "Spam"},
-        ]
-        r = resolve(org_id=1, user_id="u1")
-        assert len(r.blacklist) == 2
-        email_entry = next(e for e in r.blacklist if e["contact_detail"] == "x@x.com")
-        assert email_entry["reason"] == "User reason"
-
-    def test_team_blacklist_overrides_org(self):
-        _ORG_BLACKLIST[1] = [
-            {"medium": "email", "contact_detail": "x@x.com", "reason": "Org"},
-        ]
-        _TEAM_BLACKLIST[100] = [
-            {"medium": "email", "contact_detail": "x@x.com", "reason": "Team"},
-        ]
-        r = resolve(org_id=1, team_ids=[100])
-        assert len(r.blacklist) == 1
-        assert r.blacklist[0]["reason"] == "Team"
-
-
-# ---------------------------------------------------------------------------
-# 6. sync_all_seed_data with empty data
+# 3. sync_all_seed_data with empty data
 # ---------------------------------------------------------------------------
 
 
@@ -451,7 +134,7 @@ class TestSyncAllSeedData:
 
 
 # ---------------------------------------------------------------------------
-# 7. Secrets file: cascade with team level
+# 4. Secrets file: merge order (org → team → user → assistant)
 # ---------------------------------------------------------------------------
 
 
@@ -515,7 +198,7 @@ class TestSecretsAssistantLevel:
         assert len(result) == 1
         assert result[0]["value"] == "t200"
 
-    def test_full_cascade_org_team_user_assistant(self, tmp_path):
+    def test_secrets_merge_org_team_user_assistant(self, tmp_path):
         f = tmp_path / ".secrets.json"
         f.write_text(
             json.dumps(
@@ -572,7 +255,7 @@ class TestSecretsAssistantLevel:
 
 
 # ---------------------------------------------------------------------------
-# 8. Custom function collection from directories
+# 5. Custom function collection from directories
 # ---------------------------------------------------------------------------
 
 
@@ -605,7 +288,7 @@ class TestCustomFunctionCollection:
 
 
 # ---------------------------------------------------------------------------
-# 9. Hash behavior edge cases
+# 6. Hash behavior edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -627,89 +310,3 @@ class TestHashEdgeCases:
         h1 = _record_hash({"name": "A", "v": 1}, set())
         h2 = _record_hash({"name": "A", "v": 2}, set())
         assert h1 != h2
-
-
-# ---------------------------------------------------------------------------
-# 10. Full four-level cascade integration
-# ---------------------------------------------------------------------------
-
-
-class TestFullCascadeIntegration:
-    def test_all_four_levels_config_merge(self):
-        register_org(
-            1,
-            config=ActorConfig(
-                timeout=120.0,
-                guidelines="Org.",
-                model="org-model",
-            ),
-        )
-        register_team(
-            100,
-            config=ActorConfig(
-                guidelines="Team.",
-                can_compose=False,
-            ),
-        )
-        register_user(
-            "u1",
-            config=ActorConfig(
-                guidelines="User.",
-                model="user-model",
-            ),
-        )
-        register_assistant(
-            10,
-            config=ActorConfig(
-                guidelines="Assistant.",
-                can_store=False,
-            ),
-        )
-        r = resolve(org_id=1, team_ids=[100], user_id="u1", assistant_id=10)
-        assert r.config.guidelines == "Org.\nTeam.\nUser.\nAssistant."
-        assert r.config.timeout == 120.0
-        assert r.config.model == "user-model"
-        assert r.config.can_compose is False
-        assert r.config.can_store is False
-
-    def test_all_four_levels_contacts(self):
-        register_org(
-            1,
-            contacts=[
-                {"first_name": "Org", "surname": "Person"},
-            ],
-        )
-        register_team(
-            100,
-            contacts=[
-                {"first_name": "Team", "surname": "Person"},
-            ],
-        )
-        register_user(
-            "u1",
-            contacts=[
-                {"first_name": "User", "surname": "Person"},
-            ],
-        )
-        register_assistant(
-            10,
-            contacts=[
-                {"first_name": "Asst", "surname": "Person"},
-            ],
-        )
-        r = resolve(org_id=1, team_ids=[100], user_id="u1", assistant_id=10)
-        names = {c["first_name"] for c in r.contacts}
-        assert names == {"Org", "Team", "User", "Asst"}
-
-    def test_all_four_levels_function_dirs(self):
-        register_org(1, function_dir=Path("/org/fn"))
-        register_team(100, function_dir=Path("/team/fn"))
-        register_user("u1", function_dir=Path("/user/fn"))
-        register_assistant(10, function_dir=Path("/asst/fn"))
-        r = resolve(org_id=1, team_ids=[100], user_id="u1", assistant_id=10)
-        assert r.function_dirs == [
-            Path("/org/fn"),
-            Path("/team/fn"),
-            Path("/user/fn"),
-            Path("/asst/fn"),
-        ]
