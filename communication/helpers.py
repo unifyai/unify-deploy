@@ -99,7 +99,8 @@ def graph_client_from_assistant(assistant: dict, user_email: str) -> GraphServic
             scopes=_GRAPH_SCOPES,
         )
     logger.info(
-        "No per-user OAuth token for %s, using admin credentials", user_email,
+        "No per-user OAuth token for %s, using admin credentials",
+        user_email,
     )
     return get_admin_graph_client()
 

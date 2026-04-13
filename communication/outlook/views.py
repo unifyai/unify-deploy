@@ -43,6 +43,7 @@ MAX_RETRIES = 1
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _get_user_node(graph, sender: str, assistant: dict):
     """Return the Graph request builder targeting the correct user.
 
@@ -59,6 +60,7 @@ async def _get_user_node(graph, sender: str, assistant: dict):
 # ---------------------------------------------------------------------------
 # Provisioning
 # ---------------------------------------------------------------------------
+
 
 @router.post("/create", status_code=201)
 async def create_outlook_user(request: Request):
@@ -169,6 +171,7 @@ async def delete_outlook_user(request: Request):
 # Send
 # ---------------------------------------------------------------------------
 
+
 @router.post("/send")
 async def send_outlook_email(request: Request):
     """Send an email via Microsoft Graph API.
@@ -249,6 +252,7 @@ async def send_outlook_email(request: Request):
 # ---------------------------------------------------------------------------
 # Watch
 # ---------------------------------------------------------------------------
+
 
 @router.post("/watch")
 async def watch_outlook_email(request: Request):
@@ -360,6 +364,7 @@ async def delete_outlook_watch(request: Request):
 # ---------------------------------------------------------------------------
 # Attachment
 # ---------------------------------------------------------------------------
+
 
 @router.get("/attachment")
 async def get_outlook_attachment(
