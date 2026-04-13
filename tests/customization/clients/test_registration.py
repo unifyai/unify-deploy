@@ -22,7 +22,6 @@ from unity_deploy.customization.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
-    EnvironmentConfig,
     GuidanceEntry,
     SecretEntry,
     SeedLayer,
@@ -330,14 +329,12 @@ class TestRegisterClient:
             "test_client",
             mapping,
             Path("/fake"),
-            default_org_id=10,
             environment="production",
         )
 
         assert "v0" in loaded
         assert "test_client" in _CLIENT_DEPLOYMENTS
         entry = _CLIENT_DEPLOYMENTS["test_client"]
-        assert entry.default_org_id == 10
         assert entry.environment == "production"
 
     def test_multiple_deployments_loaded_once(self, monkeypatch):
@@ -360,7 +357,7 @@ class TestRegisterClient:
                 DeploymentTarget(scope="default", deployment="v0"),
             ],
         )
-        loaded = register_client("test", mapping, Path("/fake"), default_org_id=10)
+        loaded = register_client("test", mapping, Path("/fake"))
 
         assert set(loaded.keys()) == {"v0", "v1"}
         assert call_count["v1"] == 1
@@ -395,7 +392,6 @@ class TestIsolatedResolution:
             "test_client",
             mapping,
             Path("/fake"),
-            default_org_id=10,
             environment=environment,
         )
 
@@ -416,7 +412,6 @@ class TestIsolatedResolution:
             "test_client",
             mapping,
             Path("/fake"),
-            default_org_id=10,
             environment=environment,
         )
 
@@ -443,7 +438,7 @@ class TestIsolatedResolution:
         assert len(result.guidance) == 1
 
     def test_assistant_match_ignores_org_mismatch(self, monkeypatch):
-        """Routing is target-driven; org_id on the entry is metadata only."""
+        """Assistant target matches regardless of org_id in the session."""
         self._register_assistant_only(monkeypatch)
         result = resolve_from_deployments(org_id=999, assistant_id=99)
         assert result is not None
@@ -519,7 +514,6 @@ class TestEnvironmentGuardrail:
             "staging_client",
             mapping,
             Path("/fake"),
-            default_org_id=10,
             environment="staging",
         )
 
@@ -540,7 +534,6 @@ class TestEnvironmentGuardrail:
             "prod_client",
             mapping,
             Path("/fake"),
-            default_org_id=10,
             environment="production",
         )
 
@@ -562,7 +555,6 @@ class TestEnvironmentGuardrail:
             "universal_client",
             mapping,
             Path("/fake"),
-            default_org_id=10,
         )
 
         monkeypatch.setenv("ORCHESTRA_URL", "https://internal.example.com/v0")
@@ -571,31 +563,73 @@ class TestEnvironmentGuardrail:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TestEnvironmentConfig — model validation
+# TestScopeRouting — org-wide, user-wide, assistant-specific coexistence
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestEnvironmentConfig:
+class TestScopeRouting:
+    """Verify that scoping lives entirely in DeploymentTarget."""
 
-    def test_org_scoped(self):
-        cfg = EnvironmentConfig(
-            org_id=7,
-            mapping=DeploymentMapping(
-                targets=[DeploymentTarget(scope="default", deployment="v0")],
-            ),
-        )
-        assert cfg.org_id == 7
-        assert cfg.user_id is None
+    def test_org_wide_catches_any_assistant_in_org(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
 
-    def test_user_scoped(self):
-        cfg = EnvironmentConfig(
-            user_id="user-abc",
-            mapping=DeploymentMapping(
-                targets=[DeploymentTarget(scope="default", deployment="v0")],
-            ),
+        v1 = _make_spec("v1", "Org-wide v1")
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: v1)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="org", scope_id="7", deployment="v1")],
         )
-        assert cfg.user_id == "user-abc"
-        assert cfg.org_id is None
+        register_client("test", mapping, Path("/fake"))
+
+        assert resolve_from_deployments(org_id=7, assistant_id=83) is not None
+        assert resolve_from_deployments(org_id=7, assistant_id=999) is not None
+        assert resolve_from_deployments(org_id=99, assistant_id=83) is None
+
+    def test_assistant_target_beats_org_target(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        v0 = _make_spec("v0", "Personal v0")
+        v1 = _make_spec("v1", "Org-wide v1")
+        monkeypatch.setattr(
+            dt,
+            "load_deployment",
+            lambda d, n: {"v0": v0, "v1": v1}[n],
+        )
+
+        mapping = DeploymentMapping(
+            targets=[
+                DeploymentTarget(scope="assistant", scope_id="378", deployment="v0"),
+                DeploymentTarget(scope="org", scope_id="7", deployment="v1"),
+            ],
+        )
+        register_client("test", mapping, Path("/fake"))
+
+        personal = resolve_from_deployments(org_id=None, assistant_id=378)
+        assert personal is not None
+        assert personal.config.guidelines == "Personal v0"
+
+        org_asst = resolve_from_deployments(org_id=7, assistant_id=83)
+        assert org_asst is not None
+        assert org_asst.config.guidelines == "Org-wide v1"
+
+    def test_user_wide_catches_any_assistant_for_user(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        v1 = _make_spec("v1", "User-wide v1")
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: v1)
+
+        mapping = DeploymentMapping(
+            targets=[
+                DeploymentTarget(scope="user", scope_id="user-abc", deployment="v1"),
+            ],
+        )
+        register_client("test", mapping, Path("/fake"))
+
+        result = resolve_from_deployments(user_id="user-abc", assistant_id=50)
+        assert result is not None
+        assert result.config.guidelines == "User-wide v1"
+
+        assert resolve_from_deployments(user_id="other", assistant_id=50) is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
