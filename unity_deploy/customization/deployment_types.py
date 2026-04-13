@@ -83,9 +83,7 @@ def _merge_actor_configs(base: ActorConfig, override: ActorConfig) -> ActorConfi
     """Deep-merge two :class:`ActorConfig` instances (base + override).
 
     For each field, the override value wins when non-None; otherwise the
-    base value is kept.  This is simpler than the cascade-style
-    ``_merge_configs`` in ``clients/__init__`` because it handles exactly
-    two configs with straightforward "override wins" semantics.
+    base value is kept.
     """
     merged: dict = {}
     for field_name in ActorConfig.model_fields:

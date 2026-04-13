@@ -10,7 +10,7 @@ register its specs into the ``_CLIENT_DEPLOYMENTS`` registry.
 During manager initialization, ``resolve()`` is called with the current
 org_id / team_ids / user_id / assistant_id to produce a
 ``ResolvedCustomization`` by finding the matching client and returning
-the pure deployment spec — no cascade merge.
+the matching deployment spec directly.
 """
 
 from __future__ import annotations
@@ -51,13 +51,19 @@ class ResolvedCustomization:
 
 
 # ---------------------------------------------------------------------------
-# Deployment registry (isolated resolution, no cascade)
+# Deployment registry
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class ClientDeploymentEntry:
-    """A registered client with its mapping and loaded deployment specs."""
+    """A registered client with its mapping and loaded deployment specs.
+
+    ``default_org_id`` and ``default_user_id`` are metadata — they
+    record which org/user this client is intended for but do **not**
+    act as hard filters during resolution.  Routing is driven entirely
+    by the :class:`DeploymentMapping` targets.
+    """
 
     mapping: DeploymentMapping
     specs: dict[str, DeploymentSpec]
@@ -122,14 +128,14 @@ def resolve_from_deployments(
 
     1. **Environment guardrail** — skip if registered for a different
        environment than what :func:`detect_environment` reports.
-    2. **Org guardrail** — skip if ``default_org_id`` is set and
-       doesn't match the request's *org_id*.
-    3. **User guardrail** — skip if ``default_user_id`` is set and
-       doesn't match the request's *user_id*.
-    4. **Mapping resolution** — walk the client's
-       :class:`DeploymentMapping` to find the matching deployment name.
-    5. Return the spec converted to :class:`ResolvedCustomization`
+    2. **Mapping resolution** — walk the client's
+       :class:`DeploymentMapping` to find the first matching target.
+       If no target matches, move on to the next client.
+    3. Return the spec converted to :class:`ResolvedCustomization`
        via :func:`_spec_to_resolved`.
+
+    ``default_org_id`` and ``default_user_id`` on the entry are
+    metadata only — routing is driven entirely by the mapping targets.
 
     Returns ``None`` when no client matches.
     """
@@ -142,7 +148,7 @@ def resolve_from_deployments(
 
     for client_name, entry in _CLIENT_DEPLOYMENTS.items():
         if entry.environment is not None and entry.environment != current_env:
-            logger.warning(
+            logger.debug(
                 "Skipping client '%s' — registered for '%s' but running in '%s'",
                 client_name,
                 entry.environment,
@@ -150,19 +156,17 @@ def resolve_from_deployments(
             )
             continue
 
-        if entry.default_org_id is not None and org_id != entry.default_org_id:
+        try:
+            dep_name = resolve_deployment_name(
+                entry.mapping,
+                user_id=user_id,
+                org_id=org_id,
+                team_ids=team_ids,
+                assistant_id=assistant_id,
+            )
+        except ValueError:
             continue
 
-        if entry.default_user_id is not None and user_id != entry.default_user_id:
-            continue
-
-        dep_name = resolve_deployment_name(
-            entry.mapping,
-            user_id=user_id,
-            org_id=org_id,
-            team_ids=team_ids,
-            assistant_id=assistant_id,
-        )
         spec = entry.specs[dep_name]
         return _spec_to_resolved(
             spec,
@@ -188,9 +192,9 @@ def resolve(
 ) -> ResolvedCustomization:
     """Resolve customizations for the given identity.
 
-    Walks ``_CLIENT_DEPLOYMENTS`` looking for a client whose org/user
-    and environment match.  Returns the pure deployment spec as a
-    :class:`ResolvedCustomization` — no cascade merge.
+    Walks ``_CLIENT_DEPLOYMENTS`` looking for a client whose mapping
+    targets match the session identity.  Returns the deployment spec
+    as a :class:`ResolvedCustomization`.
 
     When no client matches, returns an empty default customization.
     """
