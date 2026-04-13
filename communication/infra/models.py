@@ -70,6 +70,7 @@ class ScheduledTaskActivationUpsertRequest(BaseModel):
     source_type: Literal["scheduled"] = "scheduled"
     previous_activation_revision: Optional[str] = None
     previous_scheduled_for: Optional[datetime] = None
+    previous_execution_mode: Optional[Literal["live", "offline"]] = None
 
 
 class ScheduledTaskActivationDeleteRequest(BaseModel):
@@ -79,6 +80,22 @@ class ScheduledTaskActivationDeleteRequest(BaseModel):
     task_id: int
     activation_revision: str
     scheduled_for: datetime
+    execution_mode: Literal["live", "offline"] = "live"
+
+
+class OfflineTaskDispatchRequest(BaseModel):
+    """Dispatch one validated offline task execution attempt."""
+
+    assistant_id: str
+    task_id: int
+    source_task_log_id: int
+    activation_revision: str
+    execution_mode: Literal["offline"] = "offline"
+    source_type: Literal["scheduled", "triggered"] = "scheduled"
+    scheduled_for: Optional[datetime] = None
+    source_ref: Optional[str] = None
+    source_medium: Optional[str] = None
+    source_contact_id: Optional[int] = None
 
 
 class PoolDiskDeleteRequest(BaseModel):

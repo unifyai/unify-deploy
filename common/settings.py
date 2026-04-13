@@ -97,8 +97,25 @@ class Settings:
             "UNITY_TASK_DUE_QUEUE_NAME",
             f"unity-task-due{self.env_suffix}",
         )
+        self.task_offline_queue_name: str = os.environ.get(
+            "UNITY_TASK_OFFLINE_QUEUE_NAME",
+            f"unity-task-offline{self.env_suffix}",
+        )
+        self.task_activation_repair_queue_name: str = os.environ.get(
+            "UNITY_TASK_ACTIVATION_REPAIR_QUEUE_NAME",
+            f"unity-task-activation-repair{self.env_suffix}",
+        )
         self.task_due_dispatch_deadline_seconds: int = int(
             os.environ.get("UNITY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"),
+        )
+        self.task_activation_horizon_days: int = int(
+            os.environ.get("UNITY_TASK_ACTIVATION_HORIZON_DAYS", "29"),
+        )
+        self.offline_task_job_ttl_seconds: int = int(
+            os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
+        )
+        self.offline_task_job_active_deadline_seconds: int = int(
+            os.environ.get("UNITY_OFFLINE_TASK_JOB_ACTIVE_DEADLINE_SECONDS", "900"),
         )
 
         # Auth keys
