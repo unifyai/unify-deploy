@@ -719,6 +719,96 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     }
 
 
+def _build_start_job_request_data(
+    assistant: dict,
+    medium: str,
+    *,
+    wake_reasons: list[dict] | None = None,
+) -> dict[str, str]:
+    """Build the `/infra/job/start` form payload for one activation request."""
+
+    api_key = assistant["api_key"]
+    assistant_id = assistant["assistant_id"]
+    desktop_mode = assistant.get("desktop_mode") or NO_DESKTOP_MODE
+    user_desktop_mode = assistant.get("user_desktop_mode", None)
+    user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
+    user_desktop_url = assistant.get("user_desktop_url", None)
+    demo_id = assistant.get("demo_id", None)
+    data = {
+        "api_key": api_key,
+        "medium": medium,
+        "assistant_id": assistant_id,
+        "user_id": assistant["user_id"],
+        "user_first_name": assistant["user_first_name"],
+        "user_surname": assistant["user_surname"],
+        "user_email": assistant["user_email"],
+        "assistant_first_name": assistant["assistant_first_name"],
+        "assistant_surname": assistant["assistant_surname"],
+        "assistant_age": assistant["assistant_age"],
+        "assistant_nationality": assistant["assistant_nationality"],
+        "assistant_about": assistant["assistant_about"],
+        "assistant_timezone": assistant["assistant_timezone"],
+        "user_number": assistant["user_number"],
+        "assistant_number": assistant["assistant_number"],
+        "assistant_email": assistant["assistant_email"],
+        "user_whatsapp_number": assistant["user_whatsapp_number"],
+        "assistant_whatsapp_number": assistant.get(
+            "assistant_whatsapp_number",
+            "",
+        ),
+        "assistant_discord_bot_id": assistant.get(
+            "assistant_discord_bot_id",
+            "",
+        ),
+        "voice_provider": assistant["voice_provider"],
+        "voice_id": assistant["voice_id"],
+        "desktop_mode": desktop_mode,
+        "user_desktop_mode": user_desktop_mode or "",
+        "user_desktop_filesys_sync": ("true" if user_desktop_filesys_sync else "false"),
+        "user_desktop_url": user_desktop_url or "",
+        # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
+        "demo_id": str(demo_id) if demo_id else "",
+        "team_ids": json.dumps(assistant.get("team_ids", [])),
+        "org_id": (
+            str(assistant.get("org_id", ""))
+            if assistant.get("org_id") is not None
+            else ""
+        ),
+        "deploy_env": assistant.get("deploy_env", ""),
+    }
+    if wake_reasons:
+        data["wake_reasons"] = json.dumps(wake_reasons)
+    return data
+
+
+def dispatch_unity_start_intent(
+    assistant: dict,
+    medium: str,
+    *,
+    wake_reasons: list[dict] | None = None,
+    timeout_seconds: float = START_INTENT_DISPATCH_TIMEOUT_SECONDS,
+) -> requests.Response | None:
+    """Dispatch `/infra/job/start` and return the observed edge response."""
+
+    api_key = assistant["api_key"]
+    assistant_id = assistant["assistant_id"]
+    if api_key == "":
+        logger.info(f"No user name for assistant {assistant_id}")
+        return None
+
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+    return requests.post(
+        f"{SETTINGS.comms_url}/infra/job/start",
+        headers=headers,
+        data=_build_start_job_request_data(
+            assistant,
+            medium,
+            wake_reasons=wake_reasons,
+        ),
+        timeout=timeout_seconds,
+    )
+
+
 def start_unity_job(assistant: dict, medium: str) -> None:
     """Best-effort low-latency dispatch of activation intent to comms.
 
@@ -728,73 +818,18 @@ def start_unity_job(assistant: dict, medium: str) -> None:
     proof that comms accepted the request, created a session, or made runtime
     ready.
     """
-    api_key = assistant["api_key"]
     assistant_id = assistant["assistant_id"]
-
-    if api_key == "":
-        logger.info(f"No user name for assistant {assistant_id}")
-        return
-
-    desktop_mode = assistant.get("desktop_mode") or NO_DESKTOP_MODE
-    user_desktop_mode = assistant.get("user_desktop_mode", None)
-    user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
-    user_desktop_url = assistant.get("user_desktop_url", None)
-
-    demo_id = assistant.get("demo_id", None)
 
     # This is intentionally a fast edge handoff. Adapters does not wait for the
     # full /infra/job/start convergence path to complete on the webhook thread.
-    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     try:
-        response = requests.post(
-            f"{SETTINGS.comms_url}/infra/job/start",
-            headers=headers,
-            data={
-                "api_key": api_key,
-                "medium": medium,
-                "assistant_id": assistant_id,
-                "user_id": assistant["user_id"],
-                "user_first_name": assistant["user_first_name"],
-                "user_surname": assistant["user_surname"],
-                "user_email": assistant["user_email"],
-                "assistant_first_name": assistant["assistant_first_name"],
-                "assistant_surname": assistant["assistant_surname"],
-                "assistant_age": assistant["assistant_age"],
-                "assistant_nationality": assistant["assistant_nationality"],
-                "assistant_about": assistant["assistant_about"],
-                "assistant_timezone": assistant["assistant_timezone"],
-                "user_number": assistant["user_number"],
-                "assistant_number": assistant["assistant_number"],
-                "assistant_email": assistant["assistant_email"],
-                "user_whatsapp_number": assistant["user_whatsapp_number"],
-                "assistant_whatsapp_number": assistant.get(
-                    "assistant_whatsapp_number",
-                    "",
-                ),
-                "assistant_discord_bot_id": assistant.get(
-                    "assistant_discord_bot_id",
-                    "",
-                ),
-                "voice_provider": assistant["voice_provider"],
-                "voice_id": assistant["voice_id"],
-                "desktop_mode": desktop_mode,
-                "user_desktop_mode": user_desktop_mode or "",
-                "user_desktop_filesys_sync": (
-                    "true" if user_desktop_filesys_sync else "false"
-                ),
-                "user_desktop_url": user_desktop_url or "",
-                # Pass demo_id directly; Unity derives demo_mode from demo_id presence
-                "demo_id": str(demo_id) if demo_id else "",
-                "team_ids": json.dumps(assistant.get("team_ids", [])),
-                "org_id": (
-                    str(assistant.get("org_id", ""))
-                    if assistant.get("org_id") is not None
-                    else ""
-                ),
-                "deploy_env": assistant.get("deploy_env", ""),
-            },
-            timeout=START_INTENT_DISPATCH_TIMEOUT_SECONDS,
+        response = dispatch_unity_start_intent(
+            assistant,
+            medium,
+            timeout_seconds=START_INTENT_DISPATCH_TIMEOUT_SECONDS,
         )
+        if response is None:
+            return
         if response.status_code == 200:
             logger.info(
                 f"Activation request accepted by comms for assistant {assistant_id}",

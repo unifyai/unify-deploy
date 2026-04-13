@@ -4,14 +4,17 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from functools import partial
-from google.api_core.exceptions import Conflict, NotFound as GcpNotFound
+from google.api_core.exceptions import AlreadyExists, Conflict, NotFound as GcpNotFound
 from google.cloud import compute_v1, pubsub_v1, storage
 from google.oauth2.service_account import Credentials
-from google.protobuf import duration_pb2
+from google.protobuf import duration_pb2, timestamp_pb2
+import hashlib
 import json
 import logging
 import os
+import re
 import time
+from typing import Any
 import uuid
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
@@ -115,6 +118,8 @@ from .models import (
     PoolReleaseRequest,
     PoolStatusResponse,
     PoolVMStatus,
+    ScheduledTaskActivationDeleteRequest,
+    ScheduledTaskActivationUpsertRequest,
 )
 from common.settings import SETTINGS
 from communication.dependencies import (
@@ -140,6 +145,10 @@ START_JOB_LEASE_DURATION_SECONDS = SETTINGS.lease_duration_seconds
 START_JOB_LEASE_WAIT_TIMEOUT_SECONDS = START_JOB_LEASE_DURATION_SECONDS + 5
 START_JOB_LEASE_POLL_INTERVAL_SECONDS = 0.2
 START_JOB_TERMINATING_SESSION_WAIT_TIMEOUT_SECONDS = 5.0
+TASK_DUE_EVENT_TYPE = "task_due"
+TASK_DUE_ENDPOINT_PATH = "/scheduled/tasks/due"
+TASK_DUE_HTTP_TIMEOUT_SECONDS = 30
+_TASK_ID_SAFE_RE = re.compile(r"[^a-z0-9-]+")
 ASSISTANT_SESSION_CONTROLLER_DEPLOYMENTS = {
     "staging": "assistant-session-controller-staging",
 }
@@ -214,6 +223,8 @@ router = APIRouter()
 
 _pubsub_publisher: pubsub_v1.PublisherClient | None = None
 _pubsub_subscriber: pubsub_v1.SubscriberClient | None = None
+_cloud_tasks_client = None
+_task_due_queue_ensured = False
 
 
 def _get_pubsub_clients() -> (
@@ -226,6 +237,214 @@ def _get_pubsub_clients() -> (
         _pubsub_publisher = pubsub_v1.PublisherClient(credentials=creds)
         _pubsub_subscriber = pubsub_v1.SubscriberClient(credentials=creds)
     return _pubsub_publisher, _pubsub_subscriber
+
+
+def _get_cloud_tasks_client():
+    """Return a cached Cloud Tasks client."""
+
+    global _cloud_tasks_client
+    if _cloud_tasks_client is None:
+        from google.cloud import tasks_v2
+
+        _cloud_tasks_client = tasks_v2.CloudTasksClient(
+            credentials=_service_account_credentials(),
+        )
+    return _cloud_tasks_client
+
+
+def _task_due_queue_parent() -> str:
+    """Return the Cloud Tasks parent resource for the configured queue."""
+
+    return (
+        f"projects/{SETTINGS.gcp_project_id}/locations/"
+        f"{SETTINGS.task_due_queue_location}"
+    )
+
+
+def _task_due_queue_path() -> str:
+    """Return the fully qualified Cloud Tasks queue path."""
+
+    return f"{_task_due_queue_parent()}/queues/{SETTINGS.task_due_queue_name}"
+
+
+def _normalize_task_id_component(value: str) -> str:
+    """Normalize free-form identifiers into Cloud Tasks task-id fragments."""
+
+    normalized = _TASK_ID_SAFE_RE.sub("-", value.lower()).strip("-")
+    return normalized or "assistant"
+
+
+def _scheduled_activation_task_name(
+    *,
+    assistant_id: str,
+    task_id: int,
+    activation_revision: str,
+    scheduled_for: datetime,
+) -> str:
+    """Return the Cloud Tasks name for one scheduled activation delivery."""
+
+    due_utc = scheduled_for.astimezone(timezone.utc)
+    assistant_component = _normalize_task_id_component(str(assistant_id))[:32]
+    revision_component = hashlib.sha256(
+        activation_revision.encode("utf-8"),
+    ).hexdigest()[:10]
+    task_component = (
+        f"task-due-{assistant_component}-{task_id}-"
+        f"{due_utc.strftime('%Y%m%d%H%M%S')}-{revision_component}"
+    )
+    return f"{_task_due_queue_path()}/tasks/{task_component}"
+
+
+def _ensure_task_due_queue() -> str:
+    """Create the scheduled-task queue on first use if it is missing."""
+
+    global _task_due_queue_ensured
+    queue_path = _task_due_queue_path()
+    if _task_due_queue_ensured:
+        return queue_path
+
+    client = _get_cloud_tasks_client()
+    try:
+        client.get_queue(name=queue_path)
+    except GcpNotFound:
+        from google.cloud import tasks_v2
+
+        queue = tasks_v2.Queue(name=queue_path)
+        try:
+            client.create_queue(parent=_task_due_queue_parent(), queue=queue)
+        except AlreadyExists:
+            pass
+
+    _task_due_queue_ensured = True
+    return queue_path
+
+
+def _scheduled_activation_http_body(
+    request: ScheduledTaskActivationUpsertRequest,
+) -> bytes:
+    """Serialize the delayed task delivery payload sent to adapters."""
+
+    payload = {
+        "assistant_id": request.assistant_id,
+        "task_id": request.task_id,
+        "source_task_log_id": request.source_task_log_id,
+        "activation_revision": request.activation_revision,
+        "scheduled_for": request.scheduled_for.astimezone(timezone.utc).isoformat(),
+        "execution_mode": request.execution_mode,
+        "source_type": request.source_type,
+    }
+    return json.dumps(payload).encode("utf-8")
+
+
+def _delete_scheduled_activation_task(
+    *,
+    assistant_id: str,
+    task_id: int,
+    activation_revision: str,
+    scheduled_for: datetime,
+) -> bool:
+    """Delete one delayed activation task if it still exists."""
+
+    client = _get_cloud_tasks_client()
+    task_name = _scheduled_activation_task_name(
+        assistant_id=assistant_id,
+        task_id=task_id,
+        activation_revision=activation_revision,
+        scheduled_for=scheduled_for,
+    )
+    try:
+        client.delete_task(name=task_name)
+        return True
+    except GcpNotFound:
+        return False
+
+
+def _upsert_scheduled_activation_task(
+    request: ScheduledTaskActivationUpsertRequest,
+) -> dict[str, Any]:
+    """Create the Cloud Task for one scheduled activation if absent."""
+
+    if not SETTINGS.orchestra_admin_key:
+        raise RuntimeError("ORCHESTRA_ADMIN_KEY must be configured")
+    if not SETTINGS.adapters_url:
+        raise RuntimeError("UNITY_ADAPTERS_URL must be configured")
+
+    from google.cloud import tasks_v2
+
+    queue_path = _ensure_task_due_queue()
+    task_name = _scheduled_activation_task_name(
+        assistant_id=request.assistant_id,
+        task_id=request.task_id,
+        activation_revision=request.activation_revision,
+        scheduled_for=request.scheduled_for,
+    )
+    schedule_time = timestamp_pb2.Timestamp()
+    schedule_time.FromDatetime(request.scheduled_for.astimezone(timezone.utc))
+
+    task = tasks_v2.Task(
+        name=task_name,
+        http_request=tasks_v2.HttpRequest(
+            http_method=tasks_v2.HttpMethod.POST,
+            url=f"{SETTINGS.adapters_url}{TASK_DUE_ENDPOINT_PATH}",
+            headers={
+                "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                "Content-Type": "application/json",
+            },
+            body=_scheduled_activation_http_body(request),
+        ),
+        schedule_time=schedule_time,
+        dispatch_deadline=duration_pb2.Duration(
+            seconds=SETTINGS.task_due_dispatch_deadline_seconds,
+        ),
+    )
+
+    client = _get_cloud_tasks_client()
+    try:
+        client.create_task(parent=queue_path, task=task)
+        action = "created"
+    except AlreadyExists:
+        action = "already_exists"
+
+    return {
+        "action": action,
+        "queue": queue_path,
+        "task_name": task_name,
+        "scheduled_for": request.scheduled_for.astimezone(timezone.utc).isoformat(),
+    }
+
+
+def _parse_wake_reasons(raw_wake_reasons: str) -> list[dict[str, Any]]:
+    """Parse the optional JSON-encoded wake reason list."""
+
+    if not raw_wake_reasons:
+        return []
+    try:
+        parsed = json.loads(raw_wake_reasons)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="wake_reasons must be valid JSON",
+        ) from exc
+    if not isinstance(parsed, list) or any(
+        not isinstance(item, dict) for item in parsed
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="wake_reasons must be a JSON list of objects",
+        )
+    return parsed
+
+
+def _startup_payload_without_ephemeral_wake_reasons(
+    payload: dict[str, Any],
+    *,
+    keep_wake_reasons: bool,
+) -> dict[str, Any]:
+    """Drop one-shot wake reasons when reusing an already active session."""
+
+    if keep_wake_reasons:
+        return payload
+    return {key: value for key, value in payload.items() if key != "wake_reasons"}
 
 
 def _start_job_lease_name(assistant_id: str) -> str:
@@ -444,6 +663,7 @@ def _build_startup_payload(
     demo_id: str,
     team_ids: str,
     org_id: str,
+    wake_reasons: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Build the bootstrap Secret payload for a session activation request.
 
@@ -451,7 +671,7 @@ def _build_startup_payload(
     must always pass the latest assistant config. The bootstrap Secret becomes
     the controller's source of truth for both fresh and reused activations.
     """
-    return {
+    payload = {
         "api_key": api_key,
         "medium": medium,
         "assistant_id": assistant_id,
@@ -482,6 +702,9 @@ def _build_startup_payload(
         "team_ids": json.loads(team_ids) if team_ids else [],
         "org_id": int(org_id) if org_id else None,
     }
+    if wake_reasons:
+        payload["wake_reasons"] = wake_reasons
+    return payload
 
 
 def _ensure_subscription(
@@ -867,6 +1090,87 @@ async def read_job(job_name: str, namespace: str = SETTINGS.default_namespace):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/task-activation/upsert")
+async def upsert_scheduled_task_activation(
+    request: ScheduledTaskActivationUpsertRequest,
+):
+    """Materialize one scheduled activation into Cloud Tasks."""
+
+    previous_deleted = False
+    if (
+        request.previous_activation_revision
+        and request.previous_scheduled_for
+        and (
+            request.previous_activation_revision != request.activation_revision
+            or request.previous_scheduled_for != request.scheduled_for
+        )
+    ):
+        previous_deleted = await asyncio.to_thread(
+            _delete_scheduled_activation_task,
+            assistant_id=request.assistant_id,
+            task_id=request.task_id,
+            activation_revision=request.previous_activation_revision,
+            scheduled_for=request.previous_scheduled_for,
+        )
+
+    if request.execution_mode != "live":
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "execution_mode_not_live",
+            "previous_deleted": previous_deleted,
+        }
+
+    try:
+        result = await asyncio.to_thread(_upsert_scheduled_activation_task, request)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to materialize scheduled activation: {exc}",
+        ) from exc
+
+    return {
+        "success": True,
+        "status": result["action"],
+        "queue": result["queue"],
+        "task_name": result["task_name"],
+        "scheduled_for": result["scheduled_for"],
+        "previous_deleted": previous_deleted,
+    }
+
+
+@router.post("/task-activation/delete")
+async def delete_scheduled_task_activation(
+    request: ScheduledTaskActivationDeleteRequest,
+):
+    """Delete one previously materialized scheduled activation."""
+
+    try:
+        deleted = await asyncio.to_thread(
+            _delete_scheduled_activation_task,
+            assistant_id=request.assistant_id,
+            task_id=request.task_id,
+            activation_revision=request.activation_revision,
+            scheduled_for=request.scheduled_for,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete scheduled activation: {exc}",
+        ) from exc
+
+    return {
+        "success": True,
+        "deleted": deleted,
+        "task_name": _scheduled_activation_task_name(
+            assistant_id=request.assistant_id,
+            task_id=request.task_id,
+            activation_revision=request.activation_revision,
+            scheduled_for=request.scheduled_for,
+        ),
+    }
+
+
 @router.post("/job/start")
 async def start_job(
     api_key: str = Form(...),
@@ -898,6 +1202,7 @@ async def start_job(
     demo_id: str = Form(""),
     team_ids: str = Form(""),
     org_id: str = Form(""),
+    wake_reasons: str = Form(""),
 ):
     """
     Ensure an AssistantSession exists for this assistant activation.
@@ -941,12 +1246,14 @@ async def start_job(
     activation_id = None
     existing_phase = None
     reused_active_session = False
+    active_session_already_running = False
     restart_in_progress = False
     idle_pool_replenish_scheduled = False
     attempted_secret_refs: list[tuple[str, str]] = []
     coord_api = None
     start_lease_name = None
     start_lease_holder_id = None
+    requested_wake_reasons = _parse_wake_reasons(wake_reasons)
     causal_token = push_causal_context(
         build_causal_context(
             caller="views.job_start",
@@ -987,6 +1294,7 @@ async def start_job(
             demo_id=demo_id,
             team_ids=team_ids,
             org_id=org_id,
+            wake_reasons=requested_wake_reasons,
         )
         (
             start_lease_name,
@@ -1063,6 +1371,9 @@ async def start_job(
         reused_active_session = bool(
             existing_phase in ACTIVE_PHASES and existing_activation_id,
         )
+        active_session_already_running = bool(
+            existing_phase == "Active" and existing_activation_id,
+        )
         restart_in_progress = bool(
             release_draining
             or (
@@ -1072,6 +1383,10 @@ async def start_job(
                 and observed_activation_id
                 and existing_activation_id != observed_activation_id
             ),
+        )
+        bootstrap_payload = _startup_payload_without_ephemeral_wake_reasons(
+            startup_payload,
+            keep_wake_reasons=not active_session_already_running,
         )
         activation_id = (
             existing_activation_id
@@ -1096,7 +1411,7 @@ async def start_job(
             SETTINGS.default_namespace,
             assistant_id,
             activation_id,
-            startup_payload,
+            bootstrap_payload,
         )
         attempted_secret_refs.append((secret_name, activation_id))
 
@@ -1158,7 +1473,7 @@ async def start_job(
                 SETTINGS.default_namespace,
                 assistant_id,
                 activation_id,
-                startup_payload,
+                bootstrap_payload,
             )
             attempted_secret_refs.append((secret_name, activation_id))
             spec = build_assistant_session_spec(
@@ -1226,6 +1541,11 @@ async def start_job(
             "activation_id": activation_id,
             "phase": status.get("phase", "PendingJob"),
             "job_name": binding_job_ref(binding).get("name"),
+            "reused_active_session": reused_active_session,
+            "active_session_already_running": active_session_already_running,
+            "wake_reasons_attached_to_startup": bool(
+                requested_wake_reasons and not active_session_already_running,
+            ),
         }
     except HTTPException as exc:
         emit_observability_event(

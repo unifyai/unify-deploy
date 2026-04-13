@@ -4,6 +4,7 @@ Focused tests for POST /infra/job/start session reuse behavior.
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -241,6 +242,109 @@ def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pendin
     assert refreshed_spec["desktop"] == {"mode": "ubuntu", "required": True}
     assert refreshed_spec["startupSecretRef"] == refreshed_secret_name
     assert refreshed_spec["requestedAt"]
+
+
+def test_start_job_persists_wake_reasons_for_pending_reused_session(client):
+    """Pending reused sessions must retain wake reasons in the bootstrap secret."""
+
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session(phase="PendingVM")
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        _control_plane_ready_patch(),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value=existing_session["spec"]["startupSecretRef"],
+        ) as mock_create_or_update_bootstrap_secret,
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ),
+    ):
+        response = client.post(
+            "/infra/job/start",
+            data=_start_job_payload(
+                wake_reasons=json.dumps([{"type": "task_due", "task_id": 101}]),
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = mock_create_or_update_bootstrap_secret.call_args.args[4]
+    assert payload["wake_reasons"] == [{"type": "task_due", "task_id": 101}]
+    assert response.json()["wake_reasons_attached_to_startup"] is True
+
+
+def test_start_job_strips_wake_reasons_for_running_session(client):
+    """Already-running sessions should not persist one-shot wake reasons."""
+
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session(phase="Active")
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        _control_plane_ready_patch(),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value=existing_session["spec"]["startupSecretRef"],
+        ) as mock_create_or_update_bootstrap_secret,
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ),
+    ):
+        response = client.post(
+            "/infra/job/start",
+            data=_start_job_payload(
+                wake_reasons=json.dumps([{"type": "task_due", "task_id": 101}]),
+            ),
+        )
+
+    assert response.status_code == 200
+    payload = mock_create_or_update_bootstrap_secret.call_args.args[4]
+    assert "wake_reasons" not in payload
+    assert response.json()["active_session_already_running"] is True
+    assert response.json()["wake_reasons_attached_to_startup"] is False
 
 
 def test_start_job_cleans_superseded_bootstrap_secret_after_session_repoint(client):

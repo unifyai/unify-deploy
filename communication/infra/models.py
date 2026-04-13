@@ -6,6 +6,7 @@ Supports both Windows and Ubuntu VMs via vm_type parameter.
 
 from pydantic import BaseModel
 from typing import Optional, Literal
+from datetime import datetime
 
 
 class VMReadyRequest(BaseModel):
@@ -55,6 +56,29 @@ class PoolReleaseRequest(BaseModel):
     vm_name: Optional[str] = None
     job_name: Optional[str] = None
     release_generation: Optional[int] = None
+
+
+class ScheduledTaskActivationUpsertRequest(BaseModel):
+    """Idempotent request to materialize one scheduled activation."""
+
+    assistant_id: str
+    task_id: int
+    source_task_log_id: int
+    activation_revision: str
+    scheduled_for: datetime
+    execution_mode: Literal["live", "offline"] = "live"
+    source_type: Literal["scheduled"] = "scheduled"
+    previous_activation_revision: Optional[str] = None
+    previous_scheduled_for: Optional[datetime] = None
+
+
+class ScheduledTaskActivationDeleteRequest(BaseModel):
+    """Delete one previously materialized scheduled activation."""
+
+    assistant_id: str
+    task_id: int
+    activation_revision: str
+    scheduled_for: datetime
 
 
 class PoolDiskDeleteRequest(BaseModel):

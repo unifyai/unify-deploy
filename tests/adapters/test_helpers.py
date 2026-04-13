@@ -20,6 +20,7 @@ from adapters.helpers import (
     get_default_contacts,
     get_unity_jobs_inventory,
     check_contact_details,
+    dispatch_unity_start_intent,
     replenish_idle_pool,
     start_unity_job,
 )
@@ -266,6 +267,45 @@ def test_start_unity_job_demo_id_with_different_mediums(mock_post):
 
         assert data["demo_id"] == "99", f"Expected demo_id='99' for medium={medium}"
         assert data["medium"] == medium, f"Expected medium={medium}"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
+    """Wake reasons should be serialized onto the start-intent form payload."""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+    assistant_data = _create_mock_assistant_data(demo_id=7)
+    wake_reasons = [{"type": "task_due", "task_id": 101}]
+
+    response = dispatch_unity_start_intent(
+        assistant_data,
+        "api_message",
+        wake_reasons=wake_reasons,
+        timeout_seconds=12,
+    )
+
+    assert response is mock_response
+    call_kwargs = mock_post.call_args.kwargs
+    assert call_kwargs["timeout"] == 12
+    assert json.loads(call_kwargs["data"]["wake_reasons"]) == wake_reasons
+    assert call_kwargs["data"]["medium"] == "api_message"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_dispatch_unity_start_intent_returns_none_without_api_key(mock_post):
+    """Assistants without API keys should not dispatch start intent requests."""
+
+    assistant_data = _create_mock_assistant_data()
+    assistant_data["api_key"] = ""
+
+    response = dispatch_unity_start_intent(assistant_data, "api_message")
+
+    assert response is None
+    mock_post.assert_not_called()
 
 
 @patch("adapters.helpers._fetch_infra_jobs")

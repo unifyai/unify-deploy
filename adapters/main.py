@@ -73,6 +73,7 @@ from .helpers import (
     check_valid_contact,
     create_conference_response,
     dispatch_livekit_agent,
+    dispatch_unity_start_intent,
     expire_all_stale_jobs,
     get_assistant,
     get_graph_client_from_token,
@@ -1271,6 +1272,18 @@ class ScheduledPayload(BaseModel):
     test: bool = False
 
 
+class ScheduledTaskDuePayload(BaseModel):
+    """Payload delivered by Cloud Tasks when a scheduled task becomes due."""
+
+    assistant_id: str
+    task_id: int
+    source_task_log_id: int
+    activation_revision: str
+    scheduled_for: datetime
+    execution_mode: str = "live"
+    source_type: str = "scheduled"
+
+
 # =============================================================================
 # Unify Attachment Upload
 # =============================================================================
@@ -1703,6 +1716,65 @@ async def unify_meet_webhook(request: Request):
 # =============================================================================
 
 
+def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
+    """Return the canonical wake reason / system-event payload for due tasks."""
+
+    return {
+        "type": "task_due",
+        "task_id": payload.task_id,
+        "source_task_log_id": payload.source_task_log_id,
+        "activation_revision": payload.activation_revision,
+        "scheduled_for": payload.scheduled_for.astimezone(timezone.utc).isoformat(),
+        "execution_mode": payload.execution_mode,
+        "source_type": payload.source_type,
+    }
+
+
+def _task_due_message(payload: ScheduledTaskDuePayload) -> str:
+    """Return the human-readable summary attached to a due-task event."""
+
+    scheduled_for = payload.scheduled_for.astimezone(timezone.utc).isoformat()
+    return f"Scheduled task {payload.task_id} became due at {scheduled_for}."
+
+
+def _publish_unity_system_event(
+    *,
+    assistant_id: str,
+    event_type: str,
+    message: str,
+    contacts: list[dict] | None = None,
+    extra_event_fields: dict | None = None,
+) -> None:
+    """Publish a Unity system event to the assistant's Pub/Sub topic."""
+
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    event_payload = {
+        "contacts": contacts or [],
+        "assistant_id": assistant_id,
+        "event_type": event_type,
+        "message": message,
+    }
+    if extra_event_fields:
+        event_payload.update(extra_event_fields)
+
+    publish_future = pubsub_client.publish(
+        topic_path,
+        json.dumps(
+            {
+                "thread": "unity_system_event",
+                "publish_timestamp": time.time(),
+                "event": event_payload,
+            },
+        ).encode("utf-8"),
+        thread="inbound",
+    )
+    if "test" in str(assistant_id):
+        message_id = publish_future.result(timeout=10)
+        logger.info(f"Message ID: {message_id}")
+
+
 @app.post("/unity/system-event", dependencies=[Depends(require_admin_key)])
 async def unity_system_event_webhook(request: Request):
     """Unity system event webhook - handles system-level events."""
@@ -1752,37 +1824,123 @@ async def unity_system_event_webhook(request: Request):
         context["is_job_running"],
     )
 
-    # publish to pubsub
-    pubsub_client = get_pubsub_client()
-    topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
-    logger.info(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
     try:
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "unity_system_event",
-                    "publish_timestamp": time.time(),
-                    "event": {
-                        "contacts": contacts,
-                        "assistant_id": assistant_id,
-                        "event_type": event_type,
-                        "message": message,
-                    },
-                },
-            ).encode("utf-8"),
-            thread="inbound",
+        _publish_unity_system_event(
+            assistant_id=assistant_id,
+            event_type=event_type,
+            message=message,
+            contacts=contacts,
         )
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            logger.info(f"Message ID: {message_id}")
         logger.info("unity_system_event message published to Pub/Sub successfully")
     except Exception as e:
         logger.error(f"Error publishing unity_system_event to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
+
+
+@app.post("/scheduled/tasks/due", dependencies=[Depends(require_admin_key)])
+async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
+    """Wake or notify an assistant when a scheduled task becomes due."""
+
+    assistant_data = await asyncio.to_thread(
+        get_assistant,
+        assistant_id=payload.assistant_id,
+    )
+    if not assistant_data or not assistant_data.get("assistant_id"):
+        logger.info(
+            "Skipping task_due delivery because assistant %s no longer exists",
+            payload.assistant_id,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "assistant_not_found",
+        }
+
+    assistant_id = assistant_data["assistant_id"]
+    wake_reason = _build_task_due_reason(payload)
+
+    try:
+        if uses_local_unity_runtime(assistant_data):
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="task_due",
+                message=_task_due_message(payload),
+                extra_event_fields=wake_reason,
+            )
+            return {
+                "success": True,
+                "status": "published_local",
+                "assistant_id": assistant_id,
+            }
+
+        response = await asyncio.to_thread(
+            dispatch_unity_start_intent,
+            assistant_data,
+            "api_message",
+            wake_reasons=[wake_reason],
+            timeout_seconds=30,
+        )
+    except requests.RequestException as exc:
+        logger.error(
+            "Failed dispatching scheduled task due wake for assistant %s: %s",
+            assistant_id,
+            exc,
+        )
+        return Response(
+            content=f"Failed to dispatch task due wake: {exc}",
+            status_code=500,
+        )
+
+    if response is None:
+        return Response(
+            content="Assistant is missing an API key for task due delivery",
+            status_code=500,
+        )
+    if response.status_code != 200:
+        return Response(content=response.text, status_code=response.status_code)
+
+    try:
+        start_result = response.json()
+    except ValueError as exc:
+        logger.error("Invalid /infra/job/start response for task_due: %s", exc)
+        return Response(
+            content="Invalid /infra/job/start response",
+            status_code=500,
+        )
+
+    if start_result.get("active_session_already_running"):
+        try:
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="task_due",
+                message=_task_due_message(payload),
+                extra_event_fields=wake_reason,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed publishing task_due system event for assistant %s: %s",
+                assistant_id,
+                exc,
+            )
+            return Response(
+                content=f"Failed to publish task_due system event: {exc}",
+                status_code=500,
+            )
+        return {
+            "success": True,
+            "status": "published_to_active_session",
+            "assistant_id": assistant_id,
+            "activation_id": start_result.get("activation_id"),
+        }
+
+    return {
+        "success": True,
+        "status": "attached_to_startup",
+        "assistant_id": assistant_id,
+        "activation_id": start_result.get("activation_id"),
+    }
 
 
 @app.post("/unity/pre-hire", dependencies=[Depends(require_admin_key)])

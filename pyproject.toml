@@ -29,6 +29,7 @@ dependencies = [
     "google-cloud-secret-manager>=2.16.0",
     "google-cloud-compute>=1.14.0",
     "google-cloud-dns>=0.35.0",
+    "google-cloud-tasks>=2.22.0",
 
     # ACME protocol for wildcard TLS cert renewal
     "acme>=5.0.0",

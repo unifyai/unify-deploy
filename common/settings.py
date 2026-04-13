@@ -89,6 +89,17 @@ class Settings:
         self.orchestra_url: str = _service_url("ORCHESTRA_URL", "orchestra")
         self.comms_url: str = _service_url("UNITY_COMMS_URL", "comms")
         self.adapters_url: str = _service_url("UNITY_ADAPTERS_URL", "adapters")
+        self.task_due_queue_location: str = os.environ.get(
+            "UNITY_TASK_DUE_QUEUE_LOCATION",
+            self.default_region,
+        )
+        self.task_due_queue_name: str = os.environ.get(
+            "UNITY_TASK_DUE_QUEUE_NAME",
+            f"unity-task-due{self.env_suffix}",
+        )
+        self.task_due_dispatch_deadline_seconds: int = int(
+            os.environ.get("UNITY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"),
+        )
 
         # Auth keys
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
