@@ -128,7 +128,7 @@ async def health_check() -> None:
         if conn._fatal_close_code:
             logger.error(
                 f"Bot {bot_id} has fatal close code {conn._fatal_close_code}, "
-                "skipping reconnect (needs pool sync or operator fix)"
+                "skipping reconnect (needs pool sync or operator fix)",
             )
             continue
         if not conn.connected:

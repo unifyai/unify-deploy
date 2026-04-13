@@ -17,7 +17,7 @@ from livekit.api import (
     CreateSIPInboundTrunkRequest,
 )
 
-from communication.helpers import get_twilio_client, get_twilio_wa_client
+from communication.helpers import get_twilio_wa_client
 from common.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -392,7 +392,7 @@ async def _attach_voice_app(sender_sid: str, timeout: float = 60.0) -> bool:
                 json={
                     "configuration": {
                         "voice_application_sid": WHATSAPP_VOICE_APP_SID,
-                    }
+                    },
                 },
                 headers=headers,
                 timeout=10.0,

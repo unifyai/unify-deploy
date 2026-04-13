@@ -130,7 +130,7 @@ async def send_discord_message(request: Request):
 
     message_id = msg_resp.json()["id"]
     logger.info(
-        f"Sent Discord message to {channel_id} via bot {pool_bot_id} (msg={message_id})"
+        f"Sent Discord message to {channel_id} via bot {pool_bot_id} (msg={message_id})",
     )
     return {"success": True, "message_id": message_id, "channel_id": channel_id}
 

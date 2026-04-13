@@ -1372,7 +1372,6 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         for key, value in _pool_bootstrap_metadata_updates(vm_name, vm_type).items()
     ]
 
-
     labels = {
         POOL_ROLE_LABEL: "provisioning",
         ASSISTANT_ID_LABEL: "",

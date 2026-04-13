@@ -112,12 +112,14 @@ async def _ensure_job_running(assistant_data: dict, medium: str = "discord") -> 
                     "user_surname": assistant_data.get("user_surname", ""),
                     "user_email": assistant_data.get("user_email", ""),
                     "assistant_first_name": assistant_data.get(
-                        "assistant_first_name", ""
+                        "assistant_first_name",
+                        "",
                     ),
                     "assistant_surname": assistant_data.get("assistant_surname", ""),
                     "assistant_age": assistant_data.get("assistant_age", ""),
                     "assistant_nationality": assistant_data.get(
-                        "assistant_nationality", ""
+                        "assistant_nationality",
+                        "",
                     ),
                     "assistant_about": assistant_data.get("assistant_about", ""),
                     "assistant_timezone": assistant_data.get("assistant_timezone", ""),
@@ -125,13 +127,16 @@ async def _ensure_job_running(assistant_data: dict, medium: str = "discord") -> 
                     "assistant_number": assistant_data.get("assistant_number", ""),
                     "assistant_email": assistant_data.get("assistant_email", ""),
                     "user_whatsapp_number": assistant_data.get(
-                        "user_whatsapp_number", ""
+                        "user_whatsapp_number",
+                        "",
                     ),
                     "assistant_whatsapp_number": assistant_data.get(
-                        "assistant_whatsapp_number", ""
+                        "assistant_whatsapp_number",
+                        "",
                     ),
                     "assistant_discord_bot_id": assistant_data.get(
-                        "assistant_discord_bot_id", ""
+                        "assistant_discord_bot_id",
+                        "",
                     ),
                     "voice_provider": assistant_data.get("voice_provider", ""),
                     "voice_id": assistant_data.get("voice_id", ""),
@@ -273,7 +278,8 @@ class GatewayConnection:
 
         url = self._resume_url or DISCORD_GATEWAY_URL
         self._ws = await asyncio.wait_for(
-            self._http_session.ws_connect(url), timeout=30.0
+            self._http_session.ws_connect(url),
+            timeout=30.0,
         )
         self._heartbeat_acked = True
 
@@ -282,7 +288,7 @@ class GatewayConnection:
             logger.error(f"Bot {self.bot_id}: expected HELLO (op 10), got {hello}")
             await self._ws.close(code=1000)
             raise ConnectionError(
-                f"Bot {self.bot_id}: did not receive HELLO, got op={hello.get('op')}"
+                f"Bot {self.bot_id}: did not receive HELLO, got op={hello.get('op')}",
             )
         self._heartbeat_interval = hello["d"]["heartbeat_interval"] / 1000.0
 
@@ -307,7 +313,7 @@ class GatewayConnection:
                         "device": "unify-comms",
                     },
                 },
-            }
+            },
         )
 
     async def _send_resume(self) -> None:
@@ -319,7 +325,7 @@ class GatewayConnection:
                     "session_id": self._session_id,
                     "seq": self._seq,
                 },
-            }
+            },
         )
 
     async def _heartbeat_loop(self) -> None:
@@ -356,12 +362,12 @@ class GatewayConnection:
             ):
                 close_code = self._ws.close_code
                 logger.warning(
-                    f"Bot {self.bot_id}: WebSocket closed (code={close_code})"
+                    f"Bot {self.bot_id}: WebSocket closed (code={close_code})",
                 )
                 if close_code in FATAL_CLOSE_CODES:
                     logger.error(
                         f"Bot {self.bot_id}: fatal close code {close_code}, "
-                        "not reconnecting"
+                        "not reconnecting",
                     )
                     self._running = False
                     self._fatal_close_code = close_code
@@ -444,7 +450,9 @@ class GatewayConnection:
 
         if is_channel and self._bot_user_id:
             content = re.sub(
-                rf"<@!?{re.escape(self._bot_user_id)}>", "", content
+                rf"<@!?{re.escape(self._bot_user_id)}>",
+                "",
+                content,
             ).strip()
 
         attachments = [
