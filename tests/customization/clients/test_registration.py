@@ -371,7 +371,8 @@ class TestRegisterClient:
 
 class TestIsolatedResolution:
 
-    def _register_test_client(self, monkeypatch, *, environment=None):
+    def _register_with_default(self, monkeypatch, *, environment=None):
+        """Register a client whose mapping has assistant + default targets."""
         from unity_deploy.customization import deployment_types as dt
 
         v0 = _make_spec("v0", "Default v0")
@@ -396,41 +397,68 @@ class TestIsolatedResolution:
             environment=environment,
         )
 
+    def _register_assistant_only(self, monkeypatch, *, environment=None):
+        """Register a client whose mapping has only assistant targets (no default)."""
+        from unity_deploy.customization import deployment_types as dt
+
+        v1 = _make_spec("v1", "Assistant v1")
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: v1)
+
+        mapping = DeploymentMapping(
+            targets=[
+                DeploymentTarget(scope="assistant", scope_id="99", deployment="v1"),
+                DeploymentTarget(scope="assistant", scope_id="200", deployment="v1"),
+            ],
+        )
+        register_client(
+            "test_client",
+            mapping,
+            Path("/fake"),
+            default_org_id=10,
+            environment=environment,
+        )
+
     def test_assistant_gets_pure_v1(self, monkeypatch):
-        self._register_test_client(monkeypatch)
+        self._register_with_default(monkeypatch)
         result = resolve_from_deployments(org_id=10, assistant_id=99)
         assert result is not None
         assert result.config.guidelines == "Assistant v1"
         assert len(result.guidance) == 1
         assert result.guidance[0]["title"] == "v1 guide"
 
-    def test_default_gets_v0(self, monkeypatch):
-        self._register_test_client(monkeypatch)
+    def test_default_catches_unmatched_session(self, monkeypatch):
+        self._register_with_default(monkeypatch)
         result = resolve_from_deployments(org_id=10, assistant_id=1)
         assert result is not None
         assert result.config.guidelines == "Default v0"
 
-    def test_no_cascade_bleed(self, monkeypatch):
-        """v0 org-level should NOT bleed into v1 assistant-level."""
-        self._register_test_client(monkeypatch)
+    def test_no_bleed_between_specs(self, monkeypatch):
+        """v0 default data should NOT bleed into v1 assistant-level."""
+        self._register_with_default(monkeypatch)
         result = resolve_from_deployments(org_id=10, assistant_id=99)
         assert result is not None
         assert "Default v0" not in (result.config.guidelines or "")
         assert len(result.guidance) == 1
 
-    def test_wrong_org_returns_none(self, monkeypatch):
-        self._register_test_client(monkeypatch)
+    def test_assistant_match_ignores_org_mismatch(self, monkeypatch):
+        """Routing is target-driven; org_id on the entry is metadata only."""
+        self._register_assistant_only(monkeypatch)
         result = resolve_from_deployments(org_id=999, assistant_id=99)
+        assert result is not None
+        assert result.config.guidelines == "Assistant v1"
+
+    def test_no_target_match_returns_none(self, monkeypatch):
+        """When no target matches and there is no default, return None."""
+        self._register_assistant_only(monkeypatch)
+        result = resolve_from_deployments(org_id=10, assistant_id=1)
         assert result is None
 
-    def test_resolve_uses_isolated_path(self, monkeypatch):
-        """resolve() should use the isolated path when a client matches."""
-        self._register_test_client(monkeypatch)
+    def test_resolve_uses_deployment_path(self, monkeypatch):
+        self._register_with_default(monkeypatch)
         result = resolve(org_id=10, assistant_id=99)
         assert result.config.guidelines == "Assistant v1"
 
     def test_resolve_returns_defaults_when_no_client(self):
-        """resolve() returns empty defaults when no client matches."""
         result = resolve(org_id=999)
         assert result.config == ActorConfig()
         assert result.function_dirs == []
@@ -445,7 +473,7 @@ class TestIsolatedResolution:
         mapping = DeploymentMapping(
             targets=[DeploymentTarget(scope="default", deployment="v0")],
         )
-        register_client("test", mapping, Path("/fake"), default_org_id=10)
+        register_client("test", mapping, Path("/fake"))
 
         result = resolve(org_id=10)
         assert result.function_dirs == [_FAKE_DIR_A]
@@ -462,7 +490,7 @@ class TestIsolatedResolution:
         mapping = DeploymentMapping(
             targets=[DeploymentTarget(scope="default", deployment="v0")],
         )
-        register_client("test", mapping, Path("/fake"), default_org_id=10)
+        register_client("test", mapping, Path("/fake"))
 
         result = resolve(org_id=10)
         secret_names = {s["name"] for s in result.secrets}

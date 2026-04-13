@@ -379,6 +379,11 @@ class TestDeploymentResolver:
     """Verify each client's _MAPPING targets resolve to valid deployments."""
 
     def test_default_resolves(self, client: str, mapping, dep_dir: Path):
+        has_default = any(t.scope == "default" for t in mapping.targets)
+        if not has_default:
+            with pytest.raises(ValueError, match="No matching"):
+                resolve_deployment_name(mapping)
+            return
         name = resolve_deployment_name(mapping)
         valid = [
             d.name
