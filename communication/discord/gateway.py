@@ -87,6 +87,63 @@ async def _fetch_assistant(assistant_id: str) -> dict | None:
     return assistants[0]
 
 
+def _default_contacts(assistant_data: dict) -> list[dict]:
+    return [
+        {
+            "contact_id": 0,
+            "first_name": assistant_data.get("assistant_first_name", ""),
+            "surname": assistant_data.get("assistant_surname", ""),
+            "email_address": assistant_data.get("assistant_email", ""),
+            "phone_number": assistant_data.get("assistant_number", ""),
+            "whatsapp_number": assistant_data.get("assistant_whatsapp_number", ""),
+            "bio": "",
+            "rolling_summary": "",
+            "should_respond": False,
+            "response_policy": "",
+        },
+        {
+            "contact_id": 1,
+            "first_name": assistant_data.get("user_first_name", ""),
+            "surname": assistant_data.get("user_surname", ""),
+            "email_address": assistant_data.get("user_email", ""),
+            "phone_number": assistant_data.get("user_number", ""),
+            "whatsapp_number": assistant_data.get("user_whatsapp_number", ""),
+            "bio": "",
+            "rolling_summary": "",
+            "should_respond": True,
+            "response_policy": "",
+        },
+    ]
+
+
+async def _fetch_contacts(assistant_data: dict) -> list[dict]:
+    """Fetch the assistant's contact list from Orchestra logs.
+
+    Mirrors the pattern used by SMS/WhatsApp in adapters/helpers.py
+    (get_contacts + get_default_contacts fallback).
+    """
+    user_id = assistant_data.get("user_id", "")
+    assistant_id = assistant_data.get("assistant_id", "")
+    api_key = assistant_data.get("api_key", "")
+    if not api_key:
+        return _default_contacts(assistant_data)
+
+    context = f"{user_id}/{assistant_id}/Contacts"
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{SETTINGS.orchestra_url}/logs",
+            params={"project_name": "Assistants", "context": context},
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10.0,
+        )
+    if resp.status_code != 200:
+        return _default_contacts(assistant_data)
+    logs = resp.json().get("logs", [])
+    if len(logs) < 2:
+        return _default_contacts(assistant_data)
+    return [entry["entries"] for entry in logs]
+
+
 async def _ensure_job_running(assistant_data: dict, medium: str = "discord") -> None:
     """Fire-and-forget request to start a Unity container for this assistant.
 
@@ -195,6 +252,7 @@ def _publish_to_pubsub(
     is_channel: bool = False,
     guild_id: str | None = None,
     attachments: list[dict] | None = None,
+    contacts: list[dict] | None = None,
 ) -> None:
     """Publish an inbound Discord message to the assistant's Pub/Sub topic."""
     client = _get_pubsub_client()
@@ -206,6 +264,7 @@ def _publish_to_pubsub(
         "thread": "discord",
         "publish_timestamp": time.time(),
         "event": {
+            "contacts": contacts or [],
             "bot_id": bot_id,
             "sender_discord_id": sender_discord_id,
             "channel_id": channel_id,
@@ -493,8 +552,10 @@ class GatewayConnection:
         role = route.get("role", "contact")
 
         assistant_data = await _fetch_assistant(assistant_id)
+        contacts: list[dict] = []
         if assistant_data:
             asyncio.create_task(_ensure_job_running(assistant_data))
+            contacts = await _fetch_contacts(assistant_data)
 
         _publish_to_pubsub(
             assistant_id=assistant_id,
@@ -506,6 +567,7 @@ class GatewayConnection:
             is_channel=is_channel,
             guild_id=guild_id,
             attachments=attachments,
+            contacts=contacts,
         )
 
     async def _reconnect(self, resume: bool = True) -> None:
