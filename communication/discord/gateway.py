@@ -36,6 +36,22 @@ FRESH_IDENTIFY_CODES = {4003, 4007, 4009}
 
 _pubsub_client: pubsub_v1.PublisherClient | None = None
 
+_seen_message_ids: dict[str, float] = {}
+_DEDUP_TTL = 300.0
+
+
+def _already_published(message_id: str) -> bool:
+    """Return True if this message_id was already published recently."""
+    now = time.time()
+    cutoff = now - _DEDUP_TTL
+    expired = [k for k, t in _seen_message_ids.items() if t < cutoff]
+    for k in expired:
+        del _seen_message_ids[k]
+    if message_id in _seen_message_ids:
+        return True
+    _seen_message_ids[message_id] = now
+    return False
+
 
 def _get_pubsub_client() -> pubsub_v1.PublisherClient:
     global _pubsub_client
@@ -246,6 +262,7 @@ async def _send_dm(bot_token: str, user_id: str, content: str) -> None:
 
 def _publish_to_pubsub(
     assistant_id: str,
+    message_id: str,
     bot_id: str,
     sender_discord_id: str,
     channel_id: str,
@@ -266,6 +283,7 @@ def _publish_to_pubsub(
         "thread": "discord",
         "publish_timestamp": time.time(),
         "event": {
+            "message_id": message_id,
             "contacts": contacts or [],
             "bot_id": bot_id,
             "sender_discord_id": sender_discord_id,
@@ -506,6 +524,7 @@ class GatewayConnection:
                 return
 
         sender_id = author["id"]
+        message_id = data["id"]
         content = data.get("content", "")
         channel_id = data["channel_id"]
 
@@ -559,8 +578,15 @@ class GatewayConnection:
             asyncio.create_task(_ensure_job_running(assistant_data))
             contacts = await _fetch_contacts(assistant_data)
 
+        if _already_published(message_id):
+            logger.debug(
+                f"Bot {self.bot_id}: skipping duplicate MESSAGE_CREATE {message_id}",
+            )
+            return
+
         _publish_to_pubsub(
             assistant_id=assistant_id,
+            message_id=message_id,
             bot_id=self.bot_id,
             sender_discord_id=sender_id,
             channel_id=channel_id,
