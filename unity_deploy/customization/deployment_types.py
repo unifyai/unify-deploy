@@ -61,22 +61,28 @@ def detect_environment() -> str:
 # ---------------------------------------------------------------------------
 
 
-class GuidanceEntry(BaseModel):
-    """A single guidance entry registered with the actor."""
+from unity.guidance_manager.types.guidance import Guidance
+from unity.secret_manager.types import Secret
 
-    title: str = Field(..., description="Short, descriptive title for the guidance.")
-    content: str = Field(..., description="Full guidance text.")
+GuidanceEntry = Guidance
+SecretEntry = Secret
 
 
-class SecretEntry(BaseModel):
-    """A single secret credential registered with the actor."""
+class SeedLayer(BaseModel):
+    """Additive seed data registered at a specific identity scope.
 
-    name: str = Field(..., description="Environment-style key, e.g. 'MS365_TENANT_ID'.")
-    value: str = Field(..., description="The secret value.")
-    description: str = Field(
-        ...,
-        description="Human-readable explanation of what this secret is and how to use it.",
-    )
+    Layers are collected during resolution in scope order
+    (org -> team -> user -> assistant) and merged onto the
+    deployment spec's seed data.  More specific layers override
+    less specific ones using natural-key dedup (contacts by
+    name, guidance by title, knowledge tables by seed_key, etc.).
+    """
+
+    contacts: list[dict] = Field(default_factory=list)
+    guidance: list[Guidance] = Field(default_factory=list)
+    knowledge: dict[str, dict] = Field(default_factory=dict)
+    blacklist: list[dict] = Field(default_factory=list)
+    secrets: list[Secret] = Field(default_factory=list)
 
 
 def _merge_actor_configs(base: ActorConfig, override: ActorConfig) -> ActorConfig:
@@ -120,11 +126,11 @@ class DeploymentSpec(BaseModel):
         ...,
         description="Actor identity and capabilities config.",
     )
-    guidance: list[GuidanceEntry] = Field(
+    guidance: list[Guidance] = Field(
         default_factory=list,
         description="Guidance entries registered with the actor.",
     )
-    secrets: list[SecretEntry] = Field(
+    secrets: list[Secret] = Field(
         default_factory=list,
         description="Credentials registered with the actor's SecretManager.",
     )
@@ -431,6 +437,55 @@ def register_client(
         default_org_id,
     )
     return loaded
+
+
+def register_layer(
+    client_name: str,
+    scope: str,
+    scope_id: str,
+    layer: SeedLayer,
+) -> None:
+    """Register shared seed data at a specific identity scope.
+
+    Parameters
+    ----------
+    client_name
+        Must match a previously registered client name.
+    scope
+        One of ``"org"``, ``"team"``, ``"user"``, ``"assistant"``.
+    scope_id
+        The identifier within the scope (e.g. org ID as a string,
+        user UUID, assistant ID as a string).
+    layer
+        A :class:`SeedLayer` containing the additive seed data.
+
+    Raises
+    ------
+    KeyError
+        If *client_name* has not been registered via :func:`register_client`.
+    ValueError
+        If *scope* is not one of the allowed values.
+    """
+    from unity_deploy.customization.clients import _CLIENT_DEPLOYMENTS
+
+    if client_name not in _CLIENT_DEPLOYMENTS:
+        raise KeyError(
+            f"Client '{client_name}' not registered. "
+            f"Call register_client() before register_layer().",
+        )
+    if scope not in ("org", "team", "user", "assistant"):
+        raise ValueError(
+            f"Invalid scope '{scope}'. Must be one of: org, team, user, assistant.",
+        )
+
+    entry = _CLIENT_DEPLOYMENTS[client_name]
+    key = f"{scope}:{scope_id}"
+    entry.layers[key] = layer
+    logger.debug(
+        "Registered seed layer for client '%s' at %s",
+        client_name,
+        key,
+    )
 
 
 # Resolve the PipelineConfig forward reference in DeploymentSpec
