@@ -107,12 +107,12 @@ def _default_contacts(assistant_data: dict) -> list[dict]:
     return [
         {
             "contact_id": 0,
-            "first_name": assistant_data.get("assistant_first_name", ""),
-            "surname": assistant_data.get("assistant_surname", ""),
-            "email_address": assistant_data.get("assistant_email", ""),
-            "phone_number": assistant_data.get("assistant_number", ""),
-            "whatsapp_number": assistant_data.get("assistant_whatsapp_number", ""),
-            "discord_id": assistant_data.get("assistant_discord_bot_id", ""),
+            "first_name": assistant_data.get("first_name") or "",
+            "surname": assistant_data.get("surname") or "",
+            "email_address": assistant_data.get("email") or "",
+            "phone_number": assistant_data.get("phone") or "",
+            "whatsapp_number": assistant_data.get("assistant_whatsapp_number") or "",
+            "discord_id": assistant_data.get("assistant_discord_bot_id") or "",
             "bio": "",
             "rolling_summary": "",
             "should_respond": False,
@@ -120,12 +120,12 @@ def _default_contacts(assistant_data: dict) -> list[dict]:
         },
         {
             "contact_id": 1,
-            "first_name": assistant_data.get("user_first_name", ""),
-            "surname": assistant_data.get("user_surname", ""),
-            "email_address": assistant_data.get("user_email", ""),
-            "phone_number": assistant_data.get("user_number", ""),
-            "whatsapp_number": assistant_data.get("user_whatsapp_number", ""),
-            "discord_id": assistant_data.get("user_discord_id", ""),
+            "first_name": assistant_data.get("user_first_name") or "",
+            "surname": assistant_data.get("user_last_name") or "",
+            "email_address": assistant_data.get("user_email") or "",
+            "phone_number": assistant_data.get("user_phone") or "",
+            "whatsapp_number": assistant_data.get("user_whatsapp_number") or "",
+            "discord_id": assistant_data.get("user_discord_id") or "",
             "bio": "",
             "rolling_summary": "",
             "should_respond": True,
@@ -140,9 +140,9 @@ async def _fetch_contacts(assistant_data: dict) -> list[dict]:
     Mirrors the pattern used by SMS/WhatsApp in adapters/helpers.py
     (get_contacts + get_default_contacts fallback).
     """
-    user_id = assistant_data.get("user_id", "")
-    assistant_id = assistant_data.get("assistant_id", "")
-    api_key = assistant_data.get("api_key", "")
+    user_id = assistant_data.get("user_id") or ""
+    assistant_id = assistant_data.get("agent_id") or ""
+    api_key = assistant_data.get("api_key") or ""
     if not api_key:
         return _default_contacts(assistant_data)
 
@@ -168,10 +168,15 @@ async def _ensure_job_running(assistant_data: dict, medium: str = "discord") -> 
     Calls the comms API's /infra/job/start endpoint, which handles
     deduplication atomically via K8s labels.
     """
-    assistant_id = assistant_data.get("assistant_id", "")
-    api_key = assistant_data.get("api_key", "")
+    assistant_id = assistant_data.get("agent_id") or ""
+    api_key = assistant_data.get("api_key") or ""
     if not api_key:
         return
+
+    def _s(key: str, default: str = "") -> str:
+        """Get a string value, coalescing None to the default."""
+        v = assistant_data.get(key)
+        return str(v) if v is not None else default
 
     try:
         async with httpx.AsyncClient() as client:
@@ -182,51 +187,36 @@ async def _ensure_job_running(assistant_data: dict, medium: str = "discord") -> 
                     "api_key": api_key,
                     "medium": medium,
                     "assistant_id": assistant_id,
-                    "user_id": assistant_data.get("user_id", ""),
-                    "user_first_name": assistant_data.get("user_first_name", ""),
-                    "user_surname": assistant_data.get("user_surname", ""),
-                    "user_email": assistant_data.get("user_email", ""),
-                    "assistant_first_name": assistant_data.get(
-                        "assistant_first_name",
-                        "",
-                    ),
-                    "assistant_surname": assistant_data.get("assistant_surname", ""),
-                    "assistant_age": assistant_data.get("assistant_age", ""),
-                    "assistant_nationality": assistant_data.get(
-                        "assistant_nationality",
-                        "",
-                    ),
-                    "assistant_about": assistant_data.get("assistant_about", ""),
-                    "assistant_timezone": assistant_data.get("assistant_timezone", ""),
-                    "user_number": assistant_data.get("user_number", ""),
-                    "assistant_number": assistant_data.get("assistant_number", ""),
-                    "assistant_email": assistant_data.get("assistant_email", ""),
-                    "user_whatsapp_number": assistant_data.get(
-                        "user_whatsapp_number",
-                        "",
-                    ),
-                    "assistant_whatsapp_number": assistant_data.get(
-                        "assistant_whatsapp_number",
-                        "",
-                    ),
-                    "assistant_discord_bot_id": assistant_data.get(
-                        "assistant_discord_bot_id",
-                        "",
-                    ),
-                    "voice_provider": assistant_data.get("voice_provider", ""),
-                    "voice_id": assistant_data.get("voice_id", ""),
-                    "desktop_mode": assistant_data.get("desktop_mode", "ubuntu"),
-                    "user_desktop_mode": assistant_data.get("user_desktop_mode", ""),
+                    "user_id": _s("user_id"),
+                    "user_first_name": _s("user_first_name"),
+                    "user_surname": _s("user_last_name"),
+                    "user_email": _s("user_email"),
+                    "assistant_first_name": _s("first_name"),
+                    "assistant_surname": _s("surname"),
+                    "assistant_age": _s("age"),
+                    "assistant_nationality": _s("nationality"),
+                    "assistant_about": _s("about"),
+                    "assistant_timezone": _s("timezone", "UTC"),
+                    "user_number": _s("user_phone"),
+                    "assistant_number": _s("phone"),
+                    "assistant_email": _s("email"),
+                    "user_whatsapp_number": _s("user_whatsapp_number"),
+                    "assistant_whatsapp_number": _s("assistant_whatsapp_number"),
+                    "assistant_discord_bot_id": _s("assistant_discord_bot_id"),
+                    "voice_provider": _s("voice_provider"),
+                    "voice_id": _s("voice_id"),
+                    "desktop_mode": _s("desktop_mode", "ubuntu"),
+                    "user_desktop_mode": _s("user_desktop_mode"),
                     "user_desktop_filesys_sync": (
                         "true"
                         if assistant_data.get("user_desktop_filesys_sync")
                         else "false"
                     ),
-                    "user_desktop_url": assistant_data.get("user_desktop_url", ""),
-                    "demo_id": str(assistant_data.get("demo_id", "") or ""),
-                    "team_ids": json.dumps(assistant_data.get("team_ids", [])),
-                    "org_id": str(assistant_data.get("org_id", "") or ""),
-                    "deploy_env": assistant_data.get("deploy_env", ""),
+                    "user_desktop_url": _s("user_desktop_url"),
+                    "demo_id": _s("demo_id"),
+                    "team_ids": json.dumps(assistant_data.get("team_ids") or []),
+                    "org_id": _s("organization_id"),
+                    "deploy_env": _s("deploy_env"),
                 },
                 timeout=5.0,
             )
