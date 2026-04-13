@@ -1763,6 +1763,19 @@ TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS = 120
 TEST_ASSISTANT_CLEANUP_PARALLELISM = 6
 
 
+def _factory_assistant_surname(index: int) -> str:
+    """Return an alphabetic surname accepted by Unity contact validation."""
+
+    value = abs(int(index))
+    letters: list[str] = []
+    while True:
+        value, remainder = divmod(value, 26)
+        letters.append(chr(ord("A") + remainder))
+        if value == 0:
+            break
+    return f"Run{''.join(reversed(letters))}"
+
+
 def _list_owned_assistants() -> list[dict]:
     """Return assistants visible to the current test user."""
     if not UNIFY_KEY:
@@ -1854,27 +1867,34 @@ def _admin_record_to_data(a: dict) -> dict:
     }
 
 
-def _create_test_assistant(index: int) -> dict:
+def _create_test_assistant(
+    index: int,
+    *,
+    desktop_mode: str | None = "ubuntu",
+    is_local: bool = True,
+) -> dict:
     """Create a test assistant on Orchestra and return its full data.
 
-    Calls POST /v0/assistant with is_local=True (skips wakeup) and
-    create_infra=True (provisions Pub/Sub topic).  Then fetches the full
-    admin record to get api_key and user fields.
+    Calls POST /v0/assistant with create_infra=True (provisions Pub/Sub
+    topic). By default the helper keeps assistants local so tests can opt
+    into remote runtime wakeups only when they need them. Then fetches the
+    full admin record to get api_key and user fields.
     """
     assert UNIFY_KEY, "UNIFY_KEY required to create test assistants"
     assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
 
     payload = {
         "first_name": TEST_ASSISTANT_FACTORY_FIRST_NAME,
-        "surname": f"{index:03d}",
+        "surname": _factory_assistant_surname(index),
         "age": 25,
         "nationality": "North America",
         "about": TEST_ASSISTANT_FACTORY_ABOUT,
-        "desktop_mode": "ubuntu",
-        "is_local": True,
+        "is_local": is_local,
         "create_infra": True,
         "timezone": "UTC",
     }
+    if desktop_mode is not None:
+        payload["desktop_mode"] = desktop_mode
     create_resp = requests.post(
         f"{ORCHESTRA_URL}/assistant",
         json=payload,
