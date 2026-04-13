@@ -222,4 +222,7 @@ def resolve(
 # ---------------------------------------------------------------------------
 
 from . import client_alpha  # noqa: F401, E402
-from . import clientgamma  # noqa: F401, E402
+
+# TODO: Yasser has left the team.  Re-enable when a new ClientGamma deployment
+# owner is assigned and _ENVIRONMENTS is populated in clientgamma/__init__.py.
+# from . import clientgamma  # noqa: F401, E402
