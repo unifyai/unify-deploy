@@ -7,7 +7,7 @@ group name declared in this package's ``pyproject.toml``.
 Performs three tasks that were previously steps 7-9 in
 ``_init_managers``:
 
-1. Resolve client customization (org/team/user/assistant cascade)
+1. Resolve client customization (deployment-matched spec; secrets from ``.secrets.json`` merge org→team→user→assistant)
 2. Sync seed data (contacts, guidance, knowledge, secrets, blacklist)
 3. Sync custom functions and virtual environments
 """
