@@ -15,7 +15,6 @@ WORKDIR /app
 RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
 # Clone and install unillm + unifyai (private dependencies).
-# Preview builds intentionally reuse the staging dependency branches.
 RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unify.git /tmp/unify && \
     pip install --no-cache-dir /tmp/unify

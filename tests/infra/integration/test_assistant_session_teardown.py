@@ -1,7 +1,7 @@
 """Integration tests for the full assistant deletion and session teardown flow.
 
 Tests cover three scenarios and are designed to run unchanged against any
-deployed environment (staging, preview, main).  Session-CRD-specific
+deployed environment (staging, main).  Session-CRD-specific
 assertions are automatically skipped when the AssistantSession controller
 is not deployed on the target cluster.
 
@@ -23,9 +23,8 @@ is not deployed on the target cluster.
 Run against the default environment (staging):
     pytest tests/infra/integration/test_assistant_session_teardown.py -v -s
 
-Run against preview:
-    TEST_NAMESPACE=preview \\
-    TEST_ORCHESTRA_URL=https://internal.example.com/v0 \\
+Run against staging:
+    TEST_NAMESPACE=staging \\
     pytest tests/infra/integration/test_assistant_session_teardown.py -v -s
 """
 

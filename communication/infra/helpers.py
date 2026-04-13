@@ -277,7 +277,7 @@ def create_unity_job(
         job_name: Name of the job
         namespace: Kubernetes namespace
         image: Docker image to use
-        deploy_env: Deployment environment ("production", "staging", or "preview")
+        deploy_env: Deployment environment ("production" or "staging")
         ttl_seconds_after_finished: Seconds after job completion before cleanup (None to disable)
     """
     try:

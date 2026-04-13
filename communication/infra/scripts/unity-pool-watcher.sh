@@ -35,8 +35,6 @@ get_deploy_env() {
     env_name=$(get_metadata "unity-environment")
     if [[ -n "$env_name" ]]; then
         echo "$env_name"
-    elif [[ -n "$(get_metadata "preview")" ]]; then
-        echo "preview"
     elif [[ -n "$(get_metadata "staging")" ]]; then
         echo "staging"
     else
@@ -262,7 +260,6 @@ do_update() {
         unity_url="https://github.com/unifyai/unity.git"
     fi
     case "$deploy_env" in
-        preview) unity_branch="preview" ;;
         staging) unity_branch="staging" ;;
         *) unity_branch="main" ;;
     esac

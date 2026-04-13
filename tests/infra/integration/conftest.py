@@ -186,22 +186,7 @@ def real_assistant_data():
         assert (
             assistants
         ), "No assistants found for this user. Hire one on the target environment first."
-        if NAMESPACE == "preview":
-            preview_candidates = [
-                a
-                for a in assistants
-                if a.get("deploy_env") == "preview" and not a.get("is_local", False)
-            ]
-            if preview_candidates:
-                chosen = preview_candidates[0]
-            else:
-                print(
-                    "\n[Setup] No non-local preview assistant found; "
-                    "creating one automatically for preview integration tests.",
-                )
-                return _create_preview_managed_assistant()
-        else:
-            chosen = assistants[0]
+        chosen = assistants[0]
         assistant_id = str(chosen["agent_id"])
         print(
             f"\n[Setup] Auto-detected assistant: {chosen.get('first_name', '')} "
@@ -1890,9 +1875,6 @@ def _create_test_assistant(index: int) -> dict:
         "create_infra": True,
         "timezone": "UTC",
     }
-    if NAMESPACE == "preview":
-        payload["deploy_env"] = "preview"
-
     create_resp = requests.post(
         f"{ORCHESTRA_URL}/assistant",
         json=payload,
@@ -1926,56 +1908,6 @@ def _create_test_assistant(index: int) -> dict:
     return _admin_record_to_data(a)
 
 
-def _create_preview_managed_assistant() -> dict:
-    """Create a non-local preview-routed assistant for preview E2E flows."""
-    assert UNIFY_KEY, "UNIFY_KEY required to create preview assistants"
-    assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
-
-    payload = {
-        "first_name": "PreviewInfra",
-        "surname": f"{int(time.time()) % 100000:05d}",
-        "age": 25,
-        "nationality": "North America",
-        "about": "Preview integration assistant (auto-created by tests)",
-        "desktop_mode": "ubuntu",
-        "is_local": False,
-        "create_infra": True,
-        "deploy_env": "preview",
-        "timezone": "UTC",
-    }
-
-    create_resp = requests.post(
-        f"{ORCHESTRA_URL}/assistant",
-        json=payload,
-        headers={"Authorization": f"Bearer {UNIFY_KEY}"},
-        timeout=90,
-    )
-    assert (
-        create_resp.status_code == 200
-    ), f"Failed to create preview assistant: {create_resp.status_code} {create_resp.text}"
-
-    info = create_resp.json().get("info", {})
-    agent_id = str(info.get("agent_id", ""))
-    assert (
-        agent_id
-    ), f"No agent_id in preview assistant create response: {create_resp.text}"
-
-    admin_resp = requests.get(
-        f"{ORCHESTRA_URL}/admin/assistant",
-        params={"agent_id": agent_id},
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        timeout=10,
-    )
-    assert admin_resp.status_code == 200, (
-        f"Failed to fetch admin record for preview assistant {agent_id}: "
-        f"{admin_resp.status_code} {admin_resp.text}"
-    )
-
-    admin_info = admin_resp.json()["info"]
-    a = admin_info[0] if isinstance(admin_info, list) else admin_info
-    return _admin_record_to_data(a)
-
-
 def _delete_test_assistant(
     agent_id: str,
     batch_api=None,
@@ -1986,7 +1918,7 @@ def _delete_test_assistant(
     Calls DELETE /v0/assistant/{id} which handles Pub/Sub, disks, phones,
     emails, and DB cleanup. Tests then defensively expire AssistantJobs
     records, wait for the Comms runtime to quiesce, and prune any lingering
-    AssistantSession or assistant-disk artifacts so repeated preview runs stay
+    AssistantSession or assistant-disk artifacts so repeated test runs stay
     idempotent even when upstream cleanup lags.
 
     Swallows all exceptions so teardown never aborts mid-way.

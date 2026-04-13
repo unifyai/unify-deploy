@@ -15,7 +15,6 @@ import requests
 from .conftest import (
     ADAPTERS_URL,
     ADMIN_KEY,
-    NAMESPACE,
     ORCHESTRA_URL,
     UNIFY_KEY,
     _admin_record_to_data,
@@ -65,9 +64,6 @@ def _create_managed_desktop_test_assistant(desktop_mode: str) -> dict:
         "create_infra": True,
         "timezone": "UTC",
     }
-    if NAMESPACE == "preview":
-        payload["deploy_env"] = "preview"
-
     create_resp = requests.post(
         f"{ORCHESTRA_URL}/assistant",
         json=payload,

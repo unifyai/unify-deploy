@@ -128,37 +128,37 @@ def test_merge_conditions_replaces_by_type():
 def test_vm_refs_match_requires_same_identity():
     assert vm_refs_match(
         {
-            "name": "unity-pool-ubuntu-10-preview",
-            "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+            "name": "unity-pool-ubuntu-10-staging",
+            "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
         },
         {
-            "name": "unity-pool-ubuntu-10-preview",
-            "hostname": "https://unity-pool-ubuntu-10-preview.vm.unify.ai/",
+            "name": "unity-pool-ubuntu-10-staging",
+            "hostname": "https://unity-pool-ubuntu-10-staging.vm.unify.ai/",
         },
     )
     assert not vm_refs_match(
         {
-            "name": "unity-pool-ubuntu-10-preview",
-            "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+            "name": "unity-pool-ubuntu-10-staging",
+            "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
         },
         {
-            "name": "unity-pool-ubuntu-14-preview",
-            "hostname": "unity-pool-ubuntu-14-preview.vm.unify.ai",
+            "name": "unity-pool-ubuntu-14-staging",
+            "hostname": "unity-pool-ubuntu-14-staging.vm.unify.ai",
         },
     )
 
 
 def test_desktop_url_matches_vm_ref_normalizes_scheme():
     vm_ref = {
-        "name": "unity-pool-ubuntu-10-preview",
-        "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+        "name": "unity-pool-ubuntu-10-staging",
+        "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
     }
     assert desktop_url_matches_vm_ref(
-        "https://unity-pool-ubuntu-10-preview.vm.unify.ai/",
+        "https://unity-pool-ubuntu-10-staging.vm.unify.ai/",
         vm_ref,
     )
     assert not desktop_url_matches_vm_ref(
-        "https://unity-pool-ubuntu-14-preview.vm.unify.ai",
+        "https://unity-pool-ubuntu-14-staging.vm.unify.ai",
         vm_ref,
     )
 
@@ -179,10 +179,10 @@ def test_assistant_session_observability_fields_summarize_runtime_state():
                 job_ref={"name": "unity-job-1"},
                 pod_ref={"name": "unity-pod-1"},
                 vm_ref={
-                    "name": "unity-pool-ubuntu-10-preview",
-                    "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+                    "name": "unity-pool-ubuntu-10-staging",
+                    "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
                 },
-                desktop_url="https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+                desktop_url="https://unity-pool-ubuntu-10-staging.vm.unify.ai",
             ),
             "lastError": "waiting",
             "suspendIntent": build_suspend_intent(
@@ -203,8 +203,8 @@ def test_assistant_session_observability_fields_summarize_runtime_state():
     assert summary["session_name"] == "assistant-session-1207"
     assert summary["activation_id"] == "act-1"
     assert summary["job_name"] == "unity-job-1"
-    assert summary["vm_name"] == "unity-pool-ubuntu-10-preview"
-    assert summary["vm_hostname"] == "unity-pool-ubuntu-10-preview.vm.unify.ai"
+    assert summary["vm_name"] == "unity-pool-ubuntu-10-staging"
+    assert summary["vm_hostname"] == "unity-pool-ubuntu-10-staging.vm.unify.ai"
     assert summary["suspend_intent"] == SUSPEND_INTENT_REPLACE
     assert summary["suspend_intent_binding_id"] == "binding-1"
     assert summary["suspend_intent_source"] == "controller.bootstrap_timeout"
@@ -221,8 +221,8 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
             "status": {
                 "binding": build_binding(
                     binding_id="binding-1",
-                    vm_ref={"name": "unity-pool-ubuntu-10-preview"},
-                    desktop_url="https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+                    vm_ref={"name": "unity-pool-ubuntu-10-staging"},
+                    desktop_url="https://unity-pool-ubuntu-10-staging.vm.unify.ai",
                 ),
             },
         },
@@ -235,7 +235,7 @@ def test_patch_assistant_session_status_allows_explicit_none(monkeypatch):
 
     patch_assistant_session_status(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         binding=None,
     )
@@ -268,7 +268,7 @@ def test_patch_assistant_session_status_persists_suspend_intent(monkeypatch):
 
     updated = patch_assistant_session_status(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         suspend_intent=build_suspend_intent(
             binding_id="binding-1",
@@ -307,7 +307,7 @@ def test_patch_assistant_session_status_preserves_retry_counters(monkeypatch):
     custom_api = FakeCustomApi()
     patch_assistant_session_status(
         custom_api,
-        "preview",
+        "staging",
         "1207",
         bootstrap_retries=2,
         vm_retries=3,
@@ -316,7 +316,7 @@ def test_patch_assistant_session_status_preserves_retry_counters(monkeypatch):
 
     patch_assistant_session_status(
         custom_api,
-        "preview",
+        "staging",
         "1207",
         phase="PendingVM",
         observed_activation_id="act-2",
@@ -338,7 +338,7 @@ def test_patch_assistant_session_status_replaces_signals_without_touching_bindin
             "phase": "PendingGuest",
             "binding": build_binding(
                 binding_id="binding-1",
-                vm_ref={"name": "unity-pool-ubuntu-10-preview"},
+                vm_ref={"name": "unity-pool-ubuntu-10-staging"},
             ),
         },
     }
@@ -362,13 +362,13 @@ def test_patch_assistant_session_status_replaces_signals_without_touching_bindin
 
     patch_assistant_session_status(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         signals={
             "desktopReady": build_binding_signal(
                 binding_id="binding-1",
                 state="ready",
-                hostname="unity-pool-ubuntu-10-preview.vm.unify.ai",
+                hostname="unity-pool-ubuntu-10-staging.vm.unify.ai",
             ),
         },
     )
@@ -388,7 +388,7 @@ def test_record_assistant_session_signal_merges_into_status(monkeypatch):
                 "vmGuestHealth": build_binding_signal(
                     binding_id="binding-1",
                     state="ready",
-                    vmRef={"name": "unity-pool-ubuntu-10-preview"},
+                    vmRef={"name": "unity-pool-ubuntu-10-staging"},
                 ),
             },
         },
@@ -413,13 +413,13 @@ def test_record_assistant_session_signal_merges_into_status(monkeypatch):
 
     updated = record_assistant_session_signal(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         signal_name="desktopReady",
         payload=build_binding_signal(
             binding_id="binding-1",
             state="ready",
-            hostname="unity-pool-ubuntu-10-preview.vm.unify.ai",
+            hostname="unity-pool-ubuntu-10-staging.vm.unify.ai",
         ),
         source="test",
     )
@@ -463,7 +463,7 @@ def test_record_released_binding_upserts_release_ledger(monkeypatch):
 
     updated = record_released_binding(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         binding_id="binding-2",
         release_requested_at="2026-04-08T00:02:00+00:00",
@@ -509,7 +509,7 @@ def test_claim_binding_vm_assignment_attempt_marks_binding_in_progress(monkeypat
 
     attempt_id = claim_binding_vm_assignment_attempt(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         target_binding_id="binding-1",
         stale_after_seconds=60,
@@ -558,14 +558,14 @@ def test_persist_binding_vm_assignment_result_records_success(monkeypatch):
 
     persisted = persist_binding_vm_assignment_result(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         target_binding_id="binding-1",
         attempt_id="attempt-1",
         state="assigned",
         vm_ref={
-            "name": "unity-pool-ubuntu-10-preview",
-            "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+            "name": "unity-pool-ubuntu-10-staging",
+            "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
             "vmType": "ubuntu",
         },
         source="test",
@@ -574,7 +574,7 @@ def test_persist_binding_vm_assignment_result_records_success(monkeypatch):
     assert persisted is True
     assert (
         binding_vm_ref(session["status"]["binding"])["name"]
-        == "unity-pool-ubuntu-10-preview"
+        == "unity-pool-ubuntu-10-staging"
     )
     assert binding_vm_assignment(session["status"]["binding"]) == {}
 
@@ -615,7 +615,7 @@ def test_persist_binding_vm_assignment_result_ignores_stale_attempt(monkeypatch)
 
     persisted = persist_binding_vm_assignment_result(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         target_binding_id="binding-1",
         attempt_id="attempt-1",
@@ -689,13 +689,13 @@ def test_record_assistant_session_signal_persists_source_and_causal_context(
     ):
         updated = record_assistant_session_signal(
             FakeCustomApi(),
-            "preview",
+            "staging",
             "1207",
             signal_name="desktopReady",
             payload=build_binding_signal(
                 binding_id="binding-1",
                 state="ready",
-                hostname="unity-pool-ubuntu-10-preview.vm.unify.ai",
+                hostname="unity-pool-ubuntu-10-staging.vm.unify.ai",
             ),
             source="test",
         )
@@ -715,13 +715,13 @@ def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch)
             "phase": "Active",
             "binding": build_binding(
                 binding_id="binding-1",
-                job_ref={"name": "unity-job-1", "namespace": "preview"},
-                pod_ref={"name": "unity-pod-1", "namespace": "preview"},
+                job_ref={"name": "unity-job-1", "namespace": "staging"},
+                pod_ref={"name": "unity-pod-1", "namespace": "staging"},
                 vm_ref={
-                    "name": "unity-pool-ubuntu-10-preview",
-                    "hostname": "unity-pool-ubuntu-10-preview.vm.unify.ai",
+                    "name": "unity-pool-ubuntu-10-staging",
+                    "hostname": "unity-pool-ubuntu-10-staging.vm.unify.ai",
                 },
-                desktop_url="https://unity-pool-ubuntu-10-preview.vm.unify.ai",
+                desktop_url="https://unity-pool-ubuntu-10-staging.vm.unify.ai",
             ),
         },
     }
@@ -756,7 +756,7 @@ def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch)
 
     patch_assistant_session_status(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         phase="PendingJob",
         binding=build_binding(
@@ -840,7 +840,7 @@ def test_delete_assistant_session_treats_missing_session_as_absent():
 
     deleted = delete_assistant_session(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
     )
 
@@ -881,7 +881,7 @@ def test_create_or_update_bootstrap_secret_reconciles_create_conflict_to_latest_
     core_api = FakeCoreApi()
     secret_name = create_or_update_bootstrap_secret(
         core_api,
-        "preview",
+        "staging",
         "1207",
         "act-1",
         requested_payload,
@@ -920,7 +920,7 @@ def test_create_or_update_bootstrap_secret_retries_replace_conflict():
 
     secret_name = create_or_update_bootstrap_secret(
         FakeCoreApi(),
-        "preview",
+        "staging",
         "1207",
         "act-1",
         requested_payload,
@@ -952,7 +952,7 @@ def test_create_or_update_bootstrap_secret_replaces_when_owner_annotations_stale
 
     secret_name = create_or_update_bootstrap_secret(
         FakeCoreApi(),
-        "preview",
+        "staging",
         "1207",
         "act-new",
         requested_payload,
@@ -1002,7 +1002,7 @@ def test_create_or_update_assistant_session_rejects_terminating_existing_session
     with pytest.raises(AssistantSessionTerminatingError):
         create_or_update_assistant_session(
             FakeCustomApi(),
-            "preview",
+            "staging",
             "1207",
             desired_spec,
         )
@@ -1039,7 +1039,7 @@ def test_create_or_update_assistant_session_skips_patch_when_spec_already_curren
 
     session = create_or_update_assistant_session(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         desired_spec,
     )
@@ -1090,7 +1090,7 @@ def test_create_or_update_assistant_session_returns_existing_on_create_conflict_
 
     session = create_or_update_assistant_session(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         desired_spec,
     )
@@ -1139,7 +1139,7 @@ def test_create_or_update_assistant_session_retries_when_create_conflict_reread_
 
     session = create_or_update_assistant_session(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         desired_spec,
     )
@@ -1192,7 +1192,7 @@ def test_create_or_update_assistant_session_raises_on_create_conflict_when_spec_
     with pytest.raises(ApiException) as exc_info:
         create_or_update_assistant_session(
             FakeCustomApi(),
-            "preview",
+            "staging",
             "1207",
             desired_spec,
         )
@@ -1239,7 +1239,7 @@ def test_create_or_update_assistant_session_applies_requested_activation(
 
     session = create_or_update_assistant_session(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         desired_spec,
     )
@@ -1291,7 +1291,7 @@ def test_create_or_update_assistant_session_converges_after_patch_conflict_when_
 
     session = create_or_update_assistant_session(
         FakeCustomApi(),
-        "preview",
+        "staging",
         "1207",
         desired_spec,
     )

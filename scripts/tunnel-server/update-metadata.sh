@@ -12,16 +12,13 @@
 #   --update-startup-script   Push latest local startup script to the VM
 #   --metadata KEY=VALUE      Add/update a metadata key (repeatable)
 #   --restart                 Stop+start the VM after update (only if RUNNING)
-#   --env ENV                 Target environment: production, staging, or preview
+#   --env ENV                 Target environment: production or staging
 #   --dry-run                 Show what would happen without making changes
 #   -h, --help                Show this help
 #
 # Examples:
 #   # Push latest startup script to production
 #   ./update-metadata.sh --update-startup-script
-#
-#   # Push latest startup script to preview
-#   ./update-metadata.sh --update-startup-script --env preview
 #
 #   # Update the GCS bucket metadata
 #   ./update-metadata.sh --metadata gcs-bucket=unity-tunnel-config-staging
@@ -75,8 +72,8 @@ while [[ $# -gt 0 ]]; do
         --env)
             TARGET_ENV="$2"
             case "$TARGET_ENV" in
-                production|staging|preview) ;;
-                *) die "Invalid --env value: $TARGET_ENV (expected production, staging, or preview)" ;;
+                production|staging) ;;
+                *) die "Invalid --env value: $TARGET_ENV (expected production or staging)" ;;
             esac
             shift 2
             ;;
@@ -93,7 +90,6 @@ fi
 # Resolve VM name based on environment
 case "$TARGET_ENV" in
     staging) VM_NAME="unity-tunnel-server-staging" ;;
-    preview) VM_NAME="unity-tunnel-server-preview" ;;
     *) VM_NAME="unity-tunnel-server" ;;
 esac
 

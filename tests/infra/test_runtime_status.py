@@ -90,7 +90,7 @@ def test_stop_job_records_session_stop_for_owned_job(client):
         "status": {
             "binding": build_binding(
                 binding_id="binding-123",
-                job_ref={"name": "unity-job-1", "namespace": "preview"},
+                job_ref={"name": "unity-job-1", "namespace": "staging"},
             ),
         },
     }
@@ -216,7 +216,7 @@ def test_runtime_status_reports_binding_cleanup_after_release_while_new_binding_
         "assistant_id": "1207",
         "binding_id": "binding-new",
         "pool_role": "assigned",
-        "vm_name": "unity-pool-ubuntu-9-preview",
+        "vm_name": "unity-pool-ubuntu-9-staging",
     }
 
     def _list_jobs(*_args, **kwargs):
@@ -258,7 +258,7 @@ def test_runtime_status_reports_binding_cleanup_after_release_while_new_binding_
         ),
         patch(
             "communication.infra.views.find_vm_with_disk",
-            return_value="unity-pool-ubuntu-9-preview",
+            return_value="unity-pool-ubuntu-9-staging",
         ),
     ):
         response = client.get(

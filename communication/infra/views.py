@@ -128,7 +128,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_UNITY_IMAGE = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest"
 TERMINAL_SESSION_PRUNE_DEFAULT_LIMIT = 50
 TERMINAL_SESSION_PRUNE_MAX_LIMIT = 200
-TERMINAL_SESSION_PRUNE_PREVIEW_RETENTION_HOURS = 6.0
 TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS = 24.0
 TERMINAL_SESSION_GHOST_HEAL_GRACE_MINUTES = 10.0
 
@@ -142,7 +141,6 @@ START_JOB_LEASE_WAIT_TIMEOUT_SECONDS = START_JOB_LEASE_DURATION_SECONDS + 5
 START_JOB_LEASE_POLL_INTERVAL_SECONDS = 0.2
 START_JOB_TERMINATING_SESSION_WAIT_TIMEOUT_SECONDS = 5.0
 ASSISTANT_SESSION_CONTROLLER_DEPLOYMENTS = {
-    "preview": "assistant-session-controller-preview",
     "staging": "assistant-session-controller-staging",
 }
 
@@ -2642,9 +2640,6 @@ def _terminal_session_ghost_heal_skip_reason(
 
 def _default_terminal_session_prune_retention_hours() -> float:
     """Return the environment-specific retention window for terminal sessions."""
-
-    if SETTINGS.deploy_env == "preview":
-        return TERMINAL_SESSION_PRUNE_PREVIEW_RETENTION_HOURS
     return TERMINAL_SESSION_PRUNE_DEFAULT_RETENTION_HOURS
 
 

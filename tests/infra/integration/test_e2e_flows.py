@@ -103,8 +103,8 @@ class TestE2EFlows:
         assistant's ID and annotated with the startup configuration.
 
         Verifies the contract between Orchestra, the adapter, and the comms
-        app that the container is correctly provisioned for the preview
-        startup protocol (AssistantSession binding on the Job).
+        app that the container is correctly provisioned with the
+        AssistantSession binding on the Job.
         """
         assistant_id = str(real_assistant_data["assistant_id"])
 

@@ -694,7 +694,7 @@ class _SchedulerNoise:
     but that endpoint performs the full shared-environment sweep and can block
     for minutes while VM rebalance completes. The stress test instead injects
     the lower-cost cleanup endpoints directly so it still exercises stale-runtime
-    races without creating extra idle pool churn in preview.
+    races without creating extra idle pool churn in the shared environment.
     """
 
     def __init__(self, min_interval=20, max_interval=45):

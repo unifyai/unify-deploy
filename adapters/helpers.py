@@ -1067,7 +1067,7 @@ def cleanup_idle_pool() -> dict:
         if (
             job["job_name"].endswith(SETTINGS.env_suffix)
             if SETTINGS.env_suffix
-            else not any(job["job_name"].endswith(s) for s in ("-staging", "-preview"))
+            else not job["job_name"].endswith("-staging")
         )
     }
 

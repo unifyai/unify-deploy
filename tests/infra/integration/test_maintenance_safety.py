@@ -14,11 +14,9 @@ These are real integration tests that create containers, inject stale
 jobs, fire the maintenance endpoint, and verify outcomes against the
 live K8s cluster.
 
-Run against preview::
+Run against staging::
 
-    TEST_NAMESPACE=preview TEST_VM_ZONE=us-central1-b \\
-    TEST_COMMS_APP_URL=https://service.a.run.app \\
-    TEST_ADAPTERS_URL=https://service.a.run.app \\
+    TEST_NAMESPACE=staging \\
     ./.venv/bin/pytest tests/infra/integration/test_maintenance_safety.py -v -s
 """
 
