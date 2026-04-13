@@ -27,7 +27,7 @@ Unity discovers this package at runtime via Python [entry points](https://packag
 
 The startup hook performs three tasks during manager initialization:
 
-1. **Resolve client customization** -- cascading merge of org/team/user/assistant configs, environments, function directories, and seed data.
+1. **Resolve client customization** -- deployment-matched spec with optional shared seed layers (org/team/user/assistant) merged in scope order, plus secrets from `.secrets.json`.
 2. **Sync seed data** -- hash-based idempotent sync of contacts, guidance, knowledge, secrets, and blacklist entries to the Unify backend.
 3. **Sync custom functions** -- upsert client-specific memoized Python functions and virtual environments via `FunctionManager.sync_custom()`.
 
