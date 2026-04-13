@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
@@ -25,6 +26,34 @@ if TYPE_CHECKING:
 from unity_deploy.customization.configs.types.actor_config import ActorConfig
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Environment detection
+# ---------------------------------------------------------------------------
+
+
+def detect_environment() -> str:
+    """Detect the deployment environment from ``ORCHESTRA_URL``.
+
+    Returns ``"staging"`` when the URL contains ``"staging"``,
+    ``"development"`` when it points to localhost / 127.0.0.1,
+    and ``"production"`` otherwise (including when unset, which
+    defaults to ``https://api.unify.ai``).
+
+    ``ORCHESTRA_URL`` is the canonical indicator of which Unify backend
+    the application is connected to.  Known patterns::
+
+        Production:  https://api.unify.ai/v0
+        Staging:     https://internal.example.com/...
+        Development: http://localhost:8000
+    """
+    url = os.environ.get("ORCHESTRA_URL", "").lower()
+    if "staging" in url:
+        return "staging"
+    if "localhost" in url or "127.0.0.1" in url:
+        return "development"
+    return "production"
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +79,25 @@ class SecretEntry(BaseModel):
     )
 
 
+def _merge_actor_configs(base: ActorConfig, override: ActorConfig) -> ActorConfig:
+    """Deep-merge two :class:`ActorConfig` instances (base + override).
+
+    For each field, the override value wins when non-None; otherwise the
+    base value is kept.  This is simpler than the cascade-style
+    ``_merge_configs`` in ``clients/__init__`` because it handles exactly
+    two configs with straightforward "override wins" semantics.
+    """
+    merged: dict = {}
+    for field_name in ActorConfig.model_fields:
+        base_val = getattr(base, field_name)
+        override_val = getattr(override, field_name)
+        if override_val is not None:
+            merged[field_name] = override_val
+        elif base_val is not None:
+            merged[field_name] = base_val
+    return ActorConfig(**merged)
+
+
 class DeploymentSpec(BaseModel):
     """Fully validated, self-contained deployment descriptor.
 
@@ -59,6 +107,9 @@ class DeploymentSpec(BaseModel):
     Fields ``pipeline_config``, ``function_dir``, and ``data_dir`` are
     optional -- lightweight deployments (e.g. config + secrets only)
     leave them as ``None``.
+
+    Use :meth:`derive` to create a child deployment that inherits
+    fields from this spec and overrides only what changed.
     """
 
     model_config = {"arbitrary_types_allowed": True}
@@ -79,6 +130,22 @@ class DeploymentSpec(BaseModel):
         default_factory=list,
         description="Credentials registered with the actor's SecretManager.",
     )
+    contacts: list[dict] = Field(
+        default_factory=list,
+        description="Contact records synced to the ContactManager.",
+    )
+    knowledge: dict[str, dict] = Field(
+        default_factory=dict,
+        description="Knowledge table specs synced to the KnowledgeManager.",
+    )
+    blacklist: list[dict] = Field(
+        default_factory=list,
+        description="Blacklist entries synced to the ContactManager.",
+    )
+    environments: list = Field(
+        default_factory=list,
+        description="BaseEnvironment instances forwarded to the CodeActActor.",
+    )
 
     pipeline_config: Optional["PipelineConfig"] = Field(
         default=None,
@@ -88,10 +155,34 @@ class DeploymentSpec(BaseModel):
         default=None,
         description="Absolute path to the functions/ directory (None if no custom functions).",
     )
+    venv_dir: Optional[Path] = Field(
+        default=None,
+        description="Absolute path to a custom venv directory (None if no custom venvs).",
+    )
     data_dir: Optional[Path] = Field(
         default=None,
         description="Absolute path to the data/ directory with raw assets (None if no local data).",
     )
+
+    def derive(self, **overrides) -> "DeploymentSpec":
+        """Create a derived deployment by overriding specific fields.
+
+        ``actor_config`` is deep-merged: non-None fields in *overrides*
+        win, while unset fields are inherited from this (base) spec.
+        All other fields are replaced wholesale when provided.  Fields
+        not passed are inherited unchanged.
+
+        Example::
+
+            BASE = DeploymentSpec(name="base", actor_config=ActorConfig(...))
+            v2 = BASE.derive(name="v2", function_dir=Path("/new/funcs"))
+        """
+        if "actor_config" in overrides:
+            overrides["actor_config"] = _merge_actor_configs(
+                self.actor_config,
+                overrides["actor_config"],
+            )
+        return self.model_copy(update=overrides)
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +220,30 @@ class DeploymentMapping(BaseModel):
     targets: list[DeploymentTarget] = Field(
         ...,
         description="Ordered list of mappings; first match wins.",
+    )
+
+
+class EnvironmentConfig(BaseModel):
+    """Per-environment deployment configuration for a client.
+
+    Bundles the org / user identity with the mapping targets that are
+    valid in this specific environment.  Assistant and org IDs are
+    environment-specific because staging and production databases are
+    separate — the same numeric ID can refer to completely different
+    entities.
+    """
+
+    org_id: int | None = Field(
+        default=None,
+        description="The org ID for this client in this environment.",
+    )
+    user_id: str | None = Field(
+        default=None,
+        description="The user ID for this client in this environment (alternative to org).",
+    )
+    mapping: DeploymentMapping = Field(
+        ...,
+        description="Identity-to-deployment routing for this environment.",
     )
 
 
@@ -249,102 +364,53 @@ def validate_deployment_dir(
     return errors
 
 
-def register_deployment(
-    dep: DeploymentSpec,
-    *,
-    user_id: str | None = None,
-    org_id: int | None = None,
-    team_id: int | None = None,
-    assistant_id: int | None = None,
-) -> None:
-    """Register a loaded deployment with the customization registry.
-
-    Passes ``actor_config``, ``function_dir`` (if present), ``guidance``,
-    and ``secrets`` (if present) to the appropriate ``register_*`` call.
-
-    Priority (only one fires): assistant > user > team > org.
-    """
-    from unity_deploy.customization.clients import (
-        register_assistant,
-        register_org,
-        register_team,
-        register_user,
-    )
-
-    guidance_dicts = [entry.model_dump() for entry in dep.guidance]
-    secrets_dicts = (
-        [entry.model_dump() for entry in dep.secrets] if dep.secrets else None
-    )
-
-    kwargs: dict = {"config": dep.actor_config}
-    if dep.function_dir is not None:
-        kwargs["function_dir"] = dep.function_dir
-    if guidance_dicts:
-        kwargs["guidance"] = guidance_dicts
-    if secrets_dicts:
-        kwargs["secrets"] = secrets_dicts
-
-    if assistant_id is not None:
-        register_assistant(assistant_id, **kwargs)
-        logger.info(
-            "Registered deployment '%s' for assistant %s",
-            dep.name,
-            assistant_id,
-        )
-    elif user_id is not None:
-        register_user(user_id, **kwargs)
-        logger.info(
-            "Registered deployment '%s' for user %s (%d guidance, %d secrets, "
-            "functions: %s)",
-            dep.name,
-            user_id,
-            len(dep.guidance),
-            len(dep.secrets),
-            dep.function_dir,
-        )
-    elif team_id is not None:
-        register_team(team_id, **kwargs)
-        logger.info(
-            "Registered deployment '%s' for team %s",
-            dep.name,
-            team_id,
-        )
-    elif org_id is not None:
-        register_org(org_id, **kwargs)
-        logger.info(
-            "Registered deployment '%s' for org %s",
-            dep.name,
-            org_id,
-        )
-
-
-def register_all_deployments(
+def register_client(
+    client_name: str,
     mapping: DeploymentMapping,
     deployments_dir: Path,
     *,
     default_org_id: int | None = None,
     default_user_id: str | None = None,
+    environment: str | None = None,
 ) -> dict[str, DeploymentSpec]:
-    """Load and register every deployment referenced in *mapping*.
+    """Register a client's deployment mapping for isolated resolution.
 
-    Each :class:`DeploymentTarget` in the mapping is registered under
-    its declared scope:
+    Loads every deployment referenced in *mapping* and stores the
+    mapping + loaded specs in the ``_CLIENT_DEPLOYMENTS`` registry
+    inside ``clients/__init__``.  Resolution is handled by
+    :func:`~unity_deploy.customization.clients.resolve_from_deployments`
+    which returns the matching spec directly.
 
-    - ``user``      → ``register_deployment(dep, user_id=scope_id)``
-    - ``org``       → ``register_deployment(dep, org_id=int(scope_id))``
-    - ``team``      → ``register_deployment(dep, team_id=int(scope_id))``
-    - ``assistant`` → ``register_deployment(dep, assistant_id=int(scope_id))``
-    - ``default``   → registered at org level (*default_org_id*) or
-                      user level (*default_user_id*), whichever is given.
+    Parameters
+    ----------
+    client_name
+        Unique key for this client (e.g. ``"client_alpha"``).
+    mapping
+        The :class:`DeploymentMapping` for the current environment.
+    deployments_dir
+        Filesystem path containing ``<name>/deployment.py`` packages.
+    default_org_id
+        The org ID that scopes this client — requests from other orgs
+        will not match.
+    default_user_id
+        Alternative to *default_org_id* for user-scoped clients.
+    environment
+        The deployment environment this registration applies to
+        (e.g. ``"staging"``, ``"production"``).  Stored as a guardrail:
+        ``resolve_from_deployments`` verifies the runtime environment
+        matches before returning a result.
 
-    This enables multiple deployments to be live simultaneously — e.g.
-    v1 for a specific user while v0 serves the rest of the org.
-
-    Returns a dict of ``deployment_name → DeploymentSpec`` for every
-    unique deployment that was loaded.
+    Returns
+    -------
+    dict[str, DeploymentSpec]
+        Loaded specs keyed by deployment name.
     """
-    loaded: dict[str, DeploymentSpec] = {}
+    from unity_deploy.customization.clients import (
+        ClientDeploymentEntry,
+        _CLIENT_DEPLOYMENTS,
+    )
 
+    loaded: dict[str, DeploymentSpec] = {}
     for target in mapping.targets:
         if target.deployment not in loaded:
             loaded[target.deployment] = load_deployment(
@@ -352,32 +418,20 @@ def register_all_deployments(
                 target.deployment,
             )
 
-        dep = loaded[target.deployment]
-
-        if target.scope == "user":
-            register_deployment(dep, user_id=target.scope_id)
-
-        elif target.scope == "org":
-            register_deployment(dep, org_id=int(target.scope_id))  # type: ignore[arg-type]
-
-        elif target.scope == "team":
-            register_deployment(dep, team_id=int(target.scope_id))  # type: ignore[arg-type]
-
-        elif target.scope == "assistant":
-            register_deployment(dep, assistant_id=int(target.scope_id))  # type: ignore[arg-type]
-
-        elif target.scope == "default":
-            if default_org_id is not None:
-                register_deployment(dep, org_id=default_org_id)
-            elif default_user_id is not None:
-                register_deployment(dep, user_id=default_user_id)
-            else:
-                logger.warning(
-                    "Skipping 'default' target for deployment '%s' — "
-                    "provide default_org_id or default_user_id to register it",
-                    target.deployment,
-                )
-
+    _CLIENT_DEPLOYMENTS[client_name] = ClientDeploymentEntry(
+        mapping=mapping,
+        specs=loaded,
+        default_org_id=default_org_id,
+        default_user_id=default_user_id,
+        environment=environment,
+    )
+    logger.info(
+        "Registered client '%s' (%d deployment(s), env=%s, org=%s)",
+        client_name,
+        len(loaded),
+        environment,
+        default_org_id,
+    )
     return loaded
 
 
