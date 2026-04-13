@@ -48,7 +48,7 @@ def test_offline_dispatch_skips_stale_activation():
     client = _client()
 
     with patch(
-        "communication.infra.views._lookup_current_task_activation",
+        "communication.infra.task_activation._lookup_current_task_activation",
         return_value=_activation(activation_revision="rev-new"),
     ):
         response = client.post(
@@ -71,22 +71,24 @@ def test_offline_dispatch_launches_job_for_current_activation():
 
     with (
         patch(
-            "communication.infra.views._lookup_current_task_activation",
+            "communication.infra.task_activation._lookup_current_task_activation",
             return_value=_activation(),
         ),
         patch(
-            "communication.infra.views._create_or_adopt_task_run",
+            "communication.infra.task_activation._create_or_adopt_task_run",
             return_value={"run": {"state": "pending"}, "created": True},
         ) as mock_create_run,
         patch(
-            "communication.infra.views._get_k8s_clients",
+            "communication.infra.task_activation._get_k8s_clients",
             return_value=("batch-api", None, None, None),
         ),
         patch(
-            "communication.infra.views._launch_offline_task_job",
+            "communication.infra.task_activation._launch_offline_task_job",
             return_value=("unity-offline-abc", True),
         ) as mock_launch,
-        patch("communication.infra.views._update_task_run") as mock_update_run,
+        patch(
+            "communication.infra.task_activation._update_task_run",
+        ) as mock_update_run,
     ):
         response = client.post(
             "/infra/task-activation/offline-dispatch",

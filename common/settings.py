@@ -83,6 +83,7 @@ class Settings:
             "gcp-project-runtime",
         )
         self.default_region: str = "us-central1"
+        self.gke_cluster_name: str = os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
         self.default_namespace: str = self.deploy_env
 
         # Service URLs

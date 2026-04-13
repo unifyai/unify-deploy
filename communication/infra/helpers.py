@@ -83,8 +83,8 @@ def setup_kubernetes_client():
 
             creds_data = json.loads(creds_json)
             project_id = creds_data.get("project_id", SETTINGS.gcp_project_id)
-            cluster_name = "unity"
-            region = "us-central1"
+            cluster_name = SETTINGS.gke_cluster_name
+            region = SETTINGS.default_region
 
             print(
                 f"🔑 Using service account: {creds_data.get('client_email', 'unknown')}",

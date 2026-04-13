@@ -92,24 +92,22 @@ def fake_tasks_module():
 def test_upsert_scheduled_task_activation_creates_cloud_task(client, fake_tasks_module):
     """Upsert should create one Cloud Task with the adapters due callback."""
 
-    from communication.infra import views
+    from communication.infra import task_activation
 
     fake_client = _FakeCloudTasksClient()
-    views._task_due_queue_ensured = False
-    views._task_queues_ensured = set()
-    views._cloud_tasks_client = fake_client
+    task_activation._task_queues_ensured = set()
 
     with (
         patch(
-            "communication.infra.views.SETTINGS.orchestra_admin_key",
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
             "test-admin-key",
         ),
         patch(
-            "communication.infra.views.SETTINGS.adapters_url",
+            "communication.infra.task_activation.SETTINGS.adapters_url",
             "https://adapters.test",
         ),
         patch(
-            "communication.infra.views._get_cloud_tasks_client",
+            "communication.infra.task_activation._get_cloud_tasks_client",
             return_value=fake_client,
         ),
         patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
@@ -132,7 +130,7 @@ def test_upsert_scheduled_task_activation_creates_cloud_task(client, fake_tasks_
     assert len(fake_client.created_tasks) == 1
 
     parent, task = fake_client.created_tasks[0]
-    assert parent.endswith(f"/queues/{views.SETTINGS.task_due_queue_name}")
+    assert parent.endswith(f"/queues/{task_activation.SETTINGS.task_due_queue_name}")
     assert task.http_request.url.endswith("/scheduled/tasks/due")
     assert task.http_request.headers["Authorization"].startswith("Bearer ")
     assert b'"task_id": 101' in task.http_request.body
@@ -141,7 +139,7 @@ def test_upsert_scheduled_task_activation_creates_cloud_task(client, fake_tasks_
     )
     assert (
         task.dispatch_deadline.seconds
-        == views.SETTINGS.task_due_dispatch_deadline_seconds
+        == task_activation.SETTINGS.task_due_dispatch_deadline_seconds
     )
 
 
@@ -151,31 +149,31 @@ def test_upsert_scheduled_task_activation_deletes_previous_materialization(
 ):
     """Changing the activation identity should delete the previous Cloud Task."""
 
-    from communication.infra import views
+    from communication.infra import task_activation
 
     fake_client = _FakeCloudTasksClient()
-    previous_name = views._scheduled_activation_task_name(
+    previous_name = task_activation._scheduled_activation_task_name(
         assistant_id="assistant-123",
         task_id=101,
         activation_revision="rev-old",
         scheduled_for=datetime(2026, 4, 10, 8, 0, tzinfo=timezone.utc),
     )
     fake_client.existing_task_names.add(previous_name)
-    views._task_due_queue_ensured = True
-    views._task_queues_ensured = {views.SETTINGS.task_due_queue_name}
-    views._cloud_tasks_client = fake_client
+    task_activation._task_queues_ensured = {
+        task_activation.SETTINGS.task_due_queue_name,
+    }
 
     with (
         patch(
-            "communication.infra.views.SETTINGS.orchestra_admin_key",
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
             "test-admin-key",
         ),
         patch(
-            "communication.infra.views.SETTINGS.adapters_url",
+            "communication.infra.task_activation.SETTINGS.adapters_url",
             "https://adapters.test",
         ),
         patch(
-            "communication.infra.views._get_cloud_tasks_client",
+            "communication.infra.task_activation._get_cloud_tasks_client",
             return_value=fake_client,
         ),
         patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
@@ -202,14 +200,13 @@ def test_upsert_scheduled_task_activation_deletes_previous_materialization(
 def test_delete_scheduled_task_activation_is_idempotent(client):
     """Deleting a missing materialization should still return success."""
 
-    from communication.infra import views
+    from communication.infra import task_activation
 
     fake_client = _FakeCloudTasksClient()
-    views._task_queues_ensured = set()
-    views._cloud_tasks_client = fake_client
+    task_activation._task_queues_ensured = set()
 
     with patch(
-        "communication.infra.views._get_cloud_tasks_client",
+        "communication.infra.task_activation._get_cloud_tasks_client",
         return_value=fake_client,
     ):
         response = client.post(
@@ -234,21 +231,22 @@ def test_upsert_offline_scheduled_task_activation_targets_offline_queue(
 ):
     """Offline activations should materialize onto the hidden offline queue."""
 
-    from communication.infra import views
+    from communication.infra import task_activation
 
     fake_client = _FakeCloudTasksClient()
-    views._task_due_queue_ensured = False
-    views._task_queues_ensured = set()
-    views._cloud_tasks_client = fake_client
+    task_activation._task_queues_ensured = set()
 
     with (
         patch(
-            "communication.infra.views.SETTINGS.orchestra_admin_key",
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
             "test-admin-key",
         ),
-        patch("communication.infra.views.SETTINGS.comms_url", "https://comms.test"),
         patch(
-            "communication.infra.views._get_cloud_tasks_client",
+            "communication.infra.task_activation.SETTINGS.comms_url",
+            "https://comms.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
             return_value=fake_client,
         ),
         patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
@@ -269,7 +267,9 @@ def test_upsert_offline_scheduled_task_activation_targets_offline_queue(
     body = response.json()
     assert body["status"] == "created"
     parent, task = fake_client.created_tasks[0]
-    assert parent.endswith(f"/queues/{views.SETTINGS.task_offline_queue_name}")
+    assert parent.endswith(
+        f"/queues/{task_activation.SETTINGS.task_offline_queue_name}",
+    )
     assert (
         task.http_request.url
         == "https://comms.test/infra/task-activation/offline-dispatch"
@@ -283,29 +283,30 @@ def test_upsert_far_future_activation_targets_repair_queue(
 ):
     """Far-future activations should chain through the repair queue horizon."""
 
-    from communication.infra import views
+    from communication.infra import task_activation
 
     fake_client = _FakeCloudTasksClient()
-    views._task_due_queue_ensured = False
-    views._task_queues_ensured = set()
-    views._cloud_tasks_client = fake_client
+    task_activation._task_queues_ensured = set()
     now = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
     scheduled_for = datetime(2026, 6, 10, 9, 0, tzinfo=timezone.utc)
-    expected_checkpoint = now + views.timedelta(
-        days=views.SETTINGS.task_activation_horizon_days,
+    expected_checkpoint = now + task_activation.timedelta(
+        days=task_activation.SETTINGS.task_activation_horizon_days,
     )
 
     with (
         patch(
-            "communication.infra.views.SETTINGS.orchestra_admin_key",
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
             "test-admin-key",
         ),
-        patch("communication.infra.views.SETTINGS.comms_url", "https://comms.test"),
         patch(
-            "communication.infra.views._get_cloud_tasks_client",
+            "communication.infra.task_activation.SETTINGS.comms_url",
+            "https://comms.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
             return_value=fake_client,
         ),
-        patch("communication.infra.views.datetime") as mock_datetime,
+        patch("communication.infra.task_activation.datetime") as mock_datetime,
         patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
     ):
         mock_datetime.now.return_value = now
@@ -327,7 +328,7 @@ def test_upsert_far_future_activation_targets_repair_queue(
     assert body["scheduled_checkpoint_for"] == expected_checkpoint.isoformat()
     parent, task = fake_client.created_tasks[0]
     assert parent.endswith(
-        f"/queues/{views.SETTINGS.task_activation_repair_queue_name}",
+        f"/queues/{task_activation.SETTINGS.task_activation_repair_queue_name}",
     )
     assert task.http_request.url == "https://comms.test/infra/task-activation/repair"
     assert task.schedule_time.seconds == int(expected_checkpoint.timestamp())
@@ -339,31 +340,31 @@ def test_upsert_recreates_existing_activation_to_repair_drift(
 ):
     """AlreadyExists should delete and recreate the Cloud Task instead of silently accepting drift."""
 
-    from communication.infra import views
+    from communication.infra import task_activation
 
     fake_client = _FakeCloudTasksClient()
-    task_name = views._scheduled_activation_task_name(
+    task_name = task_activation._scheduled_activation_task_name(
         assistant_id="assistant-123",
         task_id=101,
         activation_revision="rev-123",
         scheduled_for=datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc),
     )
     fake_client.existing_task_names.add(task_name)
-    views._task_due_queue_ensured = True
-    views._task_queues_ensured = {views.SETTINGS.task_due_queue_name}
-    views._cloud_tasks_client = fake_client
+    task_activation._task_queues_ensured = {
+        task_activation.SETTINGS.task_due_queue_name,
+    }
 
     with (
         patch(
-            "communication.infra.views.SETTINGS.orchestra_admin_key",
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
             "test-admin-key",
         ),
         patch(
-            "communication.infra.views.SETTINGS.adapters_url",
+            "communication.infra.task_activation.SETTINGS.adapters_url",
             "https://adapters.test",
         ),
         patch(
-            "communication.infra.views._get_cloud_tasks_client",
+            "communication.infra.task_activation._get_cloud_tasks_client",
             return_value=fake_client,
         ),
         patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
