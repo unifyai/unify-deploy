@@ -2,33 +2,39 @@
 Code-first client customization registry.
 
 Client configs, environments, custom functions, and seed data are defined
-in Python code under per-client subpackages (e.g. ``clientdelta/``).  Each
-subpackage registers its org-level, team-level, user-level, and/or
-assistant-level customizations into the module-level dicts below.
+in Python code under per-client subpackages (e.g. ``client_alpha/``).
+Each subpackage declares environment-scoped deployment mappings and calls
+:func:`~unity_deploy.customization.deployment_types.register_client` to
+register its specs into the ``_CLIENT_DEPLOYMENTS`` registry.
 
 During manager initialization, ``resolve()`` is called with the current
 org_id / team_ids / user_id / assistant_id to produce a
-``ResolvedCustomization`` containing merged configs, environments,
-function dirs, and seed data.  Cross-cutting seed data (contacts,
-guidance, knowledge, secrets, blacklist) is synced separately by
-``_init_managers()``, while actor-specific fields (config, environments)
-are forwarded to the ``CodeActActor`` constructor.
-
-Cascade order (least to most specific): org -> team(s) -> user -> assistant.
-When a user belongs to multiple teams, team customizations are merged in
-ascending team_id order before being fed into the cascade.
+``ResolvedCustomization`` by finding the matching client and returning
+the matching deployment spec directly.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TypeVar, TYPE_CHECKING
 
+from unity.guidance_manager.types.guidance import Guidance
+from unity.secret_manager.types import Secret
 from unity_deploy.customization.configs.types.actor_config import ActorConfig
 
 if TYPE_CHECKING:
     from unity.actor.environments.base import BaseEnvironment
+    from unity_deploy.customization.deployment_types import (
+        DeploymentMapping,
+        DeploymentSpec,
+        SeedLayer,
+    )
+
+T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -43,517 +49,196 @@ class ResolvedCustomization:
     function_dirs: list[Path]
     venv_dirs: list[Path]
     contacts: list[dict[str, Any]]
-    guidance: list[dict[str, Any]]
+    guidance: list[Guidance]
     knowledge: dict[str, dict[str, Any]]
     blacklist: list[dict[str, Any]]
-    secrets: list[dict[str, Any]]
+    secrets: list[Secret]
 
 
 # ---------------------------------------------------------------------------
-# Registry dicts — populated by client subpackages at import time
-# ---------------------------------------------------------------------------
-
-_ORG_CONFIGS: dict[int, ActorConfig] = {}
-_ORG_ENVIRONMENTS: dict[int, list[BaseEnvironment]] = {}
-_ORG_FUNCTION_DIRS: dict[int, list[Path]] = {}
-_ORG_VENV_DIRS: dict[int, list[Path]] = {}
-_ORG_CONTACTS: dict[int, list[dict]] = {}
-_ORG_GUIDANCE: dict[int, list[dict]] = {}
-_ORG_KNOWLEDGE: dict[int, dict[str, dict]] = {}
-_ORG_BLACKLIST: dict[int, list[dict]] = {}
-_ORG_SECRETS: dict[int, list[dict]] = {}
-
-_TEAM_CONFIGS: dict[int, ActorConfig] = {}
-_TEAM_ENVIRONMENTS: dict[int, list[BaseEnvironment]] = {}
-_TEAM_FUNCTION_DIRS: dict[int, list[Path]] = {}
-_TEAM_VENV_DIRS: dict[int, list[Path]] = {}
-_TEAM_CONTACTS: dict[int, list[dict]] = {}
-_TEAM_GUIDANCE: dict[int, list[dict]] = {}
-_TEAM_KNOWLEDGE: dict[int, dict[str, dict]] = {}
-_TEAM_BLACKLIST: dict[int, list[dict]] = {}
-_TEAM_SECRETS: dict[int, list[dict]] = {}
-
-_USER_CONFIGS: dict[str, ActorConfig] = {}
-_USER_ENVIRONMENTS: dict[str, list[BaseEnvironment]] = {}
-_USER_FUNCTION_DIRS: dict[str, list[Path]] = {}
-_USER_VENV_DIRS: dict[str, list[Path]] = {}
-_USER_CONTACTS: dict[str, list[dict]] = {}
-_USER_GUIDANCE: dict[str, list[dict]] = {}
-_USER_KNOWLEDGE: dict[str, dict[str, dict]] = {}
-_USER_BLACKLIST: dict[str, list[dict]] = {}
-_USER_SECRETS: dict[str, list[dict]] = {}
-
-_ASSISTANT_CONFIGS: dict[int, ActorConfig] = {}
-_ASSISTANT_ENVIRONMENTS: dict[int, list[BaseEnvironment]] = {}
-_ASSISTANT_FUNCTION_DIRS: dict[int, list[Path]] = {}
-_ASSISTANT_VENV_DIRS: dict[int, list[Path]] = {}
-_ASSISTANT_CONTACTS: dict[int, list[dict]] = {}
-_ASSISTANT_GUIDANCE: dict[int, list[dict]] = {}
-_ASSISTANT_KNOWLEDGE: dict[int, dict[str, dict]] = {}
-_ASSISTANT_BLACKLIST: dict[int, list[dict]] = {}
-_ASSISTANT_SECRETS: dict[int, list[dict]] = {}
-
-
-# ---------------------------------------------------------------------------
-# Public helpers for client subpackages to register themselves
+# Deployment registry
 # ---------------------------------------------------------------------------
 
 
-def register_org(
-    org_id: int,
-    *,
-    config: ActorConfig | None = None,
-    environments: list[BaseEnvironment] | None = None,
-    function_dir: Path | None = None,
-    venv_dir: Path | None = None,
-    contacts: list[dict] | None = None,
-    guidance: list[dict] | None = None,
-    knowledge: dict[str, dict] | None = None,
-    blacklist: list[dict] | None = None,
-    secrets: list[dict] | None = None,
-) -> None:
-    if config is not None:
-        _ORG_CONFIGS[org_id] = config
-    if environments:
-        _ORG_ENVIRONMENTS[org_id] = environments
-    if function_dir is not None:
-        _ORG_FUNCTION_DIRS.setdefault(org_id, []).append(function_dir)
-    if venv_dir is not None:
-        _ORG_VENV_DIRS.setdefault(org_id, []).append(venv_dir)
-    if contacts:
-        _ORG_CONTACTS.setdefault(org_id, []).extend(contacts)
-    if guidance:
-        _ORG_GUIDANCE.setdefault(org_id, []).extend(guidance)
-    if knowledge:
-        _ORG_KNOWLEDGE.setdefault(org_id, {}).update(knowledge)
-    if blacklist:
-        _ORG_BLACKLIST.setdefault(org_id, []).extend(blacklist)
-    if secrets:
-        _ORG_SECRETS.setdefault(org_id, []).extend(secrets)
+@dataclass
+class ClientDeploymentEntry:
+    """A registered client with its mapping and loaded deployment specs.
 
-
-def register_team(
-    team_id: int,
-    *,
-    config: ActorConfig | None = None,
-    environments: list[BaseEnvironment] | None = None,
-    function_dir: Path | None = None,
-    venv_dir: Path | None = None,
-    contacts: list[dict] | None = None,
-    guidance: list[dict] | None = None,
-    knowledge: dict[str, dict] | None = None,
-    blacklist: list[dict] | None = None,
-    secrets: list[dict] | None = None,
-) -> None:
-    if config is not None:
-        _TEAM_CONFIGS[team_id] = config
-    if environments:
-        _TEAM_ENVIRONMENTS[team_id] = environments
-    if function_dir is not None:
-        _TEAM_FUNCTION_DIRS.setdefault(team_id, []).append(function_dir)
-    if venv_dir is not None:
-        _TEAM_VENV_DIRS.setdefault(team_id, []).append(venv_dir)
-    if contacts:
-        _TEAM_CONTACTS.setdefault(team_id, []).extend(contacts)
-    if guidance:
-        _TEAM_GUIDANCE.setdefault(team_id, []).extend(guidance)
-    if knowledge:
-        _TEAM_KNOWLEDGE.setdefault(team_id, {}).update(knowledge)
-    if blacklist:
-        _TEAM_BLACKLIST.setdefault(team_id, []).extend(blacklist)
-    if secrets:
-        _TEAM_SECRETS.setdefault(team_id, []).extend(secrets)
-
-
-def register_user(
-    user_id: str,
-    *,
-    config: ActorConfig | None = None,
-    environments: list[BaseEnvironment] | None = None,
-    function_dir: Path | None = None,
-    venv_dir: Path | None = None,
-    contacts: list[dict] | None = None,
-    guidance: list[dict] | None = None,
-    knowledge: dict[str, dict] | None = None,
-    blacklist: list[dict] | None = None,
-    secrets: list[dict] | None = None,
-) -> None:
-    if config is not None:
-        _USER_CONFIGS[user_id] = config
-    if environments:
-        _USER_ENVIRONMENTS[user_id] = environments
-    if function_dir is not None:
-        _USER_FUNCTION_DIRS.setdefault(user_id, []).append(function_dir)
-    if venv_dir is not None:
-        _USER_VENV_DIRS.setdefault(user_id, []).append(venv_dir)
-    if contacts:
-        _USER_CONTACTS.setdefault(user_id, []).extend(contacts)
-    if guidance:
-        _USER_GUIDANCE.setdefault(user_id, []).extend(guidance)
-    if knowledge:
-        _USER_KNOWLEDGE.setdefault(user_id, {}).update(knowledge)
-    if blacklist:
-        _USER_BLACKLIST.setdefault(user_id, []).extend(blacklist)
-    if secrets:
-        _USER_SECRETS.setdefault(user_id, []).extend(secrets)
-
-
-def register_assistant(
-    assistant_id: int,
-    *,
-    config: ActorConfig | None = None,
-    environments: list[BaseEnvironment] | None = None,
-    function_dir: Path | None = None,
-    venv_dir: Path | None = None,
-    contacts: list[dict] | None = None,
-    guidance: list[dict] | None = None,
-    knowledge: dict[str, dict] | None = None,
-    blacklist: list[dict] | None = None,
-    secrets: list[dict] | None = None,
-) -> None:
-    if config is not None:
-        _ASSISTANT_CONFIGS[assistant_id] = config
-    if environments:
-        _ASSISTANT_ENVIRONMENTS[assistant_id] = environments
-    if function_dir is not None:
-        _ASSISTANT_FUNCTION_DIRS.setdefault(assistant_id, []).append(function_dir)
-    if venv_dir is not None:
-        _ASSISTANT_VENV_DIRS.setdefault(assistant_id, []).append(venv_dir)
-    if contacts:
-        _ASSISTANT_CONTACTS.setdefault(assistant_id, []).extend(contacts)
-    if guidance:
-        _ASSISTANT_GUIDANCE.setdefault(assistant_id, []).extend(guidance)
-    if knowledge:
-        _ASSISTANT_KNOWLEDGE.setdefault(assistant_id, {}).update(knowledge)
-    if blacklist:
-        _ASSISTANT_BLACKLIST.setdefault(assistant_id, []).extend(blacklist)
-    if secrets:
-        _ASSISTANT_SECRETS.setdefault(assistant_id, []).extend(secrets)
-
-
-# ---------------------------------------------------------------------------
-# Resolution
-# ---------------------------------------------------------------------------
-
-
-def _merge_configs(configs: list[ActorConfig]) -> ActorConfig:
-    """Merge a list of configs in precedence order (first = least specific).
-
-    For scalar fields, the last non-None value wins (more specific overrides
-    less specific).  For ``guidelines``, all non-None values are concatenated
-    with newlines (additive).  For ``url_mappings``, dicts are merged
-    additively (more specific origins override less specific ones).
+    Routing is driven entirely by :class:`DeploymentMapping` targets —
+    scoping (org-wide, user-wide, assistant-specific) is expressed
+    through :class:`DeploymentTarget` entries.
     """
-    if not configs:
-        return ActorConfig()
 
-    merged: dict = {}
-    guidelines_parts: list[str] = []
-    url_mappings_merged: dict[str, str] = {}
+    mapping: DeploymentMapping
+    specs: dict[str, DeploymentSpec]
+    environment: str | None = None
+    layers: dict[str, SeedLayer] = field(default_factory=dict)
 
-    for cfg in configs:
-        for field_name in cfg.model_fields:
-            value = getattr(cfg, field_name)
-            if value is None:
-                continue
-            if field_name == "guidelines":
-                guidelines_parts.append(value)
-            elif field_name == "url_mappings":
-                url_mappings_merged.update(value)
+
+_CLIENT_DEPLOYMENTS: dict[str, ClientDeploymentEntry] = {}
+
+
+# ---------------------------------------------------------------------------
+# Seed-layer merge helpers
+# ---------------------------------------------------------------------------
+
+
+def _merge_by_key(
+    base: list[T],
+    overlay: list[T],
+    key_fn: Callable[[T], str],
+) -> list[T]:
+    """Merge two record lists; overlay wins on key collision."""
+    merged: dict[str, T] = {}
+    for rec in base:
+        merged[key_fn(rec)] = rec
+    for rec in overlay:
+        merged[key_fn(rec)] = rec
+    return list(merged.values())
+
+
+def _contact_key(r: dict) -> str:
+    return f"{r.get('first_name', '')}|{r.get('surname', '')}".lower()
+
+
+def _guidance_key(r: Guidance) -> str:
+    return r.title
+
+
+def _blacklist_key(r: dict) -> str:
+    return f"{r.get('medium', '')}|{r.get('contact_detail', '')}"
+
+
+def _secret_key(r: Secret) -> str:
+    return r.name
+
+
+def _merge_knowledge(
+    base: dict[str, dict],
+    overlay: dict[str, dict],
+) -> dict[str, dict]:
+    """Deep-merge knowledge tables.  Overlay columns and rows win on collision."""
+    merged = {k: dict(v) for k, v in base.items()}
+    for table_name, spec in overlay.items():
+        if table_name not in merged:
+            merged[table_name] = dict(spec)
+            continue
+        existing = merged[table_name]
+        if spec.get("columns"):
+            existing.setdefault("columns", {}).update(spec["columns"])
+        if spec.get("description"):
+            existing["description"] = spec["description"]
+        seed_key = spec.get("seed_key") or existing.get("seed_key")
+        if seed_key:
+            existing["seed_key"] = seed_key
+        if spec.get("rows"):
+            all_rows = existing.get("rows", []) + spec["rows"]
+            if seed_key:
+                seen: dict[str, dict] = {}
+                for row in all_rows:
+                    seen[str(row.get(seed_key, id(row)))] = row
+                existing["rows"] = list(seen.values())
             else:
-                merged[field_name] = value
-
-    if guidelines_parts:
-        merged["guidelines"] = "\n".join(guidelines_parts)
-    if url_mappings_merged:
-        merged["url_mappings"] = url_mappings_merged
-
-    return ActorConfig(**merged)
-
-
-def _collect_dirs(
-    registries: list[dict],
-    keys: list,
-) -> list[Path]:
-    dirs: list[Path] = []
-    for registry, key in zip(registries, keys):
-        if key is not None and key in registry:
-            dirs.extend(registry[key])
-    return dirs
-
-
-def _collect_dirs_multi(
-    registries: list[tuple[dict, list[int] | int | str | None]],
-) -> list[Path]:
-    """Collect directories from registries, supporting multi-key lookups for teams."""
-    dirs: list[Path] = []
-    for registry, key_or_keys in registries:
-        if key_or_keys is None:
-            continue
-        keys = key_or_keys if isinstance(key_or_keys, list) else [key_or_keys]
-        for k in keys:
-            if k in registry:
-                dirs.extend(registry[k])
-    return dirs
-
-
-def _merge_list_seed(
-    registries: list[dict],
-    keys: list,
-    natural_key_fn: Any = None,
-) -> list[dict]:
-    """Merge list-based seed data across cascade levels.
-
-    Later (more specific) records override earlier ones by natural key
-    if ``natural_key_fn`` is provided.  Otherwise just concatenate.
-    """
-    merged: list[dict] = []
-    for registry, key in zip(registries, keys):
-        if key is not None and key in registry:
-            merged.extend(registry[key])
-    if natural_key_fn is not None and merged:
-        seen: dict[str, dict] = {}
-        for rec in merged:
-            try:
-                seen[natural_key_fn(rec)] = rec
-            except Exception:
-                seen[id(rec)] = rec
-        return list(seen.values())
+                existing["rows"] = all_rows
     return merged
 
 
-def _merge_list_seed_multi(
-    registries: list[tuple[dict, list[int] | int | str | None]],
-    natural_key_fn: Any = None,
-) -> list[dict]:
-    """Like _merge_list_seed but supports multi-key lookups for teams."""
-    merged: list[dict] = []
-    for registry, key_or_keys in registries:
-        if key_or_keys is None:
-            continue
-        keys = key_or_keys if isinstance(key_or_keys, list) else [key_or_keys]
-        for k in keys:
-            if k in registry:
-                merged.extend(registry[k])
-    if natural_key_fn is not None and merged:
-        seen: dict[str, dict] = {}
-        for rec in merged:
-            try:
-                seen[natural_key_fn(rec)] = rec
-            except Exception:
-                seen[id(rec)] = rec
-        return list(seen.values())
-    return merged
+def _collect_layers(
+    entry: ClientDeploymentEntry,
+    *,
+    org_id: int | None = None,
+    team_ids: list[int] | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+) -> list["SeedLayer"]:
+    """Return matching layers in scope order (org -> teams -> user -> assistant)."""
+    layers = entry.layers
+    if not layers:
+        return []
+
+    result: list[SeedLayer] = []
+    if org_id is not None:
+        layer = layers.get(f"org:{org_id}")
+        if layer is not None:
+            result.append(layer)
+    if team_ids:
+        for tid in sorted(team_ids):
+            layer = layers.get(f"team:{tid}")
+            if layer is not None:
+                result.append(layer)
+    if user_id is not None:
+        layer = layers.get(f"user:{user_id}")
+        if layer is not None:
+            result.append(layer)
+    if assistant_id is not None:
+        layer = layers.get(f"assistant:{assistant_id}")
+        if layer is not None:
+            result.append(layer)
+    return result
 
 
-def _merge_knowledge_seed(
-    registries: list[dict],
-    keys: list,
-) -> dict[str, dict]:
-    """Merge knowledge table specs across cascade levels.
-
-    Later levels can add new tables or override rows in existing tables.
-    Row merging within a table uses ``seed_key`` for dedup.
-    """
-    merged: dict[str, dict] = {}
-    for registry, key in zip(registries, keys):
-        if key is not None and key in registry:
-            for table_name, spec in registry[key].items():
-                if table_name not in merged:
-                    merged[table_name] = dict(spec)
-                else:
-                    existing = merged[table_name]
-                    seed_key = spec.get("seed_key") or existing.get("seed_key")
-                    if spec.get("columns"):
-                        existing.setdefault("columns", {}).update(spec["columns"])
-                    if spec.get("description"):
-                        existing["description"] = spec["description"]
-                    if seed_key:
-                        existing["seed_key"] = seed_key
-                    if spec.get("rows"):
-                        all_rows = existing.get("rows", []) + spec["rows"]
-                        if seed_key:
-                            seen: dict[str, dict] = {}
-                            for row in all_rows:
-                                seen[str(row.get(seed_key, id(row)))] = row
-                            existing["rows"] = list(seen.values())
-                        else:
-                            existing["rows"] = all_rows
-    return merged
+# ---------------------------------------------------------------------------
+# Spec -> ResolvedCustomization
+# ---------------------------------------------------------------------------
 
 
-def _merge_knowledge_seed_multi(
-    registries: list[tuple[dict, list[int] | int | str | None]],
-) -> dict[str, dict]:
-    """Like _merge_knowledge_seed but supports multi-key lookups for teams."""
-    merged: dict[str, dict] = {}
-    for registry, key_or_keys in registries:
-        if key_or_keys is None:
-            continue
-        keys = key_or_keys if isinstance(key_or_keys, list) else [key_or_keys]
-        for k in keys:
-            if k not in registry:
-                continue
-            for table_name, spec in registry[k].items():
-                if table_name not in merged:
-                    merged[table_name] = dict(spec)
-                else:
-                    existing = merged[table_name]
-                    seed_key = spec.get("seed_key") or existing.get("seed_key")
-                    if spec.get("columns"):
-                        existing.setdefault("columns", {}).update(spec["columns"])
-                    if spec.get("description"):
-                        existing["description"] = spec["description"]
-                    if seed_key:
-                        existing["seed_key"] = seed_key
-                    if spec.get("rows"):
-                        all_rows = existing.get("rows", []) + spec["rows"]
-                        if seed_key:
-                            seen: dict[str, dict] = {}
-                            for row in all_rows:
-                                seen[str(row.get(seed_key, id(row)))] = row
-                            existing["rows"] = list(seen.values())
-                        else:
-                            existing["rows"] = all_rows
-    return merged
-
-
-def resolve(
+def _spec_to_resolved(
+    spec: "DeploymentSpec",
+    entry: ClientDeploymentEntry,
+    *,
     org_id: int | None = None,
     team_ids: list[int] | None = None,
     user_id: str | None = None,
     assistant_id: int | None = None,
 ) -> ResolvedCustomization:
-    """Resolve merged customizations for the given identity.
+    """Convert a :class:`DeploymentSpec` into a resolved result.
 
-    Cascade order (least to most specific):
-    org -> team(s) -> user -> assistant.
-
-    When a user belongs to multiple teams, team customizations are merged
-    in ascending team_id order before being fed into the cascade.
+    Shared seed-data layers registered on *entry* are collected in
+    scope order (org -> team -> user -> assistant) and merged onto
+    the spec's seed data.  File-based secrets from ``.secrets.json``
+    are applied last.
     """
-    sorted_team_ids = sorted(team_ids) if team_ids else []
-
-    configs: list[ActorConfig] = []
-    environments: list[BaseEnvironment] = []
-
-    if org_id is not None:
-        if org_id in _ORG_CONFIGS:
-            configs.append(_ORG_CONFIGS[org_id])
-        if org_id in _ORG_ENVIRONMENTS:
-            environments.extend(_ORG_ENVIRONMENTS[org_id])
-
-    for tid in sorted_team_ids:
-        if tid in _TEAM_CONFIGS:
-            configs.append(_TEAM_CONFIGS[tid])
-        if tid in _TEAM_ENVIRONMENTS:
-            environments.extend(_TEAM_ENVIRONMENTS[tid])
-
-    if user_id is not None:
-        if user_id in _USER_CONFIGS:
-            configs.append(_USER_CONFIGS[user_id])
-        if user_id in _USER_ENVIRONMENTS:
-            environments.extend(_USER_ENVIRONMENTS[user_id])
-
-    if assistant_id is not None:
-        if assistant_id in _ASSISTANT_CONFIGS:
-            configs.append(_ASSISTANT_CONFIGS[assistant_id])
-        if assistant_id in _ASSISTANT_ENVIRONMENTS:
-            environments.extend(_ASSISTANT_ENVIRONMENTS[assistant_id])
-
-    merged_config = _merge_configs(configs)
-
-    seen: dict[str, BaseEnvironment] = {}
-    for env in environments:
-        seen[env.namespace] = env
-    deduped_envs = list(seen.values())
-
-    cascade = [
-        (_ORG_FUNCTION_DIRS, org_id),
-        (_TEAM_FUNCTION_DIRS, sorted_team_ids or None),
-        (_USER_FUNCTION_DIRS, user_id),
-        (_ASSISTANT_FUNCTION_DIRS, assistant_id),
-    ]
-    function_dirs = _collect_dirs_multi(cascade)
-
-    venv_cascade = [
-        (_ORG_VENV_DIRS, org_id),
-        (_TEAM_VENV_DIRS, sorted_team_ids or None),
-        (_USER_VENV_DIRS, user_id),
-        (_ASSISTANT_VENV_DIRS, assistant_id),
-    ]
-    venv_dirs = _collect_dirs_multi(venv_cascade)
-
-    seed_cascade = [
-        (_ORG_CONTACTS, org_id),
-        (_TEAM_CONTACTS, sorted_team_ids or None),
-        (_USER_CONTACTS, user_id),
-        (_ASSISTANT_CONTACTS, assistant_id),
-    ]
-    contacts = _merge_list_seed_multi(
-        seed_cascade,
-        natural_key_fn=lambda r: (
-            f"{r.get('first_name', '')}|{r.get('surname', '')}"
-        ).lower(),
-    )
-    guidance = _merge_list_seed_multi(
-        [
-            (_ORG_GUIDANCE, org_id),
-            (_TEAM_GUIDANCE, sorted_team_ids or None),
-            (_USER_GUIDANCE, user_id),
-            (_ASSISTANT_GUIDANCE, assistant_id),
-        ],
-        natural_key_fn=lambda r: str(r.get("title", "")),
-    )
-    blacklist = _merge_list_seed_multi(
-        [
-            (_ORG_BLACKLIST, org_id),
-            (_TEAM_BLACKLIST, sorted_team_ids or None),
-            (_USER_BLACKLIST, user_id),
-            (_ASSISTANT_BLACKLIST, assistant_id),
-        ],
-        natural_key_fn=lambda r: f"{r.get('medium', '')}|{r.get('contact_detail', '')}",
-    )
-    knowledge = _merge_knowledge_seed_multi(
-        [
-            (_ORG_KNOWLEDGE, org_id),
-            (_TEAM_KNOWLEDGE, sorted_team_ids or None),
-            (_USER_KNOWLEDGE, user_id),
-            (_ASSISTANT_KNOWLEDGE, assistant_id),
-        ],
-    )
-
-    code_secrets = _merge_list_seed_multi(
-        [
-            (_ORG_SECRETS, org_id),
-            (_TEAM_SECRETS, sorted_team_ids or None),
-            (_USER_SECRETS, user_id),
-            (_ASSISTANT_SECRETS, assistant_id),
-        ],
-        natural_key_fn=lambda r: str(r.get("name", "")),
-    )
-
     from unity_deploy.customization.secrets_file import load_secrets
+
+    contacts: list[dict] = list(spec.contacts)
+    guidance: list[Guidance] = list(spec.guidance)
+    knowledge: dict[str, dict] = dict(spec.knowledge)
+    blacklist: list[dict] = list(spec.blacklist)
+    secrets: list[Secret] = list(spec.secrets)
+
+    for layer in _collect_layers(
+        entry,
+        org_id=org_id,
+        team_ids=team_ids,
+        user_id=user_id,
+        assistant_id=assistant_id,
+    ):
+        if layer.contacts:
+            contacts = _merge_by_key(contacts, layer.contacts, _contact_key)
+        if layer.guidance:
+            guidance = _merge_by_key(guidance, list(layer.guidance), _guidance_key)
+        if layer.knowledge:
+            knowledge = _merge_knowledge(knowledge, layer.knowledge)
+        if layer.blacklist:
+            blacklist = _merge_by_key(blacklist, layer.blacklist, _blacklist_key)
+        if layer.secrets:
+            secrets = _merge_by_key(secrets, list(layer.secrets), _secret_key)
 
     file_secrets = load_secrets(
         org_id=org_id,
-        team_ids=sorted_team_ids or None,
+        team_ids=team_ids,
         user_id=user_id,
         assistant_id=assistant_id,
     )
-
-    secrets_by_name: dict[str, dict[str, Any]] = {}
-    for s in code_secrets:
-        secrets_by_name[s["name"]] = s
-    for s in file_secrets:
-        secrets_by_name[s["name"]] = {**secrets_by_name.get(s["name"], {}), **s}
-    secrets = list(secrets_by_name.values())
+    if file_secrets:
+        file_secret_models = [Secret(**s) for s in file_secrets]
+        secrets = _merge_by_key(secrets, file_secret_models, _secret_key)
 
     return ResolvedCustomization(
-        config=merged_config,
-        environments=deduped_envs,
-        function_dirs=function_dirs,
-        venv_dirs=venv_dirs,
+        config=spec.actor_config,
+        environments=list(spec.environments),
+        function_dirs=[spec.function_dir] if spec.function_dir else [],
+        venv_dirs=[spec.venv_dir] if spec.venv_dir else [],
         contacts=contacts,
         guidance=guidance,
         knowledge=knowledge,
@@ -562,12 +247,115 @@ def resolve(
     )
 
 
+def resolve_from_deployments(
+    org_id: int | None = None,
+    team_ids: list[int] | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+) -> ResolvedCustomization | None:
+    """Walk ``_CLIENT_DEPLOYMENTS`` and return an isolated result if a match is found.
+
+    Each registered client is checked in order:
+
+    1. **Environment guardrail** — skip if registered for a different
+       environment than what :func:`detect_environment` reports.
+    2. **Mapping resolution** — walk the client's
+       :class:`DeploymentMapping` to find the first matching target.
+       If no target matches, move on to the next client.
+    3. Return the spec converted to :class:`ResolvedCustomization`
+       via :func:`_spec_to_resolved`.
+
+    Returns ``None`` when no client matches.
+    """
+    from unity_deploy.customization.deployment_types import (
+        detect_environment,
+        resolve_deployment_name,
+    )
+
+    current_env = detect_environment()
+
+    for client_name, entry in _CLIENT_DEPLOYMENTS.items():
+        if entry.environment is not None and entry.environment != current_env:
+            logger.debug(
+                "Skipping client '%s' — registered for '%s' but running in '%s'",
+                client_name,
+                entry.environment,
+                current_env,
+            )
+            continue
+
+        try:
+            dep_name = resolve_deployment_name(
+                entry.mapping,
+                user_id=user_id,
+                org_id=org_id,
+                team_ids=team_ids,
+                assistant_id=assistant_id,
+            )
+        except ValueError:
+            continue
+
+        spec = entry.specs[dep_name]
+        return _spec_to_resolved(
+            spec,
+            entry,
+            org_id=org_id,
+            team_ids=team_ids,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve(
+    org_id: int | None = None,
+    team_ids: list[int] | None = None,
+    user_id: str | None = None,
+    assistant_id: int | None = None,
+) -> ResolvedCustomization:
+    """Resolve customizations for the given identity.
+
+    Walks ``_CLIENT_DEPLOYMENTS`` looking for a client whose mapping
+    targets match the session identity.  Returns the deployment spec
+    as a :class:`ResolvedCustomization`.
+
+    When no client matches, returns an empty default customization.
+    """
+    result = resolve_from_deployments(
+        org_id=org_id,
+        team_ids=team_ids,
+        user_id=user_id,
+        assistant_id=assistant_id,
+    )
+    if result is not None:
+        return result
+
+    return ResolvedCustomization(
+        config=ActorConfig(),
+        environments=[],
+        function_dirs=[],
+        venv_dirs=[],
+        contacts=[],
+        guidance=[],
+        knowledge={},
+        blacklist=[],
+        secrets=[],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Import client subpackages so they self-register.
 # Add new clients here.
 # ---------------------------------------------------------------------------
 
-from unity_deploy.customization.clients import (
-    client_alpha as _client_alpha,
-)  # noqa: F401, E402
-from unity_deploy.customization.clients import clientgamma as _vantage  # noqa: F401, E402
+from . import client_alpha  # noqa: F401, E402
+
+# TODO: Yasser has left the team.  Re-enable when a new ClientGamma deployment
+# owner is assigned and _ENVIRONMENTS is populated in clientgamma/__init__.py.
+# from . import clientgamma  # noqa: F401, E402

@@ -259,7 +259,7 @@ class TestLoadSecrets:
         assert len(result) == 1
         assert result[0]["value"] == "user-val"
 
-    def test_cascade_merges_different_keys(self, tmp_path):
+    def test_secrets_merge_distinct_keys_across_levels(self, tmp_path):
         f = tmp_path / ".secrets.json"
         f.write_text(
             json.dumps(

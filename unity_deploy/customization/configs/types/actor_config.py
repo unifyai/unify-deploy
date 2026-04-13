@@ -12,9 +12,9 @@ class ActorConfig(BaseModel):
     constructor default".  Partial overrides are natural (e.g. set only
     ``can_compose=False`` and leave everything else at defaults).
 
-    Defined in code under ``unity/customization/clients/`` per client,
-    resolved at Actor construction time via the cascading
-    org -> user -> assistant merge.
+    Defined in code under ``unity_deploy/customization/clients/`` per
+    client, resolved at Actor construction time via the deployment
+    mapping system.
     """
 
     can_compose: Optional[bool] = Field(

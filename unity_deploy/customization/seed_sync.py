@@ -17,6 +17,8 @@ from typing import Any, Callable, TYPE_CHECKING
 import unify
 
 from unity.common.hierarchical_logger import ICONS
+from unity.guidance_manager.types.guidance import Guidance
+from unity.secret_manager.types import Secret
 
 if TYPE_CHECKING:
     from unity_deploy.customization.clients import ResolvedCustomization
@@ -221,12 +223,13 @@ def _sync_contacts(records: list[dict], meta: SeedMetaStore) -> bool:
     )
 
 
-def _sync_guidance(records: list[dict], meta: SeedMetaStore) -> bool:
+def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
     if not records:
         return False
     from unity.manager_registry import ManagerRegistry
 
     gm = ManagerRegistry.get_guidance_manager()
+    source_dicts = [r.model_dump() for r in records]
 
     def natural_key(r: dict) -> str:
         return str(r.get("title", ""))
@@ -247,7 +250,7 @@ def _sync_guidance(records: list[dict], meta: SeedMetaStore) -> bool:
 
     return sync_seed_data(
         manager_key="guidance",
-        source_records=records,
+        source_records=source_dicts,
         natural_key_fn=natural_key,
         get_existing_fn=get_existing,
         create_fn=create,
@@ -258,12 +261,13 @@ def _sync_guidance(records: list[dict], meta: SeedMetaStore) -> bool:
     )
 
 
-def _sync_secrets(records: list[dict], meta: SeedMetaStore) -> bool:
+def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
     if not records:
         return False
     from unity.manager_registry import ManagerRegistry
 
     sm = ManagerRegistry.get_secret_manager()
+    source_dicts = [r.model_dump() for r in records]
 
     def natural_key(r: dict) -> str:
         return str(r.get("name", ""))
@@ -308,7 +312,7 @@ def _sync_secrets(records: list[dict], meta: SeedMetaStore) -> bool:
 
     return sync_seed_data(
         manager_key="secrets",
-        source_records=records,
+        source_records=source_dicts,
         natural_key_fn=natural_key,
         get_existing_fn=get_existing,
         create_fn=create,
