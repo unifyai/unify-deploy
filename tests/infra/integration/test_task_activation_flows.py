@@ -45,6 +45,9 @@ TASK_FLOW_TIMEOUT_SECONDS = 240
 RUNTIME_INIT_GRACE_SECONDS = 15
 SILENT_START_OBSERVATION_SECONDS = 20
 OFFLINE_NO_WAKE_GRACE_SECONDS = 30
+# Offline integration cases only need a numeric entrypoint to satisfy the task
+# contract; they do not assert the downstream offline function behavior itself.
+TEST_OFFLINE_FUNCTION_ID = 777
 
 
 def _orchestra_headers(api_key: str) -> dict[str, str]:
@@ -149,7 +152,7 @@ def _scheduled_task_entries(
     }
     if offline:
         entries["offline"] = True
-        entries["entrypoint"] = "tests.noop_offline_task"
+        entries["entrypoint"] = TEST_OFFLINE_FUNCTION_ID
     return _with_mutable_explicit_types(entries)
 
 
@@ -181,7 +184,7 @@ def _trigger_task_entries(
     }
     if offline:
         entries["offline"] = True
-        entries["entrypoint"] = "tests.noop_offline_task"
+        entries["entrypoint"] = TEST_OFFLINE_FUNCTION_ID
     return _with_mutable_explicit_types(entries)
 
 
