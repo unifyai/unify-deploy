@@ -68,6 +68,10 @@ class ScheduledTaskActivationUpsertRequest(BaseModel):
     scheduled_for: datetime
     execution_mode: Literal["live", "offline"] = "live"
     source_type: Literal["scheduled"] = "scheduled"
+    task_label: Optional[str] = None
+    task_summary: Optional[str] = None
+    visibility_policy: str = "silent_by_default"
+    recurrence_hint: str = "one_off"
     previous_activation_revision: Optional[str] = None
     previous_scheduled_for: Optional[datetime] = None
     previous_execution_mode: Optional[Literal["live", "offline"]] = None

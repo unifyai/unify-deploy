@@ -49,6 +49,10 @@ def _task_due_payload() -> dict:
         "scheduled_for": "2026-04-10T09:00:00+00:00",
         "execution_mode": "live",
         "source_type": "scheduled",
+        "task_label": "Morning briefing",
+        "task_summary": "Prepare the morning update before the user checks in.",
+        "visibility_policy": "silent_by_default",
+        "recurrence_hint": "recurring",
     }
 
 
@@ -95,6 +99,10 @@ def test_scheduled_task_due_attaches_wake_reason_for_cold_start():
             "scheduled_for": "2026-04-10T09:00:00+00:00",
             "execution_mode": "live",
             "source_type": "scheduled",
+            "task_label": "Morning briefing",
+            "task_summary": "Prepare the morning update before the user checks in.",
+            "visibility_policy": "silent_by_default",
+            "recurrence_hint": "recurring",
         },
     ]
 
@@ -132,7 +140,15 @@ def test_scheduled_task_due_publishes_event_for_running_session():
     assert body["status"] == "published_to_active_session"
     mock_publish.assert_called_once()
     assert mock_publish.call_args.kwargs["event_type"] == "task_due"
+    assert (
+        mock_publish.call_args.kwargs["message"]
+        == "Scheduled task 'Morning briefing' became due at 2026-04-10T09:00:00+00:00."
+    )
     assert mock_publish.call_args.kwargs["extra_event_fields"]["task_id"] == 101
+    assert (
+        mock_publish.call_args.kwargs["extra_event_fields"]["task_label"]
+        == "Morning briefing"
+    )
 
 
 def test_scheduled_task_due_skips_deleted_assistant():

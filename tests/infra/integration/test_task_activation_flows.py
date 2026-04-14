@@ -451,6 +451,10 @@ class TestTaskActivationFlows:
                 "scheduled_for": activation["next_due_at"],
                 "execution_mode": "live",
                 "source_type": "scheduled",
+                "task_label": f"Integration scheduled task {task_id}",
+                "task_summary": "Quietly start this work when it becomes due.",
+                "visibility_policy": "silent_by_default",
+                "recurrence_hint": "one_off",
             }
             assert expected_reason in list(
                 bootstrap_payload.get("wake_reasons") or [],

@@ -120,6 +120,10 @@ def test_upsert_scheduled_task_activation_creates_cloud_task(client, fake_tasks_
                 "source_task_log_id": 555,
                 "activation_revision": "rev-123",
                 "scheduled_for": "2026-04-10T09:00:00+00:00",
+                "task_label": "Morning briefing",
+                "task_summary": "Prepare the morning update before the user checks in.",
+                "visibility_policy": "silent_by_default",
+                "recurrence_hint": "recurring",
             },
         )
 
@@ -134,6 +138,13 @@ def test_upsert_scheduled_task_activation_creates_cloud_task(client, fake_tasks_
     assert task.http_request.url.endswith("/scheduled/tasks/due")
     assert task.http_request.headers["Authorization"].startswith("Bearer ")
     assert b'"task_id": 101' in task.http_request.body
+    assert b'"task_label": "Morning briefing"' in task.http_request.body
+    assert (
+        b'"task_summary": "Prepare the morning update before the user checks in."'
+        in task.http_request.body
+    )
+    assert b'"visibility_policy": "silent_by_default"' in task.http_request.body
+    assert b'"recurrence_hint": "recurring"' in task.http_request.body
     assert task.schedule_time.seconds == int(
         datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc).timestamp(),
     )

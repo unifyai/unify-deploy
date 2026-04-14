@@ -1282,6 +1282,10 @@ class ScheduledTaskDuePayload(BaseModel):
     scheduled_for: datetime
     execution_mode: str = "live"
     source_type: str = "scheduled"
+    task_label: str = ""
+    task_summary: str = ""
+    visibility_policy: str = "silent_by_default"
+    recurrence_hint: str = "one_off"
 
 
 # =============================================================================
@@ -1727,6 +1731,10 @@ def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
         "scheduled_for": payload.scheduled_for.astimezone(timezone.utc).isoformat(),
         "execution_mode": payload.execution_mode,
         "source_type": payload.source_type,
+        "task_label": payload.task_label,
+        "task_summary": payload.task_summary,
+        "visibility_policy": payload.visibility_policy,
+        "recurrence_hint": payload.recurrence_hint,
     }
 
 
@@ -1734,6 +1742,8 @@ def _task_due_message(payload: ScheduledTaskDuePayload) -> str:
     """Return the human-readable summary attached to a due-task event."""
 
     scheduled_for = payload.scheduled_for.astimezone(timezone.utc).isoformat()
+    if payload.task_label:
+        return f"Scheduled task '{payload.task_label}' became due at {scheduled_for}."
     return f"Scheduled task {payload.task_id} became due at {scheduled_for}."
 
 

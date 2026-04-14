@@ -131,6 +131,10 @@ def _scheduled_activation_http_body(
         "scheduled_for": request.scheduled_for.astimezone(timezone.utc).isoformat(),
         "execution_mode": request.execution_mode,
         "source_type": request.source_type,
+        "task_label": request.task_label or "",
+        "task_summary": request.task_summary or "",
+        "visibility_policy": request.visibility_policy,
+        "recurrence_hint": request.recurrence_hint,
     }
     return json.dumps(payload).encode("utf-8")
 
