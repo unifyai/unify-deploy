@@ -198,6 +198,8 @@ def get_assistant(
         or "",
         "assistant_discord_bot_id": assistants[0].get("assistant_discord_bot_id", ""),
         "assistant_email": assistants[0]["email"] or "",
+        "assistant_email_provider": assistants[0].get("email_provider")
+        or "google_workspace",
         "user_number": assistants[0]["user_phone"] or "",
         "user_whatsapp_number": assistants[0].get("user_whatsapp_number") or "",
         "user_email": assistants[0]["user_email"] or "",
@@ -751,6 +753,9 @@ def _build_start_job_request_data(
         "user_number": assistant["user_number"],
         "assistant_number": assistant["assistant_number"],
         "assistant_email": assistant["assistant_email"],
+        "assistant_email_provider": assistant.get(
+            "assistant_email_provider", "google_workspace"
+        ),
         "user_whatsapp_number": assistant["user_whatsapp_number"],
         "assistant_whatsapp_number": assistant.get(
             "assistant_whatsapp_number",
