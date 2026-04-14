@@ -1456,37 +1456,69 @@ class TokenCredentialFromSecret(TokenCredential):
         )
 
 
+_GRAPH_SCOPES = ["https://graph.microsoft.com/.default"]
+
+
 def get_graph_client_from_token(access_token: str) -> GraphServiceClient:
-    """
-    Create a Microsoft Graph client from an access token (delegated permissions).
-
-    Args:
-        access_token: The Microsoft access token
-
-    Returns:
-        GraphServiceClient configured with the access token
-    """
+    """Create a Graph client from a per-user OAuth access token."""
     return GraphServiceClient(
         credentials=TokenCredentialFromSecret(access_token),
-        scopes=["https://graph.microsoft.com/.default"],
+        scopes=_GRAPH_SCOPES,
     )
 
 
-async def get_outlook_thread_id(email_id: str, graph_client):
-    """
-    Fetch Outlook message details using delegated permissions.
-    Similar to get_thread_id for Gmail - extracts conversation data from a notification.
+def get_admin_graph_client() -> GraphServiceClient:
+    """Build a Graph client using tenant-level client credentials.
 
-    Args:
-        email_id: The message ID from the notification
-        graph_client: GraphServiceClient configured with user's access token
+    Used for mailbox operations on provisioned MS365 users that don't
+    have per-user OAuth tokens.
+    """
+    from azure.identity import ClientSecretCredential
+
+    tenant_id = os.getenv("MS365_ADMIN_TENANT_ID", "")
+    client_id = os.getenv("MS365_ADMIN_CLIENT_ID", "")
+    client_secret = os.getenv("MS365_ADMIN_CLIENT_SECRET", "")
+    if not all([tenant_id, client_id, client_secret]):
+        raise RuntimeError(
+            "MS365 admin credentials not configured "
+            "(MS365_ADMIN_TENANT_ID, MS365_ADMIN_CLIENT_ID, MS365_ADMIN_CLIENT_SECRET)",
+        )
+    credential = ClientSecretCredential(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    return GraphServiceClient(credentials=credential, scopes=_GRAPH_SCOPES)
+
+
+def get_outlook_graph_client(secrets: dict) -> tuple[GraphServiceClient, bool]:
+    """Return a Graph client and whether it uses per-user OAuth.
 
     Returns:
-        tuple: (conversation_id, email_id, last_message) or (None, None, None) if not found
+        (graph_client, has_user_token) — ``has_user_token`` is True when
+        using a per-user OAuth token (operations should target ``/me``),
+        False when using admin app credentials (operations must target
+        ``/users/{email}``).
+    """
+    access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
+    if access_token:
+        return get_graph_client_from_token(access_token), True
+    return get_admin_graph_client(), False
+
+
+async def get_outlook_thread_id(
+    email_id: str,
+    graph_client,
+    *,
+    user_email: str | None = None,
+):
+    """Fetch Outlook message details from a notification.
+
+    When ``user_email`` is provided the message is fetched via
+    ``/users/{email}/messages/...`` (app credentials).  Otherwise
+    ``/me/messages/...`` is used (delegated token).
     """
     try:
-        # Fetch the message with body in text format (not HTML)
-        # Must explicitly select uniqueBody as it's not returned by default
         request_config = (
             MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration()
         )
@@ -1509,20 +1541,19 @@ async def get_outlook_thread_id(email_id: str, graph_client):
             )
         )
 
-        # Use /me endpoint for delegated permissions
-        message = await graph_client.me.messages.by_message_id(email_id).get(
+        if user_email:
+            user_node = graph_client.users.by_user_id(user_email)
+        else:
+            user_node = graph_client.me
+
+        message = await user_node.messages.by_message_id(email_id).get(
             request_configuration=request_config,
         )
 
         if not message:
-            print(f"Message {email_id} not found")
+            logger.info("Message %s not found", email_id)
             return None, None, None
 
-        # Note: Not marking as read - subscription only triggers on "created" events,
-        # so we don't need to track read status for duplicate prevention
-
-        # Extract message details (similar to Gmail's last_message format)
-        # Use unique_body to get only the new content, not the quoted thread history
         last_message = {
             "sender": message.from_.email_address.address if message.from_ else "",
             "to": [r.email_address.address for r in (message.to_recipients or [])],
@@ -1536,19 +1567,20 @@ async def get_outlook_thread_id(email_id: str, graph_client):
                 else None
             ),
             "has_attachments": message.has_attachments,
-            "attachments": [],  # TODO: fetch attachment details if needed
+            "attachments": [],
         }
 
         conversation_id = message.conversation_id
-        print(
-            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}",
+        logger.info(
+            "conversation_id: %s, email_id: %s",
+            conversation_id,
+            email_id,
         )
 
         return conversation_id, email_id, last_message
 
     except Exception as e:
-        print(f"Error fetching Outlook message: {e}")
-        traceback.print_exc()
+        logger.error("Error fetching Outlook message: %s", e, exc_info=True)
         return None, None, None
 
 

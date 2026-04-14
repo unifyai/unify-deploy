@@ -67,6 +67,7 @@ SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
 from .helpers import (
     cleanup_idle_pool,
+    get_outlook_graph_client,
     replenish_idle_pool,
     add_user_to_conference,
     build_webhook_context,
@@ -76,7 +77,6 @@ from .helpers import (
     dispatch_unity_start_intent,
     expire_all_stale_jobs,
     get_assistant,
-    get_graph_client_from_token,
     get_outlook_thread_id,
     get_pubsub_client,
     get_thread_id,
@@ -2331,22 +2331,21 @@ async def outlook_notification_processor(request: Request):
         user_id = assistant_data["user_id"]
         api_key = assistant_data["api_key"]
 
-        # Get access token from secrets
+        # Build Graph client: per-user OAuth token if available, else admin app credentials
         secrets = assistant_data.get("secrets", {})
-        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
-        if not access_token:
+        try:
+            graph_client, has_user_token = get_outlook_graph_client(secrets)
+        except RuntimeError:
             logger.info(
-                f"No Microsoft access token for {_redact_email(assistant_email_address)}",
+                f"No Microsoft credentials available for {_redact_email(assistant_email_address)}",
             )
             return Response(status_code=200)
-
-        # Create Graph client from token
-        graph_client = get_graph_client_from_token(access_token)
 
         # Fetch message details to get the actual sender
         conversation_id, email_id, last_message = await get_outlook_thread_id(
             email_id,
             graph_client,
+            user_email=None if has_user_token else assistant_email_address,
         )
         logger.info(
             f"conversation_id: {conversation_id}, email_id: {email_id}",
@@ -2923,12 +2922,19 @@ def scheduled_email_watches(payload: ScheduledPayload):
         if not email:
             continue
 
-        secrets = assistant.get("secrets", {})
-        has_ms_token = bool(secrets.get("MICROSOFT_ACCESS_TOKEN"))
+        # Determine provider from the assistant record.  Fall back to
+        # token-sniffing for assistants that predate the email_provider field.
+        email_provider = assistant.get("email_provider")
+        if not email_provider:
+            has_ms_token = bool(
+                assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
+            )
+            email_provider = "microsoft_365" if has_ms_token else "google_workspace"
+
+        use_outlook = email_provider == "microsoft_365"
 
         try:
-            if has_ms_token:
-                # Use Outlook watch
+            if use_outlook:
                 watch_response = requests.post(
                     f"{SETTINGS.comms_url}/outlook/watch",
                     json={"primary_email": email},
@@ -2948,7 +2954,6 @@ def scheduled_email_watches(payload: ScheduledPayload):
                     f"Outlook watch for {_redact_email(email)}: {result.get('success', False)}",
                 )
             else:
-                # Use Gmail watch
                 watch_response = requests.post(
                     f"{SETTINGS.comms_url}/gmail/watch",
                     json={
@@ -2974,7 +2979,7 @@ def scheduled_email_watches(payload: ScheduledPayload):
         except Exception as e:
             error_msg = f"Error renewing watch for {_redact_email(email)}: {e}"
             logger.error(error_msg)
-            provider = "outlook" if has_ms_token else "gmail"
+            provider = "outlook" if use_outlook else "gmail"
             results[provider].append(
                 {"email": email, "success": False, "error": error_msg},
             )

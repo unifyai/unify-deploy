@@ -139,7 +139,7 @@ class Settings:
         # Microsoft 365 provisioning (tenant-level app for creating/managing users)
         self.ms365_email_domain: str = os.environ.get(
             "MS365_EMAIL_DOMAIN",
-            "unify.ai",
+            "tenant.onmicrosoft.com",
         )
         self.ms365_admin_tenant_id: str = os.environ.get(
             "MS365_ADMIN_TENANT_ID",
