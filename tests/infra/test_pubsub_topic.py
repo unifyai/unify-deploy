@@ -17,8 +17,14 @@ import json
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
+from google.api_core.exceptions import NotFound as GcpNotFound
 
+import communication.infra.runtime_clients as _runtime_clients_mod
 import communication.infra.views as _views_mod
+
+# Keep legacy patch targets pointing at the shared runtime client module objects.
+_views_mod.Credentials = _runtime_clients_mod.Credentials
+_views_mod.pubsub_v1 = _runtime_clients_mod.pubsub_v1
 
 GCP_SA_KEY_JSON = json.dumps(
     {
@@ -59,8 +65,8 @@ def _setup_pubsub_mocks(mock_publisher_class, mock_subscriber_class, mock_creds)
     We install a ``side_effect`` that shallow-copies each request dict at
     call time so individual assertions work correctly.
     """
-    _views_mod._pubsub_publisher = None
-    _views_mod._pubsub_subscriber = None
+    _runtime_clients_mod._pubsub_publisher = None
+    _runtime_clients_mod._pubsub_subscriber = None
 
     mock_creds.return_value = MagicMock()
 
@@ -551,8 +557,8 @@ class TestDeletePubSubTopic:
     ):
         """All subscriptions (including actions-sub) should be deleted
         before the topic itself is deleted."""
-        _views_mod._pubsub_publisher = None
-        _views_mod._pubsub_subscriber = None
+        _runtime_clients_mod._pubsub_publisher = None
+        _runtime_clients_mod._pubsub_subscriber = None
 
         mock_creds.return_value = MagicMock()
 
@@ -594,8 +600,8 @@ class TestDeletePubSubTopic:
         client,
     ):
         """If a subscription was already deleted, deletion should continue."""
-        _views_mod._pubsub_publisher = None
-        _views_mod._pubsub_subscriber = None
+        _runtime_clients_mod._pubsub_publisher = None
+        _runtime_clients_mod._pubsub_subscriber = None
 
         mock_creds.return_value = MagicMock()
 
@@ -615,7 +621,7 @@ class TestDeletePubSubTopic:
         # First delete succeeds, second raises "not found"
         subscriber.delete_subscription.side_effect = [
             None,
-            Exception("Subscription not found"),
+            GcpNotFound("Subscription not found"),
         ]
 
         response = client.request(
