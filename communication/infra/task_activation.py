@@ -576,7 +576,7 @@ def _delete_previous_materialization(
     ):
         return False
 
-    previous_execution_mode = request.previous_execution_mode or request.execution_mode
+    previous_execution_mode = request.previous_execution_mode or "live"
     if (
         request.previous_activation_revision == request.activation_revision
         and request.previous_scheduled_for == request.scheduled_for

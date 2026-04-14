@@ -197,6 +197,62 @@ def test_upsert_scheduled_task_activation_deletes_previous_materialization(
     assert previous_name in fake_client.deleted_task_names
 
 
+def test_upsert_mode_change_deletes_previous_live_materialization_by_default(
+    client,
+    fake_tasks_module,
+):
+    """Mode-only updates should delete the prior live task when no previous mode is sent."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    previous_name = task_activation._scheduled_activation_task_name(
+        assistant_id="assistant-123",
+        task_id=101,
+        activation_revision="rev-123",
+        scheduled_for=datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc),
+        execution_mode="live",
+    )
+    fake_client.existing_task_names.add(previous_name)
+    task_activation._task_queues_ensured = {
+        task_activation.SETTINGS.task_due_queue_name,
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
+            "test-admin-key",
+        ),
+        patch(
+            "communication.infra.task_activation.SETTINGS.comms_url",
+            "https://comms.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+        patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
+    ):
+        response = client.post(
+            "/infra/task-activation/upsert",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+                "activation_revision": "rev-123",
+                "scheduled_for": "2026-04-10T09:00:00+00:00",
+                "execution_mode": "offline",
+                "previous_activation_revision": "rev-123",
+                "previous_scheduled_for": "2026-04-10T09:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["previous_deleted"] is True
+    assert previous_name in fake_client.deleted_task_names
+
+
 def test_delete_scheduled_task_activation_is_idempotent(client):
     """Deleting a missing materialization should still return success."""
 
