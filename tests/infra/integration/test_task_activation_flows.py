@@ -38,7 +38,7 @@ from .conftest import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
-UNITY_PROJECT_NAME = "Unity"
+TASK_MACHINE_PROJECT_NAME = "Assistants"
 TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
 TASK_DUE_LEAD_SECONDS = 60
 TASK_FLOW_TIMEOUT_SECONDS = 240
@@ -57,7 +57,7 @@ def _orchestra_headers(api_key: str) -> dict[str, str]:
 
 
 def _task_context_name(assistant_data: dict[str, Any]) -> str:
-    """Return the assistant-scoped Unity Tasks context name."""
+    """Return the assistant-scoped task context name."""
 
     return f"{assistant_data['user_id']}/{assistant_data['assistant_id']}/Tasks"
 
@@ -192,12 +192,12 @@ def _create_unity_task_log(
     assistant_data: dict[str, Any],
     entries: dict[str, Any],
 ) -> int:
-    """Create one Unity task row through Orchestra and return its log id."""
+    """Create one assistant task row through Orchestra and return its log id."""
 
     response = requests.post(
         f"{ORCHESTRA_URL}/logs",
         json={
-            "project_name": UNITY_PROJECT_NAME,
+            "project_name": TASK_MACHINE_PROJECT_NAME,
             "context": _task_context_name(assistant_data),
             "entries": entries,
         },
@@ -205,14 +205,14 @@ def _create_unity_task_log(
         timeout=30,
     )
     assert response.status_code == 200, (
-        f"Failed creating Unity task row in {_task_context_name(assistant_data)}: "
+        f"Failed creating task row in {_task_context_name(assistant_data)}: "
         f"{response.status_code} {response.text}"
     )
     return int(response.json()["log_event_ids"][0])
 
 
 def _delete_unity_logs(assistant_data: dict[str, Any], log_ids: list[int]) -> None:
-    """Delete Unity task rows created by the test."""
+    """Delete task rows created by the test."""
 
     if not log_ids:
         return
@@ -220,14 +220,14 @@ def _delete_unity_logs(assistant_data: dict[str, Any], log_ids: list[int]) -> No
         f"{ORCHESTRA_URL}/logs",
         json={
             "ids_and_fields": [[int(log_id), None] for log_id in log_ids],
-            "project_name": UNITY_PROJECT_NAME,
+            "project_name": TASK_MACHINE_PROJECT_NAME,
             "context": _task_context_name(assistant_data),
         },
         headers=_orchestra_headers(assistant_data["api_key"]),
         timeout=30,
     )
     assert response.status_code == 200, (
-        f"Failed deleting Unity task rows {log_ids}: "
+        f"Failed deleting task rows {log_ids}: "
         f"{response.status_code} {response.text}"
     )
 
@@ -240,7 +240,7 @@ def _cleanup_unity_logs(assistant_data: dict[str, Any], log_ids: list[int]) -> N
     try:
         _delete_unity_logs(assistant_data, log_ids)
     except AssertionError as exc:
-        print(f"[Cleanup] Failed deleting Unity task rows {log_ids}: {exc}")
+        print(f"[Cleanup] Failed deleting task rows {log_ids}: {exc}")
 
 
 def _get_context_logs(
@@ -253,7 +253,7 @@ def _get_context_logs(
     """Read logs from one Orchestra context, treating a missing context as empty."""
 
     params: dict[str, Any] = {
-        "project_name": UNITY_PROJECT_NAME,
+        "project_name": TASK_MACHINE_PROJECT_NAME,
         "context": context_name,
         "limit": limit,
     }
