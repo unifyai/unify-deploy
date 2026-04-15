@@ -8,6 +8,10 @@ steps:
   - |
     set -euo pipefail
     git clone --depth 1 --branch ${_UNITY_REF} https://$$GITHUB_TOKEN@github.com/unifyai/unity.git /workspace/unity-src
+    if [ -n "${_UNITY_SHA}" ]; then
+      git -C /workspace/unity-src fetch --depth 1 origin ${_UNITY_SHA}
+      git -C /workspace/unity-src checkout --detach FETCH_HEAD
+    fi
     git -C /workspace/unity-src rev-parse --short=12 HEAD > /workspace/unity_sha.txt
     rm -rf /workspace/unity-src/deploy
     mkdir -p /workspace/unity-src/deploy
@@ -141,6 +145,7 @@ substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'unity'
   _UNITY_REF: 'staging'
+  _UNITY_SHA: ''
 
 availableSecrets:
   secretManager:
