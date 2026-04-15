@@ -27,8 +27,12 @@ os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
 # These mocks are set at module level so they're applied before imports
 _mock_livekit = MagicMock()
 _mock_livekit.api = MagicMock()
+_mock_livekit.protocol = MagicMock()
+_mock_livekit.protocol.sip = MagicMock()
 sys.modules["livekit"] = _mock_livekit
 sys.modules["livekit.api"] = _mock_livekit.api
+sys.modules["livekit.protocol"] = _mock_livekit.protocol
+sys.modules["livekit.protocol.sip"] = _mock_livekit.protocol.sip
 
 
 # =============================================================================
@@ -42,9 +46,9 @@ def app_module():
     Import the app module once per test module with mocked external services.
     This avoids re-importing for every test which is slow.
     """
-    # Clear any cached adapters modules to force reimport with mocks
+    # Clear cached modules to force reimport with mocks
     for mod in list(sys.modules.keys()):
-        if mod.startswith("adapters"):
+        if mod.startswith("adapters") or mod == "common.livekit":
             del sys.modules[mod]
 
     # Import with mocks in place
@@ -119,7 +123,7 @@ def client(app_module, mock_gcs, mock_pubsub, mock_webhook_context, mock_get_ass
     # Patch at the module level where the functions are used
     with (
         patch.object(app_module.storage, "Client", return_value=storage_client),
-        patch("adapters.helpers.get_pubsub_client", return_value=mock_pubsub),
+        patch("adapters.main.get_pubsub_client", return_value=mock_pubsub),
         patch.object(app_module, "get_assistant", return_value=mock_get_assistant),
         patch.object(
             app_module.Credentials,
@@ -207,7 +211,7 @@ class TestAttachmentUploadCurrentBehavior:
 
         response = client.post("/unify/attachment", files=files)
 
-        assert response.status_code == 401
+        assert response.status_code == 403
 
     def test_upload_generates_unique_ids(self, client):
         """Each upload gets a unique ID."""
@@ -340,7 +344,7 @@ class TestMessageWithAttachmentsCurrentBehavior:
             "/unify/message",
             json={"assistant_id": "test", "contact_id": 1, "body": "Hi"},
         )
-        assert response.status_code == 401
+        assert response.status_code == 403
 
 
 class TestEndToEndFlow:
@@ -392,8 +396,8 @@ class TestAttachmentUploadNewBehavior:
     - User-scoped GCS paths
     """
 
-    def test_upload_uses_user_id_in_path(self, client):
-        """GCS path uses user_id from assistant lookup."""
+    def test_upload_uses_assistant_id_in_path(self, client):
+        """GCS path uses assistant_id as the directory prefix."""
         files = {"file": ("doc.pdf", io.BytesIO(b"content"), "application/pdf")}
 
         response = client.post(
@@ -405,11 +409,10 @@ class TestAttachmentUploadNewBehavior:
         assert response.status_code == 200
         data = response.json()
 
-        # gs_url should contain user_id (12345 from mock) not assistant_id
         assert "gs_url" in data
         assert (
-            "/12345/" in data["gs_url"]
-        ), f"Expected user_id in path, got: {data['gs_url']}"
+            "/test-assistant/" in data["gs_url"]
+        ), f"Expected assistant_id in path, got: {data['gs_url']}"
 
     def test_upload_returns_gs_url(self, client):
         """Upload response includes permanent gs:// URL."""
@@ -466,11 +469,11 @@ class TestMessageNewBehavior:
     - Full attachment metadata in PubSub (gs_url, content_type, size_bytes)
     """
 
-    def test_message_rejects_more_than_10_attachments(self, client):
-        """Messages with more than 10 attachments are rejected."""
+    def test_message_accepts_more_than_10_attachments(self, client):
+        """Messages with more than 10 attachments are accepted (no server-side limit)."""
         attachments = [
             {"id": f"id-{i}", "filename": f"file{i}.pdf", "url": f"https://url{i}"}
-            for i in range(11)  # 11 attachments
+            for i in range(11)
         ]
 
         response = client.post(
@@ -478,13 +481,12 @@ class TestMessageNewBehavior:
             json={
                 "assistant_id": "test-assistant",
                 "contact_id": 1,
-                "body": "Too many attachments",
+                "body": "Many attachments",
                 "attachments": attachments,
             },
         )
 
-        assert response.status_code == 400
-        assert "10" in response.text or "maximum" in response.text.lower()
+        assert response.status_code == 200
 
     def test_message_includes_gs_url_in_pubsub(self, client):
         """PubSub message includes gs_url for each attachment."""

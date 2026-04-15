@@ -1,8 +1,9 @@
 """Unit tests for the /phone/send-call endpoint.
 
-Verifies that the SIP URI is built from the room_name parameter (not from
-the phone number), matching the canonical unity_{assistant_id}_{medium}
-format that LiveKit dispatch rules route on.
+Verifies that the SIP URI uses the E.164 phone number as the user part
+(LiveKit matches it against the inbound trunk's ``numbers`` field),
+while a per-trunk dispatch rule routes the SIP participant into the
+correct room.
 """
 
 import os
@@ -39,16 +40,17 @@ def client():
     with (
         patch.dict(os.environ, ENV, clear=False),
         patch.object(SETTINGS, "orchestra_admin_key", "test-admin-key"),
+        patch.object(SETTINGS, "comms_url", "https://comms.example.com"),
     ):
         from communication.main import app
 
-        return TestClient(app, raise_server_exceptions=False)
+        yield TestClient(app, raise_server_exceptions=False)
 
 
 class TestSendCall:
 
-    def test_sip_uri_uses_room_name(self, client, mock_twilio):
-        """The SIP URI must encode the room name, not the phone number."""
+    def test_sip_uri_uses_phone_number(self, client, mock_twilio):
+        """The SIP URI user part is the E.164 From number (trunk matching)."""
         resp = client.post(
             "/phone/send-call",
             json={
@@ -62,9 +64,10 @@ class TestSendCall:
         assert resp.status_code == 200
         call_kwargs = mock_twilio.calls.create.call_args
         sip_to = call_kwargs.kwargs.get("to") or call_kwargs[1].get("to")
-        assert (
-            sip_to == "sip:unity_568_phone@test.sip.livekit.cloud"
-        ), f"Expected room-name-based SIP URI, got: {sip_to}"
+        assert sip_to.startswith(
+            "sip:+15550100006@"
+        ), f"Expected E.164-based SIP URI, got: {sip_to}"
+        assert sip_to.endswith(".sip.livekit.cloud")
 
     def test_twiml_url_contains_phone_number(self, client, mock_twilio):
         """The TwiML URL must still reference the recipient's phone number."""
@@ -99,8 +102,8 @@ class TestSendCall:
         assert data["success"] is True
         assert data["call_sid"] == "CA_test_call_sid"
 
-    def test_sip_uri_never_contains_plus(self, client, mock_twilio):
-        """Regression: old code put +{phone} in the SIP URI user part."""
+    def test_sip_uri_uses_e164_format(self, client, mock_twilio):
+        """The SIP URI preserves E.164 format with the + prefix."""
         resp = client.post(
             "/phone/send-call",
             json={
@@ -114,5 +117,4 @@ class TestSendCall:
         assert resp.status_code == 200
         call_kwargs = mock_twilio.calls.create.call_args
         sip_to = call_kwargs.kwargs.get("to") or call_kwargs[1].get("to")
-        assert sip_to.startswith("sip:unity_42_phone@")
-        assert "+" not in sip_to
+        assert sip_to == "sip:+447427857991@test.sip.livekit.cloud"
