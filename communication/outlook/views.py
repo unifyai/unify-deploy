@@ -139,7 +139,7 @@ async def create_outlook_user(request: Request):
 
     return {
         "success": True,
-        "primary_email": primary_email,
+        "user": {"primaryEmail": primary_email},
         "user_id": created_user.id,
         "license_assigned": license_assigned,
     }
