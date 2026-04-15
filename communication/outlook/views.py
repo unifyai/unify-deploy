@@ -1,3 +1,4 @@
+import base64
 import logging
 import os
 import secrets
@@ -9,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from msgraph.generated.models.assigned_license import AssignedLicense
 from msgraph.generated.models.body_type import BodyType
 from msgraph.generated.models.email_address import EmailAddress
+from msgraph.generated.models.file_attachment import FileAttachment
 from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.message import Message
 from msgraph.generated.models.password_profile import PasswordProfile
@@ -17,6 +19,9 @@ from msgraph.generated.models.subscription import Subscription
 from msgraph.generated.models.user import User
 from msgraph.generated.users.item.assign_license.assign_license_post_request_body import (
     AssignLicensePostRequestBody,
+)
+from msgraph.generated.users.item.messages.item.create_reply.create_reply_post_request_body import (
+    CreateReplyPostRequestBody,
 )
 from msgraph.generated.users.item.messages.item.reply.reply_post_request_body import (
     ReplyPostRequestBody,
@@ -191,7 +196,8 @@ async def send_outlook_email(request: Request):
         "bcc": "bcc@example.com" (optional),
         "subject": "Email subject",
         "body": "Email body content",
-        "in_reply_to": "message_id" (optional, for replies)
+        "in_reply_to": "message_id" (optional, for replies),
+        "attachment": {"filename": str, "content_base64": str} (optional)
     }
     """
     data = await request.json()
@@ -200,6 +206,7 @@ async def send_outlook_email(request: Request):
     subject = data.get("subject", "")
     body = data.get("body")
     in_reply_to = data.get("in_reply_to")
+    attachment = data.get("attachment")
 
     if not sender or not to or body is None:
         raise HTTPException(
@@ -234,11 +241,35 @@ async def send_outlook_email(request: Request):
                 Recipient(email_address=EmailAddress(address=a)) for a in bcc_list
             ]
 
-        if in_reply_to:
-            await user.messages.by_message_id(in_reply_to).reply.post(
-                ReplyPostRequestBody(message=message),
+        file_attachment = None
+        if attachment:
+            file_attachment = FileAttachment(
+                odata_type="#microsoft.graph.fileAttachment",
+                name=attachment.get("filename", "attachment"),
+                content_type="application/octet-stream",
+                content_bytes=base64.b64decode(
+                    attachment.get("content_base64", ""),
+                ),
             )
+
+        if in_reply_to:
+            if file_attachment:
+                draft = await user.messages.by_message_id(
+                    in_reply_to,
+                ).create_reply.post(
+                    CreateReplyPostRequestBody(message=message),
+                )
+                await user.messages.by_message_id(
+                    draft.id,
+                ).attachments.post(file_attachment)
+                await user.messages.by_message_id(draft.id).send.post()
+            else:
+                await user.messages.by_message_id(in_reply_to).reply.post(
+                    ReplyPostRequestBody(message=message),
+                )
         else:
+            if file_attachment:
+                message.attachments = [file_attachment]
             await user.send_mail.post(
                 SendMailPostRequestBody(
                     message=message,
