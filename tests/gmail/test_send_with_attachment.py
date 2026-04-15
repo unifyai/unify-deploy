@@ -10,7 +10,7 @@ These tests verify that the /gmail/send endpoint correctly handles:
 import base64
 import os
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
 
@@ -27,18 +27,17 @@ def mock_gmail_service():
 @pytest.fixture
 def client(mock_gmail_service):
     """Create a test client with mocked Gmail service and auth."""
-    # Set required environment variables for the app
     os.environ.setdefault("GCP_SA_KEY", "{}")
     os.environ.setdefault("ORCHESTRA_ADMIN_KEY", "test-admin-key")
 
     with patch(
-        "communication.gmail.views.get_gmail_service",
+        "communication.gmail.views.get_gmail_service_async",
+        new_callable=AsyncMock,
         return_value=mock_gmail_service,
     ):
         from communication.main import app
 
         test_client = TestClient(app)
-        # Add auth header to all requests
         test_client.headers["Authorization"] = "Bearer test-admin-key"
         yield test_client
 

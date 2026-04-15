@@ -13,6 +13,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from common.settings import SETTINGS
+from communication.helpers import _lookup_assistant
+from google.oauth2.credentials import Credentials as OAuthCredentials
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -56,15 +58,48 @@ def get_admin_service():
     return build("admin", "directory_v1", credentials=creds)
 
 
+_GMAIL_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
+]
+
+
+async def get_gmail_service_async(sender_email: str):
+    """Build a Gmail API client, preferring BYOD OAuth tokens.
+
+    For user-granted (BYOD) accounts the assistant has a
+    ``GOOGLE_ACCESS_TOKEN`` secret.  For platform-managed Workspace
+    accounts we fall back to service-account delegation.
+    """
+    try:
+        assistant = await _lookup_assistant(sender_email)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning(
+            "Failed to look up assistant for %s, falling back to SA", sender_email
+        )
+        creds = _service_account_credentials(scopes=_GMAIL_SCOPES, subject=sender_email)
+        return build("gmail", "v1", credentials=creds)
+
+    access_token = assistant.get("secrets", {}).get("GOOGLE_ACCESS_TOKEN")
+    if access_token:
+        creds = OAuthCredentials(token=access_token)
+        return build("gmail", "v1", credentials=creds)
+
+    creds = _service_account_credentials(scopes=_GMAIL_SCOPES, subject=sender_email)
+    return build("gmail", "v1", credentials=creds)
+
+
 def get_gmail_service(sender_email: str):
-    """Build a Gmail API client impersonating the sender."""
-    # include send and readonly scopes for reading history and replying
-    scopes = [
-        "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/gmail.readonly",
-        "https://www.googleapis.com/auth/gmail.modify",
-    ]
-    creds = _service_account_credentials(scopes=scopes, subject=sender_email)
+    """Build a Gmail API client via service-account delegation.
+
+    Synchronous version used by callers that cannot await (e.g. the
+    adapters' inbound Gmail processor).  For the async path that also
+    supports BYOD tokens, use ``get_gmail_service_async``.
+    """
+    creds = _service_account_credentials(scopes=_GMAIL_SCOPES, subject=sender_email)
     return build("gmail", "v1", credentials=creds)
 
 
@@ -196,14 +231,10 @@ async def send_email(request: Request):
         msg["References"] = in_reply_to
     print(f"msg: {msg}")
 
-    # get raw message and initialize service
     raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    service = get_gmail_service(sender)
+    service = await get_gmail_service_async(sender)
 
-    # send the email
     sent = service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
-
-    print(f"sent: {sent}")
     return {"success": True, "id": sent.get("id")}
 
 
@@ -213,11 +244,9 @@ async def watch_email(request: Request):
     user_email = data.get("primary_email")
     if not user_email:
         raise HTTPException(status_code=400, detail="Missing primary_email")
-    creds = _service_account_credentials(
-        scopes=["https://www.googleapis.com/auth/gmail.modify"],
-        subject=user_email,
-    )
-    gmail_service = build("gmail", "v1", credentials=creds)
+
+    gmail_service = await get_gmail_service_async(user_email)
+
     watch_request = {
         "labelIds": ["INBOX"],
         "topicName": _gmail_topic_path(data.get("topic_name")),
@@ -241,7 +270,7 @@ async def get_attachment(
     filename: str | None = None,
 ):
     try:
-        service = get_gmail_service(receiver_email)
+        service = await get_gmail_service_async(receiver_email)
         attachment = (
             service.users()
             .messages()

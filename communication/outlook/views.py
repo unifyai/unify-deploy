@@ -112,6 +112,7 @@ async def create_outlook_user(request: Request):
 
     # Assign Exchange Online license so a mailbox is provisioned
     sku_id = SETTINGS.ms365_license_sku_id
+    license_assigned = False
     if sku_id:
         await graph.users.by_user_id(created_user.id).assign_license.post(
             AssignLicensePostRequestBody(
@@ -120,6 +121,7 @@ async def create_outlook_user(request: Request):
             ),
         )
         logger.info("Assigned license %s to %s", sku_id, primary_email)
+        license_assigned = True
 
     # Trigger inbox watch (best-effort; mailbox may take a few seconds)
     async with httpx.AsyncClient() as http_client:
@@ -130,7 +132,12 @@ async def create_outlook_user(request: Request):
             timeout=30,
         )
 
-    return {"success": True, "primary_email": primary_email, "user_id": created_user.id}
+    return {
+        "success": True,
+        "primary_email": primary_email,
+        "user_id": created_user.id,
+        "license_assigned": license_assigned,
+    }
 
 
 @router.delete("/delete")

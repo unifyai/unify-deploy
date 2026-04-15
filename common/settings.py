@@ -154,6 +154,18 @@ class Settings:
             "",
         )
 
+        # BYOD Microsoft 365 (multi-tenant Entra ID app for user-granted access)
+        self.ms365_byod_client_id: str = os.environ.get(
+            "MS365_BYOD_CLIENT_ID",
+            "",
+        )
+
+        # BYOD Google (platform-level OAuth 2.0 web app for user-granted Gmail access)
+        self.google_oauth_client_id: str = os.environ.get(
+            "GOOGLE_OAUTH_CLIENT_ID",
+            "",
+        )
+
         # K8s Lease-based assignment
         self.lease_duration_seconds: int = 60
 
