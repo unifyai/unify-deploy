@@ -37,11 +37,18 @@ The startup hook performs three tasks during manager initialization:
 unity-deploy/
 ├── pyproject.toml                    # Package metadata + entry point declaration
 ├── .pre-commit-config.yaml           # Hooks matching Unity's config
+├── base/
+│   ├── Dockerfile                    # Mirrored Unity base-image deploy assets
+│   ├── cloudbuild-staging.yaml       # Mirrored base-image Cloud Build config
+│   ├── cloudbuild.yaml               # Mirrored base-image Cloud Build config
+│   ├── entrypoint.sh                 # Mirrored runtime entrypoint
+│   ├── desktop/                      # Mirrored desktop stack for hosted sessions
+│   └── scripts/                      # Mirrored hosted job-watcher/log-upload assets
 ├── deploy/
-│   ├── Dockerfile                    # Full-build image (clones Unity + overlay)
-│   ├── cloudbuild-staging.yaml       # Cloud Build trigger for staging
-│   ├── cloudbuild.yaml               # Cloud Build trigger for production
-│   └── cloudbuild-preview.yaml       # Cloud Build trigger for preview
+│   ├── Dockerfile                    # Thin enterprise overlay image
+│   ├── cloudbuild-staging.yaml       # Overlay build trigger for staging
+│   ├── cloudbuild.yaml               # Overlay build trigger for production
+│   └── cloudbuild-preview.yaml       # Overlay build trigger for preview
 └── unity_deploy/
     ├── hook.py                       # Entry point: startup_hook()
     └── customization/
@@ -55,6 +62,13 @@ unity-deploy/
         ├── seed_sync.py              # Generic hash-based seed data sync
         └── secrets_file.py           # .secrets.json parser
 ```
+
+## Migration Note
+
+During the hosted deploy split, `base/` is the private mirror of the hosted base-image
+assets that still live in `unity/deploy/` today. Treat `base/` as the canonical private
+copy while the live production/staging triggers continue to run from `unity`; cutover
+should happen only after the private path is verified end-to-end.
 
 ## Setup
 

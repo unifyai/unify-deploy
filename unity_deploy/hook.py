@@ -47,6 +47,7 @@ def startup_hook(
     """
     from unity_deploy.customization.clients import resolve
     from unity_deploy.customization.seed_sync import sync_all_seed_data
+    from unity_deploy.runtime import get_runtime_backend_overrides
     from unity.function_manager.custom_functions import (
         collect_functions_from_directories,
         collect_venvs_from_directories,
@@ -73,6 +74,7 @@ def startup_hook(
     return {
         "environments": resolved.environments,
         "url_mappings": config.url_mappings if config.url_mappings else None,
+        "runtime_backends": get_runtime_backend_overrides(),
         "actor_kwargs": {
             k: v
             for k, v in {
