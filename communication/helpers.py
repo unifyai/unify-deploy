@@ -108,11 +108,20 @@ def graph_client_from_assistant(assistant: dict, user_email: str) -> GraphServic
 async def get_graph_client(user_email: str) -> GraphServiceClient:
     """Get a Graph client for the given assistant mailbox.
 
-    Convenience wrapper that looks up the assistant from Orchestra first.
-    Prefer ``graph_client_from_assistant`` when you already have the
-    assistant record to avoid a redundant Orchestra round-trip.
+    Looks up the assistant from Orchestra to check for per-user OAuth
+    tokens (BYOD).  Falls back to tenant-level admin credentials when
+    the lookup fails (e.g. during initial provisioning before the
+    AssistantContact row exists).
     """
-    assistant = await _lookup_assistant(user_email)
+    try:
+        assistant = await _lookup_assistant(user_email)
+    except Exception:
+        logger.warning(
+            "Failed to look up assistant for %s, falling back to admin Graph client",
+            user_email,
+        )
+        return get_admin_graph_client()
+
     return graph_client_from_assistant(assistant, user_email)
 
 
