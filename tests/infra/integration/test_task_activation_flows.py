@@ -39,7 +39,6 @@ from .conftest import (
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 TASK_MACHINE_PROJECT_NAME = "Assistants"
-TASK_ACTIVATIONS_CONTEXT_NAME = "Tasks/Activations"
 TASK_DUE_LEAD_SECONDS = 60
 TASK_FLOW_TIMEOUT_SECONDS = 240
 RUNTIME_INIT_GRACE_SECONDS = 15
@@ -60,6 +59,12 @@ def _task_context_name(assistant_data: dict[str, Any]) -> str:
     """Return the assistant-scoped task context name."""
 
     return f"{assistant_data['user_id']}/{assistant_data['assistant_id']}/Tasks"
+
+
+def _activation_context_name(assistant_data: dict[str, Any]) -> str:
+    """Return the assistant-scoped activation context name."""
+
+    return f"{_task_context_name(assistant_data)}/Activations"
 
 
 def _with_mutable_explicit_types(entries: dict[str, Any]) -> dict[str, Any]:
@@ -282,8 +287,7 @@ def _get_activation(
     assistant_id = str(assistant_data["assistant_id"])
     logs = _get_context_logs(
         assistant_data,
-        TASK_ACTIVATIONS_CONTEXT_NAME,
-        filter_expr=f"assistant_id == '{assistant_id}'",
+        _activation_context_name(assistant_data),
         limit=50,
     )
     for log in logs:
@@ -318,7 +322,7 @@ def _wait_for_activation(
             "tasks_context": _task_context_name(assistant_data),
             "activation_logs": _get_context_logs(
                 assistant_data,
-                TASK_ACTIVATIONS_CONTEXT_NAME,
+                _activation_context_name(assistant_data),
                 limit=50,
             ),
         },

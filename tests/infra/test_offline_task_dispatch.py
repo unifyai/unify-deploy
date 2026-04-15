@@ -105,5 +105,51 @@ def test_offline_dispatch_launches_job_for_current_activation():
     assert mock_launch.called
     assert mock_update_run.call_count == 1
     update_kwargs = mock_update_run.call_args.kwargs
+    assert update_kwargs["assistant_id"] == "assistant-123"
     assert update_kwargs["updates"]["state"] == "running"
     assert update_kwargs["updates"]["job_name"] == "unity-offline-abc"
+
+
+def test_offline_dispatch_persists_trigger_provenance_on_run_create():
+    """Triggered offline dispatch should persist the known provenance fields."""
+
+    client = _client()
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(
+                activation_kind="triggered",
+                next_due_at=None,
+            ),
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            return_value={"run": {"state": "pending"}, "created": True},
+        ) as mock_create_run,
+        patch(
+            "communication.infra.task_activation._get_k8s_clients",
+            return_value=("batch-api", None, None, None),
+        ),
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=("unity-offline-abc", True),
+        ),
+        patch("communication.infra.task_activation._update_task_run"),
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(
+                source_type="triggered",
+                scheduled_for=None,
+                source_medium="whatsapp",
+                source_ref="message-123",
+                source_contact_id="77",
+            ),
+        )
+
+    assert response.status_code == 200
+    create_payload = mock_create_run.call_args.args[0]
+    assert create_payload["source_medium"] == "whatsapp"
+    assert create_payload["source_ref"] == "message-123"
+    assert create_payload["source_contact_id"] == "77"

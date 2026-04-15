@@ -342,13 +342,19 @@ def _create_or_adopt_task_run(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _update_task_run(*, run_key: str, updates: dict[str, Any]) -> dict[str, Any]:
+def _update_task_run(
+    *,
+    assistant_id: str,
+    run_key: str,
+    updates: dict[str, Any],
+) -> dict[str, Any]:
     """Apply a partial update to one task run row."""
 
     return _orchestra_admin_post(
         ORCHESTRA_TASK_RUN_UPDATE_PATH,
         {
             "project_name": ORCHESTRA_TASK_MACHINE_PROJECT,
+            "assistant_id": assistant_id,
             "run_key": run_key,
             "updates": updates,
         },
@@ -612,6 +618,13 @@ def _build_offline_run_create_payload(
         "execution_mode": "offline",
         "activation_revision": request.activation_revision,
         "scheduled_for": _request_scheduled_for_iso(request),
+        "source_medium": request.source_medium or None,
+        "source_ref": request.source_ref or None,
+        "source_contact_id": (
+            str(request.source_contact_id)
+            if request.source_contact_id is not None
+            else None
+        ),
         "state": "pending",
     }
 
@@ -774,6 +787,7 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
         )
         await asyncio.to_thread(
             _update_task_run,
+            assistant_id=request.assistant_id,
             run_key=run_key,
             updates=_running_task_run_updates(job_name),
         )
