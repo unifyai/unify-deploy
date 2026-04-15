@@ -746,6 +746,7 @@ def test_production_traffic_stress(
     gce_client,
     poll,
     request,
+    pubsub_subscriber,
 ):
     """Simulate a product launch: N simultaneous users with diverse traffic.
 
@@ -1232,9 +1233,7 @@ def test_production_traffic_stress(
         # Phase 4 (3 rounds × 30s = ~90s+) so they've had time to process
         # Phase 2 inbound messages and produce LLM responses.
         try:
-            from google.cloud import pubsub_v1 as _pubsub_v1
-
-            subscriber = _pubsub_v1.SubscriberClient()
+            subscriber = pubsub_subscriber
             delivered_count = 0
             checked_count = 0
             check_sample = assistants[: min(3, N)]

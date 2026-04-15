@@ -265,6 +265,7 @@ class TestE2EFlows:
         core_api,
         gce_client,
         comms,
+        pubsub_subscriber,
     ):
         """After wakeup, a message sent via /unify/message must produce a reply.
 
@@ -277,10 +278,8 @@ class TestE2EFlows:
         that instructs the assistant to reply with a unique token, avoiding
         flakiness from the assistant deciding to stay silent.
         """
-        from google.cloud import pubsub_v1 as _pubsub_v1
-
         assistant_id = str(real_assistant_data["assistant_id"])
-        subscriber = _pubsub_v1.SubscriberClient()
+        subscriber = pubsub_subscriber
 
         try:
             expire_test_assistant_records(assistant_id)

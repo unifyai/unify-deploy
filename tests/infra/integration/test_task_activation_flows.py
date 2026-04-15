@@ -404,13 +404,14 @@ class TestTaskActivationFlows:
         core_api,
         gce_client,
         comms,
+        pubsub_subscriber,
     ):
         """A due scheduled task should wake a sleeping assistant quietly."""
 
         assistant = _create_remote_task_assistant(batch_api)
         assistant_id = str(assistant["assistant_id"])
         created_log_ids: list[int] = []
-        subscriber = pubsub_v1.SubscriberClient()
+        subscriber = pubsub_subscriber
 
         try:
             scheduled_for_dt = (
@@ -621,13 +622,14 @@ class TestTaskActivationFlows:
         batch_api,
         core_api,
         gce_client,
+        pubsub_subscriber,
     ):
         """Triggered tasks should piggyback on the real inbound while hiding offline work."""
 
         assistant = _create_remote_task_assistant(batch_api)
         assistant_id = str(assistant["assistant_id"])
         created_log_ids: list[int] = []
-        subscriber = pubsub_v1.SubscriberClient()
+        subscriber = pubsub_subscriber
 
         try:
             response, _elapsed = _wakeup(assistant_id)

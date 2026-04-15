@@ -42,6 +42,15 @@ End-to-end tests that run against real staging K8s, GCE, and Pub/Sub infrastruct
 
    Optional:
    - `TEST_ASSISTANT_ID` -- staging assistant ID to use. If not set, the first assistant found for your user is used automatically.
+   - `TEST_GOOGLE_APPLICATION_CREDENTIALS` -- absolute path to a service-account JSON file for Pub/Sub checks
+   - `TEST_GCP_SA_KEY` -- inline JSON for the same credential, if you prefer not to use a file
+
+   Pub/Sub integration checks resolve credentials in this order:
+   1. `TEST_GCP_SA_KEY`
+   2. `GCP_SA_KEY`
+   3. `TEST_GOOGLE_APPLICATION_CREDENTIALS`
+   4. `GOOGLE_APPLICATION_CREDENTIALS`
+   5. ambient ADC via `google.auth.default()`
 
 ## Running
 
@@ -110,6 +119,8 @@ curl -X POST "$TEST_ADAPTERS_URL/scheduled/jobs/create" -H "Authorization: Beare
 ```bash
 gcloud compute instances list --project=gcp-project-vms --zones=us-central1-a --limit=1
 ```
+
+**Pub/Sub checks fail with `pubsub.subscriptions.consume`**: Your current ADC principal cannot pull from the staging outbound subscription. Set `TEST_GOOGLE_APPLICATION_CREDENTIALS` (or `TEST_GCP_SA_KEY`) to a credential that has `roles/pubsub.subscriber` on `gcp-project-runtime`.
 
 **Orchestra calls fail with connection refused**: Make sure `TEST_ORCHESTRA_URL` points to staging, not localhost:
 ```bash
