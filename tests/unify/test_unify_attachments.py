@@ -11,6 +11,8 @@ import sys
 import pytest
 from unittest.mock import MagicMock, patch
 
+from common.settings import SETTINGS
+
 # =============================================================================
 # MODULE-LEVEL MOCKS - Applied before any adapters imports
 # =============================================================================
@@ -117,7 +119,7 @@ def client(app_module, mock_gcs, mock_pubsub, mock_webhook_context, mock_get_ass
     # Patch at the module level where the functions are used
     with (
         patch.object(app_module.storage, "Client", return_value=storage_client),
-        patch.object(app_module.pubsub_v1, "PublisherClient", return_value=mock_pubsub),
+        patch("adapters.helpers.get_pubsub_client", return_value=mock_pubsub),
         patch.object(app_module, "get_assistant", return_value=mock_get_assistant),
         patch.object(
             app_module.Credentials,
@@ -129,6 +131,7 @@ def client(app_module, mock_gcs, mock_pubsub, mock_webhook_context, mock_get_ass
             "build_webhook_context",
             return_value=mock_webhook_context,
         ),
+        patch.object(SETTINGS, "orchestra_admin_key", "test-admin-key"),
     ):
         test_client = TestClient(app_module.app)
         test_client.headers["Authorization"] = "Bearer test-admin-key"

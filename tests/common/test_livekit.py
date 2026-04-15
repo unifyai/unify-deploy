@@ -5,6 +5,7 @@ import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from common.livekit import make_room_name, _start_room_egress
+from common.settings import SETTINGS
 
 
 class TestMakeRoomName:
@@ -85,7 +86,10 @@ class TestRecordingFilepath:
     def test_filepath_structure_production(self):
         mock_api = _mock_livekit_api()
         env = {**ENV_DEFAULTS, "DEPLOY_ENV": "production"}
-        with patch.dict("os.environ", env, clear=False):
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch.object(SETTINGS, "deploy_env", "production"),
+        ):
             asyncio.run(
                 _start_room_egress(mock_api, "unity_42_meet", "42", "user2"),
             )
@@ -116,7 +120,10 @@ class TestRecordingFilepath:
         """Verify the complete filepath matches {env}/{id}/{room}_{timestamp}.mp3."""
         mock_api = _mock_livekit_api()
         env = {**ENV_DEFAULTS, "DEPLOY_ENV": "production"}
-        with patch.dict("os.environ", env, clear=False):
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch.object(SETTINGS, "deploy_env", "production"),
+        ):
             asyncio.run(
                 _start_room_egress(mock_api, "unity_25_phone", "25", "user1"),
             )

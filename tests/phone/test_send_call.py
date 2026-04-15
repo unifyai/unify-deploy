@@ -11,10 +11,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from common.settings import SETTINGS
+
 ENV = {
     "LIVEKIT_SIP_URI": "test.sip.livekit.cloud",
     "UNITY_COMMS_URL": "https://comms.example.com",
-    "ORCHESTRA_ADMIN_KEY": "test-admin-key",
     "TWILIO_ACCOUNT_SID": "ACtest",
     "TWILIO_AUTH_TOKEN": "test-token",
 }
@@ -35,7 +36,10 @@ def mock_twilio():
 
 @pytest.fixture
 def client():
-    with patch.dict(os.environ, ENV, clear=False):
+    with (
+        patch.dict(os.environ, ENV, clear=False),
+        patch.object(SETTINGS, "orchestra_admin_key", "test-admin-key"),
+    ):
         from communication.main import app
 
         return TestClient(app, raise_server_exceptions=False)

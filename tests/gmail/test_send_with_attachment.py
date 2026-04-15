@@ -13,6 +13,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 
+from common.settings import SETTINGS
+
 
 @pytest.fixture
 def mock_gmail_service():
@@ -28,12 +30,14 @@ def mock_gmail_service():
 def client(mock_gmail_service):
     """Create a test client with mocked Gmail service and auth."""
     os.environ.setdefault("GCP_SA_KEY", "{}")
-    os.environ.setdefault("ORCHESTRA_ADMIN_KEY", "test-admin-key")
 
-    with patch(
-        "communication.gmail.views.get_gmail_service_async",
-        new_callable=AsyncMock,
-        return_value=mock_gmail_service,
+    with (
+        patch(
+            "communication.gmail.views.get_gmail_service_async",
+            new_callable=AsyncMock,
+            return_value=mock_gmail_service,
+        ),
+        patch.object(SETTINGS, "orchestra_admin_key", "test-admin-key"),
     ):
         from communication.main import app
 
