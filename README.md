@@ -88,7 +88,7 @@ The SBC proxy at `sbc.unify.ai` uses TLS 1.2 with certificate verification enabl
 | `TWILIO_AUTH_TOKEN` | Twilio webhook signature validation | Validation skipped (warning logged) |
 | `OUTLOOK_WEBHOOK_SECRET` | Outlook notification validation | Outlook webhooks return 500 |
 | `TEAMS_WEBHOOK_SECRET` | Teams notification validation | Teams webhooks return 500 |
-| `OAUTH_STATE_SIGNING_KEY` | (Optional) HMAC signing for OAuth state parameter | State signature verification skipped |
+| `OAUTH_STATE_SIGNING_KEY` | HMAC key for verifying OAuth state signatures (must match Orchestra) | OAuth callbacks return 500 |
 
 ### GCP Infrastructure (not tracked in code)
 

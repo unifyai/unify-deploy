@@ -58,6 +58,7 @@ from common.livekit import (
     verify_livekit_webhook,
 )
 
+from common.oauth import OAuthStateError, verify_oauth_state
 from common.settings import SETTINGS
 
 # Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
@@ -2821,30 +2822,16 @@ async def microsoft_oauth_callback(request: Request):
     if not state:
         return Response(content="Missing state parameter", status_code=400)
 
+    if not SETTINGS.oauth_state_signing_key:
+        return Response(
+            content="OAUTH_STATE_SIGNING_KEY not configured",
+            status_code=500,
+        )
+
     try:
-        state_bytes = base64.b64decode(state)
-        state_data = json.loads(state_bytes.decode())
-
-        import hmac as _hmac
-        import hashlib as _hashlib
-
-        signing_key = os.environ.get("OAUTH_STATE_SIGNING_KEY")
-        if signing_key:
-            provided_sig = state_data.pop("_sig", "")
-            canonical = json.dumps(state_data, sort_keys=True)
-            expected_sig = _hmac.new(
-                signing_key.encode(),
-                canonical.encode(),
-                _hashlib.sha256,
-            ).hexdigest()
-            if not _hmac.compare_digest(provided_sig, expected_sig):
-                return Response(content="Invalid state signature", status_code=400)
-        else:
-            logger.warning(
-                "OAUTH_STATE_SIGNING_KEY not set - state signature validation skipped",
-            )
-    except Exception:
-        return Response(content="Invalid state parameter", status_code=400)
+        state_data = verify_oauth_state(state, SETTINGS.oauth_state_signing_key)
+    except OAuthStateError as exc:
+        return Response(content=str(exc), status_code=400)
 
     is_byod = state_data.get("byod", False)
     redirect_after = state_data.get("redirect_after")
@@ -3026,31 +3013,16 @@ async def google_oauth_callback(request: Request):
     if not state:
         return Response(content="Missing state parameter", status_code=400)
 
-    # Decode + verify state
+    if not SETTINGS.oauth_state_signing_key:
+        return Response(
+            content="OAUTH_STATE_SIGNING_KEY not configured",
+            status_code=500,
+        )
+
     try:
-        state_bytes = base64.b64decode(state)
-        state_data = json.loads(state_bytes.decode())
-
-        import hmac as _hmac
-        import hashlib as _hashlib
-
-        signing_key = os.environ.get("OAUTH_STATE_SIGNING_KEY")
-        if signing_key:
-            provided_sig = state_data.pop("_sig", "")
-            canonical = json.dumps(state_data, sort_keys=True)
-            expected_sig = _hmac.new(
-                signing_key.encode(),
-                canonical.encode(),
-                _hashlib.sha256,
-            ).hexdigest()
-            if not _hmac.compare_digest(provided_sig, expected_sig):
-                return Response(content="Invalid state signature", status_code=400)
-        else:
-            logger.warning(
-                "OAUTH_STATE_SIGNING_KEY not set - state signature validation skipped",
-            )
-    except Exception:
-        return Response(content="Invalid state parameter", status_code=400)
+        state_data = verify_oauth_state(state, SETTINGS.oauth_state_signing_key)
+    except OAuthStateError as exc:
+        return Response(content=str(exc), status_code=400)
 
     raw_assistant_id = state_data.get("assistant_id")
     redirect_after = state_data.get("redirect_after")

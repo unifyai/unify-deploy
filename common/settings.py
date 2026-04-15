@@ -166,6 +166,12 @@ class Settings:
             "",
         )
 
+        # HMAC key shared with Orchestra for signing/verifying OAuth state params
+        self.oauth_state_signing_key: str = os.environ.get(
+            "OAUTH_STATE_SIGNING_KEY",
+            "",
+        )
+
         # K8s Lease-based assignment
         self.lease_duration_seconds: int = 60
 
