@@ -12,6 +12,9 @@ dependencies = []
 [project.entry-points."unity_deploy.init"]
 enterprise = "unity_deploy.hook:startup_hook"
 
+[project.entry-points."unity.deploy_runtime"]
+enterprise = "unity_deploy.runtime:register_runtime_backends"
+
 [dependency-groups]
 dev = [
     "unity",
