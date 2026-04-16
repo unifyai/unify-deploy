@@ -74,8 +74,16 @@ async def get_gmail_service_async(sender_email: str):
     """
     try:
         assistant = await _lookup_assistant(sender_email)
-    except HTTPException:
-        raise
+    except HTTPException as exc:
+        if exc.status_code >= 500:
+            raise
+        logger.warning(
+            "Assistant lookup failed for %s (status %s), falling back to SA",
+            sender_email,
+            exc.status_code,
+        )
+        creds = _service_account_credentials(scopes=_GMAIL_SCOPES, subject=sender_email)
+        return build("gmail", "v1", credentials=creds)
     except Exception:
         logger.warning(
             "Failed to look up assistant for %s, falling back to SA", sender_email
@@ -128,11 +136,14 @@ async def create_email_user(request: Request):
             "password": password,
         }
         res = service.users().insert(body=user_body).execute()
-        # optional watch call
         async with httpx.AsyncClient() as http_client:
             await http_client.post(
                 f"{SETTINGS.comms_url}/gmail/watch",
                 json={"primary_email": primary_email},
+                headers={
+                    "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                },
+                timeout=30,
             )
         return {"success": True, "user": res}
     except Exception as e:
