@@ -2565,6 +2565,12 @@ async def teams_notification_processor(request: Request):
                 logger.error(f"Failed to fetch chat message (status={status})")
                 return Response(status_code=200)
 
+            chat_metadata, _ = await graph_get(
+                f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}?$select=chatType,topic",
+            )
+            chat_type = chat_metadata.get("chatType") if chat_metadata else None
+            chat_topic = chat_metadata.get("topic") if chat_metadata else None
+
         # Extract sender info
         sender_user = message_data.get("from", {}).get("user", {})
         sender_name = sender_user.get("displayName", "Unknown")
@@ -2653,7 +2659,14 @@ async def teams_notification_processor(request: Request):
                 },
             )
         else:
-            event_data.update({"chat_id": chat_id, "action": "new_message"})
+            event_data.update(
+                {
+                    "chat_id": chat_id,
+                    "chat_type": chat_type,
+                    "chat_topic": chat_topic,
+                    "action": "new_message",
+                }
+            )
 
         # Publish to Pub/Sub
         pubsub_client = get_pubsub_client()
