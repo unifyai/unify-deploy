@@ -2945,7 +2945,9 @@ async def microsoft_oauth_callback(request: Request):
     # ------------------------------------------------------------------
     # Store tokens + granted scopes
     # ------------------------------------------------------------------
-    granted_scopes = tokens.get("scope", "")
+    from adapters.scopes import build_scope_string
+
+    granted_scopes = build_scope_string("microsoft", features) if is_byod else ""
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
     old_secrets = assistant.get("secrets", {})
@@ -2954,7 +2956,7 @@ async def microsoft_oauth_callback(request: Request):
         old_secrets=old_secrets,
         new_secrets=tokens,
         api_key=api_key,
-        granted_scopes=granted_scopes if is_byod else "",
+        granted_scopes=granted_scopes,
     )
 
     # ------------------------------------------------------------------
@@ -3177,7 +3179,9 @@ async def google_oauth_callback(request: Request):
         )
 
     # Store tokens + granted scopes
-    granted_scopes = tokens.get("scope", "")
+    from adapters.scopes import build_scope_string
+
+    granted_scopes = build_scope_string("google", features)
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
     old_secrets = assistant.get("secrets", {})
