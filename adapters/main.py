@@ -2945,12 +2945,12 @@ async def microsoft_oauth_callback(request: Request):
     )
 
     # ------------------------------------------------------------------
-    # BYOD: conditional post-OAuth actions based on granted scopes
+    # BYOD: post-OAuth actions driven by state from Orchestra
     # ------------------------------------------------------------------
     if is_byod:
-        from common.scopes import has_feature
+        actions = state_data.get("actions", {})
 
-        if has_feature("microsoft", granted_scopes, "email"):
+        if actions.get("register_email_contact"):
             try:
                 await _register_byod_email_contact(
                     assistant_id=assistant_id,
@@ -2961,6 +2961,7 @@ async def microsoft_oauth_callback(request: Request):
             except Exception as e:
                 logger.error(f"Failed to register BYOD email contact: {e}")
 
+        if actions.get("setup_email_watch"):
             try:
                 async with httpx.AsyncClient() as http_client:
                     await http_client.post(
@@ -2974,7 +2975,7 @@ async def microsoft_oauth_callback(request: Request):
             except Exception as e:
                 logger.error(f"Failed to set up Outlook watch after BYOD OAuth: {e}")
 
-        if has_feature("microsoft", granted_scopes, "teams"):
+        if actions.get("setup_teams_watch"):
             try:
                 async with httpx.AsyncClient() as http_client:
                     await http_client.post(
@@ -3175,10 +3176,9 @@ async def google_oauth_callback(request: Request):
         granted_scopes=granted_scopes,
     )
 
-    from common.scopes import has_feature
+    actions = state_data.get("actions", {})
 
-    # Register email contact only if email scopes were actually granted
-    if has_feature("google", granted_scopes, "email"):
+    if actions.get("register_email_contact"):
         try:
             await _register_byod_email_contact(
                 assistant_id=assistant_id,
@@ -3189,7 +3189,7 @@ async def google_oauth_callback(request: Request):
         except Exception as e:
             logger.error(f"Failed to register BYOD Gmail contact: {e}")
 
-        # Set up Gmail inbox watch so inbound mail is delivered
+    if actions.get("setup_email_watch"):
         try:
             async with httpx.AsyncClient() as http_client:
                 await http_client.post(
