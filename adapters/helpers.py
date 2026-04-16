@@ -198,6 +198,8 @@ def get_assistant(
         or "",
         "assistant_discord_bot_id": assistants[0].get("assistant_discord_bot_id", ""),
         "assistant_email": assistants[0]["email"] or "",
+        "assistant_email_provider": assistants[0].get("email_provider")
+        or "google_workspace",
         "user_number": assistants[0]["user_phone"] or "",
         "user_whatsapp_number": assistants[0].get("user_whatsapp_number") or "",
         "user_email": assistants[0]["user_email"] or "",
@@ -719,6 +721,99 @@ def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
     }
 
 
+def _build_start_job_request_data(
+    assistant: dict,
+    medium: str,
+    *,
+    wake_reasons: list[dict] | None = None,
+) -> dict[str, str]:
+    """Build the `/infra/job/start` form payload for one activation request."""
+
+    api_key = assistant["api_key"]
+    assistant_id = assistant["assistant_id"]
+    desktop_mode = assistant.get("desktop_mode") or NO_DESKTOP_MODE
+    user_desktop_mode = assistant.get("user_desktop_mode", None)
+    user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
+    user_desktop_url = assistant.get("user_desktop_url", None)
+    demo_id = assistant.get("demo_id", None)
+    data = {
+        "api_key": api_key,
+        "medium": medium,
+        "assistant_id": assistant_id,
+        "user_id": assistant["user_id"],
+        "user_first_name": assistant["user_first_name"],
+        "user_surname": assistant["user_surname"],
+        "user_email": assistant["user_email"],
+        "assistant_first_name": assistant["assistant_first_name"],
+        "assistant_surname": assistant["assistant_surname"],
+        "assistant_age": assistant["assistant_age"],
+        "assistant_nationality": assistant["assistant_nationality"],
+        "assistant_about": assistant["assistant_about"],
+        "assistant_timezone": assistant["assistant_timezone"],
+        "user_number": assistant["user_number"],
+        "assistant_number": assistant["assistant_number"],
+        "assistant_email": assistant["assistant_email"],
+        "assistant_email_provider": assistant.get(
+            "assistant_email_provider", "google_workspace"
+        ),
+        "user_whatsapp_number": assistant["user_whatsapp_number"],
+        "assistant_whatsapp_number": assistant.get(
+            "assistant_whatsapp_number",
+            "",
+        ),
+        "assistant_discord_bot_id": assistant.get(
+            "assistant_discord_bot_id",
+            "",
+        ),
+        "voice_provider": assistant["voice_provider"],
+        "voice_id": assistant["voice_id"],
+        "desktop_mode": desktop_mode,
+        "user_desktop_mode": user_desktop_mode or "",
+        "user_desktop_filesys_sync": ("true" if user_desktop_filesys_sync else "false"),
+        "user_desktop_url": user_desktop_url or "",
+        # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
+        "demo_id": str(demo_id) if demo_id else "",
+        "team_ids": json.dumps(assistant.get("team_ids", [])),
+        "org_id": (
+            str(assistant.get("org_id", ""))
+            if assistant.get("org_id") is not None
+            else ""
+        ),
+        "deploy_env": assistant.get("deploy_env", ""),
+    }
+    if wake_reasons:
+        data["wake_reasons"] = json.dumps(wake_reasons)
+    return data
+
+
+def dispatch_unity_start_intent(
+    assistant: dict,
+    medium: str,
+    *,
+    wake_reasons: list[dict] | None = None,
+    timeout_seconds: float = START_INTENT_DISPATCH_TIMEOUT_SECONDS,
+) -> requests.Response | None:
+    """Dispatch `/infra/job/start` and return the observed edge response."""
+
+    api_key = assistant["api_key"]
+    assistant_id = assistant["assistant_id"]
+    if api_key == "":
+        logger.info(f"No user name for assistant {assistant_id}")
+        return None
+
+    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
+    return requests.post(
+        f"{SETTINGS.comms_url}/infra/job/start",
+        headers=headers,
+        data=_build_start_job_request_data(
+            assistant,
+            medium,
+            wake_reasons=wake_reasons,
+        ),
+        timeout=timeout_seconds,
+    )
+
+
 def start_unity_job(assistant: dict, medium: str) -> None:
     """Best-effort low-latency dispatch of activation intent to comms.
 
@@ -728,73 +823,18 @@ def start_unity_job(assistant: dict, medium: str) -> None:
     proof that comms accepted the request, created a session, or made runtime
     ready.
     """
-    api_key = assistant["api_key"]
     assistant_id = assistant["assistant_id"]
-
-    if api_key == "":
-        logger.info(f"No user name for assistant {assistant_id}")
-        return
-
-    desktop_mode = assistant.get("desktop_mode") or NO_DESKTOP_MODE
-    user_desktop_mode = assistant.get("user_desktop_mode", None)
-    user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
-    user_desktop_url = assistant.get("user_desktop_url", None)
-
-    demo_id = assistant.get("demo_id", None)
 
     # This is intentionally a fast edge handoff. Adapters does not wait for the
     # full /infra/job/start convergence path to complete on the webhook thread.
-    headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
     try:
-        response = requests.post(
-            f"{SETTINGS.comms_url}/infra/job/start",
-            headers=headers,
-            data={
-                "api_key": api_key,
-                "medium": medium,
-                "assistant_id": assistant_id,
-                "user_id": assistant["user_id"],
-                "user_first_name": assistant["user_first_name"],
-                "user_surname": assistant["user_surname"],
-                "user_email": assistant["user_email"],
-                "assistant_first_name": assistant["assistant_first_name"],
-                "assistant_surname": assistant["assistant_surname"],
-                "assistant_age": assistant["assistant_age"],
-                "assistant_nationality": assistant["assistant_nationality"],
-                "assistant_about": assistant["assistant_about"],
-                "assistant_timezone": assistant["assistant_timezone"],
-                "user_number": assistant["user_number"],
-                "assistant_number": assistant["assistant_number"],
-                "assistant_email": assistant["assistant_email"],
-                "user_whatsapp_number": assistant["user_whatsapp_number"],
-                "assistant_whatsapp_number": assistant.get(
-                    "assistant_whatsapp_number",
-                    "",
-                ),
-                "assistant_discord_bot_id": assistant.get(
-                    "assistant_discord_bot_id",
-                    "",
-                ),
-                "voice_provider": assistant["voice_provider"],
-                "voice_id": assistant["voice_id"],
-                "desktop_mode": desktop_mode,
-                "user_desktop_mode": user_desktop_mode or "",
-                "user_desktop_filesys_sync": (
-                    "true" if user_desktop_filesys_sync else "false"
-                ),
-                "user_desktop_url": user_desktop_url or "",
-                # Pass demo_id directly; Unity derives demo_mode from demo_id presence
-                "demo_id": str(demo_id) if demo_id else "",
-                "team_ids": json.dumps(assistant.get("team_ids", [])),
-                "org_id": (
-                    str(assistant.get("org_id", ""))
-                    if assistant.get("org_id") is not None
-                    else ""
-                ),
-                "deploy_env": assistant.get("deploy_env", ""),
-            },
-            timeout=START_INTENT_DISPATCH_TIMEOUT_SECONDS,
+        response = dispatch_unity_start_intent(
+            assistant,
+            medium,
+            timeout_seconds=START_INTENT_DISPATCH_TIMEOUT_SECONDS,
         )
+        if response is None:
+            return
         if response.status_code == 200:
             logger.info(
                 f"Activation request accepted by comms for assistant {assistant_id}",
@@ -1421,37 +1461,69 @@ class TokenCredentialFromSecret(TokenCredential):
         )
 
 
+_GRAPH_SCOPES = ["https://graph.microsoft.com/.default"]
+
+
 def get_graph_client_from_token(access_token: str) -> GraphServiceClient:
-    """
-    Create a Microsoft Graph client from an access token (delegated permissions).
-
-    Args:
-        access_token: The Microsoft access token
-
-    Returns:
-        GraphServiceClient configured with the access token
-    """
+    """Create a Graph client from a per-user OAuth access token."""
     return GraphServiceClient(
         credentials=TokenCredentialFromSecret(access_token),
-        scopes=["https://graph.microsoft.com/.default"],
+        scopes=_GRAPH_SCOPES,
     )
 
 
-async def get_outlook_thread_id(email_id: str, graph_client):
-    """
-    Fetch Outlook message details using delegated permissions.
-    Similar to get_thread_id for Gmail - extracts conversation data from a notification.
+def get_admin_graph_client() -> GraphServiceClient:
+    """Build a Graph client using tenant-level client credentials.
 
-    Args:
-        email_id: The message ID from the notification
-        graph_client: GraphServiceClient configured with user's access token
+    Used for mailbox operations on provisioned MS365 users that don't
+    have per-user OAuth tokens.
+    """
+    from azure.identity import ClientSecretCredential
+
+    tenant_id = os.getenv("MS365_ADMIN_TENANT_ID", "")
+    client_id = os.getenv("MS365_ADMIN_CLIENT_ID", "")
+    client_secret = os.getenv("MS365_ADMIN_CLIENT_SECRET", "")
+    if not all([tenant_id, client_id, client_secret]):
+        raise RuntimeError(
+            "MS365 admin credentials not configured "
+            "(MS365_ADMIN_TENANT_ID, MS365_ADMIN_CLIENT_ID, MS365_ADMIN_CLIENT_SECRET)",
+        )
+    credential = ClientSecretCredential(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    return GraphServiceClient(credentials=credential, scopes=_GRAPH_SCOPES)
+
+
+def get_outlook_graph_client(secrets: dict) -> tuple[GraphServiceClient, bool]:
+    """Return a Graph client and whether it uses per-user OAuth.
 
     Returns:
-        tuple: (conversation_id, email_id, last_message) or (None, None, None) if not found
+        (graph_client, has_user_token) — ``has_user_token`` is True when
+        using a per-user OAuth token (operations should target ``/me``),
+        False when using admin app credentials (operations must target
+        ``/users/{email}``).
+    """
+    access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
+    if access_token:
+        return get_graph_client_from_token(access_token), True
+    return get_admin_graph_client(), False
+
+
+async def get_outlook_thread_id(
+    email_id: str,
+    graph_client,
+    *,
+    user_email: str | None = None,
+):
+    """Fetch Outlook message details from a notification.
+
+    When ``user_email`` is provided the message is fetched via
+    ``/users/{email}/messages/...`` (app credentials).  Otherwise
+    ``/me/messages/...`` is used (delegated token).
     """
     try:
-        # Fetch the message with body in text format (not HTML)
-        # Must explicitly select uniqueBody as it's not returned by default
         request_config = (
             MessageItemRequestBuilder.MessageItemRequestBuilderGetRequestConfiguration()
         )
@@ -1474,20 +1546,19 @@ async def get_outlook_thread_id(email_id: str, graph_client):
             )
         )
 
-        # Use /me endpoint for delegated permissions
-        message = await graph_client.me.messages.by_message_id(email_id).get(
+        if user_email:
+            user_node = graph_client.users.by_user_id(user_email)
+        else:
+            user_node = graph_client.me
+
+        message = await user_node.messages.by_message_id(email_id).get(
             request_configuration=request_config,
         )
 
         if not message:
-            print(f"Message {email_id} not found")
+            logger.info("Message %s not found", email_id)
             return None, None, None
 
-        # Note: Not marking as read - subscription only triggers on "created" events,
-        # so we don't need to track read status for duplicate prevention
-
-        # Extract message details (similar to Gmail's last_message format)
-        # Use unique_body to get only the new content, not the quoted thread history
         last_message = {
             "sender": message.from_.email_address.address if message.from_ else "",
             "to": [r.email_address.address for r in (message.to_recipients or [])],
@@ -1501,19 +1572,20 @@ async def get_outlook_thread_id(email_id: str, graph_client):
                 else None
             ),
             "has_attachments": message.has_attachments,
-            "attachments": [],  # TODO: fetch attachment details if needed
+            "attachments": [],
         }
 
         conversation_id = message.conversation_id
-        print(
-            f"conversation_id: {conversation_id}, email_id: {email_id}, last_message: {last_message}",
+        logger.info(
+            "conversation_id: %s, email_id: %s",
+            conversation_id,
+            email_id,
         )
 
         return conversation_id, email_id, last_message
 
     except Exception as e:
-        print(f"Error fetching Outlook message: {e}")
-        traceback.print_exc()
+        logger.error("Error fetching Outlook message: %s", e, exc_info=True)
         return None, None, None
 
 
@@ -1906,6 +1978,136 @@ async def store_microsoft_tokens(
                     logger.info(
                         f"Creating secret {secret_name} for assistant {assistant_id}",
                     )
+                    response = await client.post(**args)
+                if response.status_code in (200, 201):
+                    logger.info(f"Stored {secret_name} for assistant {assistant_id}")
+                else:
+                    logger.info(
+                        f"Failed to store {secret_name}: {response.status_code} - {response.text}",
+                    )
+                    success = False
+            except Exception as e:
+                logger.info(f"Error storing {secret_name}: {e}")
+                success = False
+
+    return success
+
+
+# =============================================================================
+# Google OAuth Helpers
+# =============================================================================
+
+
+async def exchange_google_code_for_tokens(
+    client_id: str,
+    client_secret: str,
+    code: str,
+    redirect_uri: str,
+) -> dict:
+    """Exchange a Google authorization code for access + refresh tokens."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Google token exchange failed: {response.text}")
+
+        data = response.json()
+        data["expires_at"] = (
+            datetime.now(tz=timezone.utc)
+            + timedelta(seconds=data.get("expires_in", 3600))
+        ).isoformat()
+        return data
+
+
+async def refresh_google_tokens(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+) -> dict:
+    """Use a refresh token to obtain a new Google access token."""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Google token refresh failed: {response.text}")
+
+        data = response.json()
+        data["expires_at"] = (
+            datetime.now(tz=timezone.utc)
+            + timedelta(seconds=data.get("expires_in", 3600))
+        ).isoformat()
+        return data
+
+
+async def get_google_user_info(access_token: str) -> dict:
+    """Fetch the authenticated Google user's profile (email, name, etc.)."""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Failed to get Google user info: {response.text}")
+
+        return response.json()
+
+
+async def store_google_tokens(
+    assistant_id: str,
+    old_secrets: dict,
+    new_secrets: dict,
+    api_key: str,
+) -> bool:
+    """Store Google OAuth tokens as assistant secrets in Orchestra."""
+    if not SETTINGS.orchestra_url:
+        logger.info("SETTINGS.orchestra_url not configured")
+        return False
+
+    secrets_to_store = {
+        "GOOGLE_ACCESS_TOKEN": new_secrets["access_token"],
+        "GOOGLE_REFRESH_TOKEN": new_secrets.get("refresh_token", ""),
+        "GOOGLE_TOKEN_EXPIRES_AT": new_secrets.get("expires_at", ""),
+    }
+
+    if not api_key:
+        logger.info("api_key not configured")
+        return False
+
+    success = True
+    async with httpx.AsyncClient() as client:
+        for secret_name, secret_value in secrets_to_store.items():
+            if not secret_value:
+                continue
+            try:
+                args = {
+                    "url": f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret",
+                    "json": {"secret_name": secret_name, "secret_value": secret_value},
+                    "headers": {"Authorization": f"Bearer {api_key}"},
+                    "timeout": 30.0,
+                }
+                if old_secrets and secret_name in old_secrets:
+                    args["url"] += f"/{secret_name}"
+                    args["json"].pop("secret_name")
+                    response = await client.put(**args)
+                else:
                     response = await client.post(**args)
                 if response.status_code in (200, 201):
                     logger.info(f"Stored {secret_name} for assistant {assistant_id}")

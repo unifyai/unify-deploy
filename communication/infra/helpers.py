@@ -83,8 +83,8 @@ def setup_kubernetes_client():
 
             creds_data = json.loads(creds_json)
             project_id = creds_data.get("project_id", SETTINGS.gcp_project_id)
-            cluster_name = "unity"
-            region = "us-central1"
+            cluster_name = SETTINGS.gke_cluster_name
+            region = SETTINGS.default_region
 
             print(
                 f"🔑 Using service account: {creds_data.get('client_email', 'unknown')}",
@@ -264,10 +264,13 @@ def create_unity_job(
     image: str = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest",
     deploy_env: str = SETTINGS.deploy_env,
     ttl_seconds_after_finished: int = None,
+    active_deadline_seconds: int | None = None,
     unity_status: str = "idle",
     priority_class_name: str | None = None,
+    app_label: str = "unity",
     extra_labels: dict | None = None,
     extra_annotations: dict | None = None,
+    extra_env: dict[str, str] | None = None,
 ):
     """
     Create a Kubernetes Job for a Unity assistant.
@@ -305,9 +308,14 @@ def create_unity_job(
         ]
         if deploy_env == "staging":
             env_vars += [{"name": "STAGING", "value": "true"}]
+        if extra_env:
+            env_vars.extend(
+                {"name": str(key), "value": str(value)}
+                for key, value in extra_env.items()
+            )
 
         metadata_labels = {
-            "app": "unity",
+            "app": app_label,
             "created-by": "create_job_script",
             "unity-status": unity_status,
             "unity-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -340,7 +348,7 @@ def create_unity_job(
                 "backoffLimit": 0,
                 "template": {
                     "metadata": {
-                        "labels": {"app": "unity"},
+                        "labels": {"app": app_label},
                         "annotations": pod_annotations,
                     },
                     "spec": {
@@ -399,6 +407,8 @@ def create_unity_job(
         # Add TTL if specified
         if ttl_seconds_after_finished is not None:
             job_manifest["spec"]["ttlSecondsAfterFinished"] = ttl_seconds_after_finished
+        if active_deadline_seconds is not None:
+            job_manifest["spec"]["activeDeadlineSeconds"] = active_deadline_seconds
 
         # Create the job
         try:

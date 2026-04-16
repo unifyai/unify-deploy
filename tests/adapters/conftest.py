@@ -19,6 +19,7 @@ load_dotenv()
 load_dotenv(".env.temp")
 
 os.environ.setdefault("OUTLOOK_WEBHOOK_SECRET", "test-outlook-secret")
+os.environ.setdefault("OAUTH_STATE_SIGNING_KEY", "test-oauth-signing-key")
 
 # Add the project root to the Python path so tests can import modules
 project_root = Path(__file__).parent.parent.parent

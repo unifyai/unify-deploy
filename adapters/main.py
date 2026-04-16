@@ -58,6 +58,7 @@ from common.livekit import (
     verify_livekit_webhook,
 )
 
+from common.oauth import OAuthStateError, verify_oauth_state
 from common.settings import SETTINGS
 
 # Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
@@ -67,15 +68,16 @@ SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
 from .helpers import (
     cleanup_idle_pool,
+    get_outlook_graph_client,
     replenish_idle_pool,
     add_user_to_conference,
     build_webhook_context,
     check_valid_contact,
     create_conference_response,
     dispatch_livekit_agent,
+    dispatch_unity_start_intent,
     expire_all_stale_jobs,
     get_assistant,
-    get_graph_client_from_token,
     get_outlook_thread_id,
     get_pubsub_client,
     get_thread_id,
@@ -83,10 +85,14 @@ from .helpers import (
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
+    exchange_google_code_for_tokens,
     exchange_microsoft_code_for_tokens,
+    get_google_user_info,
     get_microsoft_user_info,
+    refresh_google_tokens,
     resolve_whatsapp_route,
     start_unity_job,
+    store_google_tokens,
     store_microsoft_tokens,
     uses_local_unity_runtime,
 )
@@ -1271,6 +1277,22 @@ class ScheduledPayload(BaseModel):
     test: bool = False
 
 
+class ScheduledTaskDuePayload(BaseModel):
+    """Payload delivered by Cloud Tasks when a scheduled task becomes due."""
+
+    assistant_id: str
+    task_id: int
+    source_task_log_id: int
+    activation_revision: str
+    scheduled_for: datetime
+    execution_mode: str = "live"
+    source_type: str = "scheduled"
+    task_label: str = ""
+    task_summary: str = ""
+    visibility_policy: str = "silent_by_default"
+    recurrence_hint: str = "one_off"
+
+
 # =============================================================================
 # Unify Attachment Upload
 # =============================================================================
@@ -1703,6 +1725,71 @@ async def unify_meet_webhook(request: Request):
 # =============================================================================
 
 
+def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
+    """Return the canonical wake reason / system-event payload for due tasks."""
+
+    return {
+        "type": "task_due",
+        "task_id": payload.task_id,
+        "source_task_log_id": payload.source_task_log_id,
+        "activation_revision": payload.activation_revision,
+        "scheduled_for": payload.scheduled_for.astimezone(timezone.utc).isoformat(),
+        "execution_mode": payload.execution_mode,
+        "source_type": payload.source_type,
+        "task_label": payload.task_label,
+        "task_summary": payload.task_summary,
+        "visibility_policy": payload.visibility_policy,
+        "recurrence_hint": payload.recurrence_hint,
+    }
+
+
+def _task_due_message(payload: ScheduledTaskDuePayload) -> str:
+    """Return the human-readable summary attached to a due-task event."""
+
+    scheduled_for = payload.scheduled_for.astimezone(timezone.utc).isoformat()
+    if payload.task_label:
+        return f"Scheduled task '{payload.task_label}' became due at {scheduled_for}."
+    return f"Scheduled task {payload.task_id} became due at {scheduled_for}."
+
+
+def _publish_unity_system_event(
+    *,
+    assistant_id: str,
+    event_type: str,
+    message: str,
+    contacts: list[dict] | None = None,
+    extra_event_fields: dict | None = None,
+) -> None:
+    """Publish a Unity system event to the assistant's Pub/Sub topic."""
+
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    event_payload = {
+        "contacts": contacts or [],
+        "assistant_id": assistant_id,
+        "event_type": event_type,
+        "message": message,
+    }
+    if extra_event_fields:
+        event_payload.update(extra_event_fields)
+
+    publish_future = pubsub_client.publish(
+        topic_path,
+        json.dumps(
+            {
+                "thread": "unity_system_event",
+                "publish_timestamp": time.time(),
+                "event": event_payload,
+            },
+        ).encode("utf-8"),
+        thread="inbound",
+    )
+    if "test" in str(assistant_id):
+        message_id = publish_future.result(timeout=10)
+        logger.info(f"Message ID: {message_id}")
+
+
 @app.post("/unity/system-event", dependencies=[Depends(require_admin_key)])
 async def unity_system_event_webhook(request: Request):
     """Unity system event webhook - handles system-level events."""
@@ -1752,37 +1839,123 @@ async def unity_system_event_webhook(request: Request):
         context["is_job_running"],
     )
 
-    # publish to pubsub
-    pubsub_client = get_pubsub_client()
-    topic_name = SETTINGS.assistant_topic(assistant_id)
-    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
-    logger.info(f"Publishing unity_system_event to Pub/Sub at path: {topic_path}")
     try:
-        publish_future = pubsub_client.publish(
-            topic_path,
-            json.dumps(
-                {
-                    "thread": "unity_system_event",
-                    "publish_timestamp": time.time(),
-                    "event": {
-                        "contacts": contacts,
-                        "assistant_id": assistant_id,
-                        "event_type": event_type,
-                        "message": message,
-                    },
-                },
-            ).encode("utf-8"),
-            thread="inbound",
+        _publish_unity_system_event(
+            assistant_id=assistant_id,
+            event_type=event_type,
+            message=message,
+            contacts=contacts,
         )
-        if "test" in assistant_id:
-            message_id = publish_future.result(timeout=10)
-            logger.info(f"Message ID: {message_id}")
         logger.info("unity_system_event message published to Pub/Sub successfully")
     except Exception as e:
         logger.error(f"Error publishing unity_system_event to Pub/Sub: {e}")
         return Response(content="Error publishing to Pub/Sub", status_code=500)
 
     return Response(status_code=200)
+
+
+@app.post("/scheduled/tasks/due", dependencies=[Depends(require_admin_key)])
+async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
+    """Wake or notify an assistant when a scheduled task becomes due."""
+
+    assistant_data = await asyncio.to_thread(
+        get_assistant,
+        assistant_id=payload.assistant_id,
+    )
+    if not assistant_data or not assistant_data.get("assistant_id"):
+        logger.info(
+            "Skipping task_due delivery because assistant %s no longer exists",
+            payload.assistant_id,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "assistant_not_found",
+        }
+
+    assistant_id = assistant_data["assistant_id"]
+    wake_reason = _build_task_due_reason(payload)
+
+    try:
+        if uses_local_unity_runtime(assistant_data):
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="task_due",
+                message=_task_due_message(payload),
+                extra_event_fields=wake_reason,
+            )
+            return {
+                "success": True,
+                "status": "published_local",
+                "assistant_id": assistant_id,
+            }
+
+        response = await asyncio.to_thread(
+            dispatch_unity_start_intent,
+            assistant_data,
+            "api_message",
+            wake_reasons=[wake_reason],
+            timeout_seconds=30,
+        )
+    except requests.RequestException as exc:
+        logger.error(
+            "Failed dispatching scheduled task due wake for assistant %s: %s",
+            assistant_id,
+            exc,
+        )
+        return Response(
+            content=f"Failed to dispatch task due wake: {exc}",
+            status_code=500,
+        )
+
+    if response is None:
+        return Response(
+            content="Assistant is missing an API key for task due delivery",
+            status_code=500,
+        )
+    if response.status_code != 200:
+        return Response(content=response.text, status_code=response.status_code)
+
+    try:
+        start_result = response.json()
+    except ValueError as exc:
+        logger.error("Invalid /infra/job/start response for task_due: %s", exc)
+        return Response(
+            content="Invalid /infra/job/start response",
+            status_code=500,
+        )
+
+    if start_result.get("active_session_already_running"):
+        try:
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="task_due",
+                message=_task_due_message(payload),
+                extra_event_fields=wake_reason,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed publishing task_due system event for assistant %s: %s",
+                assistant_id,
+                exc,
+            )
+            return Response(
+                content=f"Failed to publish task_due system event: {exc}",
+                status_code=500,
+            )
+        return {
+            "success": True,
+            "status": "published_to_active_session",
+            "assistant_id": assistant_id,
+            "activation_id": start_result.get("activation_id"),
+        }
+
+    return {
+        "success": True,
+        "status": "attached_to_startup",
+        "assistant_id": assistant_id,
+        "activation_id": start_result.get("activation_id"),
+    }
 
 
 @app.post("/unity/pre-hire", dependencies=[Depends(require_admin_key)])
@@ -2024,18 +2197,30 @@ def gmail_notification_processor(envelope: dict = Body(...)):
         assistant_email_address = notification["emailAddress"]
         history_id = notification["historyId"]
 
-        # get credentials
-        creds_json = json.loads(os.getenv("GCP_SA_KEY"))
-        scopes = [
-            "https://www.googleapis.com/auth/gmail.send",
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/gmail.modify",
-        ]
-        gmail_creds = Credentials.from_service_account_info(
-            creds_json,
-            scopes=scopes,
-            subject=assistant_email_address,
+        # Build Gmail API client.  BYOD accounts have a GOOGLE_ACCESS_TOKEN
+        # secret; platform-managed accounts use service-account delegation.
+        assistant_data_prefetch = get_assistant(email_address=assistant_email_address)
+        google_token = (assistant_data_prefetch.get("secrets") or {}).get(
+            "GOOGLE_ACCESS_TOKEN",
         )
+        if google_token:
+            from google.oauth2.credentials import (
+                Credentials as OAuthCredentials,
+            )
+
+            gmail_creds = OAuthCredentials(token=google_token)
+        else:
+            creds_json = json.loads(os.getenv("GCP_SA_KEY"))
+            scopes = [
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.modify",
+            ]
+            gmail_creds = Credentials.from_service_account_info(
+                creds_json,
+                scopes=scopes,
+                subject=assistant_email_address,
+            )
         gmail_service = build("gmail", "v1", credentials=gmail_creds)
 
         # process the history and thread
@@ -2163,22 +2348,21 @@ async def outlook_notification_processor(request: Request):
         user_id = assistant_data["user_id"]
         api_key = assistant_data["api_key"]
 
-        # Get access token from secrets
+        # Build Graph client: per-user OAuth token if available, else admin app credentials
         secrets = assistant_data.get("secrets", {})
-        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
-        if not access_token:
+        try:
+            graph_client, has_user_token = get_outlook_graph_client(secrets)
+        except RuntimeError:
             logger.info(
-                f"No Microsoft access token for {_redact_email(assistant_email_address)}",
+                f"No Microsoft credentials available for {_redact_email(assistant_email_address)}",
             )
             return Response(status_code=200)
-
-        # Create Graph client from token
-        graph_client = get_graph_client_from_token(access_token)
 
         # Fetch message details to get the actual sender
         conversation_id, email_id, last_message = await get_outlook_thread_id(
             email_id,
             graph_client,
+            user_email=None if has_user_token else assistant_email_address,
         )
         logger.info(
             f"conversation_id: {conversation_id}, email_id: {email_id}",
@@ -2560,19 +2744,63 @@ async def microsoft_router(request: Request):
     return Response(content="OK", status_code=200)
 
 
+# =============================================================================
+# BYOD Helpers
+# =============================================================================
+
+
+async def _register_byod_email_contact(
+    *,
+    assistant_id: str,
+    email: str,
+    provider: str,
+    api_key: str,
+) -> None:
+    """Create an AssistantContact row in Orchestra for a BYOD email.
+
+    Calls Orchestra's admin endpoint to upsert the contact with
+    ``provisioned_by=user`` so the platform knows it doesn't own the
+    underlying mailbox.
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/contact",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "contact_type": "email",
+                "provisioned_by": "user",
+                "contact_value": email,
+                "email_provider": provider,
+            },
+            timeout=30,
+        )
+        if response.status_code >= 400:
+            logger.error(
+                "Orchestra contact creation returned %s: %s",
+                response.status_code,
+                response.text,
+            )
+            raise Exception(
+                f"Orchestra returned {response.status_code}: {response.text}",
+            )
+
+
 @app.get("/microsoft/auth/callback")
 async def microsoft_oauth_callback(request: Request):
-    """
-    OAuth callback - Microsoft redirects here after user authorizes.
-    See docs/MICROSOFT_OAUTH_SETUP_GUIDE.md for full setup instructions.
+    """OAuth callback for Microsoft — handles both enterprise and BYOD flows.
 
-    State must contain:
-    - assistant_email: The assistant's email (to look up credentials)
-    - tenant_id: Azure AD tenant ID
-    - client_id: Azure AD app client ID
-    - redirect_after: (optional) URL to redirect to after success
+    **Enterprise flow** (existing): state contains ``assistant_email``,
+    ``tenant_id``, ``client_id``.  The ``AZURE_CLIENT_SECRET`` is read
+    from the assistant's secrets in Orchestra.
+
+    **BYOD flow**: state contains ``assistant_id`` and ``byod: true``.
+    Credentials come from platform env vars (``MS365_BYOD_CLIENT_ID``,
+    ``MS365_BYOD_CLIENT_SECRET``).  After token exchange the user's
+    email is discovered via ``GET /me`` and an ``AssistantContact`` is
+    created in Orchestra with ``provisioned_by=user``.
+
+    See ``docs/MICROSOFT_OAUTH_SETUP_GUIDE.md`` for enterprise setup.
     """
-    # Get query params
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     error = request.query_params.get("error")
@@ -2588,72 +2816,91 @@ async def microsoft_oauth_callback(request: Request):
     if not code:
         return Response(content="Missing authorization code", status_code=400)
 
-    # Decode state
-    tenant_id = None
-    client_id = None
-    redirect_after = None
-    assistant_email = None
+    # ------------------------------------------------------------------
+    # Decode + verify state
+    # ------------------------------------------------------------------
+    if not state:
+        return Response(content="Missing state parameter", status_code=400)
 
-    if state:
-        try:
-            state_bytes = base64.b64decode(state)
-            state_data = json.loads(state_bytes.decode())
-
-            import hmac as _hmac
-            import hashlib as _hashlib
-
-            signing_key = os.environ.get("OAUTH_STATE_SIGNING_KEY")
-            if signing_key:
-                provided_sig = state_data.pop("_sig", "")
-                canonical = json.dumps(state_data, sort_keys=True)
-                expected_sig = _hmac.new(
-                    signing_key.encode(),
-                    canonical.encode(),
-                    _hashlib.sha256,
-                ).hexdigest()
-                if not _hmac.compare_digest(provided_sig, expected_sig):
-                    return Response(content="Invalid state signature", status_code=400)
-            else:
-                logger.warning(
-                    "OAUTH_STATE_SIGNING_KEY not set - state signature validation skipped",
-                )
-
-            tenant_id = state_data.get("tenant_id")
-            client_id = state_data.get("client_id")
-            redirect_after = state_data.get("redirect_after")
-            assistant_email = state_data.get("assistant_email")
-        except Exception:
-            return Response(content="Invalid state parameter", status_code=400)
-
-    if not tenant_id or not client_id:
+    if not SETTINGS.oauth_state_signing_key:
         return Response(
-            content="Missing tenant_id or client_id in state",
-            status_code=400,
+            content="OAUTH_STATE_SIGNING_KEY not configured",
+            status_code=500,
         )
 
-    if not assistant_email:
-        return Response(content="Missing assistant_email in state", status_code=400)
+    try:
+        state_data = verify_oauth_state(state, SETTINGS.oauth_state_signing_key)
+    except OAuthStateError as exc:
+        return Response(content=str(exc), status_code=400)
 
-    # Get assistant data (including secrets) from orchestra
-    assistant = get_assistant(email_address=assistant_email)
-    if not assistant or not assistant.get("assistant_id"):
-        return Response(
-            content=f"Assistant not found for email: {assistant_email}",
-            status_code=400,
-        )
+    is_byod = state_data.get("byod", False)
+    redirect_after = state_data.get("redirect_after")
 
-    secrets = assistant.get("secrets", {})
-    client_secret = secrets.get("AZURE_CLIENT_SECRET")
+    # ------------------------------------------------------------------
+    # Resolve assistant + credentials
+    # ------------------------------------------------------------------
+    if is_byod:
+        raw_assistant_id = state_data.get("assistant_id")
+        if not raw_assistant_id:
+            return Response(
+                content="Missing assistant_id in BYOD state",
+                status_code=400,
+            )
 
-    if not client_secret:
-        return Response(
-            content="AZURE_CLIENT_SECRET not found in assistant secrets. Add it to the assistant configuration.",
-            status_code=400,
-        )
+        assistant = get_assistant(assistant_id=str(raw_assistant_id))
+        if not assistant or not assistant.get("assistant_id"):
+            return Response(
+                content=f"Assistant not found: {raw_assistant_id}",
+                status_code=400,
+            )
+
+        client_id = SETTINGS.ms365_byod_client_id
+        client_secret = os.environ.get("MS365_BYOD_CLIENT_SECRET", "")
+        tenant_id = "common"
+
+        if not client_id or not client_secret:
+            return Response(
+                content="MS365 BYOD app credentials not configured on the platform",
+                status_code=500,
+            )
+    else:
+        # Enterprise flow — existing behaviour
+        tenant_id = state_data.get("tenant_id")
+        client_id = state_data.get("client_id")
+        assistant_email = state_data.get("assistant_email")
+
+        if not tenant_id or not client_id:
+            return Response(
+                content="Missing tenant_id or client_id in state",
+                status_code=400,
+            )
+        if not assistant_email:
+            return Response(
+                content="Missing assistant_email in state",
+                status_code=400,
+            )
+
+        assistant = get_assistant(email_address=assistant_email)
+        if not assistant or not assistant.get("assistant_id"):
+            return Response(
+                content=f"Assistant not found for email: {assistant_email}",
+                status_code=400,
+            )
+
+        secrets = assistant.get("secrets", {})
+        client_secret = secrets.get("AZURE_CLIENT_SECRET")
+        if not client_secret:
+            return Response(
+                content="AZURE_CLIENT_SECRET not found in assistant secrets. "
+                "Add it to the assistant configuration.",
+                status_code=400,
+            )
 
     redirect_uri = os.getenv("UNITY_ADAPTERS_URL", "") + "/microsoft/auth/callback"
 
-    # Exchange code for tokens
+    # ------------------------------------------------------------------
+    # Exchange code → tokens
+    # ------------------------------------------------------------------
     try:
         tokens = await exchange_microsoft_code_for_tokens(
             tenant_id=tenant_id,
@@ -2666,7 +2913,7 @@ async def microsoft_oauth_callback(request: Request):
         logger.error(f"Token exchange failed: {e}")
         return Response(content=f"Token exchange failed: {e}", status_code=400)
 
-    # Get user email from token (should match assistant_email)
+    # Discover the authenticated user's email
     try:
         logger.info("Token exchange successful")
         user_info = await get_microsoft_user_info(tokens["access_token"])
@@ -2681,21 +2928,193 @@ async def microsoft_oauth_callback(request: Request):
             status_code=400,
         )
 
-    # Store tokens as assistant secrets
+    # ------------------------------------------------------------------
+    # Store tokens
+    # ------------------------------------------------------------------
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
+    old_secrets = assistant.get("secrets", {})
     stored = await store_microsoft_tokens(
         assistant_id=assistant_id,
-        old_secrets=secrets,
+        old_secrets=old_secrets,
         new_secrets=tokens,
         api_key=api_key,
     )
 
+    # ------------------------------------------------------------------
+    # BYOD: register email as an AssistantContact in Orchestra
+    # ------------------------------------------------------------------
+    if is_byod:
+        try:
+            await _register_byod_email_contact(
+                assistant_id=assistant_id,
+                email=user_email,
+                provider="microsoft_365",
+                api_key=api_key,
+            )
+        except Exception as e:
+            logger.error(f"Failed to register BYOD email contact: {e}")
+
+        # Set up inbox watch so inbound mail is delivered
+        try:
+            async with httpx.AsyncClient() as http_client:
+                await http_client.post(
+                    f"{SETTINGS.comms_url}/outlook/watch",
+                    json={"primary_email": user_email},
+                    headers={
+                        "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                    },
+                    timeout=30,
+                )
+        except Exception as e:
+            logger.error(f"Failed to set up Outlook watch after BYOD OAuth: {e}")
+
     logger.info(
-        f"OAuth complete for {_redact_email(user_email)} (assistant: {_redact_email(assistant_email)}, id: {assistant_id}), stored={stored}",
+        f"OAuth complete for {_redact_email(user_email)} "
+        f"(assistant id: {assistant_id}, byod={is_byod}), stored={stored}",
     )
 
-    # Redirect to success page or return JSON
+    if redirect_after:
+        sep = "&" if "?" in redirect_after else "?"
+        return RedirectResponse(
+            f"{redirect_after}{sep}success=true&user_email={user_email}",
+        )
+
+    return Response(
+        content=json.dumps(
+            {"success": True, "user_email": user_email, "stored": stored},
+        ),
+        media_type="application/json",
+    )
+
+
+@app.get("/google/auth/callback")
+async def google_oauth_callback(request: Request):
+    """OAuth callback for Google — BYOD Gmail access.
+
+    State contains ``assistant_id`` and ``redirect_after``.
+    Credentials come from platform env vars (``GOOGLE_OAUTH_CLIENT_ID``,
+    ``GOOGLE_OAUTH_CLIENT_SECRET``).  After token exchange the user's
+    email is discovered and an ``AssistantContact`` is created in
+    Orchestra with ``provisioned_by=user``.
+    """
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    error = request.query_params.get("error")
+
+    if error:
+        error_desc = request.query_params.get("error_description", "")
+        logger.error(f"Google OAuth error: {error} — {error_desc}")
+        return Response(content=f"OAuth error: {error} — {error_desc}", status_code=400)
+
+    if not code:
+        return Response(content="Missing authorization code", status_code=400)
+
+    if not state:
+        return Response(content="Missing state parameter", status_code=400)
+
+    if not SETTINGS.oauth_state_signing_key:
+        return Response(
+            content="OAUTH_STATE_SIGNING_KEY not configured",
+            status_code=500,
+        )
+
+    try:
+        state_data = verify_oauth_state(state, SETTINGS.oauth_state_signing_key)
+    except OAuthStateError as exc:
+        return Response(content=str(exc), status_code=400)
+
+    raw_assistant_id = state_data.get("assistant_id")
+    redirect_after = state_data.get("redirect_after")
+
+    if not raw_assistant_id:
+        return Response(content="Missing assistant_id in state", status_code=400)
+
+    assistant = get_assistant(assistant_id=str(raw_assistant_id))
+    if not assistant or not assistant.get("assistant_id"):
+        return Response(
+            content=f"Assistant not found: {raw_assistant_id}",
+            status_code=400,
+        )
+
+    client_id = SETTINGS.google_oauth_client_id
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return Response(
+            content="Google OAuth app credentials not configured on the platform",
+            status_code=500,
+        )
+
+    redirect_uri = os.getenv("UNITY_ADAPTERS_URL", "") + "/google/auth/callback"
+
+    # Exchange code → tokens
+    try:
+        tokens = await exchange_google_code_for_tokens(
+            client_id=client_id,
+            client_secret=client_secret,
+            code=code,
+            redirect_uri=redirect_uri,
+        )
+    except Exception as e:
+        logger.error(f"Google token exchange failed: {e}")
+        return Response(content=f"Token exchange failed: {e}", status_code=400)
+
+    # Discover the authenticated user's email
+    try:
+        logger.info("Google token exchange successful")
+        user_info = await get_google_user_info(tokens["access_token"])
+        user_email = user_info.get("email")
+    except Exception as e:
+        logger.error(f"Failed to get Google user info: {e}")
+        return Response(content=f"Failed to get user info: {e}", status_code=400)
+
+    if not user_email:
+        return Response(
+            content="Could not determine user email from token",
+            status_code=400,
+        )
+
+    # Store tokens
+    assistant_id = assistant["assistant_id"]
+    api_key = assistant["api_key"]
+    old_secrets = assistant.get("secrets", {})
+    stored = await store_google_tokens(
+        assistant_id=assistant_id,
+        old_secrets=old_secrets,
+        new_secrets=tokens,
+        api_key=api_key,
+    )
+
+    # Register email as an AssistantContact in Orchestra
+    try:
+        await _register_byod_email_contact(
+            assistant_id=assistant_id,
+            email=user_email,
+            provider="google_workspace",
+            api_key=api_key,
+        )
+    except Exception as e:
+        logger.error(f"Failed to register BYOD Gmail contact: {e}")
+
+    # Set up Gmail inbox watch so inbound mail is delivered
+    try:
+        async with httpx.AsyncClient() as http_client:
+            await http_client.post(
+                f"{SETTINGS.comms_url}/gmail/watch",
+                json={"primary_email": user_email},
+                headers={
+                    "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                },
+                timeout=30,
+            )
+    except Exception as e:
+        logger.error(f"Failed to set up Gmail watch after BYOD OAuth: {e}")
+
+    logger.info(
+        f"Google OAuth complete for {_redact_email(user_email)} "
+        f"(assistant id: {assistant_id}), stored={stored}",
+    )
+
     if redirect_after:
         sep = "&" if "?" in redirect_after else "?"
         return RedirectResponse(
@@ -2755,12 +3174,19 @@ def scheduled_email_watches(payload: ScheduledPayload):
         if not email:
             continue
 
-        secrets = assistant.get("secrets", {})
-        has_ms_token = bool(secrets.get("MICROSOFT_ACCESS_TOKEN"))
+        # Determine provider from the assistant record.  Fall back to
+        # token-sniffing for assistants that predate the email_provider field.
+        email_provider = assistant.get("email_provider")
+        if not email_provider:
+            has_ms_token = bool(
+                assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
+            )
+            email_provider = "microsoft_365" if has_ms_token else "google_workspace"
+
+        use_outlook = email_provider == "microsoft_365"
 
         try:
-            if has_ms_token:
-                # Use Outlook watch
+            if use_outlook:
                 watch_response = requests.post(
                     f"{SETTINGS.comms_url}/outlook/watch",
                     json={"primary_email": email},
@@ -2780,7 +3206,6 @@ def scheduled_email_watches(payload: ScheduledPayload):
                     f"Outlook watch for {_redact_email(email)}: {result.get('success', False)}",
                 )
             else:
-                # Use Gmail watch
                 watch_response = requests.post(
                     f"{SETTINGS.comms_url}/gmail/watch",
                     json={
@@ -2806,7 +3231,7 @@ def scheduled_email_watches(payload: ScheduledPayload):
         except Exception as e:
             error_msg = f"Error renewing watch for {_redact_email(email)}: {e}"
             logger.error(error_msg)
-            provider = "outlook" if has_ms_token else "gmail"
+            provider = "outlook" if use_outlook else "gmail"
             results[provider].append(
                 {"email": email, "success": False, "error": error_msg},
             )
@@ -2883,15 +3308,24 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
         if not access_token or not refresh_token:
             continue
 
-        # Get required credentials for refresh
+        # Get required credentials for refresh.
+        # Enterprise flow: per-assistant Azure credentials.
+        # BYOD fallback: platform-level multi-tenant app.
         tenant_id = secrets.get("AZURE_TENANT_ID")
         client_id = secrets.get("AZURE_CLIENT_ID")
         client_secret = secrets.get("AZURE_CLIENT_SECRET")
         if not all([tenant_id, client_id, client_secret]):
-            results["failed"].append(
-                {"email": email, "error": "Missing Azure credentials"},
-            )
-            continue
+            byod_client_id = SETTINGS.ms365_byod_client_id
+            byod_client_secret = os.environ.get("MS365_BYOD_CLIENT_SECRET", "")
+            if byod_client_id and byod_client_secret:
+                tenant_id = "common"
+                client_id = byod_client_id
+                client_secret = byod_client_secret
+            else:
+                results["failed"].append(
+                    {"email": email, "error": "Missing Azure credentials"},
+                )
+                continue
 
         try:
             # Refresh the token
@@ -2958,6 +3392,125 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
 
     logger.info(
         f"Microsoft token refresh complete: "
+        f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed",
+    )
+    return results
+
+
+@app.post("/scheduled/google-tokens", dependencies=[Depends(require_admin_key)])
+def scheduled_google_tokens(payload: ScheduledPayload):
+    """Refresh Google OAuth tokens for all BYOD Gmail assistants.
+
+    Should be scheduled to run every 30 minutes (access tokens expire
+    in ~1 hour).  Only processes assistants that have
+    ``GOOGLE_ACCESS_TOKEN`` and ``GOOGLE_REFRESH_TOKEN`` in secrets.
+    """
+    admin_key = SETTINGS.orchestra_admin_key
+    if not admin_key:
+        return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
+
+    client_id = SETTINGS.google_oauth_client_id
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return Response(
+            content="GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET not configured",
+            status_code=500,
+        )
+
+    try:
+        response = requests.get(
+            f"{SETTINGS.orchestra_url}/admin/assistant",
+            headers={"Authorization": f"Bearer {admin_key}"},
+        )
+        if response.status_code != 200:
+            return Response(
+                content=f"Failed to get assistants: {response.text}",
+                status_code=500,
+            )
+        all_assistants = response.json().get("info", [])
+    except Exception as e:
+        logger.error(f"Failed to get assistants: {e}")
+        return Response(content=f"Failed to get assistants: {e}", status_code=500)
+
+    logger.info(f"Checking {len(all_assistants)} assistants for Google token refresh")
+    results = {"refreshed": [], "failed": []}
+
+    for assistant in all_assistants:
+        email = assistant.get("email", "unknown")
+        assistant_id = assistant.get("agent_id")
+
+        if payload.test and email != "default-test-assistant@unify.ai":
+            continue
+
+        secrets = assistant.get("secrets", {})
+        if not secrets:
+            continue
+        access_token = secrets.get("GOOGLE_ACCESS_TOKEN")
+        refresh_token = secrets.get("GOOGLE_REFRESH_TOKEN")
+        if not access_token or not refresh_token:
+            continue
+
+        try:
+            token_resp = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "refresh_token": refresh_token,
+                    "grant_type": "refresh_token",
+                },
+            )
+
+            if token_resp.status_code != 200:
+                results["failed"].append(
+                    {
+                        "email": email,
+                        "error": f"Token refresh failed: {token_resp.text}",
+                    },
+                )
+                continue
+
+            new_tokens = token_resp.json()
+            expires_at = (
+                datetime.now(tz=timezone.utc)
+                + timedelta(seconds=new_tokens.get("expires_in", 3600))
+            ).isoformat()
+
+            api_key = assistant.get("api_key")
+
+            secrets_to_store = {
+                "GOOGLE_ACCESS_TOKEN": new_tokens["access_token"],
+                "GOOGLE_TOKEN_EXPIRES_AT": expires_at,
+            }
+            if new_tokens.get("refresh_token"):
+                secrets_to_store["GOOGLE_REFRESH_TOKEN"] = new_tokens["refresh_token"]
+
+            for secret_name, secret_value in secrets_to_store.items():
+                response = requests.put(
+                    f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret/{secret_name}",
+                    json={"secret_value": secret_value},
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                if response.status_code != 200:
+                    results["failed"].append(
+                        {
+                            "email": email,
+                            "error": f"Failed to store {secret_name}: {response.text}",
+                        },
+                    )
+                    continue
+
+            results["refreshed"].append(email)
+            logger.info(f"Refreshed Google token for {_redact_email(email)}")
+
+        except Exception as e:
+            results["failed"].append({"email": email, "error": str(e)})
+            logger.error(
+                f"Error refreshing Google token for {_redact_email(email)}: {e}"
+            )
+
+    logger.info(
+        f"Google token refresh complete: "
         f"{len(results['refreshed'])} refreshed, {len(results['failed'])} failed",
     )
     return results
@@ -3312,4 +3865,4 @@ if __name__ == "__main__":
     logger.info("    - POST /scheduled/cert-renewal")
     logger.info("Server running at: http://localhost:8080")
 
-    uvicorn.run("adapters.main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("adapters.main:app", host="0.0.0.0", port=8081, reload=True)

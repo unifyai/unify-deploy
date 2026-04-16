@@ -83,12 +83,41 @@ class Settings:
             "gcp-project-runtime",
         )
         self.default_region: str = "us-central1"
+        self.gke_cluster_name: str = os.environ.get("UNITY_GKE_CLUSTER_NAME", "unity")
         self.default_namespace: str = self.deploy_env
 
         # Service URLs
         self.orchestra_url: str = _service_url("ORCHESTRA_URL", "orchestra")
         self.comms_url: str = _service_url("UNITY_COMMS_URL", "comms")
         self.adapters_url: str = _service_url("UNITY_ADAPTERS_URL", "adapters")
+        self.task_due_queue_location: str = os.environ.get(
+            "UNITY_TASK_DUE_QUEUE_LOCATION",
+            self.default_region,
+        )
+        self.task_due_queue_name: str = os.environ.get(
+            "UNITY_TASK_DUE_QUEUE_NAME",
+            f"unity-task-due{self.env_suffix}",
+        )
+        self.task_offline_queue_name: str = os.environ.get(
+            "UNITY_TASK_OFFLINE_QUEUE_NAME",
+            f"unity-task-offline{self.env_suffix}",
+        )
+        self.task_activation_repair_queue_name: str = os.environ.get(
+            "UNITY_TASK_ACTIVATION_REPAIR_QUEUE_NAME",
+            f"unity-task-activation-repair{self.env_suffix}",
+        )
+        self.task_due_dispatch_deadline_seconds: int = int(
+            os.environ.get("UNITY_TASK_DUE_DISPATCH_DEADLINE_SECONDS", "30"),
+        )
+        self.task_activation_horizon_days: int = int(
+            os.environ.get("UNITY_TASK_ACTIVATION_HORIZON_DAYS", "29"),
+        )
+        self.offline_task_job_ttl_seconds: int = int(
+            os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
+        )
+        self.offline_task_job_active_deadline_seconds: int = int(
+            os.environ.get("UNITY_OFFLINE_TASK_JOB_ACTIVE_DEADLINE_SECONDS", "900"),
+        )
 
         # Auth keys
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
@@ -105,6 +134,42 @@ class Settings:
         self.workspace_admin_subject: str = os.environ.get(
             "WORKSPACE_ADMIN_SUBJECT",
             "dan@unify.ai",
+        )
+
+        # Microsoft 365 provisioning (tenant-level app for creating/managing users)
+        self.ms365_email_domain: str = os.environ.get(
+            "MS365_EMAIL_DOMAIN",
+            "tenant.onmicrosoft.com",
+        )
+        self.ms365_admin_tenant_id: str = os.environ.get(
+            "MS365_ADMIN_TENANT_ID",
+            "",
+        )
+        self.ms365_admin_client_id: str = os.environ.get(
+            "MS365_ADMIN_CLIENT_ID",
+            "",
+        )
+        self.ms365_license_sku_id: str = os.environ.get(
+            "MS365_LICENSE_SKU_ID",
+            "",
+        )
+
+        # BYOD Microsoft 365 (multi-tenant Entra ID app for user-granted access)
+        self.ms365_byod_client_id: str = os.environ.get(
+            "MS365_BYOD_CLIENT_ID",
+            "",
+        )
+
+        # BYOD Google (platform-level OAuth 2.0 web app for user-granted Gmail access)
+        self.google_oauth_client_id: str = os.environ.get(
+            "GOOGLE_OAUTH_CLIENT_ID",
+            "",
+        )
+
+        # HMAC key shared with Orchestra for signing/verifying OAuth state params
+        self.oauth_state_signing_key: str = os.environ.get(
+            "OAUTH_STATE_SIGNING_KEY",
+            "",
         )
 
         # K8s Lease-based assignment

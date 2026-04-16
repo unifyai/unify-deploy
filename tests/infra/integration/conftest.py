@@ -26,6 +26,13 @@ import pytest
 import requests
 from dotenv import load_dotenv
 
+from tests.infra.integration.pubsub_auth import (
+    build_pubsub_publisher_client,
+    build_pubsub_subscriber_client,
+    client_credential_context,
+    resolve_pubsub_credentials,
+)
+
 _CURRENT_RUNTIME_IDENTITY_TRACKER = None
 _INTEGRATION_LOG_STARTED_AT_MONOTONIC = time.monotonic()
 
@@ -323,10 +330,46 @@ def require_gce(gce_client):
 
 
 @pytest.fixture(scope="session")
-def pubsub_publisher():
-    from google.cloud import pubsub_v1
+def _resolved_pubsub_credentials():
+    """Resolve one explicit Pub/Sub identity for the integration-test session."""
 
-    return pubsub_v1.PublisherClient()
+    resolved = resolve_pubsub_credentials()
+    print(f"[Pub/Sub] Using {resolved.describe()}")
+    return resolved
+
+
+@pytest.fixture
+def pubsub_credentials(request, _resolved_pubsub_credentials):
+    """Attach Pub/Sub credential context to failure artifacts for this test."""
+
+    add_failure_context(
+        request,
+        "pubsub_credentials",
+        _resolved_pubsub_credentials.as_context(),
+    )
+    return _resolved_pubsub_credentials
+
+
+@pytest.fixture
+def pubsub_publisher(pubsub_credentials):
+    """Build a publisher client using the explicit integration credential path."""
+
+    client = build_pubsub_publisher_client(pubsub_credentials)
+    try:
+        yield client
+    finally:
+        client.transport.close()
+
+
+@pytest.fixture
+def pubsub_subscriber(pubsub_credentials):
+    """Build a subscriber client using the explicit integration credential path."""
+
+    client = build_pubsub_subscriber_client(pubsub_credentials)
+    try:
+        yield client
+    finally:
+        client.transport.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1763,6 +1806,19 @@ TEST_ASSISTANT_DELETE_TIMEOUT_SECONDS = 120
 TEST_ASSISTANT_CLEANUP_PARALLELISM = 6
 
 
+def _factory_assistant_surname(index: int) -> str:
+    """Return an alphabetic surname accepted by Unity contact validation."""
+
+    value = abs(int(index))
+    letters: list[str] = []
+    while True:
+        value, remainder = divmod(value, 26)
+        letters.append(chr(ord("A") + remainder))
+        if value == 0:
+            break
+    return f"Run{''.join(reversed(letters))}"
+
+
 def _list_owned_assistants() -> list[dict]:
     """Return assistants visible to the current test user."""
     if not UNIFY_KEY:
@@ -1854,27 +1910,34 @@ def _admin_record_to_data(a: dict) -> dict:
     }
 
 
-def _create_test_assistant(index: int) -> dict:
+def _create_test_assistant(
+    index: int,
+    *,
+    desktop_mode: str | None = "ubuntu",
+    is_local: bool = True,
+) -> dict:
     """Create a test assistant on Orchestra and return its full data.
 
-    Calls POST /v0/assistant with is_local=True (skips wakeup) and
-    create_infra=True (provisions Pub/Sub topic).  Then fetches the full
-    admin record to get api_key and user fields.
+    Calls POST /v0/assistant with create_infra=True (provisions Pub/Sub
+    topic). By default the helper keeps assistants local so tests can opt
+    into remote runtime wakeups only when they need them. Then fetches the
+    full admin record to get api_key and user fields.
     """
     assert UNIFY_KEY, "UNIFY_KEY required to create test assistants"
     assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY required to fetch admin records"
 
     payload = {
         "first_name": TEST_ASSISTANT_FACTORY_FIRST_NAME,
-        "surname": f"{index:03d}",
+        "surname": _factory_assistant_surname(index),
         "age": 25,
         "nationality": "North America",
         "about": TEST_ASSISTANT_FACTORY_ABOUT,
-        "desktop_mode": "ubuntu",
-        "is_local": True,
+        "is_local": is_local,
         "create_infra": True,
         "timezone": "UTC",
     }
+    if desktop_mode is not None:
+        payload["desktop_mode"] = desktop_mode
     create_resp = requests.post(
         f"{ORCHESTRA_URL}/assistant",
         json=payload,
@@ -2359,7 +2422,7 @@ def pull_outbound_messages(
     Returns a list of parsed event dicts (may be empty if no messages).
     Acknowledges all pulled messages.
     """
-    from google.api_core.exceptions import DeadlineExceeded
+    from google.api_core.exceptions import DeadlineExceeded, PermissionDenied
 
     sub_name = f"unity-{assistant_id}{_PUBSUB_SUFFIX}-outbound-sub"
     sub_path = subscriber.subscription_path(GCP_PROJECT_ID, sub_name)
@@ -2370,6 +2433,17 @@ def pull_outbound_messages(
         )
     except DeadlineExceeded:
         return []
+    except PermissionDenied as exc:
+        credential_context = client_credential_context(subscriber)
+        context_suffix = (
+            f" Resolved Pub/Sub credentials: {json.dumps(credential_context, sort_keys=True)}"
+            if credential_context
+            else ""
+        )
+        raise AssertionError(
+            "Pub/Sub subscriber lacks permission to consume "
+            f"{sub_path}.{context_suffix}",
+        ) from exc
 
     messages = response.received_messages
     if not messages:

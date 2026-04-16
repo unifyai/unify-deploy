@@ -6,18 +6,16 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from functools import partial
 from google.api_core.exceptions import Conflict, NotFound as GcpNotFound
 from google.cloud import compute_v1, pubsub_v1, storage
-from google.oauth2.service_account import Credentials
 from google.protobuf import duration_pb2
 import json
 import logging
-import os
 import time
+from typing import Any
 import uuid
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
 from .helpers import (
     acquire_named_lease,
-    setup_kubernetes_client,
     create_unity_job,
     delete_job,
     get_job_logs,
@@ -25,6 +23,12 @@ from .helpers import (
     release_named_lease,
     suspend_job,
 )
+from .runtime_clients import (
+    get_k8s_clients as _get_k8s_clients,
+    get_pubsub_clients as _get_pubsub_clients,
+    service_account_credentials as _service_account_credentials,
+)
+from .task_activation import router as task_activation_router
 from .assistant_sessions import (
     ACTIVE_PHASES,
     AssistantSessionTerminatingError,
@@ -140,17 +144,10 @@ START_JOB_LEASE_DURATION_SECONDS = SETTINGS.lease_duration_seconds
 START_JOB_LEASE_WAIT_TIMEOUT_SECONDS = START_JOB_LEASE_DURATION_SECONDS + 5
 START_JOB_LEASE_POLL_INTERVAL_SECONDS = 0.2
 START_JOB_TERMINATING_SESSION_WAIT_TIMEOUT_SECONDS = 5.0
+TASK_DUE_EVENT_TYPE = "task_due"
 ASSISTANT_SESSION_CONTROLLER_DEPLOYMENTS = {
     "staging": "assistant-session-controller-staging",
 }
-
-
-def _service_account_credentials() -> Credentials:
-    """Build GCP service-account credentials from the configured env payload."""
-    creds_json = os.getenv("GCP_SA_KEY")
-    if not creds_json:
-        raise RuntimeError("GCP_SA_KEY must be set for GCP-backed infra endpoints")
-    return Credentials.from_service_account_info(json.loads(creds_json))
 
 
 async def _publish_desktop_ready(
@@ -197,35 +194,42 @@ async def _publish_desktop_ready(
     return message_id
 
 
-async def _get_k8s_clients():
-    """Return cached K8s API clients, running the (potentially blocking)
-    setup in a thread so the event loop is never stalled."""
-    result = await asyncio.to_thread(setup_kubernetes_client)
-    if not result[0]:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to connect to Kubernetes cluster",
-        )
-    return result
-
-
 router = APIRouter()
+router.include_router(task_activation_router)
 
 
-_pubsub_publisher: pubsub_v1.PublisherClient | None = None
-_pubsub_subscriber: pubsub_v1.SubscriberClient | None = None
+def _parse_wake_reasons(raw_wake_reasons: str) -> list[dict[str, Any]]:
+    """Parse the optional JSON-encoded wake reason list."""
+
+    if not raw_wake_reasons:
+        return []
+    try:
+        parsed = json.loads(raw_wake_reasons)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="wake_reasons must be valid JSON",
+        ) from exc
+    if not isinstance(parsed, list) or any(
+        not isinstance(item, dict) for item in parsed
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="wake_reasons must be a JSON list of objects",
+        )
+    return parsed
 
 
-def _get_pubsub_clients() -> (
-    tuple[pubsub_v1.PublisherClient, pubsub_v1.SubscriberClient]
-):
-    """Return cached PubSub publisher and subscriber clients."""
-    global _pubsub_publisher, _pubsub_subscriber
-    if _pubsub_publisher is None or _pubsub_subscriber is None:
-        creds = _service_account_credentials()
-        _pubsub_publisher = pubsub_v1.PublisherClient(credentials=creds)
-        _pubsub_subscriber = pubsub_v1.SubscriberClient(credentials=creds)
-    return _pubsub_publisher, _pubsub_subscriber
+def _startup_payload_without_ephemeral_wake_reasons(
+    payload: dict[str, Any],
+    *,
+    keep_wake_reasons: bool,
+) -> dict[str, Any]:
+    """Drop one-shot wake reasons when reusing an already active session."""
+
+    if keep_wake_reasons:
+        return payload
+    return {key: value for key, value in payload.items() if key != "wake_reasons"}
 
 
 def _start_job_lease_name(assistant_id: str) -> str:
@@ -431,6 +435,7 @@ def _build_startup_payload(
     user_number: str,
     assistant_number: str,
     assistant_email: str,
+    assistant_email_provider: str,
     user_whatsapp_number: str,
     assistant_whatsapp_number: str,
     assistant_discord_bot_id: str,
@@ -444,6 +449,7 @@ def _build_startup_payload(
     demo_id: str,
     team_ids: str,
     org_id: str,
+    wake_reasons: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Build the bootstrap Secret payload for a session activation request.
 
@@ -451,7 +457,7 @@ def _build_startup_payload(
     must always pass the latest assistant config. The bootstrap Secret becomes
     the controller's source of truth for both fresh and reused activations.
     """
-    return {
+    payload = {
         "api_key": api_key,
         "medium": medium,
         "assistant_id": assistant_id,
@@ -468,6 +474,7 @@ def _build_startup_payload(
         "user_number": user_number,
         "assistant_number": assistant_number,
         "assistant_email": assistant_email,
+        "assistant_email_provider": assistant_email_provider,
         "user_whatsapp_number": user_whatsapp_number,
         "assistant_whatsapp_number": assistant_whatsapp_number,
         "assistant_discord_bot_id": assistant_discord_bot_id,
@@ -482,6 +489,9 @@ def _build_startup_payload(
         "team_ids": json.loads(team_ids) if team_ids else [],
         "org_id": int(org_id) if org_id else None,
     }
+    if wake_reasons:
+        payload["wake_reasons"] = wake_reasons
+    return payload
 
 
 def _ensure_subscription(
@@ -885,6 +895,7 @@ async def start_job(
     user_number: str = Form(""),
     assistant_number: str = Form(""),
     assistant_email: str = Form(""),
+    assistant_email_provider: str = Form("google_workspace"),
     user_whatsapp_number: str = Form(""),
     assistant_whatsapp_number: str = Form(""),
     assistant_discord_bot_id: str = Form(""),
@@ -898,6 +909,7 @@ async def start_job(
     demo_id: str = Form(""),
     team_ids: str = Form(""),
     org_id: str = Form(""),
+    wake_reasons: str = Form(""),
 ):
     """
     Ensure an AssistantSession exists for this assistant activation.
@@ -941,12 +953,14 @@ async def start_job(
     activation_id = None
     existing_phase = None
     reused_active_session = False
+    active_session_already_running = False
     restart_in_progress = False
     idle_pool_replenish_scheduled = False
     attempted_secret_refs: list[tuple[str, str]] = []
     coord_api = None
     start_lease_name = None
     start_lease_holder_id = None
+    requested_wake_reasons = _parse_wake_reasons(wake_reasons)
     causal_token = push_causal_context(
         build_causal_context(
             caller="views.job_start",
@@ -974,6 +988,7 @@ async def start_job(
             user_number=user_number,
             assistant_number=assistant_number,
             assistant_email=assistant_email,
+            assistant_email_provider=assistant_email_provider,
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
             assistant_discord_bot_id=assistant_discord_bot_id,
@@ -987,6 +1002,7 @@ async def start_job(
             demo_id=demo_id,
             team_ids=team_ids,
             org_id=org_id,
+            wake_reasons=requested_wake_reasons,
         )
         (
             start_lease_name,
@@ -1063,6 +1079,9 @@ async def start_job(
         reused_active_session = bool(
             existing_phase in ACTIVE_PHASES and existing_activation_id,
         )
+        active_session_already_running = bool(
+            existing_phase == "Active" and existing_activation_id,
+        )
         restart_in_progress = bool(
             release_draining
             or (
@@ -1072,6 +1091,10 @@ async def start_job(
                 and observed_activation_id
                 and existing_activation_id != observed_activation_id
             ),
+        )
+        bootstrap_payload = _startup_payload_without_ephemeral_wake_reasons(
+            startup_payload,
+            keep_wake_reasons=not active_session_already_running,
         )
         activation_id = (
             existing_activation_id
@@ -1096,7 +1119,7 @@ async def start_job(
             SETTINGS.default_namespace,
             assistant_id,
             activation_id,
-            startup_payload,
+            bootstrap_payload,
         )
         attempted_secret_refs.append((secret_name, activation_id))
 
@@ -1158,7 +1181,7 @@ async def start_job(
                 SETTINGS.default_namespace,
                 assistant_id,
                 activation_id,
-                startup_payload,
+                bootstrap_payload,
             )
             attempted_secret_refs.append((secret_name, activation_id))
             spec = build_assistant_session_spec(
@@ -1226,6 +1249,11 @@ async def start_job(
             "activation_id": activation_id,
             "phase": status.get("phase", "PendingJob"),
             "job_name": binding_job_ref(binding).get("name"),
+            "reused_active_session": reused_active_session,
+            "active_session_already_running": active_session_already_running,
+            "wake_reasons_attached_to_startup": bool(
+                requested_wake_reasons and not active_session_already_running,
+            ),
         }
     except HTTPException as exc:
         emit_observability_event(

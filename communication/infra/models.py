@@ -6,6 +6,7 @@ Supports both Windows and Ubuntu VMs via vm_type parameter.
 
 from pydantic import BaseModel
 from typing import Optional, Literal
+from datetime import datetime
 
 
 class VMReadyRequest(BaseModel):
@@ -55,6 +56,50 @@ class PoolReleaseRequest(BaseModel):
     vm_name: Optional[str] = None
     job_name: Optional[str] = None
     release_generation: Optional[int] = None
+
+
+class ScheduledTaskActivationUpsertRequest(BaseModel):
+    """Idempotent request to materialize one scheduled activation."""
+
+    assistant_id: str
+    task_id: int
+    source_task_log_id: int
+    activation_revision: str
+    scheduled_for: datetime
+    execution_mode: Literal["live", "offline"] = "live"
+    source_type: Literal["scheduled"] = "scheduled"
+    task_label: Optional[str] = None
+    task_summary: Optional[str] = None
+    visibility_policy: str = "silent_by_default"
+    recurrence_hint: str = "one_off"
+    previous_activation_revision: Optional[str] = None
+    previous_scheduled_for: Optional[datetime] = None
+    previous_execution_mode: Optional[Literal["live", "offline"]] = None
+
+
+class ScheduledTaskActivationDeleteRequest(BaseModel):
+    """Delete one previously materialized scheduled activation."""
+
+    assistant_id: str
+    task_id: int
+    activation_revision: str
+    scheduled_for: datetime
+    execution_mode: Literal["live", "offline"] = "live"
+
+
+class OfflineTaskDispatchRequest(BaseModel):
+    """Dispatch one validated offline task execution attempt."""
+
+    assistant_id: str
+    task_id: int
+    source_task_log_id: int
+    activation_revision: str
+    execution_mode: Literal["offline"] = "offline"
+    source_type: Literal["scheduled", "triggered"] = "scheduled"
+    scheduled_for: Optional[datetime] = None
+    source_ref: Optional[str] = None
+    source_medium: Optional[str] = None
+    source_contact_id: Optional[int] = None
 
 
 class PoolDiskDeleteRequest(BaseModel):
