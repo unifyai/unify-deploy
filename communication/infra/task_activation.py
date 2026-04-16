@@ -371,6 +371,15 @@ def _running_task_run_updates(job_name: str) -> dict[str, str]:
     }
 
 
+def _optional_display_text(value: Any) -> str | None:
+    """Normalize optional display text so empty strings do not leak into rows."""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _normalize_datetime_string(value: str | None) -> str | None:
     """Normalize ISO-8601 datetimes for equality checks."""
 
@@ -606,9 +615,11 @@ def _delete_previous_materialization(
 def _build_offline_run_create_payload(
     request: OfflineTaskDispatchRequest,
     run_key: str,
+    activation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the initial Orchestra payload for one offline task run row."""
 
+    activation = activation or {}
     return {
         "run_key": run_key,
         "assistant_id": request.assistant_id,
@@ -625,6 +636,13 @@ def _build_offline_run_create_payload(
             if request.source_contact_id is not None
             else None
         ),
+        "source_contact_display_name": _optional_display_text(
+            request.source_contact_display_name,
+        ),
+        "task_name": _optional_display_text(request.task_name)
+        or _optional_display_text(activation.get("task_name")),
+        "task_description": _optional_display_text(request.task_description)
+        or _optional_display_text(activation.get("task_description")),
         "state": "pending",
     }
 
@@ -756,7 +774,7 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
         run_key = _build_offline_run_key(request)
         run_response = await asyncio.to_thread(
             _create_or_adopt_task_run,
-            _build_offline_run_create_payload(request, run_key),
+            _build_offline_run_create_payload(request, run_key, activation),
         )
         run = run_response.get("run") or {}
         created = bool(run_response.get("created"))

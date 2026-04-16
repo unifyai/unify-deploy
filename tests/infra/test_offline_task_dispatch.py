@@ -1,5 +1,7 @@
 """Unit tests for the hidden offline task dispatch lane."""
 
+import hashlib
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from unittest.mock import patch
@@ -104,10 +106,38 @@ def test_offline_dispatch_launches_job_for_current_activation():
     }
     assert mock_launch.called
     assert mock_update_run.call_count == 1
+    create_payload = mock_create_run.call_args.args[0]
+    assert create_payload["task_name"] == "Daily summary"
+    assert create_payload["task_description"] == "Send the daily summary email."
     update_kwargs = mock_update_run.call_args.kwargs
     assert update_kwargs["assistant_id"] == "assistant-123"
     assert update_kwargs["updates"]["state"] == "running"
     assert update_kwargs["updates"]["job_name"] == "unity-offline-abc"
+
+
+def test_offline_run_key_uses_canonical_trigger_provenance_shape():
+    """Triggered offline runs should use the same provenance ingredients as live."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        assistant_id="assistant-123",
+        task_id=101,
+        source_task_log_id=555,
+        activation_revision="rev-123",
+        execution_mode="offline",
+        source_type="triggered",
+        source_medium="sms_message",
+        source_ref="message-123",
+        source_contact_id="77",
+    )
+    revision_digest = hashlib.sha256(b"rev-123").hexdigest()[:12]
+    source_ref_digest = hashlib.sha256(b"message-123").hexdigest()[:12]
+
+    assert task_activation._build_offline_run_key(request) == (
+        f"offline:triggered:assistant-123:101:{revision_digest}:"
+        f"contact-77-sms-message-{source_ref_digest}"
+    )
 
 
 def test_offline_dispatch_persists_trigger_provenance_on_run_create():
@@ -145,6 +175,7 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
                 source_medium="whatsapp",
                 source_ref="message-123",
                 source_contact_id="77",
+                source_contact_display_name="Alice Owner",
             ),
         )
 
@@ -153,3 +184,6 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
     assert create_payload["source_medium"] == "whatsapp"
     assert create_payload["source_ref"] == "message-123"
     assert create_payload["source_contact_id"] == "77"
+    assert create_payload["source_contact_display_name"] == "Alice Owner"
+    assert create_payload["task_name"] == "Daily summary"
+    assert create_payload["task_description"] == "Send the daily summary email."
