@@ -1934,15 +1934,9 @@ async def store_microsoft_tokens(
     old_secrets: dict,
     new_secrets: dict,
     api_key: str,
+    granted_scopes: str = "",
 ) -> bool:
-    """
-    Store Microsoft OAuth tokens as assistant secrets.
-
-    Stores:
-    - MICROSOFT_ACCESS_TOKEN
-    - MICROSOFT_REFRESH_TOKEN
-    - MICROSOFT_TOKEN_EXPIRES_AT
-    """
+    """Store Microsoft OAuth tokens (and granted scopes) as assistant secrets."""
     if not SETTINGS.orchestra_url:
         logger.info("SETTINGS.orchestra_url not configured")
         return False
@@ -1952,6 +1946,8 @@ async def store_microsoft_tokens(
         "MICROSOFT_REFRESH_TOKEN": new_secrets.get("refresh_token", ""),
         "MICROSOFT_TOKEN_EXPIRES_AT": new_secrets.get("expires_at", ""),
     }
+    if granted_scopes:
+        secrets_to_store["MICROSOFT_GRANTED_SCOPES"] = granted_scopes
 
     if not api_key:
         logger.info("api_key not configured")
@@ -2075,8 +2071,9 @@ async def store_google_tokens(
     old_secrets: dict,
     new_secrets: dict,
     api_key: str,
+    granted_scopes: str = "",
 ) -> bool:
-    """Store Google OAuth tokens as assistant secrets in Orchestra."""
+    """Store Google OAuth tokens (and granted scopes) as assistant secrets."""
     if not SETTINGS.orchestra_url:
         logger.info("SETTINGS.orchestra_url not configured")
         return False
@@ -2086,6 +2083,8 @@ async def store_google_tokens(
         "GOOGLE_REFRESH_TOKEN": new_secrets.get("refresh_token", ""),
         "GOOGLE_TOKEN_EXPIRES_AT": new_secrets.get("expires_at", ""),
     }
+    if granted_scopes:
+        secrets_to_store["GOOGLE_GRANTED_SCOPES"] = granted_scopes
 
     if not api_key:
         logger.info("api_key not configured")

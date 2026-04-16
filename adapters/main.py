@@ -2835,6 +2835,7 @@ async def microsoft_oauth_callback(request: Request):
 
     is_byod = state_data.get("byod", False)
     redirect_after = state_data.get("redirect_after")
+    features = state_data.get("features", ["email"])
 
     # ------------------------------------------------------------------
     # Resolve assistant + credentials
@@ -2929,8 +2930,9 @@ async def microsoft_oauth_callback(request: Request):
         )
 
     # ------------------------------------------------------------------
-    # Store tokens
+    # Store tokens + granted scopes
     # ------------------------------------------------------------------
+    granted_scopes = tokens.get("scope", "")
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
     old_secrets = assistant.get("secrets", {})
@@ -2939,39 +2941,57 @@ async def microsoft_oauth_callback(request: Request):
         old_secrets=old_secrets,
         new_secrets=tokens,
         api_key=api_key,
+        granted_scopes=granted_scopes if is_byod else "",
     )
 
     # ------------------------------------------------------------------
-    # BYOD: register email as an AssistantContact in Orchestra
+    # BYOD: conditional post-OAuth actions based on granted scopes
     # ------------------------------------------------------------------
     if is_byod:
-        try:
-            await _register_byod_email_contact(
-                assistant_id=assistant_id,
-                email=user_email,
-                provider="microsoft_365",
-                api_key=api_key,
-            )
-        except Exception as e:
-            logger.error(f"Failed to register BYOD email contact: {e}")
+        from common.scopes import has_feature
 
-        # Set up inbox watch so inbound mail is delivered
-        try:
-            async with httpx.AsyncClient() as http_client:
-                await http_client.post(
-                    f"{SETTINGS.comms_url}/outlook/watch",
-                    json={"primary_email": user_email},
-                    headers={
-                        "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
-                    },
-                    timeout=30,
+        if has_feature("microsoft", granted_scopes, "email"):
+            try:
+                await _register_byod_email_contact(
+                    assistant_id=assistant_id,
+                    email=user_email,
+                    provider="microsoft_365",
+                    api_key=api_key,
                 )
-        except Exception as e:
-            logger.error(f"Failed to set up Outlook watch after BYOD OAuth: {e}")
+            except Exception as e:
+                logger.error(f"Failed to register BYOD email contact: {e}")
+
+            try:
+                async with httpx.AsyncClient() as http_client:
+                    await http_client.post(
+                        f"{SETTINGS.comms_url}/outlook/watch",
+                        json={"primary_email": user_email},
+                        headers={
+                            "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                        },
+                        timeout=30,
+                    )
+            except Exception as e:
+                logger.error(f"Failed to set up Outlook watch after BYOD OAuth: {e}")
+
+        if has_feature("microsoft", granted_scopes, "teams"):
+            try:
+                async with httpx.AsyncClient() as http_client:
+                    await http_client.post(
+                        f"{SETTINGS.comms_url}/teams/watch",
+                        json={"primary_email": user_email},
+                        headers={
+                            "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                        },
+                        timeout=30,
+                    )
+            except Exception as e:
+                logger.error(f"Failed to set up Teams watch after BYOD OAuth: {e}")
 
     logger.info(
         f"OAuth complete for {_redact_email(user_email)} "
-        f"(assistant id: {assistant_id}, byod={is_byod}), stored={stored}",
+        f"(assistant id: {assistant_id}, byod={is_byod}), stored={stored}, "
+        f"features={features}, granted_scopes={granted_scopes[:80]}",
     )
 
     if redirect_after:
@@ -2988,15 +3008,82 @@ async def microsoft_oauth_callback(request: Request):
     )
 
 
+# =========================================================================
+# Google token revocation (called by Orchestra before scope-reduction re-auth)
+# =========================================================================
+
+
+@app.post("/google/revoke", dependencies=[Depends(require_admin_key)])
+async def google_revoke(request: Request):
+    """Revoke a Google OAuth token and clear related assistant secrets.
+
+    Called by Orchestra's ``POST /assistant/{id}/connect`` when the user
+    reduces their granted scopes.  Google doesn't support partial
+    revocation, so the entire grant is revoked and the user re-authorizes
+    with the reduced scope set.
+
+    Request body::
+
+        { "assistant_id": "...", "token": "the-access-token" }
+    """
+    data = await request.json()
+    token = data.get("token")
+    assistant_id = data.get("assistant_id")
+
+    if not token:
+        return Response(content="Missing token", status_code=400)
+
+    # Revoke with Google
+    async with httpx.AsyncClient() as http_client:
+        resp = await http_client.post(
+            "https://oauth2.googleapis.com/revoke",
+            params={"token": token},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10,
+        )
+        revoked = resp.status_code == 200
+        if not revoked:
+            logger.warning(
+                "Google token revocation returned %s: %s",
+                resp.status_code,
+                resp.text,
+            )
+
+    # Clear stale secrets so revoked tokens don't linger
+    if assistant_id:
+        assistant = get_assistant(assistant_id=str(assistant_id))
+        if assistant and assistant.get("api_key"):
+            api_key = assistant["api_key"]
+            secrets_to_clear = [
+                "GOOGLE_ACCESS_TOKEN",
+                "GOOGLE_REFRESH_TOKEN",
+                "GOOGLE_TOKEN_EXPIRES_AT",
+                "GOOGLE_GRANTED_SCOPES",
+            ]
+            async with httpx.AsyncClient() as http_client:
+                for name in secrets_to_clear:
+                    await http_client.delete(
+                        f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret/{name}",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        timeout=10,
+                    )
+
+    return Response(
+        content=json.dumps({"revoked": revoked}),
+        media_type="application/json",
+    )
+
+
 @app.get("/google/auth/callback")
 async def google_oauth_callback(request: Request):
-    """OAuth callback for Google — BYOD Gmail access.
+    """OAuth callback for Google — BYOD access.
 
-    State contains ``assistant_id`` and ``redirect_after``.
+    State contains ``assistant_id``, ``features``, and ``redirect_after``.
     Credentials come from platform env vars (``GOOGLE_OAUTH_CLIENT_ID``,
     ``GOOGLE_OAUTH_CLIENT_SECRET``).  After token exchange the user's
-    email is discovered and an ``AssistantContact`` is created in
-    Orchestra with ``provisioned_by=user``.
+    email is discovered, granted scopes are recorded, and actions
+    (contact registration, email watch) are taken based on which features
+    were actually granted.
     """
     code = request.query_params.get("code")
     state = request.query_params.get("state")
@@ -3026,6 +3113,7 @@ async def google_oauth_callback(request: Request):
 
     raw_assistant_id = state_data.get("assistant_id")
     redirect_after = state_data.get("redirect_after")
+    features = state_data.get("features", ["email"])
 
     if not raw_assistant_id:
         return Response(content="Missing assistant_id in state", status_code=400)
@@ -3074,7 +3162,8 @@ async def google_oauth_callback(request: Request):
             status_code=400,
         )
 
-    # Store tokens
+    # Store tokens + granted scopes
+    granted_scopes = tokens.get("scope", "")
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
     old_secrets = assistant.get("secrets", {})
@@ -3083,36 +3172,41 @@ async def google_oauth_callback(request: Request):
         old_secrets=old_secrets,
         new_secrets=tokens,
         api_key=api_key,
+        granted_scopes=granted_scopes,
     )
 
-    # Register email as an AssistantContact in Orchestra
-    try:
-        await _register_byod_email_contact(
-            assistant_id=assistant_id,
-            email=user_email,
-            provider="google_workspace",
-            api_key=api_key,
-        )
-    except Exception as e:
-        logger.error(f"Failed to register BYOD Gmail contact: {e}")
+    from common.scopes import has_feature
 
-    # Set up Gmail inbox watch so inbound mail is delivered
-    try:
-        async with httpx.AsyncClient() as http_client:
-            await http_client.post(
-                f"{SETTINGS.comms_url}/gmail/watch",
-                json={"primary_email": user_email},
-                headers={
-                    "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
-                },
-                timeout=30,
+    # Register email contact only if email scopes were actually granted
+    if has_feature("google", granted_scopes, "email"):
+        try:
+            await _register_byod_email_contact(
+                assistant_id=assistant_id,
+                email=user_email,
+                provider="google_workspace",
+                api_key=api_key,
             )
-    except Exception as e:
-        logger.error(f"Failed to set up Gmail watch after BYOD OAuth: {e}")
+        except Exception as e:
+            logger.error(f"Failed to register BYOD Gmail contact: {e}")
+
+        # Set up Gmail inbox watch so inbound mail is delivered
+        try:
+            async with httpx.AsyncClient() as http_client:
+                await http_client.post(
+                    f"{SETTINGS.comms_url}/gmail/watch",
+                    json={"primary_email": user_email},
+                    headers={
+                        "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                    },
+                    timeout=30,
+                )
+        except Exception as e:
+            logger.error(f"Failed to set up Gmail watch after BYOD OAuth: {e}")
 
     logger.info(
         f"Google OAuth complete for {_redact_email(user_email)} "
-        f"(assistant id: {assistant_id}), stored={stored}",
+        f"(assistant id: {assistant_id}), stored={stored}, "
+        f"features={features}, granted_scopes={granted_scopes[:80]}",
     )
 
     if redirect_after:
@@ -3314,6 +3408,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
         tenant_id = secrets.get("AZURE_TENANT_ID")
         client_id = secrets.get("AZURE_CLIENT_ID")
         client_secret = secrets.get("AZURE_CLIENT_SECRET")
+        is_byod = False
         if not all([tenant_id, client_id, client_secret]):
             byod_client_id = SETTINGS.ms365_byod_client_id
             byod_client_secret = os.environ.get("MS365_BYOD_CLIENT_SECRET", "")
@@ -3321,14 +3416,22 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
                 tenant_id = "common"
                 client_id = byod_client_id
                 client_secret = byod_client_secret
+                is_byod = True
             else:
                 results["failed"].append(
                     {"email": email, "error": "Missing Azure credentials"},
                 )
                 continue
 
+        # BYOD: use the stored granted scopes so scope reduction is
+        # durable across refreshes.  Enterprise: use .default (admin
+        # controls permissions at the app registration level).
+        if is_byod and secrets.get("MICROSOFT_GRANTED_SCOPES"):
+            refresh_scope = secrets["MICROSOFT_GRANTED_SCOPES"]
+        else:
+            refresh_scope = "https://graph.microsoft.com/.default offline_access"
+
         try:
-            # Refresh the token
             token_resp = requests.post(
                 f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
                 data={
@@ -3336,7 +3439,7 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
                     "client_secret": client_secret,
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
-                    "scope": "https://graph.microsoft.com/.default offline_access",
+                    "scope": refresh_scope,
                 },
             )
 
