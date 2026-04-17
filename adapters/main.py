@@ -68,6 +68,7 @@ SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 
 from .helpers import (
     cleanup_idle_pool,
+    get_admin_graph_bearer_token,
     get_outlook_graph_client,
     replenish_idle_pool,
     add_user_to_conference,
@@ -2520,19 +2521,34 @@ async def teams_notification_processor(request: Request):
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
         api_key = assistant_data["api_key"]
-        access_token = assistant_data.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN")
-        if not access_token:
-            logger.info(
-                f"No Microsoft access token for {_redact_email(assistant_email)}",
-            )
-            return Response(status_code=200)
+
+        # Pick Graph credentials mode.  BYOD assistants carry a per-user
+        # OAuth token and use /me/* paths.  Us-provisioned assistants have
+        # no stored token; we mint an app-only bearer against the admin
+        # tenant and address the mailbox explicitly via /users/{email}/*.
+        user_access_token = assistant_data.get("secrets", {}).get(
+            "MICROSOFT_ACCESS_TOKEN",
+        )
+        is_byod = bool(user_access_token)
+        if is_byod:
+            bearer = user_access_token
+            chat_path_prefix = "/v1.0/me"
+        else:
+            try:
+                bearer = get_admin_graph_bearer_token()
+            except Exception as e:
+                logger.error(
+                    f"Cannot acquire admin bearer for {_redact_email(assistant_email)}: {e}",
+                )
+                return Response(status_code=200)
+            chat_path_prefix = f"/v1.0/users/{quote(assistant_email, safe='@')}"
 
         # Fetch message from Graph API
         async def graph_get(url: str) -> tuple[dict | None, int]:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(
                     url,
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    headers={"Authorization": f"Bearer {bearer}"},
                     timeout=30.0,
                 )
             return resp.json() if resp.status_code == 200 else None, resp.status_code
@@ -2559,14 +2575,18 @@ async def teams_notification_processor(request: Request):
                 logger.info(f"Message {message_id} not found in list")
                 return Response(status_code=200)
         else:
-            url = f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/messages/{message_id}"
+            url = (
+                f"https://graph.microsoft.com{chat_path_prefix}"
+                f"/chats/{chat_id}/messages/{message_id}"
+            )
             message_data, status = await graph_get(url)
             if not message_data:
                 logger.error(f"Failed to fetch chat message (status={status})")
                 return Response(status_code=200)
 
             chat_metadata, _ = await graph_get(
-                f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}?$select=chatType,topic",
+                f"https://graph.microsoft.com{chat_path_prefix}"
+                f"/chats/{chat_id}?$select=chatType,topic",
             )
             chat_type = chat_metadata.get("chatType") if chat_metadata else None
             chat_topic = chat_metadata.get("topic") if chat_metadata else None

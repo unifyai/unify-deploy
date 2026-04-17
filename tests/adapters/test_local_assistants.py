@@ -33,8 +33,9 @@ class _GraphResponse:
 
 
 class _FakeAsyncClient:
-    def __init__(self, response_payload: dict):
+    def __init__(self, response_payload: dict, calls: list | None = None):
         self._response_payload = response_payload
+        self._calls = calls
 
     async def __aenter__(self):
         return self
@@ -42,7 +43,14 @@ class _FakeAsyncClient:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
-    async def get(self, *_args, **_kwargs):
+    async def get(self, url, *_args, **kwargs):
+        if self._calls is not None:
+            self._calls.append(
+                {
+                    "url": url,
+                    "headers": kwargs.get("headers", {}),
+                },
+            )
         return _GraphResponse(self._response_payload)
 
 
@@ -215,3 +223,91 @@ def test_teams_notification_respects_local_runtime(
         mock_start_unity_job.assert_called_once_with(assistant_data, "teams")
     else:
         mock_start_unity_job.assert_not_called()
+
+
+def test_teams_notification_us_provisioned_uses_admin_bearer(app_module):
+    """Us-provisioned assistants (no MICROSOFT_ACCESS_TOKEN) must fall
+    back to an admin bearer token and address Graph chat endpoints via
+    ``/users/{assistant_email}/chats/...`` rather than ``/me/chats/...``.
+    """
+    from fastapi.testclient import TestClient
+
+    assistant_data = _assistant_data(is_local=False)
+    assistant_data["secrets"] = {}
+    assistant_data["assistant_email"] = "user@tenant.onmicrosoft.com"
+
+    mock_publisher = _mock_pubsub()
+    captured_calls: list[dict] = []
+    message_payload = {
+        "id": "message-123",
+        "from": {
+            "user": {
+                "displayName": "Sender",
+                "userPrincipalName": "sender@example.com",
+                "id": "sender-123",
+                "email": "sender@example.com",
+            },
+        },
+        "body": {"content": "Hello from Teams", "contentType": "text"},
+        "createdDateTime": "2026-04-10T00:00:00Z",
+        "subject": "",
+        "chatType": "oneOnOne",
+    }
+
+    with (
+        patch.object(
+            app_module,
+            "build_webhook_context",
+            return_value={"assistant": assistant_data},
+        ),
+        patch.object(
+            app_module,
+            "check_valid_contact",
+            return_value=([{"contact_id": 1}], True),
+        ),
+        patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
+        patch.object(app_module, "start_unity_job"),
+        patch.object(
+            app_module,
+            "get_admin_graph_bearer_token",
+            return_value="admin-bearer-xyz",
+        ) as mock_admin_bearer,
+        patch.object(
+            app_module.httpx,
+            "AsyncClient",
+            return_value=_FakeAsyncClient(message_payload, calls=captured_calls),
+        ),
+    ):
+        client = TestClient(app_module.app)
+        response = client.post(
+            "/chat/teams",
+            json={
+                "clientState": f"test-teams-secret::{assistant_data['assistant_email']}",
+                "resource": ("chats('19:uni01_abc@thread.v2')/messages('message-123')"),
+                "resourceData": {
+                    "id": "message-123",
+                    "chatId": "19:uni01_abc@thread.v2",
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.text == "OK"
+    mock_admin_bearer.assert_called_once()
+    mock_publisher.publish.assert_called_once()
+    assert captured_calls, "expected at least one Graph call"
+    for call in captured_calls:
+        assert (
+            "/me/chats/" not in call["url"]
+        ), f"us-provisioned path must not use /me, got {call['url']}"
+        assert (
+            call["headers"].get("Authorization") == "Bearer admin-bearer-xyz"
+        ), "us-provisioned path must use admin bearer"
+    chat_calls = [c for c in captured_calls if "/chats/" in c["url"]]
+    assert chat_calls, "expected at least one chat-scoped Graph call"
+    for call in chat_calls:
+        assert (
+            f"/users/{assistant_data['assistant_email']}/chats/" in call["url"]
+            or f"/users/{assistant_data['assistant_email'].replace('@', '%40')}/chats/"
+            in call["url"]
+        ), f"chat call must be scoped to assistant user, got {call['url']}"

@@ -1496,6 +1496,33 @@ def get_admin_graph_client() -> GraphServiceClient:
     return GraphServiceClient(credentials=credential, scopes=_GRAPH_SCOPES)
 
 
+def get_admin_graph_bearer_token() -> str:
+    """Acquire an app-only bearer token for Microsoft Graph.
+
+    Uses the same ``MS365_ADMIN_*`` client credentials as
+    ``get_admin_graph_client``.  Returned token targets the
+    ``https://graph.microsoft.com/.default`` scope and is suitable for
+    direct ``httpx`` calls against paths the Graph SDK doesn't expose
+    cleanly (e.g. ``/users/{email}/chats/...``).
+    """
+    from azure.identity import ClientSecretCredential
+
+    tenant_id = os.getenv("MS365_ADMIN_TENANT_ID", "")
+    client_id = os.getenv("MS365_ADMIN_CLIENT_ID", "")
+    client_secret = os.getenv("MS365_ADMIN_CLIENT_SECRET", "")
+    if not all([tenant_id, client_id, client_secret]):
+        raise RuntimeError(
+            "MS365 admin credentials not configured "
+            "(MS365_ADMIN_TENANT_ID, MS365_ADMIN_CLIENT_ID, MS365_ADMIN_CLIENT_SECRET)",
+        )
+    credential = ClientSecretCredential(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+    return credential.get_token("https://graph.microsoft.com/.default").token
+
+
 def get_outlook_graph_client(secrets: dict) -> tuple[GraphServiceClient, bool]:
     """Return a Graph client and whether it uses per-user OAuth.
 
