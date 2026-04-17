@@ -3676,12 +3676,20 @@ def scheduled_google_tokens(payload: ScheduledPayload):
 @app.post("/scheduled/teams-watches", dependencies=[Depends(require_admin_key)])
 def scheduled_teams_watches(payload: ScheduledPayload):
     """
-    Cloud Run endpoint that renews Teams chat AND channel subscriptions for all assistants.
-    Teams subscriptions expire after 60 minutes, so this should run every 30-45 mins.
-    Only processes assistants with MICROSOFT_ACCESS_TOKEN in their secrets.
+    Cloud Run endpoint that renews Teams chat AND channel subscriptions
+    for every Microsoft-365-backed assistant.  Teams subscriptions
+    expire after 60 minutes, so this should run every 30-45 mins.
 
-    For chats: Creates/renews /me/chats/getAllMessages subscription
-    For channels: Finds and renews any existing channel subscriptions
+    Assistants are selected by ``email_provider == "microsoft_365"``
+    (with a token-sniffing fallback for records that predate the
+    field), matching the shape of ``/scheduled/email-watches``.  The
+    comms service picks credentials internally — BYOD uses the
+    per-user OAuth token; us-provisioned falls back to admin app
+    credentials.
+
+    Channel sub renewal still requires a per-user token (we look up
+    existing subs via the user-scoped Graph endpoint), so it is
+    guarded behind BYOD.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
@@ -3728,12 +3736,19 @@ def scheduled_teams_watches(payload: ScheduledPayload):
         secrets = assistant.get("secrets", {})
         access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
 
-        # Skip if no Microsoft token (not using Microsoft services)
-        if not access_token:
+        # Include every Microsoft-backed assistant (BYOD + us-provisioned).
+        # Token sniffing is a fallback for records that predate the
+        # ``email_provider`` field.
+        email_provider = assistant.get("email_provider")
+        if not email_provider:
+            email_provider = "microsoft_365" if access_token else "google_workspace"
+        if email_provider != "microsoft_365":
             continue
 
         try:
-            # 1. Renew Teams chat watch (DMs and group chats)
+            # 1. Renew Teams chat watch (DMs and group chats).  The
+            #    comms service picks credentials + resource path based
+            #    on whether the assistant has a per-user token.
             watch_response = requests.post(
                 f"{SETTINGS.comms_url}/teams/watch",
                 json={"primary_email": email},
@@ -3753,8 +3768,18 @@ def scheduled_teams_watches(payload: ScheduledPayload):
                 f"Teams chat watch for {_redact_email(email)}: {result.get('success', False)}",
             )
 
-            # 2. Renew any existing channel subscriptions
-            # List all subscriptions and renew those matching /teams/{id}/channels/{id}/messages
+            # 2. Renew any existing channel subscriptions.  This lookup
+            #    hits Graph with the user token, so it is BYOD-only.
+            #    Us-provisioned assistants without a user token skip
+            #    this step entirely; if channel watches are ever
+            #    required for them we would need a tenant-scoped
+            #    enumeration path.
+            if not access_token:
+                results["skipped"].append(
+                    {"email": email, "type": "channel_enumeration"},
+                )
+                continue
+
             subs_response = requests.get(
                 "https://graph.microsoft.com/v1.0/subscriptions",
                 headers={"Authorization": f"Bearer {access_token}"},

@@ -11,7 +11,12 @@ from msgraph.generated.models.chat_message_attachment import ChatMessageAttachme
 from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.subscription import Subscription
 
-from communication.helpers import get_graph_client
+from communication.helpers import (
+    _lookup_assistant,
+    get_admin_graph_client,
+    get_graph_client,
+    graph_client_from_assistant,
+)
 from common.settings import SETTINGS
 
 router = APIRouter()
@@ -179,10 +184,30 @@ async def watch_teams_chat(request: Request):
         raise HTTPException(status_code=400, detail="Missing primary_email")
 
     try:
-        graph = await get_graph_client(user_email)
+        # Pick credentials + resource path based on whether the assistant
+        # has a per-user OAuth token.  BYOD assistants use delegated
+        # auth + /me paths; us-provisioned assistants use admin app
+        # credentials + explicit /users/{email} paths.  Note: app-only
+        # Teams chat subscriptions additionally require Microsoft
+        # licensing (``?model=A``, lifecycle URL, encryption) on the
+        # tenant side for notifications to actually be delivered.
+        try:
+            assistant = await _lookup_assistant(user_email)
+            has_user_token = bool(
+                assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
+            )
+            graph = graph_client_from_assistant(assistant, user_email)
+        except HTTPException:
+            # No assistant record yet (e.g. fresh provisioning) — fall
+            # back to admin credentials.
+            has_user_token = False
+            graph = get_admin_graph_client()
 
-        # For delegated permissions, we watch the user's own chats
-        target_resource = "/me/chats/getAllMessages"
+        target_resource = (
+            "/me/chats/getAllMessages"
+            if has_user_token
+            else f"/users/{user_email}/chats/getAllMessages"
+        )
 
         # Delete existing subscriptions for this resource
         subs = await graph.subscriptions.get()
@@ -251,12 +276,20 @@ async def delete_teams_watch(request: Request):
         raise HTTPException(status_code=400, detail="Missing primary_email")
 
     try:
-        graph = await get_graph_client(primary_email)
-        target_resource = "/me/chats/getAllMessages"
+        try:
+            assistant = await _lookup_assistant(primary_email)
+            graph = graph_client_from_assistant(assistant, primary_email)
+        except HTTPException:
+            graph = get_admin_graph_client()
+
+        target_resources = {
+            "/me/chats/getAllMessages".lower(),
+            f"/users/{primary_email}/chats/getAllMessages".lower(),
+        }
 
         subs = await graph.subscriptions.get()
         for sub in subs.value or []:
-            if sub.resource and sub.resource.lower() == target_resource.lower():
+            if sub.resource and sub.resource.lower() in target_resources:
                 await graph.subscriptions.by_subscription_id(sub.id).delete()
                 logging.info(f"Teams chat watch deleted for {primary_email}")
                 return {"success": True, "primary_email": primary_email}
