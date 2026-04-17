@@ -2594,9 +2594,9 @@ async def teams_notification_processor(request: Request):
         )
 
         # Skip self-messages
-        if sender_email and sender_email.lower() == assistant_email.lower():
-            logger.info(f"Skipping self-message from {_redact_email(sender_email)}")
-            return Response(status_code=200)
+        # if sender_email and sender_email.lower() == assistant_email.lower():
+        #     logger.info(f"Skipping self-message from {_redact_email(sender_email)}")
+        #     return Response(status_code=200)
 
         # Validate contact and start job (blocking calls offloaded to thread)
         def _validate_and_start():
