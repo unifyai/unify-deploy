@@ -812,6 +812,30 @@ def test_microsoft_router_routes_teams_notification(test_client):
     assert response.text == "OK"
 
 
+def test_microsoft_router_routes_teams_notification_odata_form(test_client):
+    """Graph delivers Teams chat notifications in OData form for
+    /me/chats/getAllMessages subscriptions (e.g. group/federated chats with
+    prefixes like `19:uni01_...@thread.v2`). The router must recognize this
+    form and forward it instead of dropping it as unknown."""
+    endpoint = "/microsoft/router"
+    notification_payload = {
+        "value": [
+            {
+                "resource": (
+                    "chats('19:uni01_abc@thread.v2')/messages('1776409346815')"
+                ),
+                "clientState": "unify-teams-webhook::test@test.com",
+            },
+        ],
+    }
+
+    response = test_client.make_request("POST", endpoint, json=notification_payload)
+
+    print("Microsoft router teams (odata) response:", response.text)
+    assert response.status_code == 200
+    assert response.text == "OK"
+
+
 # =============================================================================
 # LiveKit Recording Webhook Tests
 # =============================================================================

@@ -2749,11 +2749,15 @@ async def microsoft_router(request: Request):
                 target = f"{adapters_url}/email/outlook"
             elif (
                 "/chats/" in resource.lower()
+                or "chats(" in resource.lower()
                 or "getAllMessages" in resource
                 or ("teams(" in resource.lower() and "channels(" in resource.lower())
             ):
-                # Teams messages - both chat and channel go to same handler
-                # Channel notifications come as: teams('id')/channels('id')/messages('id')
+                # Teams messages - both chat and channel go to same handler.
+                # Graph delivers the resource in either path form
+                # (/chats/{id}/messages/{id}) or OData form
+                # (chats('id')/messages('id')); channel notifications come as
+                # teams('id')/channels('id')/messages('id').
                 target = f"{adapters_url}/chat/teams"
             else:
                 logger.info(f"unknown resource type: {resource}")
