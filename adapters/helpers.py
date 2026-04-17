@@ -323,9 +323,9 @@ def check_contact_details(
         f"Checking contact details: {email_address}, {phone_number}, {medium}, "
         f"{user_number}, {user_whatsapp_number}, {user_email}",
     )
-    if medium == "email" and user_email == email_address:
+    if medium in ("email", "teams") and user_email == email_address:
         return True
-    if medium in ["msg", "phone"] and user_number == phone_number:
+    if medium in ("msg", "phone") and user_number == phone_number:
         return True
     return False
 
