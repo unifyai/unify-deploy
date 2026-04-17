@@ -125,6 +125,45 @@ async def get_graph_client(user_email: str) -> GraphServiceClient:
     return graph_client_from_assistant(assistant, user_email)
 
 
+async def get_ms_graph_client(
+    user_email: str,
+) -> tuple[GraphServiceClient, bool]:
+    """Get a Graph client along with its credential mode.
+
+    Returns ``(graph, has_user_token)``:
+      - ``has_user_token=True``  -> per-user OAuth (BYOD).  ``/me/*`` paths work.
+      - ``has_user_token=False`` -> tenant admin credentials (us-provisioned).
+        Callers must use ``/users/{email}/*`` paths instead of ``/me/*``.
+
+    This is the Teams/Subscriptions counterpart of
+    ``get_outlook_graph_client`` in ``adapters/helpers.py`` — callers that
+    build Graph paths need to know which mode they're in.
+    """
+    try:
+        assistant = await _lookup_assistant(user_email)
+    except Exception:
+        logger.warning(
+            "Failed to look up assistant for %s, falling back to admin Graph client",
+            user_email,
+        )
+        return get_admin_graph_client(), False
+
+    access_token = assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN")
+    if access_token:
+        return (
+            GraphServiceClient(
+                credentials=TokenCredentialFromSecret(access_token),
+                scopes=_GRAPH_SCOPES,
+            ),
+            True,
+        )
+    logger.info(
+        "No per-user OAuth token for %s, using admin credentials",
+        user_email,
+    )
+    return get_admin_graph_client(), False
+
+
 def get_twilio_client():
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
