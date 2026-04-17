@@ -2586,8 +2586,24 @@ async def teams_notification_processor(request: Request):
                 sender_email = user_data.get("mail") or user_data.get(
                     "userPrincipalName",
                 )
-            if not sender_email:
-                sender_email = f"{sender_id}@teams"
+
+        # Federated / consumer-account senders are not resolvable via /users/{id}
+        # (their sender_id is a cross-tenant proxy, not a tenant user GUID).
+        # Their real address is exposed on the chat's members collection.
+        if not sender_email and sender_id and chat_id:
+            members_data, _ = await graph_get(
+                f"https://graph.microsoft.com/v1.0/me/chats/{chat_id}/members",
+            )
+            for member in (members_data or {}).get("value", []):
+                if member.get("userId") == sender_id:
+                    sender_email = member.get("email") or member.get(
+                        "userPrincipalName",
+                    )
+                    if sender_email:
+                        break
+
+        if not sender_email and sender_id:
+            sender_email = f"{sender_id}@teams"
 
         logger.info(
             f"from_email: {_redact_email(sender_email) if sender_email else 'None'}, sender_name: {sender_name}",
