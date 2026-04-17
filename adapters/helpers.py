@@ -1721,12 +1721,11 @@ def get_thread_id(user_id, history_id, gmail_service):
             print(f"message: {message} {msg_id}")
             message_headers = message["payload"].get("headers", [])
             print(f"message_headers: {message_headers}")
-            message_id_header = [
-                header
-                for header in message_headers
-                if header.get("name") == "Message-ID"
-            ][0]
-            email_id = message_id_header.get("value")
+            # RFC 5322 header names are case-insensitive and Message-ID is
+            # technically optional; senders vary (`Message-Id`, `Message-ID`,
+            # occasionally absent for bulk mail). Use the shared helper and
+            # fall through to None rather than aborting the whole message.
+            email_id = _header(message_headers, "Message-ID") or None
             print(f"email_id: {email_id}")
 
             # Extract attachments from the Gmail message payload
