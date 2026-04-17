@@ -85,7 +85,7 @@ steps:
     gcloud scheduler jobs update http "email-watches-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
       --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
@@ -93,7 +93,7 @@ steps:
       --schedule "0 0 * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
       --time-zone "UTC" \
       --location="${_REGION}"
@@ -172,7 +172,7 @@ steps:
     gcloud scheduler jobs update http "microsoft-tokens-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
       --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
@@ -180,7 +180,7 @@ steps:
       --schedule "*/30 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
       --time-zone "UTC" \
       --location="${_REGION}"
@@ -201,7 +201,7 @@ steps:
     gcloud scheduler jobs update http "teams-watches-staging" \
       --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
       --http-method POST \
-      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
       --location="${_REGION}" \
     || \
@@ -209,7 +209,7 @@ steps:
       --schedule "*/30 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
       --http-method POST \
-      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY" \
+      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
       --time-zone "UTC" \
       --location="${_REGION}"
