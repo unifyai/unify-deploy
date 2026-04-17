@@ -1,11 +1,14 @@
-import os
+import base64
 import logging
+import os
+import uuid
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, HTTPException, Request
 
-from msgraph.generated.models.chat_message import ChatMessage
-from msgraph.generated.models.item_body import ItemBody
+from fastapi import APIRouter, HTTPException, Request
 from msgraph.generated.models.body_type import BodyType
+from msgraph.generated.models.chat_message import ChatMessage
+from msgraph.generated.models.chat_message_attachment import ChatMessageAttachment
+from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.subscription import Subscription
 
 from communication.helpers import get_graph_client
@@ -15,6 +18,64 @@ router = APIRouter()
 
 # Retry configuration for subscription creation (1 retry = 2 total attempts)
 MAX_RETRIES = 1
+
+
+async def _upload_and_build_attachments(
+    graph,
+    raw_attachments: list[dict],
+) -> list[ChatMessageAttachment]:
+    """Upload files to OneDrive and return Graph ChatMessageAttachment objects.
+
+    Each item in *raw_attachments* should have ``filename`` and
+    ``content_base64``.  Files are written to ``Teams Attachments/`` in the
+    sender's personal OneDrive so the Graph API can reference them.
+    """
+    result: list[ChatMessageAttachment] = []
+    for att in raw_attachments:
+        filename = att.get("filename", "attachment")
+        content_b64 = att.get("content_base64", "")
+        if not content_b64:
+            continue
+        file_bytes = base64.b64decode(content_b64)
+
+        safe_name = f"{uuid.uuid4().hex[:8]}_{filename}"
+        drive_item = await graph.me.drive.root.item_with_path(
+            f"Teams Attachments/{safe_name}"
+        ).content.put(file_bytes)
+
+        att_id = uuid.uuid4().hex
+        result.append(
+            ChatMessageAttachment(
+                id=att_id,
+                content_type="reference",
+                content_url=drive_item.web_url,
+                name=filename,
+            ),
+        )
+    return result
+
+
+def _build_chat_message(
+    body: str,
+    content_type: str,
+    attachments: list[ChatMessageAttachment],
+) -> ChatMessage:
+    """Build a ChatMessage, embedding ``<attachment>`` tags when needed."""
+    if attachments:
+        att_tags = "".join(
+            f'<attachment id="{a.id}"></attachment>' for a in attachments
+        )
+        html_body = f"{body} {att_tags}" if body else att_tags
+        return ChatMessage(
+            body=ItemBody(content=html_body, content_type=BodyType.Html),
+            attachments=attachments,
+        )
+    return ChatMessage(
+        body=ItemBody(
+            content=body,
+            content_type=BodyType.Html if content_type == "html" else BodyType.Text,
+        ),
+    )
 
 
 @router.post("/send")
@@ -27,7 +88,8 @@ async def send_teams_chat(request: Request):
         "from": "sender@yourdomain.com",
         "chat_id": "19:meeting_xxx@thread.v2",
         "body": "Message content",
-        "content_type": "text" or "html" (optional, defaults to "text")
+        "content_type": "text" or "html" (optional, defaults to "text"),
+        "attachments": [{"filename": str, "content_base64": str}] (optional)
     }
     """
     data = await request.json()
@@ -35,6 +97,7 @@ async def send_teams_chat(request: Request):
     chat_id = data.get("chat_id")
     body = data.get("body")
     content_type = data.get("content_type", "text")
+    raw_attachments = data.get("attachments") or []
 
     if not sender or not chat_id or body is None:
         raise HTTPException(
@@ -45,12 +108,8 @@ async def send_teams_chat(request: Request):
     try:
         graph = await get_graph_client(sender)
 
-        message = ChatMessage(
-            body=ItemBody(
-                content=body,
-                content_type=BodyType.Html if content_type == "html" else BodyType.Text,
-            ),
-        )
+        attachments = await _upload_and_build_attachments(graph, raw_attachments)
+        message = _build_chat_message(body, content_type, attachments)
 
         result = await graph.me.chats.by_chat_id(chat_id).messages.post(message)
 
@@ -510,13 +569,15 @@ async def send_teams_channel_message(
     {
         "from": "sender@yourdomain.com",
         "body": "Message content",
-        "content_type": "text" or "html" (optional, defaults to "text")
+        "content_type": "text" or "html" (optional, defaults to "text"),
+        "attachments": [{"filename": str, "content_base64": str}] (optional)
     }
     """
     data = await request.json()
     sender = data.get("from")
     body = data.get("body")
     content_type = data.get("content_type", "text")
+    raw_attachments = data.get("attachments") or []
 
     if not sender or body is None:
         raise HTTPException(
@@ -527,12 +588,8 @@ async def send_teams_channel_message(
     try:
         graph = await get_graph_client(sender)
 
-        message = ChatMessage(
-            body=ItemBody(
-                content=body,
-                content_type=BodyType.Html if content_type == "html" else BodyType.Text,
-            ),
-        )
+        attachments = await _upload_and_build_attachments(graph, raw_attachments)
+        message = _build_chat_message(body, content_type, attachments)
 
         result = (
             await graph.teams.by_team_id(team_id)

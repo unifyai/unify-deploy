@@ -2632,18 +2632,31 @@ async def teams_notification_processor(request: Request):
         message_content_type = message_data.get("body", {}).get("contentType", "text")
         subject = message_data.get("subject", "")
 
+        raw_attachments = message_data.get("attachments") or []
+        attachments = [
+            {
+                "id": att.get("id", ""),
+                "name": att.get("name", ""),
+                "content_type": att.get("contentType", ""),
+                "content_url": att.get("contentUrl", ""),
+            }
+            for att in raw_attachments
+            if att.get("contentType") == "reference" and att.get("contentUrl")
+        ]
+
         event_data = {
             "contacts": contacts,
             "message_id": message_id,
             "sender": sender_email,
             "sender_name": sender_name,
             "sender_id": sender_id,
-            "message": message_content,
+            "body": message_content,
             "content_type": message_content_type,
             "created_at": message_data.get("createdDateTime"),
             "assistant_email": assistant_email,
             "is_channel_message": is_channel_message,
             "timestamp": int(time.time() * 1000),
+            "attachments": attachments,
         }
 
         if is_channel_message:
