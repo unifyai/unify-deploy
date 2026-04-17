@@ -25,6 +25,23 @@ router = APIRouter()
 MAX_RETRIES = 1
 
 
+def _with_model_a(url: str) -> str:
+    """Append ``model=A`` to a Graph notification URL.
+
+    App-only Teams change notifications (chat/channel ``getAllMessages``
+    and channel message resources) must declare a billing model or
+    Microsoft silently throttles/drops deliveries. Model A bills per
+    notification and is the correct choice when the tenant isn't
+    configured for Teams licensing-based (Model B) metering. Delegated
+    subscriptions reject this param, so callers only pass through this
+    helper when authenticating as the application.
+    """
+    if "model=" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}model=A"
+
+
 async def _upload_and_build_attachments(
     graph,
     raw_attachments: list[dict],
@@ -209,6 +226,10 @@ async def watch_teams_chat(request: Request):
             else f"/users/{user_email}/chats/getAllMessages"
         )
 
+        # App-only subs on getAllMessages require a billing model or
+        # Graph silently suppresses notifications.
+        notification_url = webhook_url if has_user_token else _with_model_a(webhook_url)
+
         # Delete existing subscriptions for this resource
         subs = await graph.subscriptions.get()
         for sub in subs.value or []:
@@ -229,7 +250,7 @@ async def watch_teams_chat(request: Request):
                 result = await graph.subscriptions.post(
                     Subscription(
                         change_type="created",
-                        notification_url=webhook_url,
+                        notification_url=notification_url,
                         resource=target_resource,
                         expiration_date_time=datetime.now(timezone.utc)
                         + timedelta(minutes=60),
@@ -468,10 +489,23 @@ async def watch_teams_channel(request: Request):
         raise HTTPException(status_code=400, detail="Missing channel_id")
 
     try:
-        graph = await get_graph_client(user_email)
+        # Mirror watch_teams_chat's credential resolution so we can tell
+        # whether the eventual Graph client is delegated or app-only.
+        try:
+            assistant = await _lookup_assistant(user_email)
+            has_user_token = bool(
+                assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
+            )
+            graph = graph_client_from_assistant(assistant, user_email)
+        except HTTPException:
+            has_user_token = False
+            graph = get_admin_graph_client()
 
         # Resource path for channel messages
         target_resource = f"/teams/{team_id}/channels/{channel_id}/messages"
+
+        # App-only channel subs also need the billing model declared.
+        notification_url = webhook_url if has_user_token else _with_model_a(webhook_url)
 
         # Delete existing subscriptions for this exact resource
         subs = await graph.subscriptions.get()
@@ -493,7 +527,7 @@ async def watch_teams_channel(request: Request):
                 result = await graph.subscriptions.post(
                     Subscription(
                         change_type="created",
-                        notification_url=webhook_url,
+                        notification_url=notification_url,
                         resource=target_resource,
                         expiration_date_time=datetime.now(timezone.utc)
                         + timedelta(minutes=60),
