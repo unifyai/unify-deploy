@@ -11,24 +11,13 @@ from msgraph.generated.models.chat_message_attachment import ChatMessageAttachme
 from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.subscription import Subscription
 
-from communication.helpers import get_graph_client, get_ms_graph_client
+from communication.helpers import get_graph_client
 from common.settings import SETTINGS
 
 router = APIRouter()
 
 # Retry configuration for subscription creation (1 retry = 2 total attempts)
 MAX_RETRIES = 1
-
-
-def _chat_watch_resource(user_email: str, has_user_token: bool) -> str:
-    """Resource path for a Teams chat subscription.
-
-    Delegated tokens use ``/me``; app-only credentials have no ``/me`` and
-    must scope explicitly to ``/users/{email}``.
-    """
-    if has_user_token:
-        return "/me/chats/getAllMessages"
-    return f"/users/{user_email}/chats/getAllMessages"
 
 
 async def _upload_and_build_attachments(
@@ -190,8 +179,10 @@ async def watch_teams_chat(request: Request):
         raise HTTPException(status_code=400, detail="Missing primary_email")
 
     try:
-        graph, has_user_token = await get_ms_graph_client(user_email)
-        target_resource = _chat_watch_resource(user_email, has_user_token)
+        graph = await get_graph_client(user_email)
+
+        # For delegated permissions, we watch the user's own chats
+        target_resource = "/me/chats/getAllMessages"
 
         # Delete existing subscriptions for this resource
         subs = await graph.subscriptions.get()
@@ -226,7 +217,6 @@ async def watch_teams_chat(request: Request):
                     "action": "created",
                     "subscription_id": result.id,
                     "expiration": result.expiration_date_time.isoformat(),
-                    "mode": "delegated" if has_user_token else "app_only",
                 }
             except Exception as e:
                 error_str = str(e).lower()
@@ -261,8 +251,8 @@ async def delete_teams_watch(request: Request):
         raise HTTPException(status_code=400, detail="Missing primary_email")
 
     try:
-        graph, has_user_token = await get_ms_graph_client(primary_email)
-        target_resource = _chat_watch_resource(primary_email, has_user_token)
+        graph = await get_graph_client(primary_email)
+        target_resource = "/me/chats/getAllMessages"
 
         subs = await graph.subscriptions.get()
         for sub in subs.value or []:
@@ -280,53 +270,6 @@ async def delete_teams_watch(request: Request):
         raise
     except Exception as e:
         logging.error(f"Failed to delete Teams chat watch: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/subscriptions")
-async def list_teams_subscriptions(primary_email: str):
-    """List Graph subscriptions visible to the assistant's Graph client.
-
-    Works for both delegated (BYOD) and app-only (us-provisioned)
-    credentials — the auth selection is centralized in
-    ``get_ms_graph_client``.  The scheduler uses this to discover
-    existing channel subscriptions without needing a per-user OAuth
-    token of its own.
-    """
-    if not primary_email:
-        raise HTTPException(status_code=400, detail="Missing primary_email")
-
-    try:
-        graph, has_user_token = await get_ms_graph_client(primary_email)
-        subs = await graph.subscriptions.get()
-
-        out = []
-        for sub in subs.value or []:
-            out.append(
-                {
-                    "id": sub.id,
-                    "resource": sub.resource,
-                    "expiration_date_time": (
-                        sub.expiration_date_time.isoformat()
-                        if sub.expiration_date_time
-                        else None
-                    ),
-                    "client_state": sub.client_state,
-                    "change_type": sub.change_type,
-                },
-            )
-
-        return {
-            "success": True,
-            "primary_email": primary_email,
-            "mode": "delegated" if has_user_token else "app_only",
-            "subscriptions": out,
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to list Teams subscriptions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -492,10 +435,9 @@ async def watch_teams_channel(request: Request):
         raise HTTPException(status_code=400, detail="Missing channel_id")
 
     try:
-        graph, has_user_token = await get_ms_graph_client(user_email)
+        graph = await get_graph_client(user_email)
 
-        # Channel messages resource path is identical for delegated and
-        # app-only permissions — no /me/ in the path.
+        # Resource path for channel messages
         target_resource = f"/teams/{team_id}/channels/{channel_id}/messages"
 
         # Delete existing subscriptions for this exact resource
@@ -535,7 +477,6 @@ async def watch_teams_channel(request: Request):
                     "team_id": team_id,
                     "channel_id": channel_id,
                     "expiration": result.expiration_date_time.isoformat(),
-                    "mode": "delegated" if has_user_token else "app_only",
                 }
             except Exception as e:
                 error_str = str(e).lower()

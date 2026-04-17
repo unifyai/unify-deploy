@@ -3653,42 +3653,14 @@ def scheduled_google_tokens(payload: ScheduledPayload):
     return results
 
 
-def _is_teams_licensing_error(error_text: str) -> bool:
-    """Detect Microsoft Graph change-notifications licensing errors.
-
-    App-only Teams chat subscriptions require the tenant to have accepted
-    the Graph change-notifications pay-as-you-go billing model.  When it
-    isn't configured, Graph returns ``ExtensionError`` with messages like
-    "payment required" / "billing" / "model=A".  We classify these
-    distinctly so the scheduler can surface them without polluting the
-    normal failed bucket.
-    """
-    if not error_text:
-        return False
-    lowered = error_text.lower()
-    tokens = (
-        "paymentrequired",
-        "payment required",
-        "payment model",
-        "billing",
-        "extensionerror",
-        "change notifications subscription",
-    )
-    return any(tok in lowered for tok in tokens)
-
-
 @app.post("/scheduled/teams-watches", dependencies=[Depends(require_admin_key)])
 def scheduled_teams_watches(payload: ScheduledPayload):
     """
     Cloud Run endpoint that renews Teams chat AND channel subscriptions for all assistants.
     Teams subscriptions expire after 60 minutes, so this should run every 30-45 mins.
+    Only processes assistants with MICROSOFT_ACCESS_TOKEN in their secrets.
 
-    Processes every assistant whose ``email_provider`` is ``microsoft_365``,
-    whether they have a per-user OAuth token (BYOD) or not (us-provisioned
-    mailboxes using admin client credentials).  Credential-mode selection
-    and resource-path branching are handled inside the comms service.
-
-    For chats: Creates/renews the chat getAllMessages subscription
+    For chats: Creates/renews /me/chats/getAllMessages subscription
     For channels: Finds and renews any existing channel subscriptions
     """
     admin_key = SETTINGS.orchestra_admin_key
@@ -3715,7 +3687,6 @@ def scheduled_teams_watches(payload: ScheduledPayload):
         all_assistants = [
             {
                 "email": "default-test-assistant@unify.ai",
-                "email_provider": "microsoft_365",
                 "secrets": {"MICROSOFT_ACCESS_TOKEN": "test"},
             },
         ]
@@ -3734,17 +3705,11 @@ def scheduled_teams_watches(payload: ScheduledPayload):
         if not email:
             continue
 
-        # Determine provider from the assistant record.  Fall back to
-        # token-sniffing for assistants that predate the email_provider
-        # field, matching the pattern in scheduled_email_watches.
-        email_provider = assistant.get("email_provider")
-        if not email_provider:
-            has_ms_token = bool(
-                assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
-            )
-            email_provider = "microsoft_365" if has_ms_token else "google_workspace"
+        secrets = assistant.get("secrets", {})
+        access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
 
-        if email_provider != "microsoft_365":
+        # Skip if no Microsoft token (not using Microsoft services)
+        if not access_token:
             continue
 
         try:
@@ -3762,29 +3727,17 @@ def scheduled_teams_watches(payload: ScheduledPayload):
             )
             if result.get("success"):
                 results["chats_renewed"].append({"email": email, **result})
-            elif _is_teams_licensing_error(result.get("error", "")):
-                results["skipped"].append(
-                    {
-                        "email": email,
-                        "type": "chat",
-                        "reason": "licensing",
-                        **result,
-                    },
-                )
             else:
                 results["failed"].append({"email": email, "type": "chat", **result})
             logger.info(
                 f"Teams chat watch for {_redact_email(email)}: {result.get('success', False)}",
             )
 
-            # 2. Renew any existing channel subscriptions.  Go through the
-            # comms service so credential selection (delegated vs admin)
-            # stays centralized there — us-provisioned assistants have no
-            # per-user bearer token for a direct Graph call.
+            # 2. Renew any existing channel subscriptions
+            # List all subscriptions and renew those matching /teams/{id}/channels/{id}/messages
             subs_response = requests.get(
-                f"{SETTINGS.comms_url}/teams/subscriptions",
-                params={"primary_email": email},
-                headers={"Authorization": f"Bearer {admin_key}"},
+                "https://graph.microsoft.com/v1.0/subscriptions",
+                headers={"Authorization": f"Bearer {access_token}"},
                 timeout=30,
             )
 
@@ -3793,7 +3746,7 @@ def scheduled_teams_watches(payload: ScheduledPayload):
             )
             if subs_response.status_code == 200:
                 subs_data = subs_response.json()
-                for sub in subs_data.get("subscriptions", []):
+                for sub in subs_data.get("value", []):
                     resource = sub.get("resource", "")
                     # Check if this is a channel subscription
                     if "/teams/" in resource and "/channels/" in resource:
@@ -3825,17 +3778,6 @@ def scheduled_teams_watches(payload: ScheduledPayload):
                                 results["channels_renewed"].append(
                                     {"email": email, **ch_result},
                                 )
-                            elif _is_teams_licensing_error(
-                                ch_result.get("error", ""),
-                            ):
-                                results["skipped"].append(
-                                    {
-                                        "email": email,
-                                        "type": "channel",
-                                        "reason": "licensing",
-                                        **ch_result,
-                                    },
-                                )
                             else:
                                 results["failed"].append(
                                     {"email": email, "type": "channel", **ch_result},
@@ -3866,7 +3808,6 @@ def scheduled_teams_watches(payload: ScheduledPayload):
         f"Teams watch renewal complete: "
         f"{len(results['chats_renewed'])} chats, "
         f"{len(results['channels_renewed'])} channels, "
-        f"{len(results['skipped'])} skipped, "
         f"{len(results['failed'])} failed",
     )
     return results
