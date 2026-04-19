@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import signal
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from google.cloud import storage
 
@@ -25,7 +27,11 @@ from unity_deploy.infra.gcp.settings import GcpPipelineSettings
 
 logger = logging.getLogger(__name__)
 
-_shutdown_requested = False
+# Module-level shutdown Event used by all worker loops. Set on
+# SIGTERM/SIGINT via ``install_signal_handlers``. Kept as an
+# ``asyncio.Event`` (rather than a bare bool) so that async sleeps can
+# wake immediately when shutdown is requested via ``shutdown_aware_sleep``.
+_shutdown_event: asyncio.Event | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +51,12 @@ class WorkerInfra:
     artifact_store: ArtifactStore
     work_queue: WorkQueue
     run_ledger_factory: Callable[[str], RunLedger]
+    # ``heartbeat_ledger_factory`` is a parallel ledger keyed by the
+    # same ``run_id`` but writing to ``heartbeats.jsonl`` instead of
+    # ``run_ledger.jsonl``. Used exclusively by ``LeaseExtender`` to
+    # record periodic liveness signals without contending with the
+    # main stage/file/run ledger buffer.
+    heartbeat_ledger_factory: Callable[[str], RunLedger]
     cost_ledger_factory: Callable[[str], CostLedger]
     bundle_store: DeploymentBundleStore
     job_store: DeploymentJobStore
@@ -58,20 +70,238 @@ class WorkerInfra:
 
 
 def is_shutdown_requested() -> bool:
-    return _shutdown_requested
+    """Return True once SIGTERM or SIGINT has been observed."""
+    return _shutdown_event is not None and _shutdown_event.is_set()
+
+
+def get_shutdown_event() -> asyncio.Event:
+    """Return the shared shutdown Event.
+
+    ``install_signal_handlers`` must have been called first; otherwise
+    no signal → Event bridge exists and callers would wait forever.
+    """
+    if _shutdown_event is None:
+        raise RuntimeError(
+            "install_signal_handlers() must be called before " "get_shutdown_event()",
+        )
+    return _shutdown_event
+
+
+class LeaseExtender:
+    """Background task that periodically extends a Pub/Sub lease.
+
+    One instance per in-flight message: started after ``receive()``,
+    stopped (in a ``finally`` block) when the handler terminates via
+    success, retry, or dead-letter.
+
+    Rationale:
+
+    * Messages take variable amounts of time (parsing a 100-page PDF
+      can exceed the 10-minute default ack deadline). Without lease
+      extension, Pub/Sub would redeliver to a second pod mid-work,
+      producing duplicate load.
+    * Keeping extension fully decoupled from the handler means the
+      handler never has to manage its own Pub/Sub concerns. If the
+      handler hangs, the extender keeps the lease alive until the pod
+      itself terminates (24h grace period), at which point the process
+      dies, extensions stop, and Pub/Sub redelivers. Pod liveness
+      becomes the ultimate watchdog.
+    * ``last_progress_at`` timestamps each extension as a coarse
+      heartbeat visible in kubectl logs — ops can tell at a glance if
+      a particular pod is actively working on a message.
+    * When a ``run_ledger`` is supplied, each successful extension
+      also writes a ``PipelineHeartbeatManifest`` to the ledger. This
+      turns the lease-extension tick into a persisted liveness signal
+      ops can query across all active runs to detect hung pods
+      (``max(now - last_progress_at) > threshold`` pages on-call).
+      Heartbeat ledger writes are best-effort: a GCS outage must NOT
+      stop the Pub/Sub lease from being extended, so failures there
+      are logged-and-swallowed.
+
+    Extension cadence is chosen so the deadline never lapses: we
+    extend by ``extension_seconds`` (default 600 = 10 min) every
+    ``period_seconds`` (default 300 = 5 min), leaving a 5-minute
+    safety margin against clock drift / request latency.
+    """
+
+    def __init__(
+        self,
+        *,
+        work_queue: WorkQueue,
+        receipt_id: str,
+        job_id: str | None = None,
+        period_seconds: float = 300.0,
+        extension_seconds: int = 600,
+        run_ledger: RunLedger | None = None,
+        run_id: str | None = None,
+        stage: str | None = None,
+    ):
+        self._work_queue = work_queue
+        self._receipt_id = receipt_id
+        self._job_id = job_id
+        self._period_s = period_seconds
+        self._extension_s = extension_seconds
+        self._run_ledger = run_ledger
+        self._run_id = run_id
+        self._stage = stage
+        self._stop_event = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+        self._started_at: float = 0.0
+        self._last_progress_at: float = 0.0
+        self._extensions: int = 0
+
+        # Heartbeat persistence requires run_id + stage. If only one
+        # is supplied we treat it as a wiring bug (loud error instead
+        # of silently dropping heartbeats), but only when the caller
+        # actually asked for a ledger.
+        if self._run_ledger is not None and (
+            self._run_id is None or self._stage is None
+        ):
+            raise ValueError(
+                "LeaseExtender with run_ledger requires run_id and stage "
+                "so heartbeats can be attributed to a specific run.",
+            )
+
+    def start(self) -> None:
+        self._started_at = time.monotonic()
+        self._last_progress_at = self._started_at
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        """Signal the extender to stop and wait for it to exit."""
+        self._stop_event.set()
+        task = self._task
+        if task is None:
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    def _write_heartbeat(self, elapsed: float) -> None:
+        """Append a liveness record to the heartbeat ledger.
+
+        Best-effort: any failure here is caught and logged so a GCS
+        outage never interferes with the Pub/Sub lease extension
+        itself (which is the load-bearing part of this class).
+        """
+        ledger = self._run_ledger
+        if ledger is None or self._run_id is None or self._stage is None:
+            return
+        try:
+            from unity.common.pipeline import PipelineHeartbeatManifest
+
+            manifest = PipelineHeartbeatManifest(
+                run_id=self._run_id,
+                stage=self._stage,  # type: ignore[arg-type]
+                elapsed_seconds=elapsed,
+                extensions_emitted=self._extensions,
+                receipt_id=self._receipt_id,
+                job_id=self._job_id,
+            )
+            ledger.write(manifest)
+        except Exception:
+            logger.exception(
+                "Heartbeat write failed (run=%s stage=%s receipt=%s)",
+                self._run_id,
+                self._stage,
+                self._receipt_id,
+            )
+
+    async def _run(self) -> None:
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(),
+                        timeout=self._period_s,
+                    )
+                    return
+                except asyncio.TimeoutError:
+                    pass
+
+                try:
+                    await self._work_queue.extend_lease(
+                        self._receipt_id,
+                        self._extension_s,
+                    )
+                    self._extensions += 1
+                    self._last_progress_at = time.monotonic()
+                    elapsed = self._last_progress_at - self._started_at
+                    logger.info(
+                        "Lease extended (job=%s receipt=%s "
+                        "elapsed=%.0fs extensions=%d last_progress_at=+%.0fs)",
+                        self._job_id or "?",
+                        self._receipt_id,
+                        elapsed,
+                        self._extensions,
+                        elapsed,
+                    )
+                    # Persist heartbeat AFTER a successful extension so
+                    # a heartbeat row never implies "still alive" when
+                    # the lease has actually lapsed.
+                    self._write_heartbeat(elapsed)
+                except Exception:
+                    logger.exception(
+                        "Lease extension failed (job=%s receipt=%s)",
+                        self._job_id or "?",
+                        self._receipt_id,
+                    )
+        except asyncio.CancelledError:
+            pass
+
+
+async def shutdown_aware_sleep(seconds: float) -> bool:
+    """Sleep for ``seconds`` or until shutdown is requested.
+
+    Returns True if shutdown was requested during the sleep (caller
+    should exit its consumer loop), False if the full duration elapsed
+    without a shutdown signal.
+
+    Workers use this on the empty-queue backoff path so a SIGTERM mid-
+    sleep wakes the loop immediately rather than blocking for up to
+    the full backoff window.
+    """
+    event = get_shutdown_event()
+    if event.is_set():
+        return True
+    try:
+        await asyncio.wait_for(event.wait(), timeout=seconds)
+        return True
+    except asyncio.TimeoutError:
+        return False
 
 
 def install_signal_handlers() -> None:
-    """Install SIGTERM/SIGINT handlers for graceful worker shutdown."""
+    """Install SIGTERM/SIGINT handlers for graceful worker shutdown.
 
-    def _handler(signum: int, _frame: Any) -> None:
-        global _shutdown_requested
-        sig_name = signal.Signals(signum).name
+    Creates the module-level ``_shutdown_event`` and wires the POSIX
+    signals to ``asyncio.Event.set``. On Linux (the deployment target)
+    this uses ``loop.add_signal_handler`` which runs the handler on the
+    event loop itself, so the Event transitions are visible to
+    ``asyncio.wait_for`` without any cross-thread bridging. For
+    environments where ``add_signal_handler`` is unavailable (Windows,
+    non-main threads), we fall back to the sync ``signal.signal``
+    bridge — the Event mutation is safe because Python's signal
+    dispatch runs between bytecodes on the main thread.
+    """
+    global _shutdown_event
+    loop = asyncio.get_running_loop()
+    _shutdown_event = asyncio.Event()
+
+    def _on_signal(signum: int) -> None:
+        sig_name = (
+            signal.Signals(signum).name if isinstance(signum, int) else str(signum)
+        )
         logger.info("Received %s — requesting graceful shutdown", sig_name)
-        _shutdown_requested = True
+        if _shutdown_event is not None:
+            _shutdown_event.set()
 
-    signal.signal(signal.SIGTERM, _handler)
-    signal.signal(signal.SIGINT, _handler)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _on_signal, sig)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(sig, lambda s, _f: _on_signal(s))
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +396,21 @@ def build_worker_infra(
             environment=settings.environment,  # type: ignore[union-attr]
         )
 
+    def heartbeat_ledger_factory(run_id: str) -> RunLedger:
+        from unity_deploy.infra.gcp.ledgers import GcsRunLedger
+
+        # Flush threshold of 1 = every heartbeat tick round-trips to
+        # GCS immediately, so ops monitoring sees near-real-time
+        # progress (heartbeats are tiny, cost is negligible).
+        return GcsRunLedger(
+            client=storage_client,
+            settings=settings.ledger,  # type: ignore[union-attr]
+            run_id=run_id,
+            environment=settings.environment,  # type: ignore[union-attr]
+            blob_basename="heartbeats.jsonl",
+            flush_threshold=1,
+        )
+
     def cost_ledger_factory(run_id: str) -> CostLedger:
         from unity_deploy.infra.gcp.ledgers import GcsCostLedger
 
@@ -180,6 +425,7 @@ def build_worker_infra(
         artifact_store=artifact_store,
         work_queue=work_queue,
         run_ledger_factory=run_ledger_factory,
+        heartbeat_ledger_factory=heartbeat_ledger_factory,
         cost_ledger_factory=cost_ledger_factory,
         bundle_store=bundle_store,
         job_store=job_store,
