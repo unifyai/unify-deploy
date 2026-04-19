@@ -89,6 +89,13 @@ steps:
   - '-c'
   - |
     set -eu
+    # The cloud-builders/kubectl image only auto-runs
+    # `gcloud container clusters get-credentials` via its default
+    # entrypoint wrapper. We override entrypoint to `bash`, so we
+    # have to fetch credentials ourselves or kubectl falls back to
+    # talking to localhost:8080 and every apply fails.
+    gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
+
     echo "Applying production pipeline worker manifests..."
     kubectl apply -f deploy/k8s/workers/parse-worker-deployment.yaml
     kubectl apply -f deploy/k8s/workers/ingest-worker-deployment.yaml

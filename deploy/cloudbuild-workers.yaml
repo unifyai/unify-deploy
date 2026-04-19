@@ -45,6 +45,12 @@ steps:
   args:
   - '-c'
   - |
+    set -eu
+    # kubectl cloud-builder's credential wrapper only runs under its
+    # default entrypoint; we override with `bash`, so fetch
+    # credentials explicitly (otherwise kubectl talks to
+    # localhost:8080 and the rollout restart fails).
+    gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
     kubectl rollout restart deployment/unity-parse-worker -n default || true
     kubectl rollout restart deployment/unity-ingest-worker -n default || true
   env:
