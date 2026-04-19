@@ -48,6 +48,102 @@ def _resolve_embed_columns(
     return None
 
 
+def _dispatch_dm(*, config: PipelineConfig, project_name: str) -> int:
+    """Publish one ParseRequested per source_file with DM-mode binding.
+
+    Uploads each source file to GCS via
+    :func:`unity.common.pipeline.publish_parse_request`, which also
+    enforces the ``one file per ParseRequested`` invariant that Tier-2
+    parallelism depends on.
+
+    Each file's ``DmBinding.target_context`` is taken from the first
+    table's ``context``. If a source file has multiple tables with
+    differing contexts, a warning is logged and the first context is
+    used; the worker's current DM mode applies that single binding to
+    every table in the plan. Extending :class:`DmBinding` to carry a
+    per-table mapping is out of scope for this flag -- the common case
+    is one-table-per-file in DM pipelines.
+    """
+    from unity.common.pipeline import DispatchTarget, publish_parse_request
+    from unity.common.pipeline.types import DmBinding
+    from unity_deploy.infra.gcp.settings import GcpPipelineSettings
+
+    settings = GcpPipelineSettings()
+    project_id = settings.pubsub.project_id
+    bucket_name = settings.artifact_store.bucket
+    if not project_id:
+        logger.error(
+            "UNITY_PUBSUB_PROJECT_ID is not set; cannot dispatch. Set the "
+            "GCP project via env or unset --dispatch to run in-process.",
+        )
+        return 2
+    if not bucket_name:
+        logger.error(
+            "UNITY_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.",
+        )
+        return 2
+
+    target = DispatchTarget(
+        project_id=project_id,
+        bucket_name=bucket_name,
+        env_suffix=settings.env_suffix(),
+        upload_prefix=f"dispatch/ingest_dm/{project_name}",
+    )
+
+    logger.info(
+        "=== DM Dispatch [project=%s, env=%s, bucket=%s] ===",
+        project_name,
+        settings.environment,
+        bucket_name,
+    )
+    logger.info("Dispatching %d source file(s)...", len(config.source_files))
+
+    errors = 0
+    for sf in config.source_files:
+        tables = list(sf.tables or [])
+        if not tables:
+            logger.warning("Skipping %s: no tables defined in config", sf.file_path)
+            continue
+
+        contexts = {t.context for t in tables}
+        if len(contexts) > 1:
+            logger.warning(
+                "File %s has %d distinct table contexts (%s); using the first "
+                "(%s) for DmBinding. All tables will land under this context.",
+                sf.file_path,
+                len(contexts),
+                sorted(contexts),
+                tables[0].context,
+            )
+
+        dm_binding = DmBinding(target_context=tables[0].context)
+        try:
+            result = publish_parse_request(
+                target=target,
+                logical_path=sf.file_path,
+                ingestion_mode="dm",
+                dm_binding=dm_binding,
+                source_local_path=sf.file_path,
+            )
+            logger.info(
+                "  dispatched %s -> job=%s gs_uri=%s message_id=%s",
+                sf.file_path,
+                result.job_id,
+                result.gs_uri,
+                result.message_id,
+            )
+        except Exception:
+            logger.exception("  dispatch failed for %s", sf.file_path)
+            errors += 1
+
+    logger.info(
+        "=== DM Dispatch Complete (files=%d, errors=%d) ===",
+        len(config.source_files),
+        errors,
+    )
+    return 1 if errors else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Ingest client data via the DataManager pipeline",
@@ -155,6 +251,17 @@ def main() -> int:
         action="store_true",
         help="Enable deployment job tracking (writes job status to .deployments/)",
     )
+    parser.add_argument(
+        "--dispatch",
+        action="store_true",
+        help=(
+            "Publish ParseRequested messages to the GCP pipeline (one per "
+            "source file) and exit, instead of parsing/ingesting in-process. "
+            "Each file is sent with ingestion_mode=dm + DmBinding. Use this "
+            "to drive the GKE parse/ingest workers for bulk operator "
+            "ingests in staging/production."
+        ),
+    )
     args = parser.parse_args()
 
     from unity_deploy.customization.scripts.ingest_utils import (
@@ -198,6 +305,9 @@ def main() -> int:
         args.config or default_pipeline_config_path(args.client, args.deployment),
         project_root=project_root,
     )
+
+    if args.dispatch:
+        return _dispatch_dm(config=config, project_name=args.project)
 
     activate_project(args.project, overwrite=args.overwrite)
 

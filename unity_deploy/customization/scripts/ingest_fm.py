@@ -19,10 +19,98 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 
 logger = logging.getLogger(__name__)
+
+
+def _dispatch_fm(*, file_paths: list[str], project_name: str) -> int:
+    """Publish one ParseRequested per source file with FM-mode binding.
+
+    Uploads each source file to GCS via
+    :func:`unity.common.pipeline.publish_parse_request`, which also
+    enforces the ``one file per ParseRequested`` invariant that Tier-2
+    parallelism depends on. All files are routed with
+    ``ingestion_mode="fm"`` and an :class:`FmBinding` whose identity is
+    derived from the ``USER_ID`` / ``ASSISTANT_ID`` environment
+    variables (matching what the ingest worker's
+    :func:`activate_unify_context` expects). The alias is hard-wired to
+    ``"Local"`` since the worker reconstructs a
+    :class:`LocalFileSystemAdapter` for its FileManager regardless.
+    """
+    from unity.common.pipeline import DispatchTarget, publish_parse_request
+    from unity.common.pipeline.types import FmBinding
+    from unity_deploy.infra.gcp.settings import GcpPipelineSettings
+
+    settings = GcpPipelineSettings()
+    project_id = settings.pubsub.project_id
+    bucket_name = settings.artifact_store.bucket
+    if not project_id:
+        logger.error(
+            "UNITY_PUBSUB_PROJECT_ID is not set; cannot dispatch. Set the "
+            "GCP project via env or unset --dispatch to run in-process.",
+        )
+        return 2
+    if not bucket_name:
+        logger.error(
+            "UNITY_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.",
+        )
+        return 2
+
+    user_id = os.environ.get("USER_ID", "default")
+    assistant_id = os.environ.get("ASSISTANT_ID", "0")
+
+    target = DispatchTarget(
+        project_id=project_id,
+        bucket_name=bucket_name,
+        env_suffix=settings.env_suffix(),
+        upload_prefix=f"dispatch/ingest_fm/{project_name}",
+    )
+
+    logger.info(
+        "=== FM Dispatch [project=%s, env=%s, user_id=%s, assistant_id=%s] ===",
+        project_name,
+        settings.environment,
+        user_id,
+        assistant_id,
+    )
+    logger.info("Dispatching %d source file(s)...", len(file_paths))
+
+    errors = 0
+    for fp in file_paths:
+        fm_binding = FmBinding(
+            user_id=user_id,
+            assistant_id=assistant_id,
+            fm_alias="Local",
+            logical_path=fp,
+        )
+        try:
+            result = publish_parse_request(
+                target=target,
+                logical_path=fp,
+                ingestion_mode="fm",
+                fm_binding=fm_binding,
+                source_local_path=fp,
+            )
+            logger.info(
+                "  dispatched %s -> job=%s gs_uri=%s message_id=%s",
+                fp,
+                result.job_id,
+                result.gs_uri,
+                result.message_id,
+            )
+        except Exception:
+            logger.exception("  dispatch failed for %s", fp)
+            errors += 1
+
+    logger.info(
+        "=== FM Dispatch Complete (files=%d, errors=%d) ===",
+        len(file_paths),
+        errors,
+    )
+    return 1 if errors else 0
 
 
 def main() -> int:
@@ -111,6 +199,18 @@ def main() -> int:
         action="store_true",
         help="Enable deployment job tracking (writes job status to .deployments/)",
     )
+    parser.add_argument(
+        "--dispatch",
+        action="store_true",
+        help=(
+            "Publish ParseRequested messages to the GCP pipeline (one per "
+            "source file) and exit, instead of parsing/ingesting in-process. "
+            "Each file is sent with ingestion_mode=fm + FmBinding "
+            "(user_id/assistant_id from USER_ID/ASSISTANT_ID env vars, "
+            "alias=Local). Use this to drive the GKE parse/ingest workers "
+            "for bulk operator ingests in staging/production."
+        ),
+    )
     args = parser.parse_args()
 
     from unity_deploy.customization.scripts.ingest_utils import (
@@ -156,6 +256,9 @@ def main() -> int:
 
     file_paths = [sf.file_path for sf in config.source_files]
     logger.info("Source files: %s", file_paths)
+
+    if args.dispatch:
+        return _dispatch_fm(file_paths=file_paths, project_name=args.project)
 
     activate_project(args.project, overwrite=args.overwrite)
 
