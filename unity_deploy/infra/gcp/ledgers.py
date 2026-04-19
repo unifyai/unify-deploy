@@ -38,12 +38,22 @@ class GcsRunLedger:
         environment: str = "staging",
         flush_threshold: int = 10,
         retry_policy: ResilientRequestPolicy | None = None,
+        blob_basename: str = "run_ledger.jsonl",
     ):
+        # ``blob_basename`` lets callers keep multiple append-only JSONL
+        # ledgers side-by-side under a single run directory, e.g.::
+        #
+        #   {env}/{run_id}/run_ledger.jsonl   ← stage/file/run manifests
+        #   {env}/{run_id}/heartbeats.jsonl   ← periodic liveness signal
+        #
+        # Each GcsRunLedger instance rewrites its OWN blob on flush, so
+        # two instances sharing the same basename would clobber each
+        # other — always pick a unique basename per concurrent writer.
         self._client = client
         self._bucket_name = settings.bucket
         prefix = settings.prefix.strip("/")
         env_prefix = f"{prefix}/{environment}" if prefix else environment
-        self._blob_key = f"{env_prefix}/{run_id}/run_ledger.jsonl"
+        self._blob_key = f"{env_prefix}/{run_id}/{blob_basename}"
         self._flush_threshold = max(flush_threshold, 1)
         self._retry_policy = retry_policy or ResilientRequestPolicy()
 

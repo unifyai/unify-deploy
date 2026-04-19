@@ -187,6 +187,69 @@ class PubSubWorkQueue:
         await self.ack(receipt_id)
         logger.warning("Dead-lettered message %s: %s", receipt_id, error)
 
+    async def extend_lease(self, receipt_id: str, seconds: int) -> None:
+        """Extend the Pub/Sub ack deadline for *receipt_id* by *seconds*.
+
+        Called by the ``LeaseExtender`` while a handler is still
+        processing a message, so Pub/Sub does not redeliver it to a
+        second pod. ``modify_ack_deadline`` is the Pub/Sub API for both
+        lease extension (positive new deadline) and early nack
+        (``new_deadline=0``); here we always use it in extension mode.
+
+        Errors are swallowed and logged: missing the occasional
+        extension is survivable (the next period will retry), and a
+        hard failure would just mean the message eventually gets
+        redelivered — which is exactly the right behaviour.
+        """
+        new_deadline = max(int(seconds), 1)
+        for sub_path in self._sub_map.values():
+            try:
+                await asyncio.to_thread(
+                    self._subscriber.modify_ack_deadline,
+                    request={
+                        "subscription": sub_path,
+                        "ack_ids": [receipt_id],
+                        "ack_deadline_seconds": new_deadline,
+                    },
+                )
+                return
+            except Exception:
+                continue
+        logger.warning(
+            "extend_lease: no subscription accepted receipt %s (deadline=%ds)",
+            receipt_id,
+            new_deadline,
+        )
+
+    async def close(self) -> None:
+        """Close Pub/Sub client channels and background transport threads.
+
+        Called by workers during graceful shutdown after the main
+        consumer loop has exited. ``SubscriberClient.close`` shuts down
+        the gRPC channel and any in-flight streaming pull. The
+        ``PublisherClient`` runs a background thread for batched
+        publishes that must be stopped so the process can exit cleanly.
+
+        Both calls are dispatched via ``asyncio.to_thread`` because the
+        underlying GCP clients block. Errors are swallowed and logged
+        so shutdown cannot itself hang or raise.
+        """
+        for client, method in (
+            (self._subscriber, "close"),
+            (self._publisher, "stop"),
+        ):
+            fn = getattr(client, method, None)
+            if fn is None:
+                continue
+            try:
+                await asyncio.to_thread(fn)
+            except Exception:
+                logger.exception(
+                    "Failed to %s %s during shutdown",
+                    method,
+                    type(client).__name__,
+                )
+
     async def is_cancelled(self, run_id: str) -> bool:
         if self._cancellation_store is None:
             return False

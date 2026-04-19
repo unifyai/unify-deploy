@@ -9,12 +9,15 @@ from typing import Any
 
 from google.cloud import storage
 
+from unity.common.pipeline.artifact_store import CONTENT_ROWS_TABLE_ID
 from unity.common.pipeline.retry_policy import ResilientRequestPolicy
 from unity.common.pipeline.row_streaming import iter_table_input_rows
 from unity.common.pipeline.types import (
+    InlineRowsHandle,
     ObjectStoreArtifactHandle,
     TableInputHandle,
 )
+from typing import Iterable
 
 from .settings import GcsArtifactStoreSettings
 
@@ -93,6 +96,45 @@ class GcsArtifactStore:
             artifact_format="jsonl",
             columns=columns,
             row_count=row_count,
+        )
+
+    def materialize_content_rows(
+        self,
+        rows: Iterable[Any],
+        *,
+        logical_path: str,
+        artifact_format: str = "jsonl",
+    ) -> ObjectStoreArtifactHandle:
+        """Serialise lowered content rows as a JSONL artifact in GCS.
+
+        Rows may be Pydantic models (e.g. ``FileContentRow``) or plain
+        dicts.  The table id is fixed to :data:`CONTENT_ROWS_TABLE_ID` so
+        manifests reference a single conventional key for derived content.
+        """
+        serialised: list[dict[str, Any]] = []
+        columns: list[str] = []
+        for row in rows:
+            dump = getattr(row, "model_dump", None)
+            if callable(dump):
+                payload = dict(dump(mode="json", exclude_none=True))
+            elif isinstance(row, dict):
+                payload = {str(k): v for k, v in row.items()}
+            else:
+                payload = {"value": row}
+            serialised.append(payload)
+            if not columns:
+                columns = [str(k) for k in payload.keys()]
+
+        inline = InlineRowsHandle(
+            rows=serialised,
+            columns=columns,
+            row_count=len(serialised),
+        )
+        return self.materialize_table_input(
+            inline,
+            logical_path=logical_path,
+            table_id=CONTENT_ROWS_TABLE_ID,
+            artifact_format=artifact_format,
         )
 
     # -- manifest CRUD -------------------------------------------------------
