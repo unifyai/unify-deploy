@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unity-ingest-worker
+  namespace: default
+  labels:
+    app: unity-ingest-worker
+    component: pipeline-worker
+    environment: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: unity-ingest-worker
+  template:
+    metadata:
+      labels:
+        app: unity-ingest-worker
+        component: pipeline-worker
+        environment: staging
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: ingest-worker
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
+        command:
+        - python
+        - -m
+        - unity_deploy.infra.workers.entrypoint_ingest
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        env:
+        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+          value: "staging"
+        - name: UNITY_GCS_ARTIFACT_BUCKET
+          value: "unity-pipeline-artifacts-staging"
+        - name: ORCHESTRA_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: ORCHESTRA_ADMIN_KEY
+        - name: GCP_SA_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: GCP_SA_KEY
+        - name: UNIFY_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: UNIFY_KEY
+        - name: UNITY_PUBSUB_PROJECT_ID
+          value: "gcp-project-runtime"
+        - name: USER_ID
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: USER_ID
+        - name: ASSISTANT_ID
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: ASSISTANT_ID
+        - name: UNIFY_PROJECT_NAME
+          value: "Assistants"

@@ -1,0 +1,86 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unity-parse-worker
+  namespace: default
+  labels:
+    app: unity-parse-worker
+    component: pipeline-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: unity-parse-worker
+  template:
+    metadata:
+      labels:
+        app: unity-parse-worker
+        component: pipeline-worker
+    spec:
+      terminationGracePeriodSeconds: 120
+      containers:
+      - name: parse-worker
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest
+        command:
+        - python
+        - -m
+        - unity_deploy.infra.workers.entrypoint_parse
+        resources:
+          requests:
+            cpu: "1"
+            memory: "4Gi"
+          limits:
+            cpu: "2"
+            memory: "8Gi"
+        env:
+        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+          value: "production"
+        - name: UNITY_GCS_ARTIFACT_BUCKET
+          value: "unity-pipeline-artifacts"
+        - name: ORCHESTRA_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: ORCHESTRA_ADMIN_KEY
+        - name: GCP_SA_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: GCP_SA_KEY
+        - name: UNITY_PUBSUB_PROJECT_ID
+          value: "gcp-project-runtime"
+        livenessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        readinessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 10
+          periodSeconds: 30
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: unity-parse-worker-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: unity-parse-worker
+  minReplicas: 0
+  maxReplicas: 5
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: pubsub.googleapis.com|subscription|num_undelivered_messages
+        selector:
+          matchLabels:
+            resource.labels.subscription_id: unity-parse-sub
+      target:
+        type: AverageValue
+        averageValue: "5"

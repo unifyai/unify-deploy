@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unity-parse-worker
+  namespace: default
+  labels:
+    app: unity-parse-worker
+    component: pipeline-worker
+    environment: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: unity-parse-worker
+  template:
+    metadata:
+      labels:
+        app: unity-parse-worker
+        component: pipeline-worker
+        environment: staging
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: parse-worker
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
+        command:
+        - python
+        - -m
+        - unity_deploy.infra.workers.entrypoint_parse
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+          limits:
+            cpu: "1"
+            memory: "4Gi"
+        env:
+        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+          value: "staging"
+        - name: UNITY_GCS_ARTIFACT_BUCKET
+          value: "unity-pipeline-artifacts-staging"
+        - name: ORCHESTRA_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: ORCHESTRA_ADMIN_KEY
+        - name: GCP_SA_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: GCP_SA_KEY
+        - name: UNITY_PUBSUB_PROJECT_ID
+          value: "gcp-project-runtime"

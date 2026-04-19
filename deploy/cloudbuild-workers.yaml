@@ -1,0 +1,46 @@
+steps:
+  # Deploy parse and ingest worker deployments to GKE.
+  # Triggered after the overlay image is built and pushed.
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-parse-worker'
+  args:
+  - 'apply'
+  - '-f'
+  - 'deploy/k8s/workers/parse-worker-deployment.yaml'
+  env:
+  - 'CLOUDSDK_COMPUTE_ZONE=${_ZONE}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-ingest-worker'
+  args:
+  - 'apply'
+  - '-f'
+  - 'deploy/k8s/workers/ingest-worker-deployment.yaml'
+  env:
+  - 'CLOUDSDK_COMPUTE_ZONE=${_ZONE}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['deploy-parse-worker']
+
+  # Rolling restart to pick up new image
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'restart-workers'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    kubectl rollout restart deployment/unity-parse-worker || true
+    kubectl rollout restart deployment/unity-ingest-worker || true
+  env:
+  - 'CLOUDSDK_COMPUTE_ZONE=${_ZONE}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['deploy-ingest-worker']
+
+options:
+  substitutionOption: ALLOW_LOOSE
+
+substitutions:
+  _ZONE: 'us-central1-a'
+  _CLUSTER: 'unity'
+
+timeout: '300s'
