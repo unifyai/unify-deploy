@@ -305,6 +305,19 @@ def create_unity_job(
             {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
             {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
             {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
+            # Pipeline worker dispatch: route attachment ingestion through the
+            # GKE parse/ingest workers via Pub/Sub (topic names are derived
+            # from GCP_PROJECT_ID + DEPLOY_ENV, matching the existing
+            # ``unity-{name}{env_suffix}`` convention).
+            {"name": "UNITY_FILE_PIPELINE_DISPATCH_ENABLED", "value": "true"},
+            {
+                "name": "UNITY_FILE_PIPELINE_ARTIFACT_BUCKET",
+                "value": (
+                    "unity-pipeline-artifacts"
+                    if deploy_env == "production"
+                    else f"unity-pipeline-artifacts-{deploy_env}"
+                ),
+            },
         ]
         if deploy_env == "staging":
             env_vars += [{"name": "STAGING", "value": "true"}]
