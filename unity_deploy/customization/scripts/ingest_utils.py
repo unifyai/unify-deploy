@@ -333,7 +333,7 @@ def merge_pipeline_configs(
             f"Pipeline config directory does not exist or is not a directory: "
             f"{config_dir.resolve()}",
         )
-    json_files = sorted(config_dir.glob("*.json"))
+    json_files = sorted(config_dir.rglob("*.json"))
     if not json_files:
         raise FileNotFoundError(f"No *.json files found in {config_dir.resolve()}")
 

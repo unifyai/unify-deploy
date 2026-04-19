@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from unity.data_manager.types.ingest import PostIngestConfig
 from unity.file_manager.types.config import (
+    CostLedgerConfig,
     DiagnosticsConfig,
     EmbeddingsConfig,
     ExecutionConfig,
@@ -44,6 +45,7 @@ from unity.file_manager.types.config import (
     OutputConfig,
     ParseConfig,
     RetryConfig,
+    TransportConfig,
 )
 
 
@@ -103,6 +105,8 @@ class PipelineConfig(BaseModel):
     )
     retry: RetryConfig = Field(default_factory=RetryConfig)
     diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
+    transport: TransportConfig = Field(default_factory=TransportConfig)
+    cost: CostLedgerConfig = Field(default_factory=CostLedgerConfig)
 
     # -- factory -----------------------------------------------------------
 
@@ -172,6 +176,8 @@ class PipelineConfig(BaseModel):
             embed=self.embed,
             output=self.output,
             diagnostics=self.diagnostics,
+            transport=self.transport,
+            cost=self.cost,
             execution=ExecutionConfig(
                 parallel_files=self.execution.parallel_files,
                 max_file_workers=self.execution.max_file_workers,
