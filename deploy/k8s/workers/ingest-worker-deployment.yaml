@@ -8,7 +8,15 @@ metadata:
     app: unity-ingest-worker
     component: pipeline-worker
 spec:
-  replicas: 1
+  replicas: 2
+  # See parse-worker-deployment.yaml for rationale: 24h grace period
+  # forces maxSurge=100% so rolling restarts don't stall on draining
+  # pods.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 100%
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: unity-ingest-worker
@@ -17,8 +25,10 @@ spec:
       labels:
         app: unity-ingest-worker
         component: pipeline-worker
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      terminationGracePeriodSeconds: 120
+      terminationGracePeriodSeconds: 86400
       containers:
       - name: ingest-worker
         image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest
@@ -26,12 +36,16 @@ spec:
         - python
         - -m
         - unity_deploy.infra.workers.entrypoint_ingest
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "sleep 2"]
         resources:
           requests:
-            cpu: "2"
-            memory: "2Gi"
+            cpu: "500m"
+            memory: "1Gi"
           limits:
-            cpu: "4"
+            cpu: "3"
             memory: "4Gi"
         env:
         - name: UNITY_GCP_PIPELINE_ENVIRONMENT
@@ -88,7 +102,11 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: unity-ingest-worker
-  minReplicas: 0
+  # One-pod-per-message semantics (Option C): one IngestRequested drives
+  # one DataManager load (which fans out Tier-1 row batches internally
+  # on threads). averageValue=1 scales replicas linearly with
+  # undelivered depth. minReplicas=2 keeps warm capacity.
+  minReplicas: 2
   maxReplicas: 10
   metrics:
   - type: External
@@ -100,4 +118,28 @@ spec:
             resource.labels.subscription_id: unity-ingest-sub
       target:
         type: AverageValue
-        averageValue: "10"
+        averageValue: "1"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 3600
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: unity-ingest-worker-pdb
+  namespace: default
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: unity-ingest-worker

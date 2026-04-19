@@ -1,3 +1,4 @@
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,7 +9,12 @@ metadata:
     component: pipeline-worker
     environment: staging
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 100%
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: unity-parse-worker
@@ -18,8 +24,13 @@ spec:
         app: unity-parse-worker
         component: pipeline-worker
         environment: staging
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      terminationGracePeriodSeconds: 60
+      # Staging mirrors production's 24h grace so drain semantics are
+      # exercised under real load. Ops can always force-delete a stuck
+      # staging pod with `kubectl delete pod --grace-period=0 --force`.
+      terminationGracePeriodSeconds: 86400
       containers:
       - name: parse-worker
         image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
@@ -27,12 +38,16 @@ spec:
         - python
         - -m
         - unity_deploy.infra.workers.entrypoint_parse
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "sleep 2"]
         resources:
           requests:
             cpu: "500m"
             memory: "2Gi"
           limits:
-            cpu: "1"
+            cpu: "2"
             memory: "4Gi"
         env:
         - name: UNITY_GCP_PIPELINE_ENVIRONMENT
@@ -51,3 +66,55 @@ spec:
               key: GCP_SA_KEY
         - name: UNITY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: unity-parse-worker-hpa
+  namespace: default
+  labels:
+    environment: staging
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: unity-parse-worker
+  minReplicas: 2
+  maxReplicas: 3
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: pubsub.googleapis.com|subscription|num_undelivered_messages
+        selector:
+          matchLabels:
+            resource.labels.subscription_id: unity-parse-sub-staging
+      target:
+        type: AverageValue
+        averageValue: "1"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 3600
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: unity-parse-worker-pdb
+  namespace: default
+  labels:
+    environment: staging
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: unity-parse-worker
