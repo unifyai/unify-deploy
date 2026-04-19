@@ -1,6 +1,11 @@
 steps:
-  # Deploy parse and ingest worker deployments to GKE.
-  # Triggered after the overlay image is built and pushed.
+  # Deploy parse and ingest worker deployments (+ CronJob / PDB / HPA)
+  # to GKE. This config is used for manual / emergency worker rollouts
+  # only — the normal path is that cloudbuild-staging.yaml and
+  # cloudbuild.yaml already include an inline `refresh-pipeline-workers`
+  # step that runs kubectl apply + rollout restart on every push. Keep
+  # this file around as an operator escape hatch (see
+  # guides/PIPELINE_OPERATIONS.md § "Manual worker rollout").
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'deploy-parse-worker'
   args:
@@ -8,7 +13,7 @@ steps:
   - '-f'
   - 'deploy/k8s/workers/parse-worker-deployment.yaml'
   env:
-  - 'CLOUDSDK_COMPUTE_ZONE=${_ZONE}'
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
 
 - name: 'gcr.io/cloud-builders/kubectl'
@@ -18,9 +23,20 @@ steps:
   - '-f'
   - 'deploy/k8s/workers/ingest-worker-deployment.yaml'
   env:
-  - 'CLOUDSDK_COMPUTE_ZONE=${_ZONE}'
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
   waitFor: ['deploy-parse-worker']
+
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-weekly-cronjob'
+  args:
+  - 'apply'
+  - '-f'
+  - 'deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml'
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['deploy-ingest-worker']
 
   # Rolling restart to pick up new image
 - name: 'gcr.io/cloud-builders/kubectl'
@@ -29,18 +45,18 @@ steps:
   args:
   - '-c'
   - |
-    kubectl rollout restart deployment/unity-parse-worker || true
-    kubectl rollout restart deployment/unity-ingest-worker || true
+    kubectl rollout restart deployment/unity-parse-worker -n default || true
+    kubectl rollout restart deployment/unity-ingest-worker -n default || true
   env:
-  - 'CLOUDSDK_COMPUTE_ZONE=${_ZONE}'
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['deploy-ingest-worker']
+  waitFor: ['deploy-weekly-cronjob']
 
 options:
   substitutionOption: ALLOW_LOOSE
 
 substitutions:
-  _ZONE: 'us-central1-a'
+  _REGION: 'us-central1'
   _CLUSTER: 'unity'
 
 timeout: '300s'
