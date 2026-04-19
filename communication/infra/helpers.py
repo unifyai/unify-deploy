@@ -309,7 +309,7 @@ def create_unity_job(
             # GKE parse/ingest workers via Pub/Sub (topic names are derived
             # from GCP_PROJECT_ID + DEPLOY_ENV, matching the existing
             # ``unity-{name}{env_suffix}`` convention).
-            {"name": "UNITY_FILE_PIPELINE_DISPATCH_ENABLED", "value": "true"},
+            {"name": "UNITY_FILE_PIPELINE_DISPATCH_ENABLED", "value": "false"},
             {
                 "name": "UNITY_FILE_PIPELINE_ARTIFACT_BUCKET",
                 "value": (
