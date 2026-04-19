@@ -7,7 +7,11 @@ name = "unity-deploy"
 version = "0.1.0"
 description = "Enterprise deployment overlay for Unity"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pydantic-settings>=2.0",
+    "google-cloud-storage>=2.14",
+    "google-cloud-pubsub>=2.19",
+]
 
 [project.entry-points."unity_deploy.init"]
 enterprise = "unity_deploy.hook:startup_hook"
