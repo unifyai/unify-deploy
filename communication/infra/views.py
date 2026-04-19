@@ -449,6 +449,7 @@ def _build_startup_payload(
     demo_id: str,
     team_ids: str,
     org_id: str,
+    assistant_job_title: str = "",
     wake_reasons: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Build the bootstrap Secret payload for a session activation request.
@@ -470,6 +471,7 @@ def _build_startup_payload(
         "assistant_age": assistant_age,
         "assistant_nationality": assistant_nationality,
         "assistant_about": assistant_about,
+        "assistant_job_title": assistant_job_title,
         "assistant_timezone": assistant_timezone,
         "user_number": user_number,
         "assistant_number": assistant_number,
@@ -891,6 +893,7 @@ async def start_job(
     assistant_age: str = Form(...),
     assistant_nationality: str = Form(...),
     assistant_about: str = Form(...),
+    assistant_job_title: str = Form(""),
     assistant_timezone: str = Form("UTC"),
     user_number: str = Form(""),
     assistant_number: str = Form(""),
@@ -984,6 +987,7 @@ async def start_job(
             assistant_age=assistant_age,
             assistant_nationality=assistant_nationality,
             assistant_about=assistant_about,
+            assistant_job_title=assistant_job_title,
             assistant_timezone=assistant_timezone,
             user_number=user_number,
             assistant_number=assistant_number,

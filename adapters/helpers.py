@@ -118,6 +118,7 @@ def get_assistant(
         "assistant_age": "20",
         "assistant_nationality": "United States",
         "assistant_about": "Local Assistant",
+        "assistant_job_title": "",
         "assistant_timezone": "UTC",
         "assistant_email": "unity.agent@unify.ai",
         "user_email": "unity.agent@unify.ai",
@@ -192,6 +193,10 @@ def get_assistant(
         "assistant_age": str(assistants[0].get("age", "")),
         "assistant_nationality": assistants[0]["nationality"],
         "assistant_about": assistants[0]["about"],
+        # Free-text job title / specialization (e.g. "Growth marketing"). Empty
+        # string when unset, so downstream code can treat it as "no specialty"
+        # without nullable-handling everywhere.
+        "assistant_job_title": assistants[0].get("job_title") or "",
         "assistant_timezone": assistants[0].get("timezone", "UTC"),
         "assistant_number": assistants[0]["phone"] or "",
         "assistant_whatsapp_number": assistants[0].get("assistant_whatsapp_number")
@@ -749,6 +754,7 @@ def _build_start_job_request_data(
         "assistant_age": assistant["assistant_age"],
         "assistant_nationality": assistant["assistant_nationality"],
         "assistant_about": assistant["assistant_about"],
+        "assistant_job_title": assistant.get("assistant_job_title", ""),
         "assistant_timezone": assistant["assistant_timezone"],
         "user_number": assistant["user_number"],
         "assistant_number": assistant["assistant_number"],

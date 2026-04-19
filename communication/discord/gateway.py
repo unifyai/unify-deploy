@@ -196,6 +196,7 @@ async def _ensure_job_running(assistant_data: dict, medium: str = "discord") -> 
                     "assistant_age": _s("age"),
                     "assistant_nationality": _s("nationality"),
                     "assistant_about": _s("about"),
+                    "assistant_job_title": _s("job_title"),
                     "assistant_timezone": _s("timezone", "UTC"),
                     "user_number": _s("user_phone"),
                     "assistant_number": _s("phone"),

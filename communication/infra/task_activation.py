@@ -512,6 +512,7 @@ def _build_offline_runner_env(
         "ASSISTANT_NATIONALITY": str(assistant_data.get("assistant_nationality") or ""),
         "ASSISTANT_TIMEZONE": str(assistant_data.get("assistant_timezone") or "UTC"),
         "ASSISTANT_ABOUT": str(assistant_data.get("assistant_about") or ""),
+        "ASSISTANT_JOB_TITLE": str(assistant_data.get("assistant_job_title") or ""),
         "ASSISTANT_NUMBER": str(assistant_data.get("assistant_number") or ""),
         "ASSISTANT_EMAIL": str(assistant_data.get("assistant_email") or ""),
         "ASSISTANT_WHATSAPP_NUMBER": str(
