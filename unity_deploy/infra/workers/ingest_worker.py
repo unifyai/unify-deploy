@@ -1,4 +1,27 @@
-"""Ingest worker: consumes IngestRequested messages, streams rows into DataManager."""
+"""Ingest worker: consumes IngestRequested messages, streams rows into DataManager.
+
+The worker consumes a pointer-only :class:`IngestPlan` that the parse
+worker has already materialised to GCS.  Heavy data (content rows,
+table row bodies) lives behind handles, so the manifest this worker
+downloads is always KB-scale regardless of the source file size.
+
+Two ingestion flavours are supported, driven by
+``IngestRequested.ingestion_mode``:
+
+- **FM mode** (``ingestion_mode="fm"``): activates a Unify context
+  derived from ``msg.fm_binding``, instantiates a
+  :class:`unity.file_manager.managers.file_manager.FileManager`, and
+  delegates the work to
+  :func:`unity.file_manager.managers.utils.executor.fm_process_plan`.
+  The resulting rows land under ``Files/{alias}/{storage_id}/...`` with
+  a proper ``FileRecords`` entry.
+
+- **DM mode** (``ingestion_mode="dm"``): drives
+  :func:`unity.common.pipeline.ingest_artifacts` directly over the
+  plan's ``table_inputs``, issuing
+  ``DataManager.ingest(ctx, None, table_input_handle=handle, ...)`` per
+  table.  No ``FileRecords`` entry is created.
+"""
 
 from __future__ import annotations
 
@@ -6,19 +29,19 @@ import asyncio
 import json
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from unity.common.pipeline import (
+    ArtifactWorkItem,
+    IngestPlan,
+    PipelineInstrumentation,
+    ingest_artifacts,
+)
 from unity.common.pipeline._utils import utc_now_iso
-from unity.common.pipeline.row_streaming import iter_table_input_row_batches
 from unity.common.pipeline.run_ledger import PipelineStageManifest
 from unity.common.pipeline.types import (
     AttachmentCallback,
-    CsvFileHandle,
     IngestRequested,
-    InlineRowsHandle,
-    ObjectStoreArtifactHandle,
-    TableInputHandle,
-    XlsxSheetHandle,
 )
 from unity.common.pipeline.work_queue import ReceivedWorkItem
 
@@ -33,12 +56,21 @@ async def handle_ingest_message(
     *,
     infra: WorkerInfra,
 ) -> None:
-    """Process one IngestRequested message end-to-end.
+    """Process one ``IngestRequested`` message end-to-end.
 
-    Steps:
-      1. Read ParsedFileBundle manifest from GCS
-      2. For each table, check cancellation, then stream rows via dm.ingest()
-      3. Emit run/cost ledger entries
+    Steps
+    -----
+    1. Read the ``IngestPlan`` manifest from the artifact store and
+       rehydrate it into a Pydantic model.
+    2. Branch on ``msg.ingestion_mode``:
+       - ``"fm"``: activate the Unify context implied by ``fm_binding``,
+         build a ``FileManager`` and call ``fm_process_plan``.
+       - ``"dm"``: fan out table ingestion via ``ingest_artifacts`` with
+         a DM-flavoured ``ingest_fn`` that streams from the plan's
+         ``TableInputHandle``.
+    3. Emit run-ledger entries and optionally publish an
+       ``attachment_ingestion_complete`` envelope when the message
+       originated from a CM attachment dispatch.
     """
     from .worker_utils import is_shutdown_requested
 
@@ -51,111 +83,54 @@ async def handle_ingest_message(
     run_ledger = infra.run_ledger_factory(run_id)
     cost_ledger = infra.cost_ledger_factory(run_id)
 
-    logger.info("[ingest] Starting job=%s, manifest=%s", run_id, msg.manifest_key)
+    logger.info(
+        "[ingest] Starting job=%s, manifest=%s, mode=%s",
+        run_id,
+        msg.manifest_key,
+        msg.ingestion_mode,
+    )
     ingest_start = time.perf_counter()
 
-    table_failures: list[str] = []
+    overall_error: str | None = None
+    total_rows = 0
     try:
-        manifest: dict = artifact_store.get_json(msg.manifest_key)
-        tables: list[dict] = manifest.get("tables", [])
-        file_path: str = manifest.get("file_path", "")
+        manifest_payload: dict = artifact_store.get_json(msg.manifest_key)
+        plan = IngestPlan.model_validate(manifest_payload)
+        file_path = plan.file_path
 
-        logger.info("[ingest] %d table(s) to ingest from %s", len(tables), file_path)
+        if is_shutdown_requested() or await work_queue.is_cancelled(run_id):
+            logger.info("[ingest] Cancelled before dispatch, job=%s", run_id)
+            run_ledger.write(
+                PipelineStageManifest(
+                    run_id=run_id,
+                    file_path=file_path,
+                    stage_name="ingest",
+                    status="error",
+                    error="cancelled",
+                ),
+            )
+            overall_error = "cancelled"
 
-        total_rows = 0
-        for table_entry in tables:
-            table_id: str = table_entry.get("table_id", "")
-            handle_data: dict = table_entry.get("handle", {})
-
-            if is_shutdown_requested() or await work_queue.is_cancelled(run_id):
-                logger.info(
-                    "[ingest] Cancelled before table %s, job=%s",
-                    table_id,
-                    run_id,
+        if overall_error is None:
+            if msg.ingestion_mode == "fm":
+                total_rows, overall_error = await _run_fm_mode(
+                    plan=plan,
+                    msg=msg,
+                    infra=infra,
+                    run_ledger=run_ledger,
                 )
-                run_ledger.write(
-                    PipelineStageManifest(
-                        run_id=run_id,
-                        file_path=file_path,
-                        table_id=table_id,
-                        stage_name="ingest",
-                        status="error",
-                        error="cancelled",
-                    ),
+            else:
+                total_rows, overall_error = await _run_dm_mode(
+                    plan=plan,
+                    msg=msg,
+                    infra=infra,
+                    run_ledger=run_ledger,
                 )
-                table_failures.append("cancelled")
-                break
-
-            table_start = time.perf_counter()
-
-            try:
-                handle = _resolve_handle(handle_data)
-                context = msg.target_context or f"{run_id}/{table_id}"
-
-                from unity.data_manager import DataManager
-
-                dm = DataManager()
-                rows_for_ingest: list[dict] = []
-
-                for batch in iter_table_input_row_batches(
-                    handle,
-                    batch_size=msg.batch_size,
-                ):
-                    rows_for_ingest.extend(batch)
-
-                inserted = 0
-                if rows_for_ingest:
-                    result = dm.ingest(
-                        context,
-                        rows_for_ingest,
-                        chunk_size=msg.batch_size,
-                    )
-                    inserted = getattr(result, "rows_inserted", 0) or 0
-                    total_rows += inserted
-
-                table_duration = (time.perf_counter() - table_start) * 1000
-
-                run_ledger.write(
-                    PipelineStageManifest(
-                        run_id=run_id,
-                        file_path=file_path,
-                        table_id=table_id,
-                        stage_name="ingest",
-                        status="success",
-                        duration_ms=table_duration,
-                        meta={
-                            "rows_inserted": inserted,
-                            "context": context,
-                        },
-                    ),
-                )
-                logger.info(
-                    "[ingest] Table %s: %d rows in %.1fms",
-                    table_id,
-                    inserted,
-                    table_duration,
-                )
-
-            except Exception as exc:
-                table_duration = (time.perf_counter() - table_start) * 1000
-                logger.exception("[ingest] Table %s failed", table_id)
-                run_ledger.write(
-                    PipelineStageManifest(
-                        run_id=run_id,
-                        file_path=file_path,
-                        table_id=table_id,
-                        stage_name="ingest",
-                        status="error",
-                        duration_ms=table_duration,
-                        error=str(exc),
-                    ),
-                )
-                table_failures.append(str(exc))
 
         try:
             job = job_store.read_job(run_id)
             if job.status != "cancelled":
-                job.status = "success" if not table_failures else "error"
+                job.status = "success" if overall_error is None else "error"
                 job.finished_at = utc_now_iso()
                 job.metadata["total_rows_inserted"] = total_rows
                 job_store.upsert_job(job)
@@ -175,8 +150,8 @@ async def handle_ingest_message(
         if msg.attachment_callback is not None:
             await _publish_attachment_completion(
                 callback=msg.attachment_callback,
-                success=not table_failures,
-                error=table_failures[0] if table_failures else None,
+                success=overall_error is None,
+                error=overall_error,
             )
 
     except Exception as exc:
@@ -199,18 +174,268 @@ async def handle_ingest_message(
         cost_ledger.close()
 
 
-def _resolve_handle(handle_data: dict) -> TableInputHandle:
-    """Reconstruct a TableInputHandle from its serialized form."""
-    kind = handle_data.get("kind", "")
-    if kind == "object_store_artifact":
-        return ObjectStoreArtifactHandle.model_validate(handle_data)
-    if kind == "csv_file":
-        return CsvFileHandle.model_validate(handle_data)
-    if kind == "xlsx_sheet":
-        return XlsxSheetHandle.model_validate(handle_data)
-    if kind == "inline_rows":
-        return InlineRowsHandle.model_validate(handle_data)
-    raise ValueError(f"Unknown handle kind: {kind!r}")
+# ---------------------------------------------------------------------------
+# FM mode
+# ---------------------------------------------------------------------------
+
+
+async def _run_fm_mode(
+    *,
+    plan: IngestPlan,
+    msg: IngestRequested,
+    infra: WorkerInfra,
+    run_ledger,
+) -> tuple[int, str | None]:
+    """Dispatch an ``IngestPlan`` through ``fm_process_plan``.
+
+    Activates the Unify context described by ``msg.fm_binding``, builds
+    a ``FileManager`` bound to the requested alias, and delegates the
+    entire per-file fanout (content + tables) to
+    :func:`fm_process_plan`.  The function returns ``(total_rows,
+    error)`` so the caller can still record an ``ingest`` ledger line
+    and emit an attachment callback.
+    """
+    fm_binding = msg.fm_binding
+    if fm_binding is None:
+        raise RuntimeError("FM ingest mode requires msg.fm_binding to be set.")
+
+    from .worker_utils import activate_unify_context
+
+    activate_unify_context(
+        user_id=fm_binding.user_id,
+        assistant_id=fm_binding.assistant_id,
+    )
+
+    from unity.data_manager import DataManager
+    from unity.file_manager.filesystem_adapters.local_adapter import (
+        LocalFileSystemAdapter,
+    )
+    from unity.file_manager.managers.file_manager import FileManager
+    from unity.file_manager.managers.utils.executor import fm_process_plan
+    from unity.file_manager.types.config import FilePipelineConfig
+
+    dm = DataManager()
+    # The FM adapter's ``name`` determines the ``Files/{alias}/...``
+    # namespace rows are written under.  ``LocalFileSystemAdapter.name``
+    # is "Local", which matches what CM attachments produce today.  The
+    # worker does not need the file bytes on disk (content/tables are
+    # streamed from object-store handles), so ``enable_sync=False`` and a
+    # throwaway root are sufficient.
+    adapter = LocalFileSystemAdapter(root=None, enable_sync=False)
+    fm = FileManager(adapter=adapter, data_manager=dm)
+    logger.info(
+        "[ingest][fm] activated context=%s/%s alias=%s",
+        fm_binding.user_id,
+        fm_binding.assistant_id,
+        adapter.name,
+    )
+
+    config = FilePipelineConfig()
+    instrumentation = PipelineInstrumentation.from_config(
+        config,
+        run_id=msg.job_id,
+        file_count=1,
+    )
+
+    total_rows = 0
+    error: str | None = None
+    start = time.perf_counter()
+    try:
+        with instrumentation:
+            result = fm_process_plan(
+                fm,
+                plan=plan,
+                file_path=plan.file_path,
+                config=config,
+                instrumentation=instrumentation,
+                reporter=None,
+                enable_progress=False,
+                verbosity="low",
+            )
+            status = str(getattr(result, "status", "error") or "error")
+            if status != "success":
+                error = str(getattr(result, "error", "fm_process_plan failed") or "")
+            total_rows = _extract_total_rows(result)
+    except Exception as exc:
+        error = str(exc) or "fm_process_plan raised"
+        logger.exception("[ingest][fm] Failed for %s", plan.file_path)
+
+    run_ledger.write(
+        PipelineStageManifest(
+            run_id=msg.job_id,
+            file_path=plan.file_path,
+            stage_name="ingest",
+            status="success" if error is None else "error",
+            duration_ms=(time.perf_counter() - start) * 1000,
+            error=error,
+            meta={
+                "ingestion_mode": "fm",
+                "fm_alias": fm_binding.fm_alias,
+                "total_rows": total_rows,
+            },
+        ),
+    )
+    return total_rows, error
+
+
+def _extract_total_rows(result: Any) -> int:
+    """Best-effort total-row extraction from a ``FileResultType`` result."""
+    metrics = getattr(result, "metrics", None)
+    if metrics is not None:
+        for attr in ("rows_ingested", "rows_inserted", "total_rows"):
+            value = getattr(metrics, attr, None)
+            if isinstance(value, int):
+                return value
+    total = getattr(result, "total_records", None)
+    if isinstance(total, int):
+        return total
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# DM mode
+# ---------------------------------------------------------------------------
+
+
+async def _run_dm_mode(
+    *,
+    plan: IngestPlan,
+    msg: IngestRequested,
+    infra: WorkerInfra,
+    run_ledger,
+) -> tuple[int, str | None]:
+    """Dispatch an ``IngestPlan`` via raw DataManager ingestion.
+
+    Constructs one ``ArtifactWorkItem`` per table in the plan, then
+    drives :func:`unity.common.pipeline.ingest_artifacts` with a DM
+    ``ingest_fn`` that calls ``dm.ingest(ctx, None,
+    table_input_handle=handle, ...)``.  Streaming is preserved --
+    ``dm.ingest`` pulls batches from the handle itself rather than
+    loading the entire table into memory.
+    """
+    dm_binding = msg.dm_binding
+    default_target = (
+        dm_binding.target_context if dm_binding else msg.target_context
+    ) or msg.job_id
+
+    from unity.data_manager import DataManager
+    from unity.file_manager.types.config import FilePipelineConfig
+
+    dm = DataManager()
+    config = FilePipelineConfig()
+    instrumentation = PipelineInstrumentation.from_config(
+        config,
+        run_id=msg.job_id,
+        file_count=1,
+    )
+
+    work_items: list[ArtifactWorkItem] = []
+    for meta in plan.tables_meta:
+        table_id = str(meta.table_id or "")
+        handle = (plan.table_inputs or {}).get(table_id)
+        if handle is None:
+            continue
+        columns = list(meta.columns or []) or list(
+            getattr(handle, "columns", []) or [],
+        )
+        row_count = int(meta.row_count or getattr(handle, "row_count", 0) or 0)
+        target_context = default_target
+        if msg.dm_binding is None and table_id:
+            target_context = f"{default_target}/{table_id}"
+        work_items.append(
+            ArtifactWorkItem(
+                kind="table",
+                label=str(meta.label or table_id or "table"),
+                stage_name="ingest_table",
+                payload={
+                    "dm": dm,
+                    "context": target_context,
+                    "handle": handle,
+                    "batch_size": msg.batch_size,
+                },
+                columns=columns,
+                row_count=row_count,
+                table_id=table_id or None,
+                stage_id=instrumentation.make_stage_id(
+                    file_path=plan.file_path,
+                    stage_name="ingest_table",
+                    discriminator=table_id or str(meta.label or ""),
+                ),
+                meta={
+                    "row_count": row_count,
+                    "table_label": meta.label,
+                    "column_count": len(columns),
+                    "source_handle_type": type(handle).__name__,
+                    "context": target_context,
+                },
+            ),
+        )
+
+    def _dm_ingest_fn(item: ArtifactWorkItem) -> dict:
+        pl = item.payload
+        result = pl["dm"].ingest(
+            pl["context"],
+            None,
+            table_input_handle=pl["handle"],
+            chunk_size=pl["batch_size"],
+        )
+        return {
+            "ingest_result": result,
+            "context": pl["context"],
+            "row_count": getattr(result, "rows_inserted", 0) or 0,
+        }
+
+    total_rows = 0
+    error: str | None = None
+    start = time.perf_counter()
+    try:
+        with instrumentation:
+            artifact_results = ingest_artifacts(
+                work_items=work_items,
+                ingest_fn=_dm_ingest_fn,
+                instrumentation=instrumentation,
+                source_path=plan.file_path,
+                max_workers=getattr(config.execution, "max_embed_workers", 8),
+                retry_config=config.retry,
+            )
+        for ar in artifact_results:
+            if ar.success:
+                total_rows += int(
+                    getattr(ar, "rows_inserted", 0)
+                    or (
+                        ar.value.get("row_count", 0)
+                        if isinstance(ar.value, dict)
+                        else 0
+                    ),
+                )
+            elif error is None:
+                error = ar.error or "ingest failed"
+    except Exception as exc:
+        error = str(exc) or "ingest_artifacts raised"
+        logger.exception("[ingest][dm] Failed for %s", plan.file_path)
+
+    run_ledger.write(
+        PipelineStageManifest(
+            run_id=msg.job_id,
+            file_path=plan.file_path,
+            stage_name="ingest",
+            status="success" if error is None else "error",
+            duration_ms=(time.perf_counter() - start) * 1000,
+            error=error,
+            meta={
+                "ingestion_mode": "dm",
+                "default_target_context": default_target,
+                "table_count": len(work_items),
+                "total_rows": total_rows,
+            },
+        ),
+    )
+    return total_rows, error
+
+
+# ---------------------------------------------------------------------------
+# Attachment callback
+# ---------------------------------------------------------------------------
 
 
 async def _publish_attachment_completion(

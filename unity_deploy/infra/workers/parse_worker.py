@@ -35,10 +35,16 @@ async def handle_parse_message(
       1. Download source file(s) from GCS to temp directory
       2. Parse via FileParser.parse_batch()
       3. Cancellation checkpoint
-      4. Write ParsedFileBundle manifest to GCS
-      5. Materialize table artifacts to GCS
-      6. Emit run/cost ledger entries
-      7. Publish IngestRequested for each file
+      4. Lower each parse result into a pointer-only ``IngestPlan`` via
+         :func:`unity.file_manager.parse_adapter.adapter.lower_to_ingest_plan`.
+         Heavy outputs (content rows lowered from the ``DocumentGraph``,
+         inline table rows) are materialised to GCS as JSONL artifacts and
+         referenced by handles so the manifest published to the queue
+         stays KB-scale regardless of input size.
+      5. Write the ``IngestPlan`` manifest (pointers only) to GCS.
+      6. Emit run/cost ledger entries.
+      7. Publish ``IngestRequested`` carrying the manifest key + the
+         propagated ``ingestion_mode`` / binding metadata.
     """
     from .worker_utils import is_shutdown_requested
 
@@ -102,10 +108,19 @@ async def handle_parse_message(
                 )
                 return
 
-            from unity.common.pipeline.transport import build_table_handles
+            from unity.file_manager.parse_adapter.adapter import (
+                lower_to_ingest_plan,
+            )
+            from unity.file_manager.types.config import FilePipelineConfig
+
+            # Default worker config is sufficient here -- the plan only
+            # needs ``ingest.business_contexts`` for lowering enrichment
+            # (absent in the worker path today) and the artifact format
+            # is driven by ``msg.artifact_format``.
+            plan_config = FilePipelineConfig()
 
             for pr in parse_results:
-                if pr.status != "success" or not pr.tables:
+                if pr.status != "success":
                     run_ledger.write(
                         PipelineStageManifest(
                             run_id=run_id,
@@ -118,28 +133,16 @@ async def handle_parse_message(
                     )
                     continue
 
-                handles = build_table_handles(
+                plan = lower_to_ingest_plan(
                     pr,
+                    run_id=run_id,
+                    config=plan_config,
                     artifact_store=artifact_store,
                     artifact_format=msg.artifact_format,
                 )
 
-                manifest_data = {
-                    "run_id": run_id,
-                    "file_path": pr.logical_path,
-                    "tables": [
-                        {
-                            "table_id": tid,
-                            "handle": h.model_dump(mode="json"),
-                        }
-                        for tid, h in handles.items()
-                    ],
-                    "parse_status": pr.status,
-                    "table_count": len(pr.tables),
-                }
-
                 manifest_key = f"{run_id}/manifests/{Path(pr.logical_path).stem}.json"
-                artifact_store.put_json(manifest_key, manifest_data)
+                artifact_store.put_json(manifest_key, plan.model_dump(mode="json"))
 
                 run_ledger.write(
                     PipelineStageManifest(
@@ -149,8 +152,10 @@ async def handle_parse_message(
                         status="success",
                         duration_ms=parse_duration * 1000,
                         meta={
-                            "table_count": len(pr.tables),
+                            "table_count": len(plan.tables_meta),
                             "manifest_key": manifest_key,
+                            "ingestion_mode": msg.ingestion_mode,
+                            "has_content_rows": plan.content_rows_handle is not None,
                         },
                     ),
                 )
@@ -160,14 +165,20 @@ async def handle_parse_message(
                     deployment_id=msg.deployment_id,
                     manifest_key=manifest_key,
                     attachment_callback=msg.attachment_callback,
+                    ingestion_mode=msg.ingestion_mode,
+                    fm_binding=msg.fm_binding,
+                    dm_binding=msg.dm_binding,
                 )
                 await work_queue.publish(
                     topic="ingest",
                     payload=ingest_msg.model_dump(mode="json"),
                 )
                 logger.info(
-                    "[parse] Published IngestRequested for %s",
+                    "[parse] Published IngestRequested for %s (mode=%s, tables=%d, content=%s)",
                     pr.logical_path,
+                    msg.ingestion_mode,
+                    len(plan.tables_meta),
+                    "yes" if plan.content_rows_handle is not None else "no",
                 )
 
         run_ledger.flush()
