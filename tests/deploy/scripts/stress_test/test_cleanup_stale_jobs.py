@@ -1,13 +1,21 @@
+"""Regression tests for ``deploy/scripts/stress_test/cleanup_stale_jobs.py``."""
+
+from __future__ import annotations
+
 import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock
 
+
+def _repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    raise FileNotFoundError("Could not locate unity-deploy repo root")
+
+
 SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "deploy"
-    / "scripts"
-    / "stress_test"
-    / "cleanup_stale_jobs.py"
+    _repo_root() / "deploy" / "scripts" / "stress_test" / "cleanup_stale_jobs.py"
 )
 
 
