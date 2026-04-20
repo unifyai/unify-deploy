@@ -30,6 +30,11 @@ from msgraph.generated.users.item.send_mail.send_mail_post_request_body import (
     SendMailPostRequestBody,
 )
 
+from adapters.helpers import (
+    acquire_microsoft_user_tokens_ropc,
+    store_microsoft_tokens,
+)
+from adapters.scopes import build_scope_string
 from communication.helpers import (
     _lookup_assistant,
     get_admin_graph_client,
@@ -75,16 +80,28 @@ async def create_outlook_user(request: Request):
     {
         "local": "alice",
         "first_name": "Alice",
-        "last_name": "Smith"
+        "last_name": "Smith",
+        "assistant_id": "..." (optional),
+        "api_key": "..."      (optional),
+        "features": [...]     (optional, defaults to email + teams)
     }
 
     The mailbox is provisioned automatically once the license is assigned.
-    After creation, sets up an inbox watch via ``POST /outlook/watch``.
+    When ``assistant_id`` and ``api_key`` are provided, an ROPC sign-in
+    is performed against the freshly-set password and the resulting
+    delegated tokens are stored as assistant secrets.  This lets every
+    downstream Graph operation use the per-user OAuth path (``/me/...``)
+    rather than the app-only path (``/users/{email}/...``) — which is
+    the only way to subscribe to Teams change notifications without the
+    ``?model=`` billing param.
     """
     data = await request.json()
     local = data.get("local")
     first_name = data.get("first_name")
     last_name = data.get("last_name")
+    assistant_id = data.get("assistant_id")
+    api_key = data.get("api_key")
+    features = data.get("features") or ["email", "teams"]
     if not local or not first_name or not last_name:
         raise HTTPException(
             status_code=400,
@@ -115,7 +132,6 @@ async def create_outlook_user(request: Request):
     created_user = await graph.users.post(user_body)
     logger.info("Created MS365 user %s (id=%s)", primary_email, created_user.id)
 
-    # Assign Exchange Online license so a mailbox is provisioned
     sku_id = SETTINGS.ms365_license_sku_id
     license_assigned = False
     if sku_id:
@@ -128,7 +144,41 @@ async def create_outlook_user(request: Request):
         logger.info("Assigned license %s to %s", sku_id, primary_email)
         license_assigned = True
 
-    # Trigger inbox watch (best-effort; mailbox may take a few seconds)
+    # ROPC: trade the freshly-set password for delegated tokens so the
+    # mailbox behaves like a BYOD account from this point on.  Skipped
+    # when the caller didn't pass assistant_id+api_key (legacy path:
+    # mailbox stays app-only and Teams watch is unreachable — see
+    # ``communication/teams/views.py#watch_teams``).
+    tokens_stored = False
+    if assistant_id and api_key:
+        scope = build_scope_string("microsoft", features)
+        try:
+            tokens = await acquire_microsoft_user_tokens_ropc(
+                tenant_id=SETTINGS.ms365_admin_tenant_id,
+                client_id=SETTINGS.ms365_admin_client_id,
+                client_secret=os.getenv("MS365_ADMIN_CLIENT_SECRET", ""),
+                username=primary_email,
+                password=password,
+                scope=scope,
+            )
+            tokens_stored = await store_microsoft_tokens(
+                assistant_id=assistant_id,
+                old_secrets={},
+                new_secrets=tokens,
+                api_key=api_key,
+                granted_scopes=scope,
+            )
+        except Exception as e:
+            logger.error(
+                "ROPC token acquisition failed for %s: %s "
+                "(check Conditional Access exclusions + 'Allow public "
+                "client flows' on the admin app registration)",
+                primary_email,
+                e,
+            )
+
+    # Trigger inbox + Teams watches (best-effort; mailbox may take a few
+    # seconds to be fully provisioned by Exchange Online).
     async with httpx.AsyncClient() as http_client:
         await http_client.post(
             f"{SETTINGS.comms_url}/outlook/watch",
@@ -136,12 +186,141 @@ async def create_outlook_user(request: Request):
             headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
             timeout=30,
         )
+        if tokens_stored:
+            await http_client.post(
+                f"{SETTINGS.comms_url}/teams/watch",
+                json={"primary_email": primary_email},
+                headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+                timeout=30,
+            )
 
     return {
         "success": True,
         "user": {"primaryEmail": primary_email},
         "user_id": created_user.id,
         "license_assigned": license_assigned,
+        "tokens_stored": tokens_stored,
+    }
+
+
+@router.post("/backfill-tokens")
+async def backfill_outlook_tokens(request: Request):
+    """Acquire delegated tokens for an already-provisioned bot mailbox.
+
+    Used to retro-fit ROPC onto mailboxes created before
+    ``create_outlook_user`` started doing it inline.  Because the
+    original generated password was never persisted, the only
+    automatable path is: admin-resets the password, then ROPC against
+    the new one.
+
+    Request body::
+
+        { "primary_email":  "user@tenant.onmicrosoft.com",
+          "assistant_id":   "...",
+          "api_key":        "...",
+          "features":       [...]   (optional, defaults to email + teams),
+          "rotate_password": true   (optional; default true. Set false
+                                     only if you've already reset the
+                                     password out-of-band and pass it
+                                     in via ``password``),
+          "password":       "..."   (optional override; required when
+                                     rotate_password=false) }
+
+    Side effects:
+      * Rotates the mailbox password (Graph ``PATCH /users/{id}``).
+        Anyone holding the old one will be locked out.
+      * Stores ``MICROSOFT_ACCESS_TOKEN`` / ``MICROSOFT_REFRESH_TOKEN``
+        / ``MICROSOFT_TOKEN_EXPIRES_AT`` / ``MICROSOFT_GRANTED_SCOPES``
+        on the assistant.
+      * Triggers ``/teams/watch`` so the new tokens take effect end-to-end.
+
+    Operational prerequisites are the same as for inline ROPC at
+    create-time: the admin app registration must allow public client
+    flows, and the mailbox must be exempt from MFA-requiring
+    Conditional Access.
+    """
+    data = await request.json()
+    primary_email = data.get("primary_email")
+    assistant_id = data.get("assistant_id")
+    api_key = data.get("api_key")
+    features = data.get("features") or ["email", "teams"]
+    rotate_password = data.get("rotate_password", True)
+    override_password = data.get("password")
+
+    if not primary_email or not assistant_id or not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing primary_email / assistant_id / api_key",
+        )
+    if not rotate_password and not override_password:
+        raise HTTPException(
+            status_code=400,
+            detail="rotate_password=false requires an explicit password",
+        )
+
+    graph = get_admin_graph_client()
+    user = await graph.users.by_user_id(primary_email).get()
+    if not user or not user.id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No MS365 user for {primary_email}",
+        )
+
+    if rotate_password:
+        password = "".join(
+            secrets.choice(string.ascii_letters + string.digits) for _ in range(32)
+        )
+        await graph.users.by_user_id(user.id).patch(
+            User(
+                password_profile=PasswordProfile(
+                    force_change_password_next_sign_in=False,
+                    password=password,
+                ),
+            ),
+        )
+        logger.info("Rotated password for %s in preparation for ROPC", primary_email)
+    else:
+        password = override_password
+
+    scope = build_scope_string("microsoft", features)
+    tokens = await acquire_microsoft_user_tokens_ropc(
+        tenant_id=SETTINGS.ms365_admin_tenant_id,
+        client_id=SETTINGS.ms365_admin_client_id,
+        client_secret=os.getenv("MS365_ADMIN_CLIENT_SECRET", ""),
+        username=primary_email,
+        password=password,
+        scope=scope,
+    )
+    tokens_stored = await store_microsoft_tokens(
+        assistant_id=assistant_id,
+        old_secrets={
+            "MICROSOFT_ACCESS_TOKEN": "_",
+            "MICROSOFT_REFRESH_TOKEN": "_",
+            "MICROSOFT_TOKEN_EXPIRES_AT": "_",
+            "MICROSOFT_GRANTED_SCOPES": "_",
+        },
+        new_secrets=tokens,
+        api_key=api_key,
+        granted_scopes=scope,
+    )
+
+    teams_watch_status: int | None = None
+    if tokens_stored:
+        async with httpx.AsyncClient() as http_client:
+            r = await http_client.post(
+                f"{SETTINGS.comms_url}/teams/watch",
+                json={"primary_email": primary_email},
+                headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+                timeout=30,
+            )
+            teams_watch_status = r.status_code
+
+    return {
+        "success": tokens_stored,
+        "primary_email": primary_email,
+        "tokens_stored": tokens_stored,
+        "password_rotated": rotate_password,
+        "teams_watch_status": teams_watch_status,
     }
 
 

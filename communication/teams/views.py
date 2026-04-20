@@ -21,25 +21,29 @@ from common.settings import SETTINGS
 
 router = APIRouter()
 
-# Retry configuration for subscription creation (1 retry = 2 total attempts)
+# Retry once on validation timeouts; Graph occasionally fails to reach
+# the webhook on the first attempt while warming up the notification
+# pipeline.
 MAX_RETRIES = 1
 
+# Resource paths Graph uses for the user-scoped "everything" feeds.  Both
+# are delegated-only in our setup — see watch_teams below for why.
+_CHATS_RESOURCE = "/me/chats/getAllMessages"
+_JOINED_TEAMS_RESOURCE = "/me/joinedTeams/getAllMessages"
 
-def _with_model_a(url: str) -> str:
-    """Append ``model=A`` to a Graph notification URL.
 
-    App-only Teams change notifications (chat/channel ``getAllMessages``
-    and channel message resources) must declare a billing model or
-    Microsoft silently throttles/drops deliveries. Model A bills per
-    notification and is the correct choice when the tenant isn't
-    configured for Teams licensing-based (Model B) metering. Delegated
-    subscriptions reject this param, so callers only pass through this
-    helper when authenticating as the application.
+def _sub_owned_by(sub, webhook_secret: str, user_email: str) -> bool:
+    """Return True if *sub* was created by this service for *user_email*.
+
+    Uses ``clientState`` (``{secret}::{email}``) as the ownership signal
+    so we can safely dedupe stale subs without touching subs that belong
+    to other apps or users.
     """
-    if "model=" in url:
-        return url
-    sep = "&" if "?" in url else "?"
-    return f"{url}{sep}model=A"
+    cs = (sub.client_state or "") if hasattr(sub, "client_state") else ""
+    if "::" not in cs:
+        return False
+    prefix, _, email = cs.partition("::")
+    return prefix == webhook_secret and email.lower() == user_email.lower()
 
 
 async def _upload_and_build_attachments(
@@ -98,6 +102,58 @@ def _build_chat_message(
             content_type=BodyType.Html if content_type == "html" else BodyType.Text,
         ),
     )
+
+
+async def _create_one_subscription(
+    graph,
+    *,
+    resource: str,
+    webhook_url: str,
+    client_state: str,
+    user_email: str,
+) -> dict:
+    """POST a single subscription with our retry behaviour.
+
+    Returns ``{"resource": ..., "subscription_id": ..., "expiration": ...}``
+    on success, ``{"resource": ..., "error": ...}`` on a permission
+    failure (so the caller can degrade gracefully — e.g. when a BYOD
+    tenant hasn't admin-consented ``ChannelMessage.Read.All``, the
+    chats sub still succeeds and we continue).
+    """
+    sub_kwargs = dict(
+        change_type="created",
+        notification_url=webhook_url,
+        resource=resource,
+        expiration_date_time=datetime.now(timezone.utc) + timedelta(minutes=60),
+        client_state=client_state,
+    )
+    last_err: Exception | None = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            result = await graph.subscriptions.post(Subscription(**sub_kwargs))
+            logging.info(
+                f"Teams watch created on {resource} for {user_email}: {result.id}",
+            )
+            return {
+                "resource": resource,
+                "subscription_id": result.id,
+                "expiration": result.expiration_date_time.isoformat(),
+            }
+        except Exception as e:
+            last_err = e
+            error_str = str(e).lower()
+            is_validation_timeout = "validation" in error_str and "timeout" in error_str
+            if is_validation_timeout and attempt < MAX_RETRIES:
+                logging.warning(
+                    f"Teams watch validation timeout on {resource} for "
+                    f"{user_email}, retrying...",
+                )
+                continue
+            break
+    logging.warning(
+        f"Teams watch on {resource} for {user_email} failed: {last_err}",
+    )
+    return {"resource": resource, "error": str(last_err)}
 
 
 @router.post("/send")
@@ -182,16 +238,34 @@ async def list_teams_chats(user_email: str):
 
 
 @router.post("/watch")
-async def watch_teams_chat(request: Request):
-    """
-    Create webhook subscription for new chat messages.
-    Teams chat subscriptions expire after 60 minutes max.
+async def watch_teams(request: Request):
+    """Create the unified Teams change-notification subscriptions for a user.
 
-    Request body:
-    {
-        "primary_email": "user@yourdomain.com",
-        "webhook_url": "https://..." (optional, defaults to adapters URL)
-    }
+    Two subscriptions are created against the user's delegated token:
+
+    * ``/me/chats/getAllMessages`` — every 1:1 and group chat the user
+      participates in, now and in the future.
+    * ``/me/joinedTeams/getAllMessages`` — every channel message across
+      every team the user is a member of, including teams they later
+      join.  Requires the tenant admin to have consented
+      ``ChannelMessage.Read.All``; if they haven't this sub fails 403
+      and we keep going (chats still works).
+
+    Both subscriptions expire in 60 minutes; ``/scheduled/teams-watches``
+    re-posts here every 30 min and re-creates them.
+
+    Why delegated-only: app-only Teams subscriptions require a billing
+    model declaration (``?model=A`` or ``?model=B``) in the
+    notification URL, which Graph charges per notification or per
+    licensed user.  Delegated subscriptions inherit the user's existing
+    Teams license and need no extra billing setup.  For unify-managed
+    mailboxes we obtain delegated tokens via ROPC at provisioning time
+    (see ``communication/outlook/views.py#create_outlook_user``).
+
+    Request body::
+
+        { "primary_email": "user@yourdomain.com",
+          "webhook_url": "https://..." (optional) }
     """
     data = await request.json()
     user_email = data.get("primary_email")
@@ -201,92 +275,88 @@ async def watch_teams_chat(request: Request):
         raise HTTPException(status_code=400, detail="Missing primary_email")
 
     try:
-        # Pick credentials + resource path based on whether the assistant
-        # has a per-user OAuth token.  BYOD assistants use delegated
-        # auth + /me paths; us-provisioned assistants use admin app
-        # credentials + explicit /users/{email} paths.  Note: app-only
-        # Teams chat subscriptions additionally require Microsoft
-        # licensing (``?model=A``, lifecycle URL, encryption) on the
-        # tenant side for notifications to actually be delivered.
         try:
             assistant = await _lookup_assistant(user_email)
-            has_user_token = bool(
-                assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
-            )
-            graph = graph_client_from_assistant(assistant, user_email)
         except HTTPException:
-            # No assistant record yet (e.g. fresh provisioning) — fall
-            # back to admin credentials.
-            has_user_token = False
-            graph = get_admin_graph_client()
+            assistant = None
 
-        target_resource = (
-            "/me/chats/getAllMessages"
-            if has_user_token
-            else f"/users/{user_email}/chats/getAllMessages"
+        has_user_token = bool(
+            (assistant or {}).get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
         )
+        if not has_user_token:
+            # Without a delegated token there is no path forward that
+            # avoids ``?model=``.  Surface a clear error rather than
+            # silently falling back to app-only — that defeats the whole
+            # purpose of the unified watcher.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No delegated MICROSOFT_ACCESS_TOKEN for {user_email}. "
+                    "Run the BYOD OAuth flow or re-provision via "
+                    "/outlook/create with assistant_id+api_key so ROPC "
+                    "can store user tokens."
+                ),
+            )
 
-        # App-only subs on getAllMessages require a billing model or
-        # Graph silently suppresses notifications.
-        notification_url = webhook_url if has_user_token else _with_model_a(webhook_url)
+        graph = graph_client_from_assistant(assistant, user_email)
 
-        # Delete existing subscriptions for this resource
-        subs = await graph.subscriptions.get()
-        for sub in subs.value or []:
-            if sub.resource and sub.resource.lower() == target_resource.lower():
-                try:
-                    await graph.subscriptions.by_subscription_id(sub.id).delete()
-                except Exception:
-                    pass
-
-        # Create new subscription with retry logic for validation timeouts
-        # Encode assistant email in clientState so we can identify them in notifications
-        # Format: {secret}::{email}
         webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
         client_state = f"{webhook_secret}::{user_email}"
 
-        for attempt in range(MAX_RETRIES + 1):
+        # Tear down any prior subs we own on either of the two unified
+        # resources.  We match by clientState (ownership) + suffix so
+        # we don't disturb subs created by other tenants/apps and so
+        # we catch resource path forms Graph normalises after the fact.
+        subs = await graph.subscriptions.get()
+        for sub in subs.value or []:
+            resource = (sub.resource or "").lower()
+            if not (
+                resource.endswith("/chats/getallmessages")
+                or resource.endswith("/joinedteams/getallmessages")
+            ):
+                continue
+            if not _sub_owned_by(sub, webhook_secret, user_email):
+                continue
             try:
-                result = await graph.subscriptions.post(
-                    Subscription(
-                        change_type="created",
-                        notification_url=notification_url,
-                        resource=target_resource,
-                        expiration_date_time=datetime.now(timezone.utc)
-                        + timedelta(minutes=60),
-                        client_state=client_state,
-                    ),
-                )
-                logging.info(f"Teams chat watch created for {user_email}: {result.id}")
-                return {
-                    "success": True,
-                    "action": "created",
-                    "subscription_id": result.id,
-                    "expiration": result.expiration_date_time.isoformat(),
-                }
-            except Exception as e:
-                error_str = str(e).lower()
-                is_validation_timeout = (
-                    "validation" in error_str and "timeout" in error_str
-                )
-                if is_validation_timeout and attempt < MAX_RETRIES:
-                    logging.warning(
-                        f"Teams chat watch validation timeout for {user_email}, retrying...",
-                    )
-                    continue
-                raise
+                await graph.subscriptions.by_subscription_id(sub.id).delete()
+            except Exception:
+                pass
+
+        chats_result = await _create_one_subscription(
+            graph,
+            resource=_CHATS_RESOURCE,
+            webhook_url=webhook_url,
+            client_state=client_state,
+            user_email=user_email,
+        )
+        channels_result = await _create_one_subscription(
+            graph,
+            resource=_JOINED_TEAMS_RESOURCE,
+            webhook_url=webhook_url,
+            client_state=client_state,
+            user_email=user_email,
+        )
+
+        # Treat the call as successful as long as chats came up — even
+        # in well-configured tenants channels can fail because admin
+        # consent on ``ChannelMessage.Read.All`` hasn't been granted.
+        # The caller can inspect ``channels`` to detect partial failure.
+        return {
+            "success": "subscription_id" in chats_result,
+            "chats": chats_result,
+            "channels": channels_result,
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Failed to create Teams chat watch: {e}")
+        logging.error(f"Failed to create Teams watch: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/watch")
 async def delete_teams_watch(request: Request):
-    """
-    Delete Teams chat subscription.
+    """Delete both unified Teams subscriptions for a user.
 
     Request body: { "primary_email": "user@yourdomain.com" }
     """
@@ -303,17 +373,28 @@ async def delete_teams_watch(request: Request):
         except HTTPException:
             graph = get_admin_graph_client()
 
-        target_resources = {
-            "/me/chats/getAllMessages".lower(),
-            f"/users/{primary_email}/chats/getAllMessages".lower(),
-        }
+        webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
 
         subs = await graph.subscriptions.get()
+        deleted = 0
         for sub in subs.value or []:
-            if sub.resource and sub.resource.lower() in target_resources:
-                await graph.subscriptions.by_subscription_id(sub.id).delete()
-                logging.info(f"Teams chat watch deleted for {primary_email}")
-                return {"success": True, "primary_email": primary_email}
+            resource = (sub.resource or "").lower()
+            if not (
+                resource.endswith("/chats/getallmessages")
+                or resource.endswith("/joinedteams/getallmessages")
+            ):
+                continue
+            if not _sub_owned_by(sub, webhook_secret, primary_email):
+                continue
+            await graph.subscriptions.by_subscription_id(sub.id).delete()
+            deleted += 1
+
+        if deleted:
+            logging.info(
+                f"Teams watch deleted for {primary_email} "
+                f"({deleted} subscription(s))",
+            )
+            return {"success": True, "primary_email": primary_email, "deleted": deleted}
 
         raise HTTPException(
             status_code=404,
@@ -323,7 +404,7 @@ async def delete_teams_watch(request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Failed to delete Teams chat watch: {e}")
+        logging.error(f"Failed to delete Teams watch: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -458,164 +539,6 @@ async def list_team_channels(team_id: str, user_email: str):
         raise
     except Exception as e:
         logging.error(f"Failed to list team channels: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/watch-channel")
-async def watch_teams_channel(request: Request):
-    """
-    Create webhook subscription for new messages in a Teams channel.
-    Channel subscriptions expire after 60 minutes max.
-
-    Request body:
-    {
-        "primary_email": "user@yourdomain.com",
-        "team_id": "team-uuid",
-        "channel_id": "19:channel-id@thread.tacv2",
-        "webhook_url": "https://..." (optional, defaults to adapters URL)
-    }
-    """
-    data = await request.json()
-    user_email = data.get("primary_email")
-    team_id = data.get("team_id")
-    channel_id = data.get("channel_id")
-    webhook_url = data.get("webhook_url") or f"{SETTINGS.adapters_url}/microsoft/router"
-
-    if not user_email:
-        raise HTTPException(status_code=400, detail="Missing primary_email")
-    if not team_id:
-        raise HTTPException(status_code=400, detail="Missing team_id")
-    if not channel_id:
-        raise HTTPException(status_code=400, detail="Missing channel_id")
-
-    try:
-        # Mirror watch_teams_chat's credential resolution so we can tell
-        # whether the eventual Graph client is delegated or app-only.
-        try:
-            assistant = await _lookup_assistant(user_email)
-            has_user_token = bool(
-                assistant.get("secrets", {}).get("MICROSOFT_ACCESS_TOKEN"),
-            )
-            graph = graph_client_from_assistant(assistant, user_email)
-        except HTTPException:
-            has_user_token = False
-            graph = get_admin_graph_client()
-
-        # Resource path for channel messages
-        target_resource = f"/teams/{team_id}/channels/{channel_id}/messages"
-
-        # App-only channel subs also need the billing model declared.
-        notification_url = webhook_url if has_user_token else _with_model_a(webhook_url)
-
-        # Delete existing subscriptions for this exact resource
-        subs = await graph.subscriptions.get()
-        for sub in subs.value or []:
-            if sub.resource and sub.resource.lower() == target_resource.lower():
-                try:
-                    await graph.subscriptions.by_subscription_id(sub.id).delete()
-                except Exception:
-                    pass
-
-        # Create new subscription with retry logic for validation timeouts
-        # Format: {secret}::{email} - same as chat watch
-        # team_id and channel_id are extracted from the resource path in the adapter
-        webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
-        client_state = f"{webhook_secret}::{user_email}"
-
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                result = await graph.subscriptions.post(
-                    Subscription(
-                        change_type="created",
-                        notification_url=notification_url,
-                        resource=target_resource,
-                        expiration_date_time=datetime.now(timezone.utc)
-                        + timedelta(minutes=60),
-                        client_state=client_state,
-                    ),
-                )
-                logging.info(
-                    f"Teams channel watch created for {user_email} on {team_id}/{channel_id}: {result.id}",
-                )
-                return {
-                    "success": True,
-                    "action": "created",
-                    "subscription_id": result.id,
-                    "team_id": team_id,
-                    "channel_id": channel_id,
-                    "expiration": result.expiration_date_time.isoformat(),
-                }
-            except Exception as e:
-                error_str = str(e).lower()
-                is_validation_timeout = (
-                    "validation" in error_str and "timeout" in error_str
-                )
-                if is_validation_timeout and attempt < MAX_RETRIES:
-                    logging.warning(
-                        f"Teams channel watch validation timeout for {user_email} "
-                        f"on {team_id}/{channel_id}, retrying...",
-                    )
-                    continue
-                raise
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to create Teams channel watch: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/watch-channel")
-async def delete_teams_channel_watch(request: Request):
-    """
-    Delete Teams channel subscription.
-
-    Request body:
-    {
-        "primary_email": "user@yourdomain.com",
-        "team_id": "team-uuid",
-        "channel_id": "19:channel-id@thread.tacv2"
-    }
-    """
-    data = await request.json()
-    primary_email = data.get("primary_email")
-    team_id = data.get("team_id")
-    channel_id = data.get("channel_id")
-
-    if not primary_email:
-        raise HTTPException(status_code=400, detail="Missing primary_email")
-    if not team_id:
-        raise HTTPException(status_code=400, detail="Missing team_id")
-    if not channel_id:
-        raise HTTPException(status_code=400, detail="Missing channel_id")
-
-    try:
-        graph = await get_graph_client(primary_email)
-        target_resource = f"/teams/{team_id}/channels/{channel_id}/messages"
-
-        subs = await graph.subscriptions.get()
-        for sub in subs.value or []:
-            if sub.resource and sub.resource.lower() == target_resource.lower():
-                await graph.subscriptions.by_subscription_id(sub.id).delete()
-                logging.info(
-                    f"Teams channel watch deleted for {primary_email} on {team_id}/{channel_id}",
-                )
-                return {
-                    "success": True,
-                    "primary_email": primary_email,
-                    "team_id": team_id,
-                    "channel_id": channel_id,
-                }
-
-        raise HTTPException(
-            status_code=404,
-            detail=f"No subscription found for channel {channel_id} in team {team_id}",
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Failed to delete Teams channel watch: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -2456,14 +2456,20 @@ async def teams_notification_processor(request: Request):
         resource = notification.get("resource", "")
         resource_data = notification.get("resourceData", {})
 
-        # Determine message type from resource path
+        # Determine message type from resource path.  Channel messages
+        # arrive in two shapes:
+        #   teams('{id}')/channels('{id}')/messages('{id}')
+        #   users('{id}')/joinedTeams('{id}')/channels('{id}')/messages('{id}')
+        # The second is what ``/me/joinedTeams/getAllMessages`` produces;
+        # ``joinedTeams`` happens to contain the substring ``teams`` so
+        # the older detector doesn't need to change.
+        resource_lower = resource.lower()
         is_channel_message = (
-            "teams(" in resource.lower() and "channels(" in resource.lower()
-        )
-        is_reply = "replies(" in resource.lower() or "/replies/" in resource.lower()
+            "channels(" in resource_lower or "/channels/" in resource_lower
+        ) and ("teams(" in resource_lower or "/teams/" in resource_lower)
+        is_reply = "replies(" in resource_lower or "/replies/" in resource_lower
         msg_type = "channel" if is_channel_message else "chat"
 
-        # Extract IDs
         if is_reply:
             message_id = resource_data.get("id") or parse_teams_resource_id(
                 resource,
@@ -2478,7 +2484,13 @@ async def teams_notification_processor(request: Request):
             parent_message_id = None
 
         if is_channel_message:
-            team_id = parse_teams_resource_id(resource, "teams")
+            # Prefer ``joinedTeams`` when present so we don't accidentally
+            # extract the literal ``joinedTeams('{id}')`` segment when
+            # asking for ``teams``.  ``joinedTeams`` carries the same
+            # team id semantically.
+            team_id = parse_teams_resource_id(
+                resource, "joinedTeams"
+            ) or parse_teams_resource_id(resource, "teams")
             channel_id = parse_teams_resource_id(resource, "channels")
             chat_id = None
             if not team_id or not channel_id or not message_id:
@@ -2607,6 +2619,16 @@ async def teams_notification_processor(request: Request):
                     "userPrincipalName",
                 )
             if not sender_email:
+                # Federated / consumer senders aren't resolvable via
+                # ``/users/{id}`` (their id is a cross-tenant proxy, not a
+                # tenant user GUID).  Synthesising ``{id}@teams`` keeps
+                # the downstream contact pipeline flowing but the contact
+                # will look like an unknown external — worth surfacing so
+                # operators can correlate "unknown sender" reports.
+                logger.warning(
+                    f"sender resolve fell through to synthetic placeholder "
+                    f"for sender_id={sender_id} (federated / consumer account?)",
+                )
                 sender_email = f"{sender_id}@teams"
 
         logger.info(
@@ -2618,9 +2640,7 @@ async def teams_notification_processor(request: Request):
         #     logger.info(f"Skipping self-message from {_redact_email(sender_email)}")
         #     return Response(status_code=200)
 
-        # Validate contact and start job (blocking calls offloaded to thread)
         def _validate_and_start():
-            # Validate contact
             contacts, is_valid = check_valid_contact(
                 email_address=sender_email,
                 medium="teams",
@@ -2630,12 +2650,12 @@ async def teams_notification_processor(request: Request):
                 user_whatsapp_number=assistant_data.get("user_whatsapp_number", ""),
                 user_email=assistant_data.get("user_email", ""),
                 assistant_data=assistant_data,
+                sender_name=sender_name,
             )
             if not is_valid:
                 logger.info(f"Invalid contact: {_redact_email(sender_email)}")
                 return None, False
 
-            # Local assistants publish to Pub/Sub but keep runtime local.
             if uses_local_unity_runtime(assistant_data):
                 logger.info("Skipped remote job start for local teams assistant")
             else:
@@ -2646,6 +2666,19 @@ async def teams_notification_processor(request: Request):
         contacts, valid = await asyncio.to_thread(_validate_and_start)
         if not valid:
             return Response(status_code=200)
+
+        # Cache the (sender_id → contact) mapping so subsequent messages
+        # from this federated/external sender match in O(1) without
+        # re-running the brittle name-fallback path.  Best-effort: a
+        # failure here does not break the current message's delivery.
+        if sender_id and sender_email and sender_email.endswith("@teams"):
+            await _register_teams_user_id_contact(
+                assistant_id=str(assistant_id),
+                api_key=api_key,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                synthetic_email=sender_email,
+            )
 
         # Build event payload
         message_content = message_data.get("body", {}).get("content", "")
@@ -2735,6 +2768,65 @@ async def teams_notification_processor(request: Request):
         return Response(content=error_message, status_code=500)
 
 
+async def _handle_teams_lifecycle(
+    item: dict,
+    http_client: httpx.AsyncClient,
+) -> None:
+    """Process a single Graph lifecycle notification item.
+
+    The unified Teams watcher is delegated-only and creates two
+    subscriptions per user (``/me/chats/getAllMessages`` and
+    ``/me/joinedTeams/getAllMessages``).  Graph posts ``lifecycleEvent``
+    items with one of:
+
+    - ``subscriptionRemoved`` / ``missed`` — re-bootstrap by POSTing
+      ``/teams/watch``; that endpoint deletes any owned stale subs and
+      re-creates both.
+    - ``reauthorizationRequired`` — also handled by re-POSTing
+      ``/teams/watch``.  Delegated subs rarely fire this event (the
+      30 min scheduler tick handles renewal in the common case), but
+      we treat it the same way: rebuild from scratch instead of
+      PATCHing, because the user may have rotated tokens between the
+      old sub creation and now.
+
+    Ownership is verified via ``clientState`` (``{secret}::{email}``)
+    to avoid touching subscriptions that belong to other tenants or
+    apps sharing the same endpoint.
+    """
+    event = item.get("lifecycleEvent")
+    client_state = item.get("clientState", "")
+
+    expected_secret = os.environ.get("TEAMS_WEBHOOK_SECRET", "")
+    if not expected_secret or "::" not in client_state:
+        logger.info(f"lifecycle: dropping item with invalid clientState ({event})")
+        return
+    secret, _, assistant_email = client_state.partition("::")
+    if secret != expected_secret or not assistant_email:
+        logger.info(f"lifecycle: dropping item with wrong secret ({event})")
+        return
+
+    if event not in ("subscriptionRemoved", "missed", "reauthorizationRequired"):
+        logger.info(f"lifecycle: unhandled event {event!r}")
+        return
+
+    try:
+        resp = await http_client.post(
+            f"{SETTINGS.comms_url}/teams/watch",
+            json={"primary_email": assistant_email},
+            headers={
+                "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+            },
+            timeout=2.0,
+        )
+        logger.info(
+            f"lifecycle: rebuild /teams/watch for "
+            f"{_redact_email(assistant_email)} ({event}) returned "
+            f"{resp.status_code}",
+        )
+    except Exception as e:
+        logger.info(f"lifecycle: rebuild request sent (timeout ok): {e}")
+
+
 @app.post("/microsoft/router")
 async def microsoft_router(request: Request):
     """
@@ -2761,6 +2853,14 @@ async def microsoft_router(request: Request):
 
     async with httpx.AsyncClient() as client:
         for notification in notifications:
+            # Lifecycle notifications share the same URL as change
+            # notifications (app-only Teams subs use the same endpoint for
+            # both); we identify them by the ``lifecycleEvent`` field and
+            # handle them inline rather than forwarding to /chat/teams.
+            if notification.get("lifecycleEvent"):
+                await _handle_teams_lifecycle(notification, client)
+                continue
+
             resource = notification.get("resource", "")
 
             # Route based on resource type
@@ -2797,6 +2897,49 @@ async def microsoft_router(request: Request):
 # =============================================================================
 # BYOD Helpers
 # =============================================================================
+
+
+async def _register_teams_user_id_contact(
+    *,
+    assistant_id: str,
+    api_key: str,
+    sender_id: str,
+    sender_name: str,
+    synthetic_email: str,
+) -> None:
+    """Cache a (Teams sender_id → contact) mapping in Orchestra.
+
+    Called the first time we successfully resolve a federated /
+    anonymous-guest / consumer-MSA Teams sender by name.  Subsequent
+    messages from the same ``sender_id`` can short-circuit the
+    name-fallback path; the synthetic ``{sender_id}@teams`` email
+    becomes a stable lookup key.
+
+    Best-effort: failures are logged and swallowed so they never block
+    the inbound message that triggered them.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/contact",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "contact_type": "teams_user_id",
+                    "provisioned_by": "system",
+                    "contact_value": synthetic_email,
+                    "display_name": sender_name,
+                    "external_id": sender_id,
+                },
+                timeout=30,
+            )
+            if response.status_code >= 400:
+                logger.info(
+                    "teams_user_id cache write returned %s: %s",
+                    response.status_code,
+                    response.text[:200],
+                )
+    except Exception as e:
+        logger.info(f"teams_user_id cache write failed (non-fatal): {e}")
 
 
 async def _register_byod_email_contact(
@@ -3676,26 +3819,21 @@ def scheduled_google_tokens(payload: ScheduledPayload):
 @app.post("/scheduled/teams-watches", dependencies=[Depends(require_admin_key)])
 def scheduled_teams_watches(payload: ScheduledPayload):
     """
-    Cloud Run endpoint that renews Teams chat AND channel subscriptions
-    for every Microsoft-365-backed assistant.  Teams subscriptions
-    expire after 60 minutes, so this should run every 30-45 mins.
+    Cloud Run endpoint that renews the unified Teams subscriptions
+    (chats + channels via ``joinedTeams``) for every Microsoft-365
+    assistant.  Teams subscriptions expire after 60 minutes, so this
+    runs every 30 mins.
 
-    Assistants are selected by ``email_provider == "microsoft_365"``
-    (with a token-sniffing fallback for records that predate the
-    field), matching the shape of ``/scheduled/email-watches``.  The
-    comms service picks credentials internally — BYOD uses the
-    per-user OAuth token; us-provisioned falls back to admin app
-    credentials.
-
-    Channel sub renewal still requires a per-user token (we look up
-    existing subs via the user-scoped Graph endpoint), so it is
-    guarded behind BYOD.
+    A single POST to ``/teams/watch`` per assistant rebuilds both subs.
+    The comms service requires a delegated token for every mailbox in
+    this codepath; us-provisioned mailboxes get one via ROPC at
+    ``/outlook/create``.  Mailboxes without a stored token surface as
+    ``failed`` in the results and need a re-provision or BYOD OAuth.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
         return Response(content="ORCHESTRA_ADMIN_KEY not configured", status_code=500)
 
-    # Fetch all assistants with their secrets
     if not payload.test:
         try:
             response = requests.get(
@@ -3722,9 +3860,10 @@ def scheduled_teams_watches(payload: ScheduledPayload):
     logger.info(f"Processing {len(all_assistants)} assistants for Teams watch renewal")
 
     results = {
-        "chats_renewed": [],
-        "channels_renewed": [],
-        "skipped": [],
+        "renewed": [],
+        "channels_unconsented": [],
+        "no_token": [],
+        "timed_out": [],
         "failed": [],
     }
 
@@ -3736,9 +3875,6 @@ def scheduled_teams_watches(payload: ScheduledPayload):
         secrets = assistant.get("secrets", {})
         access_token = secrets.get("MICROSOFT_ACCESS_TOKEN")
 
-        # Include every Microsoft-backed assistant (BYOD + us-provisioned).
-        # Token sniffing is a fallback for records that predate the
-        # ``email_provider`` field.
         email_provider = assistant.get("email_provider")
         if not email_provider:
             email_provider = "microsoft_365" if access_token else "google_workspace"
@@ -3746,102 +3882,47 @@ def scheduled_teams_watches(payload: ScheduledPayload):
             continue
 
         try:
-            # 1. Renew Teams chat watch (DMs and group chats).  The
-            #    comms service picks credentials + resource path based
-            #    on whether the assistant has a per-user token.
             watch_response = requests.post(
                 f"{SETTINGS.comms_url}/teams/watch",
                 json={"primary_email": email},
                 headers={"Authorization": f"Bearer {admin_key}"},
                 timeout=30,
             )
-            result = (
-                watch_response.json()
-                if watch_response.status_code == 200
-                else {"success": False, "error": watch_response.text}
-            )
-            if result.get("success"):
-                results["chats_renewed"].append({"email": email, **result})
-            else:
-                results["failed"].append({"email": email, "type": "chat", **result})
-            logger.info(
-                f"Teams chat watch for {_redact_email(email)}: {result.get('success', False)}",
-            )
-
-            # 2. Renew any existing channel subscriptions.  This lookup
-            #    hits Graph with the user token, so it is BYOD-only.
-            #    Us-provisioned assistants without a user token skip
-            #    this step entirely; if channel watches are ever
-            #    required for them we would need a tenant-scoped
-            #    enumeration path.
-            if not access_token:
-                results["skipped"].append(
-                    {"email": email, "type": "channel_enumeration"},
+            if watch_response.status_code == 409:
+                results["no_token"].append(
+                    {"email": email, "detail": watch_response.text[:300]},
+                )
+                continue
+            if watch_response.status_code != 200:
+                results["failed"].append(
+                    {
+                        "email": email,
+                        "status": watch_response.status_code,
+                        "error": watch_response.text[:500],
+                    },
                 )
                 continue
 
-            subs_response = requests.get(
-                "https://graph.microsoft.com/v1.0/subscriptions",
-                headers={"Authorization": f"Bearer {access_token}"},
-                timeout=30,
-            )
+            result = watch_response.json()
+            if result.get("success"):
+                results["renewed"].append({"email": email, **result})
+            else:
+                results["failed"].append({"email": email, **result})
 
-            logger.info(
-                f"Subscriptions response status code: {subs_response.status_code}",
-            )
-            if subs_response.status_code == 200:
-                subs_data = subs_response.json()
-                for sub in subs_data.get("value", []):
-                    resource = sub.get("resource", "")
-                    # Check if this is a channel subscription
-                    if "/teams/" in resource and "/channels/" in resource:
-                        # Parse team_id and channel_id from resource
-                        try:
-                            parts = resource.split("/")
-                            team_idx = parts.index("teams")
-                            channel_idx = parts.index("channels")
-                            team_id = parts[team_idx + 1]
-                            channel_id = parts[channel_idx + 1]
-
-                            # Renew channel subscription
-                            channel_response = requests.post(
-                                f"{SETTINGS.comms_url}/teams/watch-channel",
-                                json={
-                                    "primary_email": email,
-                                    "team_id": team_id,
-                                    "channel_id": channel_id,
-                                },
-                                headers={"Authorization": f"Bearer {admin_key}"},
-                                timeout=30,
-                            )
-                            ch_result = (
-                                channel_response.json()
-                                if channel_response.status_code == 200
-                                else {"success": False, "error": channel_response.text}
-                            )
-                            if ch_result.get("success"):
-                                results["channels_renewed"].append(
-                                    {"email": email, **ch_result},
-                                )
-                            else:
-                                results["failed"].append(
-                                    {"email": email, "type": "channel", **ch_result},
-                                )
-                            logger.info(
-                                f"Teams channel watch for {_redact_email(email)} ({team_id}/{channel_id}): "
-                                f"{ch_result.get('success', False)}",
-                            )
-                        except (ValueError, IndexError):
-                            logger.error(
-                                f"Could not parse channel subscription: {resource}",
-                            )
+            # Track the partial-failure case explicitly so dashboards
+            # can flag tenants that haven't admin-consented
+            # ``ChannelMessage.Read.All``.
+            if "error" in (result.get("channels") or {}):
+                results["channels_unconsented"].append(
+                    {"email": email, "error": result["channels"]["error"]},
+                )
 
         except requests.exceptions.Timeout:
-            # Timeout is not a failure - the request was sent and may succeed
             logger.info(
-                f"Teams watch for {_redact_email(email)}: timed out (request may still succeed)",
+                f"Teams watch for {_redact_email(email)}: timed out "
+                "(request may still succeed)",
             )
-            results["channels_renewed"].append({"email": email, "status": "timeout"})
+            results["timed_out"].append({"email": email, "status": "timeout"})
         except Exception as e:
             error_msg = f"Error renewing Teams watch for {_redact_email(email)}: {e}"
             logger.error(error_msg, exc_info=True)
@@ -3851,8 +3932,10 @@ def scheduled_teams_watches(payload: ScheduledPayload):
 
     logger.info(
         f"Teams watch renewal complete: "
-        f"{len(results['chats_renewed'])} chats, "
-        f"{len(results['channels_renewed'])} channels, "
+        f"{len(results['renewed'])} renewed, "
+        f"{len(results['channels_unconsented'])} channels_unconsented, "
+        f"{len(results['no_token'])} no_token, "
+        f"{len(results['timed_out'])} timed_out, "
         f"{len(results['failed'])} failed",
     )
     return results

@@ -301,6 +301,60 @@ def resolve_discord_route(bot_id: str, sender: str) -> dict | None:
     return _resolve_shared_pool_route("discord", bot_id, sender)
 
 
+def _normalize_display_name(name: str) -> str:
+    """Lower-case + strip punctuation/diacritics so two display strings
+    that "look the same" compare equal.
+
+    Conservative: only does what's safe for an automated match.  We do
+    NOT collapse cultural ordering differences (``Surname, First`` vs
+    ``First Surname``) — callers handle that by trying both join orders.
+    """
+    if not name:
+        return ""
+    import unicodedata as _ud
+
+    decomposed = _ud.normalize("NFKD", name)
+    stripped = "".join(c for c in decomposed if not _ud.combining(c))
+    cleaned = re.sub(r"[^\w\s]", " ", stripped).lower()
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _match_contact_by_name(
+    sender_name: str,
+    contacts: list[dict],
+) -> dict | None:
+    """Return the unique contact whose ``first_name + surname`` matches
+    ``sender_name``, or ``None`` when there is zero or >1 match.
+
+    Two candidates per contact: ``"First Surname"`` and ``"Surname First"``
+    — Teams display names sometimes follow the locale convention of the
+    sender's tenant.  Ambiguity (multiple matches) is treated as a
+    *failed* match: we'd rather drop the message than route it to the
+    wrong contact.
+    """
+    target = _normalize_display_name(sender_name)
+    if not target:
+        return None
+    matches: list[dict] = []
+    for contact in contacts:
+        first = contact.get("first_name", "") or ""
+        surname = contact.get("surname", "") or ""
+        candidates = (
+            _normalize_display_name(f"{first} {surname}"),
+            _normalize_display_name(f"{surname} {first}"),
+        )
+        if target in candidates:
+            matches.append(contact)
+    if len(matches) != 1:
+        if len(matches) > 1:
+            logger.info(
+                f"ambiguous_name_match: {sender_name!r} matched "
+                f"{len(matches)} contacts; refusing to route",
+            )
+        return None
+    return matches[0]
+
+
 def check_contact_details(
     email_address: str = None,
     phone_number: str = None,
@@ -345,6 +399,7 @@ def check_valid_contact(
     user_whatsapp_number: str = None,
     user_email: str = None,
     assistant_data: dict = None,
+    sender_name: str = None,
 ) -> list[dict[str, str]]:
     """
     Check if the contact is valid.
@@ -359,6 +414,11 @@ def check_valid_contact(
         user_whatsapp_number: The whatsapp number of the user.
         user_email: The email of the user.
         assistant_data: The data of the assistant.
+        sender_name: Display name from the inbound provider (Teams/etc.).
+            Used as a fallback when we have no resolvable email — e.g.
+            federated, anonymous-guest, or consumer-MSA Teams users
+            whose ``from.user.email`` is missing.  Match is best-effort
+            and only succeeds when exactly one contact's name lines up.
     """
     logger.info(
         f"Checking valid contact: {email_address}, {phone_number}, {medium}, "
@@ -444,6 +504,22 @@ def check_valid_contact(
         ):
             logger.info(f"Contact found: {contact}")
             return contacts, True
+
+    # Teams-specific fallback: federated / consumer / anonymous-guest
+    # senders often arrive with no resolvable email (or our synthesised
+    # ``{id}@teams`` placeholder).  In that case the only signal Graph
+    # gives us is ``from.user.displayName``.  Match it against the
+    # contacts' first/surname; refuse to route on ambiguity.
+    if (
+        medium == "teams"
+        and sender_name
+        and (not email_address or email_address.endswith("@teams"))
+    ):
+        match = _match_contact_by_name(sender_name, contacts)
+        if match is not None:
+            logger.info(f"Contact matched by name: {sender_name!r} -> {match}")
+            return contacts, True
+
     return default_contacts, False
 
 
@@ -1945,6 +2021,52 @@ async def exchange_microsoft_code_for_tokens(
             + timedelta(seconds=data.get("expires_in", 3600))
         ).isoformat()
         return data
+
+
+async def acquire_microsoft_user_tokens_ropc(
+    tenant_id: str,
+    client_id: str,
+    client_secret: str,
+    username: str,
+    password: str,
+    scope: str,
+) -> dict:
+    """Acquire delegated tokens for a service-account mailbox via ROPC.
+
+    Used at provisioning time so unify-managed mailboxes carry the same
+    per-user OAuth tokens as BYOD ones — that is the only way to create
+    Teams change-notification subscriptions without ``?model=`` (Graph
+    requires a billing model on every app-only Teams subscription, but
+    rejects the param on delegated subscriptions).
+
+    Requires:
+      * the admin app registration to allow public client flows
+        (Authentication → Allow public client flows = Yes); ROPC fails
+        with ``AADSTS7000218`` otherwise.
+      * the target user to be exempt from MFA-requiring Conditional
+        Access (the bot mailboxes have no human at the keyboard); fails
+        with ``AADSTS50076`` / ``AADSTS53003`` otherwise.
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "password",
+                "username": username,
+                "password": password,
+                "scope": scope,
+            },
+            timeout=30.0,
+        )
+    if response.status_code != 200:
+        raise Exception(f"ROPC token request failed: {response.text}")
+    data = response.json()
+    data["expires_at"] = (
+        datetime.now(tz=timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))
+    ).isoformat()
+    return data
 
 
 async def get_microsoft_user_info(access_token: str) -> dict:

@@ -40,10 +40,11 @@ MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
     "teams": [
         "Chat.Read",
         "Chat.ReadWrite",
+        "ChatMessage.Read",
         "ChannelMessage.Send",
+        "ChannelMessage.Read.All",
         "Team.ReadBasic.All",
         "Channel.ReadBasic.All",
-        "ChannelMessage.Read.All",
     ],
     "sharepoint": ["Sites.Read.All", "Sites.ReadWrite.All"],
     "tasks": ["Tasks.Read", "Tasks.ReadWrite"],
