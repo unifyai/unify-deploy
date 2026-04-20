@@ -47,6 +47,47 @@ class _FakeAsyncClient:
         return _GraphResponse(self._response_payload)
 
 
+class _RoutedAsyncClient:
+    """Graph fake that picks a response payload based on the request URL.
+
+    Needed once the handler makes multiple Graph calls per notification
+    (message fetch, chat metadata, roster); a single-payload fake can't
+    distinguish between them.  Entries in *routes* are matched with a
+    simple substring test and the first hit wins, falling back to the
+    final ``default`` payload.
+    """
+
+    def __init__(
+        self,
+        routes: list[tuple[str, dict]],
+        *,
+        default: dict | None = None,
+        calls: list | None = None,
+    ):
+        self._routes = routes
+        self._default = default or {}
+        self._calls = calls
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, url, *_args, **kwargs):
+        if self._calls is not None:
+            self._calls.append(
+                {
+                    "url": url,
+                    "headers": kwargs.get("headers", {}),
+                },
+            )
+        for needle, payload in self._routes:
+            if needle in url:
+                return _GraphResponse(payload)
+        return _GraphResponse(self._default)
+
+
 @pytest.fixture(scope="module")
 def app_module():
     # Share the already-loaded adapters.main with the rest of the suite.
@@ -310,3 +351,366 @@ def test_teams_notification_us_provisioned_uses_admin_bearer(app_module):
             or f"/users/{assistant_data['assistant_email'].replace('@', '%40')}/chats/"
             in call["url"]
         ), f"chat call must be scoped to assistant user, got {call['url']}"
+
+
+def test_teams_notification_emits_resolved_participants(app_module):
+    """Group chat inbound must publish a ``participants`` list with the
+    assistant resolved to contact_id=0, known senders matched to their
+    contact row by email, and unknowns preserved with ``contact_id=None``
+    so Unity finishes the resolve via its unknown-contact path.
+    """
+    from fastapi.testclient import TestClient
+
+    assistant_data = _assistant_data(is_local=False)
+    assistant_email = assistant_data["assistant_email"]
+    chat_id = "19:group_xyz@thread.v2"
+
+    message_payload = {
+        "id": "message-123",
+        "from": {
+            "user": {
+                "displayName": "Alice",
+                "userPrincipalName": "alice@acme.com",
+                "id": "alice-aad-id",
+                "email": "alice@acme.com",
+            },
+        },
+        "body": {"content": "Hello group", "contentType": "text"},
+        "createdDateTime": "2026-04-10T00:00:00Z",
+        "subject": "",
+    }
+
+    chat_metadata = {"chatType": "group", "topic": "Team sync"}
+
+    roster_payload = {
+        "value": [
+            {
+                "userId": "assistant-aad-id",
+                "email": assistant_email,
+                "displayName": "Assistant",
+            },
+            {
+                "userId": "alice-aad-id",
+                "email": "alice@acme.com",
+                "displayName": "Alice",
+            },
+            {
+                "userId": "bob-aad-id",
+                "email": "bob@external.com",
+                "displayName": "Bob",
+            },
+        ],
+    }
+
+    contacts = [
+        {"contact_id": 0, "email_address": assistant_email},
+        {
+            "contact_id": 5,
+            "email_address": "alice@acme.com",
+            "first_name": "Alice",
+            "surname": "",
+        },
+    ]
+
+    mock_publisher = _mock_pubsub()
+    routed = _RoutedAsyncClient(
+        routes=[
+            (f"/chats/{quote_chat_id(chat_id)}/members", roster_payload),
+            (f"/chats/{chat_id}/members", roster_payload),
+            (f"/chats/{chat_id}/messages/message-123", message_payload),
+            (f"/chats/{chat_id}?", chat_metadata),
+        ],
+        default={},
+    )
+
+    with (
+        patch.object(
+            app_module,
+            "build_webhook_context",
+            return_value={"assistant": assistant_data},
+        ),
+        patch.object(
+            app_module,
+            "check_valid_contact",
+            return_value=(contacts, True, contacts[1]),
+        ),
+        patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
+        patch.object(app_module, "start_unity_job"),
+        patch.object(app_module.httpx, "AsyncClient", return_value=routed),
+    ):
+        # Ensure a prior test didn't leave a stale roster cached for this chat.
+        app_module._invalidate_teams_roster(
+            chat_id=chat_id,
+            team_id=None,
+            channel_id=None,
+        )
+        client = TestClient(app_module.app)
+        response = client.post(
+            "/chat/teams",
+            json={
+                "clientState": f"test-teams-secret::{assistant_email}",
+                "resource": f"/chats/{chat_id}/messages/message-123",
+                "resourceData": {"id": "message-123", "chatId": chat_id},
+            },
+        )
+
+    assert response.status_code == 200
+    mock_publisher.publish.assert_called_once()
+    import json as _json
+
+    published = _json.loads(mock_publisher.publish.call_args[0][1].decode("utf-8"))
+    event = published["event"]
+    assert "participants" in event
+    assert event.get("participants_incomplete") is False
+    by_email = {p.get("email"): p for p in event["participants"]}
+
+    assistant_entry = by_email.get(assistant_email)
+    assert assistant_entry is not None, "assistant must be in participants"
+    assert assistant_entry["contact_id"] == 0
+
+    alice_entry = by_email.get("alice@acme.com")
+    assert alice_entry is not None, "known sender must be in participants"
+    assert alice_entry["contact_id"] == 5
+
+    bob_entry = by_email.get("bob@external.com")
+    assert bob_entry is not None, "unknown member must still be emitted"
+    assert bob_entry["contact_id"] is None, (
+        "unknown members must carry contact_id=None so Unity resolves via "
+        "_get_or_create_unknown_contact rather than the adapter minting rows"
+    )
+
+
+def quote_chat_id(chat_id: str) -> str:
+    from urllib.parse import quote
+
+    return quote(chat_id, safe="")
+
+
+def _run_channel_participants_test(
+    app_module,
+    *,
+    membership_type: str,
+    expect_team_members_call: bool,
+    expected_reason: str,
+):
+    """Shared harness for the standard/private/shared channel tests.
+
+    The only meaningful difference between the three flavours is the
+    ``membershipType`` payload and the downstream assertion on whether
+    ``/teams/{id}/members`` was called — everything else (message,
+    mentions, contacts, assertions on sender/mentioned/assistant being
+    present) is identical.
+    """
+    from fastapi.testclient import TestClient
+
+    assistant_data = _assistant_data(is_local=False)
+    assistant_email = assistant_data["assistant_email"]
+    team_id = "team-xyz"
+    channel_id = "19:channel_abc@thread.tacv2"
+
+    message_payload = {
+        "id": "message-123",
+        "from": {
+            "user": {
+                "displayName": "Alice",
+                "userPrincipalName": "alice@acme.com",
+                "id": "alice-aad-id",
+                "email": "alice@acme.com",
+            },
+        },
+        "body": {"content": "Hello <at>Bob</at>", "contentType": "html"},
+        "createdDateTime": "2026-04-10T00:00:00Z",
+        "subject": "",
+        "mentions": [
+            {
+                "id": 0,
+                "mentionText": "Bob",
+                "mentioned": {
+                    "user": {
+                        "id": "bob-aad-id",
+                        "displayName": "Bob",
+                        "userIdentityType": "aadUser",
+                    },
+                },
+            },
+        ],
+    }
+
+    # Channel messages are fetched from the "recent messages" list and
+    # filtered by id; return a list payload whose first entry matches.
+    channel_messages_payload = {"value": [message_payload]}
+
+    team_members_payload = {
+        "value": [
+            {
+                "userId": "assistant-aad-id",
+                "email": assistant_email,
+                "displayName": "Assistant",
+            },
+            {
+                "userId": "alice-aad-id",
+                "email": "alice@acme.com",
+                "displayName": "Alice",
+            },
+        ],
+    }
+
+    bob_profile_payload = {
+        "mail": "bob@external.com",
+        "userPrincipalName": "bob@external.com",
+    }
+
+    contacts = [
+        {"contact_id": 0, "email_address": assistant_email},
+        {
+            "contact_id": 5,
+            "email_address": "alice@acme.com",
+            "first_name": "Alice",
+            "surname": "",
+        },
+    ]
+
+    mock_publisher = _mock_pubsub()
+    captured: list[dict] = []
+    routed = _RoutedAsyncClient(
+        routes=[
+            # Channel metadata lookup for membershipType gating — must
+            # come first so the ``$select=membershipType`` query string
+            # wins over the less-specific ``/messages`` route below.
+            ("$select=membershipType", {"membershipType": membership_type}),
+            # Team roster only used for standard channels.
+            (f"/teams/{team_id}/members", team_members_payload),
+            # Message fetch (the handler queries a "recent messages" list).
+            (f"/teams/{team_id}/channels/", channel_messages_payload),
+            # Mention enrichment for Bob.
+            ("/users/bob-aad-id", bob_profile_payload),
+        ],
+        default={},
+        calls=captured,
+    )
+
+    with (
+        patch.object(
+            app_module,
+            "build_webhook_context",
+            return_value={"assistant": assistant_data},
+        ),
+        patch.object(
+            app_module,
+            "check_valid_contact",
+            return_value=(contacts, True, contacts[1]),
+        ),
+        patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
+        patch.object(app_module, "start_unity_job"),
+        patch.object(app_module.httpx, "AsyncClient", return_value=routed),
+    ):
+        app_module._invalidate_teams_roster(
+            chat_id=None,
+            team_id=team_id,
+            channel_id=channel_id,
+        )
+        # Membership-type cache is separate; wipe it too so the three
+        # tests don't see each other's cached value.
+        app_module._teams_membership_type_cache.pop(
+            f"{team_id}::{channel_id}",
+            None,
+        )
+        client = TestClient(app_module.app)
+        response = client.post(
+            "/chat/teams",
+            json={
+                "clientState": f"test-teams-secret::{assistant_email}",
+                "resource": (
+                    f"teams('{team_id}')/channels('{channel_id}')"
+                    f"/messages('message-123')"
+                ),
+                "resourceData": {"id": "message-123"},
+            },
+        )
+
+    assert response.status_code == 200
+    mock_publisher.publish.assert_called_once()
+
+    import json as _json
+
+    published = _json.loads(mock_publisher.publish.call_args[0][1].decode("utf-8"))
+    event = published["event"]
+
+    assert event.get("participants_reason") == expected_reason, (
+        f"expected participants_reason={expected_reason}, "
+        f"got {event.get('participants_reason')}"
+    )
+
+    by_email = {p.get("email"): p for p in event["participants"]}
+
+    # Sender (Alice) must always be in participants with her contact_id.
+    alice_entry = by_email.get("alice@acme.com")
+    assert alice_entry is not None, "sender must be in participants"
+    assert alice_entry["contact_id"] == 5
+
+    # @mentioned user (Bob) must always be in participants; contact_id
+    # stays None because Bob isn't in the contacts dict — Unity's
+    # unknown-contact path owns that creation.
+    bob_entry = by_email.get("bob@external.com")
+    assert bob_entry is not None, "@mentioned user must be in participants"
+    assert bob_entry["contact_id"] is None
+
+    # Assistant is always present at contact_id=0.
+    assistant_entry = by_email.get(assistant_email)
+    assert assistant_entry is not None, "assistant must always be a participant"
+    assert assistant_entry["contact_id"] == 0
+
+    team_members_calls = [
+        c for c in captured if c["url"].endswith(f"/teams/{team_id}/members")
+    ]
+    if expect_team_members_call:
+        assert team_members_calls, (
+            "standard channels must enumerate the team roster via "
+            "/teams/{id}/members"
+        )
+    else:
+        assert not team_members_calls, (
+            f"{membership_type} channels must not call /teams/{{id}}/members "
+            f"— ChannelMember.Read.All is required and not in our scope bundle"
+        )
+
+
+def test_teams_channel_standard_emits_team_roster(app_module):
+    """Standard channels resolve participants from the team roster via
+    ``/teams/{id}/members`` — the one channel path that works without
+    ``ChannelMember.Read.All``.
+    """
+    _run_channel_participants_test(
+        app_module,
+        membership_type="standard",
+        expect_team_members_call=True,
+        expected_reason="ok",
+    )
+
+
+def test_teams_channel_private_uses_mentions_fallback(app_module):
+    """Private channels can't enumerate members without
+    ``ChannelMember.Read.All``, which we don't request.  Participants
+    fall back to sender + @mentioned users, with
+    ``participants_reason=private_channel`` so downstream can tell this
+    apart from a transient Graph failure.
+    """
+    _run_channel_participants_test(
+        app_module,
+        membership_type="private",
+        expect_team_members_call=False,
+        expected_reason="private_channel",
+    )
+
+
+def test_teams_channel_shared_uses_mentions_fallback(app_module):
+    """Shared channels are subject to the same scope gate as private
+    ones — no roster, participants fall back to sender + @mentions,
+    and the event carries ``participants_reason=shared_channel``.
+    """
+    _run_channel_participants_test(
+        app_module,
+        membership_type="shared",
+        expect_team_members_call=False,
+        expected_reason="shared_channel",
+    )

@@ -2641,6 +2641,19 @@ async def teams_notification_processor(request: Request):
                 asyncio.create_task(
                     _maybe_rebootstrap_teams_watch(assistant_email),
                 )
+            # Any membership / topology change invalidates the cached
+            # roster for this conversation, regardless of whether a
+            # /teams/watch rebuild is warranted.  Chats receive
+            # memberAdded / memberLeft events on the same resource path.
+            chat_topology_markers = ("memberAdded", "memberLeft", "membersAdded")
+            if any(m in event_type for m in topology_markers) or any(
+                m in event_type for m in chat_topology_markers
+            ):
+                _invalidate_teams_roster(
+                    chat_id=chat_id,
+                    team_id=team_id,
+                    channel_id=channel_id,
+                )
             logger.info(
                 f"Skipping non-message channel event "
                 f"(messageType={message_type}, event_type={event_type!r}, "
@@ -2736,6 +2749,76 @@ async def teams_notification_processor(request: Request):
                 synthetic_email=sender_email,
             )
 
+        # Fetch the conversation roster and pre-resolve as many members
+        # as possible against the contacts we already loaded for the
+        # sender path.  Unity finishes unresolved entries via its
+        # canonical unknown-contact creation flow; we deliberately don't
+        # mint contacts here so ``ContactManager`` stays the sole writer.
+        #
+        # Chats and standard channels yield a full roster.  Private /
+        # shared channels fall back to "sender + @mentions" because
+        # their membership endpoint requires ``ChannelMember.Read.All``
+        # which we intentionally don't request.
+        participants: list[dict] = []
+        participants_incomplete = False
+        participants_reason = "ok"
+        try:
+            roster, participants_incomplete, participants_reason = (
+                await _fetch_teams_roster(
+                    bearer=bearer,
+                    chat_path_prefix=chat_path_prefix,
+                    chat_id=chat_id,
+                    team_id=team_id,
+                    channel_id=channel_id,
+                )
+            )
+            # Layer in signal that does *not* depend on the roster:
+            # the sender and anyone the sender @mentioned.  For private
+            # and shared channels this is the only participant data we
+            # can produce; for chats / standard channels it's additive
+            # (usually already in the roster, deduped below).
+            augmented = list(roster)
+            if sender_id or sender_email:
+                augmented.append(
+                    {
+                        "aad_user_id": sender_id,
+                        "email": (
+                            sender_email
+                            if sender_email and not sender_email.endswith("@teams")
+                            else None
+                        ),
+                        "display_name": sender_name or "",
+                        "tenant_id": None,
+                    },
+                )
+            augmented.extend(
+                await _extract_message_mentions(
+                    message_data=message_data,
+                    bearer=bearer,
+                ),
+            )
+            participants = _resolve_roster_participants(
+                roster=augmented,
+                contacts=contacts,
+                assistant_email=assistant_email,
+            )
+            logger.info(
+                f"teams roster: {len(participants)} participants "
+                f"({sum(1 for p in participants if p.get('contact_id') is not None)} "
+                f"resolved) incomplete={participants_incomplete} "
+                f"reason={participants_reason}",
+            )
+        except Exception as e:
+            # Roster is best-effort: sender-path delivery must not
+            # regress when /members fails for any reason (scope missing,
+            # Graph hiccup, federated tenant).  Publish the event
+            # without participants and let downstream fall back to
+            # legacy receiver_ids = [0] behaviour.
+            logger.info(f"teams roster fetch errored (non-fatal): {e}")
+            participants = []
+            participants_incomplete = True
+            participants_reason = "graph_error"
+
         # Build event payload
         message_content = message_data.get("body", {}).get("content", "")
         message_content_type = message_data.get("body", {}).get("contentType", "text")
@@ -2791,6 +2874,9 @@ async def teams_notification_processor(request: Request):
             "is_channel_message": is_channel_message,
             "timestamp": int(time.time() * 1000),
             "attachments": attachments,
+            "participants": participants,
+            "participants_incomplete": participants_incomplete,
+            "participants_reason": participants_reason,
         }
 
         if is_channel_message:
@@ -2896,6 +2982,367 @@ async def _maybe_rebootstrap_teams_watch(assistant_email: str) -> None:
             f"topology-event: /teams/watch rebuild for "
             f"{_redact_email(assistant_email)} failed: {e}",
         )
+
+
+# Short-TTL cache for Teams chat / channel rosters.  Graph charges a
+# round trip per ``/members`` call; hot chats produce bursts of messages
+# that would otherwise refetch the same roster dozens of times.  Entries
+# are invalidated on topology system events (memberAdded / memberLeft /
+# channelAdded / teamJoined) inside ``teams_notification_processor`` so
+# membership changes propagate immediately without waiting for TTL.
+_TEAMS_ROSTER_TTL_S = 600.0
+_teams_roster_cache: dict[str, tuple[float, list[dict], bool, str]] = {}
+_teams_roster_lock = asyncio.Lock()
+
+# Channel ``membershipType`` rarely changes after creation (a standard
+# channel cannot become private or vice-versa without recreating), so a
+# long TTL is safe.  Covered by the already-granted ``Channel.ReadBasic.All``
+# scope — no extra consent required.
+_TEAMS_MEMBERSHIP_TYPE_TTL_S = 86_400.0
+_teams_membership_type_cache: dict[str, tuple[float, str | None]] = {}
+_teams_membership_type_lock = asyncio.Lock()
+
+
+def _roster_cache_key(
+    *,
+    chat_id: str | None,
+    team_id: str | None,
+    channel_id: str | None,
+) -> str:
+    if chat_id:
+        return f"chat::{chat_id}"
+    return f"channel::{team_id}::{channel_id}"
+
+
+def _invalidate_teams_roster(
+    *,
+    chat_id: str | None,
+    team_id: str | None,
+    channel_id: str | None,
+) -> None:
+    key = _roster_cache_key(chat_id=chat_id, team_id=team_id, channel_id=channel_id)
+    _teams_roster_cache.pop(key, None)
+
+
+async def _graph_get_json(
+    url: str,
+    bearer: str,
+    *,
+    timeout: float = 15.0,
+) -> tuple[dict | None, int]:
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            url,
+            headers={"Authorization": f"Bearer {bearer}"},
+            timeout=timeout,
+        )
+    return (resp.json() if resp.status_code == 200 else None), resp.status_code
+
+
+async def _get_channel_membership_type(
+    *,
+    bearer: str,
+    team_id: str,
+    channel_id: str,
+) -> str | None:
+    """Return ``"standard" | "private" | "shared" | None`` for a channel.
+
+    Uses ``GET /teams/{team-id}/channels/{channel-id}?$select=membershipType``
+    which requires only ``Channel.ReadBasic.All`` (already granted) and
+    is long-cached because membership type is immutable after channel
+    creation.  Returns ``None`` when the lookup fails so the caller can
+    degrade conservatively (treat unknown as private — no roster
+    available).
+    """
+    key = f"{team_id}::{channel_id}"
+    now = time.monotonic()
+    async with _teams_membership_type_lock:
+        cached = _teams_membership_type_cache.get(key)
+        if cached and now - cached[0] < _TEAMS_MEMBERSHIP_TYPE_TTL_S:
+            return cached[1]
+
+    encoded_channel_id = quote(channel_id, safe="")
+    url = (
+        f"https://graph.microsoft.com/v1.0/teams/{team_id}"
+        f"/channels/{encoded_channel_id}?$select=membershipType"
+    )
+    data, status = await _graph_get_json(url, bearer)
+    membership_type = (data or {}).get("membershipType") if data else None
+    if not membership_type:
+        logger.info(
+            f"channel membershipType fetch failed: team={team_id} "
+            f"channel={channel_id} status={status}",
+        )
+
+    async with _teams_membership_type_lock:
+        _teams_membership_type_cache[key] = (now, membership_type)
+    return membership_type
+
+
+async def _fetch_teams_roster(
+    *,
+    bearer: str,
+    chat_path_prefix: str,
+    chat_id: str | None,
+    team_id: str | None,
+    channel_id: str | None,
+) -> tuple[list[dict], bool, str]:
+    """Fetch the conversation roster for a chat or channel.
+
+    Returns ``(members, incomplete, reason)`` where *members* is a list
+    of ``{"aad_user_id", "email", "display_name", "tenant_id"}`` dicts,
+    *incomplete* is ``True`` when we couldn't fully enumerate the
+    roster, and *reason* is one of:
+
+    * ``"ok"`` — roster fetched successfully.
+    * ``"graph_error"`` — Graph call failed or partial; we retry on the
+      next notification via cache expiry.
+    * ``"private_channel"`` / ``"shared_channel"`` — channel's roster
+      endpoint requires ``ChannelMember.Read.All`` which is not in our
+      scope bundle; callers must layer in sender + message mentions as
+      a best-effort participant signal.
+    * ``"unknown_channel_type"`` — couldn't resolve ``membershipType``;
+      treated conservatively as private (no roster call attempted).
+
+    Endpoints used:
+
+    * Chats (1:1, group, meeting): ``GET {prefix}/chats/{id}/members``
+      — covered by ``Chat.Read``.
+    * Standard channels: ``GET /teams/{team-id}/members`` — covered by
+      ``TeamMember.Read.All``; members of a standard channel equal
+      members of its parent team.
+    * Private / shared channels: the channel-scoped roster endpoint
+      requires ``ChannelMember.Read.All`` which we intentionally don't
+      request.  We skip the fetch and let the caller reconstruct a
+      lower-bound participant set from the message's sender and
+      ``mentions[]`` field.
+
+    Roster results are cached per chat / (team, channel) for up to
+    :data:`_TEAMS_ROSTER_TTL_S` seconds.
+    """
+    key = _roster_cache_key(chat_id=chat_id, team_id=team_id, channel_id=channel_id)
+    now = time.monotonic()
+    async with _teams_roster_lock:
+        cached = _teams_roster_cache.get(key)
+        if cached and now - cached[0] < _TEAMS_ROSTER_TTL_S:
+            return cached[1], cached[2], cached[3]
+
+    if chat_id:
+        encoded_chat_id = quote(chat_id, safe="")
+        url = (
+            f"https://graph.microsoft.com{chat_path_prefix}"
+            f"/chats/{encoded_chat_id}/members"
+        )
+    else:
+        # Channel path: branch on ``membershipType`` because only
+        # standard channels have a team-inherited roster reachable
+        # without ``ChannelMember.Read.All``.
+        if not team_id or not channel_id:
+            return [], True, "graph_error"
+        membership_type = await _get_channel_membership_type(
+            bearer=bearer,
+            team_id=team_id,
+            channel_id=channel_id,
+        )
+        if membership_type == "private":
+            result = ([], True, "private_channel")
+            async with _teams_roster_lock:
+                _teams_roster_cache[key] = (now, *result)
+            return result
+        if membership_type == "shared":
+            result = ([], True, "shared_channel")
+            async with _teams_roster_lock:
+                _teams_roster_cache[key] = (now, *result)
+            return result
+        if membership_type != "standard":
+            # None / unrecognised value — be conservative and treat as
+            # roster-unavailable rather than hitting an endpoint that
+            # might 403 and poison the cache with graph_error.
+            result = ([], True, "unknown_channel_type")
+            async with _teams_roster_lock:
+                _teams_roster_cache[key] = (now, *result)
+            return result
+        url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/members"
+
+    members: list[dict] = []
+    incomplete = False
+    next_url: str | None = url
+    while next_url:
+        data, status = await _graph_get_json(next_url, bearer)
+        if data is None:
+            logger.info(
+                f"teams roster fetch failed: url={next_url} status={status}",
+            )
+            incomplete = True
+            break
+        for m in data.get("value", []) or []:
+            aad_id = m.get("userId") or (m.get("user") or {}).get("id")
+            email = m.get("email") or None
+            display_name = m.get("displayName") or ""
+            tenant_id = m.get("tenantId")
+            if not aad_id and not email:
+                continue
+            members.append(
+                {
+                    "aad_user_id": aad_id,
+                    "email": email,
+                    "display_name": display_name,
+                    "tenant_id": tenant_id,
+                },
+            )
+        next_url = data.get("@odata.nextLink")
+
+    reason = "graph_error" if incomplete else "ok"
+    async with _teams_roster_lock:
+        _teams_roster_cache[key] = (now, members, incomplete, reason)
+    return members, incomplete, reason
+
+
+async def _extract_message_mentions(
+    *,
+    message_data: dict,
+    bearer: str,
+) -> list[dict]:
+    """Turn the ChatMessage ``mentions[]`` array into roster-shaped dicts.
+
+    ``ChatMessage.mentions[]`` is returned alongside the message body
+    with zero extra Graph calls and zero extra scopes — it's covered by
+    the same ``ChannelMessage.Read.All`` / ``ChatMessage.Read`` that
+    already authorises the message fetch.  Each entry carries the AAD
+    user id + display name but no email; we look up email best-effort
+    via the user-profile endpoint (same pattern the sender path already
+    uses at the "Fetch email from user profile if not in message"
+    branch above).  Failures fall back to ``email=None`` so
+    :func:`_resolve_roster_participants` still emits the entry with a
+    ``None`` contact_id, letting Unity's unknown-contact flow decide.
+
+    For private and shared channels this is the *only* participant
+    signal available without ``ChannelMember.Read.All``, so we try
+    reasonably hard to enrich it (bounded by mention count — rarely more
+    than a handful per message).
+    """
+    mentions = message_data.get("mentions") or []
+    if not mentions:
+        return []
+
+    out: list[dict] = []
+    for mention in mentions:
+        mentioned = mention.get("mentioned") or {}
+        user = mentioned.get("user") or {}
+        aad_id = user.get("id")
+        display_name = user.get("displayName") or mention.get("mentionText") or ""
+        if not aad_id:
+            continue
+        email: str | None = None
+        try:
+            data, _status = await _graph_get_json(
+                f"https://graph.microsoft.com/v1.0/users/{aad_id}"
+                f"?$select=mail,userPrincipalName",
+                bearer,
+                timeout=5.0,
+            )
+        except Exception:
+            data = None
+        if data:
+            email = data.get("mail") or data.get("userPrincipalName") or None
+        out.append(
+            {
+                "aad_user_id": aad_id,
+                "email": email,
+                "display_name": display_name,
+                "tenant_id": None,
+            },
+        )
+    return out
+
+
+def _resolve_roster_participants(
+    *,
+    roster: list[dict],
+    contacts: list[dict],
+    assistant_email: str,
+) -> list[dict]:
+    """Resolve each roster member to ``contact_id`` where possible.
+
+    Returns a list of participant dicts shaped for downstream Unity
+    consumption::
+
+        {"contact_id": int | None,
+         "email": str | None,
+         "display_name": str,
+         "aad_user_id": str | None}
+
+    Resolution order per member:
+
+    1. Assistant's own mailbox → ``contact_id = 0`` (the Unity
+       convention for "the assistant itself").
+    2. Exact email match (case-insensitive) against any contact's
+       ``email_address``.
+    3. Name match via :func:`_match_contact_by_name` — only succeeds
+       when exactly one contact's first/surname lines up, which is the
+       same tolerance the sender path already uses for federated /
+       consumer Teams users without a resolvable email.
+
+    Members that can't be matched are emitted with ``contact_id=None``
+    so Unity's ``_get_or_create_unknown_contact`` path can finish the
+    resolve with the canonical contact creation semantics.  Members
+    missing any usable email are emitted with ``email=None`` so Unity
+    skips unknown-contact creation for them (creating a contact keyed
+    on a synthetic ``{id}@teams`` placeholder would pollute the store).
+    """
+    from .helpers import _match_contact_by_name
+
+    assistant_email_l = (assistant_email or "").lower()
+    contacts_by_email = {
+        (c.get("email_address") or "").lower(): c
+        for c in contacts
+        if c.get("email_address")
+    }
+
+    out: list[dict] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for m in roster:
+        email = m.get("email") or None
+        email_l = (email or "").lower()
+        display_name = m.get("display_name") or ""
+        aad_id = m.get("aad_user_id")
+
+        dedupe_key = ("email", email_l) if email_l else ("aad", aad_id or "")
+        if dedupe_key in seen_keys or dedupe_key == ("aad", ""):
+            continue
+        seen_keys.add(dedupe_key)
+
+        contact_id: int | None = None
+        if email_l and email_l == assistant_email_l:
+            contact_id = 0
+        elif email_l and email_l in contacts_by_email:
+            cid = contacts_by_email[email_l].get("contact_id")
+            contact_id = int(cid) if cid is not None else None
+        elif display_name:
+            matched = _match_contact_by_name(display_name, contacts)
+            if matched is not None:
+                cid = matched.get("contact_id")
+                contact_id = int(cid) if cid is not None else None
+
+        out.append(
+            {
+                "contact_id": contact_id,
+                "email": email,
+                "display_name": display_name,
+                "aad_user_id": aad_id,
+            },
+        )
+
+    if not any(p.get("contact_id") == 0 for p in out):
+        out.append(
+            {
+                "contact_id": 0,
+                "email": assistant_email,
+                "display_name": "",
+                "aad_user_id": None,
+            },
+        )
+    return out
 
 
 async def _handle_teams_lifecycle(
