@@ -2,6 +2,9 @@
 
 Mirrored in Orchestra's ``web/api/assistant/scopes.py`` — these are static
 data structures and an HTTP round-trip to fetch them isn't warranted.
+
+Lives in ``common/`` so both the comms and adapters services can import
+it without a cross-service dependency.
 """
 
 from __future__ import annotations

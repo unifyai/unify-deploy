@@ -86,16 +86,20 @@ from .helpers import (
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
-    exchange_google_code_for_tokens,
-    exchange_microsoft_code_for_tokens,
-    get_google_user_info,
-    get_microsoft_user_info,
-    refresh_google_tokens,
     resolve_whatsapp_route,
     start_unity_job,
-    store_google_tokens,
-    store_microsoft_tokens,
     uses_local_unity_runtime,
+)
+from common.google_oauth import (
+    exchange_google_code_for_tokens,
+    get_google_user_info,
+    refresh_google_tokens,
+    store_google_tokens,
+)
+from common.microsoft_oauth import (
+    exchange_microsoft_code_for_tokens,
+    get_microsoft_user_info,
+    store_microsoft_tokens,
 )
 
 load_dotenv()
@@ -3125,7 +3129,7 @@ async def microsoft_oauth_callback(request: Request):
     # ------------------------------------------------------------------
     # Store tokens + granted scopes
     # ------------------------------------------------------------------
-    from adapters.scopes import build_scope_string
+    from common.scopes import build_scope_string
 
     granted_scopes = build_scope_string("microsoft", features) if is_byod else ""
     assistant_id = assistant["assistant_id"]
@@ -3359,7 +3363,7 @@ async def google_oauth_callback(request: Request):
         )
 
     # Store tokens + granted scopes
-    from adapters.scopes import build_scope_string
+    from common.scopes import build_scope_string
 
     granted_scopes = build_scope_string("google", features)
     assistant_id = assistant["assistant_id"]

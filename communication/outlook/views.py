@@ -30,11 +30,11 @@ from msgraph.generated.users.item.send_mail.send_mail_post_request_body import (
     SendMailPostRequestBody,
 )
 
-from adapters.helpers import (
+from common.microsoft_oauth import (
     acquire_microsoft_user_tokens_ropc,
     store_microsoft_tokens,
 )
-from adapters.scopes import build_scope_string
+from common.scopes import build_scope_string
 from communication.helpers import (
     _lookup_assistant,
     get_admin_graph_client,
