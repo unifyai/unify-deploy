@@ -406,14 +406,19 @@ def build_worker_infra(
 
     bundle_store = GcsDeploymentBundleStore(artifact_store=artifact_store)
 
+    # Ledgers intentionally share ``artifact_store`` settings — the
+    # bucket is env-scoped via the bucket name (e.g.
+    # ``unity-pipeline-artifacts-staging``), so staging ledgers cannot
+    # leak into the production bucket by construction.
+    ledger_settings = settings.artifact_store
+
     def run_ledger_factory(run_id: str) -> RunLedger:
         from unity_deploy.infra.gcp.ledgers import GcsRunLedger
 
         return GcsRunLedger(
             client=storage_client,
-            settings=settings.ledger,  # type: ignore[union-attr]
+            settings=ledger_settings,
             run_id=run_id,
-            environment=settings.environment,  # type: ignore[union-attr]
         )
 
     def heartbeat_ledger_factory(run_id: str) -> RunLedger:
@@ -424,9 +429,8 @@ def build_worker_infra(
         # progress (heartbeats are tiny, cost is negligible).
         return GcsRunLedger(
             client=storage_client,
-            settings=settings.ledger,  # type: ignore[union-attr]
+            settings=ledger_settings,
             run_id=run_id,
-            environment=settings.environment,  # type: ignore[union-attr]
             blob_basename="heartbeats.jsonl",
             flush_threshold=1,
         )
@@ -436,9 +440,8 @@ def build_worker_infra(
 
         return GcsCostLedger(
             client=storage_client,
-            settings=settings.ledger,  # type: ignore[union-attr]
+            settings=ledger_settings,
             run_id=run_id,
-            environment=settings.environment,  # type: ignore[union-attr]
         )
 
     return WorkerInfra(

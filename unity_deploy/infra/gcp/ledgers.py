@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
     from unity.common.pipeline.cost_ledger import PipelineCostLedger
 
-from .settings import GcsLedgerSettings
+from .settings import GcsArtifactStoreSettings
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,8 @@ class GcsRunLedger:
         self,
         *,
         client: storage.Client,
-        settings: GcsLedgerSettings,
+        settings: GcsArtifactStoreSettings,
         run_id: str,
-        environment: str = "staging",
         flush_threshold: int = 10,
         retry_policy: ResilientRequestPolicy | None = None,
         blob_basename: str = "run_ledger.jsonl",
@@ -43,17 +42,21 @@ class GcsRunLedger:
         # ``blob_basename`` lets callers keep multiple append-only JSONL
         # ledgers side-by-side under a single run directory, e.g.::
         #
-        #   {env}/{run_id}/run_ledger.jsonl   ← stage/file/run manifests
-        #   {env}/{run_id}/heartbeats.jsonl   ← periodic liveness signal
+        #   jobs/{run_id}/run_ledger.jsonl   ← stage/file/run manifests
+        #   jobs/{run_id}/heartbeats.jsonl   ← periodic liveness signal
         #
         # Each GcsRunLedger instance rewrites its OWN blob on flush, so
         # two instances sharing the same basename would clobber each
         # other — always pick a unique basename per concurrent writer.
+        #
+        # The bucket is shared with the artifact store (env-scoped in the
+        # bucket name itself, e.g. ``unity-pipeline-artifacts-staging``),
+        # so per-env cross-writes are structurally impossible.
         self._client = client
         self._bucket_name = settings.bucket
         prefix = settings.prefix.strip("/")
-        env_prefix = f"{prefix}/{environment}" if prefix else environment
-        self._blob_key = f"{env_prefix}/{run_id}/{blob_basename}"
+        job_root = f"{prefix}/jobs/{run_id}" if prefix else f"jobs/{run_id}"
+        self._blob_key = f"{job_root}/{blob_basename}"
         self._flush_threshold = max(flush_threshold, 1)
         self._retry_policy = retry_policy or ResilientRequestPolicy()
 
@@ -106,16 +109,15 @@ class GcsCostLedger:
         self,
         *,
         client: storage.Client,
-        settings: GcsLedgerSettings,
+        settings: GcsArtifactStoreSettings,
         run_id: str,
-        environment: str = "staging",
         retry_policy: ResilientRequestPolicy | None = None,
     ):
         self._client = client
         self._bucket_name = settings.bucket
         prefix = settings.prefix.strip("/")
-        env_prefix = f"{prefix}/{environment}" if prefix else environment
-        self._blob_key = f"{env_prefix}/{run_id}/cost_ledger.json"
+        job_root = f"{prefix}/jobs/{run_id}" if prefix else f"jobs/{run_id}"
+        self._blob_key = f"{job_root}/cost_ledger.json"
         self._retry_policy = retry_policy or ResilientRequestPolicy()
 
         self._latest: "PipelineCostLedger | None" = None

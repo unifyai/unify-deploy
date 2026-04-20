@@ -48,7 +48,13 @@ def _resolve_embed_columns(
     return None
 
 
-def _dispatch_dm(*, config: PipelineConfig, project_name: str) -> int:
+def _dispatch_dm(
+    *,
+    config: PipelineConfig,
+    project_name: str,
+    user_id: str,
+    assistant_id: str,
+) -> int:
     """Publish one ParseRequested per source_file with DM-mode binding.
 
     Uploads each source file to GCS via
@@ -63,6 +69,11 @@ def _dispatch_dm(*, config: PipelineConfig, project_name: str) -> int:
     every table in the plan. Extending :class:`DmBinding` to carry a
     per-table mapping is out of scope for this flag -- the common case
     is one-table-per-file in DM pipelines.
+
+    Current DM dispatch is assistant-scoped too: ``user_id`` is carried
+    for provenance / routing and ``assistant_id`` identifies the
+    assistant whose Orchestra-bound api key authorizes the ingest via
+    ``GET /v0/admin/assistant?agent_id=...``.
     """
     from unity.common.pipeline import DispatchTarget, publish_parse_request
     from unity.common.pipeline.types import DmBinding
@@ -87,14 +98,15 @@ def _dispatch_dm(*, config: PipelineConfig, project_name: str) -> int:
         project_id=project_id,
         bucket_name=bucket_name,
         env_suffix=settings.env_suffix(),
-        upload_prefix=f"dispatch/ingest_dm/{project_name}",
     )
 
     logger.info(
-        "=== DM Dispatch [project=%s, env=%s, bucket=%s] ===",
+        "=== DM Dispatch [project=%s, env=%s, bucket=%s, user_id=%s, assistant_id=%s] ===",
         project_name,
         settings.environment,
         bucket_name,
+        user_id,
+        assistant_id,
     )
     logger.info("Dispatching %d source file(s)...", len(config.source_files))
 
@@ -116,7 +128,11 @@ def _dispatch_dm(*, config: PipelineConfig, project_name: str) -> int:
                 tables[0].context,
             )
 
-        dm_binding = DmBinding(target_context=tables[0].context)
+        dm_binding = DmBinding(
+            user_id=user_id,
+            assistant_id=assistant_id,
+            target_context=tables[0].context,
+        )
         try:
             result = publish_parse_request(
                 target=target,
@@ -262,6 +278,25 @@ def main() -> int:
             "ingests in staging/production."
         ),
     )
+    parser.add_argument(
+        "--user-id",
+        default=None,
+        help=(
+            "DmBinding.user_id used for --dispatch. The ingest worker "
+            "keeps this for provenance / routing. Falls back to the "
+            "USER_ID environment variable when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--assistant-id",
+        default=None,
+        help=(
+            "DmBinding.assistant_id used for --dispatch. The ingest worker "
+            "resolves the Unify api key per message via Orchestra's "
+            "GET /v0/admin/assistant?agent_id=... . Falls back to the "
+            "ASSISTANT_ID environment variable when omitted."
+        ),
+    )
     args = parser.parse_args()
 
     from unity_deploy.customization.scripts.ingest_utils import (
@@ -307,7 +342,30 @@ def main() -> int:
     )
 
     if args.dispatch:
-        return _dispatch_dm(config=config, project_name=args.project)
+        import os
+
+        user_id = args.user_id or os.environ.get("USER_ID")
+        assistant_id = args.assistant_id or os.environ.get("ASSISTANT_ID")
+        if not user_id:
+            logger.error(
+                "--dispatch requires --user-id (or USER_ID in the env). "
+                "A real user identity is required for provenance / routing.",
+            )
+            return 2
+        if not assistant_id:
+            logger.error(
+                "--dispatch requires --assistant-id (or ASSISTANT_ID in the env). "
+                "Current DM dispatch is assistant-scoped, so the ingest worker "
+                "resolves the Unify api key per message via "
+                "GET /v0/admin/assistant?agent_id=....",
+            )
+            return 2
+        return _dispatch_dm(
+            config=config,
+            project_name=args.project,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
 
     activate_project(args.project, overwrite=args.overwrite)
 

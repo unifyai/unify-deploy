@@ -32,17 +32,17 @@ class PubSubQueueSettings(BaseSettings):
     max_messages: int = 1
 
 
-class GcsLedgerSettings(BaseSettings):
-    """Settings for GCS-backed run and cost ledgers."""
-
-    model_config = {"env_prefix": "UNITY_GCS_LEDGER_"}
-
-    bucket: str = "unity-pipeline-artifacts"
-    prefix: str = ""
-
-
 class GcpPipelineSettings(BaseSettings):
-    """Composite settings for the full GCP pipeline infrastructure."""
+    """Composite settings for the full GCP pipeline infrastructure.
+
+    Run and cost ledgers intentionally share ``artifact_store`` rather
+    than owning their own bucket configuration. Having two separate
+    bucket settings (``UNITY_GCS_LEDGER_BUCKET`` + ``UNITY_GCS_ARTIFACT_BUCKET``)
+    was a footgun: overriding only the artifact bucket for staging left
+    staging ledgers silently writing into the production bucket. A single
+    bucket config per environment makes cross-env leaks structurally
+    impossible.
+    """
 
     model_config = {"env_prefix": "UNITY_GCP_PIPELINE_"}
 
@@ -51,7 +51,6 @@ class GcpPipelineSettings(BaseSettings):
         default_factory=GcsArtifactStoreSettings,
     )
     pubsub: PubSubQueueSettings = Field(default_factory=PubSubQueueSettings)
-    ledger: GcsLedgerSettings = Field(default_factory=GcsLedgerSettings)
 
     def env_suffix(self) -> str:
         """Return the environment suffix used in shared resource names.

@@ -26,6 +26,7 @@ DM mode, single file already in GCS::
 
     uv run unity_deploy/scripts/dispatch_pipeline.py \\
         --mode dm --file gs://bucket/foo.csv \\
+        --user-id alice --assistant-id 42 \\
         --target-context "alice/42/Orders"
 
 Bulk dispatch from a newline-separated manifest (one file per line)::
@@ -82,17 +83,28 @@ def main() -> int:
         ),
     )
 
-    fm_group = parser.add_argument_group("FM mode (--mode fm)")
-    fm_group.add_argument(
+    # --user-id / --assistant-id apply to both modes: current worker
+    # traffic is assistant-scoped, so the ingest worker resolves the
+    # Unify api key per message via Orchestra's assistant endpoint while
+    # still carrying user_id for provenance / routing.
+    parser.add_argument(
         "--user-id",
         default=None,
-        help="FmBinding.user_id (falls back to $USER_ID, then 'default').",
+        help=(
+            "IngestBinding.user_id (falls back to $USER_ID). Required "
+            "for both --mode fm and --mode dm."
+        ),
     )
-    fm_group.add_argument(
+    parser.add_argument(
         "--assistant-id",
         default=None,
-        help="FmBinding.assistant_id (falls back to $ASSISTANT_ID, then '0').",
+        help=(
+            "IngestBinding.assistant_id (falls back to $ASSISTANT_ID). "
+            "Required for both --mode fm and --mode dm."
+        ),
     )
+
+    fm_group = parser.add_argument_group("FM mode (--mode fm)")
     fm_group.add_argument(
         "--alias",
         default="Local",
@@ -191,12 +203,26 @@ def _dispatch(*, args: argparse.Namespace, files: list[str]) -> int:
         project_id=project_id,
         bucket_name=bucket_name,
         env_suffix=settings.env_suffix(),
-        upload_prefix="dispatch/manual",
     )
 
+    user_id = args.user_id or os.environ.get("USER_ID")
+    if not user_id:
+        logger.error(
+            "--user-id is required (or USER_ID in the env). The ingest "
+            "worker needs it for provenance / routing.",
+        )
+        return 2
+    assistant_id = args.assistant_id or os.environ.get("ASSISTANT_ID")
+    if not assistant_id:
+        logger.error(
+            "--assistant-id is required (or ASSISTANT_ID in the env). "
+            "Current worker dispatch is assistant-scoped, so the ingest "
+            "worker resolves the Unify api key per message via "
+            "GET /v0/admin/assistant?agent_id=....",
+        )
+        return 2
+
     if args.mode == "fm":
-        user_id = args.user_id or os.environ.get("USER_ID", "default")
-        assistant_id = args.assistant_id or os.environ.get("ASSISTANT_ID", "0")
         logger.info(
             "=== Dispatch [mode=fm, env=%s, user_id=%s, assistant_id=%s, alias=%s] ===",
             settings.environment,
@@ -206,8 +232,10 @@ def _dispatch(*, args: argparse.Namespace, files: list[str]) -> int:
         )
     else:
         logger.info(
-            "=== Dispatch [mode=dm, env=%s, target_context=%s] ===",
+            "=== Dispatch [mode=dm, env=%s, user_id=%s, assistant_id=%s, target_context=%s] ===",
             settings.environment,
+            user_id,
+            assistant_id,
             args.target_context,
         )
 
@@ -219,13 +247,15 @@ def _dispatch(*, args: argparse.Namespace, files: list[str]) -> int:
         dm_binding: Optional[DmBinding] = None
         if args.mode == "fm":
             fm_binding = FmBinding(
-                user_id=user_id,  # type: ignore[possibly-undefined]
-                assistant_id=assistant_id,  # type: ignore[possibly-undefined]
+                user_id=user_id,
+                assistant_id=assistant_id,
                 fm_alias=args.alias,
                 logical_path=path_or_uri,
             )
         else:
             dm_binding = DmBinding(
+                user_id=user_id,
+                assistant_id=assistant_id,
                 target_context=args.target_context,
                 create_table_prefix=args.create_table_prefix,
             )

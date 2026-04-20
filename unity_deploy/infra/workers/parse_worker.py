@@ -141,7 +141,9 @@ async def handle_parse_message(
                     artifact_format=msg.artifact_format,
                 )
 
-                manifest_key = f"{run_id}/manifests/{Path(pr.logical_path).stem}.json"
+                manifest_key = (
+                    f"jobs/{run_id}/manifests/{Path(pr.logical_path).stem}.json"
+                )
                 artifact_store.put_json(manifest_key, plan.model_dump(mode="json"))
 
                 run_ledger.write(
@@ -237,6 +239,9 @@ def _write_partial_manifest(
         "files_succeeded": sum(1 for r in parse_results if r.status == "success"),
     }
     try:
-        artifact_store.put_json(f"{run_id}/manifests/_partial.json", manifest)
+        artifact_store.put_json(
+            f"jobs/{run_id}/manifests/_partial.json",
+            manifest,
+        )
     except Exception:
         logger.debug("Could not write partial manifest for %s", run_id)

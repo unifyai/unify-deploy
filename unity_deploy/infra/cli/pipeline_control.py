@@ -177,12 +177,11 @@ async def cmd_monitor(args: argparse.Namespace) -> None:
         if job.metadata:
             print(f"Metadata: {json.dumps(job.metadata, indent=2)}")
 
-        env = settings.environment
-        prefix = settings.ledger.prefix.strip("/")
-        env_prefix = f"{prefix}/{env}" if prefix else env
-        ledger_key = f"{env_prefix}/{args.job_id}/run_ledger.jsonl"
+        prefix = settings.artifact_store.prefix.strip("/")
+        job_root = f"{prefix}/jobs/{args.job_id}" if prefix else f"jobs/{args.job_id}"
+        ledger_key = f"{job_root}/run_ledger.jsonl"
         try:
-            bucket = infra.storage_client.bucket(settings.ledger.bucket)
+            bucket = infra.storage_client.bucket(settings.artifact_store.bucket)
             blob = bucket.blob(ledger_key)
             if blob.exists():
                 content = blob.download_as_text(encoding="utf-8")
@@ -241,7 +240,7 @@ async def cmd_inspect(args: argparse.Namespace) -> None:
     assert isinstance(artifact_store, GcsArtifactStore)
 
     bucket = infra.storage_client.bucket(infra.settings.artifact_store.bucket)
-    prefix = artifact_store._full_key(f"{args.job_id}/manifests/")
+    prefix = artifact_store._full_key(f"jobs/{args.job_id}/manifests/")
 
     blobs = list(bucket.list_blobs(prefix=prefix))
     if not blobs:

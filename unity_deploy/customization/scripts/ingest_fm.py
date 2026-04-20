@@ -66,7 +66,6 @@ def _dispatch_fm(*, file_paths: list[str], project_name: str) -> int:
         project_id=project_id,
         bucket_name=bucket_name,
         env_suffix=settings.env_suffix(),
-        upload_prefix=f"dispatch/ingest_fm/{project_name}",
     )
 
     logger.info(

@@ -4,7 +4,6 @@ from .ledgers import GcsCostLedger, GcsRunLedger
 from .settings import (
     GcpPipelineSettings,
     GcsArtifactStoreSettings,
-    GcsLedgerSettings,
     PubSubQueueSettings,
 )
 from .work_queue import PubSubWorkQueue
@@ -16,7 +15,6 @@ __all__ = [
     "GcsCostLedger",
     "GcsDeploymentBundleStore",
     "GcsDeploymentJobStore",
-    "GcsLedgerSettings",
     "GcsRunLedger",
     "PubSubQueueSettings",
     "PubSubWorkQueue",

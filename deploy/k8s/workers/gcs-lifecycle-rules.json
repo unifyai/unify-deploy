@@ -24,13 +24,6 @@
     {
       "action": {"type": "Delete"},
       "condition": {
-        "age": 30,
-        "matchesPrefix": ["artifacts/"]
-      }
-    },
-    {
-      "action": {"type": "Delete"},
-      "condition": {
         "age": 90,
         "matchesPrefix": ["audit-summary/"]
       }
@@ -38,8 +31,8 @@
     {
       "action": {"type": "Delete"},
       "condition": {
-        "age": 60,
-        "matchesPrefix": ["staging/"]
+        "age": 30,
+        "matchesPrefix": ["jobs/"]
       }
     }
   ]
