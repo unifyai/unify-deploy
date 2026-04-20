@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 import os
@@ -26,10 +27,32 @@ router = APIRouter()
 # pipeline.
 MAX_RETRIES = 1
 
-# Resource paths Graph uses for the user-scoped "everything" feeds.  Both
-# are delegated-only in our setup — see watch_teams below for why.
-_CHATS_RESOURCE = "/me/chats/getAllMessages"
-_JOINED_TEAMS_RESOURCE = "/me/joinedTeams/getAllMessages"
+# Cap concurrent subscription POSTs to Graph so we don't stampede a
+# user with hundreds of channels.  Graph rate-limits aggressively on
+# /subscriptions; 20 in-flight is comfortable and still parallel.
+_SUB_CONCURRENCY = 20
+
+
+def _chats_resource(user_id: str) -> str:
+    """Canonical per-user 'all chats' subscription resource.
+
+    Graph documents ``/users/{id}/chats/getAllMessages`` as the form
+    that supports delegated permissions; ``/me/...`` also works today
+    but subscriptions persist and are refreshed by Graph workers that
+    have no ``/me`` request context, so prefer the explicit form.
+    """
+    return f"/users/{user_id}/chats/getAllMessages"
+
+
+def _channel_resource(team_id: str, channel_id: str) -> str:
+    """Per-channel 'all messages in this channel' subscription resource.
+
+    Delegated + app-only both supported.  No billing ``?model=`` param
+    needed.  There is no aggregate per-user channels feed — see
+    watch_teams below — so we enumerate joinedTeams → channels and
+    create one sub per channel.
+    """
+    return f"/teams/{team_id}/channels/{channel_id}/messages"
 
 
 def _sub_owned_by(sub, webhook_secret: str, user_email: str) -> bool:
@@ -102,6 +125,42 @@ def _build_chat_message(
             content_type=BodyType.Html if content_type == "html" else BodyType.Text,
         ),
     )
+
+
+async def _enumerate_user_channels(graph) -> list[tuple[str, str, str]]:
+    """Return ``[(team_id, channel_id, display_name), ...]`` for every
+    channel the user is a member of, across every joined team.
+
+    Graph has no aggregate "all channels this user is in" resource for
+    delegated subscriptions, so we assemble it by walking joinedTeams →
+    channels.  Concurrency-bounded to keep latency reasonable on users
+    who belong to many teams.
+    """
+    joined = await graph.me.joined_teams.get()
+    teams = list(joined.value or [])
+
+    sem = asyncio.Semaphore(_SUB_CONCURRENCY)
+
+    async def _channels_for(team_id: str) -> list[tuple[str, str, str]]:
+        async with sem:
+            resp = await graph.teams.by_team_id(team_id).channels.get()
+        return [
+            (team_id, ch.id, ch.display_name or "")
+            for ch in (resp.value or [])
+            if ch.id
+        ]
+
+    per_team = await asyncio.gather(
+        *[_channels_for(t.id) for t in teams if t.id],
+        return_exceptions=True,
+    )
+    out: list[tuple[str, str, str]] = []
+    for result in per_team:
+        if isinstance(result, Exception):
+            logging.warning(f"Failed to list channels for a team: {result}")
+            continue
+        out.extend(result)
+    return out
 
 
 async def _create_one_subscription(
@@ -241,18 +300,22 @@ async def list_teams_chats(user_email: str):
 async def watch_teams(request: Request):
     """Create the unified Teams change-notification subscriptions for a user.
 
-    Two subscriptions are created against the user's delegated token:
+    Subscriptions are created against the user's delegated token:
 
-    * ``/me/chats/getAllMessages`` — every 1:1 and group chat the user
-      participates in, now and in the future.
-    * ``/me/joinedTeams/getAllMessages`` — every channel message across
-      every team the user is a member of, including teams they later
-      join.  Requires the tenant admin to have consented
-      ``ChannelMessage.Read.All``; if they haven't this sub fails 403
-      and we keep going (chats still works).
+    * ``/users/{user-id}/chats/getAllMessages`` — every 1:1 and group
+      chat the user participates in, now and in the future.  One
+      subscription per user.
+    * ``/teams/{team-id}/channels/{channel-id}/messages`` — one
+      subscription per channel, for every channel of every team the
+      user belongs to.  Graph exposes no aggregate "all channels for
+      this user" resource for delegated subs, so we enumerate and
+      subscribe per-channel.  New channels are picked up automatically
+      on the next 30-min renewal.
 
-    Both subscriptions expire in 60 minutes; ``/scheduled/teams-watches``
-    re-posts here every 30 min and re-creates them.
+    All subscriptions expire in 60 minutes; ``/scheduled/teams-watches``
+    re-posts here every 30 min and re-creates them — the re-run
+    also re-enumerates channels, so newly joined teams/channels are
+    covered without any explicit bookkeeping.
 
     Why delegated-only: app-only Teams subscriptions require a billing
     model declaration (``?model=A`` or ``?model=B``) in the
@@ -300,51 +363,62 @@ async def watch_teams(request: Request):
 
         graph = graph_client_from_assistant(assistant, user_email)
 
+        me = await graph.me.get()
+        user_id = me.id
+        if not user_id:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Graph /me returned no id for {user_email}",
+            )
+
         webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
         client_state = f"{webhook_secret}::{user_email}"
 
-        # Tear down any prior subs we own on either of the two unified
-        # resources.  We match by clientState (ownership) + suffix so
-        # we don't disturb subs created by other tenants/apps and so
-        # we catch resource path forms Graph normalises after the fact.
+        # Tear down any prior subs we own.  Match by clientState
+        # (ownership) + resource shape so we don't disturb subs created
+        # by other tenants/apps and so we catch resource path forms
+        # Graph normalises after the fact.
         subs = await graph.subscriptions.get()
         for sub in subs.value or []:
-            resource = (sub.resource or "").lower()
-            if not (
-                resource.endswith("/chats/getallmessages")
-                or resource.endswith("/joinedteams/getallmessages")
-            ):
-                continue
-            if not _sub_owned_by(sub, webhook_secret, user_email):
+            if not _owned_teams_sub(sub, webhook_secret, user_email):
                 continue
             try:
                 await graph.subscriptions.by_subscription_id(sub.id).delete()
             except Exception:
                 pass
 
-        chats_result = await _create_one_subscription(
-            graph,
-            resource=_CHATS_RESOURCE,
-            webhook_url=webhook_url,
-            client_state=client_state,
-            user_email=user_email,
-        )
-        channels_result = await _create_one_subscription(
-            graph,
-            resource=_JOINED_TEAMS_RESOURCE,
-            webhook_url=webhook_url,
-            client_state=client_state,
-            user_email=user_email,
-        )
+        channels = await _enumerate_user_channels(graph)
+        channel_resources = [_channel_resource(tid, cid) for tid, cid, _ in channels]
 
-        # Treat the call as successful as long as chats came up — even
-        # in well-configured tenants channels can fail because admin
-        # consent on ``ChannelMessage.Read.All`` hasn't been granted.
-        # The caller can inspect ``channels`` to detect partial failure.
+        sem = asyncio.Semaphore(_SUB_CONCURRENCY)
+
+        async def _guarded(resource: str) -> dict:
+            async with sem:
+                return await _create_one_subscription(
+                    graph,
+                    resource=resource,
+                    webhook_url=webhook_url,
+                    client_state=client_state,
+                    user_email=user_email,
+                )
+
+        chats_task = asyncio.create_task(_guarded(_chats_resource(user_id)))
+        channel_tasks = [asyncio.create_task(_guarded(r)) for r in channel_resources]
+        chats_result = await chats_task
+        channel_results = await asyncio.gather(*channel_tasks) if channel_tasks else []
+
+        channel_failures = sum(1 for r in channel_results if "error" in r)
+
+        # ``success`` means the chats sub landed.  Per-channel failures
+        # don't break delivery of chats and get retried on the next
+        # 30-min renewal.  The caller can inspect ``channel_failures``
+        # and the per-channel entries in ``channels`` for partial state.
         return {
             "success": "subscription_id" in chats_result,
             "chats": chats_result,
-            "channels": channels_result,
+            "channels": channel_results,
+            "channel_count": len(channel_results),
+            "channel_failures": channel_failures,
         }
 
     except HTTPException:
@@ -354,9 +428,35 @@ async def watch_teams(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _owned_teams_sub(sub, webhook_secret: str, user_email: str) -> bool:
+    """Return True if *sub* is one of ours for *user_email*.
+
+    Matches both the chats feed (``/users/{id}/chats/getAllMessages``
+    or the older ``/me/chats/getAllMessages``) and per-channel subs
+    (``/teams/{id}/channels/{id}/messages``).  ``clientState``
+    ownership is always required so we never touch subs owned by
+    other tenants/apps.
+    """
+    if not _sub_owned_by(sub, webhook_secret, user_email):
+        return False
+    resource = (sub.resource or "").lower()
+    if resource.endswith("/chats/getallmessages"):
+        return True
+    if (
+        "/teams/" in resource
+        and "/channels/" in resource
+        and resource.endswith("/messages")
+    ):
+        return True
+    return False
+
+
 @router.delete("/watch")
 async def delete_teams_watch(request: Request):
-    """Delete both unified Teams subscriptions for a user.
+    """Delete all unified Teams subscriptions for a user.
+
+    Tears down the per-user chats sub plus every per-channel sub this
+    service created on the user's behalf.
 
     Request body: { "primary_email": "user@yourdomain.com" }
     """
@@ -378,13 +478,7 @@ async def delete_teams_watch(request: Request):
         subs = await graph.subscriptions.get()
         deleted = 0
         for sub in subs.value or []:
-            resource = (sub.resource or "").lower()
-            if not (
-                resource.endswith("/chats/getallmessages")
-                or resource.endswith("/joinedteams/getallmessages")
-            ):
-                continue
-            if not _sub_owned_by(sub, webhook_secret, primary_email):
+            if not _owned_teams_sub(sub, webhook_secret, primary_email):
                 continue
             await graph.subscriptions.by_subscription_id(sub.id).delete()
             deleted += 1

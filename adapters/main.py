@@ -2460,13 +2460,13 @@ async def teams_notification_processor(request: Request):
         resource = notification.get("resource", "")
         resource_data = notification.get("resourceData", {})
 
-        # Determine message type from resource path.  Channel messages
-        # arrive in two shapes:
-        #   teams('{id}')/channels('{id}')/messages('{id}')
-        #   users('{id}')/joinedTeams('{id}')/channels('{id}')/messages('{id}')
-        # The second is what ``/me/joinedTeams/getAllMessages`` produces;
-        # ``joinedTeams`` happens to contain the substring ``teams`` so
-        # the older detector doesn't need to change.
+        # Determine message type from resource path.  Per-channel subs
+        # emit ``teams('{id}')/channels('{id}')/messages('{id}')``.
+        # Chat subs emit ``chats('{id}')/messages('{id}')`` (or under
+        # ``users('{id}')/chats/...`` for per-user subs).  We still
+        # accept the legacy ``joinedTeams('{id}')`` envelope so any
+        # in-flight subs created by the old resource path drain
+        # cleanly until they expire.
         resource_lower = resource.lower()
         is_channel_message = (
             "channels(" in resource_lower or "/channels/" in resource_lower
@@ -2778,14 +2778,14 @@ async def _handle_teams_lifecycle(
 ) -> None:
     """Process a single Graph lifecycle notification item.
 
-    The unified Teams watcher is delegated-only and creates two
-    subscriptions per user (``/me/chats/getAllMessages`` and
-    ``/me/joinedTeams/getAllMessages``).  Graph posts ``lifecycleEvent``
-    items with one of:
+    The unified Teams watcher is delegated-only and creates a per-user
+    chats subscription (``/users/{id}/chats/getAllMessages``) plus one
+    per-channel subscription for every channel in every team the user
+    belongs to.  Graph posts ``lifecycleEvent`` items with one of:
 
     - ``subscriptionRemoved`` / ``missed`` — re-bootstrap by POSTing
       ``/teams/watch``; that endpoint deletes any owned stale subs and
-      re-creates both.
+      re-creates them all.
     - ``reauthorizationRequired`` — also handled by re-POSTing
       ``/teams/watch``.  Delegated subs rarely fire this event (the
       30 min scheduler tick handles renewal in the common case), but
@@ -3820,15 +3820,19 @@ def scheduled_google_tokens(payload: ScheduledPayload):
 def scheduled_teams_watches(payload: ScheduledPayload):
     """
     Cloud Run endpoint that renews the unified Teams subscriptions
-    (chats + channels via ``joinedTeams``) for every Microsoft-365
-    assistant.  Teams subscriptions expire after 60 minutes, so this
-    runs every 30 mins.
+    (per-user chats + per-channel) for every Microsoft-365 assistant.
+    Teams subscriptions expire after 60 minutes, so this runs every
+    30 mins.
 
-    A single POST to ``/teams/watch`` per assistant rebuilds both subs.
+    A single POST to ``/teams/watch`` per assistant rebuilds everything:
+    the chats sub plus one sub per channel across every joined team.
+    Each renewal re-enumerates channels so newly joined teams/channels
+    are picked up automatically.
+
     The comms service requires a delegated token for every mailbox in
     this codepath; us-provisioned mailboxes get one via ROPC at
     ``/outlook/create``.  Mailboxes without a stored token surface as
-    ``failed`` in the results and need a re-provision or BYOD OAuth.
+    ``no_token`` in the results and need a re-provision or BYOD OAuth.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
@@ -3861,7 +3865,7 @@ def scheduled_teams_watches(payload: ScheduledPayload):
 
     results = {
         "renewed": [],
-        "channels_unconsented": [],
+        "channel_failures": [],
         "no_token": [],
         "timed_out": [],
         "failed": [],
@@ -3909,12 +3913,17 @@ def scheduled_teams_watches(payload: ScheduledPayload):
             else:
                 results["failed"].append({"email": email, **result})
 
-            # Track the partial-failure case explicitly so dashboards
-            # can flag tenants that haven't admin-consented
-            # ``ChannelMessage.Read.All``.
-            if "error" in (result.get("channels") or {}):
-                results["channels_unconsented"].append(
-                    {"email": email, "error": result["channels"]["error"]},
+            # Per-channel failures are expected occasionally (transient
+            # 429s, unusual channel types).  Track counts per assistant
+            # so dashboards can surface tenants with chronic failures
+            # without drowning on per-sub entries.
+            if result.get("channel_failures"):
+                results["channel_failures"].append(
+                    {
+                        "email": email,
+                        "failed": result["channel_failures"],
+                        "total": result.get("channel_count", 0),
+                    },
                 )
 
         except requests.exceptions.Timeout:
@@ -3933,7 +3942,7 @@ def scheduled_teams_watches(payload: ScheduledPayload):
     logger.info(
         f"Teams watch renewal complete: "
         f"{len(results['renewed'])} renewed, "
-        f"{len(results['channels_unconsented'])} channels_unconsented, "
+        f"{len(results['channel_failures'])} with channel_failures, "
         f"{len(results['no_token'])} no_token, "
         f"{len(results['timed_out'])} timed_out, "
         f"{len(results['failed'])} failed",
