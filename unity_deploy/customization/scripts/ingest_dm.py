@@ -5,9 +5,8 @@ Parses source files (Excel, CSV, or any format supported by
 ``FileParser``) using ``FileParser.parse_batch()``, then ingests each
 ``ExtractedTable`` into named contexts via ``DataManager.ingest()``.
 
-Telemetry is wired up manually using the same ``ProgressReporter`` system
-that the FM pipeline uses, so progress JSONL files are structurally
-identical.
+Uses the shared ``PipelineInstrumentation`` for run/cost ledgers, stage/file
+manifests, and cost tracking -- identical to the FM pipeline path.
 
 Usage::
 
@@ -47,6 +46,118 @@ def _resolve_embed_columns(
                 if table_spec.table == sheet_name:
                     return list(table_spec.source_columns)
     return None
+
+
+def _dispatch_dm(
+    *,
+    config: PipelineConfig,
+    project_name: str,
+    user_id: str,
+    assistant_id: str,
+) -> int:
+    """Publish one ParseRequested per source_file with DM-mode binding.
+
+    Uploads each source file to GCS via
+    :func:`unity.common.pipeline.publish_parse_request`, which also
+    enforces the ``one file per ParseRequested`` invariant that Tier-2
+    parallelism depends on.
+
+    Each file's ``DmBinding.target_context`` is taken from the first
+    table's ``context``. If a source file has multiple tables with
+    differing contexts, a warning is logged and the first context is
+    used; the worker's current DM mode applies that single binding to
+    every table in the plan. Extending :class:`DmBinding` to carry a
+    per-table mapping is out of scope for this flag -- the common case
+    is one-table-per-file in DM pipelines.
+
+    Current DM dispatch is assistant-scoped too: ``user_id`` is carried
+    for provenance / routing and ``assistant_id`` identifies the
+    assistant whose Orchestra-bound api key authorizes the ingest via
+    ``GET /v0/admin/assistant?agent_id=...``.
+    """
+    from unity.common.pipeline import DispatchTarget, publish_parse_request
+    from unity.common.pipeline.types import DmBinding
+    from unity_deploy.infra.gcp.settings import GcpPipelineSettings
+
+    settings = GcpPipelineSettings()
+    project_id = settings.pubsub.project_id
+    bucket_name = settings.artifact_store.bucket
+    if not project_id:
+        logger.error(
+            "UNITY_PUBSUB_PROJECT_ID is not set; cannot dispatch. Set the "
+            "GCP project via env or unset --dispatch to run in-process.",
+        )
+        return 2
+    if not bucket_name:
+        logger.error(
+            "UNITY_GCS_ARTIFACT_BUCKET is not set; cannot dispatch.",
+        )
+        return 2
+
+    target = DispatchTarget(
+        project_id=project_id,
+        bucket_name=bucket_name,
+        env_suffix=settings.env_suffix(),
+    )
+
+    logger.info(
+        "=== DM Dispatch [project=%s, env=%s, bucket=%s, user_id=%s, assistant_id=%s] ===",
+        project_name,
+        settings.environment,
+        bucket_name,
+        user_id,
+        assistant_id,
+    )
+    logger.info("Dispatching %d source file(s)...", len(config.source_files))
+
+    errors = 0
+    for sf in config.source_files:
+        tables = list(sf.tables or [])
+        if not tables:
+            logger.warning("Skipping %s: no tables defined in config", sf.file_path)
+            continue
+
+        contexts = {t.context for t in tables}
+        if len(contexts) > 1:
+            logger.warning(
+                "File %s has %d distinct table contexts (%s); using the first "
+                "(%s) for DmBinding. All tables will land under this context.",
+                sf.file_path,
+                len(contexts),
+                sorted(contexts),
+                tables[0].context,
+            )
+
+        dm_binding = DmBinding(
+            user_id=user_id,
+            assistant_id=assistant_id,
+            target_context=tables[0].context,
+        )
+        try:
+            result = publish_parse_request(
+                target=target,
+                logical_path=sf.file_path,
+                ingestion_mode="dm",
+                dm_binding=dm_binding,
+                source_local_path=sf.file_path,
+            )
+            logger.info(
+                "  dispatched %s -> job=%s gs_uri=%s message_id=%s",
+                sf.file_path,
+                result.job_id,
+                result.gs_uri,
+                result.message_id,
+            )
+        except Exception:
+            logger.exception("  dispatch failed for %s", sf.file_path)
+            errors += 1
+
+    logger.info(
+        "=== DM Dispatch Complete (files=%d, errors=%d) ===",
+        len(config.source_files),
+        errors,
+    )
+    return 1 if errors else 0
 
 
 def main() -> int:
@@ -151,6 +262,41 @@ def main() -> int:
             "without running ingestion."
         ),
     )
+    parser.add_argument(
+        "--job-tracking",
+        action="store_true",
+        help="Enable deployment job tracking (writes job status to .deployments/)",
+    )
+    parser.add_argument(
+        "--dispatch",
+        action="store_true",
+        help=(
+            "Publish ParseRequested messages to the GCP pipeline (one per "
+            "source file) and exit, instead of parsing/ingesting in-process. "
+            "Each file is sent with ingestion_mode=dm + DmBinding. Use this "
+            "to drive the GKE parse/ingest workers for bulk operator "
+            "ingests in staging/production."
+        ),
+    )
+    parser.add_argument(
+        "--user-id",
+        default=None,
+        help=(
+            "DmBinding.user_id used for --dispatch. The ingest worker "
+            "keeps this for provenance / routing. Falls back to the "
+            "USER_ID environment variable when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--assistant-id",
+        default=None,
+        help=(
+            "DmBinding.assistant_id used for --dispatch. The ingest worker "
+            "resolves the Unify api key per message via Orchestra's "
+            "GET /v0/admin/assistant?agent_id=... . Falls back to the "
+            "ASSISTANT_ID environment variable when omitted."
+        ),
+    )
     args = parser.parse_args()
 
     from unity_deploy.customization.scripts.ingest_utils import (
@@ -195,6 +341,32 @@ def main() -> int:
         project_root=project_root,
     )
 
+    if args.dispatch:
+        import os
+
+        user_id = args.user_id or os.environ.get("USER_ID")
+        assistant_id = args.assistant_id or os.environ.get("ASSISTANT_ID")
+        if not user_id:
+            logger.error(
+                "--dispatch requires --user-id (or USER_ID in the env). "
+                "A real user identity is required for provenance / routing.",
+            )
+            return 2
+        if not assistant_id:
+            logger.error(
+                "--dispatch requires --assistant-id (or ASSISTANT_ID in the env). "
+                "Current DM dispatch is assistant-scoped, so the ingest worker "
+                "resolves the Unify api key per message via "
+                "GET /v0/admin/assistant?agent_id=....",
+            )
+            return 2
+        return _dispatch_dm(
+            config=config,
+            project_name=args.project,
+            user_id=user_id,
+            assistant_id=assistant_id,
+        )
+
     activate_project(args.project, overwrite=args.overwrite)
 
     diagnostics = config.diagnostics.model_dump()
@@ -208,9 +380,16 @@ def main() -> int:
     verbosity = args.verbosity or config.diagnostics.verbosity
 
     from unity.file_manager.managers.utils.progress import create_progress_event
+    from unity.common.pipeline import (
+        ArtifactWorkItem,
+        InlineRowsHandle,
+        PipelineInstrumentation,
+        build_table_handles,
+        ingest_artifacts,
+    )
 
     # ------------------------------------------------------------------ #
-    # Step 1: Parse Excel files
+    # Step 1: Parse source files
     # ------------------------------------------------------------------ #
 
     from unity.file_manager.file_parsers import FileParser
@@ -314,6 +493,82 @@ def main() -> int:
     embed_strategy = "off" if args.no_embed else config.embed.strategy
     infer_untyped = config.ingest.infer_untyped_fields
     max_table_workers = config.execution.max_table_workers
+
+    # Set up instrumentation for run/cost ledgers and manifests
+    parallel = args.parallel and True
+    total_file_count = sum(
+        1 for pr in parse_results if pr.status == "success" and pr.tables
+    )
+    instrumentation = PipelineInstrumentation.from_config(
+        config,
+        parallel_files=parallel,
+        file_count=total_file_count,
+        meta={
+            "pipeline": "ingest_dm",
+            "client": args.client,
+            "deployment": args.deployment,
+            "embed_strategy": embed_strategy,
+        },
+    )
+
+    # Record parse costs
+    if instrumentation.has_cost_tracking:
+        from unity.file_manager.managers.utils.executor import (
+            _extract_parse_cost_metrics,
+        )
+
+        for pr in parse_results:
+            lp = str(getattr(pr, "logical_path", "") or "")
+            metrics = _extract_parse_cost_metrics(pr, lp, config.parse)
+            instrumentation.add_parse_costs(file_path=lp, **metrics)
+
+    # Optional deployment job tracking
+    job = None
+    job_store = None
+    if args.job_tracking:
+        from unity.common.pipeline import (
+            DeploymentBundle,
+            DeploymentBundleArtifact,
+            DeploymentIdentity,
+            LocalDeploymentBundleStore,
+            LocalDeploymentJobStore,
+            DeploymentIngestionJob,
+            DeploymentObservabilityRefs,
+        )
+        from unity.common.pipeline._utils import utc_now_iso
+
+        deploy_root = run_dir / ".deployments"
+        bundle_store = LocalDeploymentBundleStore(deploy_root)
+        job_store = LocalDeploymentJobStore(deploy_root)
+
+        bundle = DeploymentBundle(
+            deployment_identity=DeploymentIdentity(
+                client=args.client,
+                deployment=args.deployment,
+                project=args.project,
+            ),
+            source_artifact_manifest=[
+                DeploymentBundleArtifact(
+                    kind="source_data",
+                    logical_name=sf.file_path.split("/")[-1],
+                    source_path=sf.file_path,
+                )
+                for sf in config.source_files
+            ],
+        )
+        bundle_ref = bundle_store.write_bundle(bundle)
+        job = DeploymentIngestionJob(
+            bundle_ref=bundle_ref,
+            run_mode="data_manager",
+            status="running",
+            started_at=utc_now_iso(),
+            observability_refs=DeploymentObservabilityRefs(
+                log_file=log_file,
+            ),
+        )
+        job_store.upsert_job(job)
+        logger.info("Job tracking enabled: job_id=%s", job.job_id)
+
     total_tables = 0
     total_rows = 0
     failed_tables = 0
@@ -362,238 +617,230 @@ def main() -> int:
 
         return _on_chunk
 
-    def _ingest_table(
-        table,
-        lp: str,
-        table_spec: SourceTableSpec,
-    ) -> tuple[bool, str, int]:
-        sheet_name = table_spec.sheet
-        context_path = table_spec.context
-        description = table_spec.description or None
-        embed_columns = (
-            _resolve_embed_columns(config, lp, sheet_name)
-            if not args.no_embed
-            else None
-        )
-        chunk_size = args.chunk_size or table_spec.chunk_size
-        post_ingest_config = config.effective_post_ingest(table_spec)
-        col_descs = sheet_col_descs.get(sheet_name, {})
-        rows = table.rows
-
-        if not rows:
-            logger.info(
-                "Sheet '%s' has 0 rows -- skipping %s",
-                sheet_name,
-                context_path,
-            )
-            return (True, context_path, 0)
-
-        n_chunks = (len(rows) + chunk_size - 1) // chunk_size
-
-        logger.info(
-            "Ingesting %d rows from '%s' -> %s (%d chunks of %d)",
-            len(rows),
-            sheet_name,
-            context_path,
-            n_chunks,
-            chunk_size,
-        )
-
-        table_start = time.perf_counter()
-        elapsed_ms = (table_start - pipeline_start) * 1000
-        reporter.report(
-            create_progress_event(
-                lp,
-                "ingest_table",
-                "started",
-                elapsed_ms=elapsed_ms,
-                meta={
-                    "table_label": sheet_name,
-                    "row_count": len(rows),
-                    "chunk_size": chunk_size,
-                    "total_chunks": n_chunks,
-                    "embed_columns": embed_columns,
-                    "embed_strategy": embed_strategy if embed_columns else "off",
-                },
-                verbosity=verbosity,
-            ),
-        )
-
-        chunk_callback = _make_chunk_callback(lp, sheet_name)
-
-        fields = (
-            {name: {"description": desc} for name, desc in col_descs.items()}
-            if col_descs
-            else None
-        )
-
-        try:
-            result = dm.ingest(
-                context_path,
-                rows,
-                description=description,
-                fields=fields,
-                embed_columns=embed_columns,
-                embed_strategy=embed_strategy if embed_columns else "off",
-                chunk_size=chunk_size,
-                infer_untyped_fields=infer_untyped,
-                add_to_all_context=not args.skip_all_context,
-                post_ingest=post_ingest_config,
-                on_task_complete=chunk_callback,
-            )
-
-            table_duration_ms = (time.perf_counter() - table_start) * 1000
-            elapsed_ms = (time.perf_counter() - pipeline_start) * 1000
-
-            completed_meta = {
-                "table_label": sheet_name,
-                "row_count": len(rows),
-                "rows_inserted": result.rows_inserted,
-                "rows_embedded": result.rows_embedded,
-                "chunks_processed": result.chunks_processed,
-                "total_chunks": n_chunks,
-                "context": context_path,
-            }
-            if result.coercion_stats:
-                completed_meta["coercion"] = result.coercion_stats
-
-            reporter.report(
-                create_progress_event(
-                    lp,
-                    "ingest_table",
-                    "completed",
-                    duration_ms=table_duration_ms,
-                    elapsed_ms=elapsed_ms,
-                    meta=completed_meta,
-                    verbosity=verbosity,
-                ),
-            )
-
-            logger.info(
-                "  -> %s: %d inserted, %d embedded, %d/%d chunks (%.1fs)",
-                context_path,
-                result.rows_inserted,
-                result.rows_embedded,
-                result.chunks_processed,
-                n_chunks,
-                table_duration_ms / 1000,
-            )
-            return (True, context_path, result.rows_inserted)
-
-        except Exception as e:
-            table_duration_ms = (time.perf_counter() - table_start) * 1000
-            elapsed_ms = (time.perf_counter() - pipeline_start) * 1000
-
-            import traceback
-
-            tb = traceback.format_exc()
-
-            reporter.report(
-                create_progress_event(
-                    lp,
-                    "ingest_table",
-                    "failed",
-                    duration_ms=table_duration_ms,
-                    elapsed_ms=elapsed_ms,
-                    error=str(e),
-                    traceback_str=tb,
-                    meta={"table_label": sheet_name, "row_count": len(rows)},
-                    verbosity=verbosity,
-                ),
-            )
-
-            logger.error(
-                "  -> FAILED %s: %s (%.1fs)",
-                context_path,
-                e,
-                table_duration_ms / 1000,
-            )
-            return (False, context_path, 0)
-
-    all_work: list[tuple] = []
-    file_tracking: dict[str, dict] = {}
-
-    for pr in parse_results:
-        if pr.status != "success" or not pr.tables:
-            continue
-        lp = str(pr.logical_path)
-        file_tracking[lp] = {
-            "start": time.perf_counter(),
-            "tables": 0,
-            "rows": 0,
-            "failures": 0,
-        }
-        for t in pr.tables:
-            label = t.sheet_name or t.label
-            spec = table_specs.get(label)
-            if spec is None:
+    with instrumentation:
+        for pr in parse_results:
+            if pr.status != "success" or not pr.tables:
+                if pr.status != "success":
+                    instrumentation.record_file(
+                        file_path=str(getattr(pr, "logical_path", "") or ""),
+                        status="error",
+                        meta={"parse_error": str(getattr(pr, "error", "") or "")},
+                    )
                 continue
-            if args.tables and not any(f in label for f in args.tables):
-                logger.info("Skipping '%s' (not in --tables filter)", label)
-                continue
-            all_work.append((t, lp, spec))
 
-    logger.info(
-        "Ingestion plan: %d tables across %d files (parallel=%s)",
-        len(all_work),
-        len(file_tracking),
-        args.parallel,
-    )
+            lp = str(pr.logical_path)
+            file_start = time.perf_counter()
 
-    def _collect(ok: bool, ctx: str, rows_inserted: int, lp: str):
-        nonlocal total_tables, total_rows, failed_tables
-        ft = file_tracking[lp]
-        if ok and ctx:
-            ft["tables"] += 1
-            ft["rows"] += rows_inserted
-            total_tables += 1
-            total_rows += rows_inserted
-            ingested_contexts.append(ctx)
-        elif not ok:
-            ft["failures"] += 1
-            failed_tables += 1
+            # Build transport handles so rows are streamed from source
+            # files (CSV/XLSX) instead of materialised in ExtractedTable.rows.
+            table_handles = build_table_handles(pr)
 
-    if args.parallel and len(all_work) > 1:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+            work_items: list[ArtifactWorkItem] = []
+            for t in pr.tables:
+                label = t.sheet_name or t.label
+                spec = table_specs.get(label)
+                if spec is None:
+                    continue
+                if args.tables and not any(f in label for f in args.tables):
+                    logger.info("Skipping '%s' (not in --tables filter)", label)
+                    continue
 
-        logger.info(
-            "Parallel ingestion: %d tables, max_workers=%d",
-            len(all_work),
-            max_table_workers,
-        )
-        with ThreadPoolExecutor(max_workers=max_table_workers) as pool:
-            futures = {
-                pool.submit(_ingest_table, t, lp, spec): lp for t, lp, spec in all_work
-            }
-            for fut in as_completed(futures):
-                lp = futures[fut]
-                ok, ctx, rows_inserted = fut.result()
-                _collect(ok, ctx, rows_inserted, lp)
-    else:
-        for table, lp, spec in all_work:
-            ok, ctx, rows_inserted = _ingest_table(table, lp, spec)
-            _collect(ok, ctx, rows_inserted, lp)
+                tid = str(getattr(t, "table_id", "") or "")
+                handle = table_handles.get(tid)
 
-    for lp, ft in file_tracking.items():
-        file_duration_ms = (time.perf_counter() - ft["start"]) * 1000
-        elapsed_ms = (time.perf_counter() - pipeline_start) * 1000
-        file_status = "completed" if ft["failures"] == 0 else "failed"
+                if handle is None:
+                    inline = list(getattr(t, "rows", []) or [])
+                    if not inline:
+                        logger.info(
+                            "Sheet '%s' has 0 rows -- skipping %s",
+                            label,
+                            spec.context,
+                        )
+                        continue
+                    handle = InlineRowsHandle(
+                        rows=inline,
+                        columns=list(getattr(t, "columns", []) or []),
+                        row_count=len(inline),
+                    )
 
-        reporter.report(
-            create_progress_event(
-                lp,
-                "file_complete",
-                file_status,
-                duration_ms=file_duration_ms,
-                elapsed_ms=elapsed_ms,
-                meta={
-                    "tables_ingested": ft["tables"],
-                    "rows_ingested": ft["rows"],
-                    "ingest_failures": ft["failures"],
-                },
-                verbosity=verbosity,
-            ),
-        )
+                handle_row_count = getattr(handle, "row_count", None) or 0
+                if isinstance(handle, InlineRowsHandle) and not handle.rows:
+                    logger.info(
+                        "Sheet '%s' has 0 rows -- skipping %s",
+                        label,
+                        spec.context,
+                    )
+                    continue
+
+                chunk_size = args.chunk_size or spec.chunk_size
+                embed_columns = (
+                    _resolve_embed_columns(config, lp, label)
+                    if not args.no_embed
+                    else None
+                )
+                col_descs = sheet_col_descs.get(label, {})
+                post_ingest_config = config.effective_post_ingest(spec)
+
+                rows_payload = None
+                handle_payload = None
+                if isinstance(handle, InlineRowsHandle):
+                    rows_payload = list(handle.rows)
+                else:
+                    handle_payload = handle
+
+                work_items.append(
+                    ArtifactWorkItem(
+                        kind="table",
+                        label=label,
+                        stage_name="ingest_table",
+                        payload={
+                            "context_path": spec.context,
+                            "rows": rows_payload,
+                            "table_input_handle": handle_payload,
+                            "description": spec.description or None,
+                            "embed_columns": embed_columns,
+                            "embed_strategy": (
+                                embed_strategy if embed_columns else "off"
+                            ),
+                            "chunk_size": chunk_size,
+                            "infer_untyped": infer_untyped,
+                            "skip_all_context": args.skip_all_context,
+                            "post_ingest_config": post_ingest_config,
+                            "col_descs": col_descs,
+                            "chunk_callback": _make_chunk_callback(lp, label),
+                        },
+                        columns=list(getattr(t, "columns", []) or []),
+                        row_count=handle_row_count,
+                        table_id=tid or None,
+                        stage_id=instrumentation.make_stage_id(
+                            file_path=lp,
+                            stage_name="ingest_table",
+                            discriminator=label,
+                        ),
+                        meta={
+                            "table_label": label,
+                            "row_count": handle_row_count,
+                            "context": spec.context,
+                            "chunk_size": chunk_size,
+                        },
+                    ),
+                )
+
+            # DM-specific ingest function
+            def _dm_ingest_fn(item: ArtifactWorkItem) -> dict:
+                p = item.payload
+                fields = (
+                    {
+                        name: {"description": desc}
+                        for name, desc in p["col_descs"].items()
+                    }
+                    if p["col_descs"]
+                    else None
+                )
+                result = dm.ingest(
+                    p["context_path"],
+                    p["rows"],
+                    table_input_handle=p.get("table_input_handle"),
+                    description=p["description"],
+                    fields=fields,
+                    embed_columns=p["embed_columns"],
+                    embed_strategy=p["embed_strategy"],
+                    chunk_size=p["chunk_size"],
+                    infer_untyped_fields=p["infer_untyped"],
+                    add_to_all_context=not p["skip_all_context"],
+                    post_ingest=p["post_ingest_config"],
+                    on_task_complete=p["chunk_callback"],
+                )
+                return {
+                    "ingest_result": result,
+                    "context": p["context_path"],
+                    "rows_inserted": result.rows_inserted,
+                    "rows_embedded": result.rows_embedded,
+                }
+
+            if work_items:
+                artifact_results = ingest_artifacts(
+                    work_items=work_items,
+                    ingest_fn=_dm_ingest_fn,
+                    instrumentation=instrumentation,
+                    source_path=lp,
+                    max_workers=max_table_workers if parallel else 1,
+                    retry_config=config.retry if hasattr(config, "retry") else None,
+                )
+
+                file_failures = 0
+                for ar in artifact_results:
+                    if ar.success:
+                        rows_inserted = 0
+                        if ar.value and isinstance(ar.value, dict):
+                            rows_inserted = ar.value.get("rows_inserted", 0)
+                            ctx = ar.value.get("context", "")
+                            if ctx:
+                                ingested_contexts.append(ctx)
+                        total_tables += 1
+                        total_rows += rows_inserted
+                    else:
+                        file_failures += 1
+                        failed_tables += 1
+
+                    elapsed_ms = (time.perf_counter() - pipeline_start) * 1000
+                    reporter.report(
+                        create_progress_event(
+                            lp,
+                            "ingest_table",
+                            "completed" if ar.success else "failed",
+                            duration_ms=ar.duration_ms,
+                            elapsed_ms=elapsed_ms,
+                            error=ar.error,
+                            meta={"table_label": ar.label},
+                            verbosity=verbosity,
+                        ),
+                    )
+
+                file_duration_ms = (time.perf_counter() - file_start) * 1000
+                file_status = "success" if file_failures == 0 else "error"
+
+                instrumentation.record_file(
+                    file_path=lp,
+                    status=file_status,
+                    total_duration_ms=file_duration_ms,
+                    meta={
+                        "tables_ingested": len(artifact_results) - file_failures,
+                        "ingest_failures": file_failures,
+                    },
+                )
+
+                elapsed_ms = (time.perf_counter() - pipeline_start) * 1000
+                reporter.report(
+                    create_progress_event(
+                        lp,
+                        "file_complete",
+                        "completed" if file_failures == 0 else "failed",
+                        duration_ms=file_duration_ms,
+                        elapsed_ms=elapsed_ms,
+                        meta={
+                            "tables_ingested": len(artifact_results) - file_failures,
+                            "rows_ingested": total_rows,
+                            "ingest_failures": file_failures,
+                        },
+                        verbosity=verbosity,
+                    ),
+                )
+
+        instrumentation.add_observability_costs()
+
+    # Finalize deployment job tracking
+    if job is not None and job_store is not None:
+        from unity.common.pipeline._utils import utc_now_iso
+
+        job.status = "error" if failed_tables > 0 else "success"
+        job.finished_at = utc_now_iso()
+        if failed_tables > 0:
+            job.error = f"{failed_tables} table(s) failed"
+        job.metadata["total_tables"] = total_tables
+        job.metadata["total_rows"] = total_rows
+        job.metadata["failed_tables"] = failed_tables
+        job_store.upsert_job(job)
 
     reporter.flush()
 

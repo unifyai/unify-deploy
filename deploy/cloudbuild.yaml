@@ -67,6 +67,53 @@ steps:
   secretEnv: ['ORCHESTRA_ADMIN_KEY']
   waitFor: ['upload-sha']
 
+  # Refresh pipeline workers so parse/ingest pods pick up the new image.
+  # Mirrors refresh-idle-jobs above for the adapter Cloud Run jobs;
+  # workers run in GKE rather than Cloud Run, so we reconcile via
+  # kubectl:
+  #   - `kubectl apply` re-applies any manifest drift (HPA target,
+  #     PDB budget, resource limits) whenever the YAML changes.
+  #   - `kubectl rollout restart` forces pods to restart even when
+  #     the pod-template spec is byte-identical (which is the common
+  #     case, because the manifest pins the :latest tag and the SHA
+  #     lives in the image itself).
+  # Runs in parallel with refresh-idle-jobs (no dependency between
+  # them). The 24h grace period + maxSurge=100% rolling strategy
+  # means the restart is safely fire-and-forget: the Deployment
+  # controller drains old pods while new ones take over, with no
+  # capacity dip.
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'refresh-pipeline-workers'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -eu
+    # The cloud-builders/kubectl image only auto-runs
+    # `gcloud container clusters get-credentials` via its default
+    # entrypoint wrapper. We override entrypoint to `bash`, so we
+    # have to fetch credentials ourselves or kubectl falls back to
+    # talking to localhost:8080 and every apply fails.
+    gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
+
+    echo "Applying production pipeline worker manifests..."
+    kubectl apply -f deploy/k8s/workers/parse-worker-deployment.yaml
+    kubectl apply -f deploy/k8s/workers/ingest-worker-deployment.yaml
+    kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml
+
+    echo "Triggering rolling restart to pick up new image..."
+    # `|| true` tolerates first-deploy scenarios where the Deployment
+    # does not yet exist: the apply above creates it, and the very
+    # first pods will already run the latest image, so the restart
+    # is a no-op we don't want to fail the build on.
+    kubectl rollout restart deployment/unity-parse-worker -n default || true
+    kubectl rollout restart deployment/unity-ingest-worker -n default || true
+    echo "Worker refresh requested; pods drain over up to 24h grace period."
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['upload-sha']
+
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
@@ -74,6 +121,7 @@ options:
 substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'unity'
+  _CLUSTER: 'unity'
   _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest'
 
 availableSecrets:

@@ -1,0 +1,39 @@
+{
+  "rule": [
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 7,
+        "matchesPrefix": ["debug-manifest/"]
+      }
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 30,
+        "matchesPrefix": ["failure-bundle/"]
+      }
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 14,
+        "matchesPrefix": ["progress-events/"]
+      }
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 90,
+        "matchesPrefix": ["audit-summary/"]
+      }
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 30,
+        "matchesPrefix": ["jobs/"]
+      }
+    }
+  ]
+}

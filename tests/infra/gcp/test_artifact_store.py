@@ -1,0 +1,147 @@
+"""Unit tests for :mod:`unity_deploy.infra.gcp.artifact_store`.
+
+Focused on the retry wrapper semantics. In particular, HTTP 404 responses
+must be treated as definitive ``not found`` answers and bubble up without
+consulting the generic retry policy — otherwise callers like
+``PubSubWorkQueue.is_cancelled`` burn ~30s of backoff on every message
+simply to discover that the cancellation sentinel does not exist.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from unity.common.pipeline.retry_policy import ResilientRequestPolicy
+from unity_deploy.infra.gcp.artifact_store import (
+    GcsArtifactStore,
+    _is_not_found_error,
+)
+
+
+def _make_store(*, max_retries: int = 3) -> GcsArtifactStore:
+    """Build a GcsArtifactStore wired to mocks with a liberal retry policy.
+
+    The retry policy is intentionally permissive (``retry_mode='all_errors'``,
+    non-zero ``max_retries``) so we can assert that the 404 short-circuit
+    fires *in spite of* the policy being willing to retry.
+    """
+    settings = MagicMock()
+    settings.bucket = "test-bucket"
+    settings.prefix = ""
+    policy = ResilientRequestPolicy(
+        max_retries=max_retries,
+        retry_delay_seconds=0.0,
+        backoff_multiplier=1.0,
+        jitter_ratio=0.0,
+        retry_mode="all_errors",
+    )
+    return GcsArtifactStore(
+        client=MagicMock(),
+        settings=settings,
+        retry_policy=policy,
+    )
+
+
+class TestIsNotFoundError:
+    def test_detects_google_api_core_not_found(self):
+        from google.api_core.exceptions import NotFound
+
+        assert _is_not_found_error(NotFound("boom"))
+
+    def test_detects_invalid_response_with_404_status(self):
+        from google.resumable_media.common import InvalidResponse
+
+        response = MagicMock()
+        response.status_code = 404
+        exc = InvalidResponse(response, "Request failed with status code", 404)
+        assert _is_not_found_error(exc)
+
+    def test_rejects_invalid_response_with_non_404_status(self):
+        from google.resumable_media.common import InvalidResponse
+
+        response = MagicMock()
+        response.status_code = 500
+        exc = InvalidResponse(response, "Request failed with status code", 500)
+        assert not _is_not_found_error(exc)
+
+    def test_string_fallback_matches_404_prefix(self):
+        exc = Exception("404 GET https://example.com/o/foo: No such object")
+        assert _is_not_found_error(exc)
+
+    def test_string_fallback_matches_wrapped_tuple_form(self):
+        exc = Exception(
+            "wrapped: ('Request failed with status code', 404, 'Expected one of', 200)",
+        )
+        assert _is_not_found_error(exc)
+
+    def test_plain_value_error_is_not_a_404(self):
+        assert not _is_not_found_error(ValueError("nope"))
+
+
+class TestWithRetry404ShortCircuit:
+    def test_404_raises_immediately_with_zero_retries(self):
+        from google.api_core.exceptions import NotFound
+
+        store = _make_store(max_retries=5)
+        call_count = {"n": 0}
+
+        def fn():
+            call_count["n"] += 1
+            raise NotFound("missing")
+
+        with pytest.raises(NotFound):
+            store._with_retry(fn, operation="get_json(foo)")
+
+        assert call_count["n"] == 1, (
+            "404 must bubble on the first attempt, but fn was called "
+            f"{call_count['n']} times"
+        )
+
+    def test_non_404_error_still_retries_under_permissive_policy(self):
+        store = _make_store(max_retries=2)
+        call_count = {"n": 0}
+
+        def fn():
+            call_count["n"] += 1
+            raise RuntimeError("transient")
+
+        with pytest.raises(RuntimeError):
+            store._with_retry(fn, operation="get_json(foo)")
+
+        assert call_count["n"] == 3, (
+            "non-404 errors should exhaust retries (1 initial + 2 retries), "
+            f"but fn was called {call_count['n']} times"
+        )
+
+    def test_successful_call_returns_value_without_retry(self):
+        store = _make_store()
+
+        def fn():
+            return "ok"
+
+        assert store._with_retry(fn, operation="get_json(foo)") == "ok"
+
+
+class TestJobScopedArtifactKeys:
+    """The collapsed layout writes every per-job artifact under a single
+    ``jobs/<job_id>/...`` root, so a single ``gsutil ls`` shows an entire
+    run in one place and no env-scoped prefix is applied (the environment
+    lives in the *bucket* name instead).
+    """
+
+    def test_materialize_table_input_requires_job_id(self):
+        from unity.common.pipeline.types import InlineRowsHandle
+
+        store = _make_store()
+        handle = InlineRowsHandle(rows=[], columns=[])
+
+        with pytest.raises(ValueError, match="requires a non-empty\\s+job_id"):
+            store.materialize_table_input(
+                handle,
+                logical_path="demo.csv",
+                table_id="table_1",
+                artifact_format="jsonl",
+                job_id="",
+            )

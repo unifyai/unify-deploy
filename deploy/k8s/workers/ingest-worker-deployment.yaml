@@ -1,0 +1,139 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unity-ingest-worker
+  namespace: default
+  labels:
+    app: unity-ingest-worker
+    component: pipeline-worker
+spec:
+  replicas: 2
+  # See parse-worker-deployment.yaml for rationale: 24h grace period
+  # forces maxSurge=100% so rolling restarts don't stall on draining
+  # pods.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 100%
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: unity-ingest-worker
+  template:
+    metadata:
+      labels:
+        app: unity-ingest-worker
+        component: pipeline-worker
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      terminationGracePeriodSeconds: 86400
+      containers:
+      - name: ingest-worker
+        image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest
+        command:
+        - python
+        - -m
+        - unity_deploy.infra.workers.entrypoint_ingest
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "sleep 2"]
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "3"
+            memory: "4Gi"
+        env:
+        - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+          value: "production"
+        - name: UNITY_GCS_ARTIFACT_BUCKET
+          value: "unity-pipeline-artifacts"
+        # ORCHESTRA_URL + ORCHESTRA_ADMIN_KEY are the only credentials
+        # the pod carries: every message triggers a per-assistant
+        # UNIFY_KEY lookup via Orchestra's admin endpoints (see
+        # unity_deploy.infra.workers.assistant_key_resolver). The pod
+        # does not, and must not, hold a shared UNIFY_KEY/USER_ID/
+        # ASSISTANT_ID -- shared workers serve many tenants, and
+        # baked-in credentials would auth every call as the wrong user.
+        - name: ORCHESTRA_URL
+          value: "https://api.unify.ai/v0"
+        - name: ORCHESTRA_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: ORCHESTRA_ADMIN_KEY
+        - name: GCP_SA_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: GCP_SA_KEY
+        - name: UNITY_PUBSUB_PROJECT_ID
+          value: "gcp-project-runtime"
+        - name: UNIFY_PROJECT_NAME
+          value: "Assistants"
+        livenessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        readinessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 10
+          periodSeconds: 30
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: unity-ingest-worker-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: unity-ingest-worker
+  # One-pod-per-message semantics (Option C): one IngestRequested drives
+  # one DataManager load (which fans out Tier-1 row batches internally
+  # on threads). averageValue=1 scales replicas linearly with
+  # undelivered depth. minReplicas=2 keeps warm capacity.
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: pubsub.googleapis.com|subscription|num_undelivered_messages
+        selector:
+          matchLabels:
+            resource.labels.subscription_id: unity-ingest-sub
+      target:
+        type: AverageValue
+        averageValue: "1"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 3600
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: unity-ingest-worker-pdb
+  namespace: default
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: unity-ingest-worker
