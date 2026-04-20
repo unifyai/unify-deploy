@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from common.orchestra_secrets import _upsert_assistant_secrets
 from common.settings import SETTINGS
 
 logger = logging.getLogger(__name__)
@@ -92,14 +93,20 @@ async def get_google_user_info(access_token: str) -> dict:
 
 async def store_google_tokens(
     assistant_id: str,
-    old_secrets: dict,
     new_secrets: dict,
     api_key: str,
     granted_scopes: str = "",
 ) -> bool:
-    """Store Google OAuth tokens (and granted scopes) as assistant secrets."""
+    """Upsert Google OAuth tokens (and granted scopes) as assistant secrets.
+
+    See ``common.orchestra_secrets._upsert_assistant_secrets`` for the
+    PUT-then-POST upsert semantics.
+    """
     if not SETTINGS.orchestra_url:
         logger.info("SETTINGS.orchestra_url not configured")
+        return False
+    if not api_key:
+        logger.info("api_key not configured")
         return False
 
     secrets_to_store = {
@@ -110,37 +117,8 @@ async def store_google_tokens(
     if granted_scopes:
         secrets_to_store["GOOGLE_GRANTED_SCOPES"] = granted_scopes
 
-    if not api_key:
-        logger.info("api_key not configured")
-        return False
-
-    success = True
-    async with httpx.AsyncClient() as client:
-        for secret_name, secret_value in secrets_to_store.items():
-            if not secret_value:
-                continue
-            try:
-                args = {
-                    "url": f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret",
-                    "json": {"secret_name": secret_name, "secret_value": secret_value},
-                    "headers": {"Authorization": f"Bearer {api_key}"},
-                    "timeout": 30.0,
-                }
-                if old_secrets and secret_name in old_secrets:
-                    args["url"] += f"/{secret_name}"
-                    args["json"].pop("secret_name")
-                    response = await client.put(**args)
-                else:
-                    response = await client.post(**args)
-                if response.status_code in (200, 201):
-                    logger.info(f"Stored {secret_name} for assistant {assistant_id}")
-                else:
-                    logger.info(
-                        f"Failed to store {secret_name}: {response.status_code} - {response.text}",
-                    )
-                    success = False
-            except Exception as e:
-                logger.info(f"Error storing {secret_name}: {e}")
-                success = False
-
-    return success
+    return await _upsert_assistant_secrets(
+        assistant_id=assistant_id,
+        api_key=api_key,
+        secrets=secrets_to_store,
+    )

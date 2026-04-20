@@ -3134,10 +3134,8 @@ async def microsoft_oauth_callback(request: Request):
     granted_scopes = build_scope_string("microsoft", features) if is_byod else ""
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
-    old_secrets = assistant.get("secrets", {})
     stored = await store_microsoft_tokens(
         assistant_id=assistant_id,
-        old_secrets=old_secrets,
         new_secrets=tokens,
         api_key=api_key,
         granted_scopes=granted_scopes,
@@ -3368,10 +3366,8 @@ async def google_oauth_callback(request: Request):
     granted_scopes = build_scope_string("google", features)
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
-    old_secrets = assistant.get("secrets", {})
     stored = await store_google_tokens(
         assistant_id=assistant_id,
-        old_secrets=old_secrets,
         new_secrets=tokens,
         api_key=api_key,
         granted_scopes=granted_scopes,

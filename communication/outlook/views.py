@@ -163,7 +163,6 @@ async def create_outlook_user(request: Request):
             )
             tokens_stored = await store_microsoft_tokens(
                 assistant_id=assistant_id,
-                old_secrets={},
                 new_secrets=tokens,
                 api_key=api_key,
                 granted_scopes=scope,
@@ -293,12 +292,6 @@ async def backfill_outlook_tokens(request: Request):
     )
     tokens_stored = await store_microsoft_tokens(
         assistant_id=assistant_id,
-        old_secrets={
-            "MICROSOFT_ACCESS_TOKEN": "_",
-            "MICROSOFT_REFRESH_TOKEN": "_",
-            "MICROSOFT_TOKEN_EXPIRES_AT": "_",
-            "MICROSOFT_GRANTED_SCOPES": "_",
-        },
         new_secrets=tokens,
         api_key=api_key,
         granted_scopes=scope,
