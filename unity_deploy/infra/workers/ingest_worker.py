@@ -26,10 +26,12 @@ Two ingestion flavours are supported, driven by
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from unity.common.pipeline import (
     ArtifactWorkItem,
@@ -41,14 +43,63 @@ from unity.common.pipeline._utils import utc_now_iso
 from unity.common.pipeline.run_ledger import PipelineStageManifest
 from unity.common.pipeline.types import (
     AttachmentCallback,
+    IngestBinding,
     IngestRequested,
 )
 from unity.common.pipeline.work_queue import ReceivedWorkItem
+
+from .assistant_key_resolver import resolve_api_key
 
 if TYPE_CHECKING:
     from .worker_utils import WorkerInfra
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-message UNIFY_KEY lifecycle
+# ---------------------------------------------------------------------------
+
+
+@contextlib.asynccontextmanager
+async def _with_unify_key(binding: IngestBinding) -> AsyncIterator[str]:
+    """Resolve + install ``UNIFY_KEY`` for the duration of one message.
+
+    The shared worker pods do not carry a per-assistant ``UNIFY_KEY``
+    in their environment. Instead, every message-processing code path
+    enters this context manager, which:
+
+    1. Looks up the caller's api_key from Orchestra via
+       :func:`resolve_api_key` (cached per ``(user_id, assistant_id)``).
+       The resolver reads ``SETTINGS.ORCHESTRA_URL`` and
+       ``SETTINGS.ORCHESTRA_ADMIN_KEY`` itself; we do not re-plumb
+       those here.
+    2. Installs it as ``os.environ["UNIFY_KEY"]`` so every subsequent
+       Unify SDK call -- including any deep inside
+       :class:`DataManager` / :class:`FileManager` -- picks it up.
+       The SDK contract is env-based (see
+       ``unity.session_details.SessionDetails.unify_key`` which falls
+       back to ``os.environ.get("UNIFY_KEY", "")`` on every read), so
+       this ``os.environ`` write is load-bearing and cannot be
+       replaced by a pydantic-settings update.
+    3. On exit, restores the previous value (or deletes the variable
+       if unset) so a leaked key never bleeds into heartbeat or
+       shutdown code paths after the message completes.
+
+    The worker is one-pod-one-message, so there is no risk of
+    overlapping context managers mutating ``os.environ`` concurrently.
+    """
+    api_key = await resolve_api_key(binding)
+
+    previous = os.environ.get("UNIFY_KEY")
+    os.environ["UNIFY_KEY"] = api_key
+    try:
+        yield api_key
+    finally:
+        if previous is None:
+            os.environ.pop("UNIFY_KEY", None)
+        else:
+            os.environ["UNIFY_KEY"] = previous
 
 
 async def handle_ingest_message(
@@ -201,6 +252,27 @@ async def _run_fm_mode(
 
     from .worker_utils import activate_unify_context
 
+    async with _with_unify_key(fm_binding):
+        return await _run_fm_mode_inner(
+            plan=plan,
+            msg=msg,
+            infra=infra,
+            run_ledger=run_ledger,
+            fm_binding=fm_binding,
+            activate_unify_context=activate_unify_context,
+        )
+
+
+async def _run_fm_mode_inner(
+    *,
+    plan: IngestPlan,
+    msg: IngestRequested,
+    infra: WorkerInfra,
+    run_ledger,
+    fm_binding,
+    activate_unify_context,
+) -> tuple[int, str | None]:
+    """Body of FM dispatch, run inside the per-message UNIFY_KEY scope."""
     activate_unify_context(
         user_id=fm_binding.user_id,
         assistant_id=fm_binding.assistant_id,
@@ -314,9 +386,46 @@ async def _run_dm_mode(
     loading the entire table into memory.
     """
     dm_binding = msg.dm_binding
-    default_target = (
-        dm_binding.target_context if dm_binding else msg.target_context
-    ) or msg.job_id
+    if dm_binding is None:
+        raise RuntimeError(
+            "DM ingest mode requires msg.dm_binding to be set so the worker "
+            "can resolve the Unify api_key for the dispatching user.",
+        )
+    default_target = dm_binding.target_context or msg.target_context or msg.job_id
+
+    from .worker_utils import activate_unify_context
+
+    async with _with_unify_key(dm_binding):
+        return await _run_dm_mode_inner(
+            plan=plan,
+            msg=msg,
+            infra=infra,
+            run_ledger=run_ledger,
+            dm_binding=dm_binding,
+            default_target=default_target,
+            activate_unify_context=activate_unify_context,
+        )
+
+
+async def _run_dm_mode_inner(
+    *,
+    plan: IngestPlan,
+    msg: IngestRequested,
+    infra: WorkerInfra,
+    run_ledger,
+    dm_binding,
+    default_target: str,
+    activate_unify_context,
+) -> tuple[int, str | None]:
+    """Body of DM dispatch, run inside the per-message UNIFY_KEY scope."""
+    # DM dispatches are assistant-scoped too: they still ingest into an
+    # explicit DataManager context, but Orchestra key resolution and
+    # Unify activation should happen against the bound assistant rather
+    # than a synthetic placeholder.
+    activate_unify_context(
+        user_id=dm_binding.user_id,
+        assistant_id=dm_binding.assistant_id,
+    )
 
     from unity.data_manager import DataManager
     from unity.file_manager.types.config import FilePipelineConfig
@@ -340,8 +449,6 @@ async def _run_dm_mode(
         )
         row_count = int(meta.row_count or getattr(handle, "row_count", 0) or 0)
         target_context = default_target
-        if msg.dm_binding is None and table_id:
-            target_context = f"{default_target}/{table_id}"
         work_items.append(
             ArtifactWorkItem(
                 kind="table",

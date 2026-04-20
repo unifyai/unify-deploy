@@ -5,8 +5,10 @@ Consumes ParseRequested messages from Pub/Sub and runs FileParser.parse_batch()
 for each message, writing results to GCS and publishing IngestRequested.
 
 Parse workers do **not** call the Unify SDK -- they only need GCS and
-Pub/Sub access.  No ``UNIFY_KEY``, ``USER_ID``, or ``ASSISTANT_ID``
-required.
+Pub/Sub access. ``UNIFY_KEY`` / ``USER_ID`` / ``ASSISTANT_ID`` are
+deliberately absent from both the pod manifest and this entrypoint:
+the per-message api_key lookup lives on the ingest worker
+(see ``unity_deploy.infra.workers.ingest_worker._with_unify_key``).
 
 Usage (local-with-GCP testing):
     python -m unity_deploy.infra.workers.entrypoint_parse

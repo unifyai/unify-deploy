@@ -4,16 +4,20 @@
 Consumes IngestRequested messages from Pub/Sub, reads ParsedFileBundle manifests
 from GCS, and streams rows into DataManager.
 
-Ingest workers need Unify SDK access (``DataManager.ingest`` writes to
-Unify tables), so ``UNIFY_KEY``, ``USER_ID``, and ``ASSISTANT_ID`` must
-be set.  Only a lightweight context activation is performed -- no full
-``unity.init()`` (EventBus, LLM hooks, etc.) is required.
+Ingest workers are shared across many users / assistants, so the pod
+does **not** carry a per-assistant ``UNIFY_KEY``. Instead, each
+message's :class:`IngestBinding` drives a per-message api_key lookup
+via Orchestra's admin endpoints (see
+``unity_deploy.infra.workers.assistant_key_resolver``). The resolved
+key is installed into ``os.environ["UNIFY_KEY"]`` just before the
+Unify SDK is touched and removed on exit, so a leaked key never
+bleeds into heartbeat or shutdown paths.
 
 Usage (local-with-GCP testing):
     python -m unity_deploy.infra.workers.entrypoint_ingest --project Assistants
 
 Environment (required):
-    UNIFY_KEY, USER_ID, ASSISTANT_ID
+    ORCHESTRA_URL, ORCHESTRA_ADMIN_KEY
 
 Environment (GCP):
     GCP_SA_KEY, UNITY_GCP_PIPELINE_ENVIRONMENT, UNITY_PUBSUB_PROJECT_ID,
@@ -39,7 +43,6 @@ async def main() -> None:
     from .ingest_worker import handle_ingest_message
     from .worker_utils import (
         LeaseExtender,
-        activate_unify_context,
         build_worker_infra,
         initialize_worker_environment,
         install_signal_handlers,
@@ -58,7 +61,13 @@ async def main() -> None:
 
     initialize_worker_environment(debug=args.debug)
     install_signal_handlers()
-    activate_unify_context(args.project)
+    # No boot-time `activate_unify_context` call: the worker is shared
+    # across many assistants and has no identity of its own. Per-message
+    # activation lives in ``ingest_worker._with_unify_key`` which
+    # resolves the caller's ``UNIFY_KEY`` from Orchestra and activates
+    # the right (user_id, assistant_id) context before the Unify SDK is
+    # touched.
+    _ = args.project  # kept for CLI compatibility; project read per-msg.
 
     infra = build_worker_infra()
 
