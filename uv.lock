@@ -8541,6 +8541,11 @@ dev = [
 name = "unity-deploy"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "google-cloud-pubsub" },
+    { name = "google-cloud-storage" },
+    { name = "pydantic-settings" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -8555,6 +8560,11 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "google-cloud-pubsub", specifier = ">=2.19" },
+    { name = "google-cloud-storage", specifier = ">=2.14" },
+    { name = "pydantic-settings", specifier = ">=2.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [
