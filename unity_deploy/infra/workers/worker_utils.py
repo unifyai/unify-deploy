@@ -310,13 +310,33 @@ def install_signal_handlers() -> None:
 
 
 def initialize_worker_environment(*, debug: bool = False) -> Path:
-    """Bootstrap the worker process: load .env, configure logging.
+    """Bootstrap a worker/runtime process without touching repo-local ``.env``.
 
-    Returns the resolved project root path.
+    Worker pods should read configuration only from their real process
+    environment / settings objects. They must not delegate to the old
+    standalone ingest-script bootstrap, which loads ``<repo>/.env`` for
+    local developer convenience.
+
+    Returns the resolved repository root path for callers that need it.
     """
-    from unity_deploy.customization.scripts.ingest_utils import initialize_environment
+    from unity_deploy.load_repo_env import unity_deploy_repo_root
 
-    return initialize_environment(debug=debug, sdk_log=False)
+    level = logging.DEBUG if debug else logging.INFO
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    for handler in list(root_logger.handlers):
+        root_logger.removeHandler(handler)
+
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    root_logger.addHandler(console)
+
+    return unity_deploy_repo_root()
 
 
 # ---------------------------------------------------------------------------
@@ -442,8 +462,8 @@ def build_worker_infra(
 def activate_unify_context(
     project_name: str = "Assistants",
     *,
-    user_id: str | None = None,
-    assistant_id: str | None = None,
+    user_id: str,
+    assistant_id: str,
 ) -> None:
     """Lightweight Unify context activation for worker processes.
 
@@ -456,29 +476,27 @@ def activate_unify_context(
     hooks, billing context, or ``SESSION_DETAILS``.  Does **not**
     require ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY``.
 
-    Identity is resolved from explicit arguments first, falling back to
-    ``USER_ID`` / ``ASSISTANT_ID`` environment variables, then to safe
-    defaults (``"default"`` / ``"0"``).
+    Identity must be supplied explicitly by the caller. Shared workers
+    must not guess from ``USER_ID`` / ``ASSISTANT_ID`` environment
+    variables or synthetic defaults.
 
-    ``UNIFY_KEY`` must be present in the environment for authenticated
-    Unify SDK calls.
+    ``UNIFY_KEY`` must already be installed in the environment for the
+    current message by ``ingest_worker._with_unify_key``.
     """
     import unify as _unify
 
     if not os.environ.get("UNIFY_KEY"):
         raise EnvironmentError(
             "UNIFY_KEY must be set for Unify SDK calls. "
-            "Ensure the K8s deployment or .env file sets it.",
+            "Ensure the per-message resolver installed it before "
+            "activate_unify_context() runs.",
         )
 
     project_name = os.environ.get("UNIFY_PROJECT_NAME", project_name)
-    uid = user_id or os.environ.get("USER_ID", "default")
-    aid = assistant_id or os.environ.get("ASSISTANT_ID", "0")
-
     if not _unify.active_project():
         _unify.activate(project_name)
 
-    ctx = f"{uid}/{aid}"
+    ctx = f"{user_id}/{assistant_id}"
     try:
         _unify.set_context(ctx)
     except Exception as e:

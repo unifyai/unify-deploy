@@ -86,14 +86,14 @@ async def cmd_submit(args: argparse.Namespace) -> None:
     )
     from unity.common.pipeline.types import ParseRequested
 
-    from unity_deploy.customization.scripts.ingest_utils import (
-        initialize_environment,
-        load_pipeline_config,
-    )
+    from unity_deploy.customization.scripts.ingest_utils import load_pipeline_config
     from unity_deploy.infra.gcp.artifact_store import GcsArtifactStore
-    from unity_deploy.infra.workers.worker_utils import build_worker_infra
+    from unity_deploy.infra.workers.worker_utils import (
+        build_worker_infra,
+        initialize_worker_environment,
+    )
 
-    initialize_environment(debug=args.debug, sdk_log=False)
+    initialize_worker_environment(debug=args.debug)
     infra = build_worker_infra()
 
     config = load_pipeline_config(args.config)
@@ -292,6 +292,13 @@ async def cmd_inspect(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    try:
+        from unity_deploy.load_repo_env import load_repo_dotenv
+
+        load_repo_dotenv(override=False)
+    except Exception:
+        pass
+
     parser = _build_parser()
     args = parser.parse_args()
 
