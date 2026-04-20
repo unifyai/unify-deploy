@@ -2,7 +2,6 @@
 
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,21 +11,13 @@ os.environ["ORCHESTRA_ADMIN_KEY"] = "test-admin-key"
 os.environ["GCP_PROJECT_ID"] = "test-project"
 os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
 
-_mock_livekit = MagicMock()
-_mock_livekit.api = MagicMock()
-_mock_livekit.protocol = MagicMock()
-_mock_livekit.protocol.sip = MagicMock()
-sys.modules["livekit"] = _mock_livekit
-sys.modules["livekit.api"] = _mock_livekit.api
-sys.modules["livekit.protocol"] = _mock_livekit.protocol
-sys.modules["livekit.protocol.sip"] = _mock_livekit.protocol.sip
-
 
 @pytest.fixture(scope="module")
 def app_module():
-    for mod in list(sys.modules.keys()):
-        if mod.startswith("adapters"):
-            del sys.modules[mod]
+    # Share the already-loaded adapters.main. Wiping sys.modules here
+    # used to orphan module-level ``from adapters.main import app``
+    # references held by other test files: patches then targeted the
+    # re-imported module while handlers still ran on the old one.
     from adapters import main
 
     return main

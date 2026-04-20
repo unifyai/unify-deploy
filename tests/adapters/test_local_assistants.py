@@ -1,7 +1,6 @@
 """Regression tests for local-assistant startup behavior in adapters."""
 
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,17 +9,11 @@ os.environ["GCP_SA_KEY"] = '{"type": "service_account", "project_id": "test"}'
 os.environ["ORCHESTRA_ADMIN_KEY"] = "test-admin-key"
 os.environ["GCP_PROJECT_ID"] = "test-project"
 os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
-os.environ.setdefault("OUTLOOK_WEBHOOK_SECRET", "test-outlook-secret")
-os.environ.setdefault("TEAMS_WEBHOOK_SECRET", "test-teams-secret")
-
-_mock_livekit = MagicMock()
-_mock_livekit.api = MagicMock()
-_mock_livekit.protocol = MagicMock()
-_mock_livekit.protocol.sip = MagicMock()
-sys.modules["livekit"] = _mock_livekit
-sys.modules["livekit.api"] = _mock_livekit.api
-sys.modules["livekit.protocol"] = _mock_livekit.protocol
-sys.modules["livekit.protocol.sip"] = _mock_livekit.protocol.sip
+# Force-assign rather than setdefault so a developer's local .env value
+# (loaded by conftest) never leaks into these tests and breaks the
+# clientState check below.
+os.environ["OUTLOOK_WEBHOOK_SECRET"] = "test-outlook-secret"
+os.environ["TEAMS_WEBHOOK_SECRET"] = "test-teams-secret"
 
 
 class _GraphResponse:
@@ -56,9 +49,15 @@ class _FakeAsyncClient:
 
 @pytest.fixture(scope="module")
 def app_module():
-    for mod in list(sys.modules.keys()):
-        if mod.startswith("adapters"):
-            del sys.modules[mod]
+    # Share the already-loaded adapters.main with the rest of the suite.
+    # A previous implementation wiped sys.modules["adapters.*"] and
+    # reimported here, which left other test files holding stale
+    # references to the old adapters.main (their `from adapters.main
+    # import app` at module load would capture the pre-wipe module while
+    # patches targeted the post-wipe module, so handlers ran on the old
+    # one and ignored the mocks). The env/webhook-secret setup now
+    # happens unconditionally at the top of this file, so reimporting is
+    # no longer necessary.
     from adapters import main
 
     return main
@@ -123,8 +122,8 @@ def test_outlook_notification_respects_local_runtime(
         ),
         patch.object(
             app_module,
-            "get_graph_client_from_token",
-            return_value=MagicMock(),
+            "get_outlook_graph_client",
+            return_value=(MagicMock(), True),
         ),
         patch.object(
             app_module,

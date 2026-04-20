@@ -7,7 +7,6 @@ These tests verify behavior of attachment upload and message handling.
 import io
 import json
 import os
-import sys
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -23,18 +22,6 @@ os.environ["ORCHESTRA_ADMIN_KEY"] = "test-admin-key"
 os.environ["GCP_PROJECT_ID"] = "test-project"
 os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
 
-# Mock external dependencies that may not be installed
-# These mocks are set at module level so they're applied before imports
-_mock_livekit = MagicMock()
-_mock_livekit.api = MagicMock()
-_mock_livekit.protocol = MagicMock()
-_mock_livekit.protocol.sip = MagicMock()
-sys.modules["livekit"] = _mock_livekit
-sys.modules["livekit.api"] = _mock_livekit.api
-sys.modules["livekit.protocol"] = _mock_livekit.protocol
-sys.modules["livekit.protocol.sip"] = _mock_livekit.protocol.sip
-
-
 # =============================================================================
 # TEST FIXTURES
 # =============================================================================
@@ -42,16 +29,13 @@ sys.modules["livekit.protocol.sip"] = _mock_livekit.protocol.sip
 
 @pytest.fixture(scope="module")
 def app_module():
-    """
-    Import the app module once per test module with mocked external services.
-    This avoids re-importing for every test which is slow.
-    """
-    # Clear cached modules to force reimport with mocks
-    for mod in list(sys.modules.keys()):
-        if mod.startswith("adapters") or mod == "common.livekit":
-            del sys.modules[mod]
+    """Share the already-loaded adapters.main with the rest of the suite.
 
-    # Import with mocks in place
+    Wiping sys.modules here used to orphan module-level ``from
+    adapters.main import app`` references held by other test files:
+    patches would target the re-imported module while the handlers
+    still ran on the old one.
+    """
     from adapters import main
 
     return main
