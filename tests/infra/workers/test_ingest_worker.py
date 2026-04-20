@@ -14,10 +14,19 @@ by :func:`_with_unify_key`:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
-from unity.common.pipeline.types import DmBinding, FmBinding
+from unity.common.pipeline.types import (
+    DmBinding,
+    FileParseResult,
+    FmBinding,
+    InlineRowsHandle,
+    IngestPlan,
+    ObjectStoreArtifactHandle,
+    TableMeta,
+)
 from unity_deploy.infra.workers import ingest_worker
 
 
@@ -107,3 +116,129 @@ async def test_with_unify_key_does_not_mutate_env_when_resolution_fails(
             pytest.fail("context body should never run when resolution fails")
 
     assert os.environ["UNIFY_KEY"] == "previous-key"
+
+
+# ---------------------------------------------------------------------------
+# Remote gs:// handle staging
+# ---------------------------------------------------------------------------
+
+
+class _FakeArtifactStore:
+    """Minimal stub of GcsArtifactStore for staging tests."""
+
+    def __init__(self) -> None:
+        self.downloads: list[tuple[str, Path]] = []
+
+    def download_to_local(self, source: str, dest: Path) -> Path:
+        self.downloads.append((source, Path(dest)))
+        dest_path = Path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_text('{"id": 1}\n', encoding="utf-8")
+        return dest_path
+
+
+def _make_plan(
+    *,
+    content_rows_handle=None,
+    table_inputs=None,
+) -> IngestPlan:
+    return IngestPlan(
+        run_id="run-1",
+        file_path="demo.csv",
+        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
+        content_rows_handle=content_rows_handle,
+        tables_meta=(
+            [TableMeta(table_id=k, label=k) for k in (table_inputs or {})]
+            if table_inputs
+            else []
+        ),
+        table_inputs=table_inputs or {},
+    )
+
+
+def test_stage_remote_handles_downloads_gs_artifacts_and_sets_local_path(
+    tmp_path,
+) -> None:
+    """gs:// handles get downloaded and ``source_local_path`` populated."""
+    content = ObjectStoreArtifactHandle(
+        storage_uri="gs://bucket/art/__content__.jsonl",
+        logical_path="demo.csv/content",
+        artifact_format="jsonl",
+    )
+    table = ObjectStoreArtifactHandle(
+        storage_uri="gs://bucket/art/table_1.jsonl",
+        logical_path="demo.csv/t1",
+        artifact_format="jsonl",
+    )
+    plan = _make_plan(
+        content_rows_handle=content,
+        table_inputs={"table_1": table},
+    )
+
+    store = _FakeArtifactStore()
+    staged = ingest_worker._stage_remote_handles(
+        plan,
+        artifact_store=store,
+        scratch_dir=tmp_path,
+    )
+
+    assert staged is not plan, "plan should be rebuilt when handles change"
+    assert staged.content_rows_handle.source_local_path
+    assert Path(staged.content_rows_handle.source_local_path).exists()
+    assert staged.table_inputs["table_1"].source_local_path
+    assert Path(staged.table_inputs["table_1"].source_local_path).exists()
+
+    uris = sorted(src for src, _ in store.downloads)
+    assert uris == [
+        "gs://bucket/art/__content__.jsonl",
+        "gs://bucket/art/table_1.jsonl",
+    ]
+
+
+def test_stage_remote_handles_is_noop_for_inline_and_already_staged(
+    tmp_path,
+) -> None:
+    """Inline handles and pre-staged handles are returned unchanged."""
+    inline = InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=1)
+    pre_staged = ObjectStoreArtifactHandle(
+        storage_uri="gs://bucket/art/done.jsonl",
+        logical_path="demo.csv/done",
+        source_local_path="/tmp/already-here.jsonl",
+        artifact_format="jsonl",
+    )
+    plan = _make_plan(
+        content_rows_handle=inline,
+        table_inputs={"done": pre_staged},
+    )
+
+    store = _FakeArtifactStore()
+    staged = ingest_worker._stage_remote_handles(
+        plan,
+        artifact_store=store,
+        scratch_dir=tmp_path,
+    )
+
+    assert staged is plan, "plan must not be rebuilt when there is nothing to stage"
+    assert store.downloads == []
+
+
+def test_stage_remote_handles_raises_when_store_has_no_downloader(
+    tmp_path,
+) -> None:
+    """A misconfigured store surfaces loudly rather than silently skipping."""
+    handle = ObjectStoreArtifactHandle(
+        storage_uri="gs://bucket/art/x.jsonl",
+        logical_path="demo.csv/x",
+        artifact_format="jsonl",
+    )
+    plan = _make_plan(table_inputs={"x": handle})
+
+    class _BadStore:
+        pass
+
+    with pytest.raises(RuntimeError, match="download_to_local"):
+        ingest_worker._stage_remote_handles(
+            plan,
+            artifact_store=_BadStore(),
+            scratch_dir=tmp_path,
+        )

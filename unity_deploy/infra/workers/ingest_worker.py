@@ -30,7 +30,9 @@ import contextlib
 import json
 import logging
 import os
+import tempfile
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from unity.common.pipeline import (
@@ -45,6 +47,8 @@ from unity.common.pipeline.types import (
     AttachmentCallback,
     IngestBinding,
     IngestRequested,
+    ObjectStoreArtifactHandle,
+    TableInputHandle,
 )
 from unity.common.pipeline.work_queue import ReceivedWorkItem
 
@@ -54,6 +58,111 @@ if TYPE_CHECKING:
     from .worker_utils import WorkerInfra
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-message scratch staging for gs:// artifacts
+# ---------------------------------------------------------------------------
+
+
+def _stage_remote_handles(
+    plan: IngestPlan,
+    *,
+    artifact_store: Any,
+    scratch_dir: Path,
+) -> IngestPlan:
+    """Download any ``gs://``-backed artifact handles into ``scratch_dir``.
+
+    ``unity.common.pipeline.row_streaming`` resolves rows from a local
+    filesystem path; it intentionally refuses ``gs://`` URIs so the core
+    pipeline stays storage-agnostic. This function is the ingest worker's
+    GCS-aware adapter: it walks the plan's artifact handles, downloads any
+    remote object to ``scratch_dir``, and returns a new frozen
+    :class:`IngestPlan` whose matching handles carry ``source_local_path``
+    populated. Handles that are already local (``InlineRowsHandle``,
+    ``CsvFileHandle`` on a shared volume, etc.) are left untouched.
+
+    The ``scratch_dir`` is owned by the caller and should be cleaned up in
+    a ``finally`` block so we do not leak bytes across messages in the
+    shared worker pod.
+    """
+    updates: dict[str, Any] = {}
+
+    if plan.content_rows_handle is not None:
+        staged_content = _stage_handle(
+            plan.content_rows_handle,
+            artifact_store=artifact_store,
+            scratch_dir=scratch_dir,
+            hint="content",
+        )
+        if staged_content is not plan.content_rows_handle:
+            updates["content_rows_handle"] = staged_content
+
+    if plan.table_inputs:
+        staged_tables: dict[str, TableInputHandle] = {}
+        any_change = False
+        for table_id, handle in plan.table_inputs.items():
+            staged = _stage_handle(
+                handle,
+                artifact_store=artifact_store,
+                scratch_dir=scratch_dir,
+                hint=table_id,
+            )
+            staged_tables[table_id] = staged
+            if staged is not handle:
+                any_change = True
+        if any_change:
+            updates["table_inputs"] = staged_tables
+
+    if not updates:
+        return plan
+    return plan.model_copy(update=updates)
+
+
+def _stage_handle(
+    handle: TableInputHandle,
+    *,
+    artifact_store: Any,
+    scratch_dir: Path,
+    hint: str,
+) -> TableInputHandle:
+    """Stage a single handle locally when it points at a ``gs://`` URI.
+
+    Currently only :class:`ObjectStoreArtifactHandle` is produced by the
+    parse worker's GCS materialisation path, so that's the only handle
+    type we need to stage here. Other handle types (``InlineRowsHandle``,
+    ``CsvFileHandle`` etc.) already carry either inline data or a local
+    filesystem path and are returned unchanged.
+    """
+    if not isinstance(handle, ObjectStoreArtifactHandle):
+        return handle
+    if handle.source_local_path:
+        return handle
+    if not handle.storage_uri.startswith("gs://"):
+        return handle
+    if not hasattr(artifact_store, "download_to_local"):
+        raise RuntimeError(
+            f"Cannot stage {handle.storage_uri!r}: artifact_store "
+            f"{type(artifact_store).__name__} has no download_to_local() method.",
+        )
+
+    safe_hint = _safe_scratch_name(hint)
+    dest = scratch_dir / f"{safe_hint}.jsonl"
+    local_path = artifact_store.download_to_local(handle.storage_uri, dest)
+    logger.info(
+        "[ingest] Staged %s -> %s (%d bytes)",
+        handle.storage_uri,
+        local_path,
+        local_path.stat().st_size if local_path.exists() else 0,
+    )
+    return handle.model_copy(update={"source_local_path": str(local_path)})
+
+
+def _safe_scratch_name(value: str) -> str:
+    text = str(value or "").strip() or "artifact"
+    return "".join(
+        char if char.isalnum() or char in ("-", "_") else "_" for char in text
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -144,9 +253,20 @@ async def handle_ingest_message(
 
     overall_error: str | None = None
     total_rows = 0
+    scratch_dir_ctx = tempfile.TemporaryDirectory(prefix=f"ingest_{run_id}_")
     try:
         manifest_payload: dict = artifact_store.get_json(msg.manifest_key)
         plan = IngestPlan.model_validate(manifest_payload)
+        # Stage any remote (gs://) artifact handles to a per-message scratch
+        # directory. row_streaming iterates rows against the local path, so
+        # remote URIs must be materialised before fm_process_plan /
+        # ingest_artifacts are invoked. The scratch dir is cleaned up in the
+        # finally block below.
+        plan = _stage_remote_handles(
+            plan,
+            artifact_store=artifact_store,
+            scratch_dir=Path(scratch_dir_ctx.name),
+        )
         file_path = plan.file_path
 
         if is_shutdown_requested() or await work_queue.is_cancelled(run_id):
@@ -223,6 +343,7 @@ async def handle_ingest_message(
     finally:
         run_ledger.close()
         cost_ledger.close()
+        scratch_dir_ctx.cleanup()
 
 
 # ---------------------------------------------------------------------------
