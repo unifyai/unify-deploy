@@ -51,6 +51,15 @@ spec:
           value: "staging"
         - name: UNITY_GCS_ARTIFACT_BUCKET
           value: "unity-pipeline-artifacts-staging"
+        # ORCHESTRA_URL + ORCHESTRA_ADMIN_KEY are the only credentials
+        # the pod carries: every message triggers a per-assistant
+        # UNIFY_KEY lookup via Orchestra's admin endpoints (see
+        # unity_deploy.infra.workers.assistant_key_resolver). The pod
+        # does not, and must not, hold a shared UNIFY_KEY -- shared
+        # workers serve many tenants, and a baked-in key would auth
+        # every call as the wrong user.
+        - name: ORCHESTRA_URL
+          value: "https://internal.example.com/v0"
         - name: ORCHESTRA_ADMIN_KEY
           valueFrom:
             secretKeyRef:
@@ -61,23 +70,8 @@ spec:
             secretKeyRef:
               name: unity-secrets
               key: GCP_SA_KEY
-        - name: UNIFY_KEY
-          valueFrom:
-            secretKeyRef:
-              name: unity-secrets
-              key: UNIFY_KEY
         - name: UNITY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
-        - name: USER_ID
-          valueFrom:
-            secretKeyRef:
-              name: unity-secrets
-              key: USER_ID
-        - name: ASSISTANT_ID
-          valueFrom:
-            secretKeyRef:
-              name: unity-secrets
-              key: ASSISTANT_ID
         - name: UNIFY_PROJECT_NAME
           value: "Assistants"
 ---
