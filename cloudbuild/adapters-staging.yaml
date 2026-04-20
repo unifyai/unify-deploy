@@ -72,6 +72,9 @@ steps:
   waitFor: ['push-sha-tag', 'pause-legacy-infra-schedulers']
 
   # Update Cloud Scheduler: Email Watches Staging
+  # 00:10 UTC daily.  Offset from the 00:00 spike (microsoft-tokens,
+  # google-token-refresh, infra-maintenance all fire at :00) so the
+  # Outlook branch reads a freshly-refreshed MICROSOFT_ACCESS_TOKEN.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-email-watches'
   entrypoint: bash
@@ -83,14 +86,16 @@ steps:
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
     gcloud scheduler jobs update http "email-watches-staging" \
+      --schedule "10 0 * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
+      --time-zone "UTC" \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "email-watches-staging" \
-      --schedule "0 0 * * *" \
+      --schedule "10 0 * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/email-watches" \
       --http-method POST \
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
@@ -159,6 +164,9 @@ steps:
   waitFor: ['remove-legacy-infra-schedulers']
 
   # Update Cloud Scheduler: Microsoft Token Refresh Staging
+  # :00 and :30 every hour.  Sole writer of MICROSOFT_ACCESS_TOKEN;
+  # readers (teams-watches, email-watches) are scheduled to land
+  # AFTER this tick so they always read a freshly-rotated token.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-microsoft-tokens'
   entrypoint: bash
@@ -170,10 +178,12 @@ steps:
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
     gcloud scheduler jobs update http "microsoft-tokens-staging" \
+      --schedule "*/30 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/microsoft-tokens" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
+      --time-zone "UTC" \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "microsoft-tokens-staging" \
@@ -187,7 +197,44 @@ steps:
     } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
   waitFor: ['deploy']
 
-  # Update Cloud Scheduler: Teams Chat Watches Staging (runs every 30 mins - subscriptions expire in 60 mins)
+  # Update Cloud Scheduler: Google Token Refresh Staging
+  # :05 and :35 every hour.  Offset +5m from microsoft-tokens to
+  # avoid dual-writer contention on Orchestra secret writes and
+  # refresh-token rotation races.  Access tokens live ~1h.
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'update-scheduler-google-tokens'
+  entrypoint: bash
+  secretEnv: ['ORCHESTRA_ADMIN_KEY']
+  args:
+  - '-c'
+  - |
+    set -o pipefail
+    CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
+    {
+    gcloud scheduler jobs update http "google-token-refresh-staging" \
+      --schedule "5-59/30 * * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/google-tokens" \
+      --http-method POST \
+      --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
+      --message-body '{}' \
+      --time-zone "UTC" \
+      --location="${_REGION}" \
+    || \
+    gcloud scheduler jobs create http "google-token-refresh-staging" \
+      --schedule "5-59/30 * * * *" \
+      --uri "$${CLOUD_RUN_URL}/scheduled/google-tokens" \
+      --http-method POST \
+      --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
+      --message-body '{}' \
+      --time-zone "UTC" \
+      --location="${_REGION}"
+    } 2>&1 | sed "s|$$ORCHESTRA_ADMIN_KEY|[REDACTED]|g"
+  waitFor: ['deploy']
+
+  # Update Cloud Scheduler: Teams Chat Watches Staging
+  # :10 and :40 every hour (subscriptions expire in 60 mins).
+  # 10-min offset after microsoft-tokens (:00, :30) so the renewal
+  # loop always reads a freshly-rotated MICROSOFT_ACCESS_TOKEN.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'update-scheduler-teams-watches'
   entrypoint: bash
@@ -199,14 +246,16 @@ steps:
     CLOUD_RUN_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=${_REGION} --format='value(status.url)')
     {
     gcloud scheduler jobs update http "teams-watches-staging" \
+      --schedule "10-59/30 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
       --http-method POST \
       --update-headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
       --message-body '{}' \
+      --time-zone "UTC" \
       --location="${_REGION}" \
     || \
     gcloud scheduler jobs create http "teams-watches-staging" \
-      --schedule "*/30 * * * *" \
+      --schedule "10-59/30 * * * *" \
       --uri "$${CLOUD_RUN_URL}/scheduled/teams-watches" \
       --http-method POST \
       --headers "Authorization=Bearer $$ORCHESTRA_ADMIN_KEY,Content-Type=application/json" \
