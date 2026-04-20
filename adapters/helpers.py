@@ -400,9 +400,15 @@ def check_valid_contact(
     user_email: str = None,
     assistant_data: dict = None,
     sender_name: str = None,
-) -> list[dict[str, str]]:
+) -> tuple[list[dict], bool, dict | None]:
     """
     Check if the contact is valid.
+
+    Returns:
+        ``(contacts, is_valid, matched_contact)`` where ``matched_contact``
+        is the specific contact row the caller resolved to (or ``None``
+        when no single contact was pinned — e.g. boss / default path,
+        ambiguous name fallback, or invalid).
 
     Args:
         email_address: The email address of the contact.
@@ -457,16 +463,16 @@ def check_valid_contact(
                     f"Boss user found: {email_address}, {phone_number}, {medium}, "
                     f"{user_number}, {user_whatsapp_number}, {user_email}",
                 )
-                return default_contacts, True
+                return default_contacts, True, None
 
         # otherwise
         logger.info(f"Failed to get contacts for assistant {assistant_context}")
         logger.info(response_json)
-        return default_contacts, False
+        return default_contacts, False, None
     contacts = [c["entries"] for c in resp_contacts]
     logger.info(f"Contacts: {contacts}")
     if len(contacts) == 0:
-        return default_contacts, False
+        return default_contacts, False, None
 
     # check for boss user
     boss_contact = [contact for contact in contacts if contact["contact_id"] == 1]
@@ -487,10 +493,10 @@ def check_valid_contact(
                 f"Boss user found: {email_address}, {phone_number}, {medium}, "
                 f"{boss_user_number}, {user_whatsapp_number}, {boss_user_email}",
             )
-            return contacts, True
+            return contacts, True, boss_contact
     else:
         logger.info("No boss user found")
-        return default_contacts, False
+        return default_contacts, False, None
 
     # check all contacts
     for contact in contacts:
@@ -503,7 +509,7 @@ def check_valid_contact(
             user_email=contact.get("email_address", ""),
         ):
             logger.info(f"Contact found: {contact}")
-            return contacts, True
+            return contacts, True, contact
 
     # Teams-specific fallback: federated / consumer / anonymous-guest
     # senders often arrive with no resolvable email (or our synthesised
@@ -518,9 +524,9 @@ def check_valid_contact(
         match = _match_contact_by_name(sender_name, contacts)
         if match is not None:
             logger.info(f"Contact matched by name: {sender_name!r} -> {match}")
-            return contacts, True
+            return contacts, True, match
 
-    return default_contacts, False
+    return default_contacts, False, None
 
 
 def expire_all_stale_jobs(max_age_hours: int = 24) -> dict:
@@ -1291,8 +1297,11 @@ def _resolve_contacts(
     user_whatsapp_number: str,
     user_email: str,
     assistant_data: dict,
-) -> tuple[list, bool]:
-    """Resolve contacts for an assistant. Returns (contacts, is_valid_contact)."""
+) -> tuple[list, bool, dict | None]:
+    """Resolve contacts for an assistant.
+
+    Returns ``(contacts, is_valid_contact, matched_contact)``.
+    """
     if validate_contact:
         return check_valid_contact(
             email_address=(sender if is_email else ""),
@@ -1316,8 +1325,8 @@ def _resolve_contacts(
     resp_contacts = response["logs"] if status_code == 200 else []
     if len(resp_contacts) < 2:
         logger.info("contact fetching failed, using default contacts")
-        return get_default_contacts(assistant_data), True
-    return [c["entries"] for c in resp_contacts], True
+        return get_default_contacts(assistant_data), True, None
+    return [c["entries"] for c in resp_contacts], True, None
 
 
 def build_webhook_context(
@@ -1392,7 +1401,7 @@ def build_webhook_context(
             user_email,
             assistant_data,
         )
-    contacts, is_valid_contact = contacts_future.result()
+    contacts, is_valid_contact, matched_contact = contacts_future.result()
     logger.info(f"contacts: {contacts}")
 
     # check contact validity
@@ -1427,6 +1436,7 @@ def build_webhook_context(
         "assistant": assistant_data,
         "contacts": contacts,
         "is_valid_contact": is_valid_contact,
+        "matched_contact": matched_contact,
         "is_job_running": legacy_is_job_running,
         "job_started": activation_intent_scheduled,
     }

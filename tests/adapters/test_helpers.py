@@ -441,7 +441,7 @@ def test_start_unity_job_timeout_is_best_effort_dispatch_only(
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers._WEBHOOK_BG_POOL.submit")
-@patch("adapters.helpers._resolve_contacts", return_value=([], True))
+@patch("adapters.helpers._resolve_contacts", return_value=([], True, None))
 def test_build_webhook_context_skips_job_start_for_local_assistant(
     _mock_resolve,
     mock_submit,
@@ -466,7 +466,7 @@ def test_build_webhook_context_skips_job_start_for_local_assistant(
 
 @patch("adapters.helpers.replenish_idle_pool")
 @patch("adapters.helpers._WEBHOOK_BG_POOL.submit")
-@patch("adapters.helpers._resolve_contacts", return_value=([], True))
+@patch("adapters.helpers._resolve_contacts", return_value=([], True, None))
 def test_build_webhook_context_starts_job_for_non_local_assistant(
     _mock_resolve,
     mock_submit,

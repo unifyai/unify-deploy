@@ -140,7 +140,7 @@ def test_outlook_notification_respects_local_runtime(
         patch.object(
             app_module,
             "check_valid_contact",
-            return_value=([{"contact_id": 1}], True),
+            return_value=([{"contact_id": 1}], True, {"contact_id": 1}),
         ),
         patch.object(app_module, "publish_outlook_thread_id") as mock_publish_thread,
         patch.object(app_module, "start_unity_job") as mock_start_unity_job,
@@ -196,7 +196,7 @@ def test_teams_notification_respects_local_runtime(
         patch.object(
             app_module,
             "check_valid_contact",
-            return_value=([{"contact_id": 1}], True),
+            return_value=([{"contact_id": 1}], True, {"contact_id": 1}),
         ),
         patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
         patch.object(app_module, "start_unity_job") as mock_start_unity_job,
@@ -263,7 +263,7 @@ def test_teams_notification_us_provisioned_uses_admin_bearer(app_module):
         patch.object(
             app_module,
             "check_valid_contact",
-            return_value=([{"contact_id": 1}], True),
+            return_value=([{"contact_id": 1}], True, {"contact_id": 1}),
         ),
         patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
         patch.object(app_module, "start_unity_job"),

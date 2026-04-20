@@ -2384,7 +2384,7 @@ async def outlook_notification_processor(request: Request):
 
         def _process_outlook():
             # Validate contact now that we have the sender
-            contacts, is_valid = check_valid_contact(
+            contacts, is_valid, _matched = check_valid_contact(
                 email_address=from_email,
                 medium="email",
                 assistant_context=f"{user_id}/{assistant_id}",
@@ -2607,11 +2607,46 @@ async def teams_notification_processor(request: Request):
             chat_type = chat_metadata.get("chatType") if chat_metadata else None
             chat_topic = chat_metadata.get("topic") if chat_metadata else None
 
-        # Extract sender info
-        sender_user = message_data.get("from", {}).get("user", {})
-        sender_name = sender_user.get("displayName", "Unknown")
+        # Extract sender info.  Graph returns ``"from": null`` for system /
+        # control-plane events (channelAdded, memberJoined, teamJoined,
+        # etc.) — the bare ``.get("from", {})`` idiom returns ``None``
+        # when the key *exists* but is null, so coalesce explicitly.
+        from_field = message_data.get("from") or {}
+        sender_user = from_field.get("user") or {}
+        sender_name = sender_user.get("displayName") or "Unknown"
         sender_id = sender_user.get("id")
         sender_email = sender_user.get("email") or sender_user.get("userPrincipalName")
+        message_type = message_data.get("messageType") or "message"
+
+        # System / event messages have no human sender.  Use them as a
+        # signal to re-enumerate channels (new channel / new team / we
+        # were just added as a member), then drop.  The scheduled
+        # ``/scheduled/teams-watches`` tick is the safety net; this
+        # just makes coverage near-real-time.
+        if not sender_id and not sender_email:
+            event_type = message_data.get("eventDetail", {}).get("@odata.type") or ""
+            topology_markers = (
+                "channelAdded",
+                "channelDeleted",
+                "teamJoined",
+                "memberAdded",
+                "memberJoined",
+                "teamRenamed",
+                "channelRenamed",
+            )
+            if is_channel_message and any(m in event_type for m in topology_markers):
+                # Fire-and-forget; guarded in-process to avoid a burst of
+                # redundant rebuilds when several topology events arrive
+                # back-to-back for the same assistant.
+                asyncio.create_task(
+                    _maybe_rebootstrap_teams_watch(assistant_email),
+                )
+            logger.info(
+                f"Skipping non-message channel event "
+                f"(messageType={message_type}, event_type={event_type!r}, "
+                f"team={team_id}, channel={channel_id}, msg={message_id})",
+            )
+            return Response(status_code=200)
 
         # Fetch email from user profile if not in message
         if not sender_email and sender_id:
@@ -2639,13 +2674,20 @@ async def teams_notification_processor(request: Request):
             f"from_email: {_redact_email(sender_email) if sender_email else 'None'}, sender_name: {sender_name}",
         )
 
-        # Skip self-messages
-        # if sender_email and sender_email.lower() == assistant_email.lower():
-        #     logger.info(f"Skipping self-message from {_redact_email(sender_email)}")
-        #     return Response(status_code=200)
+        # Skip self-messages.  The assistant's Teams identity is the
+        # same mailbox we're monitoring; any outbound message the
+        # runtime itself posts would otherwise loop back here.  Guard
+        # *before* resolving contacts — resolution may otherwise match
+        # the assistant to its own contact_id=0 default row and mis-
+        # attribute the message as inbound-from-boss.
+        if sender_email and sender_email.lower() == assistant_email.lower():
+            logger.info(
+                f"Skipping self-message from {_redact_email(sender_email)}",
+            )
+            return Response(status_code=200)
 
         def _validate_and_start():
-            contacts, is_valid = check_valid_contact(
+            contacts, is_valid, matched = check_valid_contact(
                 email_address=sender_email,
                 medium="teams",
                 assistant_context=f"{user_id}/{assistant_id}",
@@ -2658,17 +2700,27 @@ async def teams_notification_processor(request: Request):
             )
             if not is_valid:
                 logger.info(f"Invalid contact: {_redact_email(sender_email)}")
-                return None, False
+                return None, False, None
 
             if uses_local_unity_runtime(assistant_data):
                 logger.info("Skipped remote job start for local teams assistant")
             else:
                 start_unity_job(assistant_data, "teams")
                 logger.info("Job start requested for teams handler")
-            return contacts, True
+            return contacts, True, matched
 
-        contacts, valid = await asyncio.to_thread(_validate_and_start)
+        contacts, valid, matched_contact = await asyncio.to_thread(_validate_and_start)
         if not valid:
+            return Response(status_code=200)
+
+        # Second-tier self-guard: if the resolver pinned the assistant's
+        # own default contact (``contact_id == 0``), we are looking at
+        # an outbound/loopback message.  Drop it rather than publish.
+        if matched_contact and matched_contact.get("contact_id") == 0:
+            logger.info(
+                f"Skipping message that resolved to assistant's own contact "
+                f"(sender_email={_redact_email(sender_email)})",
+            )
             return Response(status_code=200)
 
         # Cache the (sender_id → contact) mapping so subsequent messages
@@ -2701,12 +2753,37 @@ async def teams_notification_processor(request: Request):
             if att.get("contentType") == "reference" and att.get("contentUrl")
         ]
 
+        # Resolve the sender asymmetry between comms (name-fallback
+        # tolerant) and unity.comms_manager (email-exact).  If we
+        # matched a real contact but the only email we had was our
+        # synthetic ``{id}@teams`` placeholder, rewrite ``sender`` to
+        # the contact's real email so downstream email-keyed lookups
+        # hit.  We also pass ``resolved_contact_id`` so unity can
+        # skip the re-resolution entirely.
+        resolved_contact_id = (
+            matched_contact.get("contact_id") if matched_contact else None
+        )
+        publish_sender = sender_email
+        if (
+            matched_contact
+            and sender_email
+            and sender_email.endswith("@teams")
+            and matched_contact.get("email_address")
+        ):
+            publish_sender = matched_contact["email_address"]
+            logger.info(
+                f"Rewriting synthetic sender {sender_email!r} -> "
+                f"{_redact_email(publish_sender)} "
+                f"(contact_id={resolved_contact_id})",
+            )
+
         event_data = {
             "contacts": contacts,
             "message_id": message_id,
-            "sender": sender_email,
+            "sender": publish_sender,
             "sender_name": sender_name,
             "sender_id": sender_id,
+            "resolved_contact_id": resolved_contact_id,
             "body": message_content,
             "content_type": message_content_type,
             "created_at": message_data.get("createdDateTime"),
@@ -2770,6 +2847,55 @@ async def teams_notification_processor(request: Request):
         error_message = f"Error processing Teams notification: {str(e)}"
         logger.error(error_message, exc_info=True)
         return Response(content=error_message, status_code=500)
+
+
+# In-memory dedupe for topology-driven /teams/watch rebuilds.  When a
+# user joins several new channels at once, Graph fires a burst of
+# system-event messages; we only need one rebuild per assistant.
+_TEAMS_REBOOTSTRAP_DEDUPE_WINDOW_S = 30.0
+_teams_rebootstrap_last: dict[str, float] = {}
+_teams_rebootstrap_lock = asyncio.Lock()
+
+
+async def _maybe_rebootstrap_teams_watch(assistant_email: str) -> None:
+    """Fire-and-forget rebuild of an assistant's Teams subscriptions.
+
+    Called from ``teams_notification_processor`` when we see a channel
+    topology system event (member / channel / team add).  De-duplicates
+    within a short window to absorb event bursts.  The 30-min
+    ``/scheduled/teams-watches`` tick remains the safety net; this path
+    just shortens the time-to-coverage for newly-added channels from
+    up to 30 minutes down to seconds.
+    """
+    if not assistant_email:
+        return
+    now = time.monotonic()
+    key = assistant_email.lower()
+    async with _teams_rebootstrap_lock:
+        last = _teams_rebootstrap_last.get(key, 0.0)
+        if now - last < _TEAMS_REBOOTSTRAP_DEDUPE_WINDOW_S:
+            return
+        _teams_rebootstrap_last[key] = now
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{SETTINGS.comms_url}/teams/watch",
+                json={"primary_email": assistant_email},
+                headers={
+                    "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
+                },
+                timeout=5.0,
+            )
+        logger.info(
+            f"topology-event: /teams/watch rebuild for "
+            f"{_redact_email(assistant_email)} returned {resp.status_code}",
+        )
+    except Exception as e:
+        logger.info(
+            f"topology-event: /teams/watch rebuild for "
+            f"{_redact_email(assistant_email)} failed: {e}",
+        )
 
 
 async def _handle_teams_lifecycle(
