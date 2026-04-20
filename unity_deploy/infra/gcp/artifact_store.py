@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from google.cloud import storage
 
@@ -58,6 +60,7 @@ class GcsArtifactStore:
         logical_path: str,
         table_id: str,
         artifact_format: str,
+        job_id: str = "",
     ) -> ObjectStoreArtifactHandle:
         if isinstance(handle, ObjectStoreArtifactHandle):
             return handle
@@ -65,9 +68,16 @@ class GcsArtifactStore:
             raise ValueError(
                 f"Unsupported artifact format for GcsArtifactStore: {artifact_format!r}",
             )
+        if not job_id:
+            raise ValueError(
+                "GcsArtifactStore.materialize_table_input requires a non-empty "
+                "job_id: every materialised artifact lives under "
+                "jobs/<job_id>/artifacts/... so a job can be inspected or "
+                "purged as a single self-contained directory.",
+            )
 
         blob_key = self._full_key(
-            f"artifacts/{_safe_fragment(logical_path)}/{_safe_fragment(table_id)}.jsonl",
+            f"jobs/{_safe_fragment(job_id)}/artifacts/{_safe_fragment(table_id)}.jsonl",
         )
         blob = self.bucket.blob(blob_key)
 
@@ -104,6 +114,7 @@ class GcsArtifactStore:
         *,
         logical_path: str,
         artifact_format: str = "jsonl",
+        job_id: str = "",
     ) -> ObjectStoreArtifactHandle:
         """Serialise lowered content rows as a JSONL artifact in GCS.
 
@@ -135,6 +146,7 @@ class GcsArtifactStore:
             logical_path=logical_path,
             table_id=CONTENT_ROWS_TABLE_ID,
             artifact_format=artifact_format,
+            job_id=job_id,
         )
 
     # -- manifest CRUD -------------------------------------------------------
@@ -177,6 +189,55 @@ class GcsArtifactStore:
         except Exception:
             pass
 
+    # -- local staging -------------------------------------------------------
+
+    def download_to_local(
+        self,
+        source: str,
+        dest: Path | str,
+    ) -> Path:
+        """Download a GCS object to a local filesystem path.
+
+        ``source`` may be either a plain key (resolved against this store's
+        bucket and prefix via :meth:`_full_key`) or a fully-qualified
+        ``gs://<bucket>/<key>`` URI. The latter is the common case for the
+        ingest worker, which consumes URIs emitted by
+        :meth:`materialize_table_input`.
+
+        Cross-bucket ``gs://`` URIs are rejected: if the caller asks us to
+        stage an object from a different bucket than the one this store was
+        configured with, that's a configuration bug (e.g. staging worker
+        accidentally reading production artifacts) and we want to surface it
+        loudly rather than silently download.
+
+        ``dest`` may be a path-like pointing to a file. Parent directories
+        are created as needed. Returns the resolved ``Path``.
+        """
+        dest_path = Path(dest).expanduser().resolve()
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if source.startswith("gs://"):
+            parsed = urlparse(source)
+            if parsed.scheme != "gs":
+                raise ValueError(f"Expected a gs:// URI, got: {source!r}")
+            if parsed.netloc != self._bucket_name:
+                raise ValueError(
+                    f"Cannot download gs://{parsed.netloc}/... through a "
+                    f"GcsArtifactStore configured for bucket "
+                    f"{self._bucket_name!r}; cross-bucket access is a "
+                    f"configuration error.",
+                )
+            blob_key = parsed.path.lstrip("/")
+        else:
+            blob_key = self._full_key(source)
+
+        blob = self.bucket.blob(blob_key)
+        self._with_retry(
+            lambda: blob.download_to_filename(str(dest_path)),
+            operation=f"download_to_local({blob_key})",
+        )
+        return dest_path
+
     # -- retry wrapper -------------------------------------------------------
 
     def _with_retry(self, fn, *, operation: str):
@@ -186,6 +247,15 @@ class GcsArtifactStore:
             try:
                 return fn()
             except Exception as exc:
+                # HTTP 404 is a definitive "object does not exist" answer, not a
+                # transient infra failure. Retrying only burns wall-clock time
+                # while callers like PubSubWorkQueue.is_cancelled() wait for a
+                # negative answer. Short-circuit before consulting the generic
+                # retry policy so the decision is unambiguous regardless of how
+                # the underlying SDK surfaces 404 (NotFound, InvalidResponse,
+                # wrapped stringified error, etc.).
+                if _is_not_found_error(exc):
+                    raise
                 decision = self._retry_policy.check_retry(
                     exc,
                     attempt_index=attempt,
@@ -203,6 +273,39 @@ class GcsArtifactStore:
                 )
                 time.sleep(delay)
                 attempt += 1
+
+
+def _is_not_found_error(exc: BaseException) -> bool:
+    """Return True when ``exc`` represents a hard HTTP 404.
+
+    The GCS SDK can surface a 404 as either
+    ``google.api_core.exceptions.NotFound`` (wrapped by the storage client) or
+    ``google.resumable_media.common.InvalidResponse`` (when the underlying
+    resumable-media download fails before the Storage client wraps it). We
+    accept either, plus a defensive string fallback, so the caller never has
+    to care which layer raised.
+    """
+    try:
+        from google.api_core.exceptions import NotFound as _ApiNotFound
+
+        if isinstance(exc, _ApiNotFound):
+            return True
+    except ImportError:
+        pass
+    try:
+        from google.resumable_media.common import (
+            InvalidResponse as _RmInvalidResponse,
+        )
+
+        if isinstance(exc, _RmInvalidResponse):
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+            if status == 404:
+                return True
+    except ImportError:
+        pass
+    text = str(exc)
+    return text.startswith("404 ") or "status code', 404," in text
 
 
 def _safe_fragment(value: str) -> str:
