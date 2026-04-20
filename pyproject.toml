@@ -7,11 +7,7 @@ name = "unity-deploy"
 version = "0.1.0"
 description = "Enterprise deployment overlay for Unity"
 requires-python = ">=3.12"
-dependencies = [
-    "pydantic-settings>=2.0",
-    "google-cloud-storage>=2.14",
-    "google-cloud-pubsub>=2.19",
-]
+dependencies = []
 
 [project.entry-points."unity_deploy.init"]
 enterprise = "unity_deploy.hook:startup_hook"
@@ -21,9 +17,9 @@ enterprise = "unity_deploy.runtime:register_runtime_backends"
 
 [dependency-groups]
 dev = [
-    "unity",
-    "unify",
-    "unillm",
+    "unify-agent",
+    "unify-sdk",
+    "unify-llm",
     "pre-commit>=4.0.1",
     "autoflake>=2.3.1",
     "black==26.1.0",
@@ -32,9 +28,9 @@ dev = [
 ]
 
 [tool.uv.sources]
-unity = { path = "../unity", editable = true }
-unify = { path = "../unify", editable = true }
-unillm = { path = "../unillm", editable = true }
+unify-agent = { path = "../unity", editable = true }
+unify-sdk = { path = "../unify", editable = true }
+unify-llm = { path = "../unillm", editable = true }
 
 [tool.pyright]
 extraPaths = ["../unity", "../unify", "../unillm"]
