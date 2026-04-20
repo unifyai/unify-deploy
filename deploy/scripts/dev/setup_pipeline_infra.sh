@@ -14,6 +14,7 @@ set -euo pipefail
 ENV="${1:-staging}"
 PROJECT_ID="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 REGION="us-central1"
+CLUSTER="${UNITY_GKE_CLUSTER:-unity}"
 
 # Name suffix matches the unity/communication convention:
 # production resources have no suffix; all other envs suffix with "-${ENV}".
@@ -63,6 +64,71 @@ gcloud pubsub subscriptions create "unity-ingest-sub${SUFFIX}" \
   --dead-letter-topic="unity-dead-letter${SUFFIX}" \
   --max-delivery-attempts=5 \
   2>/dev/null || echo "  (subscription already exists)"
+
+# --- Custom Metrics Stackdriver Adapter (for HPAs on Pub/Sub backlog) ---
+#
+# The parse/ingest worker HPAs scale on the external metric
+# `pubsub.googleapis.com|subscription|num_undelivered_messages`. GKE does
+# not serve that metric out of the box -- it requires Google's
+# Custom Metrics Stackdriver Adapter, which proxies Cloud Monitoring into
+# Kubernetes' `external.metrics.k8s.io` API. Without it every HPA reports
+# `FailedGetExternalMetric` and the workers never scale past `minReplicas`.
+#
+# This block is cluster-scoped (not per-env), idempotent, and assumes the
+# cluster has Workload Identity enabled (it is, on `${CLUSTER}`). The
+# adapter's KSA is bound to a least-privileged GSA with `monitoring.viewer`.
+ADAPTER_GSA="custom-metrics-adapter"
+ADAPTER_GSA_EMAIL="${ADAPTER_GSA}@${PROJECT_ID}.iam.gserviceaccount.com"
+ADAPTER_KSA_BINDING="serviceAccount:${PROJECT_ID}.svc.id.goog[custom-metrics/custom-metrics-stackdriver-adapter]"
+ADAPTER_MANIFEST_URL="https://raw.githubusercontent.com/GoogleCloudPlatform/k8s-stackdriver/master/custom-metrics-stackdriver-adapter/deploy/production/adapter_new_resource_model.yaml"
+
+echo ""
+echo "=== External Metrics Adapter (cluster=${CLUSTER}) ==="
+
+echo "Fetching cluster credentials..."
+gcloud container clusters get-credentials "${CLUSTER}" \
+  --region "${REGION}" \
+  --project "${PROJECT_ID}" >/dev/null
+
+if kubectl get ns custom-metrics >/dev/null 2>&1; then
+  echo "  (custom-metrics namespace already present -- re-applying to pick up manifest drift)"
+fi
+kubectl apply -f "${ADAPTER_MANIFEST_URL}"
+
+if ! gcloud iam service-accounts describe "${ADAPTER_GSA_EMAIL}" \
+    --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  echo "Creating GSA ${ADAPTER_GSA_EMAIL}..."
+  gcloud iam service-accounts create "${ADAPTER_GSA}" \
+    --project="${PROJECT_ID}" \
+    --display-name="Custom Metrics Stackdriver Adapter"
+else
+  echo "  (GSA ${ADAPTER_GSA_EMAIL} already exists)"
+fi
+
+echo "Granting roles/monitoring.viewer to ${ADAPTER_GSA_EMAIL}..."
+gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+  --member="serviceAccount:${ADAPTER_GSA_EMAIL}" \
+  --role="roles/monitoring.viewer" \
+  --condition=None >/dev/null
+
+echo "Binding adapter KSA -> GSA via Workload Identity..."
+gcloud iam service-accounts add-iam-policy-binding "${ADAPTER_GSA_EMAIL}" \
+  --project="${PROJECT_ID}" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="${ADAPTER_KSA_BINDING}" \
+  --condition=None >/dev/null
+
+kubectl annotate serviceaccount \
+  --namespace=custom-metrics \
+  custom-metrics-stackdriver-adapter \
+  "iam.gke.io/gcp-service-account=${ADAPTER_GSA_EMAIL}" --overwrite >/dev/null
+
+kubectl rollout restart deployment -n custom-metrics custom-metrics-stackdriver-adapter >/dev/null
+kubectl rollout status  deployment -n custom-metrics custom-metrics-stackdriver-adapter --timeout=120s
+
+echo "Adapter ready. Verifying external metrics API..."
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1" >/dev/null \
+  && echo "  external.metrics.k8s.io/v1beta1 is being served"
 
 echo ""
 echo "=== Setup Complete ==="
