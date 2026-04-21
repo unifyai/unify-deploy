@@ -467,26 +467,45 @@ def activate_unify_context(
     *,
     user_id: str,
     assistant_id: str,
+    managers: list | None = None,
 ) -> None:
-    """Lightweight Unify context activation for worker processes.
+    """Lightweight ``unity.init``-style activation for worker processes.
 
-    Performs only what ``DataManager.ingest`` requires:
+    Mirrors the core sequence from :pyfunc:`unity.init` — project
+    activation, SDK context setup, and ``ContextRegistry`` provisioning —
+    but scoped to an explicitly supplied identity and manager list rather
+    than ``SESSION_DETAILS`` and the full manager catalogue.
 
-    1. ``unify.activate(project_name)``
-    2. ``unify.set_context("{user_id}/{assistant_id}")``
+    Steps (matching ``unity.init`` order):
+
+    1. ``unify.activate(project_name)``  (once per process)
+    2. Reset the SDK context via ``unset_context()`` to prevent the
+       relative-join accumulation bug across sequential messages.
+    3. ``unify.set_context("{user_id}/{assistant_id}")``  — idempotent,
+       tolerates concurrent creation.
+    4. ``ContextRegistry.clear()`` + ``setup_for_managers(managers)`` —
+       purge stale cached paths and provision only the contexts the
+       caller actually needs.
 
     Does **not** initialise the EventBus, LLM hooks, spending-limit
     hooks, billing context, or ``SESSION_DETAILS``.  Does **not**
     require ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY``.
 
-    Identity must be supplied explicitly by the caller. Shared workers
-    must not guess from ``USER_ID`` / ``ASSISTANT_ID`` environment
-    variables or synthetic defaults.
-
-    ``UNIFY_KEY`` must already be installed in the environment for the
-    current message by ``ingest_worker._with_unify_key``.
+    Parameters
+    ----------
+    project_name :
+        Unify project to activate.
+    user_id, assistant_id :
+        Identity from the ``IngestBinding`` on the current message.
+    managers :
+        Manager **classes** whose ``Config.required_contexts`` should be
+        provisioned (e.g. ``[FileManager, DataManager]``).  When *None*
+        the ``ContextRegistry`` is cleared but no contexts are created;
+        downstream managers will still resolve lazily on first access.
     """
     import unify as _unify
+
+    from unity.common.context_registry import ContextRegistry
 
     if not os.environ.get("UNIFY_KEY"):
         raise EnvironmentError(
@@ -495,9 +514,18 @@ def activate_unify_context(
             "activate_unify_context() runs.",
         )
 
+    # --- 1. Project activation (once per process) ---
     project_name = os.environ.get("UNIFY_PROJECT_NAME", project_name)
     if not _unify.active_project():
         _unify.activate(project_name)
+
+    # --- 2+3. Context reset & set (mirrors unity.init lines 92-102) ---
+    # The SDK's set_context defaults to relative=True, which _joins_ the
+    # new path onto the current one.  In a long-lived worker that
+    # processes many messages, this would produce
+    # "user/1821/user/1821/..." after the second call.  Resetting first
+    # ensures an absolute set regardless of prior state.
+    _unify.unset_context()
 
     ctx = f"{user_id}/{assistant_id}"
     try:
@@ -507,6 +535,11 @@ def activate_unify_context(
             _unify.set_context(ctx, skip_create=True)
         else:
             raise
+
+    # --- 4. ContextRegistry (mirrors unity.init line 104) ---
+    ContextRegistry.clear()
+    if managers:
+        ContextRegistry.setup_for_managers(managers)
 
     logger.info(
         "Unify context activated: project=%s, context=%s",

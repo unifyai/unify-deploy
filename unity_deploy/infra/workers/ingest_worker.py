@@ -394,11 +394,6 @@ async def _run_fm_mode_inner(
     activate_unify_context,
 ) -> tuple[int, str | None]:
     """Body of FM dispatch, run inside the per-message UNIFY_KEY scope."""
-    activate_unify_context(
-        user_id=fm_binding.user_id,
-        assistant_id=fm_binding.assistant_id,
-    )
-
     from unity.data_manager import DataManager
     from unity.file_manager.filesystem_adapters.local_adapter import (
         LocalFileSystemAdapter,
@@ -406,6 +401,12 @@ async def _run_fm_mode_inner(
     from unity.file_manager.managers.file_manager import FileManager
     from unity.file_manager.managers.utils.executor import fm_process_plan
     from unity.file_manager.types.config import FilePipelineConfig
+
+    activate_unify_context(
+        user_id=fm_binding.user_id,
+        assistant_id=fm_binding.assistant_id,
+        managers=[FileManager, DataManager],
+    )
 
     dm = DataManager()
     # The FM adapter's ``name`` determines the ``Files/{alias}/...``
@@ -539,6 +540,9 @@ async def _run_dm_mode_inner(
     activate_unify_context,
 ) -> tuple[int, str | None]:
     """Body of DM dispatch, run inside the per-message UNIFY_KEY scope."""
+    from unity.data_manager import DataManager
+    from unity.file_manager.types.config import FilePipelineConfig
+
     # DM dispatches are assistant-scoped too: they still ingest into an
     # explicit DataManager context, but Orchestra key resolution and
     # Unify activation should happen against the bound assistant rather
@@ -546,10 +550,8 @@ async def _run_dm_mode_inner(
     activate_unify_context(
         user_id=dm_binding.user_id,
         assistant_id=dm_binding.assistant_id,
+        managers=[DataManager],
     )
-
-    from unity.data_manager import DataManager
-    from unity.file_manager.types.config import FilePipelineConfig
 
     dm = DataManager()
     config = FilePipelineConfig()
