@@ -15,6 +15,7 @@ from unity.common.pipeline.artifact_store import CONTENT_ROWS_TABLE_ID
 from unity.common.pipeline.retry_policy import ResilientRequestPolicy
 from unity.common.pipeline.row_streaming import iter_table_input_rows
 from unity.common.pipeline.types import (
+    IngestCheckpoint,
     InlineRowsHandle,
     ObjectStoreArtifactHandle,
     TableInputHandle,
@@ -256,6 +257,31 @@ class GcsArtifactStore:
         except OSError:
             pass
         return dest_path
+
+    # -- ingest checkpoints --------------------------------------------------
+
+    def write_checkpoint(
+        self,
+        job_id: str,
+        artifact_id: str,
+        checkpoint: IngestCheckpoint,
+    ) -> None:
+        """Persist an ``IngestCheckpoint`` to GCS for crash recovery."""
+        key = f"jobs/{_safe_fragment(job_id)}/checkpoints/{_safe_fragment(artifact_id)}"
+        self.put_json(key, checkpoint.model_dump(mode="json"))
+
+    def read_checkpoint(
+        self,
+        job_id: str,
+        artifact_id: str,
+    ) -> IngestCheckpoint | None:
+        """Read an ``IngestCheckpoint`` from GCS, or ``None`` if absent."""
+        key = f"jobs/{_safe_fragment(job_id)}/checkpoints/{_safe_fragment(artifact_id)}"
+        try:
+            data = self.get_json(key)
+            return IngestCheckpoint.model_validate(data)
+        except Exception:
+            return None
 
     # -- retry wrapper -------------------------------------------------------
 

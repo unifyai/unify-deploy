@@ -46,6 +46,7 @@ from unity.common.pipeline.run_ledger import PipelineStageManifest
 from unity.common.pipeline.types import (
     AttachmentCallback,
     IngestBinding,
+    IngestCheckpoint,
     IngestRequested,
     ObjectStoreArtifactHandle,
     TableInputHandle,
@@ -71,20 +72,17 @@ def _stage_remote_handles(
     artifact_store: Any,
     scratch_dir: Path,
 ) -> IngestPlan:
-    """Download any ``gs://``-backed artifact handles into ``scratch_dir``.
+    """Download non-JSONL ``gs://``-backed artifact handles into *scratch_dir*.
 
-    ``unity.common.pipeline.row_streaming`` resolves rows from a local
-    filesystem path; it intentionally refuses ``gs://`` URIs so the core
-    pipeline stays storage-agnostic. This function is the ingest worker's
-    GCS-aware adapter: it walks the plan's artifact handles, downloads any
-    remote object to ``scratch_dir``, and returns a new frozen
-    :class:`IngestPlan` whose matching handles carry ``source_local_path``
-    populated. Handles that are already local (``InlineRowsHandle``,
-    ``CsvFileHandle`` on a shared volume, etc.) are left untouched.
+    JSONL ``ObjectStoreArtifactHandle`` handles with ``gs://`` URIs are
+    intentionally **not** staged: ``row_streaming`` now streams them
+    directly from GCS via ``blob.open("r")`` when a ``storage_client``
+    is supplied, eliminating ephemeral-storage pressure entirely.
 
-    The ``scratch_dir`` is owned by the caller and should be cleaned up in
-    a ``finally`` block so we do not leak bytes across messages in the
-    shared worker pod.
+    Non-JSONL handles (future formats like parquet) or handles that
+    already carry a ``source_local_path`` are left untouched.  The
+    ``scratch_dir`` is owned by the caller and should be cleaned up in a
+    ``finally`` block.
     """
     updates: dict[str, Any] = {}
 
@@ -126,19 +124,20 @@ def _stage_handle(
     scratch_dir: Path,
     hint: str,
 ) -> TableInputHandle:
-    """Stage a single handle locally when it points at a ``gs://`` URI.
+    """Stage a single handle locally when it needs local disk access.
 
-    Currently only :class:`ObjectStoreArtifactHandle` is produced by the
-    parse worker's GCS materialisation path, so that's the only handle
-    type we need to stage here. Other handle types (``InlineRowsHandle``,
-    ``CsvFileHandle`` etc.) already carry either inline data or a local
-    filesystem path and are returned unchanged.
+    JSONL ``ObjectStoreArtifactHandle`` handles with ``gs://`` URIs are
+    skipped — they stream directly from GCS at iteration time.  Only
+    non-JSONL remote artifacts are downloaded to ``scratch_dir``.
     """
     if not isinstance(handle, ObjectStoreArtifactHandle):
         return handle
     if handle.source_local_path:
         return handle
     if not handle.storage_uri.startswith("gs://"):
+        return handle
+    # JSONL artifacts stream directly from GCS — no local staging needed.
+    if handle.artifact_format == "jsonl":
         return handle
     if not hasattr(artifact_store, "download_to_local"):
         raise RuntimeError(
@@ -147,7 +146,7 @@ def _stage_handle(
         )
 
     safe_hint = _safe_scratch_name(hint)
-    dest = scratch_dir / f"{safe_hint}.jsonl"
+    dest = scratch_dir / f"{safe_hint}.{handle.artifact_format}"
     local_path = artifact_store.download_to_local(handle.storage_uri, dest)
     logger.info(
         "[ingest] Staged %s -> %s (%d bytes)",
@@ -163,6 +162,58 @@ def _safe_scratch_name(value: str) -> str:
     return "".join(
         char if char.isalnum() or char in ("-", "_") else "_" for char in text
     )
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint callback factory
+# ---------------------------------------------------------------------------
+
+
+def _make_checkpoint_callback(
+    artifact_store: Any,
+    job_id: str,
+    artifact_id: str,
+    *,
+    initial_rows: int = 0,
+    initial_chunks: int = 0,
+):
+    """Return an ``on_task_complete`` callback that writes GCS checkpoints.
+
+    The callback is fired by ``PipelineExecutor._notify()`` after each
+    pipeline task completes inside ``dm.ingest()``.  Only
+    ``insert_chunk_*`` tasks trigger a checkpoint write; other task types
+    (``create_table``, ``embed_*``, etc.) are ignored.
+    """
+    state = {"rows": initial_rows, "chunks": initial_chunks}
+
+    def _on_task_complete(task, result):
+        if not getattr(task, "task_type", "").startswith("insert_chunk"):
+            return
+        value = getattr(result, "value", None) or {}
+        if isinstance(value, dict):
+            row_count = int(value.get("row_count", 0) or 0)
+        else:
+            row_count = 0
+        state["rows"] += row_count
+        state["chunks"] += 1
+        checkpoint = IngestCheckpoint(
+            job_id=job_id,
+            artifact_id=artifact_id,
+            chunks_committed=state["chunks"],
+            rows_committed=state["rows"],
+            last_updated=utc_now_iso(),
+        )
+        try:
+            artifact_store.write_checkpoint(job_id, artifact_id, checkpoint)
+        except Exception:
+            logger.warning(
+                "[ingest] Failed to write checkpoint job=%s artifact=%s",
+                job_id,
+                artifact_id,
+                exc_info=True,
+            )
+
+    return _on_task_complete
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +497,9 @@ async def _run_fm_mode_inner(
                 reporter=None,
                 enable_progress=False,
                 verbosity="low",
+                storage_client=infra.storage_client,
+                artifact_store=infra.artifact_store,
+                job_id=msg.job_id,
             )
             status = str(getattr(result, "status", "error") or "error")
             if status != "success":
@@ -639,6 +693,9 @@ async def _run_dm_mode_inner(
         file_count=1,
     )
 
+    artifact_store = infra.artifact_store
+    gcs_client = infra.storage_client
+
     work_items: list[ArtifactWorkItem] = []
     for meta in plan.tables_meta:
         table_id = str(meta.table_id or "")
@@ -666,6 +723,18 @@ async def _run_dm_mode_inner(
 
             post_ingest_config = PostIngestConfig.model_validate(meta.post_ingest)
 
+        ckpt = artifact_store.read_checkpoint(msg.job_id, table_id)
+        skip_rows = ckpt.rows_committed if ckpt else 0
+        initial_chunks = ckpt.chunks_committed if ckpt else 0
+        if ckpt:
+            logger.info(
+                "[ingest][dm] Resuming table=%s from checkpoint: "
+                "%d rows, %d chunks already committed",
+                table_id,
+                skip_rows,
+                initial_chunks,
+            )
+
         work_items.append(
             ArtifactWorkItem(
                 kind="table",
@@ -681,6 +750,10 @@ async def _run_dm_mode_inner(
                     "embed_columns": meta.embed_columns,
                     "embed_strategy": meta.embed_strategy,
                     "post_ingest": post_ingest_config,
+                    "skip_rows": skip_rows,
+                    "initial_chunks": initial_chunks,
+                    "table_id": table_id,
+                    "storage_client": gcs_client,
                 },
                 columns=columns,
                 row_count=row_count,
@@ -702,6 +775,13 @@ async def _run_dm_mode_inner(
 
     def _dm_ingest_fn(item: ArtifactWorkItem) -> dict:
         pl = item.payload
+        on_complete = _make_checkpoint_callback(
+            artifact_store,
+            msg.job_id,
+            pl.get("table_id", ""),
+            initial_rows=pl.get("skip_rows", 0),
+            initial_chunks=pl.get("initial_chunks", 0),
+        )
         result = pl["dm"].ingest(
             pl["context"],
             None,
@@ -712,6 +792,9 @@ async def _run_dm_mode_inner(
             embed_columns=pl.get("embed_columns"),
             embed_strategy=pl.get("embed_strategy", "off"),
             post_ingest=pl.get("post_ingest"),
+            on_task_complete=on_complete,
+            storage_client=pl.get("storage_client"),
+            skip_rows=pl.get("skip_rows", 0),
         )
         return {
             "ingest_result": result,
