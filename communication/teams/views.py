@@ -6,9 +6,16 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
+from msgraph.generated.models.aad_user_conversation_member import (
+    AadUserConversationMember,
+)
 from msgraph.generated.models.body_type import BodyType
+from msgraph.generated.models.channel import Channel
+from msgraph.generated.models.channel_membership_type import ChannelMembershipType
+from msgraph.generated.models.chat import Chat
 from msgraph.generated.models.chat_message import ChatMessage
 from msgraph.generated.models.chat_message_attachment import ChatMessageAttachment
+from msgraph.generated.models.chat_type import ChatType
 from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.subscription import Subscription
 
@@ -127,6 +134,24 @@ def _build_chat_message(
     )
 
 
+def _build_owner_member(upn: str) -> AadUserConversationMember:
+    """Build a chat/channel member bound to a user UPN with owner role.
+
+    Graph requires ``user@odata.bind = users/{upn}`` on the member
+    payload to attach an existing AAD user; ``roles=["owner"]`` is
+    mandatory for both oneOnOne and group chats (and for private /
+    shared channel members).
+    """
+    member = AadUserConversationMember(
+        odata_type="#microsoft.graph.aadUserConversationMember",
+        roles=["owner"],
+    )
+    member.additional_data = {
+        "user@odata.bind": f"https://graph.microsoft.com/v1.0/users/{upn}",
+    }
+    return member
+
+
 async def _enumerate_user_channels(graph) -> list[tuple[str, str, str]]:
     """Return ``[(team_id, channel_id, display_name), ...]`` for every
     channel the user is a member of, across every joined team.
@@ -215,6 +240,67 @@ async def _create_one_subscription(
     return {"resource": resource, "error": str(last_err)}
 
 
+async def _rebuild_teams_watches(
+    graph,
+    *,
+    user_email: str,
+    user_id: str,
+    webhook_url: str,
+) -> dict:
+    """Tear down any subs we own for this user and recreate the full set.
+
+    Shared by ``POST /watch`` (full rebuild for a user on demand / on
+    renewal) and ``POST /channels`` (so a newly-created channel gets a
+    subscription immediately instead of waiting up to 30 min for the
+    scheduled renewal).
+    """
+    webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
+    client_state = f"{webhook_secret}::{user_email}"
+
+    # Tear down any prior subs we own.  Match by clientState
+    # (ownership) + resource shape so we don't disturb subs created
+    # by other tenants/apps and so we catch resource path forms
+    # Graph normalises after the fact.
+    subs = await graph.subscriptions.get()
+    for sub in subs.value or []:
+        if not _owned_teams_sub(sub, webhook_secret, user_email):
+            continue
+        try:
+            await graph.subscriptions.by_subscription_id(sub.id).delete()
+        except Exception:
+            pass
+
+    channels = await _enumerate_user_channels(graph)
+    channel_resources = [_channel_resource(tid, cid) for tid, cid, _ in channels]
+
+    sem = asyncio.Semaphore(_SUB_CONCURRENCY)
+
+    async def _guarded(resource: str) -> dict:
+        async with sem:
+            return await _create_one_subscription(
+                graph,
+                resource=resource,
+                webhook_url=webhook_url,
+                client_state=client_state,
+                user_email=user_email,
+            )
+
+    chats_task = asyncio.create_task(_guarded(_chats_resource(user_id)))
+    channel_tasks = [asyncio.create_task(_guarded(r)) for r in channel_resources]
+    chats_result = await chats_task
+    channel_results = await asyncio.gather(*channel_tasks) if channel_tasks else []
+
+    channel_failures = sum(1 for r in channel_results if "error" in r)
+
+    return {
+        "success": "subscription_id" in chats_result,
+        "chats": chats_result,
+        "channels": channel_results,
+        "channel_count": len(channel_results),
+        "channel_failures": channel_failures,
+    }
+
+
 @router.post("/send")
 async def send_teams_chat(request: Request):
     """
@@ -257,6 +343,102 @@ async def send_teams_chat(request: Request):
         raise
     except Exception as e:
         logging.error(f"Failed to send Teams chat message: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chats")
+async def create_teams_chat(request: Request):
+    """Create (or return the existing) Teams chat.
+
+    Request body::
+
+        {
+          "from": "assistant@yourdomain.com",
+          "chat_type": "oneOnOne" | "group",
+          "members": ["upn@contoso.com", ...],   # excludes sender
+          "topic": "optional (group only)"
+        }
+
+    The sender is added implicitly as an owner (Graph requires the
+    calling user to be a member).  For ``oneOnOne``, exactly one
+    additional member is required; Graph dedupes same-pair calls and
+    returns the pre-existing chat_id.  For ``group``, at least two
+    additional members are required.
+
+    Returns ``{"success": True, "chat_id": "...", "chat_type": "..."}``.
+    """
+    data = await request.json()
+    sender = data.get("from")
+    chat_type_raw = (data.get("chat_type") or "").strip()
+    members_in = data.get("members")
+    topic = data.get("topic")
+
+    if not sender or not chat_type_raw or not isinstance(members_in, list):
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: from, chat_type, members",
+        )
+    if chat_type_raw not in ("oneOnOne", "group"):
+        raise HTTPException(
+            status_code=400,
+            detail="chat_type must be 'oneOnOne' or 'group'",
+        )
+    if chat_type_raw == "oneOnOne" and len(members_in) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="oneOnOne requires exactly one member (besides sender)",
+        )
+    if chat_type_raw == "group" and len(members_in) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="group requires at least two members (besides sender)",
+        )
+    if chat_type_raw == "oneOnOne" and topic:
+        raise HTTPException(
+            status_code=400,
+            detail="oneOnOne chats cannot have a topic",
+        )
+
+    try:
+        graph = await get_graph_client(sender)
+
+        me = await graph.me.get()
+        sender_upn = me.user_principal_name or sender
+
+        upns: list[str] = []
+        seen: set[str] = set()
+        for upn in [sender_upn, *members_in]:
+            key = (upn or "").lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            upns.append(upn)
+
+        chat = Chat(
+            chat_type=(
+                ChatType.OneOnOne if chat_type_raw == "oneOnOne" else ChatType.Group
+            ),
+            members=[_build_owner_member(upn) for upn in upns],
+        )
+        if chat_type_raw == "group" and topic:
+            chat.topic = topic
+
+        result = await graph.chats.post(chat)
+
+        logging.info(
+            f"Teams chat created/returned for {sender} "
+            f"({chat_type_raw}, {len(upns)} members): {result.id}",
+        )
+        return {
+            "success": True,
+            "chat_id": result.id,
+            "chat_type": chat_type_raw,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Failed to create Teams chat: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -371,55 +553,17 @@ async def watch_teams(request: Request):
                 detail=f"Graph /me returned no id for {user_email}",
             )
 
-        webhook_secret = os.getenv("TEAMS_WEBHOOK_SECRET", "unify-teams-webhook")
-        client_state = f"{webhook_secret}::{user_email}"
-
-        # Tear down any prior subs we own.  Match by clientState
-        # (ownership) + resource shape so we don't disturb subs created
-        # by other tenants/apps and so we catch resource path forms
-        # Graph normalises after the fact.
-        subs = await graph.subscriptions.get()
-        for sub in subs.value or []:
-            if not _owned_teams_sub(sub, webhook_secret, user_email):
-                continue
-            try:
-                await graph.subscriptions.by_subscription_id(sub.id).delete()
-            except Exception:
-                pass
-
-        channels = await _enumerate_user_channels(graph)
-        channel_resources = [_channel_resource(tid, cid) for tid, cid, _ in channels]
-
-        sem = asyncio.Semaphore(_SUB_CONCURRENCY)
-
-        async def _guarded(resource: str) -> dict:
-            async with sem:
-                return await _create_one_subscription(
-                    graph,
-                    resource=resource,
-                    webhook_url=webhook_url,
-                    client_state=client_state,
-                    user_email=user_email,
-                )
-
-        chats_task = asyncio.create_task(_guarded(_chats_resource(user_id)))
-        channel_tasks = [asyncio.create_task(_guarded(r)) for r in channel_resources]
-        chats_result = await chats_task
-        channel_results = await asyncio.gather(*channel_tasks) if channel_tasks else []
-
-        channel_failures = sum(1 for r in channel_results if "error" in r)
-
-        # ``success`` means the chats sub landed.  Per-channel failures
-        # don't break delivery of chats and get retried on the next
-        # 30-min renewal.  The caller can inspect ``channel_failures``
-        # and the per-channel entries in ``channels`` for partial state.
-        return {
-            "success": "subscription_id" in chats_result,
-            "chats": chats_result,
-            "channels": channel_results,
-            "channel_count": len(channel_results),
-            "channel_failures": channel_failures,
-        }
+        # ``success`` in the returned dict means the chats sub landed.
+        # Per-channel failures don't break delivery of chats and get
+        # retried on the next 30-min renewal.  The caller can inspect
+        # ``channel_failures`` and the per-channel entries in ``channels``
+        # for partial state.
+        return await _rebuild_teams_watches(
+            graph,
+            user_email=user_email,
+            user_id=user_id,
+            webhook_url=webhook_url,
+        )
 
     except HTTPException:
         raise
@@ -633,6 +777,117 @@ async def list_team_channels(team_id: str, user_email: str):
         raise
     except Exception as e:
         logging.error(f"Failed to list team channels: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+_CHANNEL_MEMBERSHIP_TYPES = {
+    "standard": ChannelMembershipType.Standard,
+    "private": ChannelMembershipType.Private,
+    "shared": ChannelMembershipType.Shared,
+}
+
+
+@router.post("/channels")
+async def create_teams_channel(request: Request):
+    """Create a channel inside an existing team.
+
+    Request body::
+
+        {
+          "from": "assistant@yourdomain.com",
+          "team_id": "...",
+          "display_name": "Launch",
+          "description": "optional",
+          "membership_type": "standard" | "private" | "shared",  # default "standard"
+          "owners": ["upn@..."]   # required iff membership_type != "standard"
+        }
+
+    Requires the ``Channel.Create`` delegated scope on the caller; if
+    the scope is absent Graph returns a 403 which is surfaced as 500.
+
+    On success, re-posts the full teams-watch set for the sender so the
+    new channel gets a subscription immediately instead of waiting up
+    to 30 min for the next scheduled renewal.  Rebuild failures are
+    logged but do not fail the create.
+    """
+    data = await request.json()
+    sender = data.get("from")
+    team_id = data.get("team_id")
+    display_name = data.get("display_name")
+    description = data.get("description")
+    membership_type_raw = (data.get("membership_type") or "standard").strip()
+    owners = data.get("owners") or []
+
+    if not sender or not team_id or not display_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing required fields: from, team_id, display_name",
+        )
+    if membership_type_raw not in _CHANNEL_MEMBERSHIP_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="membership_type must be 'standard', 'private', or 'shared'",
+        )
+    if not isinstance(owners, list):
+        raise HTTPException(
+            status_code=400,
+            detail="owners must be a list of UPNs when provided",
+        )
+    if membership_type_raw != "standard" and not owners:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{membership_type_raw} channels require at least one owner",
+        )
+
+    try:
+        graph = await get_graph_client(sender)
+
+        channel = Channel(
+            display_name=display_name,
+            description=description,
+            membership_type=_CHANNEL_MEMBERSHIP_TYPES[membership_type_raw],
+        )
+        if membership_type_raw != "standard":
+            channel.members = [_build_owner_member(upn) for upn in owners]
+
+        result = await graph.teams.by_team_id(team_id).channels.post(channel)
+
+        logging.info(
+            f"Teams channel created by {sender} in team {team_id} "
+            f"({membership_type_raw}): {result.id}",
+        )
+
+        webhook_url = f"{SETTINGS.adapters_url}/microsoft/router"
+        rebuild: dict | None = None
+        try:
+            me = await graph.me.get()
+            if me.id:
+                rebuild = await _rebuild_teams_watches(
+                    graph,
+                    user_email=sender,
+                    user_id=me.id,
+                    webhook_url=webhook_url,
+                )
+        except Exception as sub_err:
+            # Don't fail the create on a subscription hiccup — the
+            # scheduled renewal will pick up the new channel within
+            # 30 min, and the caller already has a usable channel_id.
+            logging.warning(
+                f"Teams watch rebuild after channel create failed: {sub_err}",
+            )
+
+        return {
+            "success": True,
+            "channel_id": result.id,
+            "team_id": team_id,
+            "membership_type": membership_type_raw,
+            "watch_rebuild": rebuild,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Failed to create Teams channel: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

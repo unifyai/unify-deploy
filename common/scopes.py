@@ -48,6 +48,7 @@ MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
         "ChannelMessage.Read.All",
         "Team.ReadBasic.All",
         "Channel.ReadBasic.All",
+        "Channel.Create",
         "TeamMember.Read.All",
     ],
     "sharepoint": ["Sites.Read.All", "Sites.ReadWrite.All"],
