@@ -156,10 +156,10 @@ def _make_plan(
     )
 
 
-def test_stage_remote_handles_downloads_gs_artifacts_and_sets_local_path(
+def test_stage_remote_handles_skips_jsonl_gs_artifacts(
     tmp_path,
 ) -> None:
-    """gs:// handles get downloaded and ``source_local_path`` populated."""
+    """JSONL gs:// handles are NOT staged — they stream directly from GCS."""
     content = ObjectStoreArtifactHandle(
         storage_uri="gs://bucket/art/__content__.jsonl",
         logical_path="demo.csv/content",
@@ -182,17 +182,36 @@ def test_stage_remote_handles_downloads_gs_artifacts_and_sets_local_path(
         scratch_dir=tmp_path,
     )
 
-    assert staged is not plan, "plan should be rebuilt when handles change"
-    assert staged.content_rows_handle.source_local_path
-    assert Path(staged.content_rows_handle.source_local_path).exists()
+    assert staged is plan, "JSONL handles stream from GCS; plan must not be rebuilt"
+    assert store.downloads == [], "no downloads should occur for JSONL handles"
+
+
+def test_stage_remote_handles_downloads_non_jsonl_gs_artifacts(
+    tmp_path,
+) -> None:
+    """Non-JSONL gs:// handles still get downloaded and staged locally."""
+    parquet_handle = ObjectStoreArtifactHandle(
+        storage_uri="gs://bucket/art/table_1.parquet",
+        logical_path="demo.csv/t1",
+        artifact_format="parquet",
+    )
+    plan = _make_plan(table_inputs={"table_1": parquet_handle})
+
+    store = _FakeArtifactStore()
+    staged = ingest_worker._stage_remote_handles(
+        plan,
+        artifact_store=store,
+        scratch_dir=tmp_path,
+    )
+
+    assert (
+        staged is not plan
+    ), "plan should be rebuilt when non-JSONL handles are staged"
     assert staged.table_inputs["table_1"].source_local_path
     assert Path(staged.table_inputs["table_1"].source_local_path).exists()
 
-    uris = sorted(src for src, _ in store.downloads)
-    assert uris == [
-        "gs://bucket/art/__content__.jsonl",
-        "gs://bucket/art/table_1.jsonl",
-    ]
+    uris = [src for src, _ in store.downloads]
+    assert uris == ["gs://bucket/art/table_1.parquet"]
 
 
 def test_stage_remote_handles_is_noop_for_inline_and_already_staged(
@@ -225,11 +244,11 @@ def test_stage_remote_handles_is_noop_for_inline_and_already_staged(
 def test_stage_remote_handles_raises_when_store_has_no_downloader(
     tmp_path,
 ) -> None:
-    """A misconfigured store surfaces loudly rather than silently skipping."""
+    """A misconfigured store surfaces loudly for non-JSONL formats."""
     handle = ObjectStoreArtifactHandle(
-        storage_uri="gs://bucket/art/x.jsonl",
+        storage_uri="gs://bucket/art/x.parquet",
         logical_path="demo.csv/x",
-        artifact_format="jsonl",
+        artifact_format="parquet",
     )
     plan = _make_plan(table_inputs={"x": handle})
 
