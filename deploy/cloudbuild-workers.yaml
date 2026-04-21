@@ -53,6 +53,11 @@ steps:
     gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
     kubectl rollout restart deployment/unity-parse-worker -n default || true
     kubectl rollout restart deployment/unity-ingest-worker -n default || true
+
+    echo "Waiting for new pods to be ready..."
+    kubectl rollout status deployment/unity-parse-worker -n default --timeout=120s || true
+    kubectl rollout status deployment/unity-ingest-worker -n default --timeout=120s || true
+    echo "Worker refresh complete."
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'

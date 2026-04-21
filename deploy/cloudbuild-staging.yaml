@@ -79,10 +79,9 @@ steps:
   #     case, because the manifest pins the :latest tag and the SHA
   #     lives in the image itself).
   # Runs in parallel with refresh-idle-jobs (no dependency between
-  # them). The 24h grace period + maxSurge=100% rolling strategy
-  # means the restart is safely fire-and-forget: the Deployment
-  # controller drains old pods while new ones take over, with no
-  # capacity dip.
+  # them). After restarting, `rollout status --timeout=120s` blocks
+  # until new pods are ready so the build only goes green once the
+  # cluster is actually serving the new image.
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'refresh-pipeline-workers'
   entrypoint: 'bash'
@@ -109,7 +108,11 @@ steps:
     # is a no-op we don't want to fail the build on.
     kubectl rollout restart deployment/unity-parse-worker -n default || true
     kubectl rollout restart deployment/unity-ingest-worker -n default || true
-    echo "Worker refresh requested; pods drain over up to 24h grace period."
+
+    echo "Waiting for new pods to be ready..."
+    kubectl rollout status deployment/unity-parse-worker -n default --timeout=120s || true
+    kubectl rollout status deployment/unity-ingest-worker -n default --timeout=120s || true
+    echo "Worker refresh complete."
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
