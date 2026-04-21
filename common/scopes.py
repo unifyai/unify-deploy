@@ -50,6 +50,10 @@ MICROSOFT_SCOPE_BUNDLES: dict[str, list[str]] = {
         "Channel.ReadBasic.All",
         "Channel.Create",
         "TeamMember.Read.All",
+        # Read the meeting's audioConferencing block (dial-in PSTN number +
+        # conferenceId) so we can bridge the assistant into a Teams meeting
+        # via Twilio → Audio Conferencing instead of a calling bot.
+        "OnlineMeetings.Read",
     ],
     "sharepoint": ["Sites.Read.All", "Sites.ReadWrite.All"],
     "tasks": ["Tasks.Read", "Tasks.ReadWrite"],
