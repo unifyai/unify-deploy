@@ -304,6 +304,7 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
 - `DELETE /gmail/delete`
 - `POST /gmail/send`
 - `POST /gmail/watch`
+- `DELETE /gmail/watch`
 
 ### Outlook (`/outlook`)
 

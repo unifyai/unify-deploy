@@ -273,6 +273,44 @@ async def watch_email(request: Request):
     return {"success": True, "historyId": watch_resp.get("historyId")}
 
 
+@router.delete("/watch")
+async def delete_gmail_watch(request: Request):
+    """Stop Gmail push notifications for ``primary_email``.
+
+    Mirrors the Outlook/Teams teardown contract used by Orchestra's
+    disconnect flow.  Must be called *before* the BYOD access token is
+    revoked or cleared — once the token is gone,
+    ``get_gmail_service_async`` either sees a revoked token or falls
+    through to service-account delegation, which isn't authorized for
+    BYOD mailboxes.
+
+    Request body: ``{ "primary_email": "user@domain.com" }``
+    """
+    data = await request.json()
+    user_email = data.get("primary_email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Missing primary_email")
+
+    gmail_service = await get_gmail_service_async(user_email)
+    try:
+        gmail_service.users().stop(userId="me").execute()
+    except HttpError as exc:
+        if _is_google_not_found_error(exc):
+            logger.info(
+                "Gmail watch already absent for %s during delete",
+                user_email,
+            )
+            return {
+                "success": True,
+                "primary_email": user_email,
+                "already_absent": True,
+            }
+        logger.error("Failed to stop Gmail watch for %s: %s", user_email, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"success": True, "primary_email": user_email}
+
+
 @router.get("/attachment")
 async def get_attachment(
     receiver_email: str,
