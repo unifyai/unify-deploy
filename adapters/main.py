@@ -101,6 +101,7 @@ from common.microsoft_oauth import (
     get_microsoft_user_info,
     store_microsoft_tokens,
 )
+from common.scopes import build_scope_string
 
 load_dotenv()
 app = FastAPI(
@@ -3702,8 +3703,6 @@ async def microsoft_oauth_callback(request: Request):
     # ------------------------------------------------------------------
     # Store tokens + granted scopes
     # ------------------------------------------------------------------
-    from common.scopes import build_scope_string
-
     granted_scopes = build_scope_string("microsoft", features) if is_byod else ""
     token_source = "byod" if is_byod else "enterprise"
     assistant_id = assistant["assistant_id"]
@@ -3936,8 +3935,6 @@ async def google_oauth_callback(request: Request):
         )
 
     # Store tokens + granted scopes
-    from common.scopes import build_scope_string
-
     granted_scopes = build_scope_string("google", features)
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
@@ -4136,13 +4133,23 @@ def _resolve_ms_refresh_credentials(
     Three origin flows exist today:
 
     - ``byod``        — user-consent OAuth against the multi-tenant
-      ``MS365_BYOD_*`` app.  ``tenant_id="common"``.
+      ``MS365_BYOD_*`` app.  ``tenant_id="common"``.  The scope sent on
+      refresh is whatever the user consented to at OAuth time, stored in
+      ``MICROSOFT_GRANTED_SCOPES``.  We can't unilaterally expand it
+      without bouncing the user through consent again.
     - ``unify_ropc``  — ROPC against ``MS365_ADMIN_*`` for mailboxes
       provisioned inside Unify's own tenant
-      (``SETTINGS.ms365_email_domain``).
+      (``SETTINGS.ms365_email_domain``).  The scope sent on refresh is
+      the current ``email + teams`` bundle computed from
+      ``common/scopes.py`` — these mailboxes exist solely to support
+      those two surfaces, and the admin app is admin-consented for the
+      full bundle, so recomputing every time lets bundle edits take
+      effect without re-provisioning.  ``MICROSOFT_GRANTED_SCOPES`` is
+      ignored for this source.
     - ``enterprise``  — authorization-code flow against per-assistant
       ``AZURE_TENANT_ID`` / ``AZURE_CLIENT_ID`` / ``AZURE_CLIENT_SECRET``
-      secrets (real BYO-tenant enterprise install).
+      secrets (real BYO-tenant enterprise install).  Uses ``.default``
+      so the admin controls permissions at the app registration level.
 
     Classification precedence:
 
@@ -4173,15 +4180,11 @@ def _resolve_ms_refresh_credentials(
         else:
             source = "byod"
 
-    stored_scopes = secrets.get("MICROSOFT_GRANTED_SCOPES")
     default_scope = "https://graph.microsoft.com/.default offline_access"
 
     if source == "enterprise":
         if not all([az_tenant, az_client, az_secret]):
             return None
-        # Enterprise: admin controls permissions at the app registration
-        # level; .default picks up every consented scope without the
-        # scheduler needing to know them.
         return (az_tenant, az_client, az_secret, default_scope, source)
 
     if source == "unify_ropc":
@@ -4190,19 +4193,15 @@ def _resolve_ms_refresh_credentials(
         client_secret = os.environ.get("MS365_ADMIN_CLIENT_SECRET", "")
         if not all([tenant_id, client_id, client_secret]):
             return None
-        return (
-            tenant_id,
-            client_id,
-            client_secret,
-            stored_scopes or default_scope,
-            source,
-        )
+        scope = build_scope_string("microsoft", ["email", "teams"])
+        return (tenant_id, client_id, client_secret, scope, source)
 
     # source == "byod"
     client_id = SETTINGS.ms365_byod_client_id
     client_secret = os.environ.get("MS365_BYOD_CLIENT_SECRET", "")
     if not client_id or not client_secret:
         return None
+    stored_scopes = secrets.get("MICROSOFT_GRANTED_SCOPES")
     return (
         "common",
         client_id,
@@ -4319,6 +4318,17 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
             # decision to save the heuristic on the next tick.
             if not secrets.get("MICROSOFT_TOKEN_SOURCE"):
                 secrets_to_store["MICROSOFT_TOKEN_SOURCE"] = source
+
+            # For unify-managed (ROPC) mailboxes, the scope sent on refresh
+            # is recomputed from ``common/scopes.py`` every tick.  Re-stamp
+            # ``MICROSOFT_GRANTED_SCOPES`` with what Microsoft actually
+            # granted (or what we sent, if the response omits it) so
+            # downstream consumers — notably Teams watch setup — see the
+            # current truth rather than a value frozen at provisioning.
+            if source == "unify_ropc":
+                granted = new_tokens.get("scope") or refresh_scope
+                if granted != secrets.get("MICROSOFT_GRANTED_SCOPES"):
+                    secrets_to_store["MICROSOFT_GRANTED_SCOPES"] = granted
 
             for secret_name, secret_value in secrets_to_store.items():
                 response = requests.put(

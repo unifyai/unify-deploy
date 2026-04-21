@@ -345,6 +345,45 @@ POST /scheduled/microsoft-tokens
 - Using the refresh token also resets its 90-day inactivity clock
 - Single scheduled job - no refresh logic needed in endpoints
 
+### How scopes are chosen per source
+
+The scheduler dispatches refresh against one of three Azure app registrations
+based on `MICROSOFT_TOKEN_SOURCE` (see `_resolve_ms_refresh_credentials` in
+`adapters/main.py`). The `scope` string sent with `grant_type=refresh_token`
+depends on the source:
+
+| Source | App | Scope sent on refresh |
+|--------|-----|----------------------|
+| `byod` | `MS365_BYOD_*` | `MICROSOFT_GRANTED_SCOPES` (frozen at user consent time) |
+| `enterprise` | per-assistant `AZURE_*` | `https://graph.microsoft.com/.default offline_access` |
+| `unify_ropc` | `MS365_ADMIN_*` | `build_scope_string("microsoft", ["email", "teams"])` recomputed every tick from `common/scopes.py` |
+
+For `unify_ropc`, this means edits to `MICROSOFT_SCOPE_BUNDLES["email"]` or
+`["teams"]` in `common/scopes.py` take effect on the next scheduled refresh —
+no mailbox re-provisioning required. `MICROSOFT_GRANTED_SCOPES` is ignored for
+this source and is re-stamped after each successful refresh to match what the
+access token actually carries.
+
+### Required permissions on the `MS365_ADMIN_*` app (unify-managed mailboxes)
+
+Because `unify_ropc` refresh always requests the full current `email + teams`
+bundle, the `MS365_ADMIN_*` Azure app registration must have **every** scope
+in `MICROSOFT_BASE_SCOPES + MICROSOFT_SCOPE_BUNDLES["email"] + MICROSOFT_SCOPE_BUNDLES["teams"]`
+(from `common/scopes.py`) configured as Delegated permissions and
+**admin-consented** for the Unify tenant. As of today, that's:
+
+- Base: `User.Read`, `offline_access`
+- Email: `Mail.Read`, `Mail.Send`, `Mail.ReadWrite`
+- Teams: `Chat.Read`, `Chat.ReadWrite`, `ChatMessage.Read`,
+  `ChannelMessage.Send`, `ChannelMessage.Read.All`, `Team.ReadBasic.All`,
+  `Channel.ReadBasic.All`, `Channel.Create`, `TeamMember.Read.All`
+
+If any scope is missing admin consent, refresh will fail with
+`AADSTS65001` / `invalid_scope` and the mailbox will surface in
+`results["failed"]`. Whenever a new scope is added to either bundle in
+`common/scopes.py`, add + admin-consent it on the admin app **before**
+deploying the change.
+
 ---
 
 ## Orchestra API Integration
