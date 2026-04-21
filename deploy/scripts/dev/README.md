@@ -72,6 +72,48 @@ Keep a deployed Unity pod alive by sending periodic keepalive pings to its Pub/S
 
 Requires `gcloud` CLI authenticated with access to the `gcp-project-runtime` project.
 
+## run_pipeline.sh
+
+Dispatch a pipeline job and stream all worker logs + scaling metrics to persistent log files.
+
+Two modes:
+
+- **Dispatch mode** (default): dispatches the job via `dispatch_pipeline.py`, then attaches log streams and monitoring.
+- **Monitor mode** (`--monitor`): skips dispatch, only streams logs and metrics for an already-running pipeline.
+
+All arguments except `--monitor` are forwarded directly to `dispatch_pipeline.py`.
+
+```bash
+# Dispatch a DM job from a config file (first 5 files only)
+deploy/scripts/dev/run_pipeline.sh \
+  --mode dm \
+  --config path/to/pipeline_config.json \
+  --project-root ~/unity-deploy \
+  --user-id $USER_ID --assistant-id $ASSISTANT_ID \
+  --limit 5
+
+# Monitor an already-running pipeline (no dispatch)
+deploy/scripts/dev/run_pipeline.sh --monitor
+```
+
+Creates a timestamped directory under `logs/pipeline/` with:
+
+| File | Content |
+|---|---|
+| `dispatch.log` | `dispatch_pipeline.py` output (dispatch mode only) |
+| `parse-worker.log` | Streaming kubectl logs for parse pods |
+| `ingest-worker.log` | Streaming kubectl logs for ingest pods |
+| `hpa.log` | HPA snapshots every 10s |
+| `pods.log` | Pod count snapshots every 10s |
+| `pubsub-backlog.log` | Pub/Sub backlog depth + replica counts every 15s |
+| `summary.txt` | Final run summary |
+
+Press `Ctrl+C` to stop all streams and generate the summary.
+
+## setup_pipeline_infra.sh
+
+Idempotent setup for GCP pipeline infrastructure (Pub/Sub topics/subscriptions, GCS buckets, Stackdriver Custom Metrics adapter for HPA scaling).
+
 ## job_logs/
 
 Tooling for streaming and inspecting Unity K8s job logs. See [`job_logs/README.md`](job_logs/README.md) for setup and usage.
