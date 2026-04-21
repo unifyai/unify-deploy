@@ -214,11 +214,25 @@ def _download_source(
         blob_name = parsed.path.lstrip("/")
         filename = Path(blob_name).name
 
+        import os
+        import time as _time
+
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(blob_name)
         local_path = str(Path(dest_dir) / filename)
+        t0 = _time.perf_counter()
         blob.download_to_filename(local_path)
-        logger.info("Downloaded %s -> %s", file_uri, local_path)
+        elapsed = _time.perf_counter() - t0
+        mb = os.path.getsize(local_path) / (1024 * 1024)
+        rate = mb / elapsed if elapsed > 0 else 0
+        logger.info(
+            "Downloaded %s -> %s (%.1f MB in %.1fs, %.1f MB/s)",
+            file_uri,
+            local_path,
+            mb,
+            elapsed,
+            rate,
+        )
         return local_path
 
     return file_uri

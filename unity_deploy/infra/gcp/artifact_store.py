@@ -84,6 +84,7 @@ class GcsArtifactStore:
         columns: list[str] = list(getattr(handle, "columns", []) or [])
         row_count = 0
 
+        t0 = time.perf_counter()
         with blob.open("w", content_type="application/x-ndjson") as writer:
             for row in iter_table_input_rows(handle):
                 payload = {str(k): v for k, v in dict(row).items()}
@@ -92,12 +93,14 @@ class GcsArtifactStore:
                 writer.write(json.dumps(payload, ensure_ascii=False))
                 writer.write("\n")
                 row_count += 1
+        elapsed = time.perf_counter() - t0
 
         storage_uri = f"gs://{self._bucket_name}/{blob_key}"
         logger.info(
-            "Materialized %d rows to %s",
+            "Materialized %d rows to %s in %.1fs",
             row_count,
             storage_uri,
+            elapsed,
         )
 
         return ObjectStoreArtifactHandle(
@@ -232,10 +235,26 @@ class GcsArtifactStore:
             blob_key = self._full_key(source)
 
         blob = self.bucket.blob(blob_key)
+        t0 = time.perf_counter()
         self._with_retry(
             lambda: blob.download_to_filename(str(dest_path)),
             operation=f"download_to_local({blob_key})",
         )
+        elapsed = time.perf_counter() - t0
+        try:
+            size_bytes = dest_path.stat().st_size
+            mb = size_bytes / (1024 * 1024)
+            rate = mb / elapsed if elapsed > 0 else 0
+            logger.info(
+                "Downloaded %.1f MB from gs://%s/%s in %.1fs (%.1f MB/s)",
+                mb,
+                self._bucket_name,
+                blob_key,
+                elapsed,
+                rate,
+            )
+        except OSError:
+            pass
         return dest_path
 
     # -- retry wrapper -------------------------------------------------------
