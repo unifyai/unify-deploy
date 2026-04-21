@@ -128,13 +128,26 @@ fi
 # ---- 2. Worker log streams ----
 echo "[2/5] Starting worker log streams..."
 
-tmux_cmd new-session -d -s "parse-logs" \
-  "kubectl logs -n default -l app=unity-parse-worker -f --tail=50 --max-log-requests=5 --prefix=true 2>&1 | tee '$LOG_DIR/parse-worker.log'; exec bash"
-echo "  parse-worker.log  (streaming)"
+# kubectl logs -f -l ... only attaches to pods that exist at start time.
+# HPA-scaled pods are invisible. A reconnecting loop re-attaches every 30s
+# so new pods get picked up with minimal delay.
+tmux_cmd new-session -d -s "parse-logs" bash -c "
+while true; do
+  kubectl logs -n default -l app=unity-parse-worker -f --tail=50 --max-log-requests=10 --prefix=true 2>&1
+  echo '[reconnecting to parse workers in 30s...]'
+  sleep 30
+done | tee '$LOG_DIR/parse-worker.log'
+"
+echo "  parse-worker.log  (streaming, reconnects every 30s)"
 
-tmux_cmd new-session -d -s "ingest-logs" \
-  "kubectl logs -n default -l app=unity-ingest-worker -f --tail=50 --max-log-requests=5 --prefix=true 2>&1 | tee '$LOG_DIR/ingest-worker.log'; exec bash"
-echo "  ingest-worker.log (streaming)"
+tmux_cmd new-session -d -s "ingest-logs" bash -c "
+while true; do
+  kubectl logs -n default -l app=unity-ingest-worker -f --tail=50 --max-log-requests=10 --prefix=true 2>&1
+  echo '[reconnecting to ingest workers in 30s...]'
+  sleep 30
+done | tee '$LOG_DIR/ingest-worker.log'
+"
+echo "  ingest-worker.log (streaming, reconnects every 30s)"
 
 # ---- 3. HPA & pod monitoring ----
 echo ""
