@@ -3705,6 +3705,7 @@ async def microsoft_oauth_callback(request: Request):
     from common.scopes import build_scope_string
 
     granted_scopes = build_scope_string("microsoft", features) if is_byod else ""
+    token_source = "byod" if is_byod else "enterprise"
     assistant_id = assistant["assistant_id"]
     api_key = assistant["api_key"]
     stored = await store_microsoft_tokens(
@@ -3712,6 +3713,7 @@ async def microsoft_oauth_callback(request: Request):
         new_secrets=tokens,
         api_key=api_key,
         granted_scopes=granted_scopes,
+        source=token_source,
     )
 
     # ------------------------------------------------------------------
@@ -4123,6 +4125,93 @@ def scheduled_email_watches(payload: ScheduledPayload):
     return results
 
 
+def _resolve_ms_refresh_credentials(
+    assistant: dict,
+) -> tuple[str, str, str, str, str] | None:
+    """Resolve ``(tenant_id, client_id, client_secret, scope, source)``
+    for redeeming an assistant's Microsoft refresh token.
+
+    A refresh token is bound to the Azure app registration that minted
+    it, so the scheduler has to redeem each token against the same app.
+    Three origin flows exist today:
+
+    - ``byod``        — user-consent OAuth against the multi-tenant
+      ``MS365_BYOD_*`` app.  ``tenant_id="common"``.
+    - ``unify_ropc``  — ROPC against ``MS365_ADMIN_*`` for mailboxes
+      provisioned inside Unify's own tenant
+      (``SETTINGS.ms365_email_domain``).
+    - ``enterprise``  — authorization-code flow against per-assistant
+      ``AZURE_TENANT_ID`` / ``AZURE_CLIENT_ID`` / ``AZURE_CLIENT_SECRET``
+      secrets (real BYO-tenant enterprise install).
+
+    Classification precedence:
+
+    1. Explicit ``MICROSOFT_TOKEN_SOURCE`` secret (stamped at issuance).
+    2. Presence of per-assistant ``AZURE_*`` secrets ⇒ ``enterprise``.
+    3. Assistant email on Unify's own domain ⇒ ``unify_ropc``.
+    4. Default ⇒ ``byod``.
+
+    Returns ``None`` when the required platform env vars for the chosen
+    flow aren't configured, so the caller can surface a clear failure
+    rather than calling Microsoft with empty credentials.
+    """
+    secrets = assistant.get("secrets") or {}
+    email = assistant.get("email", "") or ""
+
+    az_tenant = secrets.get("AZURE_TENANT_ID")
+    az_client = secrets.get("AZURE_CLIENT_ID")
+    az_secret = secrets.get("AZURE_CLIENT_SECRET")
+
+    source = secrets.get("MICROSOFT_TOKEN_SOURCE", "")
+    if not source:
+        if all([az_tenant, az_client, az_secret]):
+            source = "enterprise"
+        elif SETTINGS.ms365_email_domain and email.endswith(
+            "@" + SETTINGS.ms365_email_domain,
+        ):
+            source = "unify_ropc"
+        else:
+            source = "byod"
+
+    stored_scopes = secrets.get("MICROSOFT_GRANTED_SCOPES")
+    default_scope = "https://graph.microsoft.com/.default offline_access"
+
+    if source == "enterprise":
+        if not all([az_tenant, az_client, az_secret]):
+            return None
+        # Enterprise: admin controls permissions at the app registration
+        # level; .default picks up every consented scope without the
+        # scheduler needing to know them.
+        return (az_tenant, az_client, az_secret, default_scope, source)
+
+    if source == "unify_ropc":
+        tenant_id = SETTINGS.ms365_admin_tenant_id
+        client_id = SETTINGS.ms365_admin_client_id
+        client_secret = os.environ.get("MS365_ADMIN_CLIENT_SECRET", "")
+        if not all([tenant_id, client_id, client_secret]):
+            return None
+        return (
+            tenant_id,
+            client_id,
+            client_secret,
+            stored_scopes or default_scope,
+            source,
+        )
+
+    # source == "byod"
+    client_id = SETTINGS.ms365_byod_client_id
+    client_secret = os.environ.get("MS365_BYOD_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return None
+    return (
+        "common",
+        client_id,
+        client_secret,
+        stored_scopes or default_scope,
+        source,
+    )
+
+
 @app.post("/scheduled/microsoft-tokens", dependencies=[Depends(require_admin_key)])
 def scheduled_microsoft_tokens(payload: ScheduledPayload):
     """
@@ -4130,7 +4219,9 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
     Should be scheduled to run every 30-45 minutes to keep access tokens fresh.
 
     Fetches all assistants in a single call and only processes those with
-    Microsoft tokens configured in their secrets.
+    Microsoft tokens configured in their secrets.  See
+    ``_resolve_ms_refresh_credentials`` for the BYOD / unify-provisioned /
+    enterprise dispatch.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:
@@ -4172,34 +4263,13 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
         if not access_token or not refresh_token:
             continue
 
-        # Get required credentials for refresh.
-        # Enterprise flow: per-assistant Azure credentials.
-        # BYOD fallback: platform-level multi-tenant app.
-        tenant_id = secrets.get("AZURE_TENANT_ID")
-        client_id = secrets.get("AZURE_CLIENT_ID")
-        client_secret = secrets.get("AZURE_CLIENT_SECRET")
-        is_byod = False
-        if not all([tenant_id, client_id, client_secret]):
-            byod_client_id = SETTINGS.ms365_byod_client_id
-            byod_client_secret = os.environ.get("MS365_BYOD_CLIENT_SECRET", "")
-            if byod_client_id and byod_client_secret:
-                tenant_id = "common"
-                client_id = byod_client_id
-                client_secret = byod_client_secret
-                is_byod = True
-            else:
-                results["failed"].append(
-                    {"email": email, "error": "Missing Azure credentials"},
-                )
-                continue
-
-        # BYOD: use the stored granted scopes so scope reduction is
-        # durable across refreshes.  Enterprise: use .default (admin
-        # controls permissions at the app registration level).
-        if is_byod and secrets.get("MICROSOFT_GRANTED_SCOPES"):
-            refresh_scope = secrets["MICROSOFT_GRANTED_SCOPES"]
-        else:
-            refresh_scope = "https://graph.microsoft.com/.default offline_access"
+        creds = _resolve_ms_refresh_credentials(assistant)
+        if creds is None:
+            results["failed"].append(
+                {"email": email, "error": "Missing Azure credentials"},
+            )
+            continue
+        tenant_id, client_id, client_secret, refresh_scope, source = creds
 
         try:
             token_resp = requests.post(
@@ -4217,7 +4287,10 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
                 results["failed"].append(
                     {
                         "email": email,
-                        "error": f"Token refresh failed: {token_resp.text}",
+                        "error": (
+                            f"Token refresh failed (source={source}): "
+                            f"{token_resp.text}"
+                        ),
                     },
                 )
                 continue
@@ -4240,6 +4313,12 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
                 secrets_to_store["MICROSOFT_REFRESH_TOKEN"] = new_tokens[
                     "refresh_token"
                 ]
+            # Opportunistically stamp the source for legacy rows that
+            # pre-date ``MICROSOFT_TOKEN_SOURCE`` — the fallback
+            # classifier got us here successfully, so persist its
+            # decision to save the heuristic on the next tick.
+            if not secrets.get("MICROSOFT_TOKEN_SOURCE"):
+                secrets_to_store["MICROSOFT_TOKEN_SOURCE"] = source
 
             for secret_name, secret_value in secrets_to_store.items():
                 response = requests.put(
@@ -4257,7 +4336,10 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
                     continue
 
             results["refreshed"].append(email)
-            logger.info(f"Refreshed Microsoft token for {_redact_email(email)}")
+            logger.info(
+                f"Refreshed Microsoft token for {_redact_email(email)} "
+                f"(source={source})",
+            )
 
         except Exception as e:
             results["failed"].append({"email": email, "error": str(e)})

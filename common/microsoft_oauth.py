@@ -115,6 +115,7 @@ async def store_microsoft_tokens(
     new_secrets: dict,
     api_key: str,
     granted_scopes: str = "",
+    source: str = "",
 ) -> bool:
     """Upsert Microsoft OAuth tokens (and granted scopes) as assistant secrets.
 
@@ -122,6 +123,18 @@ async def store_microsoft_tokens(
     and fall back to ``POST /assistant/{id}/secret`` on 404.  This keeps
     callers from having to mirror Orchestra's storage state — which the
     backfill flow has no reliable way to do.
+
+    ``source`` records which OAuth flow minted the tokens so the refresh
+    scheduler picks the right Azure app registration to redeem the
+    refresh token against.  Accepted values:
+
+    - ``"byod"``        — user-consent flow against ``MS365_BYOD_*``
+      (multi-tenant Entra ID app; ``tenant_id="common"``).
+    - ``"unify_ropc"``  — ROPC against ``MS365_ADMIN_*`` for mailboxes
+      provisioned inside Unify's own tenant.
+    - ``"enterprise"``  — authorization-code flow against per-assistant
+      ``AZURE_TENANT_ID`` / ``AZURE_CLIENT_ID`` / ``AZURE_CLIENT_SECRET``
+      secrets.
     """
     if not SETTINGS.orchestra_url:
         logger.info("SETTINGS.orchestra_url not configured")
@@ -137,6 +150,8 @@ async def store_microsoft_tokens(
     }
     if granted_scopes:
         secrets_to_store["MICROSOFT_GRANTED_SCOPES"] = granted_scopes
+    if source:
+        secrets_to_store["MICROSOFT_TOKEN_SOURCE"] = source
 
     return await _upsert_assistant_secrets(
         assistant_id=assistant_id,

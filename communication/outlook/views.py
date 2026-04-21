@@ -166,6 +166,7 @@ async def create_outlook_user(request: Request):
                 new_secrets=tokens,
                 api_key=api_key,
                 granted_scopes=scope,
+                source="unify_ropc",
             )
         except Exception as e:
             logger.error(
@@ -295,6 +296,7 @@ async def backfill_outlook_tokens(request: Request):
         new_secrets=tokens,
         api_key=api_key,
         granted_scopes=scope,
+        source="unify_ropc",
     )
 
     teams_watch_status: int | None = None
