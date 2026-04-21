@@ -164,7 +164,7 @@ async def handle_parse_message(
 
                 ingest_msg = IngestRequested(
                     job_id=run_id,
-                    deployment_id=msg.deployment_id,
+                    dispatch_id=msg.dispatch_id,
                     manifest_key=manifest_key,
                     attachment_callback=msg.attachment_callback,
                     ingestion_mode=msg.ingestion_mode,

@@ -300,11 +300,13 @@ async def handle_ingest_message(
 
         try:
             job = job_store.read_job(run_id)
+            if msg.dispatch_id and not job.dispatch_id:
+                job.dispatch_id = msg.dispatch_id
             if job.status != "cancelled":
                 job.status = "success" if overall_error is None else "error"
                 job.finished_at = utc_now_iso()
                 job.metadata["total_rows_inserted"] = total_rows
-                job_store.upsert_job(job)
+            job_store.upsert_job(job)
         except Exception:
             logger.debug("Could not update job status for %s", run_id)
 

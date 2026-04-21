@@ -58,6 +58,7 @@ import logging
 import sys
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -173,11 +174,6 @@ def main() -> int:
         help="DmBinding.create_table_prefix (default: '').",
     )
 
-    parser.add_argument(
-        "--deployment-id",
-        default="",
-        help="Optional deployment identifier propagated through the run.",
-    )
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -314,8 +310,17 @@ def _dispatch(
 ) -> int:
     import os
 
+    from google.cloud import storage
+
     from unity.common.pipeline import DispatchTarget, publish_parse_request
+    from unity.common.pipeline.deployment.types import (
+        DeploymentBundleRef,
+        DeploymentIngestionJob,
+        DispatchManifest,
+    )
     from unity.common.pipeline.types import DmBinding, FmBinding
+    from unity_deploy.infra.gcp.artifact_store import GcsArtifactStore
+    from unity_deploy.infra.gcp.deployment_stores import GcsDeploymentJobStore
     from unity_deploy.infra.gcp.settings import GcpPipelineSettings
 
     settings = GcpPipelineSettings()
@@ -351,8 +356,18 @@ def _dispatch(
         )
         return 2
 
+    storage_client = storage.Client(project=project_id)
+    artifact_store = GcsArtifactStore(
+        client=storage_client,
+        settings=settings.artifact_store,
+    )
+    job_store = GcsDeploymentJobStore(artifact_store=artifact_store)
+
+    dispatch_id = uuid4().hex
+
     logger.info(
-        "=== Dispatch [mode=%s, env=%s, user_id=%s, assistant_id=%s] ===",
+        "=== Dispatch %s [mode=%s, env=%s, user_id=%s, assistant_id=%s] ===",
+        dispatch_id,
         args.mode,
         settings.environment,
         user_id,
@@ -361,6 +376,7 @@ def _dispatch(
     logger.info("Dispatching %d file(s)...", len(items))
 
     errors = 0
+    job_ids: list[str] = []
     for path_or_uri, dm_context_override in items:
         fm_binding: Optional[FmBinding] = None
         dm_binding: Optional[DmBinding] = None
@@ -392,9 +408,24 @@ def _dispatch(
                 ingestion_mode=args.mode,
                 fm_binding=fm_binding,
                 dm_binding=dm_binding,
-                deployment_id=args.deployment_id,
+                dispatch_id=dispatch_id,
                 **source_kwargs,
             )
+
+            job = DeploymentIngestionJob(
+                job_id=result.job_id,
+                dispatch_id=dispatch_id,
+                bundle_ref=DeploymentBundleRef(
+                    bundle_id=result.job_id,
+                    manifest_path="",
+                ),
+                run_mode="file_manager" if args.mode == "fm" else "data_manager",
+                execution_target="staging",
+                status="queued",
+            )
+            job_store.upsert_job(job)
+            job_ids.append(result.job_id)
+
             logger.info(
                 "  dispatched %s -> job=%s gs_uri=%s message_id=%s",
                 path_or_uri,
@@ -406,11 +437,24 @@ def _dispatch(
             logger.exception("  dispatch failed for %s", path_or_uri)
             errors += 1
 
-    logger.info(
-        "=== Dispatch Complete (files=%d, errors=%d) ===",
-        len(items),
-        errors,
+    if job_ids:
+        manifest = DispatchManifest(
+            dispatch_id=dispatch_id,
+            source="dispatch_pipeline",
+            mode=args.mode,
+            config_path=args.config or "",
+            job_ids=job_ids,
+            total_files=len(items),
+        )
+        job_store.write_dispatch(manifest)
+
+    print(
+        f"\n=== Dispatch {dispatch_id} complete "
+        f"({len(job_ids)} dispatched, {errors} errors) ===",
     )
+    print(f"  List:    pipeline_control list")
+    print(f"  Status:  pipeline_control status --dispatch-id {dispatch_id}")
+    print(f"  Cancel:  pipeline_control cancel --dispatch-id {dispatch_id}")
     return 1 if errors else 0
 
 
