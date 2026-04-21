@@ -261,3 +261,125 @@ def test_stage_remote_handles_raises_when_store_has_no_downloader(
             artifact_store=_BadStore(),
             scratch_dir=tmp_path,
         )
+
+
+# ---------------------------------------------------------------------------
+# Per-table context resolution (multi-sheet XLSX support)
+# ---------------------------------------------------------------------------
+
+
+def test_table_meta_context_used_over_default_target():
+    """Each table's meta.context overrides the message-level default_target.
+
+    This is the core mechanism for multi-sheet XLSX files where each
+    sheet targets a different DM context.
+    """
+    handle_a = InlineRowsHandle(rows=[{"x": 1}], columns=["x"], row_count=1)
+    handle_b = InlineRowsHandle(rows=[{"y": 2}], columns=["y"], row_count=1)
+
+    plan = IngestPlan(
+        run_id="run-ctx",
+        file_path="multi_sheet.xlsx",
+        parse_summary=FileParseResult(
+            logical_path="multi_sheet.xlsx",
+            status="success",
+        ),
+        tables_meta=[
+            TableMeta(
+                table_id="sheet_a",
+                label="SheetA",
+                columns=["x"],
+                context="Org/v2/DRS/AprilJune24",
+            ),
+            TableMeta(
+                table_id="sheet_b",
+                label="SheetB",
+                columns=["y"],
+                context="Org/v2/DRS/SepDec24",
+            ),
+        ],
+        table_inputs={"sheet_a": handle_a, "sheet_b": handle_b},
+    )
+
+    default_target = "Org/v2/DRS/FallbackContext"
+
+    for meta in plan.tables_meta:
+        resolved = meta.context or default_target
+        assert resolved == meta.context, (
+            f"Expected per-table context {meta.context!r}, "
+            f"got fallback {default_target!r}"
+        )
+
+
+def test_table_meta_falls_back_to_default_when_context_absent():
+    """Tables without an explicit context fall back to default_target."""
+    plan = IngestPlan(
+        run_id="run-fb",
+        file_path="single.csv",
+        parse_summary=FileParseResult(
+            logical_path="single.csv",
+            status="success",
+        ),
+        tables_meta=[
+            TableMeta(table_id="t1", label="Orders", columns=["a"]),
+        ],
+        table_inputs={
+            "t1": InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=1),
+        },
+    )
+
+    default_target = "Adhoc/Orders"
+    meta = plan.tables_meta[0]
+    resolved = meta.context or default_target
+    assert resolved == default_target
+
+
+# ---------------------------------------------------------------------------
+# _merge_table_config: context flows through parse worker merge
+# ---------------------------------------------------------------------------
+
+
+def test_merge_table_config_threads_context():
+    """_merge_table_config picks up 'context' from table_config entries."""
+    from unity_deploy.infra.workers.parse_worker import _merge_table_config
+
+    plan = IngestPlan(
+        run_id="run-merge",
+        file_path="multi.xlsx",
+        parse_summary=FileParseResult(
+            logical_path="multi.xlsx",
+            status="success",
+        ),
+        tables_meta=[
+            TableMeta(
+                table_id="s1",
+                label="SheetA",
+                sheet_name="SheetA",
+                columns=["a"],
+            ),
+            TableMeta(
+                table_id="s2",
+                label="SheetB",
+                sheet_name="SheetB",
+                columns=["b"],
+            ),
+        ],
+        table_inputs={},
+    )
+
+    table_config = {
+        "SheetA": {
+            "context": "Org/DRS/AprilJune24",
+            "description": "Sheet A desc",
+        },
+        "SheetB": {
+            "context": "Org/DRS/SepDec24",
+            "description": "Sheet B desc",
+        },
+    }
+
+    merged = _merge_table_config(plan, table_config)
+    assert merged.tables_meta[0].context == "Org/DRS/AprilJune24"
+    assert merged.tables_meta[1].context == "Org/DRS/SepDec24"
+    assert merged.tables_meta[0].description == "Sheet A desc"
+    assert merged.tables_meta[1].description == "Sheet B desc"
