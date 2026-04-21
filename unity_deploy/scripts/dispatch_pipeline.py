@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Ad-hoc operator dispatcher for the GCP parse/ingest pipeline.
+"""Operator dispatcher for the GCP parse/ingest pipeline.
 
 Publishes one ``ParseRequested`` message per file to the parse topic,
-uploading local files to GCS when needed. This is the lightest-weight
-entrypoint for manually kicking off ingestion against staging or
-production workers -- for full pipeline configs, prefer
-``ingest_dm.py --dispatch`` or ``ingest_fm.py --dispatch`` which read
-``pipeline_config.json`` and derive bindings automatically.
+uploading local files to GCS when needed.
+
+Supports two input modes:
+
+1. **Ad-hoc files** via ``--file`` / ``--files-from`` (one file per
+   ``ParseRequested``).
+2. **Config-driven** via ``--config pipeline_config.json`` which reads a
+   :class:`PipelineConfig`, resolves paths, and derives per-file
+   bindings automatically.  ``--limit N`` caps the number of source
+   files dispatched (useful for smoke / HPA-scaling tests).
+
+Both modes support ``--mode fm`` and ``--mode dm``.
 
 All GCP settings come from environment variables via
 :class:`unity_deploy.infra.gcp.settings.GcpPipelineSettings`
@@ -29,10 +36,18 @@ DM mode, single file already in GCS::
         --user-id alice --assistant-id 42 \\
         --target-context "alice/42/Orders"
 
-Bulk dispatch from a newline-separated manifest (one file per line)::
+Config-driven FM dispatch (first 5 files)::
 
     uv run unity_deploy/scripts/dispatch_pipeline.py \\
-        --mode fm --files-from manifest.txt \\
+        --mode fm --config pipeline_config.json \\
+        --project-root ~/unity-deploy \\
+        --user-id alice --assistant-id 42 --limit 5
+
+Config-driven DM dispatch (bindings from config tables)::
+
+    uv run unity_deploy/scripts/dispatch_pipeline.py \\
+        --mode dm --config pipeline_config.json \\
+        --project-root ~/unity-deploy \\
         --user-id alice --assistant-id 42
 """
 
@@ -61,6 +76,9 @@ def main() -> int:
             "context)."
         ),
     )
+
+    # -- file sources (ad-hoc or config-driven) ----------------------------
+
     parser.add_argument(
         "--file",
         action="append",
@@ -69,7 +87,7 @@ def main() -> int:
         metavar="PATH_OR_URI",
         help=(
             "Local path or gs:// URI to dispatch. Repeatable; publishes "
-            "one ParseRequested per invocation."
+            "one ParseRequested per file."
         ),
     )
     parser.add_argument(
@@ -82,11 +100,39 @@ def main() -> int:
             "with --file."
         ),
     )
+    parser.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to a pipeline_config.json. Source files and (in DM mode) "
+            "per-file target contexts are derived from the config. May be "
+            "combined with --file / --files-from."
+        ),
+    )
+    parser.add_argument(
+        "--project-root",
+        default=".",
+        metavar="DIR",
+        help=(
+            "Root directory used to resolve relative file paths in "
+            "--config (default: cwd)."
+        ),
+    )
+    parser.add_argument(
+        "--limit",
+        default=None,
+        type=int,
+        metavar="N",
+        help=(
+            "Dispatch only the first N source files from --config "
+            "(useful for smoke / HPA-scaling tests). Ignored for "
+            "--file / --files-from."
+        ),
+    )
 
-    # --user-id / --assistant-id apply to both modes: current worker
-    # traffic is assistant-scoped, so the ingest worker resolves the
-    # Unify api key per message via Orchestra's assistant endpoint while
-    # still carrying user_id for provenance / routing.
+    # -- identity ----------------------------------------------------------
+
     parser.add_argument(
         "--user-id",
         default=None,
@@ -115,7 +161,11 @@ def main() -> int:
     dm_group.add_argument(
         "--target-context",
         default=None,
-        help="DmBinding.target_context (required when --mode dm).",
+        help=(
+            "DmBinding.target_context (required for --mode dm with "
+            "--file/--files-from; derived from config tables when "
+            "using --config)."
+        ),
     )
     dm_group.add_argument(
         "--create-table-prefix",
@@ -141,26 +191,101 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    # -- build dispatch items from ad-hoc files ----------------------------
+    dispatch_items = _collect_adhoc_items(args)
+
+    # -- build dispatch items from config ----------------------------------
+    if args.config:
+        dispatch_items.extend(_collect_config_items(args))
+
+    if not dispatch_items:
+        logger.error(
+            "No files to dispatch. Supply --file, --files-from, or --config.",
+        )
+        return 2
+
+    # For ad-hoc DM files without a config, --target-context is required.
+    adhoc_files = _collect_files(
+        explicit=list(args.files),
+        manifest=args.files_from,
+    )
+    if args.mode == "dm" and adhoc_files and not args.target_context:
+        logger.error(
+            "--mode dm with --file/--files-from requires --target-context.",
+        )
+        return 2
+
+    return _dispatch(args=args, items=dispatch_items)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch item: (path_or_uri, per_file_context_override_or_None)
+# ---------------------------------------------------------------------------
+
+DispatchItem = tuple[str, Optional[str]]
+"""(path_or_uri, dm_target_context_override).
+
+For FM mode or ad-hoc DM dispatch the second element is ``None``
+(bindings are derived from CLI args). For config-driven DM dispatch
+it carries the ``tables[0].context`` from the config.
+"""
+
+
+def _collect_adhoc_items(args: argparse.Namespace) -> list[DispatchItem]:
+    """Build dispatch items from --file / --files-from."""
     files = _collect_files(
         explicit=list(args.files),
         manifest=args.files_from,
     )
-    if not files:
-        logger.error(
-            "No files supplied; pass one or more --file / --files-from.",
-        )
-        return 2
-
-    if args.mode == "dm" and not args.target_context:
-        logger.error("--mode dm requires --target-context.")
-        return 2
-
-    return _dispatch(args=args, files=files)
+    return [(f, None) for f in files]
 
 
-# ---------------------------------------------------------------------------
-# Internals
-# ---------------------------------------------------------------------------
+def _collect_config_items(args: argparse.Namespace) -> list[DispatchItem]:
+    """Build dispatch items from --config."""
+    from unity_deploy.customization.types.pipeline_config import PipelineConfig
+
+    config = PipelineConfig.from_file(args.config)
+    config.resolve_paths(Path(args.project_root).resolve())
+
+    source_files = config.source_files
+    if args.limit is not None and args.limit > 0:
+        source_files = source_files[: args.limit]
+
+    total_tables = sum(len(sf.tables) for sf in source_files)
+    logger.info(
+        "Config %s: %d source file(s), %d table(s)%s",
+        args.config,
+        len(source_files),
+        total_tables,
+        f" (limited to first {args.limit})" if args.limit else "",
+    )
+
+    items: list[DispatchItem] = []
+    for sf in source_files:
+        dm_context: Optional[str] = None
+        if args.mode == "dm":
+            tables = list(sf.tables or [])
+            if not tables:
+                logger.warning(
+                    "Skipping %s: no tables defined in config",
+                    sf.file_path,
+                )
+                continue
+            contexts = {t.context for t in tables}
+            if len(contexts) > 1:
+                logger.warning(
+                    "File %s has %d distinct table contexts (%s); using "
+                    "the first (%s) for DmBinding.",
+                    sf.file_path,
+                    len(contexts),
+                    sorted(contexts),
+                    tables[0].context,
+                )
+            dm_context = tables[0].context
+
+        items.append((sf.file_path, dm_context))
+
+    return items
 
 
 def _collect_files(*, explicit: list[str], manifest: Optional[str]) -> list[str]:
@@ -182,7 +307,11 @@ def _collect_files(*, explicit: list[str], manifest: Optional[str]) -> list[str]
     return out
 
 
-def _dispatch(*, args: argparse.Namespace, files: list[str]) -> int:
+def _dispatch(
+    *,
+    args: argparse.Namespace,
+    items: list[DispatchItem],
+) -> int:
     import os
 
     from unity.common.pipeline import DispatchTarget, publish_parse_request
@@ -222,27 +351,17 @@ def _dispatch(*, args: argparse.Namespace, files: list[str]) -> int:
         )
         return 2
 
-    if args.mode == "fm":
-        logger.info(
-            "=== Dispatch [mode=fm, env=%s, user_id=%s, assistant_id=%s, alias=%s] ===",
-            settings.environment,
-            user_id,
-            assistant_id,
-            args.alias,
-        )
-    else:
-        logger.info(
-            "=== Dispatch [mode=dm, env=%s, user_id=%s, assistant_id=%s, target_context=%s] ===",
-            settings.environment,
-            user_id,
-            assistant_id,
-            args.target_context,
-        )
-
-    logger.info("Dispatching %d file(s)...", len(files))
+    logger.info(
+        "=== Dispatch [mode=%s, env=%s, user_id=%s, assistant_id=%s] ===",
+        args.mode,
+        settings.environment,
+        user_id,
+        assistant_id,
+    )
+    logger.info("Dispatching %d file(s)...", len(items))
 
     errors = 0
-    for path_or_uri in files:
+    for path_or_uri, dm_context_override in items:
         fm_binding: Optional[FmBinding] = None
         dm_binding: Optional[DmBinding] = None
         if args.mode == "fm":
@@ -256,7 +375,7 @@ def _dispatch(*, args: argparse.Namespace, files: list[str]) -> int:
             dm_binding = DmBinding(
                 user_id=user_id,
                 assistant_id=assistant_id,
-                target_context=args.target_context,
+                target_context=(dm_context_override or args.target_context or ""),
                 create_table_prefix=args.create_table_prefix,
             )
 
@@ -289,7 +408,7 @@ def _dispatch(*, args: argparse.Namespace, files: list[str]) -> int:
 
     logger.info(
         "=== Dispatch Complete (files=%d, errors=%d) ===",
-        len(files),
+        len(items),
         errors,
     )
     return 1 if errors else 0
