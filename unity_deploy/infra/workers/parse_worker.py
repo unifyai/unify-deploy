@@ -221,6 +221,7 @@ def _merge_table_config(plan, table_config: dict):
         updated.append(
             meta.model_copy(
                 update={
+                    "context": cfg.get("context") or meta.context,
                     "description": cfg.get("description") or meta.description,
                     "column_descriptions": cfg.get("column_descriptions")
                     or meta.column_descriptions,

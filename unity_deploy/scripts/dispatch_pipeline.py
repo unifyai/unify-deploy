@@ -276,6 +276,7 @@ def _build_table_config(config, sf) -> dict:
         post_ingest = config.effective_post_ingest(spec)
 
         entry: dict = {
+            "context": spec.context,
             "description": spec.description or None,
             "embed_columns": embed_cols,
             "embed_strategy": embed_strategy if embed_cols else "off",
@@ -320,16 +321,6 @@ def _collect_config_items(args: argparse.Namespace) -> list[DispatchItem]:
                     sf.file_path,
                 )
                 continue
-            contexts = {t.context for t in tables}
-            if len(contexts) > 1:
-                logger.warning(
-                    "File %s has %d distinct table contexts (%s); using "
-                    "the first (%s) for DmBinding.",
-                    sf.file_path,
-                    len(contexts),
-                    sorted(contexts),
-                    tables[0].context,
-                )
             dm_context = tables[0].context
 
         table_cfg = _build_table_config(config, sf) if sf.tables else None

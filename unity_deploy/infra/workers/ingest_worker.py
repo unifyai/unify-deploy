@@ -706,7 +706,7 @@ async def _run_dm_mode_inner(
             getattr(handle, "columns", []) or [],
         )
         row_count = int(meta.row_count or getattr(handle, "row_count", 0) or 0)
-        target_context = default_target
+        target_context = meta.context or default_target
 
         fields = (
             {
