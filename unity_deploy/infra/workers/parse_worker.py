@@ -141,6 +141,9 @@ async def handle_parse_message(
                     artifact_format=msg.artifact_format,
                 )
 
+                if msg.table_config:
+                    plan = _merge_table_config(plan, msg.table_config)
+
                 manifest_key = (
                     f"jobs/{run_id}/manifests/{Path(pr.logical_path).stem}.json"
                 )
@@ -197,6 +200,38 @@ async def handle_parse_message(
     finally:
         run_ledger.close()
         cost_ledger.close()
+
+
+def _merge_table_config(plan, table_config: dict):
+    """Merge per-table config from ParseRequested into IngestPlan.tables_meta.
+
+    Matches config entries to TableMeta by sheet_name or label. Returns
+    a new plan with updated tables_meta carrying the config fields that
+    the ingest worker needs (description, embed_columns, etc.).
+    """
+    from unity.common.pipeline.types import TableMeta
+
+    updated: list[TableMeta] = []
+    for meta in plan.tables_meta:
+        key = meta.sheet_name or meta.label or meta.table_id
+        cfg = table_config.get(key, {})
+        if not cfg:
+            updated.append(meta)
+            continue
+        updated.append(
+            meta.model_copy(
+                update={
+                    "description": cfg.get("description") or meta.description,
+                    "column_descriptions": cfg.get("column_descriptions")
+                    or meta.column_descriptions,
+                    "embed_columns": cfg.get("embed_columns") or meta.embed_columns,
+                    "embed_strategy": cfg.get("embed_strategy", meta.embed_strategy),
+                    "chunk_size": cfg.get("chunk_size", meta.chunk_size),
+                    "post_ingest": cfg.get("post_ingest") or meta.post_ingest,
+                },
+            ),
+        )
+    return plan.model_copy(update={"tables_meta": updated})
 
 
 def _download_source(

@@ -402,7 +402,6 @@ async def _run_fm_mode_inner(
     )
     from unity.file_manager.managers.file_manager import FileManager
     from unity.file_manager.managers.utils.executor import fm_process_plan
-    from unity.file_manager.types.config import FilePipelineConfig
 
     activate_unify_context(
         user_id=fm_binding.user_id,
@@ -426,7 +425,7 @@ async def _run_fm_mode_inner(
         adapter.name,
     )
 
-    config = FilePipelineConfig()
+    config = _build_fm_config_from_plan(plan)
     instrumentation = PipelineInstrumentation.from_config(
         config,
         run_id=msg.job_id,
@@ -486,6 +485,83 @@ def _extract_total_rows(result: Any) -> int:
     if isinstance(total, int):
         return total
     return 0
+
+
+def _build_fm_config_from_plan(plan: IngestPlan):
+    """Build a ``FilePipelineConfig`` from ``TableMeta`` config fields.
+
+    Synthesises ``EmbeddingsConfig`` and ``BusinessContextsConfig``
+    objects so the existing FM executor pipeline (which resolves embed
+    columns and descriptions via config lookups) picks them up without
+    any changes to the FM internals.
+    """
+    from unity.file_manager.types.config import (
+        BusinessContextsConfig,
+        EmbeddingsConfig,
+        FileBusinessContextSpec,
+        FileEmbeddingSpec,
+        FilePipelineConfig,
+        IngestConfig,
+        TableBusinessContextSpec,
+        TableEmbeddingSpec,
+    )
+
+    embed_specs: list[TableEmbeddingSpec] = []
+    table_bc_specs: list[TableBusinessContextSpec] = []
+    embed_strategy = "off"
+
+    for meta in plan.tables_meta:
+        label = meta.label or meta.sheet_name or meta.table_id
+
+        if meta.embed_columns:
+            embed_specs.append(
+                TableEmbeddingSpec(
+                    table=label,
+                    source_columns=list(meta.embed_columns),
+                    target_columns=[f"{c}_embed" for c in meta.embed_columns],
+                ),
+            )
+            if meta.embed_strategy and meta.embed_strategy != "off":
+                embed_strategy = meta.embed_strategy
+
+        if meta.column_descriptions or meta.description:
+            table_bc_specs.append(
+                TableBusinessContextSpec(
+                    table=label,
+                    table_description=meta.description,
+                    column_descriptions=dict(meta.column_descriptions or {}),
+                ),
+            )
+
+    file_path = plan.file_path
+    embed_config = EmbeddingsConfig(strategy=embed_strategy)
+    if embed_specs:
+        embed_config = EmbeddingsConfig(
+            strategy=embed_strategy,
+            file_specs=[
+                FileEmbeddingSpec(
+                    file_path=file_path,
+                    context="per_file_table",
+                    tables=embed_specs,
+                ),
+            ],
+        )
+
+    business_contexts = None
+    if table_bc_specs:
+        business_contexts = BusinessContextsConfig(
+            file_contexts=[
+                FileBusinessContextSpec(
+                    file_path=file_path,
+                    table_contexts=table_bc_specs,
+                ),
+            ],
+        )
+
+    return FilePipelineConfig(
+        embed=embed_config,
+        ingest=IngestConfig(business_contexts=business_contexts),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +650,22 @@ async def _run_dm_mode_inner(
         )
         row_count = int(meta.row_count or getattr(handle, "row_count", 0) or 0)
         target_context = default_target
+
+        fields = (
+            {
+                name: {"description": desc}
+                for name, desc in meta.column_descriptions.items()
+            }
+            if meta.column_descriptions
+            else None
+        )
+
+        post_ingest_config = None
+        if meta.post_ingest:
+            from unity.data_manager.types.ingest import PostIngestConfig
+
+            post_ingest_config = PostIngestConfig.model_validate(meta.post_ingest)
+
         work_items.append(
             ArtifactWorkItem(
                 kind="table",
@@ -583,7 +675,12 @@ async def _run_dm_mode_inner(
                     "dm": dm,
                     "context": target_context,
                     "handle": handle,
-                    "batch_size": msg.batch_size,
+                    "batch_size": meta.chunk_size or msg.batch_size,
+                    "description": meta.description,
+                    "fields": fields,
+                    "embed_columns": meta.embed_columns,
+                    "embed_strategy": meta.embed_strategy,
+                    "post_ingest": post_ingest_config,
                 },
                 columns=columns,
                 row_count=row_count,
@@ -610,6 +707,11 @@ async def _run_dm_mode_inner(
             None,
             table_input_handle=pl["handle"],
             chunk_size=pl["batch_size"],
+            description=pl.get("description"),
+            fields=pl.get("fields"),
+            embed_columns=pl.get("embed_columns"),
+            embed_strategy=pl.get("embed_strategy", "off"),
+            post_ingest=pl.get("post_ingest"),
         )
         return {
             "ingest_result": result,

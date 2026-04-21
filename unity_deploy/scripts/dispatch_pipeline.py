@@ -218,12 +218,17 @@ def main() -> int:
 # Dispatch item: (path_or_uri, per_file_context_override_or_None)
 # ---------------------------------------------------------------------------
 
-DispatchItem = tuple[str, Optional[str]]
-"""(path_or_uri, dm_target_context_override).
+DispatchItem = tuple[str, Optional[str], Optional[dict]]
+"""(path_or_uri, dm_target_context_override, table_config).
 
 For FM mode or ad-hoc DM dispatch the second element is ``None``
 (bindings are derived from CLI args). For config-driven DM dispatch
 it carries the ``tables[0].context`` from the config.
+
+``table_config`` (third element) is a dict keyed by sheet/table name
+carrying per-table metadata (description, embed_columns, chunk_size,
+column_descriptions, post_ingest) resolved from ``PipelineConfig``.
+``None`` for ad-hoc dispatches.
 """
 
 
@@ -233,7 +238,55 @@ def _collect_adhoc_items(args: argparse.Namespace) -> list[DispatchItem]:
         explicit=list(args.files),
         manifest=args.files_from,
     )
-    return [(f, None) for f in files]
+    return [(f, None, None) for f in files]
+
+
+def _resolve_embed_columns(config, file_path: str, sheet_name: str):
+    """Look up embed source columns for a file + sheet from config."""
+    for spec in config.embed.file_specs:
+        if spec.file_path in file_path or spec.file_path == "*":
+            for table_spec in spec.tables:
+                if table_spec.table == sheet_name:
+                    return list(table_spec.source_columns)
+    return None
+
+
+def _resolve_column_descriptions(config, sheet_name: str) -> dict:
+    """Look up column descriptions from business_contexts config."""
+    if not config.ingest.business_contexts:
+        return {}
+    for fc in config.ingest.business_contexts.file_contexts:
+        for tc in fc.table_contexts:
+            if tc.table == sheet_name and tc.column_descriptions:
+                return dict(tc.column_descriptions)
+    return {}
+
+
+def _build_table_config(config, sf) -> dict:
+    """Build per-table config dict from PipelineConfig for a source file.
+
+    Returns a dict keyed by sheet name, each value containing the
+    metadata the ingest worker needs to pass to dm.ingest().
+    """
+    embed_strategy = config.embed.strategy or "off"
+    result = {}
+    for spec in sf.tables:
+        embed_cols = _resolve_embed_columns(config, sf.file_path, spec.sheet)
+        col_descs = _resolve_column_descriptions(config, spec.sheet)
+        post_ingest = config.effective_post_ingest(spec)
+
+        entry: dict = {
+            "description": spec.description or None,
+            "embed_columns": embed_cols,
+            "embed_strategy": embed_strategy if embed_cols else "off",
+            "chunk_size": spec.chunk_size,
+        }
+        if col_descs:
+            entry["column_descriptions"] = col_descs
+        if post_ingest is not None:
+            entry["post_ingest"] = post_ingest.model_dump(mode="json")
+        result[spec.sheet] = entry
+    return result
 
 
 def _collect_config_items(args: argparse.Namespace) -> list[DispatchItem]:
@@ -279,7 +332,8 @@ def _collect_config_items(args: argparse.Namespace) -> list[DispatchItem]:
                 )
             dm_context = tables[0].context
 
-        items.append((sf.file_path, dm_context))
+        table_cfg = _build_table_config(config, sf) if sf.tables else None
+        items.append((sf.file_path, dm_context, table_cfg))
 
     return items
 
@@ -377,7 +431,7 @@ def _dispatch(
 
     errors = 0
     job_ids: list[str] = []
-    for path_or_uri, dm_context_override in items:
+    for path_or_uri, dm_context_override, table_config in items:
         fm_binding: Optional[FmBinding] = None
         dm_binding: Optional[DmBinding] = None
         if args.mode == "fm":
@@ -409,6 +463,7 @@ def _dispatch(
                 fm_binding=fm_binding,
                 dm_binding=dm_binding,
                 dispatch_id=dispatch_id,
+                table_config=table_config,
                 **source_kwargs,
             )
 
