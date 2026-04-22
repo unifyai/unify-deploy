@@ -3,17 +3,14 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: unity-parse-worker
-  namespace: default
+  namespace: production
   labels:
     app: unity-parse-worker
     component: pipeline-worker
+    environment: production
 spec:
-  replicas: 2
-  # With a 24h grace period, a rolling restart cannot use the default
-  # maxUnavailable=25%/maxSurge=25% -- old pods keep draining for up to
-  # 24h, which would stall the rollout. maxSurge=100% + maxUnavailable=0
-  # means new pods come up immediately alongside draining old ones;
-  # capacity briefly doubles, never dips.
+  replicas: 1
+  revisionHistoryLimit: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -27,17 +24,10 @@ spec:
       labels:
         app: unity-parse-worker
         component: pipeline-worker
+        environment: production
       annotations:
-        # Cluster autoscaler must never evict a worker mid-drain; the
-        # app is responsible for exiting cleanly once in-flight work is
-        # acked. Without this annotation, the CA can reclaim an
-        # under-utilized node even while the pod is processing.
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      # 24h grace period covers the worst-case single-message processing
-      # time. The app drains on SIGTERM (stops pulling, finishes in
-      # flight, ack, exit). If the app exits sooner, the pod terminates
-      # sooner; this is only an upper bound.
       terminationGracePeriodSeconds: 86400
       containers:
       - name: parse-worker
@@ -48,18 +38,17 @@ spec:
         - unity_deploy.infra.workers.entrypoint_parse
         lifecycle:
           preStop:
-            # Tiny delay before SIGTERM so any in-flight lifecycle
-            # events (metric flushes, etc.) propagate. The real drain
-            # logic is the app's SIGTERM handler.
             exec:
               command: ["sh", "-c", "sleep 2"]
         resources:
           requests:
             cpu: "500m"
             memory: "2Gi"
+            ephemeral-storage: "2Gi"
           limits:
             cpu: "2"
             memory: "6Gi"
+            ephemeral-storage: "4Gi"
         env:
         - name: UNITY_GCP_PIPELINE_ENVIRONMENT
           value: "production"
@@ -92,18 +81,16 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: unity-parse-worker-hpa
-  namespace: default
+  namespace: production
+  labels:
+    environment: production
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: unity-parse-worker
-  # One-pod-per-message semantics: the Pub/Sub pull client requests
-  # max_messages=1, so each pod handles exactly one ParseRequested at a
-  # time. averageValue=1 scales replicas linearly with the undelivered
-  # queue depth. minReplicas=2 keeps warm capacity.
-  minReplicas: 2
-  maxReplicas: 5
+  minReplicas: 1
+  maxReplicas: 10
   metrics:
   - type: External
     external:
@@ -115,12 +102,9 @@ spec:
       target:
         type: AverageValue
         averageValue: "1"
-  # Scale-down must not thrash pods that are still draining. 1h
-  # stabilization + "at most 1 pod every 5 min" caps churn even when
-  # undelivered depth briefly drops to zero.
   behavior:
     scaleDown:
-      stabilizationWindowSeconds: 3600
+      stabilizationWindowSeconds: 300
       policies:
       - type: Pods
         value: 1
@@ -136,12 +120,10 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: unity-parse-worker-pdb
-  namespace: default
+  namespace: production
+  labels:
+    environment: production
 spec:
-  # Voluntary disruption budget (node drains, rolling evictions). With
-  # maxUnavailable=1 a drain proceeds one pod at a time, which keeps
-  # the worker pool serving while nodes recycle. Involuntary
-  # disruption (node hardware failure) is not constrained by PDB.
   maxUnavailable: 1
   selector:
     matchLabels:

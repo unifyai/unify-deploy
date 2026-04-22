@@ -3,15 +3,14 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: unity-ingest-worker
-  namespace: default
+  namespace: production
   labels:
     app: unity-ingest-worker
     component: pipeline-worker
+    environment: production
 spec:
-  replicas: 2
-  # See parse-worker-deployment.yaml for rationale: 24h grace period
-  # forces maxSurge=100% so rolling restarts don't stall on draining
-  # pods.
+  replicas: 1
+  revisionHistoryLimit: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -25,6 +24,7 @@ spec:
       labels:
         app: unity-ingest-worker
         component: pipeline-worker
+        environment: production
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
@@ -44,21 +44,16 @@ spec:
           requests:
             cpu: "500m"
             memory: "1Gi"
+            ephemeral-storage: "2Gi"
           limits:
             cpu: "3"
             memory: "4Gi"
+            ephemeral-storage: "4Gi"
         env:
         - name: UNITY_GCP_PIPELINE_ENVIRONMENT
           value: "production"
         - name: UNITY_GCS_ARTIFACT_BUCKET
           value: "unity-pipeline-artifacts"
-        # ORCHESTRA_URL + ORCHESTRA_ADMIN_KEY are the only credentials
-        # the pod carries: every message triggers a per-assistant
-        # UNIFY_KEY lookup via Orchestra's admin endpoints (see
-        # unity_deploy.infra.workers.assistant_key_resolver). The pod
-        # does not, and must not, hold a shared UNIFY_KEY/USER_ID/
-        # ASSISTANT_ID -- shared workers serve many tenants, and
-        # baked-in credentials would auth every call as the wrong user.
         - name: ORCHESTRA_URL
           value: "https://api.unify.ai/v0"
         - name: ORCHESTRA_ADMIN_KEY
@@ -90,18 +85,16 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: unity-ingest-worker-hpa
-  namespace: default
+  namespace: production
+  labels:
+    environment: production
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: unity-ingest-worker
-  # One-pod-per-message semantics (Option C): one IngestRequested drives
-  # one DataManager load (which fans out Tier-1 row batches internally
-  # on threads). averageValue=1 scales replicas linearly with
-  # undelivered depth. minReplicas=2 keeps warm capacity.
-  minReplicas: 2
-  maxReplicas: 10
+  minReplicas: 1
+  maxReplicas: 20
   metrics:
   - type: External
     external:
@@ -115,7 +108,7 @@ spec:
         averageValue: "1"
   behavior:
     scaleDown:
-      stabilizationWindowSeconds: 3600
+      stabilizationWindowSeconds: 300
       policies:
       - type: Pods
         value: 1
@@ -131,7 +124,9 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: unity-ingest-worker-pdb
-  namespace: default
+  namespace: production
+  labels:
+    environment: production
 spec:
   maxUnavailable: 1
   selector:

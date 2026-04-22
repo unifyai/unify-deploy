@@ -3,13 +3,13 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: unity-ingest-worker
-  namespace: default
+  namespace: staging
   labels:
     app: unity-ingest-worker
     component: pipeline-worker
     environment: staging
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 2
   strategy:
     type: RollingUpdate
@@ -54,13 +54,6 @@ spec:
           value: "staging"
         - name: UNITY_GCS_ARTIFACT_BUCKET
           value: "unity-pipeline-artifacts-staging"
-        # ORCHESTRA_URL + ORCHESTRA_ADMIN_KEY are the only credentials
-        # the pod carries: every message triggers a per-assistant
-        # UNIFY_KEY lookup via Orchestra's admin endpoints (see
-        # unity_deploy.infra.workers.assistant_key_resolver). The pod
-        # does not, and must not, hold a shared UNIFY_KEY -- shared
-        # workers serve many tenants, and a baked-in key would auth
-        # every call as the wrong user.
         - name: ORCHESTRA_URL
           value: "https://internal.example.com/v0"
         - name: ORCHESTRA_ADMIN_KEY
@@ -77,12 +70,22 @@ spec:
           value: "gcp-project-runtime"
         - name: UNIFY_PROJECT_NAME
           value: "Assistants"
+        livenessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        readinessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 10
+          periodSeconds: 30
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: unity-ingest-worker-hpa
-  namespace: default
+  namespace: staging
   labels:
     environment: staging
 spec:
@@ -90,8 +93,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: unity-ingest-worker
-  minReplicas: 2
-  maxReplicas: 5
+  minReplicas: 1
+  maxReplicas: 15
   metrics:
   - type: External
     external:
@@ -105,7 +108,7 @@ spec:
         averageValue: "1"
   behavior:
     scaleDown:
-      stabilizationWindowSeconds: 3600
+      stabilizationWindowSeconds: 300
       policies:
       - type: Pods
         value: 1
@@ -121,7 +124,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: unity-ingest-worker-pdb
-  namespace: default
+  namespace: staging
   labels:
     environment: staging
 spec:
