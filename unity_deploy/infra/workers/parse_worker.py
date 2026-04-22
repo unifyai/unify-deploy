@@ -119,7 +119,7 @@ async def handle_parse_message(
             # is driven by ``msg.artifact_format``.
             plan_config = FilePipelineConfig()
 
-            for pr in parse_results:
+            for file_uri, pr in zip(msg.file_paths, parse_results):
                 if pr.status != "success":
                     run_ledger.write(
                         PipelineStageManifest(
@@ -133,12 +133,14 @@ async def handle_parse_message(
                     )
                     continue
 
+                source_gs_uri = file_uri if file_uri.startswith("gs://") else ""
                 plan = lower_to_ingest_plan(
                     pr,
                     run_id=run_id,
                     config=plan_config,
                     artifact_store=artifact_store,
                     artifact_format=msg.artifact_format,
+                    source_gs_uri=source_gs_uri,
                 )
 
                 if msg.table_config:

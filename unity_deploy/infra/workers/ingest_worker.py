@@ -37,7 +37,9 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from unity.common.pipeline import (
     ArtifactWorkItem,
+    CancellationCheck,
     IngestPlan,
+    PipelineCancelled,
     PipelineInstrumentation,
     ingest_artifacts,
 )
@@ -45,11 +47,13 @@ from unity.common.pipeline._utils import utc_now_iso
 from unity.common.pipeline.run_ledger import PipelineStageManifest
 from unity.common.pipeline.types import (
     AttachmentCallback,
+    CsvFileHandle,
     IngestBinding,
     IngestCheckpoint,
     IngestRequested,
     ObjectStoreArtifactHandle,
     TableInputHandle,
+    XlsxSheetHandle,
 )
 from unity.common.pipeline.work_queue import ReceivedWorkItem
 
@@ -72,19 +76,26 @@ def _stage_remote_handles(
     artifact_store: Any,
     scratch_dir: Path,
 ) -> IngestPlan:
-    """Download non-JSONL ``gs://``-backed artifact handles into *scratch_dir*.
+    """Download remote-backed artifact handles into *scratch_dir*.
 
     JSONL ``ObjectStoreArtifactHandle`` handles with ``gs://`` URIs are
-    intentionally **not** staged: ``row_streaming`` now streams them
+    intentionally **not** staged: ``row_streaming`` streams them
     directly from GCS via ``blob.open("r")`` when a ``storage_client``
     is supplied, eliminating ephemeral-storage pressure entirely.
 
-    Non-JSONL handles (future formats like parquet) or handles that
-    already carry a ``source_local_path`` are left untouched.  The
-    ``scratch_dir`` is owned by the caller and should be cleaned up in a
-    ``finally`` block.
+    CSV/XLSX handles whose ``storage_uri`` is ``gs://`` need the source
+    file downloaded so that row iteration can open the local copy.
+    A dedup dict ensures each ``gs://`` source is downloaded at most once
+    even when multiple handles (e.g. multiple XLSX sheets) share the
+    same source file.
+
+    Non-JSONL ``ObjectStoreArtifactHandle`` handles (future formats like
+    parquet) are also staged.  Handles that already carry a usable
+    ``source_local_path`` are left untouched.  The ``scratch_dir`` is
+    owned by the caller and should be cleaned up in a ``finally`` block.
     """
     updates: dict[str, Any] = {}
+    staged_files: dict[str, Path] = {}
 
     if plan.content_rows_handle is not None:
         staged_content = _stage_handle(
@@ -92,6 +103,7 @@ def _stage_remote_handles(
             artifact_store=artifact_store,
             scratch_dir=scratch_dir,
             hint="content",
+            staged_files=staged_files,
         )
         if staged_content is not plan.content_rows_handle:
             updates["content_rows_handle"] = staged_content
@@ -105,6 +117,7 @@ def _stage_remote_handles(
                 artifact_store=artifact_store,
                 scratch_dir=scratch_dir,
                 hint=table_id,
+                staged_files=staged_files,
             )
             staged_tables[table_id] = staged
             if staged is not handle:
@@ -123,20 +136,31 @@ def _stage_handle(
     artifact_store: Any,
     scratch_dir: Path,
     hint: str,
+    staged_files: dict[str, Path] | None = None,
 ) -> TableInputHandle:
     """Stage a single handle locally when it needs local disk access.
 
-    JSONL ``ObjectStoreArtifactHandle`` handles with ``gs://`` URIs are
-    skipped — they stream directly from GCS at iteration time.  Only
-    non-JSONL remote artifacts are downloaded to ``scratch_dir``.
+    JSONL ``ObjectStoreArtifactHandle`` handles stream directly from GCS.
+    CSV/XLSX handles with a ``gs://`` ``storage_uri`` need the source
+    file downloaded.  The *staged_files* dict deduplicates downloads
+    when multiple handles reference the same remote file.
     """
+    if isinstance(handle, (CsvFileHandle, XlsxSheetHandle)):
+        if not handle.storage_uri.startswith("gs://"):
+            return handle
+        return _stage_tabular_handle(
+            handle,
+            artifact_store=artifact_store,
+            scratch_dir=scratch_dir,
+            staged_files=staged_files if staged_files is not None else {},
+        )
+
     if not isinstance(handle, ObjectStoreArtifactHandle):
         return handle
     if handle.source_local_path:
         return handle
     if not handle.storage_uri.startswith("gs://"):
         return handle
-    # JSONL artifacts stream directly from GCS — no local staging needed.
     if handle.artifact_format == "jsonl":
         return handle
     if not hasattr(artifact_store, "download_to_local"):
@@ -157,11 +181,88 @@ def _stage_handle(
     return handle.model_copy(update={"source_local_path": str(local_path)})
 
 
+def _stage_tabular_handle(
+    handle: CsvFileHandle | XlsxSheetHandle,
+    *,
+    artifact_store: Any,
+    scratch_dir: Path,
+    staged_files: dict[str, Path],
+) -> CsvFileHandle | XlsxSheetHandle:
+    """Download the source file for a CSV/XLSX handle, with dedup.
+
+    Multiple XLSX sheets reference the same workbook file.  The
+    *staged_files* dict maps ``gs://`` URIs to already-downloaded local
+    paths so each source is fetched at most once per message.
+    """
+    gs_uri = handle.storage_uri
+    if gs_uri in staged_files:
+        return handle.model_copy(
+            update={"source_local_path": str(staged_files[gs_uri])},
+        )
+
+    if not hasattr(artifact_store, "download_to_local"):
+        raise RuntimeError(
+            f"Cannot stage {gs_uri!r}: artifact_store "
+            f"{type(artifact_store).__name__} has no download_to_local() method.",
+        )
+
+    suffix = Path(gs_uri).suffix or (
+        ".csv" if isinstance(handle, CsvFileHandle) else ".xlsx"
+    )
+    dest = scratch_dir / f"{_safe_scratch_name(Path(gs_uri).stem)}{suffix}"
+    local_path = artifact_store.download_to_local(gs_uri, dest)
+    staged_files[gs_uri] = local_path
+    logger.info(
+        "[ingest] Staged tabular source %s -> %s (%d bytes)",
+        gs_uri,
+        local_path,
+        local_path.stat().st_size if local_path.exists() else 0,
+    )
+    return handle.model_copy(update={"source_local_path": str(local_path)})
+
+
 def _safe_scratch_name(value: str) -> str:
     text = str(value or "").strip() or "artifact"
     return "".join(
         char if char.isalnum() or char in ("-", "_") else "_" for char in text
     )
+
+
+# ---------------------------------------------------------------------------
+# Cancellation polling
+# ---------------------------------------------------------------------------
+
+
+def _build_cancellation_checker(
+    artifact_store: Any,
+    run_id: str,
+    *,
+    ttl_seconds: float = 60.0,
+) -> CancellationCheck:
+    """Return a sync ``() -> bool`` closure that caches the GCS result.
+
+    The closure reads ``jobs/{run_id}/job.json`` at most once per
+    *ttl_seconds*, keeping GCS traffic minimal even when called from
+    tight loops (per-chunk checkpoint, per-work-item dispatch).
+    """
+    cache: dict[str, float | bool] = {"t": 0.0, "v": False}
+
+    def _check() -> bool:
+        if cache["v"] is True:
+            return True
+        now = time.monotonic()
+        if now - cache["t"] < ttl_seconds:  # type: ignore[operator]
+            return bool(cache["v"])
+        try:
+            job_data = artifact_store.get_json(f"jobs/{run_id}/job.json")
+            result = job_data.get("status") == "cancelled"
+        except Exception:
+            result = False
+        cache["t"] = now
+        cache["v"] = result
+        return result
+
+    return _check
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +277,7 @@ def _make_checkpoint_callback(
     *,
     initial_rows: int = 0,
     initial_chunks: int = 0,
+    is_cancelled: CancellationCheck | None = None,
 ):
     """Return an ``on_task_complete`` callback that writes GCS checkpoints.
 
@@ -183,6 +285,10 @@ def _make_checkpoint_callback(
     pipeline task completes inside ``dm.ingest()``.  Only
     ``insert_chunk_*`` tasks trigger a checkpoint write; other task types
     (``create_table``, ``embed_*``, etc.) are ignored.
+
+    When *is_cancelled* is supplied, the callback polls it after each
+    chunk checkpoint and raises ``PipelineCancelled`` to unwind the
+    executor's pipeline, giving per-chunk cancellation granularity.
     """
     state = {"rows": initial_rows, "chunks": initial_chunks}
 
@@ -211,6 +317,12 @@ def _make_checkpoint_callback(
                 job_id,
                 artifact_id,
                 exc_info=True,
+            )
+
+        if is_cancelled and is_cancelled():
+            raise PipelineCancelled(
+                f"Job {job_id} cancelled during ingestion "
+                f"(after {state['chunks']} chunks, {state['rows']} rows)",
             )
 
     return _on_task_complete
@@ -333,6 +445,11 @@ async def handle_ingest_message(
             )
             overall_error = "cancelled"
 
+        check_cancelled = _build_cancellation_checker(
+            artifact_store,
+            run_id,
+        )
+
         if overall_error is None:
             if msg.ingestion_mode == "fm":
                 total_rows, overall_error = await _run_fm_mode(
@@ -340,6 +457,7 @@ async def handle_ingest_message(
                     msg=msg,
                     infra=infra,
                     run_ledger=run_ledger,
+                    is_cancelled=check_cancelled,
                 )
             else:
                 total_rows, overall_error = await _run_dm_mode(
@@ -347,6 +465,7 @@ async def handle_ingest_message(
                     msg=msg,
                     infra=infra,
                     run_ledger=run_ledger,
+                    is_cancelled=check_cancelled,
                 )
 
         try:
@@ -378,6 +497,27 @@ async def handle_ingest_message(
                 error=overall_error,
             )
 
+    except PipelineCancelled:
+        overall_error = "cancelled"
+        logger.info(
+            "[ingest] Job %s cancelled mid-flight after %.1fs",
+            run_id,
+            time.perf_counter() - ingest_start,
+        )
+        try:
+            job = job_store.read_job(run_id)
+            if job.status != "cancelled":
+                job.status = "cancelled"
+                job.finished_at = utc_now_iso()
+            job_store.upsert_job(job)
+        except Exception:
+            logger.debug("Could not update job status for %s", run_id)
+        if msg.attachment_callback is not None:
+            await _publish_attachment_completion(
+                callback=msg.attachment_callback,
+                success=False,
+                error="cancelled",
+            )
     except Exception as exc:
         logger.exception("[ingest] Failed job=%s", run_id)
         if msg.attachment_callback is not None:
@@ -410,6 +550,7 @@ async def _run_fm_mode(
     msg: IngestRequested,
     infra: WorkerInfra,
     run_ledger,
+    is_cancelled: CancellationCheck | None = None,
 ) -> tuple[int, str | None]:
     """Dispatch an ``IngestPlan`` through ``fm_process_plan``.
 
@@ -434,6 +575,7 @@ async def _run_fm_mode(
             run_ledger=run_ledger,
             fm_binding=fm_binding,
             activate_unify_context=activate_unify_context,
+            is_cancelled=is_cancelled,
         )
 
 
@@ -445,6 +587,7 @@ async def _run_fm_mode_inner(
     run_ledger,
     fm_binding,
     activate_unify_context,
+    is_cancelled: CancellationCheck | None = None,
 ) -> tuple[int, str | None]:
     """Body of FM dispatch, run inside the per-message UNIFY_KEY scope."""
     from unity.data_manager import DataManager
@@ -500,11 +643,14 @@ async def _run_fm_mode_inner(
                 storage_client=infra.storage_client,
                 artifact_store=infra.artifact_store,
                 job_id=msg.job_id,
+                is_cancelled=is_cancelled,
             )
             status = str(getattr(result, "status", "error") or "error")
             if status != "success":
                 error = str(getattr(result, "error", "fm_process_plan failed") or "")
             total_rows = _extract_total_rows(result)
+    except PipelineCancelled:
+        raise
     except Exception as exc:
         error = str(exc) or "fm_process_plan raised"
         logger.exception("[ingest][fm] Failed for %s", plan.file_path)
@@ -629,6 +775,7 @@ async def _run_dm_mode(
     msg: IngestRequested,
     infra: WorkerInfra,
     run_ledger,
+    is_cancelled: CancellationCheck | None = None,
 ) -> tuple[int, str | None]:
     """Dispatch an ``IngestPlan`` via raw DataManager ingestion.
 
@@ -658,6 +805,7 @@ async def _run_dm_mode(
             dm_binding=dm_binding,
             default_target=default_target,
             activate_unify_context=activate_unify_context,
+            is_cancelled=is_cancelled,
         )
 
 
@@ -670,6 +818,7 @@ async def _run_dm_mode_inner(
     dm_binding,
     default_target: str,
     activate_unify_context,
+    is_cancelled: CancellationCheck | None = None,
 ) -> tuple[int, str | None]:
     """Body of DM dispatch, run inside the per-message UNIFY_KEY scope."""
     from unity.data_manager import DataManager
@@ -781,6 +930,7 @@ async def _run_dm_mode_inner(
             pl.get("table_id", ""),
             initial_rows=pl.get("skip_rows", 0),
             initial_chunks=pl.get("initial_chunks", 0),
+            is_cancelled=is_cancelled,
         )
         result = pl["dm"].ingest(
             pl["context"],
@@ -814,6 +964,7 @@ async def _run_dm_mode_inner(
                 source_path=plan.file_path,
                 max_workers=getattr(config.execution, "max_embed_workers", 8),
                 retry_config=config.retry,
+                is_cancelled=is_cancelled,
             )
         for ar in artifact_results:
             if ar.success:
@@ -827,6 +978,8 @@ async def _run_dm_mode_inner(
                 )
             elif error is None:
                 error = ar.error or "ingest failed"
+    except PipelineCancelled:
+        raise
     except Exception as exc:
         error = str(exc) or "ingest_artifacts raised"
         logger.exception("[ingest][dm] Failed for %s", plan.file_path)
