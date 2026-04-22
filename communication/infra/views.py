@@ -2689,17 +2689,38 @@ async def _runtime_resource_state(
     batch_api,
     assistant_session: dict | None,
 ) -> dict[str, object]:
-    """Return the live runtime resources currently owned by an assistant."""
+    """Return the live runtime resources currently owned by an assistant.
+
+    Offline task runners (``app=unity-offline``) run outside the AssistantSession
+    lifecycle but still hold writes against the owning body. They are reported
+    alongside online Jobs so callers that gate on quiescence — most notably the
+    membership-change runtime barrier behind ``/infra/runtime`` — wait for
+    in-flight offline runs to drain before declaring cleanup complete.
+    """
 
     sanitized = assistant_id.lower().replace("_", "-")
-    jobs = await asyncio.to_thread(
-        batch_api.list_namespaced_job,
-        namespace=SETTINGS.default_namespace,
-        label_selector=f"app=unity,assistant-id={sanitized}",
+    jobs, offline_jobs = await asyncio.gather(
+        asyncio.to_thread(
+            batch_api.list_namespaced_job,
+            namespace=SETTINGS.default_namespace,
+            label_selector=f"app=unity,assistant-id={sanitized}",
+        ),
+        asyncio.to_thread(
+            batch_api.list_namespaced_job,
+            namespace=SETTINGS.default_namespace,
+            label_selector=f"app=unity-offline,assistant-id={sanitized}",
+        ),
     )
     active_job_names = [
         job.metadata.name
         for job in jobs.items
+        if job.status.active
+        and job.status.active > 0
+        and not job.metadata.deletion_timestamp
+    ]
+    active_offline_job_names = [
+        job.metadata.name
+        for job in offline_jobs.items
         if job.status.active
         and job.status.active > 0
         and not job.metadata.deletion_timestamp
@@ -2713,6 +2734,7 @@ async def _runtime_resource_state(
     disk_vm_name = await asyncio.to_thread(find_vm_with_disk, assistant_id)
     return {
         "active_job_names": active_job_names,
+        "active_offline_job_names": active_offline_job_names,
         "owned_vms": owned_vms,
         "other_owned_vms": other_owned_vms,
         "disk_vm_name": disk_vm_name,
@@ -3031,6 +3053,7 @@ async def runtime_status_endpoint(
     runtime_cleanup_complete = (
         session_cleanup_complete
         and not runtime_state["active_job_names"]
+        and not runtime_state["active_offline_job_names"]
         and not runtime_state["owned_vms"]
         and not runtime_state["other_owned_vms"]
         and runtime_state["disk_vm_name"] is None
@@ -3041,6 +3064,7 @@ async def runtime_status_endpoint(
         "assistant_session_phase": session_phase or None,
         "assistant_session_desired_state": session_desired_state or None,
         "active_job_names": runtime_state["active_job_names"],
+        "active_offline_job_names": runtime_state["active_offline_job_names"],
         "owned_vms": runtime_state["owned_vms"],
         "other_owned_vms": runtime_state["other_owned_vms"],
         "disk_vm_name": runtime_state["disk_vm_name"],
