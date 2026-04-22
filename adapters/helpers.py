@@ -1,6 +1,5 @@
 import base64
 from datetime import datetime, timedelta, timezone
-import httpx
 import json
 import os
 import re
@@ -842,7 +841,8 @@ def _build_start_job_request_data(
         "assistant_number": assistant["assistant_number"],
         "assistant_email": assistant["assistant_email"],
         "assistant_email_provider": assistant.get(
-            "assistant_email_provider", "google_workspace"
+            "assistant_email_provider",
+            "google_workspace",
         ),
         "user_whatsapp_number": assistant["user_whatsapp_number"],
         "assistant_whatsapp_number": assistant.get(
