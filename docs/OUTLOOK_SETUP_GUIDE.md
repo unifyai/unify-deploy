@@ -190,7 +190,7 @@ UNITY_COMMS_URL=https://your-domain.com
 
 ## Step 5.5: Configure Mail Routing for Verified Domains (Important)
 
-If you have verified a domain (e.g., `unify.ai`) in your Microsoft 365 tenant for **Teams SBC/calling** functionality, but the actual mailboxes for that domain are hosted elsewhere (another Microsoft 365 tenant, Google Workspace, etc.), you need to configure mail routing to prevent delivery failures.
+If you have verified a domain (e.g., `unify.ai`) in your Microsoft 365 tenant for any reason (SSO, federation, ownership claim, etc.) but the actual mailboxes for that domain are hosted elsewhere (another Microsoft 365 tenant, Google Workspace, etc.), you need to configure mail routing to prevent delivery failures.
 
 ### The Problem
 
@@ -221,10 +221,10 @@ Change the domain type to **Internal Relay**, which tells Exchange:
 ### Prerequisites
 
 - Ensure MX records for the domain point to the actual mail server (not this tenant)
-- This configuration does NOT affect Teams SBC functionality - the domain remains verified
+- The domain remains verified for whatever else relies on it
 
 > **When is this needed?**
-> - You have a domain verified for Teams calling/SBC
+> - You have a domain verified in this tenant
 > - Email for that domain is hosted elsewhere
 > - You want to send emails TO addresses on that domain from this tenant
 
@@ -482,7 +482,7 @@ async def test_send_email(user_access_token: str):
 - Delivery failure notification: `550 5.1.10 RESOLVER.ADR.RecipientNotFound`
 
 **Fix:**
-1. This commonly happens when a domain is verified for Teams SBC but mail is hosted elsewhere
+1. This commonly happens when a domain is verified in this tenant but mail is hosted elsewhere
 2. Go to **Exchange Admin Center** → **Mail flow** → **Accepted domains**
 3. Change the domain type from **Authoritative** to **Internal Relay**
 4. See [Step 5.5](#step-55-configure-mail-routing-for-verified-domains-important) for detailed instructions

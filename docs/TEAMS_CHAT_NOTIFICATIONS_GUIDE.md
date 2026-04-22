@@ -1043,4 +1043,4 @@ CLIENT_STATE=your-secret-state-for-validation
 4. **Handle notifications** and process messages
 5. **Integrate with your AI agent** for automated responses
 
-For the Teams calling integration, see [TEAMS_LIVEKIT_SETUP_GUIDE.md](./TEAMS_LIVEKIT_SETUP_GUIDE.md).
+For the Teams meeting integration, see [TEAMS_MEETING_GUIDE.md](./TEAMS_MEETING_GUIDE.md).

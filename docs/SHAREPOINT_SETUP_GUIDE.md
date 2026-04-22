@@ -847,5 +847,4 @@ async def search_files(user_email: str, drive_id: str, q: str):
 
 For related guides:
 - [Outlook Email Setup](./OUTLOOK_SETUP_GUIDE.md)
-- [Teams + LiveKit Setup](./TEAMS_LIVEKIT_SETUP_GUIDE.md)
 - [SharePoint API Reference](./SHAREPOINT_API_REFERENCE.md)
