@@ -160,25 +160,6 @@ class Settings:
             "",
         )
 
-        # Teams meeting PSTN dial-in bridge (``POST /teams/join_meeting``).
-        # ``TEAMS_CONFERENCING_IVR_PAUSE_S`` controls how many 0.5s DTMF
-        # waits (``w``) are prepended to the conference ID before the
-        # ``#`` terminator.  8 half-seconds (~4s) is a conservative
-        # default that clears the Microsoft Audio Conferencing greeting
-        # on the current English prompt; tune per tenant if the greeting
-        # is longer (e.g. custom org branding).
-        # ``TEAMS_CONFERENCING_CALLER_ID`` optionally overrides the
-        # Twilio E.164 used as the outbound caller ID when dialling the
-        # Teams PSTN bridge — defaults to the assistant's own Twilio DID
-        # so callerID matches the assistant's identity end-to-end.
-        self.teams_conferencing_ivr_pause_s: int = int(
-            os.environ.get("TEAMS_CONFERENCING_IVR_PAUSE_S", "8"),
-        )
-        self.teams_conferencing_caller_id: str = os.environ.get(
-            "TEAMS_CONFERENCING_CALLER_ID",
-            "",
-        )
-
         # BYOD Google (platform-level OAuth 2.0 web app for user-granted Gmail access)
         self.google_oauth_client_id: str = os.environ.get(
             "GOOGLE_OAUTH_CLIENT_ID",

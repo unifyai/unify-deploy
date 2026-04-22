@@ -67,9 +67,8 @@ def publish_assistant_event(
     """Publish an event envelope to ``unity-{assistant_id}{env_suffix}``.
 
     Returns the Pub/Sub message ID.  Raises if the publish future fails
-    — callers that treat publish failures as non-fatal (e.g. the
-    ``/teams/join_meeting`` path where the Twilio PSTN leg is already
-    in flight) should wrap in ``try/except``.
+    — callers that treat publish failures as non-fatal should wrap in
+    ``try/except``.
     """
     publisher = get_pubsub_publisher()
     topic_name = SETTINGS.assistant_topic(assistant_id)
