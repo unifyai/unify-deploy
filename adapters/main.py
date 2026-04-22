@@ -4479,10 +4479,10 @@ def scheduled_infra_maintenance():
 
     Runs hourly via Cloud Scheduler.  Consolidates container pool
     replenishment, excess-idle cleanup, stale-job expiry, orphaned-VM
-    reconciliation, quarantined-VM purge, VM pool health (scrub +
-    probe + replenish), and bounded terminal AssistantSession pruning
-    into a single scheduled endpoint so runtime cleanup concerns live
-    in one place.
+    reconciliation, orphaned-disk reconciliation, quarantined-VM purge,
+    VM pool health (scrub + probe + replenish), and bounded terminal
+    AssistantSession pruning into a single scheduled endpoint so runtime
+    cleanup concerns live in one place.
     """
     results: dict = {}
     headers = {"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"}
@@ -4523,6 +4523,24 @@ def scheduled_infra_maintenance():
         except Exception as exc:
             logger.exception("maintenance: orphan VM reconcile failed for %s", vm_type)
             results[f"{key}_error"] = str(exc)
+
+    # 4b — Delete unattached assistant disks whose assistants no longer exist.
+    # Short-term bleed-stop; longer-term the per-assistant PD should be
+    # removed entirely now that GCS holds the durable workspace archive.
+    try:
+        resp = requests.post(
+            f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphan-disks",
+            params={"max_age_hours": 72},
+            headers=headers,
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            results["orphan_disks"] = resp.json()
+        else:
+            results["orphan_disks_error"] = resp.text
+    except Exception as exc:
+        logger.exception("maintenance: orphan disk reconcile failed")
+        results["orphan_disks_error"] = str(exc)
 
     # 5 — Delete quarantined VMs so replenish_pool can create fresh replacements
     for vm_type in SUPPORTED_POOL_VM_TYPES:
