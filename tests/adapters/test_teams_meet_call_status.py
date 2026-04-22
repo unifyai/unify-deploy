@@ -23,7 +23,6 @@ from fastapi.testclient import TestClient
 import adapters.main as adapters_main
 from adapters.main import app, validate_twilio_signature
 
-
 FAKE_ASSISTANT = {
     "assistant_id": "42",
     "user_id": "7",

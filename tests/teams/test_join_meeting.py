@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 from common.settings import SETTINGS
 from communication.teams.meeting import MeetingDialIn
 
-
 ENV = {
     "LIVEKIT_SIP_URI": "test.sip.livekit.cloud",
     "UNITY_COMMS_URL": "https://comms.example.com",

@@ -21,7 +21,6 @@ from communication.phone.views import (
     initiate_teams_meet_bridge,
 )
 
-
 ENV = {
     "LIVEKIT_SIP_URI": "test.sip.livekit.cloud",
     "UNITY_COMMS_URL": "https://comms.example.com",
