@@ -52,7 +52,8 @@ gcloud pubsub subscriptions create "unity-parse-sub${SUFFIX}" \
   --ack-deadline=600 \
   --message-retention-duration=7d \
   --dead-letter-topic="unity-dead-letter${SUFFIX}" \
-  --max-delivery-attempts=5 \
+  --max-delivery-attempts=15 \
+  --expiration-period=never \
   2>/dev/null || echo "  (subscription already exists)"
 
 echo "Creating subscription: unity-ingest-sub${SUFFIX}"
@@ -62,7 +63,17 @@ gcloud pubsub subscriptions create "unity-ingest-sub${SUFFIX}" \
   --ack-deadline=600 \
   --message-retention-duration=7d \
   --dead-letter-topic="unity-dead-letter${SUFFIX}" \
-  --max-delivery-attempts=5 \
+  --max-delivery-attempts=15 \
+  --expiration-period=never \
+  2>/dev/null || echo "  (subscription already exists)"
+
+echo "Creating subscription: unity-dead-letter-sub${SUFFIX}"
+gcloud pubsub subscriptions create "unity-dead-letter-sub${SUFFIX}" \
+  --topic="unity-dead-letter${SUFFIX}" \
+  --project="${PROJECT_ID}" \
+  --ack-deadline=600 \
+  --message-retention-duration=31d \
+  --expiration-period=never \
   2>/dev/null || echo "  (subscription already exists)"
 
 # --- Custom Metrics Stackdriver Adapter (for HPAs on Pub/Sub backlog) ---
@@ -89,6 +100,31 @@ echo "Fetching cluster credentials..."
 gcloud container clusters get-credentials "${CLUSTER}" \
   --region "${REGION}" \
   --project "${PROJECT_ID}" >/dev/null
+
+# --- Kubernetes Namespaces ---
+# Workers live in env-scoped namespaces (staging / production) alongside
+# the other workloads for that environment. Ensure the target namespace
+# exists before we apply worker manifests or the adapter.
+WORKER_NS="${ENV}"
+echo "Ensuring namespace '${WORKER_NS}' exists..."
+kubectl create namespace "${WORKER_NS}" --dry-run=client -o yaml | kubectl apply -f -
+
+# Worker manifests reference `unity-secrets` for ORCHESTRA_ADMIN_KEY and
+# GCP_SA_KEY. Secrets are namespace-scoped, so if the target namespace
+# doesn't have the key yet, copy it from `default`.
+if ! kubectl get secret unity-secrets -n "${WORKER_NS}" -o jsonpath='{.data.GCP_SA_KEY}' >/dev/null 2>&1; then
+  echo "Copying GCP_SA_KEY from default namespace into ${WORKER_NS}..."
+  GCP_SA_KEY=$(kubectl get secret unity-secrets -n default -o jsonpath='{.data.GCP_SA_KEY}')
+  if [ -n "${GCP_SA_KEY}" ]; then
+    kubectl patch secret unity-secrets -n "${WORKER_NS}" \
+      --type='json' \
+      -p="[{\"op\":\"add\",\"path\":\"/data/GCP_SA_KEY\",\"value\":\"${GCP_SA_KEY}\"}]"
+  else
+    echo "  WARNING: GCP_SA_KEY not found in default namespace either"
+  fi
+else
+  echo "  (GCP_SA_KEY already present in ${WORKER_NS}/unity-secrets)"
+fi
 
 if kubectl get ns custom-metrics >/dev/null 2>&1; then
   echo "  (custom-metrics namespace already present -- re-applying to pick up manifest drift)"
