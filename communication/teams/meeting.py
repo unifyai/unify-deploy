@@ -98,7 +98,9 @@ async def fetch_onlinemeeting_by_joinurl(
     meeting = items[0] or {}
 
     participants = meeting.get("participants") or {}
-    org = (participants.get("organizer") or {}) if isinstance(participants, dict) else {}
+    org = (
+        (participants.get("organizer") or {}) if isinstance(participants, dict) else {}
+    )
     identity = (org.get("identity") or {}) if isinstance(org, dict) else {}
     user = identity.get("user") or {}
     organizer_name = (user.get("displayName") or "").strip() or None

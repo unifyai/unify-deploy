@@ -287,14 +287,19 @@ class TestCreateMeetingEndpoint:
         assert body["event_id"] is None
         mock_create.assert_awaited_once()
         kwargs = mock_create.await_args.kwargs
-        assert kwargs == {"subject": "Sync", "start_datetime": None, "end_datetime": None}
+        assert kwargs == {
+            "subject": "Sync",
+            "start_datetime": None,
+            "end_datetime": None,
+        }
 
     def test_default_mode_is_instant(self, client):
         with patch(
             "communication.teams.create_meeting.create_instant_onlinemeeting",
             new=AsyncMock(
                 return_value=CreatedMeeting(
-                    join_web_url="https://x", meeting_id="m",
+                    join_web_url="https://x",
+                    meeting_id="m",
                 ),
             ),
         ):
