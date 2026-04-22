@@ -76,10 +76,6 @@ An IP-based rate limiter protects all endpoints (120 requests per IP per 60-seco
 
 All logging uses `logger` (not `print`). Phone numbers are redacted to last 4 digits, email addresses to domain only, and message bodies are never logged.
 
-### SBC Proxy (Kamailio)
-
-The SBC proxy at `sbc.unify.ai` uses TLS 1.2 with certificate verification enabled. IP allowlisting restricts inbound Teams Direct Routing calls to Microsoft's IP ranges.
-
 ### Required Environment Variables (Security)
 
 | Variable | Purpose | Impact if missing |
