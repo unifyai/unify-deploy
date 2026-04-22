@@ -178,3 +178,9 @@ cython_debug/
 # Custom SA Key files
 comm-sa.json
 cert-manager-dns-key.json
+
+# Local-only AI agent configuration
+.cursor/rules/
+CLAUDE.md
+investigations/
+guides/
