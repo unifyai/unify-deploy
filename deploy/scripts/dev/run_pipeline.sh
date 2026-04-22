@@ -43,6 +43,8 @@ for arg in "$@"; do
   esac
 done
 
+WORKER_NS="${UNITY_GCP_PIPELINE_ENVIRONMENT:-staging}"
+
 RUN_TS="$(date +%Y-%m-%dT%H-%M-%S)"
 LOG_DIR="$REPO_ROOT/logs/pipeline/${RUN_TS}"
 mkdir -p "$LOG_DIR"
@@ -133,7 +135,7 @@ echo "[2/5] Starting worker log streams..."
 # so new pods get picked up with minimal delay.
 tmux_cmd new-session -d -s "parse-logs" bash -c "
 while true; do
-  kubectl logs -n default -l app=unity-parse-worker -f --tail=50 --max-log-requests=10 --prefix=true 2>&1
+  kubectl logs -n $WORKER_NS -l app=unity-parse-worker -f --tail=50 --max-log-requests=10 --prefix=true 2>&1
   echo '[reconnecting to parse workers in 30s...]'
   sleep 30
 done | tee '$LOG_DIR/parse-worker.log'
@@ -142,7 +144,7 @@ echo "  parse-worker.log  (streaming, reconnects every 30s)"
 
 tmux_cmd new-session -d -s "ingest-logs" bash -c "
 while true; do
-  kubectl logs -n default -l app=unity-ingest-worker -f --tail=50 --max-log-requests=10 --prefix=true 2>&1
+  kubectl logs -n $WORKER_NS -l app=unity-ingest-worker -f --tail=50 --max-log-requests=10 --prefix=true 2>&1
   echo '[reconnecting to ingest workers in 30s...]'
   sleep 30
 done | tee '$LOG_DIR/ingest-worker.log'
@@ -156,7 +158,7 @@ echo "[3/5] Starting HPA & pod monitoring..."
 tmux_cmd new-session -d -s "hpa-monitor" bash -c "
 while true; do
   echo \"--- \$(date +%H:%M:%S) ---\"
-  kubectl get hpa -n default 2>/dev/null
+  kubectl get hpa -n $WORKER_NS 2>/dev/null
   echo
   sleep 10
 done 2>&1 | tee '$LOG_DIR/hpa.log'
@@ -166,7 +168,7 @@ echo "  hpa.log           (every 10s)"
 tmux_cmd new-session -d -s "pod-monitor" bash -c "
 while true; do
   echo \"--- \$(date +%H:%M:%S) ---\"
-  kubectl get pods -l component=pipeline-worker -n default 2>/dev/null
+  kubectl get pods -l component=pipeline-worker -n $WORKER_NS 2>/dev/null
   echo
   sleep 10
 done 2>&1 | tee '$LOG_DIR/pods.log'
@@ -184,13 +186,13 @@ while true; do
     --project='$PUBSUB_PROJECT' \
     --format='value(messageRetentionDuration)' 2>/dev/null | head -1)
   # Use the metrics API for actual backlog count
-  parse_pending=\$(kubectl get hpa unity-parse-worker-hpa -n default \
+  parse_pending=\$(kubectl get hpa unity-parse-worker-hpa -n $WORKER_NS \
     -o jsonpath='{.status.currentMetrics[0].external.current.averageValue}' 2>/dev/null || echo '?')
-  ingest_pending=\$(kubectl get hpa unity-ingest-worker-hpa -n default \
+  ingest_pending=\$(kubectl get hpa unity-ingest-worker-hpa -n $WORKER_NS \
     -o jsonpath='{.status.currentMetrics[0].external.current.averageValue}' 2>/dev/null || echo '?')
-  parse_replicas=\$(kubectl get hpa unity-parse-worker-hpa -n default \
+  parse_replicas=\$(kubectl get hpa unity-parse-worker-hpa -n $WORKER_NS \
     -o jsonpath='{.status.currentReplicas}' 2>/dev/null || echo '?')
-  ingest_replicas=\$(kubectl get hpa unity-ingest-worker-hpa -n default \
+  ingest_replicas=\$(kubectl get hpa unity-ingest-worker-hpa -n $WORKER_NS \
     -o jsonpath='{.status.currentReplicas}' 2>/dev/null || echo '?')
   printf '%s  parse: backlog=%s replicas=%s  |  ingest: backlog=%s replicas=%s\n' \
     \"\$ts\" \"\$parse_pending\" \"\$parse_replicas\" \"\$ingest_pending\" \"\$ingest_replicas\"
