@@ -46,6 +46,7 @@ from .assistant_sessions import (
     assistant_session_is_terminating,
     assistant_session_observability_fields,
     assistant_session_name,
+    assistant_session_stop_requested,
     binding_desktop_url,
     binding_id as binding_id_from_status,
     binding_release_generation,
@@ -1056,6 +1057,11 @@ async def start_job(
                     "AssistantSession deletion is still in progress; retry the "
                     "wake-up shortly"
                 ),
+            )
+        if assistant_session_stop_requested(existing_session):
+            raise HTTPException(
+                status_code=409,
+                detail="AssistantSession stop is in progress",
             )
         existing_phase = (
             str(existing_session.get("status", {}).get("phase", ""))

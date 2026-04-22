@@ -110,6 +110,32 @@ def assistant_session_desired_state(session: dict[str, Any] | None) -> str:
     return desired_state or DESIRED_STATE_RUNNING
 
 
+def assistant_session_stop_requested(session: dict[str, Any] | None) -> bool:
+    """Return whether a stop is pending on the session's current binding.
+
+    Used by ``/infra/job/start`` as an in-plane fail-safe: Orchestra's
+    membership-change runtime barrier is the primary guarantee that a wake
+    cannot race a stop, but this predicate closes the reconciliation window
+    where ``desiredState`` has been patched to ``Stopped`` and ``suspendIntent``
+    records the stop against the current binding, yet the controller has not
+    yet advanced the phase into ``Released``.
+    """
+
+    current_binding = session_binding(session)
+    current_binding_id = binding_id(current_binding)
+    if not current_binding_id:
+        return False
+    if assistant_session_desired_state(session) != DESIRED_STATE_STOPPED:
+        return False
+    return (
+        suspend_intent_value(
+            session_suspend_intent(session),
+            binding_id=current_binding_id,
+        )
+        == SUSPEND_INTENT_STOP
+    )
+
+
 def session_desktop_required(session: dict[str, Any] | None) -> bool:
     """Return whether the session currently requires a managed desktop."""
 
