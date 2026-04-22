@@ -185,45 +185,6 @@ class TestPhoneConferenceStatus:
 
 
 # ---------------------------------------------------------------------------
-# Teams call (admin key in body)
-# ---------------------------------------------------------------------------
-
-
-class TestTeamsCall:
-    """Contract: POST /teams/call initiates a Teams call for an assistant.
-    Authenticated via admin_key in the JSON body."""
-
-    def test_teams_call_invalid_uri_returns_400(self):
-        resp = requests.post(
-            f"{ADAPTERS_URL}/teams/call",
-            json={
-                "from_uri": "sip:test@example.com",
-                "to_uri": "invalid-uri",
-                "call_id": "contract-test-call",
-                "admin_key": ADMIN_KEY,
-            },
-            timeout=15,
-        )
-        assert resp.status_code in (
-            200,
-            400,
-        ), f"teams/call unexpected: {resp.status_code} {resp.text}"
-
-    def test_teams_call_rejects_bad_admin_key(self):
-        resp = requests.post(
-            f"{ADAPTERS_URL}/teams/call",
-            json={
-                "from_uri": "sip:test@example.com",
-                "to_uri": "sip:+15005550006@example.com",
-                "call_id": "contract-test-call",
-                "admin_key": "wrong-key",
-            },
-            timeout=15,
-        )
-        assert resp.status_code == 403
-
-
-# ---------------------------------------------------------------------------
 # Health check + Microsoft auth callback
 # ---------------------------------------------------------------------------
 

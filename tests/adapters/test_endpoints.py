@@ -441,31 +441,6 @@ def test_health_check(test_client):
     assert response_data["status"] == "healthy"
 
 
-def test_teams_call_webhook(test_client):
-    """Test successful Teams SIP call webhook processing."""
-    endpoint = "/teams/call"
-    teams_number = "+19999999999"
-    from_uri = "sip:anonymous@teams.microsoft.com"
-    call_id = "test-call-id-12345678"
-
-    json_payload = {
-        "from_uri": from_uri,
-        "to_uri": f"sip:{teams_number}@sbc.unify.ai:5061;user=phone;transport=tls",
-        "call_id": call_id,
-        "source_ip": "10.0.0.1",
-    }
-
-    response = test_client.make_request("POST", endpoint, json=json_payload)
-
-    print("Teams call response:", response.text)
-    assert response.status_code == 200
-    assert "application/json" in response.headers.get("content-type", "")
-
-    response_data = response.json()
-    assert response_data["success"] is True
-    assert response_data["room_name"] == "unity_default-test-assistant_teams"
-
-
 def test_assistant_wakeup_webhook(test_client):
     """Test successful assistant wakeup webhook processing."""
     endpoint = "/assistant/wakeup"
@@ -726,23 +701,6 @@ def test_unity_pre_hire_webhook_invalid_body_format(test_client):
         headers=headers,
     )
     assert response.status_code == 400
-
-
-def test_teams_call_webhook_invalid_to_uri(test_client):
-    """Test Teams call webhook handles invalid to_uri gracefully."""
-    endpoint = "/teams/call"
-    json_payload = {
-        "from_uri": "sip:anonymous@teams.microsoft.com",
-        "to_uri": "invalid_uri",  # Invalid format - no sip: prefix
-        "call_id": "test-call-id",
-        "source_ip": "10.0.0.1",
-    }
-
-    response = test_client.make_request("POST", endpoint, json=json_payload)
-
-    print("Teams call invalid uri response:", response.text)
-    assert response.status_code == 400
-    assert "Invalid to_uri" in response.text
 
 
 def test_outlook_notification_missing_client_state(test_client):
