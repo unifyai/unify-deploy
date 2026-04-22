@@ -26,7 +26,6 @@ from communication.helpers import (
     get_graph_client,
     graph_client_from_assistant,
 )
-from common.pubsub import publish_assistant_event
 from common.settings import SETTINGS
 
 router = APIRouter()
@@ -1128,24 +1127,6 @@ async def create_teams_meeting(request: Request):
     except RuntimeError as e:
         logging.error("Graph meeting creation failed: %s", e)
         raise HTTPException(status_code=502, detail=str(e))
-
-    assistant_id = str(assistant.get("assistant_id") or "")
-    if assistant_id:
-        await asyncio.to_thread(
-            publish_assistant_event,
-            assistant_id=assistant_id,
-            thread="teams_meet_created",
-            event={
-                "assistant_email": assistant_email,
-                "join_web_url": created.join_web_url,
-                "meeting_id": created.meeting_id,
-                "event_id": created.event_id,
-                "subject": created.subject,
-                "start": created.start_datetime,
-                "end": created.end_datetime,
-                "mode": mode,
-            },
-        )
 
     return {
         "success": True,

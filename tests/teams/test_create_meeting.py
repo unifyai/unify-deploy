@@ -247,10 +247,6 @@ def client(assistant_record):
             "communication.teams.views._lookup_assistant",
             new=AsyncMock(return_value=assistant_record),
         ),
-        patch(
-            "communication.teams.views.publish_assistant_event",
-            new=lambda *a, **k: None,
-        ),
     ):
         from communication.main import app
 
