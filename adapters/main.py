@@ -58,7 +58,9 @@ from common.livekit import (
     verify_livekit_webhook,
 )
 
+from common.contacts import build_boss_contact
 from common.oauth import OAuthStateError, verify_oauth_state
+from common.pubsub import publish_assistant_event
 from common.settings import SETTINGS
 
 # Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
@@ -426,6 +428,111 @@ async def twilio_call_status_webhook(request: Request):
             logger.info(f"{thread} published to Pub/Sub successfully")
         except Exception as e:
             logger.error(f"Error publishing to Pub/Sub: {e}")
+
+    return Response(status_code=200)
+
+
+# Terminal Twilio call statuses — any of these on a Teams-meet leg
+# means the assistant is no longer on the call, so Unity's comms
+# manager should tear down the LiveKit session.
+_TEAMS_MEET_TERMINAL_STATUSES = {"completed", "no-answer", "busy", "canceled", "failed"}
+
+
+@app.post(
+    "/twilio/teams-meet-call-status",
+    dependencies=[Depends(validate_twilio_signature)],
+)
+async def twilio_teams_meet_call_status_webhook(request: Request):
+    """Status callback for the Twilio leg bridging an assistant into a Teams meeting.
+
+    ``/teams/join_meeting`` originates a Twilio call to LiveKit's SIP
+    URI with this URL as its ``statusCallback``, tagged with
+    ``?assistant_id=...&livekit_room=...&conference_name=...``.  Twilio
+    re-POSTs the form on every call-state transition.
+
+    Publishes ``teams_meet_started`` on ``in-progress`` and
+    ``teams_meet_ended`` on any terminal status (``completed``,
+    ``no-answer``, ``busy``, ``canceled``, ``failed``).  Intermediate
+    statuses (``queued``, ``ringing``, ``initiated``) are dropped —
+    Twilio re-fires on the next transition.
+
+    Routes contact lookup + Unity job-activation through
+    ``build_webhook_context`` (same convention as
+    ``/twilio/call-status`` and ``/twilio/whatsapp-call-status``) so
+    Unity is kept warm across long meetings, but pins the emitted
+    ``contacts`` list to boss-only.  Carrying the assistant entry
+    (``contact_id=0``) would be picked as "organizer" by Unity's
+    ``next((c for c in contacts if c.get("contact_id") != 1), None)``
+    selector, which is semantically wrong.
+    """
+    form_data = await request.form()
+    call_status = form_data.get("CallStatus")
+    call_sid = form_data.get("CallSid")
+
+    assistant_id = request.query_params.get("assistant_id", "")
+    livekit_room = request.query_params.get("livekit_room", "")
+    conference_name = request.query_params.get("conference_name", "")
+
+    logger.info(
+        "twilio_teams_meet_call_status: %s (assistant=%s, sid=%s, conference=%s)",
+        call_status,
+        assistant_id,
+        call_sid,
+        conference_name,
+    )
+
+    if not assistant_id:
+        logger.warning(
+            "teams_meet call-status missing assistant_id (sid=%s, status=%s)",
+            call_sid,
+            call_status,
+        )
+        return Response(status_code=200)
+
+    if call_status == "in-progress":
+        thread = "teams_meet_started"
+    elif call_status in _TEAMS_MEET_TERMINAL_STATUSES:
+        thread = "teams_meet_ended"
+    else:
+        return Response(status_code=200)
+
+    try:
+        context = await asyncio.to_thread(
+            build_webhook_context,
+            "teams_meet",
+            destination="",
+            sender="",
+            assistant_id=assistant_id,
+            validate_contact=False,
+            ensure_job=True,
+        )
+        assistant_data = context["assistant"]
+    except Exception as e:
+        logger.error(
+            "Failed to build webhook context for teams_meet status (assistant=%s): %s",
+            assistant_id,
+            e,
+        )
+        return Response(status_code=200)
+
+    contacts = [build_boss_contact(assistant_data)]
+    try:
+        await asyncio.to_thread(
+            publish_assistant_event,
+            assistant_id=str(assistant_id),
+            thread=thread,
+            event={
+                "contacts": contacts,
+                "assistant_id": str(assistant_id),
+                "livekit_room": livekit_room,
+                "conference_name": conference_name,
+                "twilio_call_sid": call_sid,
+                "call_status": call_status,
+                "timestamp": int(time.time() * 1000),
+            },
+        )
+    except Exception as e:
+        logger.error("Error publishing %s to Pub/Sub: %s", thread, e)
 
     return Response(status_code=200)
 

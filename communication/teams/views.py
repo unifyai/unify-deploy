@@ -4,6 +4,8 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, HTTPException, Request
 from msgraph.generated.models.aad_user_conversation_member import (
@@ -18,13 +20,20 @@ from msgraph.generated.models.chat_message_attachment import ChatMessageAttachme
 from msgraph.generated.models.chat_type import ChatType
 from msgraph.generated.models.item_body import ItemBody
 from msgraph.generated.models.subscription import Subscription
+from twilio.base.exceptions import TwilioRestException
 
+from common.contacts import build_boss_contact
+from common.livekit import create_room_and_dispatch_agent, make_room_name
 from communication.helpers import (
     _lookup_assistant,
     get_admin_graph_client,
     get_graph_client,
+    get_twilio_client,
     graph_client_from_assistant,
 )
+from communication.phone.views import initiate_teams_meet_bridge
+from communication.teams.meeting import MeetingDialIn, resolve_meeting_dialin
+from common.pubsub import publish_assistant_event
 from common.settings import SETTINGS
 
 router = APIRouter()
@@ -1011,3 +1020,369 @@ async def get_teams_channel_messages(
     except Exception as e:
         logging.error(f"Failed to get Teams channel messages: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Teams meeting PSTN dial-in bridge
+#
+# Joins a Teams meeting as an audio-only participant by calling the
+# meeting's Audio Conferencing dial-in number from the assistant's
+# Twilio DID and bridging that audio leg into a LiveKit room where the
+# AI agent is already dispatched.  See ``communication/teams/meeting.py``
+# (dial-in resolution) and ``communication/phone/views.py#initiate_teams_meet_bridge``
+# (Twilio ↔ LiveKit wiring) for the primitives.
+#
+# Channel identifier is ``teams_meet`` throughout (LiveKit room suffix,
+# agent dispatch metadata, Pub/Sub ``thread``) to match Unity's
+# ``Medium.TEAMS_MEET`` and align with the existing ``google_meet``
+# convention.
+#
+# Supports both unify-provisioned mailboxes (Graph path) and
+# externally-linked mailboxes where Graph /onlineMeetings is not
+# reachable (invite-body regex / manual override).
+# =============================================================================
+
+
+async def _publish_teams_meet_received(
+    *,
+    assistant: dict,
+    assistant_id: str,
+    assistant_email: str,
+    room_name: str,
+    conference_name: str,
+    dialin: MeetingDialIn,
+    join_web_url: str,
+    meeting_subject: str,
+    organizer_name: str,
+    organizer_email: str,
+    call_sid: str,
+) -> None:
+    """Publish ``thread: "teams_meet"`` for Unity's comms_manager.
+
+    Event payload contract (mirrors ``GoogleMeetReceived`` shape):
+
+    - ``contacts``:            at least the boss contact (contact_id=1)
+    - ``livekit_room``:        LiveKit room the PSTN leg lands in
+    - ``conference_name``:     stable id for this meeting session
+      (Unity uses this on ``leave_teams_meet``)
+    - ``twilio_call_sid``:     the outbound Twilio call — lets Unity
+      correlate ``teams_meet_started`` / ``teams_meet_ended``
+      callbacks coming through the adapters webhook
+    - ``call_metadata``:       join_web_url, meeting_subject, organizer
+      name/email, dial_in, dial_in_source — seeded into the voice
+      agent's opening prompt via ``medium_scripts/call.py``
+    """
+    contacts = [build_boss_contact(assistant)]
+    event_payload = {
+        "contacts": contacts,
+        "livekit_room": room_name,
+        "conference_name": conference_name,
+        "twilio_call_sid": call_sid,
+        "assistant_email": assistant_email,
+        "call_metadata": {
+            "join_web_url": join_web_url,
+            "meeting_subject": meeting_subject,
+            "organizer_name": organizer_name,
+            "organizer_email": organizer_email,
+            "dial_in_number": dialin.dial_in_number,
+            "conference_id": dialin.conference_id,
+            "dial_in_source": dialin.source,
+        },
+    }
+    # ``publish_assistant_event`` blocks on ``future.result``; run it in
+    # a worker thread so we don't stall the HTTP handler for the ~100ms
+    # Pub/Sub publish RTT.
+    await asyncio.to_thread(
+        publish_assistant_event,
+        assistant_id=assistant_id,
+        thread="teams_meet",
+        event=event_payload,
+    )
+
+
+_TEAMS_MEET_STATUS_CB_PATH = "/twilio/teams-meet-call-status"
+
+
+def _find_teams_meet_call_sid(
+    twilio_client: Any,
+    conference_name: str,
+) -> str | None:
+    """Return the SID of the in-progress Twilio call for ``conference_name``.
+
+    ``/teams/join_meeting`` embeds the conference name in the Twilio
+    ``statusCallback`` URL pointed at
+    ``/twilio/teams-meet-call-status?...&conference_name=...`` so
+    scanning in-progress calls and matching on that path + query
+    parameter identifies the correct leg without colliding with any
+    other outbound Twilio call the assistant may have in flight.
+
+    Returns ``None`` when no active leg exists (meeting already ended
+    or the outbound leg was rejected immediately).  The caller treats
+    this as success — the post-condition "the meeting is no longer
+    live" is satisfied.
+    """
+    try:
+        active = twilio_client.calls.list(status="in-progress", limit=50)
+    except Exception as e:
+        logging.warning(
+            "Twilio .calls.list failed while resolving conference %s: %s",
+            conference_name,
+            e,
+        )
+        return None
+    tag = f"conference_name={quote_plus(conference_name)}"
+    for call in active:
+        url = getattr(call, "status_callback", "") or ""
+        if tag in url and _TEAMS_MEET_STATUS_CB_PATH in url:
+            return call.sid
+    return None
+
+
+@router.post("/join_meeting")
+async def join_teams_meet(request: Request):
+    """Join a Teams meeting via PSTN dial-in, bridged into a LiveKit room.
+
+    Request body::
+
+        {
+          "assistant_email":      "assistant@contoso.com",
+          "join_web_url":         "https://teams.microsoft.com/l/meetup-join/...",
+          "invite_body":          "...raw invite HTML/text..." (optional),
+          "dial_in_number":       "+13235550123" (optional manual override),
+          "conference_id":        "987654321"  (optional manual override),
+          "subject":              "1:1 with Alice" (optional, for logging),
+          "record":               false (optional; LiveKit egress to GCS)
+        }
+
+    At least one of {``join_web_url`` + Graph access, ``invite_body``,
+    manual dial-in+conference ID} must resolve to a PSTN dial-in.  A
+    manual override wins over Graph wins over invite-body parsing (see
+    ``resolve_meeting_dialin``).
+
+    Returns::
+
+        {
+          "success": true,
+          "call_sid": "CAxxxx",            # Twilio call leg to the PSTN bridge
+          "conference_name": "Unity_TeamsMeet_{id}_{timestamp}",
+          "room_name": "unity_{id}_teams_meet",
+          "dial_in_source": "graph"|"invite_body"|"manual",
+          "dial_in_number": "+13235550123",
+          "conference_id": "987654321"
+        }
+
+    Callers should treat the Twilio call as an async background operation:
+    full bridge setup typically takes 3-6s (SIP ring + Audio Conferencing
+    greeting + DTMF replay).  Downstream the LiveKit agent reacts to the
+    SIP participant joining the room.
+    """
+    data = await request.json()
+    assistant_email = data.get("assistant_email")
+    join_web_url = data.get("join_web_url") or None
+    invite_body = data.get("invite_body") or None
+    manual_number = data.get("dial_in_number") or None
+    manual_conf = data.get("conference_id") or None
+    subject = data.get("subject") or ""
+    record = bool(data.get("record", False))
+
+    if not assistant_email:
+        raise HTTPException(status_code=400, detail="Missing assistant_email")
+    if not (join_web_url or invite_body or (manual_number and manual_conf)):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Must supply one of: join_web_url, invite_body, or "
+                "dial_in_number + conference_id"
+            ),
+        )
+
+    assistant = await _lookup_assistant(assistant_email)
+    assistant_id = assistant.get("agent_id") or assistant.get("assistant_id")
+    assistant_twilio_did = (
+        assistant.get("phone") or assistant.get("assistant_number") or ""
+    )
+    if not assistant_twilio_did:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Assistant {assistant_email} has no provisioned Twilio "
+                "phone number; cannot originate outbound PSTN call."
+            ),
+        )
+    access_token = (assistant.get("secrets") or {}).get("MICROSOFT_ACCESS_TOKEN") or ""
+
+    dialin: MeetingDialIn | None = await resolve_meeting_dialin(
+        access_token=access_token,
+        join_web_url=join_web_url,
+        invite_body=invite_body,
+        manual_dial_in_number=manual_number,
+        manual_conference_id=manual_conf,
+    )
+    if not dialin:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Could not resolve a Teams meeting dial-in.  Ensure the "
+                "meeting has Audio Conferencing enabled, the assistant "
+                "mailbox holds delegated OnlineMeetings.Read scope on the "
+                "organising meeting, or pass the invite_body / manual "
+                "dial_in_number + conference_id."
+            ),
+        )
+
+    # Organizer metadata resolves only on the Graph path; invite-body
+    # and manual flows leave these empty and we fall back to the boss
+    # contact upstream.
+    organizer_name = dialin.organizer_name or ""
+    organizer_email = dialin.organizer_email or ""
+    if dialin.meeting_subject and not subject:
+        subject = dialin.meeting_subject
+
+    room_name = make_room_name(str(assistant_id), "teams_meet")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    conference_name = f"Unity_TeamsMeet_{assistant_id}_{timestamp}"
+    await create_room_and_dispatch_agent(
+        room_name,
+        room_name,
+        metadata={
+            "channel": "teams_meet",
+            "assistant_email": assistant_email,
+            "assistant_id": assistant_id,
+            "conference_name": conference_name,
+            "join_web_url": join_web_url,
+            "subject": subject,
+            "dial_in_source": dialin.source,
+        },
+        record=record,
+        assistant_id=str(assistant_id),
+        user_id=str(assistant.get("user_id") or ""),
+    )
+
+    caller_id = SETTINGS.teams_conferencing_caller_id or assistant_twilio_did
+    # Dedicated Teams-meet status callback in adapters — publishes the
+    # ``teams_meet_started`` / ``teams_meet_ended`` Pub/Sub threads and
+    # keeps the Unity job warm via ``build_webhook_context``.
+    status_cb = (
+        f"{SETTINGS.adapters_url}/twilio/teams-meet-call-status"
+        f"?livekit_room={quote_plus(room_name)}"
+        f"&assistant_id={quote_plus(str(assistant_id))}"
+        f"&conference_name={quote_plus(conference_name)}"
+    )
+    try:
+        call_sid = await initiate_teams_meet_bridge(
+            assistant_twilio_did=assistant_twilio_did,
+            dial_in_number=dialin.dial_in_number,
+            conference_id=dialin.conference_id,
+            room_name=room_name,
+            caller_id=caller_id,
+            status_callback_url=status_cb,
+        )
+    except TwilioRestException as e:
+        logging.error("Twilio rejected Teams meet originate: %s", e)
+        raise HTTPException(status_code=502, detail=f"Twilio error: {e}")
+
+    logging.info(
+        "Teams meet bridge initiated (assistant=%s, room=%s, "
+        "conference=%s, source=%s, call=%s)",
+        assistant_email,
+        room_name,
+        conference_name,
+        dialin.source,
+        call_sid,
+    )
+
+    # Publish ``thread: "teams_meet"`` so Unity's comms_manager spins up
+    # the voice session before the PSTN leg even connects.  Failures
+    # are logged but non-fatal — the PSTN bridge is already in flight
+    # and Unity will still receive the downstream ``teams_meet_started``
+    # event from Twilio's call-status callback.
+    try:
+        await _publish_teams_meet_received(
+            assistant=assistant,
+            assistant_id=str(assistant_id),
+            assistant_email=assistant_email,
+            room_name=room_name,
+            conference_name=conference_name,
+            dialin=dialin,
+            join_web_url=join_web_url or "",
+            meeting_subject=subject,
+            organizer_name=organizer_name,
+            organizer_email=organizer_email,
+            call_sid=call_sid,
+        )
+    except Exception as e:
+        logging.error(
+            "Failed to publish teams_meet Pub/Sub event " "(assistant=%s, room=%s): %s",
+            assistant_email,
+            room_name,
+            e,
+        )
+
+    return {
+        "success": True,
+        "call_sid": call_sid,
+        "conference_name": conference_name,
+        "room_name": room_name,
+        "dial_in_source": dialin.source,
+        "dial_in_number": dialin.dial_in_number,
+        "conference_id": dialin.conference_id,
+    }
+
+
+@router.post("/leave_meeting")
+async def leave_teams_meet(request: Request):
+    """Hang up the Twilio leg bridging an assistant into a Teams meeting.
+
+    Request body (either key is accepted; ``call_sid`` is the fast path,
+    ``conference_name`` is the Unity-side convention and is resolved
+    by scanning in-progress Twilio calls tagged with the conference
+    name in their status-callback URL)::
+
+        { "call_sid": "CAxxxx" }
+        { "conference_name": "Unity_TeamsMeet_<id>_<ts>" }
+
+    Returns ``{"success": true}`` even when Twilio reports the call was
+    already completed (404) — the post-condition "this call is no
+    longer alive" is satisfied either way.
+    """
+    data = await request.json()
+    call_sid = data.get("call_sid")
+    conference_name = data.get("conference_name")
+
+    twilio_client = get_twilio_client()
+
+    if not call_sid and conference_name:
+        # Resolve ``conference_name`` → most-recent in-progress Twilio
+        # call whose status-callback carries the tag.  ``in-progress``
+        # covers all active states (dialling, ringing, answered).
+        call_sid = _find_teams_meet_call_sid(twilio_client, conference_name)
+        if not call_sid:
+            logging.info(
+                "No active Teams meet Twilio call found for conference %s",
+                conference_name,
+            )
+            return {
+                "success": True,
+                "conference_name": conference_name,
+                "already_ended": True,
+            }
+
+    if not call_sid:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either call_sid or conference_name",
+        )
+
+    try:
+        twilio_client.calls(call_sid).update(status="completed")
+    except TwilioRestException as e:
+        if e.status != 404:
+            logging.error("Twilio error ending Teams meet call %s: %s", call_sid, e)
+            raise HTTPException(status_code=502, detail=f"Twilio error: {e}")
+        logging.info("Teams meet call %s already ended", call_sid)
+
+    return {
+        "success": True,
+        "call_sid": call_sid,
+        "conference_name": conference_name,
+    }

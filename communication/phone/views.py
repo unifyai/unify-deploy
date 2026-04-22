@@ -148,6 +148,150 @@ async def send_call(request: Request):
     return {"success": True, "call_sid": call.sid}
 
 
+# =============================================================================
+# Teams meeting PSTN dial-in bridge
+#
+# Mirrors the ``/send-call`` shape: Twilio originates a call *to* LiveKit's
+# SIP URI (so the SIP participant lands in ``room_name`` via the phone
+# dispatch rule), then the TwiML we return dials the Teams meeting's
+# PSTN Audio Conferencing number and auto-presses the conference ID +
+# ``#`` via ``sendDigits`` once the bridge answers.  Same one-outbound-Twilio-
+# call-bridging-two-legs pattern — Teams just looks like "another PSTN
+# destination" to us.
+#
+# Channel identifier is ``teams_meet`` throughout (room suffix, agent
+# dispatch metadata, Pub/Sub thread) to align with the Google Meet
+# convention (``google_meet``) and Unity's ``Medium.TEAMS_MEET``.
+# =============================================================================
+
+
+def _teams_meet_twiml(
+    *,
+    dial_in_number: str,
+    conference_id: str,
+    caller_id: str,
+    ivr_pause_s: int,
+    status_callback_url: str | None = None,
+) -> VoiceResponse:
+    """Return the TwiML that dials a Teams meeting's audio-conferencing bridge.
+
+    * ``w`` in ``sendDigits`` pauses for 0.5s, so
+      ``ivr_pause_s`` half-seconds of leading ``w`` are prepended to let
+      Microsoft's "Welcome to Microsoft Teams audio conferencing"
+      greeting finish before we press the conference ID.  Without this
+      pause Twilio fires the DTMF immediately on answer, which the
+      bridge discards.
+    * ``#`` terminates the conference ID and skips the "press star to
+      announce your name" prompt, which would otherwise hang the join
+      until Twilio detects end-of-speech.
+    * ``timeout`` is long enough to cover US cross-country PSTN setup
+      jitter (Microsoft's Audio Conferencing SBCs sometimes take 6-8s
+      to answer during peak load).
+    """
+    pause = "w" * max(0, ivr_pause_s)
+    send_digits = f"{pause}{conference_id}#"
+
+    response = VoiceResponse()
+    dial = response.dial(caller_id=caller_id, timeout=30)
+    number_kwargs = {"send_digits": send_digits}
+    if status_callback_url:
+        number_kwargs["status_callback"] = status_callback_url
+        number_kwargs["status_callback_event"] = "initiated ringing answered completed"
+        number_kwargs["status_callback_method"] = "POST"
+    dial.number(dial_in_number, **number_kwargs)
+    return response
+
+
+async def initiate_teams_meet_bridge(
+    *,
+    assistant_twilio_did: str,
+    dial_in_number: str,
+    conference_id: str,
+    room_name: str,
+    caller_id: str | None = None,
+    ivr_pause_s: int | None = None,
+    status_callback_url: str | None = None,
+) -> str:
+    """Wire up the full Teams-meeting-join flow and return the Twilio call SID.
+
+    Steps:
+      1. Install a LiveKit phone dispatch rule mapping
+         ``assistant_twilio_did`` → ``room_name`` (idempotent).
+      2. Originate a Twilio call from the assistant's DID *to* LiveKit's
+         SIP URI for that DID.  LiveKit's dispatch rule lands the SIP
+         participant in the room, so the LiveKit agent sees the meeting
+         audio as soon as the PSTN leg is bridged.
+      3. Hand Twilio a TwiML URL that will dial Teams' Audio Conferencing
+         number and auto-enter the conference ID on pickup.
+
+    The caller is responsible for having pre-dispatched the LiveKit
+    agent into ``room_name``.
+    """
+    from urllib.parse import quote_plus
+
+    sip_uri = make_sip_uri(assistant_twilio_did)
+    await ensure_phone_dispatch_rule(assistant_twilio_did, room_name)
+
+    effective_caller_id = caller_id or assistant_twilio_did
+    effective_pause = (
+        ivr_pause_s
+        if ivr_pause_s is not None
+        else SETTINGS.teams_conferencing_ivr_pause_s
+    )
+    # ``+`` in E.164 numbers must be percent-encoded as ``%2B`` — the
+    # default form-decode in FastAPI/Starlette interprets a literal ``+``
+    # as a space, which silently corrupts dial-in / caller-ID values.
+    twiml_url = (
+        f"{SETTINGS.comms_url}/phone/teams-meet-twiml"
+        f"?dial_in={quote_plus(dial_in_number)}"
+        f"&conf_id={quote_plus(conference_id)}"
+        f"&caller_id={quote_plus(effective_caller_id)}"
+        f"&pause={effective_pause}"
+    )
+    if status_callback_url:
+        twiml_url += f"&status_cb={quote_plus(status_callback_url)}"
+
+    twilio_client = get_twilio_client()
+    call = twilio_client.calls.create(
+        to=sip_uri,
+        from_=assistant_twilio_did,
+        url=twiml_url,
+    )
+    return call.sid
+
+
+@unauth_router.post("/teams-meet-twiml")
+async def teams_meet_twiml(request: Request):
+    """TwiML handler that Twilio hits after the SIP-to-LiveKit leg answers.
+
+    All parameters come in as query-string args so Twilio can fetch
+    this with a bare GET/POST and no JSON body.  Unauthenticated
+    because it's Twilio-to-us; the secret is that the URL is only
+    given to Twilio at call-create time.
+    """
+    qp = request.query_params
+    dial_in = qp.get("dial_in") or ""
+    conf_id = qp.get("conf_id") or ""
+    caller_id = qp.get("caller_id") or ""
+    pause = int(qp.get("pause") or SETTINGS.teams_conferencing_ivr_pause_s)
+    status_cb = qp.get("status_cb") or None
+
+    if not dial_in or not conf_id or not caller_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing dial_in / conf_id / caller_id",
+        )
+
+    response = _teams_meet_twiml(
+        dial_in_number=dial_in,
+        conference_id=conf_id,
+        caller_id=caller_id,
+        ivr_pause_s=pause,
+        status_callback_url=status_cb,
+    )
+    return Response(status_code=200, content=str(response), media_type="text/xml")
+
+
 @auth_router.post("/send-text")
 async def send_text(request: Request):
     data = await request.json()
