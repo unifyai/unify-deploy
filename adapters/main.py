@@ -4524,13 +4524,20 @@ def scheduled_infra_maintenance():
             logger.exception("maintenance: orphan VM reconcile failed for %s", vm_type)
             results[f"{key}_error"] = str(exc)
 
-    # 4b — Delete unattached assistant disks whose assistants no longer exist.
-    # Short-term bleed-stop; longer-term the per-assistant PD should be
-    # removed entirely now that GCS holds the durable workspace archive.
+    # 4b — Garbage-collect unattached assistant disks. Covers:
+    #   - orphan: assistant unhired, detached > max_age_hours.
+    #   - idle:   assistant still hired but detached > idle_hours with a
+    #             fresh GCS archive; next assign restores from GCS.
+    #   - hard_cap: off by default; set hard_cap_hours > 0 to accept data
+    #               loss on PDs whose archive is missing or stale.
     try:
         resp = requests.post(
             f"{SETTINGS.comms_url}/infra/vm/pool/reconcile-orphan-disks",
-            params={"max_age_hours": 72},
+            params={
+                "max_age_hours": 12,
+                "idle_hours": 24,
+                "hard_cap_hours": 24 * 3,
+            },
             headers=headers,
             timeout=120,
         )

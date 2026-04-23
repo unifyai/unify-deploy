@@ -3113,16 +3113,39 @@ async def reconcile_orphaned_vms_endpoint(vm_type: str = "ubuntu"):
 
 
 @router.post("/vm/pool/reconcile-orphan-disks")
-async def reconcile_orphaned_disks_endpoint(max_age_hours: int = 72):
-    """Delete unattached assistant disks whose assistants no longer exist.
+async def reconcile_orphaned_disks_endpoint(
+    max_age_hours: int = 72,
+    idle_hours: int | None = None,
+    hard_cap_hours: int | None = None,
+):
+    """Garbage-collect unattached ``unity-disk-*`` assistant disks.
 
-    Workspace files are archived to GCS on release, so PDs are no longer
-    the sole durable copy.  A disk is deleted when the assistant no
-    longer exists in Orchestra **and** the disk has been unattached for
-    at least *max_age_hours* (default 3 days).
-    Safe to call on a cron schedule (e.g. daily).
+    Three deletion branches cover the cost-leak patterns:
+
+    - *max_age_hours* — assistant unhired, detached ≥ this many hours.
+    - *idle_hours* — assistant still hired, detached ≥ this many hours,
+      and a fresh GCS archive exists (default 30 d).
+    - *hard_cap_hours* — escape hatch: delete even without a fresh
+      archive once detached ≥ this many hours. ``0`` (default) disables
+      this branch and treats missing/stale archives as reasons to keep.
+
+    Safe to call on a cron schedule (e.g. hourly).
     """
-    result = await asyncio.to_thread(reconcile_orphaned_disks, max_age_hours)
+    from .vm_config import (
+        POOL_ASSISTANT_DISK_IDLE_HOURS,
+        POOL_ASSISTANT_DISK_HARD_CAP_HOURS,
+    )
+
+    result = await asyncio.to_thread(
+        reconcile_orphaned_disks,
+        max_age_hours,
+        POOL_ASSISTANT_DISK_IDLE_HOURS if idle_hours is None else idle_hours,
+        (
+            POOL_ASSISTANT_DISK_HARD_CAP_HOURS
+            if hard_cap_hours is None
+            else hard_cap_hours
+        ),
+    )
     return result
 
 

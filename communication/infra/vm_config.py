@@ -107,6 +107,23 @@ SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 # GCS bucket for archiving assistant filesystems between sessions
 POOL_ASSISTANT_ARCHIVE_BUCKET = "unity-assistant-archives"
 
+# Idle-disk garbage collection. An unattached per-assistant PD whose
+# assistant still exists in Orchestra is eligible for deletion once
+# detached for longer than this threshold, provided a GCS archive exists
+# and is at least as fresh as the disk's last detach.
+POOL_ASSISTANT_DISK_IDLE_HOURS = 24
+
+# Hard cap for orphaned disks that have neither a fresh archive nor a
+# matching live assistant. ``0`` disables the escape hatch; any positive
+# value triggers deletion with a WARN log and an accepted-data-loss tag.
+POOL_ASSISTANT_DISK_HARD_CAP_HOURS = 0
+
+# Allow for minor skew between the GCE ``last_detach_timestamp`` and the
+# GCS blob ``updated`` timestamp when deciding whether an archive is a
+# superset of the PD state. Roughly the release-upload latency plus clock
+# drift headroom.
+POOL_ASSISTANT_DISK_ARCHIVE_FRESHNESS_SKEW_SECONDS = 300
+
 # Pool image families (separate from legacy to avoid affecting existing VMs)
 POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"
 POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"

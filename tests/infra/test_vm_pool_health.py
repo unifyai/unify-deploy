@@ -1280,3 +1280,351 @@ def test_rebalance_pool_includes_stopped_reserve_prune_actions(monkeypatch):
         "stopped_reserve_deleted": ["unity-pool-ubuntu-17-staging"],
         "stopped_reserve_kept": ["unity-pool-ubuntu-14-staging"],
     }
+
+
+# ---------------------------------------------------------------------------
+# reconcile_orphaned_disks — Branch A (orphan) / B (idle) / C (hard cap)
+# ---------------------------------------------------------------------------
+
+
+def _fake_disk(
+    *,
+    name: str,
+    last_detach_seconds_ago: int | None,
+    type_url: str = (
+        "projects/gcp-project-vms/zones/us-central1-f/diskTypes/pd-standard"
+    ),
+    users=(),
+    creation_seconds_ago: int | None = None,
+):
+    detach = (
+        (datetime.now(UTC) - timedelta(seconds=last_detach_seconds_ago)).isoformat()
+        if last_detach_seconds_ago is not None
+        else ""
+    )
+    created = (
+        datetime.now(UTC)
+        - timedelta(
+            seconds=(
+                creation_seconds_ago
+                if creation_seconds_ago is not None
+                else (last_detach_seconds_ago or 0)
+            ),
+        )
+    ).isoformat()
+    return SimpleNamespace(
+        name=name,
+        type_=type_url,
+        users=list(users),
+        last_detach_timestamp=detach,
+        creation_timestamp=created,
+    )
+
+
+def _install_disk_reconcile_env(
+    monkeypatch,
+    *,
+    disks,
+    assistant_exists_map,
+    archive_info_map,
+    env_suffix: str = "-staging",
+):
+    """Install mocks for the GCE DisksClient, Orchestra lookup, and GCS."""
+    delete_calls: list[str] = []
+
+    class _FakeClient:
+        def list(self, request=None):
+            return list(disks)
+
+        def delete(self, *, project, zone, disk):
+            delete_calls.append(disk)
+            return SimpleNamespace(result=lambda: None)
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.DisksClient",
+        lambda: _FakeClient(),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._assistant_exists",
+        lambda assistant_id: assistant_exists_map.get(assistant_id, True),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._assistant_archive_info",
+        lambda assistant_id: archive_info_map.get(assistant_id, (False, None)),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.SETTINGS.env_suffix",
+        env_suffix,
+        raising=False,
+    )
+    return delete_calls
+
+
+def test_reconcile_deletes_orphan_after_grace(monkeypatch):
+    disks = [
+        _fake_disk(
+            name="unity-disk-gone-assistant-staging",
+            last_detach_seconds_ago=int(timedelta(hours=73).total_seconds()),
+        ),
+    ]
+    delete_calls = _install_disk_reconcile_env(
+        monkeypatch,
+        disks=disks,
+        assistant_exists_map={"gone-assistant": False},
+        archive_info_map={},
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=0,
+    )
+
+    assert delete_calls == ["unity-disk-gone-assistant-staging"]
+    assert result["deleted"] == 1
+    assert result["deleted_orphan"] == 1
+    assert result["deleted_idle"] == 0
+    assert result["deleted_hard_cap"] == 0
+
+
+def test_reconcile_skips_orphan_inside_grace_window(monkeypatch):
+    disks = [
+        _fake_disk(
+            name="unity-disk-gone-assistant-staging",
+            last_detach_seconds_ago=int(timedelta(hours=1).total_seconds()),
+        ),
+    ]
+    delete_calls = _install_disk_reconcile_env(
+        monkeypatch,
+        disks=disks,
+        assistant_exists_map={"gone-assistant": False},
+        archive_info_map={},
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=0,
+    )
+
+    assert delete_calls == []
+    assert result["deleted"] == 0
+    assert result["skipped_fresh"] == 1
+
+
+def test_reconcile_skips_active_assistant_under_idle_threshold(monkeypatch):
+    disks = [
+        _fake_disk(
+            name="unity-disk-hot-assistant-staging",
+            last_detach_seconds_ago=int(timedelta(hours=2).total_seconds()),
+        ),
+    ]
+    fresh_archive = datetime.now(UTC)
+    delete_calls = _install_disk_reconcile_env(
+        monkeypatch,
+        disks=disks,
+        assistant_exists_map={"hot-assistant": True},
+        archive_info_map={"hot-assistant": (True, fresh_archive)},
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=0,
+    )
+
+    assert delete_calls == []
+    assert result["skipped_active_assistant"] == 1
+    assert result["deleted_idle"] == 0
+
+
+def test_reconcile_deletes_idle_assistant_with_fresh_archive(monkeypatch):
+    detach_seconds = int(timedelta(days=31).total_seconds())
+    disks = [
+        _fake_disk(
+            name="unity-disk-cold-assistant-staging",
+            last_detach_seconds_ago=detach_seconds,
+        ),
+    ]
+    detach_ts = datetime.now(UTC) - timedelta(seconds=detach_seconds)
+    fresh_archive = detach_ts + timedelta(minutes=1)
+    delete_calls = _install_disk_reconcile_env(
+        monkeypatch,
+        disks=disks,
+        assistant_exists_map={"cold-assistant": True},
+        archive_info_map={"cold-assistant": (True, fresh_archive)},
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=0,
+    )
+
+    assert delete_calls == ["unity-disk-cold-assistant-staging"]
+    assert result["deleted_idle"] == 1
+    assert result["deleted_orphan"] == 0
+
+
+def test_reconcile_keeps_idle_disk_when_archive_missing(monkeypatch):
+    disks = [
+        _fake_disk(
+            name="unity-disk-cold-assistant-staging",
+            last_detach_seconds_ago=int(timedelta(days=45).total_seconds()),
+        ),
+    ]
+    delete_calls = _install_disk_reconcile_env(
+        monkeypatch,
+        disks=disks,
+        assistant_exists_map={"cold-assistant": True},
+        archive_info_map={"cold-assistant": (False, None)},
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=0,
+    )
+
+    assert delete_calls == []
+    assert result["skipped_no_archive"] == 1
+    assert result["deleted_idle"] == 0
+
+
+def test_reconcile_keeps_idle_disk_when_archive_older_than_detach(monkeypatch):
+    detach_seconds = int(timedelta(days=45).total_seconds())
+    disks = [
+        _fake_disk(
+            name="unity-disk-cold-assistant-staging",
+            last_detach_seconds_ago=detach_seconds,
+        ),
+    ]
+    detach_ts = datetime.now(UTC) - timedelta(seconds=detach_seconds)
+    stale_archive = detach_ts - timedelta(hours=12)
+    delete_calls = _install_disk_reconcile_env(
+        monkeypatch,
+        disks=disks,
+        assistant_exists_map={"cold-assistant": True},
+        archive_info_map={"cold-assistant": (True, stale_archive)},
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=0,
+    )
+
+    assert delete_calls == []
+    assert result["skipped_stale_archive"] == 1
+
+
+def test_reconcile_hard_cap_deletes_when_enabled(monkeypatch):
+    detach_seconds = int(timedelta(days=200).total_seconds())
+    disks = [
+        _fake_disk(
+            name="unity-disk-very-cold-staging",
+            last_detach_seconds_ago=detach_seconds,
+        ),
+    ]
+    delete_calls = _install_disk_reconcile_env(
+        monkeypatch,
+        disks=disks,
+        assistant_exists_map={"very-cold": True},
+        archive_info_map={"very-cold": (False, None)},
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=24 * 180,
+    )
+
+    assert delete_calls == ["unity-disk-very-cold-staging"]
+    assert result["deleted_hard_cap"] == 1
+    assert result["skipped_no_archive"] == 0
+
+
+def test_reconcile_ignores_non_assistant_and_attached_disks(monkeypatch):
+    old_detach = int(timedelta(days=60).total_seconds())
+    disks = [
+        _fake_disk(
+            name="some-other-disk",
+            last_detach_seconds_ago=old_detach,
+        ),
+        _fake_disk(
+            name="unity-disk-attached-staging",
+            last_detach_seconds_ago=old_detach,
+            users=[
+                "projects/gcp-project-vms/zones/us-central1-f/instances/unity-pool-ubuntu-3",
+            ],
+        ),
+        _fake_disk(
+            name="unity-disk-ssd-pool-staging",
+            last_detach_seconds_ago=old_detach,
+            type_url=(
+                "projects/gcp-project-vms/zones/us-central1-f/" "diskTypes/pd-ssd"
+            ),
+        ),
+    ]
+    delete_calls = _install_disk_reconcile_env(
+        monkeypatch,
+        disks=disks,
+        assistant_exists_map={},
+        archive_info_map={},
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=24 * 7,
+    )
+
+    assert delete_calls == []
+    assert result["deleted"] == 0
+
+
+def test_reconcile_records_delete_race_as_error(monkeypatch):
+    detach_seconds = int(timedelta(days=45).total_seconds())
+    disks = [
+        _fake_disk(
+            name="unity-disk-racing-staging",
+            last_detach_seconds_ago=detach_seconds,
+        ),
+    ]
+    detach_ts = datetime.now(UTC) - timedelta(seconds=detach_seconds)
+    fresh_archive = detach_ts + timedelta(minutes=5)
+
+    class _RacingClient:
+        def list(self, request=None):
+            return list(disks)
+
+        def delete(self, *, project, zone, disk):
+            raise RuntimeError("disk is attached")
+
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.compute_v1.DisksClient",
+        lambda: _RacingClient(),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._assistant_exists",
+        lambda assistant_id: True,
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers._assistant_archive_info",
+        lambda assistant_id: (True, fresh_archive),
+    )
+    monkeypatch.setattr(
+        "communication.infra.vm_helpers.SETTINGS.env_suffix",
+        "-staging",
+        raising=False,
+    )
+
+    result = vm_helpers_module.reconcile_orphaned_disks(
+        max_age_hours=72,
+        idle_hours=24 * 30,
+        hard_cap_hours=0,
+    )
+
+    assert result["deleted"] == 0
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["disk"] == "unity-disk-racing-staging"

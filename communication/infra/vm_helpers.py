@@ -63,6 +63,9 @@ from .vm_config import (
     POOL_ASSISTANT_DISK_TYPE,
     POOL_VM_NAME_PREFIX,
     POOL_ASSISTANT_ARCHIVE_BUCKET,
+    POOL_ASSISTANT_DISK_IDLE_HOURS,
+    POOL_ASSISTANT_DISK_HARD_CAP_HOURS,
+    POOL_ASSISTANT_DISK_ARCHIVE_FRESHNESS_SKEW_SECONDS,
     POOL_UBUNTU_VM_IMAGE_FAMILY,
     POOL_WINDOWS_VM_IMAGE_FAMILY,
 )
@@ -4036,24 +4039,33 @@ def rebalance_pool(vm_type: str) -> Dict[str, Any]:
     }
 
 
-def reconcile_orphaned_disks(max_age_hours: int = 72) -> Dict[str, Any]:
-    """Delete unattached assistant disks whose assistants no longer exist.
+def reconcile_orphaned_disks(
+    max_age_hours: int = 12,
+    idle_hours: int = POOL_ASSISTANT_DISK_IDLE_HOURS,
+    hard_cap_hours: int = POOL_ASSISTANT_DISK_HARD_CAP_HOURS,
+) -> Dict[str, Any]:
+    """Garbage-collect unattached ``unity-disk-*`` pd-standard disks.
 
-    Assistant workspace files are archived to GCS on session release, so
-    the persistent disk is no longer the sole durable copy.  This
-    function garbage-collects unattached ``unity-disk-*`` pd-standard
-    disks that are safe to remove.
+    Workspace files are archived to GCS on session release, so the PD is
+    no longer the sole durable copy. Three deletion branches cover the
+    realistic cost-leak patterns:
 
-    For each unattached disk it extracts the assistant ID, queries
-    Orchestra to check whether the assistant still exists, and deletes
-    the disk only when **both** conditions are met:
+    - **A — orphan:** assistant no longer exists in Orchestra and the
+      disk has been detached at least *max_age_hours* (default 72 h).
+    - **B — idle:** assistant still exists, the disk has been detached
+      at least *idle_hours* (default 30 d), **and** a GCS archive exists
+      whose ``updated`` timestamp is at least as recent as the disk's
+      ``last_detach_timestamp`` (modulo a small skew). A fresh PD is
+      recreated transparently on the next assignment and the guest
+      restore path repopulates ``/Unity/Local`` from GCS.
+    - **C — hard cap (opt-in, default off):** covers the above cases
+      when the archive is missing or stale but the disk has been
+      detached longer than *hard_cap_hours*. Accepts data loss; emits a
+      WARN log per deletion. Set *hard_cap_hours* to ``0`` to disable.
 
-    1. The assistant no longer exists in Orchestra (i.e. was unhired), **or**
-       the disk has been unattached longer than *max_age_hours* (default
-       3 days — kept short since GCS holds the durable archive).
-    2. The disk is not currently attached to any VM.
-
-    Idempotent and safe to call on a cron schedule (e.g. daily).
+    Returns a per-reason breakdown plus the aggregate ``deleted`` /
+    ``skipped`` counts kept for contract compatibility. Idempotent and
+    safe to call on a cron schedule (e.g. hourly).
     """
     from datetime import datetime, timezone, timedelta
 
@@ -4064,13 +4076,42 @@ def reconcile_orphaned_disks(max_age_hours: int = 72) -> Dict[str, Any]:
     )
 
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=max_age_hours)
+    orphan_cutoff = now - timedelta(hours=max_age_hours)
+    idle_cutoff = now - timedelta(hours=idle_hours)
+    hard_cap_enabled = hard_cap_hours > 0
+    hard_cap_cutoff = (
+        now - timedelta(hours=hard_cap_hours) if hard_cap_enabled else None
+    )
 
-    deleted: list[str] = []
-    skipped: list[str] = []
+    deleted_orphan: list[str] = []
+    deleted_idle: list[str] = []
+    deleted_hard_cap: list[str] = []
+    skipped_active: list[str] = []
+    skipped_fresh: list[str] = []
+    skipped_no_archive: list[str] = []
+    skipped_stale_archive: list[str] = []
     errors: list[Dict[str, str]] = []
+    deleted_details: list[Dict[str, str]] = []
 
     env_suffix = SETTINGS.env_suffix  # e.g. "" / "-staging" / "-preview"
+
+    def _delete(disk_name: str, reason: str, bucket: list[str]) -> None:
+        try:
+            op = client.delete(
+                project=SETTINGS.vm_project_id,
+                zone=SETTINGS.vm_zone,
+                disk=disk_name,
+            )
+            op.result()
+            bucket.append(disk_name)
+            deleted_details.append({"disk": disk_name, "reason": reason})
+            log_fn = logger.warning if reason == "hard_cap" else logger.info
+            log_fn(f"Deleted assistant disk ({reason}): {disk_name}")
+        except NotFound:
+            logger.info(f"Disk already deleted during reconcile: {disk_name}")
+        except Exception as e:
+            logger.error(f"Failed to delete disk {disk_name} ({reason}): {e}")
+            errors.append({"disk": disk_name, "reason": reason, "error": str(e)})
 
     for disk in client.list(request=request):
         if not disk.name.startswith("unity-disk-"):
@@ -4087,56 +4128,126 @@ def reconcile_orphaned_disks(max_age_hours: int = 72) -> Dict[str, Any]:
             raw = raw[: -len(env_suffix)]
         assistant_id = raw
 
-        # Check whether the assistant still exists in Orchestra.
+        detach_ts = _parse_disk_timestamp(
+            disk.last_detach_timestamp or disk.creation_timestamp,
+        )
+
         assistant_exists = _assistant_exists(assistant_id)
 
-        if assistant_exists:
-            skipped.append(disk.name)
+        # Branch A — orphaned assistant.
+        if not assistant_exists:
+            if detach_ts is not None and detach_ts > orphan_cutoff:
+                skipped_fresh.append(disk.name)
+                continue
+            _delete(disk.name, "orphan", deleted_orphan)
             continue
 
-        # Assistant does not exist (or lookup failed).  Apply an age
-        # guard so we don't race with a just-created assistant whose
-        # record might not be visible yet.
-        ref_ts = disk.last_detach_timestamp or disk.creation_timestamp
-        if ref_ts:
-            try:
-                if isinstance(ref_ts, str):
-                    ts = datetime.fromisoformat(ref_ts.replace("Z", "+00:00"))
-                else:
-                    ts = ref_ts
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                if ts > cutoff:
-                    skipped.append(disk.name)
-                    continue
-            except (ValueError, TypeError):
-                pass
+        # Branch B — assistant exists but has been idle long enough and
+        # GCS holds a fresh archive.
+        if detach_ts is None or detach_ts > idle_cutoff:
+            skipped_active.append(disk.name)
+            continue
 
-        try:
-            op = client.delete(
-                project=SETTINGS.vm_project_id,
-                zone=SETTINGS.vm_zone,
-                disk=disk.name,
-            )
-            op.result()
-            deleted.append(disk.name)
-            logger.info(f"Deleted orphaned assistant disk: {disk.name}")
-        except NotFound:
-            logger.info(f"Orphaned disk already deleted: {disk.name}")
-        except Exception as e:
-            logger.error(f"Failed to delete orphaned disk {disk.name}: {e}")
-            errors.append({"disk": disk.name, "error": str(e)})
+        archive_exists, archive_updated = _assistant_archive_info(assistant_id)
+        if not archive_exists:
+            if hard_cap_enabled and detach_ts <= hard_cap_cutoff:
+                logger.warning(
+                    "Deleting disk %s under hard_cap=%dh with no GCS archive; "
+                    "accepting data loss for assistant_id=%s",
+                    disk.name,
+                    hard_cap_hours,
+                    assistant_id,
+                )
+                _delete(disk.name, "hard_cap", deleted_hard_cap)
+            else:
+                skipped_no_archive.append(disk.name)
+            continue
+
+        skew = timedelta(seconds=POOL_ASSISTANT_DISK_ARCHIVE_FRESHNESS_SKEW_SECONDS)
+        if archive_updated is None or archive_updated + skew < detach_ts:
+            if hard_cap_enabled and detach_ts <= hard_cap_cutoff:
+                logger.warning(
+                    "Deleting disk %s under hard_cap=%dh with stale archive "
+                    "(archive_updated=%s, last_detach=%s); accepting data loss "
+                    "for assistant_id=%s",
+                    disk.name,
+                    hard_cap_hours,
+                    archive_updated,
+                    detach_ts,
+                    assistant_id,
+                )
+                _delete(disk.name, "hard_cap", deleted_hard_cap)
+            else:
+                skipped_stale_archive.append(disk.name)
+            continue
+
+        _delete(disk.name, "idle", deleted_idle)
+
+    total_deleted = len(deleted_orphan) + len(deleted_idle) + len(deleted_hard_cap)
+    total_skipped = (
+        len(skipped_active)
+        + len(skipped_fresh)
+        + len(skipped_no_archive)
+        + len(skipped_stale_archive)
+    )
+
+    if skipped_stale_archive:
+        logger.warning(
+            "Orphaned disk reconcile: %d disks kept due to stale GCS archive "
+            "(points to missed release-time uploads): %s",
+            len(skipped_stale_archive),
+            skipped_stale_archive,
+        )
 
     logger.info(
         "Orphaned disk reconciliation complete: "
-        f"deleted={len(deleted)} skipped={len(skipped)} errors={len(errors)}",
+        "deleted=%d (orphan=%d idle=%d hard_cap=%d) "
+        "skipped=%d (active=%d fresh=%d no_archive=%d stale_archive=%d) "
+        "errors=%d",
+        total_deleted,
+        len(deleted_orphan),
+        len(deleted_idle),
+        len(deleted_hard_cap),
+        total_skipped,
+        len(skipped_active),
+        len(skipped_fresh),
+        len(skipped_no_archive),
+        len(skipped_stale_archive),
+        len(errors),
     )
+
     return {
-        "deleted": len(deleted),
-        "skipped": len(skipped),
+        "deleted": total_deleted,
+        "skipped": total_skipped,
         "errors": errors,
-        "deleted_disks": deleted,
+        "deleted_orphan": len(deleted_orphan),
+        "deleted_idle": len(deleted_idle),
+        "deleted_hard_cap": len(deleted_hard_cap),
+        "skipped_active_assistant": len(skipped_active),
+        "skipped_fresh": len(skipped_fresh),
+        "skipped_no_archive": len(skipped_no_archive),
+        "skipped_stale_archive": len(skipped_stale_archive),
+        "deleted_disks": deleted_orphan + deleted_idle + deleted_hard_cap,
+        "deleted_details": deleted_details,
     }
+
+
+def _parse_disk_timestamp(raw: Any):
+    """Normalise a GCE disk timestamp into an aware ``datetime`` (UTC)."""
+    from datetime import datetime, timezone
+
+    if not raw:
+        return None
+    try:
+        if isinstance(raw, str):
+            ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        else:
+            ts = raw
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+    except (ValueError, TypeError):
+        return None
 
 
 def _assistant_exists(assistant_id: str) -> bool:
@@ -4165,6 +4276,39 @@ def _assistant_exists(assistant_id: str) -> bool:
         return True
     except Exception:
         return True  # network error — keep disk
+
+
+def _assistant_archive_info(assistant_id: str):
+    """Return ``(exists, updated_at)`` for the assistant's GCS archive.
+
+    Looks up ``gs://{POOL_ASSISTANT_ARCHIVE_BUCKET}/{assistant_id}.tar.gz``.
+    Any exception is swallowed and reported as ``(False, None)`` so
+    callers fail safe (keep the PD) on transient GCS issues.
+    """
+    import os
+    import json as _json
+    from google.cloud import storage
+    from google.oauth2.service_account import Credentials
+
+    try:
+        creds_json = os.getenv("GCP_SA_KEY")
+        if creds_json:
+            creds = Credentials.from_service_account_info(_json.loads(creds_json))
+            client = storage.Client(credentials=creds)
+        else:
+            client = storage.Client()
+        bucket = client.bucket(POOL_ASSISTANT_ARCHIVE_BUCKET)
+        blob = bucket.get_blob(f"{assistant_id}.tar.gz")
+        if blob is None:
+            return False, None
+        return True, blob.updated
+    except Exception as exc:
+        logger.warning(
+            "GCS archive probe failed for assistant_id=%s: %s",
+            assistant_id,
+            exc,
+        )
+        return False, None
 
 
 # =============================================================================
