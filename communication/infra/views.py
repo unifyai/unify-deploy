@@ -29,6 +29,7 @@ from .runtime_clients import (
     service_account_credentials as _service_account_credentials,
 )
 from .task_activation import router as task_activation_router
+from .dashboard_actions import router as dashboard_actions_router
 from .assistant_sessions import (
     ACTIVE_PHASES,
     AssistantSessionTerminatingError,
@@ -196,6 +197,7 @@ async def _publish_desktop_ready(
 
 router = APIRouter()
 router.include_router(task_activation_router)
+router.include_router(dashboard_actions_router)
 
 
 def _parse_wake_reasons(raw_wake_reasons: str) -> list[dict[str, Any]]:
