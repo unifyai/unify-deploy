@@ -7,6 +7,10 @@ Commands:
     status   -- Show per-job status for a dispatch
     monitor  -- Read progress and run ledger from GCS for a single job
     cancel   -- Cancel a dispatch or single job
+    pause    -- Pause a dispatch or single job (ack + park in-flight messages;
+                workers deprovision via HPA when the backlog drains)
+    resume   -- Resume a paused dispatch or job: re-publish parked messages in
+                original publish order
     delete   -- Purge all GCS artifacts for a dispatch
     inspect  -- Read parse manifests and display table schemas/samples
 
@@ -18,6 +22,10 @@ Usage:
     python -m unity_deploy.infra.cli.pipeline_control status --dispatch-id <id>
     python -m unity_deploy.infra.cli.pipeline_control cancel --dispatch-id <id>
     python -m unity_deploy.infra.cli.pipeline_control cancel --job-id <id>
+    python -m unity_deploy.infra.cli.pipeline_control pause --dispatch-id <id>
+    python -m unity_deploy.infra.cli.pipeline_control pause --job-id <id>
+    python -m unity_deploy.infra.cli.pipeline_control resume --dispatch-id <id>
+    python -m unity_deploy.infra.cli.pipeline_control resume --job-id <id>
     python -m unity_deploy.infra.cli.pipeline_control delete --dispatch-id <id> --confirm
     python -m unity_deploy.infra.cli.pipeline_control monitor --job-id <id>
     python -m unity_deploy.infra.cli.pipeline_control inspect --job-id <id>
@@ -126,6 +134,48 @@ def _build_parser() -> argparse.ArgumentParser:
     cancel_target.add_argument("--job-id", default=None)
     p_cancel.add_argument("--reason", default="operator-initiated")
     p_cancel.add_argument("--debug", action="store_true")
+
+    # -- pause -------------------------------------------------------------
+
+    p_pause = sub.add_parser(
+        "pause",
+        help=(
+            "Pause a dispatch or job. Sets status=paused in GCS, drains "
+            "in-flight ingest messages into a GCS parking lot, and lets "
+            "the HPA deprovision workers once the backlog hits zero."
+        ),
+    )
+    pause_target = p_pause.add_mutually_exclusive_group(required=True)
+    pause_target.add_argument("--dispatch-id", default=None)
+    pause_target.add_argument("--job-id", default=None)
+    p_pause.add_argument("--reason", default="operator-initiated")
+    p_pause.add_argument(
+        "--drain-batches",
+        type=int,
+        default=10,
+        help=(
+            "Upper bound on batches pulled from the ingest subscription "
+            "when draining (each batch pulls up to 100 messages). "
+            "Residual messages are parked by workers themselves when "
+            "their control watcher detects the pause."
+        ),
+    )
+    p_pause.add_argument("--debug", action="store_true")
+
+    # -- resume ------------------------------------------------------------
+
+    p_resume = sub.add_parser(
+        "resume",
+        help=(
+            "Resume a paused dispatch or job. Re-publishes every parked "
+            "message onto the ingest topic in original publish order, "
+            "then flips status back to queued so the HPA can scale up."
+        ),
+    )
+    resume_target = p_resume.add_mutually_exclusive_group(required=True)
+    resume_target.add_argument("--dispatch-id", default=None)
+    resume_target.add_argument("--job-id", default=None)
+    p_resume.add_argument("--debug", action="store_true")
 
     # -- delete ------------------------------------------------------------
 
@@ -373,7 +423,15 @@ async def cmd_list(args: argparse.Namespace) -> None:
                 status_counts["unknown"] = status_counts.get("unknown", 0) + 1
 
         status_parts = []
-        for s in ("success", "running", "queued", "error", "cancelled", "unknown"):
+        for s in (
+            "success",
+            "running",
+            "queued",
+            "paused",
+            "error",
+            "cancelled",
+            "unknown",
+        ):
             cnt = status_counts.get(s, 0)
             if cnt:
                 status_parts.append(f"{cnt} {s}")
@@ -427,7 +485,15 @@ async def cmd_status(args: argparse.Namespace) -> None:
 
     print()
     parts = []
-    for s in ("success", "running", "queued", "error", "cancelled", "unknown"):
+    for s in (
+        "success",
+        "running",
+        "queued",
+        "paused",
+        "error",
+        "cancelled",
+        "unknown",
+    ):
         cnt = status_counts.get(s, 0)
         if cnt:
             parts.append(f"{cnt} {s}")
@@ -556,6 +622,209 @@ async def cmd_cancel(args: argparse.Namespace) -> None:
         print("Workers will detect cancellation on their next checkpoint.")
 
 
+async def cmd_pause(args: argparse.Namespace) -> None:
+    """Pause a dispatch (or single job) and drain its ingest backlog.
+
+    The flow is:
+
+    1. Flip ``status`` in GCS to ``paused`` for the targeted job(s) /
+       dispatch via :class:`GcsDeploymentJobStore`.
+    2. Drain the ingest subscription in bounded batches, parking
+       payloads that belong to a paused job and nacking everything else
+       so non-paused work continues to flow.
+    3. Print a summary so the operator knows how many messages were
+       moved into the parking lot and how many remain on the
+       subscription (which the workers themselves will park when their
+       control watchers trip ``pause_event``).
+    """
+    from unity_deploy.infra.gcp.message_parking import park_message
+    from unity_deploy.infra.gcp.work_queue import PubSubWorkQueue
+
+    infra = _init_infra(debug=args.debug)
+    job_store = _get_job_store(infra)
+    work_queue = infra.work_queue
+    artifact_store = infra.artifact_store
+    assert isinstance(work_queue, PubSubWorkQueue)
+
+    paused_jobs: set[str] = set()
+    paused_dispatches: set[str] = set()
+
+    if args.job_id:
+        try:
+            job = job_store.pause_job(args.job_id, reason=args.reason)
+        except FileNotFoundError:
+            print(f"Job {args.job_id} not found")
+            sys.exit(1)
+        if job.status != "paused":
+            print(f"Job {args.job_id} is {job.status}, not paused (terminal state).")
+            return
+        paused_jobs.add(args.job_id)
+        if job.dispatch_id:
+            paused_dispatches.add(job.dispatch_id)
+        print(f"Paused job {args.job_id}")
+    else:
+        try:
+            manifest = job_store.read_dispatch(args.dispatch_id)
+        except Exception:
+            print(f"Dispatch {args.dispatch_id} not found")
+            sys.exit(1)
+        paused_count, skipped = job_store.pause_dispatch(
+            args.dispatch_id,
+            reason=args.reason,
+        )
+        paused_dispatches.add(args.dispatch_id)
+        paused_jobs.update(manifest.job_ids)
+        print(
+            f"Dispatch {args.dispatch_id}: paused {paused_count} job(s), "
+            f"skipped {skipped} (terminal or already paused)",
+        )
+
+    parked = 0
+    released = 0
+    for _batch in range(max(1, args.drain_batches)):
+        items = await work_queue.receive(max_messages=100, topics=["ingest"])
+        if not items:
+            break
+        for item in items:
+            payload = item.payload or {}
+            item_dispatch_id = str(payload.get("dispatch_id") or "")
+            item_job_id = str(payload.get("job_id") or "")
+            belongs_to_paused = item_job_id in paused_jobs or (
+                item_dispatch_id and item_dispatch_id in paused_dispatches
+            )
+            if belongs_to_paused and item_dispatch_id:
+                try:
+                    park_message(
+                        artifact_store,
+                        dispatch_id=item_dispatch_id,
+                        published_at=item.published_at,
+                        message_id=item.message_id,
+                        payload=payload,
+                        topic="ingest",
+                        parked_by="pipeline_control.pause",
+                    )
+                    await work_queue.ack(item.receipt_id)
+                    parked += 1
+                except Exception:
+                    logger.exception("Failed to park message %s", item.message_id)
+                    await work_queue.retry(
+                        item.receipt_id,
+                        error="park_failed",
+                        delay_seconds=0,
+                    )
+            else:
+                # Release back to the subscription so another pod can
+                # process unrelated work without restarting the pod.
+                await work_queue.retry(
+                    item.receipt_id,
+                    error="not-paused",
+                    delay_seconds=0,
+                )
+                released += 1
+
+    print(
+        f"Drained ingest subscription: {parked} parked, "
+        f"{released} released back for other consumers.",
+    )
+    if parked == 0 and released == 0:
+        print(
+            "No messages pulled by this drain pass. Running workers will "
+            "park their own in-flight messages when their control "
+            "watcher detects the pause (typically within ~2 seconds).",
+        )
+    print(
+        "\nBacklog will drop to zero as workers finish parking their "
+        "in-flight messages. Once num_undelivered_messages hits 0 the "
+        "ingest HPA will scale the deployment down on its own.",
+    )
+
+
+async def cmd_resume(args: argparse.Namespace) -> None:
+    """Resume a paused dispatch or job by re-publishing parked messages.
+
+    Parked blobs are sorted lexicographically; because the key layout
+    includes a zero-padded ``published_at_ns`` prefix, this is
+    equivalent to sorting by original Pub/Sub publish order.  We
+    re-publish serially and delete each blob only after its publish
+    confirms, so a crash mid-resume is safely idempotent: re-running
+    ``resume`` replays whatever is left in the parking lot.
+    """
+    from unity_deploy.infra.gcp.message_parking import (
+        delete_parked,
+        parked_payloads,
+    )
+    from unity_deploy.infra.gcp.work_queue import PubSubWorkQueue
+
+    infra = _init_infra(debug=args.debug)
+    job_store = _get_job_store(infra)
+    work_queue = infra.work_queue
+    artifact_store = infra.artifact_store
+    assert isinstance(work_queue, PubSubWorkQueue)
+
+    dispatch_ids: list[str] = []
+    job_filter: set[str] = set()
+
+    if args.job_id:
+        try:
+            job = job_store.read_job(args.job_id)
+        except FileNotFoundError:
+            print(f"Job {args.job_id} not found")
+            sys.exit(1)
+        if not job.dispatch_id:
+            print(
+                f"Job {args.job_id} has no dispatch_id recorded; parked "
+                f"messages (if any) cannot be located in GCS.",
+            )
+            sys.exit(1)
+        dispatch_ids = [job.dispatch_id]
+        job_filter = {args.job_id}
+        job_store.resume_job(args.job_id)
+        print(f"Resumed job {args.job_id}")
+    else:
+        try:
+            manifest = job_store.read_dispatch(args.dispatch_id)
+        except Exception:
+            print(f"Dispatch {args.dispatch_id} not found")
+            sys.exit(1)
+        dispatch_ids = [manifest.dispatch_id]
+        resumed_count, skipped = job_store.resume_dispatch(args.dispatch_id)
+        print(
+            f"Dispatch {args.dispatch_id}: resumed {resumed_count} job(s), "
+            f"skipped {skipped} (not paused)",
+        )
+
+    republished = 0
+    skipped_not_matching = 0
+    for dispatch_id in dispatch_ids:
+        for key, document in parked_payloads(artifact_store, dispatch_id):
+            payload = document.get("payload") or {}
+            item_job_id = str(payload.get("job_id") or "")
+            if job_filter and item_job_id not in job_filter:
+                skipped_not_matching += 1
+                continue
+            topic = str(document.get("topic") or "ingest")
+            try:
+                await work_queue.publish(topic=topic, payload=payload)
+            except Exception:
+                logger.exception("Failed to republish parked message %s", key)
+                continue
+            try:
+                delete_parked(artifact_store, key)
+            except Exception:
+                logger.exception("Failed to delete parked blob %s", key)
+            republished += 1
+
+    print(
+        f"Re-published {republished} parked message(s). "
+        f"Skipped {skipped_not_matching} parked blob(s) for other jobs.",
+    )
+    if republished:
+        print(
+            "Backlog will climb as messages land on the ingest topic; "
+            "HPA will scale the ingest deployment back up.",
+        )
+
+
 async def cmd_delete(args: argparse.Namespace) -> None:
     """Purge all GCS artifacts for a dispatch."""
     if not args.confirm:
@@ -679,6 +948,8 @@ def main() -> None:
         "status": cmd_status,
         "monitor": cmd_monitor,
         "cancel": cmd_cancel,
+        "pause": cmd_pause,
+        "resume": cmd_resume,
         "delete": cmd_delete,
         "inspect": cmd_inspect,
     }
