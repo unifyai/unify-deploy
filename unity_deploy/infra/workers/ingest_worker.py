@@ -32,6 +32,7 @@ import logging
 import os
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
@@ -229,40 +230,104 @@ def _safe_scratch_name(value: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Cancellation polling
+# Control-event watcher (cancel + pause, instant)
 # ---------------------------------------------------------------------------
 
 
-def _build_cancellation_checker(
+@dataclass
+class _ControlWatch:
+    """Handle returned by :func:`_spawn_control_watcher`.
+
+    ``cancel_event`` trips when ``job.json.status == "cancelled"``.
+    ``pause_event`` trips when ``job.json.status == "paused"``.  Both
+    events are latching: once set, they stay set for the remainder of
+    the message's lifetime (a paused job that later gets resumed will
+    be picked up again as a fresh Pub/Sub message, not this one).
+
+    Callers pass ``is_cancelled`` (a ``() -> bool`` closure) down into
+    ``ingest_artifacts`` / ``_make_checkpoint_callback``; the closure
+    just reads ``event.is_set()`` and is safe to call from worker
+    threads because it only touches plain attribute reads.
+    """
+
+    cancel_event: asyncio.Event
+    pause_event: asyncio.Event
+    _stop_event: asyncio.Event
+    _task: asyncio.Task[None]
+
+    def is_cancelled(self) -> bool:
+        return self.cancel_event.is_set() or self.pause_event.is_set()
+
+    def paused(self) -> bool:
+        return self.pause_event.is_set()
+
+    def cancelled(self) -> bool:
+        return self.cancel_event.is_set()
+
+    async def stop(self) -> None:
+        """Signal the watcher to exit and wait for it."""
+        self._stop_event.set()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+
+
+def _spawn_control_watcher(
     artifact_store: Any,
     run_id: str,
     *,
-    ttl_seconds: float = 60.0,
-) -> CancellationCheck:
-    """Return a sync ``() -> bool`` closure that caches the GCS result.
+    interval: float = 1.5,
+) -> _ControlWatch:
+    """Start a background task that watches ``job.json`` for control flips.
 
-    The closure reads ``jobs/{run_id}/job.json`` at most once per
-    *ttl_seconds*, keeping GCS traffic minimal even when called from
-    tight loops (per-chunk checkpoint, per-work-item dispatch).
+    The task polls ``jobs/{run_id}/job.json`` every *interval* seconds
+    and sets the matching event on the first status transition to
+    ``cancelled`` or ``paused``.  Polling is bounded and cheap (a
+    single GCS ``get_json`` per tick), and it replaces the older
+    per-checkpoint cache where cancellation detection could lag by up
+    to 60 s + the current chunk duration.
+
+    The task self-terminates either when an event trips (no point
+    polling further — the state is latched) or when the caller invokes
+    :meth:`_ControlWatch.stop` in a ``finally`` block on the hot path.
     """
-    cache: dict[str, float | bool] = {"t": 0.0, "v": False}
+    cancel_event = asyncio.Event()
+    pause_event = asyncio.Event()
+    stop_event = asyncio.Event()
 
-    def _check() -> bool:
-        if cache["v"] is True:
-            return True
-        now = time.monotonic()
-        if now - cache["t"] < ttl_seconds:  # type: ignore[operator]
-            return bool(cache["v"])
-        try:
-            job_data = artifact_store.get_json(f"jobs/{run_id}/job.json")
-            result = job_data.get("status") == "cancelled"
-        except Exception:
-            result = False
-        cache["t"] = now
-        cache["v"] = result
-        return result
+    async def _watch() -> None:
+        while not stop_event.is_set():
+            try:
+                data = await asyncio.to_thread(
+                    artifact_store.get_json,
+                    f"jobs/{run_id}/job.json",
+                )
+                status = (data or {}).get("status")
+                if status == "cancelled":
+                    cancel_event.set()
+                    return
+                if status == "paused":
+                    pause_event.set()
+                    return
+            except Exception:
+                # Job record may not yet exist for a freshly-dispatched
+                # message, or GCS may be transiently unavailable.
+                # Either way, keep polling — the worst case is we miss
+                # one tick of latency.
+                pass
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                continue
 
-    return _check
+    task = asyncio.create_task(_watch(), name=f"ctrl-watcher:{run_id}")
+    return _ControlWatch(
+        cancel_event=cancel_event,
+        pause_event=pause_event,
+        _stop_event=stop_event,
+        _task=task,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +439,59 @@ async def _with_unify_key(binding: IngestBinding) -> AsyncIterator[str]:
             os.environ["UNIFY_KEY"] = previous
 
 
+def _park_inflight_message(
+    *,
+    artifact_store: Any,
+    run_id: str,
+    item: ReceivedWorkItem,
+    msg: IngestRequested,
+) -> None:
+    """Upload the raw payload of the in-flight message to the GCS parking lot.
+
+    Called from the ``PipelineCancelled`` handler when the control
+    watcher's ``pause_event`` fired.  The checkpoint is already
+    durable in GCS (``_make_checkpoint_callback`` writes per chunk),
+    so the parked payload is all the state the resume flow needs to
+    re-spawn this work item.
+
+    Failures are logged but not re-raised: the alternative (letting
+    the Pub/Sub message redeliver) would put the message right back
+    in the backlog and defeat the entire purpose of parking.  We'd
+    rather proceed with an ack'd-but-unparked message and require the
+    operator to re-dispatch than loop forever on a GCS write error.
+    """
+    from unity_deploy.infra.gcp.message_parking import park_message
+
+    dispatch_id = msg.dispatch_id
+    if not dispatch_id:
+        logger.warning(
+            "[ingest] Cannot park message %s for job=%s: no dispatch_id.",
+            item.message_id,
+            run_id,
+        )
+        return
+
+    pod_name = os.environ.get("HOSTNAME") or "ingest-worker"
+    try:
+        park_message(
+            artifact_store,
+            dispatch_id=dispatch_id,
+            published_at=item.published_at,
+            message_id=item.message_id,
+            payload=item.payload or {},
+            topic="ingest",
+            parked_by=f"ingest-worker:{pod_name}",
+        )
+    except Exception:
+        logger.exception(
+            "[ingest] Failed to park message %s for job=%s; "
+            "checkpoint is still safe in GCS, but operator will need "
+            "to re-dispatch this file to resume it.",
+            item.message_id,
+            run_id,
+        )
+
+
 async def handle_ingest_message(
     item: ReceivedWorkItem,
     *,
@@ -416,7 +534,14 @@ async def handle_ingest_message(
 
     overall_error: str | None = None
     total_rows = 0
+    file_path: str = ""
     scratch_dir_ctx = tempfile.TemporaryDirectory(prefix=f"ingest_{run_id}_")
+
+    # Start the control watcher before any heavy work so a pause/cancel
+    # issued while the manifest download is running is still detected
+    # at the next hot-loop boundary.  The watcher is stopped in the
+    # outer ``finally`` below.
+    watch = _spawn_control_watcher(artifact_store, run_id)
     try:
         manifest_payload: dict = artifact_store.get_json(msg.manifest_key)
         plan = IngestPlan.model_validate(manifest_payload)
@@ -445,10 +570,7 @@ async def handle_ingest_message(
             )
             overall_error = "cancelled"
 
-        check_cancelled = _build_cancellation_checker(
-            artifact_store,
-            run_id,
-        )
+        check_cancelled: CancellationCheck = watch.is_cancelled
 
         if overall_error is None:
             if msg.ingestion_mode == "fm":
@@ -472,7 +594,7 @@ async def handle_ingest_message(
             job = job_store.read_job(run_id)
             if msg.dispatch_id and not job.dispatch_id:
                 job.dispatch_id = msg.dispatch_id
-            if job.status != "cancelled":
+            if job.status not in ("cancelled", "paused"):
                 job.status = "success" if overall_error is None else "error"
                 job.finished_at = utc_now_iso()
                 job.metadata["total_rows_inserted"] = total_rows
@@ -498,6 +620,43 @@ async def handle_ingest_message(
             )
 
     except PipelineCancelled:
+        if watch.paused():
+            # Pause path: park the in-flight payload, leave the job's
+            # status=paused (operator already wrote that) and the
+            # checkpoint intact, and return normally so the entrypoint
+            # acks the Pub/Sub message.  This collapses backlog so the
+            # HPA can deprovision, yet preserves progress so ``resume``
+            # picks up where we left off via ``read_checkpoint``.
+            _park_inflight_message(
+                artifact_store=artifact_store,
+                run_id=run_id,
+                item=item,
+                msg=msg,
+            )
+            run_ledger.write(
+                PipelineStageManifest(
+                    run_id=run_id,
+                    file_path=file_path,
+                    stage_name="ingest",
+                    status="error",
+                    duration_ms=(time.perf_counter() - ingest_start) * 1000,
+                    error="paused",
+                    meta={"paused_message_id": item.message_id},
+                ),
+            )
+            logger.info(
+                "[ingest] Job %s paused mid-flight after %.1fs; "
+                "parked message=%s (dispatch=%s)",
+                run_id,
+                time.perf_counter() - ingest_start,
+                item.message_id,
+                msg.dispatch_id or "-",
+            )
+            # Intentionally skip attachment_callback: the attachment is
+            # NOT complete yet. It fires when resume's final message
+            # finishes successfully.
+            return
+
         overall_error = "cancelled"
         logger.info(
             "[ingest] Job %s cancelled mid-flight after %.1fs",
@@ -534,6 +693,14 @@ async def handle_ingest_message(
                 )
         raise
     finally:
+        # Stop the watcher before closing ledgers so any log message it
+        # emits still has the run-scoped ledgers available.  ``stop()``
+        # is idempotent and safe to call even if the task already
+        # self-terminated on a status flip.
+        try:
+            await watch.stop()
+        except Exception:
+            logger.debug("[ingest] control watcher stop failed for job=%s", run_id)
         run_ledger.close()
         cost_ledger.close()
         scratch_dir_ctx.cleanup()

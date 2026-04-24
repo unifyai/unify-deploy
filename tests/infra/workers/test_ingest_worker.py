@@ -473,81 +473,103 @@ def test_stage_csv_with_local_uri_is_noop(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cancellation checker
+# Control watcher (cancel + pause)
 # ---------------------------------------------------------------------------
 
 
-def test_build_cancellation_checker_caches_result() -> None:
-    """The checker should cache the GCS result for the TTL period."""
-    call_count = {"n": 0}
+@pytest.mark.asyncio
+async def test_control_watcher_trips_cancel_event() -> None:
+    """status=cancelled should set cancel_event on the next poll tick."""
+
+    class _Store:
+        def __init__(self):
+            self.status = "running"
+
+        def get_json(self, key):
+            return {"status": self.status}
+
+    store = _Store()
+    watch = ingest_worker._spawn_control_watcher(store, "run-1", interval=0.01)
+    try:
+        # First tick will see "running" and keep polling.
+        store.status = "cancelled"
+        # Give the watcher a few ticks to observe the flip.
+        for _ in range(50):
+            if watch.cancel_event.is_set():
+                break
+            await _asyncio_sleep(0.01)
+        assert watch.cancelled() is True
+        assert watch.paused() is False
+        assert watch.is_cancelled() is True
+    finally:
+        await watch.stop()
+
+
+@pytest.mark.asyncio
+async def test_control_watcher_trips_pause_event() -> None:
+    """status=paused should set pause_event on the next poll tick."""
+
+    class _Store:
+        def __init__(self):
+            self.status = "running"
+
+        def get_json(self, key):
+            return {"status": self.status}
+
+    store = _Store()
+    watch = ingest_worker._spawn_control_watcher(store, "run-1", interval=0.01)
+    try:
+        store.status = "paused"
+        for _ in range(50):
+            if watch.pause_event.is_set():
+                break
+            await _asyncio_sleep(0.01)
+        assert watch.paused() is True
+        assert watch.cancelled() is False
+        assert watch.is_cancelled() is True, (
+            "pause should be surfaced through the shared is_cancelled() closure "
+            "so hot loops raise PipelineCancelled just like on cancel"
+        )
+    finally:
+        await watch.stop()
+
+
+@pytest.mark.asyncio
+async def test_control_watcher_stop_is_idempotent() -> None:
+    """Calling stop() twice should not raise."""
 
     class _Store:
         def get_json(self, key):
-            call_count["n"] += 1
             return {"status": "running"}
 
-    checker = ingest_worker._build_cancellation_checker(
-        _Store(),
-        "run-1",
-        ttl_seconds=10.0,
-    )
-
-    assert checker() is False
-    assert checker() is False
-    assert checker() is False
-    assert call_count["n"] == 1, "should only read GCS once within TTL"
+    watch = ingest_worker._spawn_control_watcher(_Store(), "run-1", interval=0.01)
+    await watch.stop()
+    await watch.stop()  # should be a no-op
 
 
-def test_build_cancellation_checker_detects_cancelled() -> None:
-    """The checker returns True when job.json status is 'cancelled'."""
-
-    class _Store:
-        def get_json(self, key):
-            return {"status": "cancelled"}
-
-    checker = ingest_worker._build_cancellation_checker(
-        _Store(),
-        "run-1",
-        ttl_seconds=0.0,
-    )
-
-    assert checker() is True
-
-
-def test_build_cancellation_checker_stays_true_once_cancelled() -> None:
-    """Once cancelled is detected, the checker returns True without re-reading."""
-    call_count = {"n": 0}
-
-    class _Store:
-        def get_json(self, key):
-            call_count["n"] += 1
-            return {"status": "cancelled"}
-
-    checker = ingest_worker._build_cancellation_checker(
-        _Store(),
-        "run-1",
-        ttl_seconds=0.0,
-    )
-
-    assert checker() is True
-    assert checker() is True
-    assert call_count["n"] == 1, "once cancelled, should not re-read"
-
-
-def test_build_cancellation_checker_handles_exception() -> None:
-    """GCS read failures are silently swallowed (returns False)."""
+@pytest.mark.asyncio
+async def test_control_watcher_swallows_exceptions() -> None:
+    """Transient GCS errors must not leak out of the background task."""
 
     class _Store:
         def get_json(self, key):
             raise RuntimeError("network error")
 
-    checker = ingest_worker._build_cancellation_checker(
-        _Store(),
-        "run-1",
-        ttl_seconds=0.0,
-    )
+    watch = ingest_worker._spawn_control_watcher(_Store(), "run-1", interval=0.01)
+    try:
+        # Run for a few ticks; the watcher should stay alive and neither
+        # event should trip.
+        await _asyncio_sleep(0.05)
+        assert watch.cancel_event.is_set() is False
+        assert watch.pause_event.is_set() is False
+    finally:
+        await watch.stop()
 
-    assert checker() is False
+
+async def _asyncio_sleep(seconds: float) -> None:
+    import asyncio as _a
+
+    await _a.sleep(seconds)
 
 
 # ---------------------------------------------------------------------------
