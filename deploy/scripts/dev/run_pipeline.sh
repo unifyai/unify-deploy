@@ -135,7 +135,7 @@ echo "[2/5] Starting worker log streams..."
 # so new pods get picked up with minimal delay.
 tmux_cmd new-session -d -s "parse-logs" bash -c "
 while true; do
-  kubectl logs -n $WORKER_NS -l app=unity-parse-worker -f --tail=50 --max-log-requests=10 --prefix=true 2>&1
+  kubectl logs -n $WORKER_NS -l app=unity-parse-worker -f --tail=50 --max-log-requests=20 --prefix=true 2>&1
   echo '[reconnecting to parse workers in 30s...]'
   sleep 30
 done | tee '$LOG_DIR/parse-worker.log'
@@ -144,7 +144,7 @@ echo "  parse-worker.log  (streaming, reconnects every 30s)"
 
 tmux_cmd new-session -d -s "ingest-logs" bash -c "
 while true; do
-  kubectl logs -n $WORKER_NS -l app=unity-ingest-worker -f --tail=50 --max-log-requests=10 --prefix=true 2>&1
+  kubectl logs -n $WORKER_NS -l app=unity-ingest-worker -f --tail=50 --max-log-requests=20 --prefix=true 2>&1
   echo '[reconnecting to ingest workers in 30s...]'
   sleep 30
 done | tee '$LOG_DIR/ingest-worker.log'
