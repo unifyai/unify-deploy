@@ -28,7 +28,16 @@ spec:
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      terminationGracePeriodSeconds: 86400
+      # Parse workers have no per-chunk checkpoint (one message =
+      # one download + one Docling parse + one manifest write), so a
+      # SIGKILL mid-parse means the whole message retries from
+      # scratch.  We keep a generous 30 min grace so an
+      # already-in-flight parse of a large PDF can finish even
+      # during rolling-restarts; the Pub/Sub DLQ
+      # (`unity-dead-letter` + maxDeliveryAttempts=15 from
+      # deploy/scripts/dev/setup_pipeline_infra.sh) still bounds
+      # worst-case loops for truly pathological files.
+      terminationGracePeriodSeconds: 1800
       containers:
       - name: parse-worker
         image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest
@@ -103,11 +112,14 @@ spec:
         type: AverageValue
         averageValue: "1"
   behavior:
+    # Same tuning as the ingest worker: percent-based scale-down
+    # on 5-min ticks, with a short 60s stabilization window so the
+    # HPA reacts quickly once parse backlog is worked off.
     scaleDown:
-      stabilizationWindowSeconds: 300
+      stabilizationWindowSeconds: 60
       policies:
-      - type: Pods
-        value: 1
+      - type: Percent
+        value: 50
         periodSeconds: 300
     scaleUp:
       stabilizationWindowSeconds: 30
