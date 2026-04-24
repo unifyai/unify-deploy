@@ -383,15 +383,25 @@ def create_unity_job(
                                     {"secretRef": {"name": "unity-secrets"}},
                                 ],
                                 "env": env_vars,
+                                # Right-sized 2026-04 from 2 vCPU / 16 GiB based on
+                                # 30 days of per-pod metrics: p999 CPU = 0.25 cores,
+                                # p999 memory = 2.5 GiB, max-ever memory = 5.6 GiB
+                                # in production. 2 vCPU keeps ~8x headroom over p999
+                                # CPU; 8 GiB keeps ~3x headroom over p999 memory and
+                                # ~40% over the 30d max. Note: previous "2 vCPU /
+                                # 16 GiB" was actually billed as 2.46 vCPU because
+                                # Autopilot's 1:6.5 vCPU:memory ratio bumps CPU up
+                                # at 16 GiB. At 8 GiB the requested 2 vCPU is
+                                # honoured as-is, so this also drops effective CPU.
                                 "resources": {
                                     "requests": {
                                         "cpu": "2",
-                                        "memory": "16Gi",
+                                        "memory": "8Gi",
                                         "ephemeral-storage": "10Gi",
                                     },
                                     "limits": {
                                         "cpu": "2",
-                                        "memory": "16Gi",
+                                        "memory": "8Gi",
                                         "ephemeral-storage": "10Gi",
                                     },
                                 },
