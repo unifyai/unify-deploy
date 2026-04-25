@@ -32,7 +32,21 @@
       "action": {"type": "Delete"},
       "condition": {
         "age": 30,
+        "matchesPrefix": ["artifacts/"]
+      }
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 30,
         "matchesPrefix": ["jobs/"]
+      }
+    },
+    {
+      "action": {"type": "Delete"},
+      "condition": {
+        "age": 30,
+        "matchesPrefix": ["dispatches/"]
       }
     }
   ]

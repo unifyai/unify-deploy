@@ -11,6 +11,9 @@ set -euo pipefail
 #   - Permissions: pubsub.topics.create, pubsub.subscriptions.create, storage.buckets.create
 #
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
+
 ENV="${1:-staging}"
 PROJECT_ID="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 REGION="us-central1"
@@ -35,7 +38,7 @@ echo "Creating GCS bucket: ${BUCKET}"
 gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${BUCKET}" 2>/dev/null || echo "  (bucket already exists)"
 
 echo "Applying lifecycle rules..."
-gsutil lifecycle set deploy/k8s/workers/gcs-lifecycle-rules.json "gs://${BUCKET}"
+gsutil lifecycle set "${REPO_ROOT}/deploy/k8s/workers/gcs-lifecycle-rules.json" "gs://${BUCKET}"
 
 # --- Pub/Sub Topics ---
 TOPICS=("unity-parse${SUFFIX}" "unity-ingest${SUFFIX}" "unity-dead-letter${SUFFIX}")
@@ -49,7 +52,7 @@ echo "Creating subscription: unity-parse-sub${SUFFIX}"
 gcloud pubsub subscriptions create "unity-parse-sub${SUFFIX}" \
   --topic="unity-parse${SUFFIX}" \
   --project="${PROJECT_ID}" \
-  --ack-deadline=600 \
+  --ack-deadline=120 \
   --message-retention-duration=7d \
   --dead-letter-topic="unity-dead-letter${SUFFIX}" \
   --max-delivery-attempts=15 \
@@ -60,7 +63,7 @@ echo "Creating subscription: unity-ingest-sub${SUFFIX}"
 gcloud pubsub subscriptions create "unity-ingest-sub${SUFFIX}" \
   --topic="unity-ingest${SUFFIX}" \
   --project="${PROJECT_ID}" \
-  --ack-deadline=600 \
+  --ack-deadline=120 \
   --message-retention-duration=7d \
   --dead-letter-topic="unity-dead-letter${SUFFIX}" \
   --max-delivery-attempts=15 \
