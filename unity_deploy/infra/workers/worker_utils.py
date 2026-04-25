@@ -23,8 +23,10 @@ from unity.common.pipeline.work_queue import WorkQueue
 
 from unity_deploy.infra.gcp.settings import GcpPipelineSettings
 
+from google.cloud import storage
+
 if TYPE_CHECKING:
-    from google.cloud import storage, pubsub_v1
+    from google.cloud import pubsub_v1
 
 
 logger = logging.getLogger(__name__)
