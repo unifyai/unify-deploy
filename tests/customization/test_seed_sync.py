@@ -8,8 +8,10 @@ import json
 from unity_deploy.customization.seed_sync import (
     _aggregate_hash,
     _record_hash,
+    _sync_guidance,
     sync_seed_data,
 )
+from unity.guidance_manager.types.guidance import Guidance
 from unity_deploy.customization.secrets_file import load_secrets
 
 # ---------------------------------------------------------------------------
@@ -144,6 +146,78 @@ class TestSyncSeedData:
         assert result is True
         assert len(updated) == 1
         assert updated[0][0] == 1
+
+    def test_excludes_backend_managed_fields_from_diff(self):
+        updated = []
+        meta = InMemoryMetaStore()
+
+        result = sync_seed_data(
+            manager_key="test",
+            source_records=[
+                {"name": "Alice", "bio": "Current bio", "authoring_assistant_id": None},
+            ],
+            natural_key_fn=lambda r: r["name"],
+            get_existing_fn=lambda: [
+                {
+                    "id": 1,
+                    "name": "Alice",
+                    "bio": "Current bio",
+                    "authoring_assistant_id": 1851,
+                },
+            ],
+            create_fn=lambda r: None,
+            update_fn=lambda _id, r: updated.append((_id, r)),
+            delete_fn=None,
+            id_field="id",
+            meta_store=meta,
+            exclude_fields={"authoring_assistant_id"},
+        )
+
+        assert result is True
+        assert updated == []
+
+    def test_guidance_sync_does_not_write_authoring_assistant_id(self, monkeypatch):
+        class FakeGuidanceManager:
+            def __init__(self):
+                self.created = []
+
+            def filter(self, limit=1000):
+                return []
+
+            def add_guidance(self, **kwargs):
+                self.created.append(kwargs)
+                return {"details": {"guidance_id": 1}}
+
+            def update_guidance(self, **kwargs):
+                raise AssertionError("update_guidance should not be called")
+
+            def delete_guidance(self, **kwargs):
+                raise AssertionError("delete_guidance should not be called")
+
+        fake = FakeGuidanceManager()
+        from unity.manager_registry import ManagerRegistry
+
+        monkeypatch.setattr(
+            ManagerRegistry,
+            "get_guidance_manager",
+            staticmethod(lambda: fake),
+        )
+
+        result = _sync_guidance(
+            [
+                Guidance(
+                    title="How to triage repairs",
+                    content="Check urgent repairs first.",
+                    authoring_assistant_id=1851,
+                ),
+            ],
+            InMemoryMetaStore(),
+        )
+
+        assert result is True
+        assert len(fake.created) == 1
+        assert "guidance_id" not in fake.created[0]
+        assert "authoring_assistant_id" not in fake.created[0]
 
     def test_deletes_removed_records(self):
         deleted = []
