@@ -933,7 +933,7 @@ async def cmd_inspect(args: argparse.Namespace) -> None:
 
 def main() -> None:
     try:
-        from unity_deploy.load_repo_env import load_repo_dotenv
+        from unity_deploy.utils.load_repo_env import load_repo_dotenv
 
         load_repo_dotenv(override=False)
     except Exception:

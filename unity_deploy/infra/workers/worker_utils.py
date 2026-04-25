@@ -10,9 +10,7 @@ import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
-
-from google.cloud import storage
+from typing import Callable, TYPE_CHECKING
 
 from unity.common.pipeline.artifact_store import ArtifactStore
 from unity.common.pipeline.cost_ledger import CostLedger
@@ -24,6 +22,10 @@ from unity.common.pipeline.run_ledger import RunLedger
 from unity.common.pipeline.work_queue import WorkQueue
 
 from unity_deploy.infra.gcp.settings import GcpPipelineSettings
+
+if TYPE_CHECKING:
+    from google.cloud import storage, pubsub_v1
+
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +321,7 @@ def initialize_worker_environment(*, debug: bool = False) -> Path:
 
     Returns the resolved repository root path for callers that need it.
     """
-    from unity_deploy.load_repo_env import unity_deploy_repo_root
+    from unity_deploy.utils.load_repo_env import unity_deploy_repo_root
 
     level = logging.DEBUG if debug else logging.INFO
     root_logger = logging.getLogger()
@@ -346,8 +348,8 @@ def initialize_worker_environment(*, debug: bool = False) -> Path:
 
 def build_gcp_clients() -> tuple[
     storage.Client,
-    "pubsub_v1.PublisherClient",
-    "pubsub_v1.SubscriberClient",
+    pubsub_v1.PublisherClient,
+    pubsub_v1.SubscriberClient,
 ]:
     """Create authenticated GCP clients from environment / SA key."""
     from google.cloud import pubsub_v1

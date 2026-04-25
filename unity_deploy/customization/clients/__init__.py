@@ -53,6 +53,7 @@ class ResolvedCustomization:
     knowledge: dict[str, dict[str, Any]]
     blacklist: list[dict[str, Any]]
     secrets: list[Secret]
+    console_config: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +245,7 @@ def _spec_to_resolved(
         knowledge=knowledge,
         blacklist=blacklist,
         secrets=secrets,
+        console_config=spec.console_config,
     )
 
 

@@ -16,7 +16,7 @@ import importlib.util
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import Any, TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -166,6 +166,15 @@ class DeploymentSpec(BaseModel):
     data_dir: Optional[Path] = Field(
         default=None,
         description="Absolute path to the data/ directory with raw assets (None if no local data).",
+    )
+    console_config: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Per-assistant console UI configuration (layout mode, tab "
+            "visibility, theme overrides). Synced to Orchestra on startup via "
+            "PATCH /v0/admin/assistant/{assistant_id}, where Orchestra stores "
+            "it in the assistant_console_config table."
+        ),
     )
 
     def derive(self, **overrides) -> "DeploymentSpec":

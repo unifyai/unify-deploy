@@ -17,11 +17,35 @@ from __future__ import annotations
 import logging
 from typing import Any, TYPE_CHECKING
 
+from unity_deploy.utils.orchestra_client import OrchestraClientError, patch_json
+
 if TYPE_CHECKING:
     from unity.conversation_manager.conversation_manager import ConversationManager
     from unity.session_details import SessionDetails
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_console_config(
+    assistant_id: int | str,
+    console_config: dict[str, Any],
+) -> None:
+    """PATCH console_config onto the assistant record in Orchestra.
+
+    Best-effort: logs a warning on failure rather than blocking startup.
+    """
+    try:
+        patch_json(
+            f"/admin/assistant/{assistant_id}",
+            {"console_config": console_config},
+        )
+        logger.info("Synced console_config for assistant %s", assistant_id)
+    except OrchestraClientError:
+        logger.warning(
+            "Failed to sync console_config for assistant %s",
+            assistant_id,
+            exc_info=True,
+        )
 
 
 def startup_hook(
@@ -62,6 +86,12 @@ def startup_hook(
     )
 
     sync_all_seed_data(resolved)
+
+    if resolved.console_config:
+        _sync_console_config(
+            session_details.assistant.agent_id,
+            resolved.console_config,
+        )
 
     if resolved.function_dirs or resolved.venv_dirs:
         source_fns = collect_functions_from_directories(resolved.function_dirs)

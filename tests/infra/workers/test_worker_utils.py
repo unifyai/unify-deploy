@@ -12,7 +12,7 @@ from unity_deploy.infra.workers.worker_utils import (
     activate_unify_context,
     initialize_worker_environment,
 )
-from unity_deploy.load_repo_env import unity_deploy_repo_root
+from unity_deploy.utils.load_repo_env import unity_deploy_repo_root
 
 
 @pytest.fixture
