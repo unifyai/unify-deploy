@@ -125,6 +125,38 @@ class TestDeploymentStructure:
             assert entry.title
             assert len(entry.content) > 50
 
+    def test_console_config_shape(self, client: str, deploy: str, dep_dir: Path):
+        spec = _load(client, deploy, dep_dir)
+        cfg = spec.console_config
+        if cfg is None:
+            return
+
+        assert cfg.get("version") == "1"
+
+        layout = cfg.get("layout")
+        assert isinstance(layout, dict)
+        assert layout.get("mode") in {"standard", "dashboard-centric"}
+        if "defaultTab" in layout:
+            assert isinstance(layout["defaultTab"], str)
+
+        tabs = cfg.get("tabs")
+        if tabs is not None:
+            assert isinstance(tabs, dict)
+            if "hidden" in tabs:
+                assert isinstance(tabs["hidden"], list)
+                assert all(isinstance(tab, str) for tab in tabs["hidden"])
+            if "order" in tabs:
+                assert isinstance(tabs["order"], list)
+                assert all(isinstance(tab, str) for tab in tabs["order"])
+
+        theme = cfg.get("theme")
+        if theme is not None:
+            assert isinstance(theme, dict)
+            if "brandName" in theme:
+                assert isinstance(theme["brandName"], str)
+            if "accentColor" in theme:
+                assert isinstance(theme["accentColor"], str)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data-pipeline structure tests — only for deployments with function_dir

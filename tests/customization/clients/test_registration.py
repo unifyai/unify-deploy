@@ -58,6 +58,7 @@ def _make_spec(
     *,
     secrets: list[SecretEntry] | None = None,
     function_dir: Path | None = None,
+    console_config: dict | None = None,
 ) -> DeploymentSpec:
     return DeploymentSpec(
         name=name,
@@ -70,6 +71,7 @@ def _make_spec(
         ],
         secrets=secrets or [],
         function_dir=function_dir,
+        console_config=console_config,
     )
 
 
@@ -492,6 +494,29 @@ class TestIsolatedResolution:
         result = resolve(org_id=10)
         secret_names = {s.name for s in result.secrets}
         assert "KEY_A" in secret_names
+
+    def test_console_config_in_resolved(self, monkeypatch):
+        from unity_deploy.customization import deployment_types as dt
+
+        console_config = {
+            "version": "1",
+            "layout": {"mode": "dashboard-centric", "defaultTab": "dashboards"},
+            "tabs": {"hidden": ["memory", "secrets"]},
+        }
+        spec = _make_spec(
+            "v0",
+            "With console config",
+            console_config=console_config,
+        )
+        monkeypatch.setattr(dt, "load_deployment", lambda d, n: spec)
+
+        mapping = DeploymentMapping(
+            targets=[DeploymentTarget(scope="default", deployment="v0")],
+        )
+        register_client("test", mapping, Path("/fake"))
+
+        result = resolve(org_id=10)
+        assert result.console_config == console_config
 
 
 # ═══════════════════════════════════════════════════════════════════════════
