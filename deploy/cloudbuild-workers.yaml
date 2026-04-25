@@ -38,6 +38,17 @@ steps:
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
   waitFor: ['deploy-ingest-worker']
 
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-failed-pod-gc'
+  args:
+  - 'apply'
+  - '-f'
+  - 'deploy/k8s/workers/failed-pod-gc-cronjob.yaml'
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['deploy-ingest-worker']
+
   # Rolling restart to pick up new image
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'restart-workers'
@@ -61,7 +72,7 @@ steps:
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['deploy-weekly-cronjob']
+  waitFor: ['deploy-weekly-cronjob', 'deploy-failed-pod-gc']
 
 options:
   substitutionOption: ALLOW_LOOSE
