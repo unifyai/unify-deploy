@@ -46,6 +46,7 @@ done
 WORKER_NS="${UNITY_GCP_PIPELINE_ENVIRONMENT:-staging}"
 
 RUN_TS="$(date +%Y-%m-%dT%H-%M-%S)"
+RUN_START_RFC3339="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LOG_DIR="$REPO_ROOT/logs/pipeline/${RUN_TS}"
 mkdir -p "$LOG_DIR"
 
@@ -92,6 +93,7 @@ fi
 PUBSUB_PROJECT="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 PARSE_SUB="${UNITY_PARSE_SUB:-unity-parse-sub-staging}"
 INGEST_SUB="${UNITY_INGEST_SUB:-unity-ingest-sub-staging}"
+DLQ_SUB="${UNITY_DLQ_SUB:-unity-dead-letter-sub-staging}"
 
 echo "========================================================================"
 if (( MONITOR_ONLY )); then
@@ -135,19 +137,19 @@ echo "[2/5] Starting worker log streams..."
 # so new pods get picked up with minimal delay.
 tmux_cmd new-session -d -s "parse-logs" bash -c "
 while true; do
-  kubectl logs -n $WORKER_NS -l app=unity-parse-worker -f --tail=50 --max-log-requests=20 --prefix=true 2>&1
+  kubectl logs -n $WORKER_NS -l app=unity-parse-worker -f --since-time='$RUN_START_RFC3339' --max-log-requests=50 --prefix=true 2>&1
   echo '[reconnecting to parse workers in 30s...]'
   sleep 30
-done | tee '$LOG_DIR/parse-worker.log'
+done | awk '!seen[\$0]++' | tee '$LOG_DIR/parse-worker.log'
 "
 echo "  parse-worker.log  (streaming, reconnects every 30s)"
 
 tmux_cmd new-session -d -s "ingest-logs" bash -c "
 while true; do
-  kubectl logs -n $WORKER_NS -l app=unity-ingest-worker -f --tail=50 --max-log-requests=20 --prefix=true 2>&1
+  kubectl logs -n $WORKER_NS -l app=unity-ingest-worker -f --since-time='$RUN_START_RFC3339' --max-log-requests=50 --prefix=true 2>&1
   echo '[reconnecting to ingest workers in 30s...]'
   sleep 30
-done | tee '$LOG_DIR/ingest-worker.log'
+done | awk '!seen[\$0]++' | tee '$LOG_DIR/ingest-worker.log'
 "
 echo "  ingest-worker.log (streaming, reconnects every 30s)"
 
@@ -180,26 +182,59 @@ echo ""
 echo "[4/5] Starting Pub/Sub backlog monitoring..."
 
 tmux_cmd new-session -d -s "pubsub-monitor" bash -c "
+metric_value() {
+  local sub=\"\$1\"
+  local metric=\"\$2\"
+  local token end start
+  token=\$(gcloud auth print-access-token 2>/dev/null) || { echo '?'; return; }
+  end=\$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  start=\$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+  curl -fsG -H \"Authorization: Bearer \$token\" \
+    --data-urlencode \"filter=metric.type=\\\"pubsub.googleapis.com/subscription/\$metric\\\" AND resource.label.subscription_id=\\\"\$sub\\\"\" \
+    --data-urlencode \"interval.endTime=\$end\" \
+    --data-urlencode \"interval.startTime=\$start\" \
+    \"https://monitoring.googleapis.com/v3/projects/$PUBSUB_PROJECT/timeSeries\" \
+    | python3 -c \"import json,sys; d=json.load(sys.stdin); ts=d.get('timeSeries') or []; points=(ts[0].get('points') or []) if ts else []; value=(points[0].get('value') or {}) if points else {}; print(value.get('int64Value') or value.get('doubleValue') or '?')\" 2>/dev/null || echo '?'
+}
 while true; do
   ts=\$(date +%H:%M:%S)
-  parse_backlog=\$(gcloud pubsub subscriptions describe '$PARSE_SUB' \
-    --project='$PUBSUB_PROJECT' \
-    --format='value(messageRetentionDuration)' 2>/dev/null | head -1)
-  # Use the metrics API for actual backlog count
-  parse_pending=\$(kubectl get hpa unity-parse-worker-hpa -n $WORKER_NS \
-    -o jsonpath='{.status.currentMetrics[0].external.current.averageValue}' 2>/dev/null || echo '?')
-  ingest_pending=\$(kubectl get hpa unity-ingest-worker-hpa -n $WORKER_NS \
-    -o jsonpath='{.status.currentMetrics[0].external.current.averageValue}' 2>/dev/null || echo '?')
+  parse_undeliv=\$(metric_value '$PARSE_SUB' 'num_undelivered_messages')
+  ingest_undeliv=\$(metric_value '$INGEST_SUB' 'num_undelivered_messages')
+  parse_oldest=\$(metric_value '$PARSE_SUB' 'oldest_unacked_message_age')
+  ingest_oldest=\$(metric_value '$INGEST_SUB' 'oldest_unacked_message_age')
   parse_replicas=\$(kubectl get hpa unity-parse-worker-hpa -n $WORKER_NS \
-    -o jsonpath='{.status.currentReplicas}' 2>/dev/null || echo '?')
+    -o jsonpath='{.status.currentReplicas}/{.status.desiredReplicas}' 2>/dev/null || echo '?')
   ingest_replicas=\$(kubectl get hpa unity-ingest-worker-hpa -n $WORKER_NS \
-    -o jsonpath='{.status.currentReplicas}' 2>/dev/null || echo '?')
-  printf '%s  parse: backlog=%s replicas=%s  |  ingest: backlog=%s replicas=%s\n' \
-    \"\$ts\" \"\$parse_pending\" \"\$parse_replicas\" \"\$ingest_pending\" \"\$ingest_replicas\"
+    -o jsonpath='{.status.currentReplicas}/{.status.desiredReplicas}' 2>/dev/null || echo '?')
+  printf '%s  parse: undeliv=%s oldest=%ss replicas=%s  |  ingest: undeliv=%s oldest=%ss replicas=%s\n' \
+    \"\$ts\" \"\$parse_undeliv\" \"\$parse_oldest\" \"\$parse_replicas\" \"\$ingest_undeliv\" \"\$ingest_oldest\" \"\$ingest_replicas\"
   sleep 15
 done 2>&1 | tee '$LOG_DIR/pubsub-backlog.log'
 "
 echo "  pubsub-backlog.log (every 15s)"
+
+tmux_cmd new-session -d -s "dlq-monitor" bash -c "
+metric_value() {
+  local sub=\"\$1\"
+  local token end start
+  token=\$(gcloud auth print-access-token 2>/dev/null) || { echo '?'; return; }
+  end=\$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  start=\$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+  curl -fsG -H \"Authorization: Bearer \$token\" \
+    --data-urlencode \"filter=metric.type=\\\"pubsub.googleapis.com/subscription/num_undelivered_messages\\\" AND resource.label.subscription_id=\\\"\$sub\\\"\" \
+    --data-urlencode \"interval.endTime=\$end\" \
+    --data-urlencode \"interval.startTime=\$start\" \
+    \"https://monitoring.googleapis.com/v3/projects/$PUBSUB_PROJECT/timeSeries\" \
+    | python3 -c \"import json,sys; d=json.load(sys.stdin); ts=d.get('timeSeries') or []; points=(ts[0].get('points') or []) if ts else []; value=(points[0].get('value') or {}) if points else {}; print(value.get('int64Value') or value.get('doubleValue') or '?')\" 2>/dev/null || echo '?'
+}
+while true; do
+  ts=\$(date +%H:%M:%S)
+  dlq_count=\$(metric_value '$DLQ_SUB')
+  printf '%s  %s: undeliv=%s\n' \"\$ts\" '$DLQ_SUB' \"\${dlq_count:-?}\"
+  sleep 60
+done 2>&1 | tee '$LOG_DIR/dlq.log'
+"
+echo "  dlq.log            (every 60s)"
 
 # ---- 5. Summary ----
 echo ""
@@ -212,6 +247,7 @@ echo "  $LOG_DIR/ingest-worker.log"
 echo "  $LOG_DIR/hpa.log"
 echo "  $LOG_DIR/pods.log"
 echo "  $LOG_DIR/pubsub-backlog.log"
+echo "  $LOG_DIR/dlq.log"
 echo ""
 echo "Tail any log:    tail -f $LOG_DIR/ingest-worker.log"
 echo "Stop all:        tmux -L $TMUX_SOCKET kill-server"
