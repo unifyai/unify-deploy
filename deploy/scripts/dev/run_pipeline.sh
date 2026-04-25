@@ -11,6 +11,7 @@ set -euo pipefail
 # Usage:
 #   # Dispatch a new job and start monitoring
 #   deploy/scripts/dev/run_pipeline.sh \
+#     --env staging \
 #     --mode dm \
 #     --config path/to/pipeline_config.json \
 #     --project-root ~/unity-deploy \
@@ -18,7 +19,7 @@ set -euo pipefail
 #     [--limit 5] [extra dispatch_pipeline.py flags...]
 #
 #   # Monitor only (no dispatch — attach to workers already processing)
-#   deploy/scripts/dev/run_pipeline.sh --monitor
+#   deploy/scripts/dev/run_pipeline.sh --monitor --env staging
 #
 # Creates a timestamped log directory under logs/pipeline/ with:
 #   dispatch.log        — dispatch_pipeline.py output (dispatch mode only)
@@ -35,15 +36,32 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
 
 # ---- Parse our own flags before forwarding the rest ----
 MONITOR_ONLY=0
+PIPELINE_ENV_ARG=""
 DISPATCH_ARGS=()
-for arg in "$@"; do
-  case "$arg" in
-    --monitor) MONITOR_ONLY=1 ;;
-    *)         DISPATCH_ARGS+=("$arg") ;;
+while (( $# > 0 )); do
+  case "$1" in
+    --monitor)
+      MONITOR_ONLY=1
+      shift
+      ;;
+    --env)
+      PIPELINE_ENV_ARG="${2:-}"
+      if [[ -z "$PIPELINE_ENV_ARG" ]]; then
+        echo "ERROR: --env requires 'staging' or 'production'." >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --env=*)
+      PIPELINE_ENV_ARG="${1#--env=}"
+      shift
+      ;;
+    *)
+      DISPATCH_ARGS+=("$1")
+      shift
+      ;;
   esac
 done
-
-WORKER_NS="${UNITY_GCP_PIPELINE_ENVIRONMENT:-staging}"
 
 RUN_TS="$(date +%Y-%m-%dT%H-%M-%S)"
 RUN_START_RFC3339="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -62,6 +80,7 @@ cleanup() {
   tmux_cmd kill-server 2>/dev/null || true
   {
     echo "Pipeline run: $RUN_TS"
+    echo "Environment: ${PIPELINE_ENV:-unknown}"
     echo "Monitor only: $MONITOR_ONLY"
     echo "Log directory: $LOG_DIR"
     echo ""
@@ -85,15 +104,47 @@ cleanup() {
 trap cleanup EXIT
 
 # Source .env for UNITY_GCS_ARTIFACT_BUCKET, UNITY_PUBSUB_PROJECT_ID etc.
+PRESET_WORKER_NS="${UNITY_WORKER_NS:-}"
+PRESET_PARSE_SUB="${UNITY_PARSE_SUB:-}"
+PRESET_INGEST_SUB="${UNITY_INGEST_SUB:-}"
+PRESET_DLQ_SUB="${UNITY_DLQ_SUB:-}"
+PRESET_ARTIFACT_BUCKET="${UNITY_GCS_ARTIFACT_BUCKET:-}"
 _ENV_FILE="$REPO_ROOT/.env"
 if [ -f "$_ENV_FILE" ]; then
   set -a; . "$_ENV_FILE"; set +a
 fi
 
+if [[ -n "$PIPELINE_ENV_ARG" ]]; then
+  PIPELINE_ENV="$PIPELINE_ENV_ARG"
+else
+  PIPELINE_ENV="${UNITY_GCP_PIPELINE_ENVIRONMENT:-staging}"
+fi
+
+case "$PIPELINE_ENV" in
+  staging) ENV_SUFFIX="-staging" ;;
+  production) ENV_SUFFIX="" ;;
+  *)
+    echo "ERROR: --env must be 'staging' or 'production' (got '$PIPELINE_ENV')." >&2
+    exit 2
+    ;;
+esac
+
 PUBSUB_PROJECT="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
-PARSE_SUB="${UNITY_PARSE_SUB:-unity-parse-sub-staging}"
-INGEST_SUB="${UNITY_INGEST_SUB:-unity-ingest-sub-staging}"
-DLQ_SUB="${UNITY_DLQ_SUB:-unity-dead-letter-sub-staging}"
+if [[ -n "$PIPELINE_ENV_ARG" ]]; then
+  WORKER_NS="${PRESET_WORKER_NS:-$PIPELINE_ENV}"
+  PARSE_SUB="${PRESET_PARSE_SUB:-unity-parse-sub${ENV_SUFFIX}}"
+  INGEST_SUB="${PRESET_INGEST_SUB:-unity-ingest-sub${ENV_SUFFIX}}"
+  DLQ_SUB="${PRESET_DLQ_SUB:-unity-dead-letter-sub${ENV_SUFFIX}}"
+  ARTIFACT_BUCKET="${PRESET_ARTIFACT_BUCKET:-unity-pipeline-artifacts${ENV_SUFFIX}}"
+else
+  WORKER_NS="${UNITY_WORKER_NS:-$PIPELINE_ENV}"
+  PARSE_SUB="${UNITY_PARSE_SUB:-unity-parse-sub${ENV_SUFFIX}}"
+  INGEST_SUB="${UNITY_INGEST_SUB:-unity-ingest-sub${ENV_SUFFIX}}"
+  DLQ_SUB="${UNITY_DLQ_SUB:-unity-dead-letter-sub${ENV_SUFFIX}}"
+  ARTIFACT_BUCKET="${UNITY_GCS_ARTIFACT_BUCKET:-unity-pipeline-artifacts${ENV_SUFFIX}}"
+fi
+export UNITY_GCP_PIPELINE_ENVIRONMENT="$PIPELINE_ENV"
+export UNITY_GCS_ARTIFACT_BUCKET="$ARTIFACT_BUCKET"
 
 echo "========================================================================"
 if (( MONITOR_ONLY )); then
@@ -102,6 +153,13 @@ else
   echo "Pipeline Runner"
 fi
 echo "========================================================================"
+echo "  Environment:   $PIPELINE_ENV"
+echo "  Worker ns:     $WORKER_NS"
+echo "  Artifact GCS:  gs://$ARTIFACT_BUCKET"
+echo "  Pub/Sub project: $PUBSUB_PROJECT"
+echo "  Parse sub:     $PARSE_SUB"
+echo "  Ingest sub:    $INGEST_SUB"
+echo "  DLQ sub:       $DLQ_SUB"
 echo "  Log directory: $LOG_DIR"
 echo ""
 

@@ -6,12 +6,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
 
 ACK=0
 LIMIT=100
-SUB="${UNITY_DLQ_SUB:-unity-dead-letter-sub-staging}"
+PIPELINE_ENV_ARG=""
+SUB_OVERRIDE=""
 PROJECT="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 
 usage() {
   cat >&2 <<'EOF'
-Usage: drain_dlq.sh [--ack] [--subscription NAME] [--project PROJECT] [--limit N]
+Usage: drain_dlq.sh [--env staging|production] [--ack] [--subscription NAME] [--project PROJECT] [--limit N]
 
 Dry-run is the default: messages are pulled and decoded, but not acked.
 Pass --ack to acknowledge messages after writing them to logs/dlq/.
@@ -21,13 +22,39 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ack) ACK=1; shift ;;
-    --subscription) SUB="$2"; shift 2 ;;
+    --env)
+      PIPELINE_ENV_ARG="${2:-}"
+      if [[ -z "$PIPELINE_ENV_ARG" ]]; then
+        echo "ERROR: --env requires 'staging' or 'production'." >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --env=*) PIPELINE_ENV_ARG="${1#--env=}"; shift ;;
+    --subscription) SUB_OVERRIDE="$2"; shift 2 ;;
     --project) PROJECT="$2"; shift 2 ;;
     --limit) LIMIT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+
+PIPELINE_ENV="${PIPELINE_ENV_ARG:-${UNITY_GCP_PIPELINE_ENVIRONMENT:-staging}}"
+case "$PIPELINE_ENV" in
+  staging) ENV_SUFFIX="-staging" ;;
+  production) ENV_SUFFIX="" ;;
+  *)
+    echo "ERROR: --env must be 'staging' or 'production' (got '$PIPELINE_ENV')." >&2
+    exit 2
+    ;;
+esac
+SUB="${SUB_OVERRIDE:-${UNITY_DLQ_SUB:-unity-dead-letter-sub${ENV_SUFFIX}}}"
+
+echo "DLQ drain target:"
+echo "  environment:  $PIPELINE_ENV"
+echo "  project:      $PROJECT"
+echo "  subscription: $SUB"
+echo "  mode:         $([[ $ACK -eq 1 ]] && echo ack || echo dry-run)"
 
 mkdir -p "$REPO_ROOT/logs/dlq"
 ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
