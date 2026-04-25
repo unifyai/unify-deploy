@@ -16,7 +16,7 @@ FIFO semantics
 --------------
 Pub/Sub message ordering is deliberately *not* enabled on the parse/
 ingest subscriptions (see ``deploy/scripts/dev/setup_pipeline_infra.sh``
-for the creation flags and ``guides/PIPELINE_OPERATIONS.md`` for the
+for the creation flags and ``deploy/guides/PIPELINE_OPERATIONS.md`` for the
 rationale).  To preserve today's soft-FIFO behaviour through a pause→
 resume cycle, parked blobs are named with a zero-padded nanosecond
 prefix derived from the original Pub/Sub ``publish_time``:

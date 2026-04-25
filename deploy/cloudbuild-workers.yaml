@@ -5,7 +5,7 @@ steps:
   # cloudbuild.yaml already include an inline `refresh-pipeline-workers`
   # step that runs kubectl apply + rollout restart on every push. Keep
   # this file around as an operator escape hatch (see
-  # guides/PIPELINE_OPERATIONS.md § "Manual worker rollout").
+  # deploy/guides/PIPELINE_OPERATIONS.md § "Manual worker rollout").
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'deploy-parse-worker'
   args:
