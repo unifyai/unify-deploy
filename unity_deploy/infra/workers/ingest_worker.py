@@ -30,11 +30,12 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
 
 from unity.common.pipeline import (
     ArtifactWorkItem,
@@ -229,6 +230,67 @@ def _safe_scratch_name(value: str) -> str:
     )
 
 
+def _scratch_guard_threshold_bytes() -> int:
+    """Return the per-worker /tmp guard threshold.
+
+    Default is 3.5 GiB, matching a 4 GiB ephemeral-storage limit with a
+    little headroom. Operators can tune it without rebuilding the image.
+    """
+    raw = os.environ.get("UNITY_INGEST_TMP_MAX_BYTES")
+    if raw:
+        try:
+            return max(int(raw), 1)
+        except ValueError:
+            logger.warning(
+                "[ingest] Ignoring invalid UNITY_INGEST_TMP_MAX_BYTES=%r",
+                raw,
+            )
+    return int(3.5 * 1024 * 1024 * 1024)
+
+
+def _guard_tmp_usage(*, run_id: str, phase: str) -> None:
+    usage = shutil.disk_usage(tempfile.gettempdir())
+    threshold = _scratch_guard_threshold_bytes()
+    if usage.used <= threshold:
+        return
+    raise RuntimeError(
+        "ingest worker /tmp usage exceeded guard threshold "
+        f"(job={run_id}, phase={phase}, used={usage.used}, "
+        f"threshold={threshold}, total={usage.total})",
+    )
+
+
+def _delete_staged_scratch_files(scratch_dir: Path, *, run_id: str) -> None:
+    """Delete staged source files as soon as durable ingest has finished."""
+    if not scratch_dir.exists():
+        return
+    reclaimed = 0
+    deleted = 0
+    for path in sorted(scratch_dir.rglob("*"), reverse=True):
+        try:
+            if path.is_file():
+                size = path.stat().st_size
+                path.unlink()
+                reclaimed += size
+                deleted += 1
+            elif path.is_dir() and path != scratch_dir:
+                path.rmdir()
+        except OSError:
+            logger.debug(
+                "[ingest] Could not delete staged scratch path job=%s path=%s",
+                run_id,
+                path,
+                exc_info=True,
+            )
+    if deleted:
+        logger.info(
+            "[ingest] Deleted %d staged scratch file(s) for job=%s, reclaimed %.1f MB",
+            deleted,
+            run_id,
+            reclaimed / (1024 * 1024),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Control-event watcher (cancel + pause, instant)
 # ---------------------------------------------------------------------------
@@ -342,6 +404,10 @@ def _make_checkpoint_callback(
     *,
     initial_rows: int = 0,
     initial_chunks: int = 0,
+    total_rows: int | None = None,
+    file_path: str = "",
+    chunk_size: int | None = None,
+    log_every_chunks: int = 10,
     is_cancelled: CancellationCheck | None = None,
 ):
     """Return an ``on_task_complete`` callback that writes GCS checkpoints.
@@ -355,7 +421,13 @@ def _make_checkpoint_callback(
     chunk checkpoint and raises ``PipelineCancelled`` to unwind the
     executor's pipeline, giving per-chunk cancellation granularity.
     """
-    state = {"rows": initial_rows, "chunks": initial_chunks}
+    state = {
+        "rows": initial_rows,
+        "chunks": initial_chunks,
+        "last_rows": initial_rows,
+        "last_logged_at": time.perf_counter(),
+    }
+    log_every = max(int(log_every_chunks), 1)
 
     def _on_task_complete(task, result):
         if not getattr(task, "task_type", "").startswith("insert_chunk"):
@@ -375,14 +447,54 @@ def _make_checkpoint_callback(
             last_updated=utc_now_iso(),
         )
         try:
+            checkpoint_started = time.perf_counter()
             artifact_store.write_checkpoint(job_id, artifact_id, checkpoint)
+            checkpoint_write_ms = (time.perf_counter() - checkpoint_started) * 1000
         except Exception:
+            checkpoint_write_ms = -1.0
             logger.warning(
                 "[ingest] Failed to write checkpoint job=%s artifact=%s",
                 job_id,
                 artifact_id,
                 exc_info=True,
             )
+
+        should_log = (
+            state["chunks"] == initial_chunks + 1
+            or state["chunks"] % log_every == 0
+            or (total_rows is not None and state["rows"] >= total_rows)
+        )
+        if should_log:
+            now = time.perf_counter()
+            elapsed_since_log = max(now - state["last_logged_at"], 1e-6)
+            rows_since_log = max(state["rows"] - state["last_rows"], 0)
+            rows_per_second = rows_since_log / elapsed_since_log
+            remaining_rows = (
+                max(total_rows - state["rows"], 0) if total_rows is not None else None
+            )
+            eta_seconds = (
+                remaining_rows / rows_per_second
+                if remaining_rows is not None and rows_per_second > 0
+                else None
+            )
+            percent = (state["rows"] / total_rows) * 100 if total_rows else None
+            logger.info(
+                "[ingest][progress] job=%s file=%s table=%s chunks=%d rows=%d/%s "
+                "chunk_size=%s pct=%s rows_per_s=%.1f checkpoint_ms=%.1f eta_s=%s",
+                job_id,
+                file_path or "-",
+                artifact_id,
+                state["chunks"],
+                state["rows"],
+                total_rows if total_rows is not None else "?",
+                chunk_size if chunk_size is not None else "?",
+                f"{percent:.1f}" if percent is not None else "?",
+                rows_per_second,
+                checkpoint_write_ms,
+                f"{eta_seconds:.0f}" if eta_seconds is not None else "?",
+            )
+            state["last_logged_at"] = now
+            state["last_rows"] = state["rows"]
 
         if is_cancelled and is_cancelled():
             raise PipelineCancelled(
@@ -496,7 +608,8 @@ async def handle_ingest_message(
     item: ReceivedWorkItem,
     *,
     infra: WorkerInfra,
-) -> None:
+    ack_receipt: Callable[[], Awaitable[None]] | None = None,
+) -> bool:
     """Process one ``IngestRequested`` message end-to-end.
 
     Steps
@@ -536,6 +649,7 @@ async def handle_ingest_message(
     total_rows = 0
     file_path: str = ""
     scratch_dir_ctx = tempfile.TemporaryDirectory(prefix=f"ingest_{run_id}_")
+    acked = False
 
     # Start the control watcher before any heavy work so a pause/cancel
     # issued while the manifest download is running is still detected
@@ -555,6 +669,7 @@ async def handle_ingest_message(
             artifact_store=artifact_store,
             scratch_dir=Path(scratch_dir_ctx.name),
         )
+        _guard_tmp_usage(run_id=run_id, phase="after_staging")
         file_path = plan.file_path
 
         if is_shutdown_requested() or await work_queue.is_cancelled(run_id):
@@ -589,6 +704,13 @@ async def handle_ingest_message(
                     run_ledger=run_ledger,
                     is_cancelled=check_cancelled,
                 )
+            _delete_staged_scratch_files(Path(scratch_dir_ctx.name), run_id=run_id)
+            _guard_tmp_usage(run_id=run_id, phase="after_durable_ingest")
+
+        if overall_error is None and ack_receipt is not None:
+            await ack_receipt()
+            acked = True
+            logger.info("[ingest] Acked job=%s after durable ingest", run_id)
 
         try:
             job = job_store.read_job(run_id)
@@ -655,7 +777,7 @@ async def handle_ingest_message(
             # Intentionally skip attachment_callback: the attachment is
             # NOT complete yet. It fires when resume's final message
             # finishes successfully.
-            return
+            return False
 
         overall_error = "cancelled"
         logger.info(
@@ -691,6 +813,13 @@ async def handle_ingest_message(
                     "[ingest] Failed to publish attachment completion for job=%s",
                     run_id,
                 )
+        if acked:
+            logger.warning(
+                "[ingest] Finalize failed after durable ack for job=%s; "
+                "rows remain committed and Pub/Sub will not redeliver.",
+                run_id,
+            )
+            return True
         raise
     finally:
         # Stop the watcher before closing ledgers so any log message it
@@ -704,6 +833,7 @@ async def handle_ingest_message(
         run_ledger.close()
         cost_ledger.close()
         scratch_dir_ctx.cleanup()
+    return acked
 
 
 # ---------------------------------------------------------------------------
@@ -1097,7 +1227,21 @@ async def _run_dm_mode_inner(
             pl.get("table_id", ""),
             initial_rows=pl.get("skip_rows", 0),
             initial_chunks=pl.get("initial_chunks", 0),
+            total_rows=item.row_count,
+            file_path=plan.file_path,
+            chunk_size=pl["batch_size"],
             is_cancelled=is_cancelled,
+        )
+        ingest_started = time.perf_counter()
+        logger.info(
+            "[ingest][dm] Starting table=%s file=%s total_rows=%s "
+            "chunk_size=%s skip_rows=%s initial_chunks=%s",
+            pl.get("table_id", ""),
+            plan.file_path,
+            item.row_count if item.row_count is not None else "?",
+            pl["batch_size"],
+            pl.get("skip_rows", 0),
+            pl.get("initial_chunks", 0),
         )
         result = pl["dm"].ingest(
             pl["context"],
@@ -1113,10 +1257,21 @@ async def _run_dm_mode_inner(
             storage_client=pl.get("storage_client"),
             skip_rows=pl.get("skip_rows", 0),
         )
+        elapsed = time.perf_counter() - ingest_started
+        rows_inserted = int(getattr(result, "rows_inserted", 0) or 0)
+        logger.info(
+            "[ingest][dm] Finished table=%s file=%s inserted_rows=%d "
+            "elapsed_s=%.1f rows_per_s=%.1f",
+            pl.get("table_id", ""),
+            plan.file_path,
+            rows_inserted,
+            elapsed,
+            rows_inserted / elapsed if elapsed > 0 else 0.0,
+        )
         return {
             "ingest_result": result,
             "context": pl["context"],
-            "row_count": getattr(result, "rows_inserted", 0) or 0,
+            "row_count": rows_inserted,
         }
 
     total_rows = 0
