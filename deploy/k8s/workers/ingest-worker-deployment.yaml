@@ -28,6 +28,7 @@ spec:
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
+      serviceAccountName: unity-pipeline-worker
       # Ingest workers checkpoint per-chunk to GCS
       # (`_make_checkpoint_callback` in ingest_worker.py), so a
       # SIGKILL after the grace window only loses the current chunk:
@@ -70,11 +71,6 @@ spec:
             secretKeyRef:
               name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: GCP_SA_KEY
-          valueFrom:
-            secretKeyRef:
-              name: unity-secrets
-              key: GCP_SA_KEY
         - name: UNITY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
         - name: UNIFY_PROJECT_NAME

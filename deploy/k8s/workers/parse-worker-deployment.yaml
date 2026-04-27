@@ -28,6 +28,7 @@ spec:
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
+      serviceAccountName: unity-pipeline-worker
       # Parse workers have no per-chunk checkpoint (one message =
       # one download + one Docling parse + one manifest write), so a
       # SIGKILL mid-parse means the whole message retries from
@@ -68,11 +69,6 @@ spec:
             secretKeyRef:
               name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: GCP_SA_KEY
-          valueFrom:
-            secretKeyRef:
-              name: unity-secrets
-              key: GCP_SA_KEY
         - name: UNITY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
         livenessProbe:

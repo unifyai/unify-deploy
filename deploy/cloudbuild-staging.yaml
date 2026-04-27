@@ -120,6 +120,7 @@ steps:
     gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
 
     echo "Applying staging pipeline worker manifests..."
+    kubectl apply -f deploy/k8s/workers/pipeline-worker-serviceaccount.yaml
     kubectl apply -f deploy/k8s/workers/parse-worker-deployment_staging.yaml
     kubectl apply -f deploy/k8s/workers/ingest-worker-deployment_staging.yaml
     kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml

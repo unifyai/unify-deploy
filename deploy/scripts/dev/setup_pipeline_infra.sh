@@ -95,6 +95,9 @@ ADAPTER_GSA="custom-metrics-adapter"
 ADAPTER_GSA_EMAIL="${ADAPTER_GSA}@${PROJECT_ID}.iam.gserviceaccount.com"
 ADAPTER_KSA_BINDING="serviceAccount:${PROJECT_ID}.svc.id.goog[custom-metrics/custom-metrics-stackdriver-adapter]"
 ADAPTER_MANIFEST_URL="https://raw.githubusercontent.com/GoogleCloudPlatform/k8s-stackdriver/master/custom-metrics-stackdriver-adapter/deploy/production/adapter_new_resource_model.yaml"
+PIPELINE_GSA="unity-pipeline-worker"
+PIPELINE_GSA_EMAIL="${PIPELINE_GSA}@${PROJECT_ID}.iam.gserviceaccount.com"
+PIPELINE_KSA="unity-pipeline-worker"
 
 echo ""
 echo "=== External Metrics Adapter (cluster=${CLUSTER}) ==="
@@ -112,22 +115,40 @@ WORKER_NS="${ENV}"
 echo "Ensuring namespace '${WORKER_NS}' exists..."
 kubectl create namespace "${WORKER_NS}" --dry-run=client -o yaml | kubectl apply -f -
 
-# Worker manifests reference `unity-secrets` for ORCHESTRA_ADMIN_KEY and
-# GCP_SA_KEY. Secrets are namespace-scoped, so if the target namespace
-# doesn't have the key yet, copy it from `default`.
-if ! kubectl get secret unity-secrets -n "${WORKER_NS}" -o jsonpath='{.data.GCP_SA_KEY}' >/dev/null 2>&1; then
-  echo "Copying GCP_SA_KEY from default namespace into ${WORKER_NS}..."
-  GCP_SA_KEY=$(kubectl get secret unity-secrets -n default -o jsonpath='{.data.GCP_SA_KEY}')
-  if [ -n "${GCP_SA_KEY}" ]; then
-    kubectl patch secret unity-secrets -n "${WORKER_NS}" \
-      --type='json' \
-      -p="[{\"op\":\"add\",\"path\":\"/data/GCP_SA_KEY\",\"value\":\"${GCP_SA_KEY}\"}]"
-  else
-    echo "  WARNING: GCP_SA_KEY not found in default namespace either"
-  fi
+echo "Ensuring pipeline worker Workload Identity binding..."
+if ! gcloud iam service-accounts describe "${PIPELINE_GSA_EMAIL}" \
+    --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  echo "Creating GSA ${PIPELINE_GSA_EMAIL}..."
+  gcloud iam service-accounts create "${PIPELINE_GSA}" \
+    --project="${PROJECT_ID}" \
+    --display-name="Unity Pipeline Worker"
 else
-  echo "  (GCP_SA_KEY already present in ${WORKER_NS}/unity-secrets)"
+  echo "  (GSA ${PIPELINE_GSA_EMAIL} already exists)"
 fi
+
+for ROLE in roles/storage.objectAdmin roles/pubsub.editor roles/datastore.user; do
+  echo "Granting ${ROLE} to ${PIPELINE_GSA_EMAIL}..."
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${PIPELINE_GSA_EMAIL}" \
+    --role="${ROLE}" \
+    --condition=None >/dev/null
+done
+
+kubectl create serviceaccount "${PIPELINE_KSA}" \
+  --namespace="${WORKER_NS}" \
+  --dry-run=client \
+  -o yaml | kubectl apply -f -
+
+kubectl annotate serviceaccount \
+  --namespace="${WORKER_NS}" \
+  "${PIPELINE_KSA}" \
+  "iam.gke.io/gcp-service-account=${PIPELINE_GSA_EMAIL}" --overwrite >/dev/null
+
+gcloud iam service-accounts add-iam-policy-binding "${PIPELINE_GSA_EMAIL}" \
+  --project="${PROJECT_ID}" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="serviceAccount:${PROJECT_ID}.svc.id.goog[${WORKER_NS}/${PIPELINE_KSA}]" \
+  --condition=None >/dev/null
 
 if kubectl get ns custom-metrics >/dev/null 2>&1; then
   echo "  (custom-metrics namespace already present -- re-applying to pick up manifest drift)"

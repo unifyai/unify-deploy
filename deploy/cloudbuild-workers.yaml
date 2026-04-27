@@ -7,6 +7,16 @@ steps:
   # this file around as an operator escape hatch (see
   # deploy/guides/PIPELINE_OPERATIONS.md § "Manual worker rollout").
 - name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-pipeline-worker-serviceaccount'
+  args:
+  - 'apply'
+  - '-f'
+  - 'deploy/k8s/workers/pipeline-worker-serviceaccount.yaml'
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+
+- name: 'gcr.io/cloud-builders/kubectl'
   id: 'deploy-parse-worker'
   args:
   - 'apply'
@@ -15,6 +25,7 @@ steps:
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['deploy-pipeline-worker-serviceaccount']
 
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'deploy-ingest-worker'
