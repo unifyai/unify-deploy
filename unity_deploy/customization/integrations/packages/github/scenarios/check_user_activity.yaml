@@ -1,0 +1,16 @@
+name: Check User Activity
+description: Look up a GitHub user and review their repositories.
+steps:
+- action: get_user
+  args:
+    username: octocat
+  expect: "Returns the octocat user profile with follower count and bio"
+- action: get_user_repos
+  args:
+    username: octocat
+  expect: "Returns a list of octocat's public repositories"
+- action: get_repo_issues
+  args:
+    owner: octocat
+    repo: Hello-World
+  expect: "Returns open issues on the Hello-World repository"

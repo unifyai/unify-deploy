@@ -1,0 +1,12 @@
+name: Find Popular Python Repositories
+description: Search for highly-starred Python repositories on GitHub.
+steps:
+- action: search_repos
+  args:
+    query: "language:python stars:>10000"
+  expect: "Returns a list of popular Python repositories with star counts"
+- action: get_repo
+  args:
+    owner: pytorch
+    repo: pytorch
+  expect: "Returns detailed info about the pytorch repository"
