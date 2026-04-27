@@ -1157,6 +1157,17 @@ class ScheduledTaskDuePayload(BaseModel):
     recurrence_hint: str = "one_off"
 
 
+class InactivityFollowupPayload(BaseModel):
+    """Payload sent by the orchestra inactivity-followup routine.
+
+    Adapter looks up the rest of the assistant's runtime info via
+    ``get_assistant``; the routine only needs to identify which
+    assistant should compose a re-engagement message.
+    """
+
+    assistant_id: str
+
+
 # =============================================================================
 # Unify Attachment Upload
 # =============================================================================
@@ -1616,6 +1627,21 @@ def _task_due_message(payload: ScheduledTaskDuePayload) -> str:
     return f"Scheduled task {payload.task_id} became due at {scheduled_for}."
 
 
+def _build_inactivity_followup_reason() -> dict:
+    """Return the canonical wake reason / system-event payload for inactivity follow-ups."""
+
+    return {"type": "inactivity_followup"}
+
+
+def _inactivity_followup_message(assistant_id: str) -> str:
+    """Return the human-readable summary attached to an inactivity follow-up event."""
+
+    return (
+        f"Re-engagement follow-up requested for assistant {assistant_id} "
+        f"after a stretch of silence across all contacts."
+    )
+
+
 def _publish_unity_system_event(
     *,
     assistant_id: str,
@@ -1805,6 +1831,124 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
             )
             return Response(
                 content=f"Failed to publish task_due system event: {exc}",
+                status_code=500,
+            )
+        return {
+            "success": True,
+            "status": "published_to_active_session",
+            "assistant_id": assistant_id,
+            "activation_id": start_result.get("activation_id"),
+        }
+
+    return {
+        "success": True,
+        "status": "attached_to_startup",
+        "assistant_id": assistant_id,
+        "activation_id": start_result.get("activation_id"),
+    }
+
+
+@app.post("/assistant/inactivity-followup", dependencies=[Depends(require_admin_key)])
+async def assistant_inactivity_followup_webhook(payload: InactivityFollowupPayload):
+    """Wake or notify an assistant for an inactivity re-engagement follow-up.
+
+    Mirrors the cold-pod / hot-pod dispatch pattern used by
+    ``scheduled_task_due_webhook``: if the assistant runs locally we
+    publish the system event directly; otherwise we dispatch a Unity
+    start intent and, if a session is already running, also publish
+    the system event so the live brain observes the reason.
+
+    Called by the orchestra inactivity-followup routine; the brain in
+    Unity reads the ``inactivity_followup`` reason and composes /
+    sends the re-engagement message itself.
+    """
+
+    assistant_data = await asyncio.to_thread(
+        get_assistant,
+        assistant_id=payload.assistant_id,
+    )
+    if not assistant_data or not assistant_data.get("assistant_id"):
+        logger.info(
+            "Skipping inactivity_followup delivery because assistant %s no longer exists",
+            payload.assistant_id,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "assistant_not_found",
+        }
+
+    assistant_id = assistant_data["assistant_id"]
+    wake_reason = _build_inactivity_followup_reason()
+
+    try:
+        if uses_local_unity_runtime(assistant_data):
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="inactivity_followup",
+                message=_inactivity_followup_message(assistant_id),
+                extra_event_fields=wake_reason,
+            )
+            return {
+                "success": True,
+                "status": "published_local",
+                "assistant_id": assistant_id,
+            }
+
+        response = await asyncio.to_thread(
+            dispatch_unity_start_intent,
+            assistant_data,
+            "api_message",
+            wake_reasons=[wake_reason],
+            timeout_seconds=30,
+        )
+    except requests.RequestException as exc:
+        logger.error(
+            "Failed dispatching inactivity_followup wake for assistant %s: %s",
+            assistant_id,
+            exc,
+        )
+        return Response(
+            content=f"Failed to dispatch inactivity_followup wake: {exc}",
+            status_code=500,
+        )
+
+    if response is None:
+        return Response(
+            content="Assistant is missing an API key for inactivity_followup delivery",
+            status_code=500,
+        )
+    if response.status_code != 200:
+        return Response(content=response.text, status_code=response.status_code)
+
+    try:
+        start_result = response.json()
+    except ValueError as exc:
+        logger.error(
+            "Invalid /infra/job/start response for inactivity_followup: %s",
+            exc,
+        )
+        return Response(
+            content="Invalid /infra/job/start response",
+            status_code=500,
+        )
+
+    if start_result.get("active_session_already_running"):
+        try:
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="inactivity_followup",
+                message=_inactivity_followup_message(assistant_id),
+                extra_event_fields=wake_reason,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed publishing inactivity_followup system event for assistant %s: %s",
+                assistant_id,
+                exc,
+            )
+            return Response(
+                content=f"Failed to publish inactivity_followup system event: {exc}",
                 status_code=500,
             )
         return {
