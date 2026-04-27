@@ -50,6 +50,31 @@ metadata:
   namespace: staging
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: assistant-session-controller-discovery
+rules:
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: assistant-session-controller-discovery-staging
+subjects:
+- kind: ServiceAccount
+  name: assistant-session-controller
+  namespace: staging
+roleRef:
+  kind: ClusterRole
+  name: assistant-session-controller-discovery
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: assistant-session-controller
@@ -111,11 +136,6 @@ spec:
         ports:
         - containerPort: 8080
           name: health
-        envFrom:
-        - configMapRef:
-            name: unity-config
-        - secretRef:
-            name: unity-secrets
         env:
         - name: WATCH_NAMESPACE
           value: staging
@@ -123,6 +143,22 @@ spec:
           value: staging
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: /secrets/key.json
+        - name: GCP_PROJECT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: unity-config
+              key: GCP_PROJECT_ID
+        - name: UNITY_COMMS_URL
+          value: "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+        - name: UNITY_ADAPTERS_URL
+          value: "https://service.a.run.app"
+        - name: ORCHESTRA_URL
+          value: "https://internal.example.com/v0"
+        - name: ORCHESTRA_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: ORCHESTRA_ADMIN_KEY
         resources:
           requests:
             cpu: 2000m
@@ -180,11 +216,6 @@ spec:
         - python
         - -m
         - communication.assistant_session_controller.pool_controller
-        envFrom:
-        - configMapRef:
-            name: unity-config
-        - secretRef:
-            name: unity-secrets
         env:
         - name: WATCH_NAMESPACE
           value: staging
@@ -192,6 +223,22 @@ spec:
           value: staging
         - name: GOOGLE_APPLICATION_CREDENTIALS
           value: /secrets/key.json
+        - name: GCP_PROJECT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: unity-config
+              key: GCP_PROJECT_ID
+        - name: UNITY_COMMS_URL
+          value: "https://unity-comms-app-staging-000000000000.us-central1.run.app"
+        - name: UNITY_ADAPTERS_URL
+          value: "https://service.a.run.app"
+        - name: ORCHESTRA_URL
+          value: "https://internal.example.com/v0"
+        - name: ORCHESTRA_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: ORCHESTRA_ADMIN_KEY
         - name: POOL_CONTROLLER_INTERVAL_SECONDS
           value: "10"
         resources:

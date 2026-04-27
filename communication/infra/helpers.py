@@ -284,6 +284,52 @@ def create_unity_job(
         ttl_seconds_after_finished: Seconds after job completion before cleanup (None to disable)
     """
     try:
+        unity_config_env = [
+            {
+                "name": key,
+                "valueFrom": {
+                    "configMapKeyRef": {
+                        "name": "unity-config",
+                        "key": key,
+                    },
+                },
+            }
+            for key in (
+                "GCP_PROJECT_ID",
+                "PROJECT_ID",
+                "VERTEXAI_LOCATION",
+                "VERTEXAI_PROJECT",
+            )
+        ]
+        unity_secret_env = [
+            {
+                "name": key,
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": "unity-secrets",
+                        "key": key,
+                    },
+                },
+            }
+            for key in (
+                "ANTHROPIC_API_KEY",
+                "CARTESIA_API_KEY",
+                "DEEPGRAM_API_KEY",
+                "ELEVEN_API_KEY",
+                "LIVEKIT_API_KEY",
+                "LIVEKIT_API_SECRET",
+                "LIVEKIT_SIP_URI",
+                "LIVEKIT_URL",
+                "OPENAI_API_KEY",
+                "ORCHESTRA_ADMIN_KEY",
+                "SHARED_UNIFY_KEY",
+                "TAVILY_API_KEY",
+                "VERTEXAI_CREDENTIALS",
+                "_UNITY_STARTUP_HOOK_GROUP",
+                "_UNITY_STARTUP_HOOK_PACKAGE",
+            )
+        ]
+
         env_vars = [
             {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
             {"name": "DEPLOY_ENV", "value": deploy_env},
@@ -319,6 +365,8 @@ def create_unity_job(
                 ),
             },
         ]
+        env_vars.extend(unity_config_env)
+        env_vars.extend(unity_secret_env)
         if deploy_env == "staging":
             env_vars += [{"name": "STAGING", "value": "true"}]
         if extra_env:
@@ -377,10 +425,6 @@ def create_unity_job(
                                 "ports": [
                                     {"containerPort": 8000},
                                     {"containerPort": 6379},
-                                ],
-                                "envFrom": [
-                                    {"configMapRef": {"name": "unity-config"}},
-                                    {"secretRef": {"name": "unity-secrets"}},
                                 ],
                                 "env": env_vars,
                                 # Right-sized 2026-04 from 2 vCPU / 16 GiB based on
