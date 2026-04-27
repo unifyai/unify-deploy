@@ -79,6 +79,7 @@ def startup_hook(
         - ``actor_kwargs``: kwargs passed to ``CodeActActor.__init__``
     """
     from unity_deploy.customization.clients import resolve
+    from unity_deploy.customization.integrations.activation import expand_integrations
     from unity_deploy.customization.seed_sync import sync_all_seed_data
     from unity_deploy.runtime import get_runtime_backend_overrides
     from unity.function_manager.custom_functions import (
@@ -93,6 +94,7 @@ def startup_hook(
         user_id=session_details.user.id,
         assistant_id=session_details.assistant.agent_id,
     )
+    resolved = expand_integrations(resolved)
 
     sync_all_seed_data(resolved)
 
@@ -109,10 +111,18 @@ def startup_hook(
         if source_fns or source_venvs:
             fm.sync_custom(source_functions=source_fns, source_venvs=source_venvs)
 
+    if resolved.mcp_configs:
+        logger.info(
+            "Loaded %d MCP integration config(s); runtime MCP wrapper sync is deferred",
+            len(resolved.mcp_configs),
+        )
+
     config = resolved.config
+    url_mappings = dict(config.url_mappings or {})
+    url_mappings.update(resolved.url_mappings)
     return {
         "environments": resolved.environments,
-        "url_mappings": config.url_mappings if config.url_mappings else None,
+        "url_mappings": url_mappings or None,
         "runtime_backends": get_runtime_backend_overrides(),
         "actor_kwargs": {
             k: v
