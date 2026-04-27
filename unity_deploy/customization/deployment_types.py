@@ -83,6 +83,7 @@ class SeedLayer(BaseModel):
     knowledge: dict[str, dict] = Field(default_factory=dict)
     blacklist: list[dict] = Field(default_factory=list)
     secrets: list[Secret] = Field(default_factory=list)
+    integrations: list[str] = Field(default_factory=list)
 
 
 def _merge_actor_configs(base: ActorConfig, override: ActorConfig) -> ActorConfig:
@@ -133,6 +134,13 @@ class DeploymentSpec(BaseModel):
     secrets: list[Secret] = Field(
         default_factory=list,
         description="Credentials registered with the actor's SecretManager.",
+    )
+    integrations: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Private integration package slugs enabled for this deployment. "
+            "Loaded from unity_deploy.customization.integrations.packages."
+        ),
     )
     contacts: list[dict] = Field(
         default_factory=list,
