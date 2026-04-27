@@ -171,9 +171,10 @@ class DeploymentSpec(BaseModel):
         default=None,
         description=(
             "Per-assistant console UI configuration (layout mode, tab "
-            "visibility, theme overrides). Synced to Orchestra on startup via "
-            "PATCH /v0/admin/assistant/{assistant_id}, where Orchestra stores "
-            "it in the assistant_console_config table."
+            "visibility, theme overrides). Reconciled to Orchestra at deploy "
+            "time via unity_deploy.scripts.reconcile_control_plane, with the "
+            "startup hook retaining a best-effort drift-repair PATCH. "
+            "Orchestra stores it in the assistant_console_config table."
         ),
     )
 

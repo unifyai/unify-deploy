@@ -4,12 +4,17 @@ Discovered at runtime via Python entry points when the
 ``_UNITY_STARTUP_HOOK_GROUP`` environment variable is set to the
 group name declared in this package's ``pyproject.toml``.
 
-Performs three tasks that were previously steps 7-9 in
+Performs runtime hydration tasks that were previously steps 7-9 in
 ``_init_managers``:
 
 1. Resolve client customization (deployment-matched spec; shared seed layers merged org→team→user→assistant; secrets from ``.secrets.json`` applied last)
 2. Sync seed data (contacts, guidance, knowledge, secrets, blacklist)
 3. Sync custom functions and virtual environments
+
+Deploy-time control-plane metadata, such as Console ``console_config``, is
+primarily reconciled by ``unity_deploy.scripts.reconcile_control_plane``.  The
+hook keeps a best-effort idempotent PATCH as drift repair for assistants that
+wake after a deployment spec changes.
 """
 
 from __future__ import annotations
@@ -30,9 +35,11 @@ def _sync_console_config(
     assistant_id: int | str,
     console_config: dict[str, Any],
 ) -> None:
-    """PATCH console_config onto the assistant record in Orchestra.
+    """Best-effort drift repair for assistant ``console_config``.
 
-    Best-effort: logs a warning on failure rather than blocking startup.
+    Primary first-visibility sync happens at deploy time via the control-plane
+    reconciler.  This wake-time PATCH is intentionally non-blocking so runtime
+    startup does not fail if Orchestra is temporarily unavailable.
     """
     try:
         patch_json(
@@ -52,7 +59,7 @@ def startup_hook(
     cm: "ConversationManager",
     session_details: "SessionDetails",
 ) -> dict[str, Any] | None:
-    """Enterprise startup hook called during ``_init_managers``.
+    """Enterprise runtime hydration hook called during ``_init_managers``.
 
     Parameters
     ----------
@@ -60,6 +67,8 @@ def startup_hook(
         The conversation manager instance (fully constructed minus the Actor).
     session_details : SessionDetails
         Runtime identity carrying org_id, team_ids, user.id, assistant.agent_id.
+        Console control-plane state should already have been reconciled before
+        this hook runs.
 
     Returns
     -------

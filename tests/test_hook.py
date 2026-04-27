@@ -6,7 +6,7 @@ from unity_deploy import hook
 from unity_deploy.utils.orchestra_client import OrchestraClientError
 
 
-def test_sync_console_config_patches_assistant(monkeypatch):
+def test_sync_console_config_repairs_assistant_console_config(monkeypatch):
     captured: dict = {}
 
     def fake_patch_json(path, body):
@@ -28,7 +28,7 @@ def test_sync_console_config_patches_assistant(monkeypatch):
     }
 
 
-def test_sync_console_config_is_best_effort(monkeypatch, caplog):
+def test_sync_console_config_drift_repair_is_best_effort(monkeypatch, caplog):
     def fake_patch_json(path, body):
         raise OrchestraClientError(500, "server exploded")
 
