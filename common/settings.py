@@ -152,34 +152,32 @@ class Settings:
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         self.shared_unify_key: str = os.environ.get("SHARED_UNIFY_KEY", "")
 
-        # Cleanup / Workspace integration
+        # Cleanup / Workspace integration.  ``workspace_admin_subject`` is
+        # the Workspace user we impersonate for Admin SDK Directory calls;
+        # still used by ``DELETE /gmail/delete`` (Orchestra teardown
+        # worker) and by Gmail SA-delegated send/read fallbacks.
+        # ``WORKSPACE_EMAIL_DOMAIN`` and ``MS365_LICENSE_SKU_ID`` were
+        # removed together with the platform mailbox provisioning
+        # endpoints.
         self.job_inventory_lookback_hours: int = int(
             os.environ.get("UNITY_JOB_INVENTORY_LOOKBACK_HOURS", "36"),
-        )
-        self.workspace_email_domain: str = os.environ.get(
-            "WORKSPACE_EMAIL_DOMAIN",
-            "unify.ai",
         )
         self.workspace_admin_subject: str = os.environ.get(
             "WORKSPACE_ADMIN_SUBJECT",
             "dan@unify.ai",
         )
 
-        # Microsoft 365 provisioning (tenant-level app for creating/managing users)
-        self.ms365_email_domain: str = os.environ.get(
-            "MS365_EMAIL_DOMAIN",
-            "tenant.onmicrosoft.com",
-        )
+        # Microsoft 365 admin app — used by ``DELETE /outlook/delete``
+        # (Orchestra teardown worker) and by app-only Graph fallbacks
+        # (e.g. Teams watch teardown).  No longer used to mint tokens;
+        # the platform-mailbox provisioning + ``unify_ropc`` refresh
+        # paths were retired with the wider @unify.ai email feature.
         self.ms365_admin_tenant_id: str = os.environ.get(
             "MS365_ADMIN_TENANT_ID",
             "",
         )
         self.ms365_admin_client_id: str = os.environ.get(
             "MS365_ADMIN_CLIENT_ID",
-            "",
-        )
-        self.ms365_license_sku_id: str = os.environ.get(
-            "MS365_LICENSE_SKU_ID",
             "",
         )
 

@@ -1,13 +1,15 @@
 """
 Behavioral contract tests for Gmail comms-app endpoints.
 
-Tests the Gmail send, attachment read, and user create/delete lifecycle
-against the real deployed comms app with domain-wide delegation.
+Tests the Gmail send, attachment read, and user delete endpoints against
+the real deployed comms app with domain-wide delegation.
 
 Endpoints covered:
 - POST /gmail/send (sends real email via delegated SA)
 - GET /gmail/attachment (reads attachment from real Gmail message)
-- POST /gmail/create + DELETE /gmail/delete (Workspace user lifecycle)
+- DELETE /gmail/delete (Workspace user teardown — Orchestra teardown
+  worker only; the matching ``POST /gmail/create`` was retired with the
+  wider @unify.ai email feature)
 """
 
 import pytest
@@ -83,45 +85,35 @@ class TestGmailAttachment:
         ), f"gmail/attachment unexpected: {resp.status_code} {resp.text}"
 
 
-class TestGmailUserLifecycle:
-    """Contract: POST /gmail/create + DELETE /gmail/delete manage
-    Google Workspace users.
+class TestGmailDelete:
+    """Contract: DELETE /gmail/delete is idempotent against an absent user.
 
-    Creates a temporary test user, verifies, then deletes immediately.
+    The matching ``POST /gmail/create`` endpoint was retired with the
+    wider @unify.ai email feature; the only remaining caller of this
+    endpoint is Orchestra's ``teardown_platform_mailboxes`` worker.
     """
 
-    def test_create_and_delete_workspace_user(self):
+    def test_delete_absent_user_is_idempotent(self):
         import uuid
 
-        test_local = f"integration-test-{uuid.uuid4().hex[:8]}"
-        test_email = f"{test_local}@unify.ai"
+        absent_email = f"integration-absent-{uuid.uuid4().hex[:8]}@unify.ai"
 
-        try:
-            create_resp = requests.post(
-                f"{COMMS_APP_URL}/gmail/create",
-                json={
-                    "local": test_local,
-                    "first_name": "IntegrationTest",
-                    "last_name": "AutoDelete",
-                },
-                headers=_ADMIN_HEADERS,
-                timeout=30,
-            )
-            # 201 = user created; 500 = SA lacks Workspace admin delegation
-            if create_resp.status_code == 500:
-                pytest.skip(
-                    "SA does not have Workspace admin delegation for user creation",
-                )
-            assert (
-                create_resp.status_code == 201
-            ), f"gmail/create failed: {create_resp.status_code} {create_resp.text}"
-            body = create_resp.json()
-            assert body["success"] is True
+        resp = requests.delete(
+            f"{COMMS_APP_URL}/gmail/delete",
+            json={"primary_email": absent_email},
+            headers=_ADMIN_HEADERS,
+            timeout=15,
+        )
 
-        finally:
-            requests.delete(
-                f"{COMMS_APP_URL}/gmail/delete",
-                json={"primary_email": test_email},
-                headers=_ADMIN_HEADERS,
-                timeout=15,
+        # 200 = idempotent success (already-absent or freshly deleted);
+        # 500 = SA lacks Workspace admin delegation in this environment.
+        if resp.status_code == 500:
+            pytest.skip(
+                "SA does not have Workspace admin delegation for user deletion",
             )
+        assert (
+            resp.status_code == 200
+        ), f"gmail/delete unexpected: {resp.status_code} {resp.text}"
+        body = resp.json()
+        assert body["success"] is True
+        assert body["already_absent"] is True

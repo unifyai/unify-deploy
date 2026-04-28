@@ -4132,40 +4132,37 @@ def _resolve_ms_refresh_credentials(
 
     A refresh token is bound to the Azure app registration that minted
     it, so the scheduler has to redeem each token against the same app.
-    Three origin flows exist today:
+    Two origin flows are minted today:
 
     - ``byod``        — user-consent OAuth against the multi-tenant
       ``MS365_BYOD_*`` app.  ``tenant_id="common"``.  The scope sent on
       refresh is whatever the user consented to at OAuth time, stored in
       ``MICROSOFT_GRANTED_SCOPES``.  We can't unilaterally expand it
       without bouncing the user through consent again.
-    - ``unify_ropc``  — ROPC against ``MS365_ADMIN_*`` for mailboxes
-      provisioned inside Unify's own tenant
-      (``SETTINGS.ms365_email_domain``).  The scope sent on refresh is
-      the current ``email + teams`` bundle computed from
-      ``common/scopes.py`` — these mailboxes exist solely to support
-      those two surfaces, and the admin app is admin-consented for the
-      full bundle, so recomputing every time lets bundle edits take
-      effect without re-provisioning.  ``MICROSOFT_GRANTED_SCOPES`` is
-      ignored for this source.
     - ``enterprise``  — authorization-code flow against per-assistant
       ``AZURE_TENANT_ID`` / ``AZURE_CLIENT_ID`` / ``AZURE_CLIENT_SECRET``
       secrets (real BYO-tenant enterprise install).  Uses ``.default``
       so the admin controls permissions at the app registration level.
 
+    A third historical source — ``unify_ropc`` — was issued by the
+    retired ``POST /outlook/create`` and ``POST /outlook/backfill-tokens``
+    endpoints for unify-tenant bot mailboxes.  No new ``unify_ropc``
+    tokens are minted; if a legacy row still carries the source we
+    return ``None`` so the caller logs a clear failure rather than
+    silently re-cycling stale credentials.
+
     Classification precedence:
 
     1. Explicit ``MICROSOFT_TOKEN_SOURCE`` secret (stamped at issuance).
     2. Presence of per-assistant ``AZURE_*`` secrets ⇒ ``enterprise``.
-    3. Assistant email on Unify's own domain ⇒ ``unify_ropc``.
-    4. Default ⇒ ``byod``.
+    3. Default ⇒ ``byod``.
 
     Returns ``None`` when the required platform env vars for the chosen
-    flow aren't configured, so the caller can surface a clear failure
-    rather than calling Microsoft with empty credentials.
+    flow aren't configured (or the source is the retired
+    ``unify_ropc``), so the caller can surface a clear failure rather
+    than calling Microsoft with empty credentials.
     """
     secrets = assistant.get("secrets") or {}
-    email = assistant.get("email", "") or ""
 
     az_tenant = secrets.get("AZURE_TENANT_ID")
     az_client = secrets.get("AZURE_CLIENT_ID")
@@ -4175,10 +4172,6 @@ def _resolve_ms_refresh_credentials(
     if not source:
         if all([az_tenant, az_client, az_secret]):
             source = "enterprise"
-        elif SETTINGS.ms365_email_domain and email.endswith(
-            "@" + SETTINGS.ms365_email_domain,
-        ):
-            source = "unify_ropc"
         else:
             source = "byod"
 
@@ -4190,13 +4183,9 @@ def _resolve_ms_refresh_credentials(
         return (az_tenant, az_client, az_secret, default_scope, source)
 
     if source == "unify_ropc":
-        tenant_id = SETTINGS.ms365_admin_tenant_id
-        client_id = SETTINGS.ms365_admin_client_id
-        client_secret = os.environ.get("MS365_ADMIN_CLIENT_SECRET", "")
-        if not all([tenant_id, client_id, client_secret]):
-            return None
-        scope = build_scope_string("microsoft", ["email", "teams"])
-        return (tenant_id, client_id, client_secret, scope, source)
+        # Retired source — the platform mailboxes that minted these
+        # tokens were torn down with the wider @unify.ai email feature.
+        return None
 
     # source == "byod"
     client_id = SETTINGS.ms365_byod_client_id
@@ -4320,17 +4309,6 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
             # decision to save the heuristic on the next tick.
             if not secrets.get("MICROSOFT_TOKEN_SOURCE"):
                 secrets_to_store["MICROSOFT_TOKEN_SOURCE"] = source
-
-            # For unify-managed (ROPC) mailboxes, the scope sent on refresh
-            # is recomputed from ``common/scopes.py`` every tick.  Re-stamp
-            # ``MICROSOFT_GRANTED_SCOPES`` with what Microsoft actually
-            # granted (or what we sent, if the response omits it) so
-            # downstream consumers — notably Teams watch setup — see the
-            # current truth rather than a value frozen at provisioning.
-            if source == "unify_ropc":
-                granted = new_tokens.get("scope") or refresh_scope
-                if granted != secrets.get("MICROSOFT_GRANTED_SCOPES"):
-                    secrets_to_store["MICROSOFT_GRANTED_SCOPES"] = granted
 
             for secret_name, secret_value in secrets_to_store.items():
                 response = requests.put(
@@ -4497,9 +4475,9 @@ def scheduled_teams_watches(payload: ScheduledPayload):
     are picked up automatically.
 
     The comms service requires a delegated token for every mailbox in
-    this codepath; us-provisioned mailboxes get one via ROPC at
-    ``/outlook/create``.  Mailboxes without a stored token surface as
-    ``no_token`` in the results and need a re-provision or BYOD OAuth.
+    this codepath; mailboxes without a stored token surface as
+    ``no_token`` in the results and need to (re-)run the BYOD OAuth
+    flow (``microsoft/auth/callback``) to mint delegated user tokens.
     """
     admin_key = SETTINGS.orchestra_admin_key
     if not admin_key:

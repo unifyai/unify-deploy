@@ -504,9 +504,9 @@ async def watch_teams(request: Request):
     model declaration (``?model=A`` or ``?model=B``) in the
     notification URL, which Graph charges per notification or per
     licensed user.  Delegated subscriptions inherit the user's existing
-    Teams license and need no extra billing setup.  For unify-managed
-    mailboxes we obtain delegated tokens via ROPC at provisioning time
-    (see ``communication/outlook/views.py#create_outlook_user``).
+    Teams license and need no extra billing setup.  Delegated tokens
+    are minted by the BYOD OAuth flow (``microsoft/auth/callback`` in
+    ``adapters``).
 
     Request body::
 
@@ -538,9 +538,8 @@ async def watch_teams(request: Request):
                 status_code=409,
                 detail=(
                     f"No delegated MICROSOFT_ACCESS_TOKEN for {user_email}. "
-                    "Run the BYOD OAuth flow or re-provision via "
-                    "/outlook/create with assistant_id+api_key so ROPC "
-                    "can store user tokens."
+                    "Run the BYOD OAuth flow (microsoft/auth/callback) "
+                    "to mint delegated user tokens for this assistant."
                 ),
             )
 

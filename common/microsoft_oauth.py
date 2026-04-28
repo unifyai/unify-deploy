@@ -50,52 +50,6 @@ async def exchange_microsoft_code_for_tokens(
         return data
 
 
-async def acquire_microsoft_user_tokens_ropc(
-    tenant_id: str,
-    client_id: str,
-    client_secret: str,
-    username: str,
-    password: str,
-    scope: str,
-) -> dict:
-    """Acquire delegated tokens for a service-account mailbox via ROPC.
-
-    Used at provisioning time so unify-managed mailboxes carry the same
-    per-user OAuth tokens as BYOD ones — that is the only way to create
-    Teams change-notification subscriptions without ``?model=`` (Graph
-    requires a billing model on every app-only Teams subscription, but
-    rejects the param on delegated subscriptions).
-
-    Requires:
-      * the admin app registration to allow public client flows
-        (Authentication → Allow public client flows = Yes); ROPC fails
-        with ``AADSTS7000218`` otherwise.
-      * the target user to be exempt from MFA-requiring Conditional
-        Access (the bot mailboxes have no human at the keyboard); fails
-        with ``AADSTS50076`` / ``AADSTS53003`` otherwise.
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "grant_type": "password",
-                "username": username,
-                "password": password,
-                "scope": scope,
-            },
-            timeout=30.0,
-        )
-    if response.status_code != 200:
-        raise Exception(f"ROPC token request failed: {response.text}")
-    data = response.json()
-    data["expires_at"] = (
-        datetime.now(tz=timezone.utc) + timedelta(seconds=data.get("expires_in", 3600))
-    ).isoformat()
-    return data
-
-
 async def get_microsoft_user_info(access_token: str) -> dict:
     """Get user info (email, name, etc.) from an access token."""
     async with httpx.AsyncClient() as client:
@@ -130,11 +84,15 @@ async def store_microsoft_tokens(
 
     - ``"byod"``        — user-consent flow against ``MS365_BYOD_*``
       (multi-tenant Entra ID app; ``tenant_id="common"``).
-    - ``"unify_ropc"``  — ROPC against ``MS365_ADMIN_*`` for mailboxes
-      provisioned inside Unify's own tenant.
     - ``"enterprise"``  — authorization-code flow against per-assistant
       ``AZURE_TENANT_ID`` / ``AZURE_CLIENT_ID`` / ``AZURE_CLIENT_SECRET``
       secrets.
+
+    The historical ``"unify_ropc"`` source (issued by the now-removed
+    ``POST /outlook/create`` and ``POST /outlook/backfill-tokens``
+    endpoints) is no longer minted.  Existing rows are still tolerated
+    by the refresh scheduler so that any straggler tokens can be cycled
+    out, but no new tokens with that source should be written.
     """
     if not SETTINGS.orchestra_url:
         logger.info("SETTINGS.orchestra_url not configured")

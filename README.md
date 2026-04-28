@@ -296,20 +296,35 @@ All JSON endpoints require a valid admin API key via the `auth_admin_key` depend
 
 **Authenticated JSON Endpoints**:
 
-- `POST /gmail/create`
-- `DELETE /gmail/delete`
+- `DELETE /gmail/delete` — Workspace user teardown (Orchestra
+  ``teardown_platform_mailboxes`` worker only; idempotent against an
+  already-absent user)
 - `POST /gmail/send`
 - `POST /gmail/watch`
 - `DELETE /gmail/watch`
+- `GET /gmail/attachment`
+
+> The historical ``POST /gmail/create`` endpoint was retired together
+> with the wider platform ``@unify.ai`` mailbox feature. Email contacts
+> are now BYOD-only — connect a user-owned Gmail mailbox via the
+> ``google/auth/callback`` flow on the adapters service.
 
 ### Outlook (`/outlook`)
 
 **Authenticated JSON Endpoints**:
 
+- `DELETE /outlook/delete` — MS365 user teardown (Orchestra
+  ``teardown_platform_mailboxes`` worker only; idempotent)
 - `POST /outlook/send`
 - `POST /outlook/watch`
-- `POST /outlook/watch/renew`
 - `DELETE /outlook/watch`
+- `GET /outlook/attachment`
+
+> The historical ``POST /outlook/create`` and
+> ``POST /outlook/backfill-tokens`` endpoints were retired together
+> with the wider platform ``@unify.ai`` mailbox feature. Email
+> contacts are now BYOD-only — connect a user-owned Outlook mailbox
+> via the ``microsoft/auth/callback`` flow on the adapters service.
 
 ### Social Verification (`/social`)
 

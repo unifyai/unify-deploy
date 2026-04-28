@@ -1,9 +1,9 @@
 """Unit tests for ``_resolve_ms_refresh_credentials`` in ``adapters/main.py``.
 
-Covers per-source scope dispatch, with particular emphasis on the
-``unify_ropc`` branch which must always use the freshly-computed
-``email + teams`` bundle from ``common/scopes.py`` regardless of what
-was stamped in ``MICROSOFT_GRANTED_SCOPES`` at provisioning time.
+Covers per-source dispatch for the two flows that still mint Microsoft
+tokens (``byod`` and ``enterprise``) plus the safety net that prevents
+the retired ``unify_ropc`` source from silently re-cycling stale
+credentials.
 """
 
 from __future__ import annotations
@@ -23,82 +23,13 @@ os.environ.setdefault("OAUTH_STATE_SIGNING_KEY", "test-oauth-signing-key")
 
 @pytest.fixture
 def ms_env(monkeypatch):
-    """Populate the Azure-app env vars the three branches rely on."""
-    monkeypatch.setenv("MS365_ADMIN_CLIENT_SECRET", "admin-secret")
+    """Populate the Azure-app env vars the BYOD branch relies on."""
     monkeypatch.setenv("MS365_BYOD_CLIENT_SECRET", "byod-secret")
 
     from common.settings import SETTINGS
 
-    monkeypatch.setattr(SETTINGS, "ms365_admin_tenant_id", "admin-tenant-id")
-    monkeypatch.setattr(SETTINGS, "ms365_admin_client_id", "admin-client-id")
     monkeypatch.setattr(SETTINGS, "ms365_byod_client_id", "byod-client-id")
-    monkeypatch.setattr(SETTINGS, "ms365_email_domain", "tenant.onmicrosoft.com")
     return SETTINGS
-
-
-def _expected_ropc_scope() -> str:
-    from common.scopes import build_scope_string
-
-    return build_scope_string("microsoft", ["email", "teams"])
-
-
-def test_unify_ropc_ignores_stale_granted_scopes(ms_env):
-    """Stale ``MICROSOFT_GRANTED_SCOPES`` must not leak into the ropc refresh."""
-    from adapters.main import _resolve_ms_refresh_credentials
-
-    assistant = {
-        "email": "user@tenant.onmicrosoft.com",
-        "secrets": {
-            "MICROSOFT_TOKEN_SOURCE": "unify_ropc",
-            "MICROSOFT_GRANTED_SCOPES": (
-                "https://graph.microsoft.com/Mail.Read offline_access"
-            ),
-        },
-    }
-
-    creds = _resolve_ms_refresh_credentials(assistant)
-
-    assert creds is not None
-    tenant_id, client_id, client_secret, scope, source = creds
-    assert source == "unify_ropc"
-    assert tenant_id == "admin-tenant-id"
-    assert client_id == "admin-client-id"
-    assert client_secret == "admin-secret"
-    assert scope == _expected_ropc_scope()
-    # Sanity: the stale single-scope value must not have survived.
-    assert "Mail.Send" in scope
-    assert "ChannelMessage.Read.All" in scope
-
-
-def test_unify_ropc_no_stored_scopes(ms_env):
-    """Missing ``MICROSOFT_GRANTED_SCOPES`` still yields the full bundle."""
-    from adapters.main import _resolve_ms_refresh_credentials
-
-    assistant = {
-        "email": "user@tenant.onmicrosoft.com",
-        "secrets": {"MICROSOFT_TOKEN_SOURCE": "unify_ropc"},
-    }
-
-    creds = _resolve_ms_refresh_credentials(assistant)
-
-    assert creds is not None
-    assert creds[3] == _expected_ropc_scope()
-
-
-def test_unify_ropc_classified_by_email_domain(ms_env):
-    """Mailboxes on ``ms365_email_domain`` fall into ropc without explicit source."""
-    from adapters.main import _resolve_ms_refresh_credentials
-
-    assistant = {
-        "email": "user@tenant.onmicrosoft.com",
-        "secrets": {},
-    }
-
-    creds = _resolve_ms_refresh_credentials(assistant)
-
-    assert creds is not None
-    assert creds[4] == "unify_ropc"
-    assert creds[3] == _expected_ropc_scope()
 
 
 def test_byod_honors_stored_granted_scopes(ms_env):
@@ -140,6 +71,21 @@ def test_byod_falls_back_to_default_scope(ms_env):
     assert creds[3] == "https://graph.microsoft.com/.default offline_access"
 
 
+def test_byod_is_default_when_source_unset(ms_env):
+    """Rows with no explicit source and no AZURE_* secrets default to BYOD."""
+    from adapters.main import _resolve_ms_refresh_credentials
+
+    assistant = {
+        "email": "user@example.com",
+        "secrets": {},
+    }
+
+    creds = _resolve_ms_refresh_credentials(assistant)
+
+    assert creds is not None
+    assert creds[4] == "byod"
+
+
 def test_enterprise_always_uses_default_scope(ms_env):
     """Enterprise uses ``.default`` and per-assistant Azure creds regardless of stored scopes."""
     from adapters.main import _resolve_ms_refresh_credentials
@@ -169,21 +115,59 @@ def test_enterprise_always_uses_default_scope(ms_env):
     assert scope == "https://graph.microsoft.com/.default offline_access"
 
 
-def test_unify_ropc_missing_admin_env_returns_none(monkeypatch):
-    """Missing admin-app env vars must surface as ``None``, not an empty-string call."""
-    monkeypatch.delenv("MS365_ADMIN_CLIENT_SECRET", raising=False)
+def test_enterprise_inferred_from_azure_secrets(ms_env):
+    """AZURE_* secrets without explicit source are classified as enterprise."""
+    from adapters.main import _resolve_ms_refresh_credentials
 
-    from common.settings import SETTINGS
+    assistant = {
+        "email": "user@enterprise.example.com",
+        "secrets": {
+            "AZURE_TENANT_ID": "ent-tenant",
+            "AZURE_CLIENT_ID": "ent-client",
+            "AZURE_CLIENT_SECRET": "ent-secret",
+        },
+    }
 
-    monkeypatch.setattr(SETTINGS, "ms365_admin_tenant_id", "")
-    monkeypatch.setattr(SETTINGS, "ms365_admin_client_id", "")
-    monkeypatch.setattr(SETTINGS, "ms365_email_domain", "tenant.onmicrosoft.com")
+    creds = _resolve_ms_refresh_credentials(assistant)
 
+    assert creds is not None
+    assert creds[4] == "enterprise"
+
+
+def test_unify_ropc_source_returns_none(ms_env):
+    """The retired ``unify_ropc`` source is rejected to avoid re-cycling stale creds.
+
+    The platform mailboxes that minted these tokens were torn down with
+    the wider @unify.ai email feature; any straggler row stamped with
+    this source must surface as a failure rather than silently calling
+    Microsoft with retired admin-app credentials.
+    """
     from adapters.main import _resolve_ms_refresh_credentials
 
     assistant = {
         "email": "user@tenant.onmicrosoft.com",
-        "secrets": {"MICROSOFT_TOKEN_SOURCE": "unify_ropc"},
+        "secrets": {
+            "MICROSOFT_TOKEN_SOURCE": "unify_ropc",
+            "MICROSOFT_REFRESH_TOKEN": "stale-refresh-token",
+        },
+    }
+
+    assert _resolve_ms_refresh_credentials(assistant) is None
+
+
+def test_byod_missing_env_returns_none(monkeypatch):
+    """Missing BYOD env vars must surface as ``None``, not an empty-string call."""
+    monkeypatch.delenv("MS365_BYOD_CLIENT_SECRET", raising=False)
+
+    from common.settings import SETTINGS
+
+    monkeypatch.setattr(SETTINGS, "ms365_byod_client_id", "")
+
+    from adapters.main import _resolve_ms_refresh_credentials
+
+    assistant = {
+        "email": "user@example.com",
+        "secrets": {"MICROSOFT_TOKEN_SOURCE": "byod"},
     }
 
     assert _resolve_ms_refresh_credentials(assistant) is None

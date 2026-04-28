@@ -2,14 +2,11 @@ import base64
 import logging
 import json
 import os
-import random
-import string
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from common.settings import SETTINGS
@@ -112,43 +109,12 @@ def get_gmail_service(sender_email: str):
 
 
 # Endpoints - JSON format
-@router.post("/create", status_code=201)
-async def create_email_user(request: Request):
-    data = await request.json()
-    local = data.get("local")
-    first_name = data.get("first_name")
-    last_name = data.get("last_name")
-    if not local or not first_name or not last_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing required fields: local, first_name, last_name",
-        )
-    primary_email = f"{local}@{SETTINGS.workspace_email_domain}"
-    # generate secure password
-    password = "".join(
-        random.choice(string.ascii_letters + string.digits) for _ in range(32)
-    )
-    try:
-        service = get_admin_service()
-        user_body = {
-            "name": {"givenName": first_name, "familyName": last_name},
-            "primaryEmail": primary_email,
-            "password": password,
-        }
-        res = service.users().insert(body=user_body).execute()
-        async with httpx.AsyncClient() as http_client:
-            await http_client.post(
-                f"{SETTINGS.comms_url}/gmail/watch",
-                json={"primary_email": primary_email},
-                headers={
-                    "Authorization": f"Bearer {SETTINGS.orchestra_admin_key}",
-                },
-                timeout=30,
-            )
-        return {"success": True, "user": res}
-    except Exception as e:
-        logger.error("Failed to create user: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+#
+# NOTE: ``POST /gmail/create`` was retired together with the wider platform
+# ``@unify.ai`` mailbox feature. Email contacts are now BYOD-only; the only
+# Workspace-directory write Communication still performs is the explicit
+# ``DELETE /gmail/delete`` invoked by Orchestra's teardown worker for
+# straggler cleanup.
 
 
 @router.delete("/delete")
