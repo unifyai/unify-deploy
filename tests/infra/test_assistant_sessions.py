@@ -36,6 +36,7 @@ from communication.infra.assistant_sessions import (
     merge_conditions,
     patch_assistant_session_status,
     persist_binding_vm_assignment_result,
+    preview_image_override,
     record_released_binding,
     record_assistant_session_signal,
     released_binding,
@@ -100,6 +101,38 @@ def test_build_assistant_session_spec_sets_desktop_required():
     assert spec["desktop"] == {"required": True, "mode": "ubuntu"}
     assert spec["startupSecretRef"] == "session-bootstrap-42"
     assert spec["activationId"] == "act-1"
+
+
+def test_preview_image_override_returns_none_without_branch_tag(monkeypatch):
+    monkeypatch.setattr(assistant_sessions_module.SETTINGS, "branch_tag", "")
+
+    def _fail():
+        raise AssertionError("should not call GCS without a branch tag")
+
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_latest_unity_image",
+        _fail,
+    )
+
+    assert preview_image_override() is None
+
+
+def test_preview_image_override_resolves_image_when_branch_tag_set(monkeypatch):
+    monkeypatch.setattr(
+        assistant_sessions_module.SETTINGS,
+        "branch_tag",
+        "myslug",
+    )
+    monkeypatch.setattr(
+        assistant_sessions_module,
+        "get_latest_unity_image",
+        lambda: "registry/unity-staging:preview-myslug-deadbeef",
+    )
+
+    assert preview_image_override() == (
+        "registry/unity-staging:preview-myslug-deadbeef"
+    )
 
 
 def test_terminating_session_is_treated_as_stopped():

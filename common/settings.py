@@ -59,6 +59,28 @@ def _service_url(env_var: str, service: str) -> str:
     return os.environ.get(env_var, urls.get(_get_deploy_env(), urls["production"]))
 
 
+def _image_hash_blob_name(
+    *,
+    deploy_env: str,
+    env_suffix: str,
+    branch_tag: str,
+) -> str:
+    """Resolve the GCS blob name that holds the active Unity image hash.
+
+    Production reads ``image_hash.txt``; staging reads
+    ``image_hash_staging.txt``.  When ``branch_tag`` is set, a
+    preview-environment revision instead reads
+    ``image_hash_{env}_{branch_tag}.txt`` so the assistant jobs it spawns
+    pull a feature-branch Unity image while shared staging traffic keeps
+    using the canonical image.
+    """
+    base = "image_hash.txt" if not env_suffix else f"image_hash_{deploy_env}.txt"
+    if not branch_tag:
+        return base
+    stem, _, ext = base.rpartition(".")
+    return f"{stem}_{branch_tag}.{ext}"
+
+
 class Settings:
     """Read-only configuration populated from environment variables.
 
@@ -76,6 +98,13 @@ class Settings:
         # Backward compatibility: True for any non-production environment.
         # Prefer checking deploy_env directly for environment-specific logic.
         self.staging: bool = self.deploy_env != "production"
+
+        # Optional per-feature-branch isolation tag.  When a Cloud Run
+        # revision is deployed with ``--tag=<slug> --no-traffic`` for
+        # preview-environment work, ``BRANCH_TAG=<slug>`` is set on the
+        # revision so the running service can pick up a per-branch
+        # Unity image without disturbing live staging traffic.
+        self.branch_tag: str = (os.environ.get("BRANCH_TAG") or "").strip().lower()
 
         # GCP identifiers
         self.gcp_project_id: str = os.environ.get(
@@ -178,10 +207,10 @@ class Settings:
         # Derived names used across the codebase
         self.unity_image_name: str = f"unity{self.env_suffix}"
         self.gmail_topic: str = f"gmail-notifications{self.env_suffix}"
-        self.image_hash_blob: str = (
-            "image_hash.txt"
-            if not self.env_suffix
-            else f"image_hash_{self.deploy_env}.txt"
+        self.image_hash_blob: str = _image_hash_blob_name(
+            deploy_env=self.deploy_env,
+            env_suffix=self.env_suffix,
+            branch_tag=self.branch_tag,
         )
 
         # Container image registry (Artifact Registry)

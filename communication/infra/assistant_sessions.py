@@ -743,11 +743,36 @@ def _get_storage_client():
 
 
 def get_latest_unity_image() -> str:
+    """Return the Unity container image to spawn assistant jobs from.
+
+    Reads the active commit hash from the GCS blob named by
+    ``SETTINGS.image_hash_blob`` and combines it with the environment's
+    image registry and image name.  In a preview-environment revision
+    (``BRANCH_TAG`` set), the blob name is per-branch so jobs spawned
+    by that revision pull a feature-branch image without affecting
+    shared staging traffic.
+    """
     storage_client = _get_storage_client()
     bucket = storage_client.bucket("unity-image-hash")
     blob = bucket.blob(SETTINGS.image_hash_blob)
     commit_hash = blob.download_as_text().strip()
     return f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:{commit_hash}"
+
+
+def preview_image_override() -> str | None:
+    """Return the Unity image URI to pin onto AssistantSessions, or ``None``.
+
+    When ``SETTINGS.branch_tag`` is unset (the canonical staging or
+    production deployment), there is no override: assistant jobs may be
+    served from the shared idle pool.  When a branch tag is configured
+    (a preview-environment Comms App revision), this resolves the
+    per-branch image hash so the controller can spawn a fresh Job
+    pinned to the feature-branch Unity image instead of claiming an
+    idle container built from the canonical staging image.
+    """
+    if not SETTINGS.branch_tag:
+        return None
+    return get_latest_unity_image()
 
 
 def get_custom_objects_api() -> k8s_client.CustomObjectsApi | None:
