@@ -158,6 +158,22 @@ def session_binding(session: dict[str, Any] | None) -> dict[str, Any]:
     return binding if isinstance(binding, dict) else {}
 
 
+def session_image_override(session: dict[str, Any] | None) -> str | None:
+    """Return the per-session Unity image override, or ``None``.
+
+    Set by preview-environment Comms App revisions to pin the spawned
+    assistant Job to a feature-branch Unity image.  Empty strings are
+    normalized to ``None`` so callers only need to check truthiness.
+    """
+
+    spec = (session or {}).get("spec") or {}
+    raw = spec.get("imageOverride")
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip()
+    return cleaned or None
+
+
 def binding_job_ref(binding: dict[str, Any] | None) -> dict[str, Any]:
     """Return the bound Job reference from a binding."""
 
@@ -1087,9 +1103,10 @@ def build_assistant_session_spec(
     startup_secret_ref: str,
     activation_id: str,
     desired_state: str = DESIRED_STATE_RUNNING,
+    image_override: str | None = None,
 ) -> dict[str, Any]:
     desktop_required = desktop_mode in ("windows", "ubuntu")
-    return {
+    spec: dict[str, Any] = {
         "assistantId": str(assistant_id),
         "userId": str(user_id),
         "medium": medium,
@@ -1103,6 +1120,9 @@ def build_assistant_session_spec(
         "activationId": activation_id,
         "requestedAt": datetime.now(timezone.utc).isoformat(),
     }
+    if image_override:
+        spec["imageOverride"] = image_override
+    return spec
 
 
 def _assistant_session_spec_matches(

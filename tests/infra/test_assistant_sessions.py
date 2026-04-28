@@ -40,6 +40,7 @@ from communication.infra.assistant_sessions import (
     record_released_binding,
     record_assistant_session_signal,
     released_binding,
+    session_image_override,
     session_signal,
     session_released_bindings,
     session_suspend_intent,
@@ -101,6 +102,33 @@ def test_build_assistant_session_spec_sets_desktop_required():
     assert spec["desktop"] == {"required": True, "mode": "ubuntu"}
     assert spec["startupSecretRef"] == "session-bootstrap-42"
     assert spec["activationId"] == "act-1"
+    assert "imageOverride" not in spec
+
+
+def test_build_assistant_session_spec_carries_image_override():
+    spec = build_assistant_session_spec(
+        assistant_id="42",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="session-bootstrap-42",
+        activation_id="act-1",
+        image_override="registry/unity-staging:preview-myslug-deadbeef",
+    )
+    assert spec["imageOverride"] == ("registry/unity-staging:preview-myslug-deadbeef")
+
+
+def test_session_image_override_normalizes_missing_or_blank_values():
+    assert session_image_override(None) is None
+    assert session_image_override({}) is None
+    assert session_image_override({"spec": {}}) is None
+    assert session_image_override({"spec": {"imageOverride": "   "}}) is None
+    assert (
+        session_image_override(
+            {"spec": {"imageOverride": "registry/unity-staging:preview-x"}},
+        )
+        == "registry/unity-staging:preview-x"
+    )
 
 
 def test_preview_image_override_returns_none_without_branch_tag(monkeypatch):

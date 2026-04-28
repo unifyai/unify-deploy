@@ -77,6 +77,15 @@ spec:
                 type: string
               requestedAt:
                 type: string
+              imageOverride:
+                type: string
+                description: |
+                  Optional fully-qualified Unity container image URI.  When set,
+                  the controller bypasses the staging idle pool and spawns a
+                  fresh Job pinned to this image.  Used by preview-environment
+                  Comms App revisions so feature-branch traffic runs the
+                  matching feature-branch Unity image instead of inheriting
+                  shared-staging idle containers.
           status:
             type: object
             properties:
