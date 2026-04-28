@@ -90,6 +90,7 @@ steps:
       --platform=managed \
       --tag=$${SLUG} \
       --no-traffic \
+      --remove-secrets=UNITY_ADAPTERS_URL \
       --update-env-vars=DEPLOY_ENV=staging,BRANCH_TAG=$${SLUG},ORCHESTRA_URL=$${ORCHESTRA_URL},UNITY_ADAPTERS_URL=$${ADAPTERS_URL} \
       --quiet
     echo "preview revision URL: https://$${SLUG}---${_PEER_COMMS_HOST}"
