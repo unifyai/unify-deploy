@@ -407,6 +407,108 @@ def test_claim_idle_job_skips_hash_filter_when_gcs_unavailable(monkeypatch):
     assert "unity-image-hash" not in selector
 
 
+def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
+    """A preview-environment session bypasses the staging idle pool entirely."""
+
+    binding = _binding("binding-1")
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value = MagicMock(items=[])
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+
+    fresh_job = _job(name="unity-preview-1207-abc123-staging")
+    create_unity_job_mock = MagicMock(return_value=fresh_job)
+    monkeypatch.setattr(controller, "create_unity_job", create_unity_job_mock)
+    image_uri = "registry/unity-staging:preview-myslug-deadbeef"
+
+    job = controller._claim_idle_job_for_binding(
+        "1207",
+        "assistant-session-1207",
+        binding,
+        image_override=image_uri,
+    )
+
+    assert job is fresh_job
+    create_unity_job_mock.assert_called_once()
+    call = create_unity_job_mock.call_args
+    assert call.kwargs["image"] == image_uri
+    assert call.kwargs["unity_status"] == "running"
+    extra_labels = call.kwargs["extra_labels"]
+    assert extra_labels["assistant-id"] == "1207"
+    assert extra_labels[controller.SESSION_REF_LABEL] == "assistant-session-1207"
+    assert extra_labels[controller.BINDING_ID_LABEL] == "binding-1"
+    extra_annotations = call.kwargs["extra_annotations"]
+    assert extra_annotations[controller.SESSION_REF_ANNOTATION] == (
+        "assistant-session-1207"
+    )
+    assert extra_annotations[controller.BINDING_ID_ANNOTATION] == "binding-1"
+    assert extra_annotations[controller.CONTAINER_READY_ANNOTATION] == "false"
+    batch_api.list_namespaced_job.assert_called_once()
+    batch_api.patch_namespaced_job.assert_not_called()
+
+
+def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkeypatch):
+    """If the binding already owns a Job, don't spawn a duplicate preview Job."""
+
+    binding = _binding("binding-1")
+    existing_job = _job(name="unity-preview-existing", container_ready=False)
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+    create_unity_job_mock = MagicMock()
+    monkeypatch.setattr(controller, "create_unity_job", create_unity_job_mock)
+
+    job = controller._claim_idle_job_for_binding(
+        "1207",
+        "assistant-session-1207",
+        binding,
+        image_override="registry/unity-staging:preview-myslug-deadbeef",
+    )
+
+    assert job is existing_job
+    create_unity_job_mock.assert_not_called()
+
+
+def test_claim_and_bind_pending_job_threads_image_override_through(monkeypatch):
+    """The reconciler propagates spec.imageOverride to the spawn helper."""
+
+    body = _base_session()
+    body["spec"]["imageOverride"] = "registry/unity-staging:preview-myslug-deadbeef"
+    body["status"]["phase"] = "PendingJob"
+    body["status"]["binding"] = _binding("binding-1")
+    fresh_job = _job(name="unity-preview-1207-abc123-staging")
+    patch_status = MagicMock()
+    batch_api = MagicMock()
+    batch_api.list_namespaced_job.return_value.items = []
+
+    monkeypatch.setattr(controller, "_batch_api", batch_api)
+    monkeypatch.setattr(controller, "_custom_api", object())
+    monkeypatch.setattr(controller, "_core_api", MagicMock())
+    monkeypatch.setattr(
+        controller,
+        "get_assistant_session",
+        lambda *_args, **_kwargs: deepcopy(body),
+    )
+    monkeypatch.setattr(controller, "_job_for_binding", lambda *_a, **_kw: None)
+    captured: dict = {}
+
+    def _fake_claim(*args, **kwargs):
+        captured.update(kwargs)
+        captured["positional"] = args
+        return fresh_job
+
+    monkeypatch.setattr(controller, "_claim_idle_job_for_binding", _fake_claim)
+    monkeypatch.setattr(controller, "_current_pod_ref", lambda *_a, **_kw: None)
+    monkeypatch.setattr(controller, "patch_assistant_session_status", patch_status)
+
+    controller._update_status_for_session(deepcopy(body))
+
+    assert captured["image_override"] == (
+        "registry/unity-staging:preview-myslug-deadbeef"
+    )
+
+
 def test_claim_idle_job_claims_jobs_in_name_order(monkeypatch):
     binding = _binding("binding-1")
     old_job = _job(name="unity-2026-01-01-00-00-00-aaa", container_ready=False)

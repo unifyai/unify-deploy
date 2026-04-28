@@ -15,6 +15,7 @@ from kubernetes.client.rest import ApiException
 from common.settings import SETTINGS
 from communication.infra.helpers import (
     acquire_assignment_lease,
+    create_unity_job,
     release_assignment_lease,
 )
 from communication.infra.observability import (
@@ -588,8 +589,111 @@ def _suspend_extra_assistant_jobs(
     return suspended_jobs
 
 
-def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: dict):
-    """Claim exactly one idle Job for the current binding."""
+def _spawn_fresh_job_for_binding(
+    *,
+    assistant_id: str,
+    session_name: str,
+    binding: dict,
+    image: str,
+):
+    """Create a Unity Job pinned to ``image`` and pre-claimed for this binding.
+
+    Used when an AssistantSession carries ``spec.imageOverride`` (preview-
+    environment revisions): the staging idle pool is built from the canonical
+    Unity image and would silently overwrite a feature branch's container,
+    so the controller bypasses the pool and synthesizes a fresh Job whose
+    metadata mirrors a newly-claimed idle Job.
+    """
+
+    assert _batch_api is not None
+    current_binding_id = binding_id_from_status(binding)
+    sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
+    job_name = (
+        f"unity-preview-{sanitized_assistant_id[:32]}"
+        f"-{uuid.uuid4().hex[:6]}{SETTINGS.env_suffix}"
+    )
+    extra_labels = {
+        "assistant-id": sanitized_assistant_id,
+        SESSION_REF_LABEL: session_name,
+        BINDING_ID_LABEL: current_binding_id,
+    }
+    extra_annotations = {
+        SESSION_REF_ANNOTATION: session_name,
+        BINDING_ID_ANNOTATION: current_binding_id,
+        CONTAINER_READY_ANNOTATION: "false",
+    }
+    emit_observability_event(
+        "controller.pending_job_stage",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        binding_id=current_binding_id,
+        job_name=job_name,
+        stage="spawn_override_job",
+        stage_state="started",
+        source="controller.reconcile",
+        image_override=image,
+    )
+    job = create_unity_job(
+        _batch_api,
+        job_name=job_name,
+        namespace=WATCH_NAMESPACE,
+        image=image,
+        deploy_env=SETTINGS.deploy_env,
+        unity_status="running",
+        priority_class_name="unity-idle",
+        extra_labels=extra_labels,
+        extra_annotations=extra_annotations,
+    )
+    if job is None:
+        emit_observability_event(
+            "controller.pending_job_stage",
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding_id=current_binding_id,
+            job_name=job_name,
+            stage="spawn_override_job",
+            stage_state="failed",
+            source="controller.reconcile",
+            image_override=image,
+        )
+        return None
+    emit_observability_event(
+        "controller.pending_job_stage",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        binding_id=current_binding_id,
+        job_name=job.metadata.name,
+        stage="spawn_override_job",
+        stage_state="completed",
+        source="controller.reconcile",
+        image_override=image,
+    )
+    emit_observability_event(
+        "controller.binding_job_claimed",
+        assistant_id=assistant_id,
+        session_name=session_name,
+        binding_id=current_binding_id,
+        job_name=job.metadata.name,
+        source="controller.reconcile",
+        image_override=image,
+    )
+    return job
+
+
+def _claim_idle_job_for_binding(
+    assistant_id: str,
+    session_name: str,
+    binding: dict,
+    image_override: str | None = None,
+):
+    """Claim exactly one Job to satisfy this binding's container slot.
+
+    When ``image_override`` is set the controller skips the shared idle pool
+    entirely and spawns a fresh Job pinned to that image.  Without an
+    override (the canonical staging/production path), it claims a single
+    idle Job whose ``unity-image-hash`` label matches the active staging
+    image hash.
+    """
 
     assert _batch_api is not None
     current_binding_id = binding_id_from_status(binding)
@@ -609,6 +713,14 @@ def _claim_idle_job_for_binding(assistant_id: str, session_name: str, binding: d
             source="controller.reconcile",
         )
         return existing_job
+
+    if image_override:
+        return _spawn_fresh_job_for_binding(
+            assistant_id=assistant_id,
+            session_name=session_name,
+            binding=binding,
+            image=image_override,
+        )
 
     sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
     current_hash = _get_current_image_hash()
@@ -732,6 +844,7 @@ def _claim_and_bind_pending_job(
     desktop_required: bool,
     bootstrap_retries: int,
     vm_retries: int,
+    image_override: str | None = None,
 ) -> JobClaimTransitionResult:
     """Advance a PendingJob binding to PendingContainer under a single-flight lease.
 
@@ -781,7 +894,12 @@ def _claim_and_bind_pending_job(
         job = _job_for_binding(session_name, binding)
         newly_claimed = False
         if job is None:
-            job = _claim_idle_job_for_binding(assistant_id, session_name, binding)
+            job = _claim_idle_job_for_binding(
+                assistant_id,
+                session_name,
+                binding,
+                image_override=image_override,
+            )
             if job is None:
                 return _JOB_CLAIM_RESULT_CAPACITY
             newly_claimed = True
@@ -2281,6 +2399,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             desktop_required=desktop_required,
             bootstrap_retries=bootstrap_retries,
             vm_retries=vm_retries,
+            image_override=session.image_override,
         )
         if claim_result == _JOB_CLAIM_RESULT_BUSY:
             return

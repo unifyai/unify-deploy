@@ -9,6 +9,7 @@ from communication.infra.assistant_sessions import (
     session_binding,
     session_desktop_mode,
     session_desktop_required,
+    session_image_override,
 )
 
 
@@ -33,6 +34,7 @@ class SessionSnapshot:
     vm_retries: int
     desktop_probe_failures: int
     last_error: str
+    image_override: str | None
 
     @classmethod
     def from_body(cls, body: dict[str, Any]) -> "SessionSnapshot":
@@ -60,4 +62,5 @@ class SessionSnapshot:
                 status.get("desktopProbeFailures", 0) or 0,
             ),
             last_error=str(status.get("lastError", "") or ""),
+            image_override=session_image_override(body),
         )
