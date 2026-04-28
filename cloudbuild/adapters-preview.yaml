@@ -79,7 +79,6 @@ steps:
       --tag=$${SLUG} \
       --no-traffic \
       --allow-unauthenticated \
-      --remove-secrets=UNITY_COMMS_URL \
       --update-env-vars=DEPLOY_ENV=staging,BRANCH_TAG=$${SLUG},ORCHESTRA_URL=$${ORCHESTRA_URL},UNITY_COMMS_URL=$${COMMS_URL} \
       --quiet
     echo "preview revision URL: https://$${SLUG}---${_PEER_ADAPTERS_HOST}"
