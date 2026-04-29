@@ -117,6 +117,7 @@ from common.livekit import (
 )
 
 from common.oauth import OAuthStateError, verify_oauth_state
+from common.int_list_codec import decode_int_list_from_form, normalize_int_list
 from common.settings import SETTINGS
 
 # Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
@@ -2368,6 +2369,22 @@ async def assistant_update_webhook(request: Request):
     try:
         form_data = await request.form()
         assistant_id = form_data.get("assistant_id")
+        raw_space_ids = form_data.get("space_ids")
+        update_kind = str(form_data.get("update_kind") or "general")
+        if update_kind not in {"general", "membership"}:
+            raise HTTPException(
+                status_code=400,
+                detail="update_kind must be 'general' or 'membership'",
+            )
+        space_ids_from_form: list[int] | None = None
+        if raw_space_ids not in (None, ""):
+            try:
+                space_ids_from_form = decode_int_list_from_form(
+                    str(raw_space_ids),
+                    field_name="space_ids",
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         logger.info(f"Received assistant_id: {assistant_id}")
 
         # Use build_webhook_context to handle job startup if needed
@@ -2378,9 +2395,21 @@ async def assistant_update_webhook(request: Request):
             sender="",
             assistant_id=assistant_id,
             validate_contact=False,
-            ensure_job=True,
+            ensure_job=update_kind != "membership",
         )
         assistant_data = context["assistant"]
+        if space_ids_from_form is None:
+            space_ids = normalize_int_list(
+                assistant_data.get("space_ids") or [],
+                field_name="space_ids",
+            )
+        else:
+            space_ids = space_ids_from_form
+        assistant_event = {
+            **assistant_data,
+            "space_ids": space_ids,
+            "update_kind": update_kind,
+        }
         logger.info(
             "Activation dispatch state (legacy flags): is_job_running=%s, job_started=%s",
             context["is_job_running"],
@@ -2397,7 +2426,7 @@ async def assistant_update_webhook(request: Request):
         message_data = {
             "thread": "assistant_update",
             "publish_timestamp": time.time(),
-            "event": assistant_data,
+            "event": assistant_event,
         }
 
         logger.info(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
@@ -2426,6 +2455,8 @@ async def assistant_update_webhook(request: Request):
             media_type="application/json",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in assistant_update_webhook: {e}", exc_info=True)
         return Response(
