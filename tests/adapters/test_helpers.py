@@ -18,6 +18,7 @@ from adapters.helpers import (
     cleanup_idle_pool,
     expire_all_stale_jobs,
     get_default_contacts,
+    get_assistant,
     get_unity_jobs_inventory,
     check_contact_details,
     dispatch_unity_start_intent,
@@ -170,6 +171,7 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "user_desktop_url": None,
         "demo_id": demo_id,
         "is_local": False,
+        "space_ids": [11, 22],
     }
 
 
@@ -296,6 +298,23 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_dispatch_unity_start_intent_encodes_space_ids_for_form(mock_post):
+    """Start-intent form payloads carry space_ids as a JSON string."""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+    assistant_data = _create_mock_assistant_data()
+
+    response = dispatch_unity_start_intent(assistant_data, "api_message")
+
+    assert response is mock_response
+    data = mock_post.call_args.kwargs["data"]
+    assert json.loads(data["space_ids"]) == [11, 22]
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
 def test_dispatch_unity_start_intent_returns_none_without_api_key(mock_post):
     """Assistants without API keys should not dispatch start intent requests."""
 
@@ -306,6 +325,60 @@ def test_dispatch_unity_start_intent_returns_none_without_api_key(mock_post):
 
     assert response is None
     mock_post.assert_not_called()
+
+
+@patch("adapters.helpers.requests.get")
+def test_get_assistant_preserves_space_ids(mock_get):
+    """Assistant lookups preserve live membership ids from Orchestra."""
+
+    mock_get.return_value = MagicMock(
+        json=MagicMock(
+            return_value={
+                "info": [
+                    {
+                        "agent_id": "assistant-123",
+                        "deploy_env": "staging",
+                        "user_id": "user-123",
+                        "api_key": "test-api-key",
+                        "user_first_name": "Test",
+                        "user_last_name": "User",
+                        "first_name": "Test",
+                        "surname": "Assistant",
+                        "age": 25,
+                        "nationality": "US",
+                        "about": "Test assistant",
+                        "job_title": "",
+                        "timezone": "UTC",
+                        "phone": "+1987654321",
+                        "assistant_whatsapp_number": "+18501234567",
+                        "assistant_discord_bot_id": "",
+                        "email": "assistant@example.com",
+                        "email_provider": "google_workspace",
+                        "user_phone": "+1234567890",
+                        "user_whatsapp_number": "+1234567890",
+                        "user_email": "test@example.com",
+                        "voice_provider": "elevenlabs",
+                        "voice_id": "voice-123",
+                        "secrets": {},
+                        "desktop_mode": "none",
+                        "user_desktop_mode": None,
+                        "user_desktop_filesys_sync": False,
+                        "user_desktop_url": None,
+                        "demo_id": None,
+                        "is_local": False,
+                        "team_ids": [7],
+                        "space_ids": [3, 4],
+                        "organization_id": 42,
+                    },
+                ],
+            },
+        ),
+    )
+
+    assistant = get_assistant(assistant_id="assistant-123")
+
+    assert assistant["space_ids"] == [3, 4]
+    assert assistant["team_ids"] == [7]
 
 
 @patch("adapters.helpers._fetch_infra_jobs")

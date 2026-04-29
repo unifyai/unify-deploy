@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from common.assistant_lookup import get_assistant
+from common.int_list_codec import encode_int_list_for_env
 from common.settings import SETTINGS
 
 from .helpers import create_unity_job
@@ -115,6 +116,7 @@ def _build_dashboard_action_env(
     """Build env vars for the headless Unity offline runner (dashboard action variant)."""
 
     team_ids = assistant_data.get("team_ids") or []
+    space_ids = assistant_data.get("space_ids") or []
     return {
         "UNITY_OFFLINE_TASK_MODE": "function",
         "UNITY_OFFLINE_TASK_FUNCTION_ID": str(action_metadata["function_id"]),
@@ -164,6 +166,7 @@ def _build_dashboard_action_env(
         "VOICE_ID": str(assistant_data.get("voice_id") or ""),
         "VOICE_MODE": "tts",
         "TEAM_IDS": ",".join(str(tid) for tid in team_ids),
+        "SPACE_IDS": encode_int_list_for_env(space_ids, field_name="space_ids"),
         "ORG_ID": (
             str(assistant_data.get("org_id"))
             if assistant_data.get("org_id") is not None

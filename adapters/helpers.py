@@ -39,6 +39,7 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
     MessageItemRequestBuilder,
 )
 
+from common.int_list_codec import encode_int_list_for_form
 from common.settings import SETTINGS
 
 _pubsub_client = None
@@ -865,6 +866,10 @@ def _build_start_job_request_data(
         # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
         "demo_id": str(demo_id) if demo_id else "",
         "team_ids": json.dumps(assistant.get("team_ids", [])),
+        "space_ids": encode_int_list_for_form(
+            assistant.get("space_ids") or [],
+            field_name="space_ids",
+        ),
         "org_id": (
             str(assistant.get("org_id", ""))
             if assistant.get("org_id") is not None

@@ -14,6 +14,7 @@ from typing import Any
 import uuid
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
+from common.int_list_codec import decode_int_list_from_form
 from .helpers import (
     acquire_named_lease,
     create_unity_job,
@@ -222,6 +223,15 @@ def _parse_wake_reasons(raw_wake_reasons: str) -> list[dict[str, Any]]:
             detail="wake_reasons must be a JSON list of objects",
         )
     return parsed
+
+
+def _decode_space_ids_form(space_ids: str) -> list[int]:
+    """Decode the space membership list carried by the start-job form."""
+
+    try:
+        return decode_int_list_from_form(space_ids, field_name="space_ids")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _startup_payload_without_ephemeral_wake_reasons(
@@ -452,6 +462,7 @@ def _build_startup_payload(
     user_desktop_url: str,
     demo_id: str,
     team_ids: str,
+    space_ids: str,
     org_id: str,
     assistant_job_title: str = "",
     wake_reasons: list[dict[str, Any]] | None = None,
@@ -493,6 +504,7 @@ def _build_startup_payload(
         "user_desktop_url": user_desktop_url if user_desktop_url else None,
         "demo_id": int(demo_id) if demo_id else None,
         "team_ids": json.loads(team_ids) if team_ids else [],
+        "space_ids": _decode_space_ids_form(space_ids),
         "org_id": int(org_id) if org_id else None,
     }
     if wake_reasons:
@@ -915,6 +927,7 @@ async def start_job(
     user_desktop_url: str = Form(""),
     demo_id: str = Form(""),
     team_ids: str = Form(""),
+    space_ids: str = Form(""),
     org_id: str = Form(""),
     wake_reasons: str = Form(""),
 ):
@@ -954,6 +967,7 @@ async def start_job(
         user_desktop_url: URL to user's own desktop (optional)
         demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
         team_ids: JSON-encoded list of team IDs the user belongs to (optional, defaults to empty)
+        space_ids: JSON-encoded list of space IDs the assistant belongs to (optional, defaults to empty)
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
     session_name = assistant_session_name(assistant_id)
@@ -1010,6 +1024,7 @@ async def start_job(
             user_desktop_url=user_desktop_url,
             demo_id=demo_id,
             team_ids=team_ids,
+            space_ids=space_ids,
             org_id=org_id,
             wake_reasons=requested_wake_reasons,
         )

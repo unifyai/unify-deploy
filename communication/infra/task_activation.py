@@ -26,6 +26,7 @@ from google.api_core.exceptions import (
 from google.protobuf import duration_pb2, timestamp_pb2
 
 from common.assistant_lookup import get_assistant
+from common.int_list_codec import encode_int_list_for_env
 from common.settings import SETTINGS
 
 # Single source of truth for the offline-runner subprocess contract.
@@ -642,6 +643,8 @@ def _build_offline_runner_env(
     """
 
     entrypoint = activation.get("entrypoint") or request.entrypoint
+    team_ids = assistant_data.get("team_ids") or []
+    space_ids = assistant_data.get("space_ids") or []
     # Layer 1 — shared task-specific env (single source of truth in Unity).
     env = _build_offline_runner_env_shared(
         assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
@@ -664,7 +667,6 @@ def _build_offline_runner_env(
     # Layer 2 — hosted-only assistant / user / voice identity, plus org and
     # transport vars the K8s job needs in env because there is no parent
     # process to inherit from. Local subprocesses skip this layer.
-    team_ids = assistant_data.get("team_ids") or []
     env.update(
         {
             "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
@@ -706,6 +708,7 @@ def _build_offline_runner_env(
             "VOICE_ID": str(assistant_data.get("voice_id") or ""),
             "VOICE_MODE": "tts",
             "TEAM_IDS": ",".join(str(team_id) for team_id in team_ids),
+            "SPACE_IDS": encode_int_list_for_env(space_ids, field_name="space_ids"),
             "ORG_ID": (
                 str(assistant_data.get("org_id"))
                 if assistant_data.get("org_id") is not None

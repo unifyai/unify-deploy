@@ -206,6 +206,50 @@ def test_offline_run_key_uses_canonical_trigger_provenance_shape():
     )
 
 
+def test_offline_runner_env_carries_space_ids_as_csv():
+    """Headless task runs receive membership ids through the env bridge."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+
+    env = task_activation._build_offline_runner_env(
+        request=request,
+        activation=_activation(),
+        assistant_data={
+            "assistant_id": "assistant-123",
+            "api_key": "test-api-key",
+            "space_ids": [1, 2],
+        },
+        run_key="run-123",
+        job_name="unity-offline-abc",
+    )
+
+    assert env["SPACE_IDS"] == "1,2"
+
+
+def test_offline_runner_env_uses_empty_space_ids_for_solo_assistant():
+    """Solo assistants keep the env value present but empty."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+
+    env = task_activation._build_offline_runner_env(
+        request=request,
+        activation=_activation(),
+        assistant_data={
+            "assistant_id": "assistant-123",
+            "api_key": "test-api-key",
+            "space_ids": [],
+        },
+        run_key="run-123",
+        job_name="unity-offline-abc",
+    )
+
+    assert env["SPACE_IDS"] == ""
+
+
 def test_offline_dispatch_persists_trigger_provenance_on_run_create():
     """Triggered offline dispatch should persist the known provenance fields."""
 
