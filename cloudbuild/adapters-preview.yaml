@@ -63,6 +63,22 @@ steps:
   waitFor: ['build-image']
 
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'snapshot-canonical-template'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    CANONICAL_REV=$(gcloud run services describe ${_SERVICE_NAME} \
+      --region=${_REGION} --platform=managed \
+      --format='value(status.traffic[0].revisionName)')
+    gcloud run revisions describe "$$CANONICAL_REV" \
+      --region=${_REGION} --platform=managed \
+      --format='value(spec.containers[0].image)' > /workspace/canonical-image.txt
+    echo "canonical image pinned for restore: $(cat /workspace/canonical-image.txt)"
+  waitFor: ['-']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'deploy-tagged'
   entrypoint: 'bash'
   args:
@@ -82,7 +98,24 @@ steps:
       --update-env-vars=DEPLOY_ENV=staging,BRANCH_TAG=$${SLUG},ORCHESTRA_URL=$${ORCHESTRA_URL},UNITY_COMMS_URL=$${COMMS_URL} \
       --quiet
     echo "preview revision URL: https://$${SLUG}---${_PEER_ADAPTERS_HOST}"
-  waitFor: ['push-image']
+  waitFor: ['push-image', 'snapshot-canonical-template']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'restore-canonical-template'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    CANONICAL_IMAGE=$(cat /workspace/canonical-image.txt)
+    gcloud run services update ${_SERVICE_NAME} \
+      --region=${_REGION} --platform=managed \
+      --image="$$CANONICAL_IMAGE" \
+      --remove-env-vars=BRANCH_TAG \
+      --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_COMMS_URL=https://${_PEER_COMMS_HOST} \
+      --quiet
+    echo "canonical service template restored to image $$CANONICAL_IMAGE"
+  waitFor: ['deploy-tagged']
 
 options:
   substitutionOption: ALLOW_LOOSE
@@ -95,5 +128,6 @@ substitutions:
   _PEER_COMMS_HOST: 'service.a.run.app'
   _PEER_ADAPTERS_HOST: 'service.a.run.app'
   _PEER_ORCHESTRA_HOST: 'service.a.run.app'
+  _CANONICAL_ORCHESTRA_URL: 'https://internal.example.com/v0'
 
 timeout: '1200s'
