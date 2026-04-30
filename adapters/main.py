@@ -119,6 +119,7 @@ from common.livekit import (
 from common.oauth import OAuthStateError, verify_oauth_state
 from common.int_list_codec import decode_int_list_from_form, normalize_int_list
 from common.settings import SETTINGS
+from common.task_destination import assistant_has_task_destination
 
 # Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
 # Duplicated here because the adapters container does not include the
@@ -1207,6 +1208,7 @@ class ScheduledTaskDuePayload(BaseModel):
     """Payload delivered by Cloud Tasks when a scheduled task becomes due."""
 
     assistant_id: str
+    destination: Optional[str] = None
     task_id: int
     source_task_log_id: int
     activation_revision: str
@@ -1860,7 +1862,7 @@ async def unify_meet_webhook(request: Request):
 def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
     """Return the canonical wake reason / system-event payload for due tasks."""
 
-    return {
+    reason = {
         "type": "task_due",
         "task_id": payload.task_id,
         "source_task_log_id": payload.source_task_log_id,
@@ -1873,6 +1875,9 @@ def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
         "visibility_policy": payload.visibility_policy,
         "recurrence_hint": payload.recurrence_hint,
     }
+    if payload.destination is not None:
+        reason["destination"] = payload.destination
+    return reason
 
 
 def _task_due_message(payload: ScheduledTaskDuePayload) -> str:
@@ -2018,6 +2023,17 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
             "success": True,
             "status": "skipped",
             "reason": "assistant_not_found",
+        }
+    if not assistant_has_task_destination(assistant_data, payload.destination):
+        logger.info(
+            "Skipping task_due delivery for assistant %s because destination %s is no longer authorized",
+            payload.assistant_id,
+            payload.destination,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "destination_membership_revoked",
         }
 
     assistant_id = assistant_data["assistant_id"]

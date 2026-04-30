@@ -34,6 +34,7 @@ def _assistant_data() -> dict:
         "user_desktop_filesys_sync": False,
         "user_desktop_url": None,
         "team_ids": [],
+        "space_ids": [],
         "org_id": None,
         "deploy_env": "staging",
         "is_local": False,
@@ -170,3 +171,64 @@ def test_scheduled_task_due_skips_deleted_assistant():
     body = response.json()
     assert body["status"] == "skipped"
     assert body["reason"] == "assistant_not_found"
+
+
+def test_scheduled_task_due_rejects_revoked_space_destination():
+    """Revoked shared due delivery should ack without waking the assistant."""
+
+    client = TestClient(app)
+
+    with (
+        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch("adapters.main.get_assistant", return_value=_assistant_data()),
+        patch("adapters.main.dispatch_unity_start_intent") as mock_dispatch,
+        patch("adapters.main._publish_unity_system_event") as mock_publish,
+    ):
+        response = client.post(
+            "/scheduled/tasks/due",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={**_task_due_payload(), "destination": "space:7"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "status": "skipped",
+        "reason": "destination_membership_revoked",
+    }
+    mock_dispatch.assert_not_called()
+    mock_publish.assert_not_called()
+
+
+def test_scheduled_task_due_carries_authorized_space_destination():
+    """Authorized shared due deliveries should carry destination in wake reasons."""
+
+    client = TestClient(app)
+    start_response = MagicMock(status_code=200)
+    start_response.json.return_value = {
+        "success": True,
+        "activation_id": "activation-1",
+        "active_session_already_running": False,
+    }
+    assistant_data = _assistant_data()
+    assistant_data["space_ids"] = [7]
+
+    with (
+        patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
+        patch("adapters.main.get_assistant", return_value=assistant_data),
+        patch("adapters.main.uses_local_unity_runtime", return_value=False),
+        patch(
+            "adapters.main.dispatch_unity_start_intent",
+            return_value=start_response,
+        ) as mock_dispatch,
+        patch("adapters.main._publish_unity_system_event"),
+    ):
+        response = client.post(
+            "/scheduled/tasks/due",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={**_task_due_payload(), "destination": "space:7"},
+        )
+
+    assert response.status_code == 200
+    wake_reasons = mock_dispatch.call_args.kwargs["wake_reasons"]
+    assert wake_reasons[0]["destination"] == "space:7"

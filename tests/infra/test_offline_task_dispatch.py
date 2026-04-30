@@ -77,6 +77,10 @@ def test_offline_dispatch_launches_job_for_current_activation():
             return_value=_activation(),
         ),
         patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value={"assistant_id": "assistant-123", "space_ids": []},
+        ),
+        patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
             return_value={"run": {"state": "pending"}, "created": True},
         ) as mock_create_run,
@@ -105,6 +109,10 @@ def test_offline_dispatch_launches_job_for_current_activation():
         "job_name": "unity-offline-abc",
     }
     assert mock_launch.called
+    assert (
+        mock_launch.call_args.kwargs["assistant_data"]["assistant_id"]
+        == "assistant-123"
+    )
     assert mock_update_run.call_count == 1
     create_payload = mock_create_run.call_args.args[0]
     assert create_payload["task_name"] == "Daily summary"
@@ -181,6 +189,84 @@ def test_offline_runner_env_carries_symbolic_function_id():
     assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "777"
 
 
+def test_offline_dispatch_persists_authorized_destination_on_run_create():
+    """Authorized shared offline dispatch should carry destination into the run row."""
+
+    client = _client()
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(destination="space:7"),
+        ) as mock_lookup,
+        patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value={"assistant_id": "assistant-123", "space_ids": [7]},
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            return_value={"run": {"state": "pending"}, "created": True},
+        ) as mock_create_run,
+        patch(
+            "communication.infra.task_activation._get_k8s_clients",
+            return_value=("batch-api", None, None, None),
+        ),
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=("unity-offline-abc", True),
+        ),
+        patch("communication.infra.task_activation._update_task_run"),
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(destination="space:7"),
+        )
+
+    assert response.status_code == 200
+    create_payload = mock_create_run.call_args.args[0]
+    assert create_payload["destination"] == "space:7"
+    assert create_payload["run_key"].startswith(
+        "offline:scheduled:assistant-123:space-7:101:",
+    )
+    assert mock_lookup.call_args.kwargs["destination"] == "space:7"
+
+
+def test_offline_dispatch_skips_revoked_space_destination():
+    """Offline dispatch should ack shared activations after membership revocation."""
+
+    client = _client()
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(destination="space:7"),
+        ),
+        patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value={"assistant_id": "assistant-123", "space_ids": [8]},
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+        ) as mock_create_run,
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+        ) as mock_launch,
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(destination="space:7"),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "status": "skipped",
+        "reason": "destination_membership_revoked",
+    }
+    mock_create_run.assert_not_called()
+    mock_launch.assert_not_called()
+
+
 def test_offline_run_key_uses_canonical_trigger_provenance_shape():
     """Triggered offline runs should use the same provenance ingredients as live."""
 
@@ -205,6 +291,12 @@ def test_offline_run_key_uses_canonical_trigger_provenance_shape():
         f"contact-77-sms-message-{source_ref_digest}"
     )
 
+    request.destination = "space:7"
+    assert task_activation._build_offline_run_key(request) == (
+        f"offline:triggered:assistant-123:space-7:101:{revision_digest}:"
+        f"contact-77-sms-message-{source_ref_digest}"
+    )
+
 
 def test_offline_runner_env_carries_space_ids_as_csv():
     """Headless task runs receive membership ids through the env bridge."""
@@ -226,6 +318,31 @@ def test_offline_runner_env_carries_space_ids_as_csv():
     )
 
     assert env["SPACE_IDS"] == "1,2"
+    assert "TASK_DESTINATION" not in env
+
+
+def test_offline_runner_env_carries_task_destination():
+    """Shared offline task runs receive the destination for routed writes."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(destination="space:7"),
+    )
+
+    env = task_activation._build_offline_runner_env(
+        request=request,
+        activation=_activation(destination="space:7"),
+        assistant_data={
+            "assistant_id": "assistant-123",
+            "api_key": "test-api-key",
+            "space_ids": [7],
+        },
+        run_key="run-123",
+        job_name="unity-offline-abc",
+    )
+
+    assert env["TASK_DESTINATION"] == "space:7"
 
 
 def test_offline_runner_env_uses_empty_space_ids_for_solo_assistant():
@@ -262,6 +379,10 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
                 activation_kind="triggered",
                 next_due_at=None,
             ),
+        ),
+        patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value={"assistant_id": "assistant-123", "space_ids": []},
         ),
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
