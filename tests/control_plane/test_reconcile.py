@@ -142,30 +142,6 @@ def test_build_control_plane_plan_projects_scenario_to_generic_task_activation()
 
     task_ops = [op for op in operations if op.field == "task_activation"]
     assert task_ops == []
-    # assert len(task_ops) == 1
-    # operation = task_ops[0]
-    # assert operation.service == "communication"
-    # assert operation.method == "post"
-    # assert operation.action == "unresolved"
-    # assert operation.path == "/infra/task-activation/upsert"
-    # assert operation.payload["assistant_id"] == "1851"
-    # assert operation.payload["task_id"] is None
-    # assert operation.payload["source_task_log_id"] is None
-    # assert operation.payload["execution_mode"] == "offline"
-    # assert operation.payload["task_label"] == "Client Alpha repairs monitoring tick"
-    # assert operation.payload["deployment_context"]["scenario_id"] == (
-    #     "client_alpha_repairs_alerts_v1"
-    # )
-    # assert operation.payload["deployment_context"]["schedule_id"] == (
-    #     "repairs_monitoring_tick"
-    # )
-    # assert operation.payload["deployment_context"]["entrypoint_function"] == (
-    #     "run_client_alpha_repairs_monitoring_tick"
-    # )
-    # assert (
-    #     "FunctionManager/TaskScheduler seeded ids"
-    #     in operation.payload["unresolved_reason"]
-    # )
 
 
 def test_build_control_plane_plan_skips_environment_mismatch():
