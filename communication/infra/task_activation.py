@@ -540,6 +540,15 @@ def _build_offline_runner_env(
     }
 
 
+def _get_assistant_data(assistant_id: str) -> dict[str, Any]:
+    """Fetch one assistant payload through the adapters helper."""
+
+    from adapters.helpers import get_assistant
+
+    assistant_data = get_assistant(assistant_id=assistant_id)
+    return assistant_data if isinstance(assistant_data, dict) else {}
+
+
 def _launch_offline_task_job(
     *,
     batch_api: Any,
@@ -549,9 +558,7 @@ def _launch_offline_task_job(
 ) -> tuple[str, bool]:
     """Create the Kubernetes Job that runs the headless Unity executor."""
 
-    from adapters.helpers import get_assistant
-
-    assistant_data = get_assistant(assistant_id=request.assistant_id)
+    assistant_data = _get_assistant_data(request.assistant_id)
     if not assistant_data or not assistant_data.get("assistant_id"):
         raise RuntimeError(f"Assistant {request.assistant_id} no longer exists")
 
