@@ -57,6 +57,7 @@ class ResolvedCustomization:
     mcp_configs: list[Any] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
     console_config: dict[str, Any] | None = None
+    scenarios: list[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +265,7 @@ def _spec_to_resolved(
         mcp_configs=[],
         url_mappings={},
         console_config=spec.console_config,
+        scenarios=[],
     )
 
 
@@ -369,6 +371,7 @@ def resolve(
         integrations=[],
         mcp_configs=[],
         url_mappings={},
+        scenarios=[],
     )
 
 
