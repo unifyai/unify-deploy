@@ -10,7 +10,8 @@ Unity container image for a preview-environment Comms App revision.
 
 Hostnames are stored as ``host`` (no scheme, no path) so the preview
 URL builder can prefix them with ``https://<slug>---`` to derive the
-tagged Cloud Run URL.
+tagged Cloud Run URL. Some services have a separate client-facing URL
+because their Cloud Run service is reached through a load balancer.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ class Service:
     host: str
     repo: str
     description: str
+    client_host_template: str | None = None
+    client_path: str = ""
 
     def tagged_url(self, slug: str) -> str:
         """Return the tag-prefixed URL for a preview revision of this service."""
@@ -49,6 +52,14 @@ class Service:
     def canonical_url(self) -> str:
         """Return the un-tagged service URL (regular staging traffic)."""
         return f"https://{self.host}"
+
+    def client_url(self, slug: str) -> str:
+        """Return the URL clients should use to reach this preview service."""
+        if self.client_host_template is None:
+            return self.tagged_url(slug)
+        return (
+            f"https://{self.client_host_template.format(slug=slug)}{self.client_path}"
+        )
 
 
 SERVICES: tuple[Service, ...] = (
@@ -67,6 +78,8 @@ SERVICES: tuple[Service, ...] = (
         host="service.a.run.app",
         repo="orchestra",
         description="Orchestra API",
+        client_host_template="{slug}internal.example.com",
+        client_path="/v0",
     ),
     Service(
         name="unity-comms-app-staging",
