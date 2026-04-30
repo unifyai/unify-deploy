@@ -87,7 +87,7 @@ async def run_validation(include_real: bool = False) -> int:
     print("\n--- Step 1: Discovery ---")
 
     manifests = runner.check(
-        "discover_integrations() finds built-in packages",
+        "discover_integrations() finds default package roots",
         discover_integrations,
     )
     if manifests is not None:

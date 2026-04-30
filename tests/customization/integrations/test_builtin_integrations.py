@@ -1,8 +1,9 @@
-"""Symbolic tests for built-in integration packages.
+"""Symbolic tests for built-in integration packages across all roots.
 
-Validates that every built-in integration package shipped with the
-repository conforms to the manifest schema and passes structural
-validation.
+Validates that every integration package shipped with the repository --
+generic, client, and mock -- conforms to the manifest schema and passes
+structural validation. Each root is asserted separately so future packages
+can be added in the right location without touching tests in the other roots.
 """
 
 import pytest
@@ -10,6 +11,8 @@ from pathlib import Path
 
 from unity_deploy.customization.integrations.discovery import (
     _BUILTIN_DIR,
+    _CLIENT_DIR,
+    _MOCK_DIR,
     _load_manifest,
 )
 from unity_deploy.customization.integrations.types import (
@@ -18,17 +21,35 @@ from unity_deploy.customization.integrations.types import (
 )
 from unity_deploy.customization.integrations.validation import validate_integration
 
-BUILTIN_SLUGS = ["github", "fetch_mcp"]
+GENERIC_SLUGS = ["github", "fetch_mcp"]
+CLIENT_SLUGS = ["client_alpha_repairs"]
+MOCK_SLUGS = ["client_alpha_repairs_mock"]
 
 
-@pytest.fixture(params=BUILTIN_SLUGS)
+@pytest.fixture(params=GENERIC_SLUGS)
 def builtin_integration(request) -> tuple[str, Path]:
     slug = request.param
     root = _BUILTIN_DIR / slug
     return slug, root
 
 
+@pytest.fixture(params=CLIENT_SLUGS)
+def client_integration(request) -> tuple[str, Path]:
+    slug = request.param
+    root = _CLIENT_DIR / slug
+    return slug, root
+
+
+@pytest.fixture(params=MOCK_SLUGS)
+def mock_integration(request) -> tuple[str, Path]:
+    slug = request.param
+    root = _MOCK_DIR / slug
+    return slug, root
+
+
 class TestBuiltinIntegrations:
+    """Generic packages: reusable platform/provider connectors."""
+
     def test_manifest_exists(self, builtin_integration):
         slug, root = builtin_integration
         manifest_file = root / "manifest.yaml"
@@ -50,6 +71,71 @@ class TestBuiltinIntegrations:
 
     def test_validation_passes(self, builtin_integration):
         slug, root = builtin_integration
+        manifest = _load_manifest(root / "manifest.yaml")
+        errors = validate_integration(manifest, root)
+        assert errors == [], f"Validation errors for {slug}: {errors}"
+
+
+class TestClientIntegrations:
+    """Client packages: private real connectors or compositions."""
+
+    def test_manifest_exists(self, client_integration):
+        slug, root = client_integration
+        manifest_file = root / "manifest.yaml"
+        assert manifest_file.is_file(), f"Missing manifest.yaml for {slug}"
+
+    def test_manifest_parses(self, client_integration):
+        slug, root = client_integration
+        manifest = _load_manifest(root / "manifest.yaml")
+        assert isinstance(manifest, IntegrationManifest)
+
+    def test_slug_matches_directory(self, client_integration):
+        slug, root = client_integration
+        manifest = _load_manifest(root / "manifest.yaml")
+        assert manifest.slug == slug
+
+    def test_has_init_py(self, client_integration):
+        slug, root = client_integration
+        assert (root / "__init__.py").is_file()
+
+    def test_validation_passes(self, client_integration):
+        slug, root = client_integration
+        manifest = _load_manifest(root / "manifest.yaml")
+        errors = validate_integration(manifest, root)
+        assert errors == [], f"Validation errors for {slug}: {errors}"
+
+
+class TestMockIntegrations:
+    """Mock packages: opt-in deterministic test doubles for scenarios."""
+
+    def test_manifest_exists(self, mock_integration):
+        slug, root = mock_integration
+        manifest_file = root / "manifest.yaml"
+        assert manifest_file.is_file(), f"Missing manifest.yaml for {slug}"
+
+    def test_manifest_parses(self, mock_integration):
+        slug, root = mock_integration
+        manifest = _load_manifest(root / "manifest.yaml")
+        assert isinstance(manifest, IntegrationManifest)
+
+    def test_slug_matches_directory(self, mock_integration):
+        slug, root = mock_integration
+        manifest = _load_manifest(root / "manifest.yaml")
+        assert manifest.slug == slug
+
+    def test_slug_has_mock_suffix(self, mock_integration):
+        slug, _root = mock_integration
+        assert slug.endswith("_mock"), (
+            f"Mock package '{slug}' must end with '_mock' so opt-in "
+            f"activation can identify it without explicit flags."
+        )
+
+    def test_has_init_py(self, mock_integration):
+        slug, root = mock_integration
+        assert (root / "__init__.py").is_file()
+
+    def test_validation_passes(self, mock_integration):
+        slug, root = mock_integration
         manifest = _load_manifest(root / "manifest.yaml")
         errors = validate_integration(manifest, root)
         assert errors == [], f"Validation errors for {slug}: {errors}"
@@ -118,3 +204,57 @@ class TestFetchMCPSpecifics:
     def test_no_demo_site(self):
         manifest = _load_manifest(_BUILTIN_DIR / "fetch_mcp" / "manifest.yaml")
         assert manifest.demo_site is None
+
+
+class TestClientAlphaRealRepairsClientSpecifics:
+    """Specifics for the private real Client Alpha repairs client connector."""
+
+    def _manifest(self):
+        return _load_manifest(
+            _CLIENT_DIR / "client_alpha_repairs" / "manifest.yaml",
+        )
+
+    def test_tier_is_api(self):
+        assert self._manifest().tier == "api"
+
+    def test_has_required_credentials(self):
+        names = {s.name for s in self._manifest().secrets}
+        assert "CLIENT_ALPHA_REPAIRS_API_BASE_URL" in names
+        assert "CLIENT_ALPHA_REPAIRS_API_TOKEN" in names
+
+    def test_not_also_in_generic_root(self):
+        assert not (
+            _BUILTIN_DIR / "client_alpha_repairs" / "manifest.yaml"
+        ).is_file(), (
+            "Real Client Alpha connector must live only under client_packages/."
+        )
+
+    def test_has_repairs_snapshot_capability(self):
+        ids = {c.id for c in self._manifest().capabilities}
+        assert "repairs_snapshot" in ids
+
+
+class TestClientAlphaRepairsMockSpecifics:
+    """Specifics for the deterministic mock used by ClientAlpha scenarios."""
+
+    def _manifest(self):
+        return _load_manifest(
+            _MOCK_DIR / "client_alpha_repairs_mock" / "manifest.yaml",
+        )
+
+    def test_tier_is_api(self):
+        assert self._manifest().tier == "api"
+
+    def test_no_required_credentials(self):
+        for s in self._manifest().secrets:
+            assert (
+                s.required is False
+            ), f"Mock package secret '{s.name}' must not be required."
+
+    def test_declares_repairs_monitoring_scenario(self):
+        manifest = self._manifest()
+        assert "repairs_monitoring.yaml" in manifest.scenarios
+
+    def test_capability_advertises_repairs_snapshot(self):
+        ids = {c.id for c in self._manifest().capabilities}
+        assert "repairs_snapshot" in ids

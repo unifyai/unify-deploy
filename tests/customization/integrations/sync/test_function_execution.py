@@ -1,16 +1,21 @@
 """FunctionManager registration and live callable execution tests.
 
-Auto-discovers all built-in integrations with a ``functions/`` directory,
-registers their functions via ``FunctionManager.add_functions``, and
-executes representative functions in mock mode to verify they work in
-FunctionManager's isolated exec namespace.
+Auto-discovers every integration with a ``functions/`` directory across the
+generic, client, and mock roots, registers their functions via
+``FunctionManager.add_functions``, and executes representative functions
+in mock mode to verify they work in FunctionManager's isolated exec
+namespace.
 
-These tests require the full Unity backend (orchestra / Unify context).
-The ``sync/conftest.py`` installs an explicit per-test base context for
-real manager instances.
+Mocks are deliberately included here because they are exactly the surface
+that scenario E2Es and offline task activations register at runtime, so we
+must guarantee they survive AST extraction and decorator stripping just
+like any production connector. The full Unity backend is required because
+``FunctionManager`` resolves manager contexts; ``sync/conftest.py``
+installs an explicit per-test base context for real manager instances.
 
 To add execution coverage for a new integration, add an entry to
-``EXECUTION_CONFIG`` below.
+``EXECUTION_CONFIG`` below. Functions that import third-party packages
+must also have a matching ``_INTEGRATION_VENVS`` entry.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ import pytest
 from tests.helpers import _handle_project
 from tests.customization.integrations.integration_test_helpers import (
     build_implementations_for_integration,
-    discover_integration_function_dirs,
+    discover_all_function_dirs,
 )
 from unity.common.context_registry import ContextRegistry
 from unity.function_manager.execution_env import create_base_globals
@@ -32,7 +37,7 @@ from unity.function_manager.function_manager import FunctionManager
 # Per-integration execution configuration
 #
 # Each entry specifies a representative function to call and the expected
-# return shape.  Integrations without an entry still get registration-only
+# return shape. Integrations without an entry still get registration-only
 # testing (add_functions with no errors).
 #
 # To add coverage for a new integration, add an entry here.
@@ -44,15 +49,25 @@ EXECUTION_CONFIG: Dict[str, Dict[str, Any]] = {
         "call_kwargs": {"username": "octocat", "mock": True},
         "expected_keys": {"login", "id", "name"},
     },
+    "client_alpha_repairs_mock": {
+        "representative_function": "fetch_repairs_snapshot",
+        "call_kwargs": {"tick": 0},
+        "expected_keys": {"schema_version", "tables", "metadata"},
+    },
 }
 
 
 # ---------------------------------------------------------------------------
-# Discovery
+# Discovery -- all roots including mocks because mock connectors are the
+# exact surface that FunctionManager registers when scenario tests or
+# offline task activations run them.
 # ---------------------------------------------------------------------------
 
-_INTEGRATION_DIRS = discover_integration_function_dirs()
-_INTEGRATION_IDS = [slug for slug, _ in _INTEGRATION_DIRS]
+_INTEGRATION_DIRS = discover_all_function_dirs(include_mock=True)
+_INTEGRATION_PARAMS = [
+    (slug, funcs_dir) for _root, slug, funcs_dir in _INTEGRATION_DIRS
+]
+_INTEGRATION_IDS = [f"{root_kind}/{slug}" for root_kind, slug, _ in _INTEGRATION_DIRS]
 
 _FM_CONTEXTS = (
     "Functions/VirtualEnvs",
@@ -101,7 +116,11 @@ def _add_integration_functions(
 
 
 @pytest.mark.requires_orchestra
-@pytest.mark.parametrize("slug,funcs_dir", _INTEGRATION_DIRS, ids=_INTEGRATION_IDS)
+@pytest.mark.parametrize(
+    "slug,funcs_dir",
+    _INTEGRATION_PARAMS,
+    ids=_INTEGRATION_IDS,
+)
 class TestFunctionRegistration:
     """Verify that integration functions register without errors."""
 
@@ -124,7 +143,11 @@ class TestFunctionRegistration:
 
 
 @pytest.mark.requires_orchestra
-@pytest.mark.parametrize("slug,funcs_dir", _INTEGRATION_DIRS, ids=_INTEGRATION_IDS)
+@pytest.mark.parametrize(
+    "slug,funcs_dir",
+    _INTEGRATION_PARAMS,
+    ids=_INTEGRATION_IDS,
+)
 class TestFunctionExecution:
     """Execute a representative function from each configured integration."""
 

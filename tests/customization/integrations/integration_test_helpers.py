@@ -1,11 +1,19 @@
 """Reusable test helpers for integration function compliance and execution.
 
-Auto-discovers all built-in integration packages that ship a ``functions/``
-directory, extracts standalone function sources (stripping decorators via
-AST), and provides AST-based compliance checks that run without any backend.
+The unity-deploy integration framework intentionally separates packages by
+ownership and runtime use. Tests follow the same separation:
 
-New integrations get automatic coverage: just add a ``functions/`` dir and
-the parameterized tests pick it up.
+* ``packages/`` holds reusable platform/provider connectors (the
+  ``"generic"`` root). These are always discovered.
+* ``client_packages/`` holds private client-specific connectors or
+  compositions (the ``"client"`` root). Always discovered for compliance,
+  symbolic, and registration tests.
+* ``mock_packages/`` holds opt-in deterministic test doubles used by
+  scenarios and pilot E2E flows (the ``"mock"`` root). Only discovered
+  when callers explicitly request it.
+
+These helpers extract standalone function sources (stripping decorators
+via AST) and run AST-only compliance checks without any backend.
 """
 
 from __future__ import annotations
@@ -13,13 +21,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-_INTEGRATIONS_ROOT = (
+_INTEGRATIONS_PARENT = (
     Path(__file__).resolve().parent.parent.parent.parent
     / "unity_deploy"
     / "customization"
     / "integrations"
-    / "packages"
 )
+_GENERIC_DIR = _INTEGRATIONS_PARENT / "packages"
+_CLIENT_DIR = _INTEGRATIONS_PARENT / "client_packages"
+_MOCK_DIR = _INTEGRATIONS_PARENT / "mock_packages"
 
 
 # ---------------------------------------------------------------------------
@@ -27,22 +37,76 @@ _INTEGRATIONS_ROOT = (
 # ---------------------------------------------------------------------------
 
 
-def discover_integration_function_dirs() -> list[tuple[str, Path]]:
-    """Auto-discover built-in integrations that have a ``functions/`` dir.
-
-    Returns
-    -------
-    list[tuple[str, Path]]
-        ``(slug, functions_dir)`` pairs, sorted by slug.
-    """
+def _discover_in_root(root: Path) -> list[tuple[str, Path]]:
+    """Return ``(slug, functions_dir)`` pairs for every package under ``root``."""
     results: list[tuple[str, Path]] = []
-    for candidate in sorted(_INTEGRATIONS_ROOT.iterdir()):
+    if not root.is_dir():
+        return results
+    for candidate in sorted(root.iterdir()):
         if not candidate.is_dir():
             continue
         manifest = candidate / "manifest.yaml"
         funcs_dir = candidate / "functions"
         if manifest.is_file() and funcs_dir.is_dir():
             results.append((candidate.name, funcs_dir))
+    return results
+
+
+def discover_integration_function_dirs() -> list[tuple[str, Path]]:
+    """Auto-discover generic ``packages/`` integrations with a ``functions/`` dir.
+
+    Only the generic root is returned. Client and mock roots are intentionally
+    excluded because they have different ownership/runtime expectations and
+    must be opted in to via :func:`discover_client_function_dirs`,
+    :func:`discover_mock_function_dirs`, or :func:`discover_all_function_dirs`.
+    """
+    return _discover_in_root(_GENERIC_DIR)
+
+
+def discover_client_function_dirs() -> list[tuple[str, Path]]:
+    """Auto-discover ``client_packages/`` integrations with a ``functions/`` dir."""
+    return _discover_in_root(_CLIENT_DIR)
+
+
+def discover_mock_function_dirs() -> list[tuple[str, Path]]:
+    """Auto-discover ``mock_packages/`` integrations with a ``functions/`` dir.
+
+    Mock packages are opt-in: production deploy resolution does not include
+    them by default. Tests that need scenario-test-double execution coverage
+    must explicitly call this helper or :func:`discover_all_function_dirs`
+    with ``include_mock=True``.
+    """
+    return _discover_in_root(_MOCK_DIR)
+
+
+def discover_all_function_dirs(
+    *,
+    include_mock: bool = False,
+) -> list[tuple[str, str, Path]]:
+    """Discover function dirs across roots.
+
+    Parameters
+    ----------
+    include_mock:
+        Whether to also include ``mock_packages/`` integrations. Mock
+        discovery is gated because mock packages mirror production schemas
+        but should never be activated by deploy resolution.
+
+    Returns
+    -------
+    list[tuple[str, str, pathlib.Path]]
+        ``(root_kind, slug, functions_dir)`` triples where ``root_kind`` is
+        one of ``"generic"``, ``"client"``, or ``"mock"``. Stable order:
+        generic -> client -> mock, each sorted by slug.
+    """
+    results: list[tuple[str, str, Path]] = []
+    for slug, funcs_dir in discover_integration_function_dirs():
+        results.append(("generic", slug, funcs_dir))
+    for slug, funcs_dir in discover_client_function_dirs():
+        results.append(("client", slug, funcs_dir))
+    if include_mock:
+        for slug, funcs_dir in discover_mock_function_dirs():
+            results.append(("mock", slug, funcs_dir))
     return results
 
 
