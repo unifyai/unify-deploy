@@ -1,11 +1,14 @@
 """Multi-source integration discovery.
 
-Three discovery paths (inspired by Home Assistant's ``components/`` +
-``custom_components/`` + HACS):
+Integration packages are intentionally separated by ownership and runtime use:
 
-1. **Built-in**: ``unity_deploy/customization/integrations/packages/*/manifest.yaml``
-2. **Entry points**: ``[project.entry-points."unity_deploy.integrations"]``
-3. **Extra paths**: additional directories supplied by the caller
+1. **Generic packages**: reusable platform/provider integrations in
+   ``packages/*/manifest.yaml``.
+2. **Client packages**: private real client connectors or compositions in
+   ``client_packages/*/manifest.yaml``.
+3. **Entry points**: externally packaged integrations registered under
+   ``[project.entry-points."unity_deploy.integrations"]``.
+4. **Extra paths**: explicit caller-provided roots, including opt-in mocks.
 
 Later sources override earlier ones by slug.
 """
@@ -25,6 +28,8 @@ logger = logging.getLogger(__name__)
 _ENTRY_POINT_GROUP = "unity_deploy.integrations"
 
 _BUILTIN_DIR = Path(__file__).resolve().parent / "packages"
+_CLIENT_DIR = Path(__file__).resolve().parent / "client_packages"
+_MOCK_DIR = Path(__file__).resolve().parent / "mock_packages"
 
 
 def discover_integrations(
@@ -33,13 +38,17 @@ def discover_integrations(
     """Discover integration packages from all sources.
 
     Discovery order (later sources override earlier by slug):
-    1. Built-in: ``unity_deploy/customization/integrations/packages/*/manifest.yaml``
-    2. Entry points: ``[project.entry-points."unity_deploy.integrations"]``
-    3. Extra paths: additional directories supplied by the caller
+    1. Generic packages: ``integrations/packages/*/manifest.yaml``
+    2. Client packages: ``integrations/client_packages/*/manifest.yaml``
+    3. Entry points: ``[project.entry-points."unity_deploy.integrations"]``
+    4. Extra paths: additional directories supplied by the caller
     """
     manifests_by_slug: dict[str, IntegrationManifest] = {}
 
     for m in discover_from_directory(_BUILTIN_DIR):
+        manifests_by_slug[m.slug] = m
+
+    for m in discover_from_directory(_CLIENT_DIR):
         manifests_by_slug[m.slug] = m
 
     for m in discover_from_entry_points():

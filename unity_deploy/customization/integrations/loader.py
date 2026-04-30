@@ -4,6 +4,10 @@ Converts discovered integration manifests into structured data: typed
 ``Guidance`` and ``Secret`` models, function directories, MCP configs,
 and URL mappings. Downstream consumers merge these into whatever runtime
 configuration format they need.
+
+The loader is root-agnostic: callers choose whether search paths include
+generic ``packages/``, private ``client_packages/``, or opt-in
+``mock_packages/`` roots.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ from unity_deploy.customization.integrations.types import (
     MCPServerConfig,
 )
 from unity_deploy.customization.integrations.validation import validate_integration
+from unity_deploy.customization.scenarios.loader import load_scenario
+from unity_deploy.customization.scenarios.types import ScenarioSpec
 from unity.secret_manager.types import Secret
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,7 @@ class LoadedIntegration:
     venv_dir: Path | None = None
     guidance_entries: list[Guidance] = field(default_factory=list)
     secret_entries: list[Secret] = field(default_factory=list)
+    scenario_specs: list[ScenarioSpec] = field(default_factory=list)
     url_mapping: dict[str, str] | None = None
     mcp_config: MCPServerConfig | None = None
 
@@ -48,6 +55,7 @@ class AggregatedIntegrations:
     venv_dirs: list[Path] = field(default_factory=list)
     guidance: list[Guidance] = field(default_factory=list)
     secrets: list[Secret] = field(default_factory=list)
+    scenarios: list[ScenarioSpec] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
     mcp_configs: list[MCPServerConfig] = field(default_factory=list)
 
@@ -84,6 +92,13 @@ def load_integration(manifest: IntegrationManifest, root: Path) -> LoadedIntegra
         result.secret_entries = [
             Secret(name=s.name, value="", description=s.description)
             for s in manifest.secrets
+        ]
+
+    if manifest.scenarios:
+        scenarios_dir = root / "scenarios"
+        result.scenario_specs = [
+            load_scenario(scenarios_dir / scenario_file)
+            for scenario_file in manifest.scenarios
         ]
 
     if manifest.demo_site is not None:
@@ -148,6 +163,7 @@ def load_integrations(
             result.venv_dirs.append(loaded.venv_dir)
         result.guidance.extend(loaded.guidance_entries)
         result.secrets.extend(loaded.secret_entries)
+        result.scenarios.extend(loaded.scenario_specs)
         if loaded.url_mapping:
             result.url_mappings.update(loaded.url_mapping)
         if loaded.mcp_config is not None:

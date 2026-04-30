@@ -33,23 +33,36 @@ storage.
 
 ## Directory Layout
 
+Integration packages are intentionally separated by ownership and runtime
+use. Discovery, activation, and tests follow the same separation:
+
 ```
 unity_deploy/customization/integrations/
 +-- __init__.py
 +-- types.py                  # manifest schema and tier metadata
-+-- discovery.py              # built-in and entry-point package discovery
++-- discovery.py              # multi-root package and entry-point discovery
 +-- loader.py                 # manifest -> Guidance/Secret/function dirs/MCP configs
 +-- validation.py             # structural validation for packages
 +-- activation.py             # expands enabled slugs into ResolvedCustomization
 +-- mcp_adapter.py            # MCP tool discovery and wrapper-source generation
 +-- aggregate_demo_sites.py   # browser-tier demo-site copy helper
-+-- packages/
-    +-- github/               # API-tier example
-    +-- fetch_mcp/            # MCP-tier example
++-- packages/                 # generic root: reusable platform/provider connectors
+|   +-- github/               # API-tier example
+|   +-- fetch_mcp/            # MCP-tier example
++-- client_packages/          # client root: private real connectors / compositions
+|   +-- client_alpha_repairs/
++-- mock_packages/            # mock root: opt-in deterministic test doubles
+    +-- client_alpha_repairs_mock/
 ```
 
-Each integration package lives under `packages/<slug>/` and must include a
-`manifest.yaml`. Optional directories are loaded by convention:
+| Root | Owner / Audience | Activation |
+|------|------------------|------------|
+| `packages/` | Platform; reusable across clients | Default |
+| `client_packages/` | One named client; private composition or real connector | Default |
+| `mock_packages/` | Internal scenario E2Es and offline pilot smoke | Opt-in only |
+
+Each integration package must include a `manifest.yaml`. Optional directories
+are loaded by convention:
 
 | Path | Purpose |
 |------|---------|
@@ -57,6 +70,7 @@ Each integration package lives under `packages/<slug>/` and must include a
 | `guidance/` | Markdown guidance synced into GuidanceManager |
 | `venvs/` | Virtual environment definitions for third-party Python dependencies |
 | `demo_site/` | Browser-tier demo site assets copied by `aggregate_demo_sites.py` |
+| `scenarios/` | YAML scenario specs loaded by the scenario runtime |
 
 ## Manifest Shape
 
@@ -111,10 +125,12 @@ is preserved and duplicate slugs are removed.
 
 ## Built-In Integrations
 
-| Slug | Tier | Purpose |
-|------|------|---------|
-| `github` | API | GitHub REST API example with mock-safe functions for users, repos, and issues |
-| `fetch_mcp` | MCP | Official MCP Fetch server example (`@modelcontextprotocol/server-fetch`) |
+| Slug | Root | Tier | Purpose |
+|------|------|------|---------|
+| `github` | `packages/` | API | GitHub REST API example with mock-safe functions for users, repos, and issues |
+| `fetch_mcp` | `packages/` | MCP | Official MCP Fetch server example (`@modelcontextprotocol/server-fetch`) |
+| `client_alpha_repairs` | `client_packages/` | API | Private Client Alpha repairs client connector (fail-closed until live credentials land) |
+| `client_alpha_repairs_mock` | `mock_packages/` | API | Deterministic Client Alpha repairs mock used by scenario E2Es; activated only when `include_mock_packages=True` or a `*_mock` slug is enabled |
 
 ## FunctionManager-Compatible Functions
 
@@ -174,24 +190,61 @@ environment, tmux isolation, logs, and per-session settings for this repo.
 Sync tests use deploy's lightweight conftest plus explicit per-test contexts;
 they do not rely on Unity's heavier global test lifecycle.
 
+Coverage is split intentionally so that mock packages get the same
+FunctionManager guarantees as production connectors:
+
+* Symbolic AST tests (`test_function_compliance.py`, `test_builtin_integrations.py`)
+  cover all three roots automatically -- generic, client, and mock. Mocks are
+  always included because the rules are structural and apply to anything
+  destined for FunctionManager.
+* Live registration and execution tests (`sync/test_function_execution.py`)
+  also cover all three roots. ``EXECUTION_CONFIG`` entries pin a
+  representative callable per integration -- including
+  ``client_alpha_repairs_mock`` -- so we exercise the same registration
+  surface that scenario E2Es and offline task activations rely on.
+* Scenario runtime tests (`tests/customization/scenarios/test_scenarios.py`)
+  cover side-effecting tick logic with a fake DataManager. Anything that
+  needs a real DataManager ingest is reserved for the staging smoke order
+  documented below.
+
 Useful narrower commands:
 
 ```bash
+tests/parallel_run.sh tests/customization/integrations
 tests/parallel_run.sh tests/customization/integrations/sync
 tests/parallel_run.sh --timeout 300 tests/customization/integrations/sync/test_function_execution.py
+tests/parallel_run.sh tests/customization/scenarios
 .venv/bin/python tests/customization/integrations/validate_e2e.py
 .venv/bin/python tests/customization/integrations/validate_e2e.py --real
 ```
 
-The symbolic tests validate manifest types, discovery, loading, validation, MCP
-wrapper generation, demo-site aggregation, package structure, and AST
-compliance. The sync tests exercise real `FunctionManager`, `GuidanceManager`,
-and `SecretManager` behavior where manager contracts matter.
-
-To add live callable execution coverage for a new API-tier integration, add an
-entry to `EXECUTION_CONFIG` in
+To add live callable execution coverage for a new API-tier integration in any
+root, add an entry to `EXECUTION_CONFIG` in
 `tests/customization/integrations/sync/test_function_execution.py`. If the
 functions import third-party packages, also provide a matching test venv entry.
+
+### Staging Smoke Order
+
+Local tests cannot exercise functions that hit a real `DataManager` ingest or
+the offline task activation lane. Run these in order against staging after a
+deploy/release that includes the affected integration:
+
+1. **FunctionManager registration smoke** -- invoke
+   ``unity_deploy.customization.scenarios.cli`` with ``--no-materialize
+   --no-outbox`` to confirm the integration's functions register and execute
+   in mock mode end-to-end.
+2. **Scenario tick smoke** -- run the same CLI without the ``--no-*`` flags
+   so the scenario tick materializes contexts through the real
+   ``DataManager`` and writes the simulated alert outbox.
+3. **Offline task activation smoke** -- trigger the materialized
+   ``ScheduledTaskActivation`` (e.g. via the reconcile job's
+   ``run_now`` path) and confirm the headless lane wakes the activation,
+   runs the entrypoint function, and clears the activation.
+
+Steps 1-2 cover the FunctionManager and scenario surfaces; step 3 covers the
+generic offline task activation lane that orchestrates scheduled scenarios in
+production. Failures at any step should block promotion of the
+integration's deployment.
 
 ## Current Caveat
 

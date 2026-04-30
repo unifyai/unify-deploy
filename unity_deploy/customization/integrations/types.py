@@ -194,6 +194,10 @@ class IntegrationManifest(BaseModel):
         default_factory=list,
         description="pip packages needed at runtime (like HA's requirements).",
     )
+    scenarios: list[str] = Field(
+        default_factory=list,
+        description="Scenario YAML filenames under scenarios/ bundled with the package.",
+    )
     venv_name: str | None = Field(
         default=None,
         description="Custom venv for isolated dependencies.",
