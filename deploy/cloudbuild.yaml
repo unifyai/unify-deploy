@@ -61,6 +61,7 @@ steps:
       --namespace production \
       --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
       --orchestra-url "${_ORCHESTRA_URL}" \
+      --unity-comms-url "${_UNITY_COMMS_URL}" \
       --timeout 300s
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
@@ -153,6 +154,7 @@ substitutions:
   _CLUSTER: 'unity'
   _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest'
   _ORCHESTRA_URL: 'https://api.unify.ai/v0'
+  _UNITY_COMMS_URL: 'https://unity-comms-app-000000000000.us-central1.run.app'
 
 availableSecrets:
   secretManager:

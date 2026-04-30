@@ -9,6 +9,7 @@ Usage:
     --namespace staging|production \
     --image IMAGE \
     --orchestra-url URL \
+    --unity-comms-url URL \
     [--timeout 300s] \
     [--template deploy/k8s/control-plane/reconcile-control-plane-job.yaml] \
     [--client CLIENT] \
@@ -23,6 +24,7 @@ environment=""
 namespace=""
 image=""
 orchestra_url=""
+unity_comms_url=""
 timeout="300s"
 template="deploy/k8s/control-plane/reconcile-control-plane-job.yaml"
 client=""
@@ -44,6 +46,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --orchestra-url)
       orchestra_url="${2:-}"
+      shift 2
+      ;;
+    --unity-comms-url)
+      unity_comms_url="${2:-}"
       shift 2
       ;;
     --timeout)
@@ -88,6 +94,7 @@ require_value "--environment" "$environment"
 require_value "--namespace" "$namespace"
 require_value "--image" "$image"
 require_value "--orchestra-url" "$orchestra_url"
+require_value "--unity-comms-url" "$unity_comms_url"
 
 if [[ ! -f "$template" ]]; then
   echo "Job template not found: ${template}" >&2
@@ -139,6 +146,7 @@ render_manifest() {
     -e "s/__ENVIRONMENT__/$(escape_sed_replacement "$environment")/g" \
     -e "s/__IMAGE__/$(escape_sed_replacement "$image")/g" \
     -e "s/__ORCHESTRA_URL__/$(escape_sed_replacement "$orchestra_url")/g" \
+    -e "s/__UNITY_COMMS_URL__/$(escape_sed_replacement "$unity_comms_url")/g" \
     -e "s/__CLIENT__/$(escape_sed_replacement "$client")/g" \
     -e "s/__ASSISTANT_ID__/$(escape_sed_replacement "$assistant_id")/g" \
     "$template"
