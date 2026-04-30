@@ -221,6 +221,27 @@ class PubSubWorkQueue:
             new_deadline,
         )
 
+    def extend_lease_sync(self, receipt_id: str, seconds: int) -> None:
+        """Synchronous ``modify_ack_deadline`` path for thread lease control."""
+        new_deadline = max(int(seconds), 0)
+        for sub_path in self._sub_map.values():
+            try:
+                self._subscriber.modify_ack_deadline(
+                    request={
+                        "subscription": sub_path,
+                        "ack_ids": [receipt_id],
+                        "ack_deadline_seconds": new_deadline,
+                    },
+                )
+                return
+            except Exception:
+                continue
+        logger.warning(
+            "extend_lease_sync: no subscription accepted receipt %s (deadline=%ds)",
+            receipt_id,
+            new_deadline,
+        )
+
     async def close(self) -> None:
         """Close Pub/Sub client channels and background transport threads.
 

@@ -8,11 +8,12 @@ import types
 
 import pytest
 
+from unity_deploy.infra.workers import worker_utils
 from unity_deploy.infra.workers.worker_utils import (
     activate_unify_context,
     initialize_worker_environment,
 )
-from unity_deploy.load_repo_env import unity_deploy_repo_root
+from unity_deploy.utils.load_repo_env import unity_deploy_repo_root
 
 
 @pytest.fixture
@@ -54,6 +55,11 @@ def test_initialize_worker_environment_skips_offline_ingest_initializer(
     assert project_root == unity_deploy_repo_root()
 
 
+def test_worker_bootstrap_imports_storage_client_symbol() -> None:
+    """Guard worker image startup against missing google.cloud.storage import."""
+    assert worker_utils.storage.Client is not None
+
+
 def test_activate_unify_context_uses_explicit_identity(monkeypatch) -> None:
     """Explicit args win; env fallbacks are not consulted."""
 
@@ -69,6 +75,9 @@ def test_activate_unify_context_uses_explicit_identity(monkeypatch) -> None:
         def activate(self, project_name: str) -> None:
             self._active_project = project_name
             self.activated_projects.append(project_name)
+
+        def unset_context(self) -> None:
+            pass
 
         def set_context(self, ctx: str, skip_create: bool = False) -> None:
             self.contexts.append((ctx, skip_create))

@@ -8,22 +8,22 @@
 # * Reset slow memory creep (e.g. glibc arena fragmentation, caching
 #   layers inside third-party libraries) that accumulates across
 #   hundreds of long-running messages.
-# * Validate that the 24h-grace + maxSurge=100% rolling-update path
-#   actually works -- if this CronJob ever fails, we know the rolling
+# * Validate that the maxSurge=100% rolling-update path actually
+#   works -- if this CronJob ever fails, we know the rolling
 #   semantics drifted before it bites a real incident.
 #
 # Schedule: Sunday 03:00 UTC (low-traffic window across US/EU).
 # Strategy: `kubectl rollout restart` mutates the pod-template
 # annotation, which triggers the Deployment's configured rolling
 # update. With maxSurge=100%, new pods come up immediately alongside
-# old pods that may still be draining (up to 24h per pod). Capacity
-# never dips.
+# old pods that may still be draining (up to 10 min for ingest,
+# 30 min for parse per the asymmetric terminationGracePeriodSeconds
+# on each Deployment). Capacity never dips.
 #
-# This CronJob is cluster-agnostic: it targets the deployment names
-# ``unity-parse-worker`` and ``unity-ingest-worker`` in namespace
-# ``default``. Both the staging and production deployment manifests
-# share those names, so whichever is installed in the cluster is the
-# one that gets restarted.
+# The CronJob lives in the `default` namespace (neutral ground) and
+# restarts workers in both `staging` and `production` namespaces.
+# RBAC is granted via one Role + RoleBinding per target namespace
+# (Roles are namespace-scoped, so we need one pair per namespace).
 
 apiVersion: v1
 kind: ServiceAccount
@@ -38,13 +38,10 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: unity-workers-rollout
-  namespace: default
+  namespace: staging
   labels:
     app: unity-workers-rollout
     component: pipeline-maintenance
-# `patch` is what `kubectl rollout restart` requires (it annotates the
-# pod template). `get` is needed for the client-side `rollout status`
-# check afterward. Scope is locked to the two worker deployments.
 rules:
 - apiGroups: ["apps"]
   resources: ["deployments"]
@@ -59,7 +56,42 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: unity-workers-rollout
+  namespace: staging
+  labels:
+    app: unity-workers-rollout
+    component: pipeline-maintenance
+subjects:
+- kind: ServiceAccount
+  name: unity-workers-rollout
   namespace: default
+roleRef:
+  kind: Role
+  name: unity-workers-rollout
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: unity-workers-rollout
+  namespace: production
+  labels:
+    app: unity-workers-rollout
+    component: pipeline-maintenance
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
+  verbs: ["get", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments/status"]
+  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: unity-workers-rollout
+  namespace: production
   labels:
     app: unity-workers-rollout
     component: pipeline-maintenance
@@ -81,17 +113,10 @@ metadata:
     app: unity-workers-rollout
     component: pipeline-maintenance
 spec:
-  # Sunday 03:00 UTC. Adjust with gcloud or kubectl edit if a different
-  # low-traffic window is needed for a specific deployment.
   schedule: "0 3 * * 0"
-  # Defensive: never overlap executions. A rollout may take up to ~24h
-  # to fully drain old pods; if the previous rollout is still in
-  # progress, skip this week's trigger rather than pile on.
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
-  # If a scheduled run is missed (control plane outage, etc.), only
-  # catch up within 1 hour. Beyond that, just wait for next Sunday.
   startingDeadlineSeconds: 3600
   jobTemplate:
     spec:
@@ -114,13 +139,11 @@ spec:
             - |
               set -eu
               echo "[$(date -u +%FT%TZ)] Triggering rollout restart for parse+ingest workers"
-              kubectl rollout restart deployment/unity-parse-worker -n default
-              kubectl rollout restart deployment/unity-ingest-worker -n default
-              echo "[$(date -u +%FT%TZ)] Rollout commands issued; workers will drain over up to 24h"
-              # We don't wait for `rollout status` -- a 24h grace period
-              # means draining pods can legitimately take hours, and the
-              # Job would time out. The Deployment controller owns the
-              # rollout state once triggered.
+              kubectl rollout restart deployment/unity-parse-worker -n staging
+              kubectl rollout restart deployment/unity-ingest-worker -n staging
+              kubectl rollout restart deployment/unity-parse-worker -n production
+              kubectl rollout restart deployment/unity-ingest-worker -n production
+              echo "[$(date -u +%FT%TZ)] Rollout commands issued; ingest workers drain in <=10m, parse workers in <=30m"
             resources:
               requests:
                 cpu: "50m"

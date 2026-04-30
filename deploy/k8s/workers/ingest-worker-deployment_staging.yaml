@@ -3,13 +3,14 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: unity-ingest-worker
-  namespace: default
+  namespace: staging
   labels:
     app: unity-ingest-worker
     component: pipeline-worker
     environment: staging
 spec:
-  replicas: 2
+  replicas: 1
+  revisionHistoryLimit: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -27,7 +28,17 @@ spec:
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      terminationGracePeriodSeconds: 86400
+      serviceAccountName: unity-pipeline-worker
+      # Ingest workers checkpoint per-chunk to GCS
+      # (`_make_checkpoint_callback` in ingest_worker.py), so a
+      # SIGKILL after the grace window only loses the current chunk:
+      # Pub/Sub redelivery + `read_checkpoint` resumes the message
+      # cleanly on another pod.  10 min comfortably exceeds any
+      # single chunk and matches the Pub/Sub ack-deadline so there
+      # is no window where the message is neither leased nor
+      # redelivered.  See the 'Termination grace period' section of
+      # the pause-resume-instant-cancel plan for the full rationale.
+      terminationGracePeriodSeconds: 600
       containers:
       - name: ingest-worker
         image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
@@ -38,26 +49,21 @@ spec:
         lifecycle:
           preStop:
             exec:
-              command: ["sh", "-c", "sleep 2"]
+              command: ["sh", "-c", "sleep 10"]
         resources:
           requests:
             cpu: "500m"
             memory: "1Gi"
+            ephemeral-storage: "4Gi"
           limits:
             cpu: "2"
             memory: "3Gi"
+            ephemeral-storage: "4Gi"
         env:
         - name: UNITY_GCP_PIPELINE_ENVIRONMENT
           value: "staging"
         - name: UNITY_GCS_ARTIFACT_BUCKET
           value: "unity-pipeline-artifacts-staging"
-        # ORCHESTRA_URL + ORCHESTRA_ADMIN_KEY are the only credentials
-        # the pod carries: every message triggers a per-assistant
-        # UNIFY_KEY lookup via Orchestra's admin endpoints (see
-        # unity_deploy.infra.workers.assistant_key_resolver). The pod
-        # does not, and must not, hold a shared UNIFY_KEY -- shared
-        # workers serve many tenants, and a baked-in key would auth
-        # every call as the wrong user.
         - name: ORCHESTRA_URL
           value: "https://internal.example.com/v0"
         - name: ORCHESTRA_ADMIN_KEY
@@ -65,21 +71,26 @@ spec:
             secretKeyRef:
               name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: GCP_SA_KEY
-          valueFrom:
-            secretKeyRef:
-              name: unity-secrets
-              key: GCP_SA_KEY
         - name: UNITY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
         - name: UNIFY_PROJECT_NAME
           value: "Assistants"
+        livenessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        readinessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 10
+          periodSeconds: 30
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: unity-ingest-worker-hpa
-  namespace: default
+  namespace: staging
   labels:
     environment: staging
 spec:
@@ -87,8 +98,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: unity-ingest-worker
-  minReplicas: 2
-  maxReplicas: 5
+  minReplicas: 1
+  maxReplicas: 15
   metrics:
   - type: External
     external:
@@ -101,11 +112,18 @@ spec:
         type: AverageValue
         averageValue: "1"
   behavior:
+    # A 15 -> 1 drain took ~70 min under the previous `type: Pods /
+    # value: 1 / periodSeconds: 300` policy (1 pod every 5 min).
+    # Percent-based scaling compresses the same drain to ~11 min:
+    # 15 -> 7 -> 3 -> 1 at 5-min intervals.  The shortened
+    # stabilization window (60s instead of 300s) also means the HPA
+    # starts reacting as soon as backlog hits zero, which is what
+    # pause/cancel expects once parked messages are ack'd.
     scaleDown:
-      stabilizationWindowSeconds: 3600
+      stabilizationWindowSeconds: 60
       policies:
-      - type: Pods
-        value: 1
+      - type: Percent
+        value: 50
         periodSeconds: 300
     scaleUp:
       stabilizationWindowSeconds: 30
@@ -118,7 +136,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: unity-ingest-worker-pdb
-  namespace: default
+  namespace: staging
   labels:
     environment: staging
 spec:

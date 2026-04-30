@@ -48,4 +48,4 @@ reportMissingImports = "warning"
 include = ["unity_deploy*"]
 
 [tool.setuptools.package-data]
-"unity_deploy" = ["**/*.json", "**/*.md"]
+"unity_deploy" = ["**/*.json", "**/*.md", "**/*.yaml", "**/*.yml"]

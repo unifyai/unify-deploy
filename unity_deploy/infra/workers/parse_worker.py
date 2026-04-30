@@ -119,7 +119,7 @@ async def handle_parse_message(
             # is driven by ``msg.artifact_format``.
             plan_config = FilePipelineConfig()
 
-            for pr in parse_results:
+            for file_uri, pr in zip(msg.file_paths, parse_results):
                 if pr.status != "success":
                     run_ledger.write(
                         PipelineStageManifest(
@@ -133,13 +133,18 @@ async def handle_parse_message(
                     )
                     continue
 
+                source_gs_uri = file_uri if file_uri.startswith("gs://") else ""
                 plan = lower_to_ingest_plan(
                     pr,
                     run_id=run_id,
                     config=plan_config,
                     artifact_store=artifact_store,
                     artifact_format=msg.artifact_format,
+                    source_gs_uri=source_gs_uri,
                 )
+
+                if msg.table_config:
+                    plan = _merge_table_config(plan, msg.table_config)
 
                 manifest_key = (
                     f"jobs/{run_id}/manifests/{Path(pr.logical_path).stem}.json"
@@ -164,7 +169,7 @@ async def handle_parse_message(
 
                 ingest_msg = IngestRequested(
                     job_id=run_id,
-                    deployment_id=msg.deployment_id,
+                    dispatch_id=msg.dispatch_id,
                     manifest_key=manifest_key,
                     attachment_callback=msg.attachment_callback,
                     ingestion_mode=msg.ingestion_mode,
@@ -199,6 +204,39 @@ async def handle_parse_message(
         cost_ledger.close()
 
 
+def _merge_table_config(plan, table_config: dict):
+    """Merge per-table config from ParseRequested into IngestPlan.tables_meta.
+
+    Matches config entries to TableMeta by sheet_name or label. Returns
+    a new plan with updated tables_meta carrying the config fields that
+    the ingest worker needs (description, embed_columns, etc.).
+    """
+    from unity.common.pipeline.types import TableMeta
+
+    updated: list[TableMeta] = []
+    for meta in plan.tables_meta:
+        key = meta.sheet_name or meta.label or meta.table_id
+        cfg = table_config.get(key, {})
+        if not cfg:
+            updated.append(meta)
+            continue
+        updated.append(
+            meta.model_copy(
+                update={
+                    "context": cfg.get("context") or meta.context,
+                    "description": cfg.get("description") or meta.description,
+                    "column_descriptions": cfg.get("column_descriptions")
+                    or meta.column_descriptions,
+                    "embed_columns": cfg.get("embed_columns") or meta.embed_columns,
+                    "embed_strategy": cfg.get("embed_strategy", meta.embed_strategy),
+                    "chunk_size": cfg.get("chunk_size", meta.chunk_size),
+                    "post_ingest": cfg.get("post_ingest") or meta.post_ingest,
+                },
+            ),
+        )
+    return plan.model_copy(update={"tables_meta": updated})
+
+
 def _download_source(
     file_uri: str,
     *,
@@ -214,11 +252,25 @@ def _download_source(
         blob_name = parsed.path.lstrip("/")
         filename = Path(blob_name).name
 
+        import os
+        import time as _time
+
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(blob_name)
         local_path = str(Path(dest_dir) / filename)
+        t0 = _time.perf_counter()
         blob.download_to_filename(local_path)
-        logger.info("Downloaded %s -> %s", file_uri, local_path)
+        elapsed = _time.perf_counter() - t0
+        mb = os.path.getsize(local_path) / (1024 * 1024)
+        rate = mb / elapsed if elapsed > 0 else 0
+        logger.info(
+            "Downloaded %s -> %s (%.1f MB in %.1fs, %.1f MB/s)",
+            file_uri,
+            local_path,
+            mb,
+            elapsed,
+            rate,
+        )
         return local_path
 
     return file_uri

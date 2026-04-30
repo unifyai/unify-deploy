@@ -53,6 +53,10 @@ class ResolvedCustomization:
     knowledge: dict[str, dict[str, Any]]
     blacklist: list[dict[str, Any]]
     secrets: list[Secret]
+    integrations: list[str] = field(default_factory=list)
+    mcp_configs: list[Any] = field(default_factory=list)
+    url_mappings: dict[str, str] = field(default_factory=dict)
+    console_config: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +147,15 @@ def _merge_knowledge(
     return merged
 
 
+def _merge_integrations(base: list[str], overlay: list[str]) -> list[str]:
+    """Append integration slugs while preserving order and removing duplicates."""
+    result: list[str] = []
+    for slug in [*base, *overlay]:
+        if slug not in result:
+            result.append(slug)
+    return result
+
+
 def _collect_layers(
     entry: ClientDeploymentEntry,
     *,
@@ -205,6 +218,7 @@ def _spec_to_resolved(
     knowledge: dict[str, dict] = dict(spec.knowledge)
     blacklist: list[dict] = list(spec.blacklist)
     secrets: list[Secret] = list(spec.secrets)
+    integrations: list[str] = list(spec.integrations)
 
     for layer in _collect_layers(
         entry,
@@ -223,6 +237,8 @@ def _spec_to_resolved(
             blacklist = _merge_by_key(blacklist, layer.blacklist, _blacklist_key)
         if layer.secrets:
             secrets = _merge_by_key(secrets, list(layer.secrets), _secret_key)
+        if layer.integrations:
+            integrations = _merge_integrations(integrations, list(layer.integrations))
 
     file_secrets = load_secrets(
         org_id=org_id,
@@ -244,6 +260,10 @@ def _spec_to_resolved(
         knowledge=knowledge,
         blacklist=blacklist,
         secrets=secrets,
+        integrations=integrations,
+        mcp_configs=[],
+        url_mappings={},
+        console_config=spec.console_config,
     )
 
 
@@ -346,6 +366,9 @@ def resolve(
         knowledge={},
         blacklist=[],
         secrets=[],
+        integrations=[],
+        mcp_configs=[],
+        url_mappings={},
     )
 
 

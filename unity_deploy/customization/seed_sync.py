@@ -121,12 +121,13 @@ def sync_seed_data(
     delete_fn: Callable[[int], Any] | None,
     id_field: str,
     meta_store: SeedMetaStore,
+    exclude_fields: set[str] | None = None,
 ) -> bool:
     """Sync code-defined records to a DB-backed state manager.
 
     Returns True if any changes were made.
     """
-    exclude_fields = {id_field}
+    exclude_fields = {id_field, *(exclude_fields or set())}
     expected_hash = _aggregate_hash(source_records, natural_key_fn, exclude_fields)
     current_hash = meta_store.get_hash(manager_key)
 
@@ -230,6 +231,12 @@ def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
 
     gm = ManagerRegistry.get_guidance_manager()
     source_dicts = [r.model_dump() for r in records]
+    readonly_fields = {"authoring_assistant_id"}
+
+    def writable_fields(rec: dict) -> dict:
+        return {
+            k: v for k, v in rec.items() if k not in {"guidance_id", *readonly_fields}
+        }
 
     def natural_key(r: dict) -> str:
         return str(r.get("title", ""))
@@ -239,10 +246,10 @@ def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
         return [g.model_dump() if hasattr(g, "model_dump") else g for g in entries]
 
     def create(rec: dict) -> Any:
-        return gm.add_guidance(**{k: v for k, v in rec.items() if k != "guidance_id"})
+        return gm.add_guidance(**writable_fields(rec))
 
     def update(guidance_id: int, rec: dict) -> Any:
-        fields = {k: v for k, v in rec.items() if k != "guidance_id"}
+        fields = writable_fields(rec)
         return gm.update_guidance(guidance_id=guidance_id, **fields)
 
     def delete(guidance_id: int) -> Any:
@@ -258,6 +265,7 @@ def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
         delete_fn=delete,
         id_field="guidance_id",
         meta_store=meta,
+        exclude_fields=readonly_fields,
     )
 
 

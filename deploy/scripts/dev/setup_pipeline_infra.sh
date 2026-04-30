@@ -11,6 +11,9 @@ set -euo pipefail
 #   - Permissions: pubsub.topics.create, pubsub.subscriptions.create, storage.buckets.create
 #
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
+
 ENV="${1:-staging}"
 PROJECT_ID="${UNITY_PUBSUB_PROJECT_ID:-gcp-project-runtime}"
 REGION="us-central1"
@@ -35,7 +38,7 @@ echo "Creating GCS bucket: ${BUCKET}"
 gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${BUCKET}" 2>/dev/null || echo "  (bucket already exists)"
 
 echo "Applying lifecycle rules..."
-gsutil lifecycle set deploy/k8s/workers/gcs-lifecycle-rules.json "gs://${BUCKET}"
+gsutil lifecycle set "${REPO_ROOT}/deploy/k8s/workers/gcs-lifecycle-rules.json" "gs://${BUCKET}"
 
 # --- Pub/Sub Topics ---
 TOPICS=("unity-parse${SUFFIX}" "unity-ingest${SUFFIX}" "unity-dead-letter${SUFFIX}")
@@ -49,20 +52,31 @@ echo "Creating subscription: unity-parse-sub${SUFFIX}"
 gcloud pubsub subscriptions create "unity-parse-sub${SUFFIX}" \
   --topic="unity-parse${SUFFIX}" \
   --project="${PROJECT_ID}" \
-  --ack-deadline=600 \
+  --ack-deadline=120 \
   --message-retention-duration=7d \
   --dead-letter-topic="unity-dead-letter${SUFFIX}" \
-  --max-delivery-attempts=5 \
+  --max-delivery-attempts=15 \
+  --expiration-period=never \
   2>/dev/null || echo "  (subscription already exists)"
 
 echo "Creating subscription: unity-ingest-sub${SUFFIX}"
 gcloud pubsub subscriptions create "unity-ingest-sub${SUFFIX}" \
   --topic="unity-ingest${SUFFIX}" \
   --project="${PROJECT_ID}" \
-  --ack-deadline=600 \
+  --ack-deadline=120 \
   --message-retention-duration=7d \
   --dead-letter-topic="unity-dead-letter${SUFFIX}" \
-  --max-delivery-attempts=5 \
+  --max-delivery-attempts=15 \
+  --expiration-period=never \
+  2>/dev/null || echo "  (subscription already exists)"
+
+echo "Creating subscription: unity-dead-letter-sub${SUFFIX}"
+gcloud pubsub subscriptions create "unity-dead-letter-sub${SUFFIX}" \
+  --topic="unity-dead-letter${SUFFIX}" \
+  --project="${PROJECT_ID}" \
+  --ack-deadline=600 \
+  --message-retention-duration=31d \
+  --expiration-period=never \
   2>/dev/null || echo "  (subscription already exists)"
 
 # --- Custom Metrics Stackdriver Adapter (for HPAs on Pub/Sub backlog) ---
@@ -81,6 +95,9 @@ ADAPTER_GSA="custom-metrics-adapter"
 ADAPTER_GSA_EMAIL="${ADAPTER_GSA}@${PROJECT_ID}.iam.gserviceaccount.com"
 ADAPTER_KSA_BINDING="serviceAccount:${PROJECT_ID}.svc.id.goog[custom-metrics/custom-metrics-stackdriver-adapter]"
 ADAPTER_MANIFEST_URL="https://raw.githubusercontent.com/GoogleCloudPlatform/k8s-stackdriver/master/custom-metrics-stackdriver-adapter/deploy/production/adapter_new_resource_model.yaml"
+PIPELINE_GSA="unity-pipeline-worker"
+PIPELINE_GSA_EMAIL="${PIPELINE_GSA}@${PROJECT_ID}.iam.gserviceaccount.com"
+PIPELINE_KSA="unity-pipeline-worker"
 
 echo ""
 echo "=== External Metrics Adapter (cluster=${CLUSTER}) ==="
@@ -89,6 +106,49 @@ echo "Fetching cluster credentials..."
 gcloud container clusters get-credentials "${CLUSTER}" \
   --region "${REGION}" \
   --project "${PROJECT_ID}" >/dev/null
+
+# --- Kubernetes Namespaces ---
+# Workers live in env-scoped namespaces (staging / production) alongside
+# the other workloads for that environment. Ensure the target namespace
+# exists before we apply worker manifests or the adapter.
+WORKER_NS="${ENV}"
+echo "Ensuring namespace '${WORKER_NS}' exists..."
+kubectl create namespace "${WORKER_NS}" --dry-run=client -o yaml | kubectl apply -f -
+
+echo "Ensuring pipeline worker Workload Identity binding..."
+if ! gcloud iam service-accounts describe "${PIPELINE_GSA_EMAIL}" \
+    --project="${PROJECT_ID}" >/dev/null 2>&1; then
+  echo "Creating GSA ${PIPELINE_GSA_EMAIL}..."
+  gcloud iam service-accounts create "${PIPELINE_GSA}" \
+    --project="${PROJECT_ID}" \
+    --display-name="Unity Pipeline Worker"
+else
+  echo "  (GSA ${PIPELINE_GSA_EMAIL} already exists)"
+fi
+
+for ROLE in roles/storage.objectAdmin roles/pubsub.editor roles/datastore.user; do
+  echo "Granting ${ROLE} to ${PIPELINE_GSA_EMAIL}..."
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${PIPELINE_GSA_EMAIL}" \
+    --role="${ROLE}" \
+    --condition=None >/dev/null
+done
+
+kubectl create serviceaccount "${PIPELINE_KSA}" \
+  --namespace="${WORKER_NS}" \
+  --dry-run=client \
+  -o yaml | kubectl apply -f -
+
+kubectl annotate serviceaccount \
+  --namespace="${WORKER_NS}" \
+  "${PIPELINE_KSA}" \
+  "iam.gke.io/gcp-service-account=${PIPELINE_GSA_EMAIL}" --overwrite >/dev/null
+
+gcloud iam service-accounts add-iam-policy-binding "${PIPELINE_GSA_EMAIL}" \
+  --project="${PROJECT_ID}" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="serviceAccount:${PROJECT_ID}.svc.id.goog[${WORKER_NS}/${PIPELINE_KSA}]" \
+  --condition=None >/dev/null
 
 if kubectl get ns custom-metrics >/dev/null 2>&1; then
   echo "  (custom-metrics namespace already present -- re-applying to pick up manifest drift)"

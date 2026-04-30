@@ -1,48 +1,37 @@
-"""Unit tests for ``unity_deploy.infra.workers.worker_utils.LeaseExtender``.
-
-Validates that the lease extender:
-
-* Calls ``work_queue.extend_lease`` periodically with the configured
-  ``extension_seconds`` value while running.
-* Stops promptly when :meth:`LeaseExtender.stop` is called, even if
-  the current sleep window has most of its duration remaining.
-* Survives transient ``extend_lease`` failures (logs the error, keeps
-  the background task alive, retries on the next period).
-* When a ``run_ledger`` + ``run_id`` + ``stage`` are supplied, writes
-  one ``PipelineHeartbeatManifest`` per successful extension tick, so
-  ops can monitor ``max(now - last_progress_at)`` across active runs
-  to detect hung pods.
-"""
+"""Unit tests for the thread-backed Pub/Sub lease controller."""
 
 from __future__ import annotations
 
-import asyncio
+import logging
+import threading
 import time
 
 import pytest
 from pydantic import BaseModel
 
 from unity.common.pipeline import PipelineHeartbeatManifest
-from unity_deploy.infra.workers.worker_utils import LeaseExtender
+from unity_deploy.infra.workers.worker_utils import LeaseController, LeaseExtender
 
 
 class _StubQueue:
-    """Minimal queue that records every ``extend_lease`` call."""
+    """Minimal queue that records every sync lease call."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
+        self._lock = threading.Lock()
 
-    async def extend_lease(self, receipt_id: str, seconds: int) -> None:
-        self.calls.append((receipt_id, seconds))
+    def extend_lease_sync(self, receipt_id: str, seconds: int) -> None:
+        with self._lock:
+            self.calls.append((receipt_id, seconds))
 
 
 class _FailingQueue:
-    """Queue whose ``extend_lease`` always raises."""
+    """Queue whose sync lease extension always raises."""
 
     def __init__(self) -> None:
         self.calls: int = 0
 
-    async def extend_lease(self, receipt_id: str, seconds: int) -> None:
+    def extend_lease_sync(self, receipt_id: str, seconds: int) -> None:
         self.calls += 1
         raise RuntimeError("pubsub unavailable")
 
@@ -82,110 +71,121 @@ class _FailingLedger:
         pass
 
 
-@pytest.mark.asyncio
-async def test_lease_extender_fires_periodically() -> None:
+def test_lease_controller_fires_while_main_thread_is_blocked() -> None:
     queue = _StubQueue()
-    extender = LeaseExtender(
+    controller = LeaseController(
         work_queue=queue,  # type: ignore[arg-type]
         receipt_id="rcpt-A",
         job_id="job-1",
-        period_seconds=0.05,
-        extension_seconds=600,
+        period_seconds=0.5,
+        extension_seconds=300,
     )
 
-    extender.start()
-    await asyncio.sleep(0.17)  # Expect ~3 periods to elapse.
-    await extender.stop()
+    controller.start()
+    time.sleep(5.0)
+    controller.stop(outcome="ack")
 
-    assert (
-        len(queue.calls) >= 2
-    ), f"expected at least 2 extensions, got {len(queue.calls)}"
+    assert len(queue.calls) >= 8
     receipt, seconds = queue.calls[0]
     assert receipt == "rcpt-A"
-    assert seconds == 600
+    assert seconds == 300
+    assert controller.state == "ACKED"
 
 
-@pytest.mark.asyncio
-async def test_lease_extender_stops_promptly_mid_sleep() -> None:
+def test_lease_controller_stops_promptly_mid_sleep() -> None:
     """stop() must not wait for the current sleep window to elapse."""
     queue = _StubQueue()
-    extender = LeaseExtender(
+    controller = LeaseController(
         work_queue=queue,  # type: ignore[arg-type]
         receipt_id="rcpt-B",
         period_seconds=30.0,
-        extension_seconds=600,
+        extension_seconds=300,
     )
-    extender.start()
-    await asyncio.sleep(0.01)
+    controller.start()
+    time.sleep(0.01)
 
     t0 = time.monotonic()
-    await extender.stop()
+    controller.stop(outcome="ack")
     elapsed = time.monotonic() - t0
     assert elapsed < 1.0, f"stop() should be near-instant, took {elapsed}s"
     assert queue.calls == [], "no extensions should have fired in 10ms window"
 
 
-@pytest.mark.asyncio
-async def test_lease_extender_survives_transient_failures() -> None:
+def test_lease_controller_logs_critical_after_repeated_failures(caplog) -> None:
     queue = _FailingQueue()
-    extender = LeaseExtender(
+    controller = LeaseController(
         work_queue=queue,  # type: ignore[arg-type]
         receipt_id="rcpt-C",
         period_seconds=0.03,
-        extension_seconds=600,
+        extension_seconds=300,
+        max_consecutive_failures=2,
     )
 
-    extender.start()
-    await asyncio.sleep(0.12)
-    await extender.stop()
+    with caplog.at_level(logging.CRITICAL):
+        controller.start()
+        time.sleep(0.12)
+        controller.stop(outcome="error")
 
-    assert queue.calls >= 2, (
-        "extender must retry across failures; "
-        f"got only {queue.calls} attempted extensions"
+    assert queue.calls >= 2
+    assert controller.state == "FAILED"
+    assert "Lease extension failed" in caplog.text
+
+
+def test_lease_controller_stop_nack_modifies_deadline_zero_once() -> None:
+    queue = _StubQueue()
+    controller = LeaseController(
+        work_queue=queue,  # type: ignore[arg-type]
+        receipt_id="rcpt-N",
+        period_seconds=30.0,
+        extension_seconds=300,
     )
 
+    controller.start()
+    controller.stop(outcome="nack")
 
-@pytest.mark.asyncio
-async def test_lease_extender_start_is_idempotent_vs_stop() -> None:
+    assert queue.calls == [("rcpt-N", 0)]
+    assert controller.state == "NACKED"
+
+
+def test_lease_controller_start_is_idempotent_vs_stop() -> None:
     """Calling stop() without start() or twice is safe (no hang / crash)."""
     queue = _StubQueue()
-    extender = LeaseExtender(
+    controller = LeaseController(
         work_queue=queue,  # type: ignore[arg-type]
         receipt_id="rcpt-D",
         period_seconds=1.0,
-        extension_seconds=600,
+        extension_seconds=300,
     )
     # stop() before start() must not raise or hang.
-    await extender.stop()
+    controller.stop(outcome="ack")
 
-    extender.start()
-    await asyncio.sleep(0.01)
-    await extender.stop()
+    controller.start()
+    time.sleep(0.01)
+    controller.stop(outcome="ack")
     # Second stop() on an already-stopped extender must be idempotent.
-    await extender.stop()
+    controller.stop(outcome="ack")
 
 
-@pytest.mark.asyncio
-async def test_lease_extender_writes_heartbeat_per_tick() -> None:
+def test_lease_controller_writes_heartbeat_per_tick() -> None:
     """With a run_ledger attached, each successful extension writes a
     ``PipelineHeartbeatManifest`` tagged with the run + stage so ops
     can query ``max(now - last_progress_at)`` across active runs."""
     queue = _StubQueue()
     ledger = _StubLedger()
-    extender = LeaseExtender(
+    controller = LeaseController(
         work_queue=queue,  # type: ignore[arg-type]
         receipt_id="rcpt-HB",
         job_id="job-heartbeat",
         period_seconds=0.05,
-        extension_seconds=600,
+        extension_seconds=300,
         run_ledger=ledger,  # type: ignore[arg-type]
         run_id="run-heartbeat",
         stage="ingest",
     )
 
-    extender.start()
-    await asyncio.sleep(0.17)  # Expect ~3 ticks.
-    await extender.stop()
+    controller.start()
+    time.sleep(0.17)  # Expect ~3 ticks.
+    controller.stop(outcome="ack")
 
     # One heartbeat per successful extension — counts must match.
     assert len(queue.calls) >= 2, "expected periodic extensions"
@@ -199,7 +199,7 @@ async def test_lease_extender_writes_heartbeat_per_tick() -> None:
         assert isinstance(manifest, PipelineHeartbeatManifest)
         assert manifest.run_id == "run-heartbeat"
         assert manifest.stage == "ingest"
-        assert manifest.receipt_id == "rcpt-HB"
+        assert manifest.receipt_id != "rcpt-HB"
         assert manifest.job_id == "job-heartbeat"
         # extensions_emitted counts from 1 upward (heartbeat is written
         # AFTER the extension is recorded, so the nth heartbeat sees n).
@@ -207,8 +207,7 @@ async def test_lease_extender_writes_heartbeat_per_tick() -> None:
         assert manifest.elapsed_seconds >= 0.0
 
 
-@pytest.mark.asyncio
-async def test_lease_extender_without_ledger_is_backward_compatible() -> None:
+def test_lease_extender_alias_without_ledger_is_backward_compatible() -> None:
     """Without a run_ledger, the extender behaves exactly as before:
     it extends leases, never constructs a heartbeat manifest, and
     never raises for missing ``run_id`` / ``stage``."""
@@ -217,12 +216,12 @@ async def test_lease_extender_without_ledger_is_backward_compatible() -> None:
         work_queue=queue,  # type: ignore[arg-type]
         receipt_id="rcpt-legacy",
         period_seconds=0.04,
-        extension_seconds=600,
+        extension_seconds=300,
     )
 
     extender.start()
-    await asyncio.sleep(0.12)
-    await extender.stop()
+    time.sleep(0.12)
+    extender.stop(outcome="ack")
 
     assert len(queue.calls) >= 2, "legacy path must still extend leases"
 
@@ -234,7 +233,7 @@ def test_lease_extender_requires_run_id_and_stage_with_ledger() -> None:
     ledger = _StubLedger()
 
     with pytest.raises(ValueError, match="run_id and stage"):
-        LeaseExtender(
+        LeaseController(
             work_queue=queue,  # type: ignore[arg-type]
             receipt_id="rcpt-bad",
             run_ledger=ledger,  # type: ignore[arg-type]
@@ -242,26 +241,25 @@ def test_lease_extender_requires_run_id_and_stage_with_ledger() -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_lease_extender_heartbeat_failures_do_not_stop_extension() -> None:
+def test_lease_controller_heartbeat_failures_do_not_stop_extension() -> None:
     """A ledger-write failure (e.g. transient GCS outage) must never
     prevent the next Pub/Sub lease extension from firing. The Pub/Sub
     lease is the load-bearing invariant; heartbeats are observational."""
     queue = _StubQueue()
     ledger = _FailingLedger()
-    extender = LeaseExtender(
+    controller = LeaseController(
         work_queue=queue,  # type: ignore[arg-type]
         receipt_id="rcpt-hb-fail",
         period_seconds=0.04,
-        extension_seconds=600,
+        extension_seconds=300,
         run_ledger=ledger,  # type: ignore[arg-type]
         run_id="run-hb-fail",
         stage="parse",
     )
 
-    extender.start()
-    await asyncio.sleep(0.17)
-    await extender.stop()
+    controller.start()
+    time.sleep(0.17)
+    controller.stop(outcome="ack")
 
     # Extensions and heartbeat attempts both kept firing across failures.
     assert len(queue.calls) >= 2, (
@@ -275,3 +273,24 @@ async def test_lease_extender_heartbeat_failures_do_not_stop_extension() -> None
     # Ledger attempts track extension calls 1:1 — a ledger failure
     # does not cause the extender to skip future heartbeats.
     assert ledger.attempts == len(queue.calls)
+
+
+def test_lease_controller_logs_only_receipt_hash(caplog) -> None:
+    queue = _StubQueue()
+    raw_receipt = "raw-receipt-secret"
+    controller = LeaseController(
+        work_queue=queue,  # type: ignore[arg-type]
+        receipt_id=raw_receipt,
+        job_id="job-hash",
+        period_seconds=0.03,
+        extension_seconds=300,
+    )
+
+    with caplog.at_level(logging.INFO):
+        controller.start()
+        time.sleep(0.08)
+        controller.stop(outcome="ack")
+
+    assert queue.calls
+    assert raw_receipt not in caplog.text
+    assert "receipt_hash=" in caplog.text

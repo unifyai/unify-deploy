@@ -24,6 +24,7 @@ import httpx
 import pytest
 import unify
 
+from tests.settings import SETTINGS
 from unity.manager_registry import ManagerRegistry
 
 _logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def _check_orchestra_available() -> bool:
 # --------------------------------------------------------------------------- #
 def pytest_configure(config):
     try:
-        from unity_deploy.load_repo_env import load_repo_dotenv
+        from unity_deploy.utils.load_repo_env import load_repo_dotenv
 
         load_repo_dotenv(override=False)
     except Exception:
@@ -92,7 +93,7 @@ def pytest_runtest_setup(item):
 @pytest.fixture(scope="session")
 def unify_project():
     """Activate a Unify project once per session (single API call)."""
-    project = os.environ.get("UNITY_TEST_PROJECT_NAME", "UnityDeployTests")
+    project = SETTINGS.test_project_name
     unify.activate(project)
     unify.set_context(project, relative=False, skip_create=True)
     return project

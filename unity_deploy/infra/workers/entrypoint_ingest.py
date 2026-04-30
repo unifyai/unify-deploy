@@ -30,9 +30,14 @@ Environment (optional):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 
 logger = logging.getLogger(__name__)
+_current_receipt: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_ingest_receipt",
+    default=None,
+)
 
 
 async def main() -> None:
@@ -103,6 +108,7 @@ async def main() -> None:
                 consecutive_empty = 0
 
                 for item in items:
+                    receipt_token = _current_receipt.set(item.receipt_id)
                     # Extract the job_id (== run_id) from the payload so we
                     # can (a) tag lease-heartbeat log lines with the run,
                     # and (b) construct a per-run heartbeat ledger. Empty
@@ -133,23 +139,34 @@ async def main() -> None:
                         stage="ingest" if heartbeat_ledger else None,
                     )
                     lease_extender.start()
+                    lease_outcome = "error"
                     try:
-                        await handle_ingest_message(item, infra=infra)
-                        await infra.work_queue.ack(item.receipt_id)
+                        acked = await handle_ingest_message(
+                            item,
+                            infra=infra,
+                            ack_receipt=lambda: infra.work_queue.ack(item.receipt_id),
+                        )
+                        if not acked:
+                            await infra.work_queue.ack(item.receipt_id)
+                        lease_outcome = "ack"
                     except RetryWorkItem as exc:
                         await infra.work_queue.retry(
                             item.receipt_id,
                             error=str(exc),
                             delay_seconds=exc.delay_seconds,
                         )
+                        lease_outcome = "error"
                     except Exception as exc:
                         logger.exception("Ingest message failed")
                         await infra.work_queue.dead_letter(
                             item.receipt_id,
                             error=str(exc),
                         )
+                        lease_outcome = "ack"
                     finally:
-                        await lease_extender.stop()
+                        if is_shutdown_requested() and lease_outcome == "error":
+                            lease_outcome = "nack"
+                        lease_extender.stop(outcome=lease_outcome)
                         if heartbeat_ledger is not None:
                             try:
                                 heartbeat_ledger.close()
@@ -158,6 +175,7 @@ async def main() -> None:
                                     "heartbeat_ledger.close() failed " "for run=%s",
                                     job_id,
                                 )
+                        _current_receipt.reset(receipt_token)
 
             except Exception:
                 logger.exception("Ingest worker loop error")

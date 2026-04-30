@@ -112,23 +112,29 @@ async def main() -> None:
                         stage="parse" if heartbeat_ledger else None,
                     )
                     lease_extender.start()
+                    lease_outcome = "error"
                     try:
                         await handle_parse_message(item, infra=infra)
                         await infra.work_queue.ack(item.receipt_id)
+                        lease_outcome = "ack"
                     except RetryWorkItem as exc:
                         await infra.work_queue.retry(
                             item.receipt_id,
                             error=str(exc),
                             delay_seconds=exc.delay_seconds,
                         )
+                        lease_outcome = "error"
                     except Exception as exc:
                         logger.exception("Parse message failed")
                         await infra.work_queue.dead_letter(
                             item.receipt_id,
                             error=str(exc),
                         )
+                        lease_outcome = "ack"
                     finally:
-                        await lease_extender.stop()
+                        if is_shutdown_requested() and lease_outcome == "error":
+                            lease_outcome = "nack"
+                        lease_extender.stop(outcome=lease_outcome)
                         if heartbeat_ledger is not None:
                             try:
                                 heartbeat_ledger.close()

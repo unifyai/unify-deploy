@@ -8,6 +8,7 @@ steps:
     set -euo pipefail
     gcloud builds triggers run unity-base-staging-private \
       --project=${PROJECT_ID} \
+      --region=${_REGION} \
       --branch=staging \
       --substitutions=_UNITY_REF=staging,_UNITY_SHA=${COMMIT_SHA}
 

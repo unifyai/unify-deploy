@@ -15,6 +15,7 @@ from unity.common.pipeline.artifact_store import CONTENT_ROWS_TABLE_ID
 from unity.common.pipeline.retry_policy import ResilientRequestPolicy
 from unity.common.pipeline.row_streaming import iter_table_input_rows
 from unity.common.pipeline.types import (
+    IngestCheckpoint,
     InlineRowsHandle,
     ObjectStoreArtifactHandle,
     TableInputHandle,
@@ -84,6 +85,7 @@ class GcsArtifactStore:
         columns: list[str] = list(getattr(handle, "columns", []) or [])
         row_count = 0
 
+        t0 = time.perf_counter()
         with blob.open("w", content_type="application/x-ndjson") as writer:
             for row in iter_table_input_rows(handle):
                 payload = {str(k): v for k, v in dict(row).items()}
@@ -92,12 +94,14 @@ class GcsArtifactStore:
                 writer.write(json.dumps(payload, ensure_ascii=False))
                 writer.write("\n")
                 row_count += 1
+        elapsed = time.perf_counter() - t0
 
         storage_uri = f"gs://{self._bucket_name}/{blob_key}"
         logger.info(
-            "Materialized %d rows to %s",
+            "Materialized %d rows to %s in %.1fs",
             row_count,
             storage_uri,
+            elapsed,
         )
 
         return ObjectStoreArtifactHandle(
@@ -232,11 +236,52 @@ class GcsArtifactStore:
             blob_key = self._full_key(source)
 
         blob = self.bucket.blob(blob_key)
+        t0 = time.perf_counter()
         self._with_retry(
             lambda: blob.download_to_filename(str(dest_path)),
             operation=f"download_to_local({blob_key})",
         )
+        elapsed = time.perf_counter() - t0
+        try:
+            size_bytes = dest_path.stat().st_size
+            mb = size_bytes / (1024 * 1024)
+            rate = mb / elapsed if elapsed > 0 else 0
+            logger.info(
+                "Downloaded %.1f MB from gs://%s/%s in %.1fs (%.1f MB/s)",
+                mb,
+                self._bucket_name,
+                blob_key,
+                elapsed,
+                rate,
+            )
+        except OSError:
+            pass
         return dest_path
+
+    # -- ingest checkpoints --------------------------------------------------
+
+    def write_checkpoint(
+        self,
+        job_id: str,
+        artifact_id: str,
+        checkpoint: IngestCheckpoint,
+    ) -> None:
+        """Persist an ``IngestCheckpoint`` to GCS for crash recovery."""
+        key = f"jobs/{_safe_fragment(job_id)}/checkpoints/{_safe_fragment(artifact_id)}"
+        self.put_json(key, checkpoint.model_dump(mode="json"))
+
+    def read_checkpoint(
+        self,
+        job_id: str,
+        artifact_id: str,
+    ) -> IngestCheckpoint | None:
+        """Read an ``IngestCheckpoint`` from GCS, or ``None`` if absent."""
+        key = f"jobs/{_safe_fragment(job_id)}/checkpoints/{_safe_fragment(artifact_id)}"
+        try:
+            data = self.get_json(key)
+            return IngestCheckpoint.model_validate(data)
+        except Exception:
+            return None
 
     # -- retry wrapper -------------------------------------------------------
 

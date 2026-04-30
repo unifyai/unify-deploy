@@ -3,13 +3,14 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: unity-parse-worker
-  namespace: default
+  namespace: staging
   labels:
     app: unity-parse-worker
     component: pipeline-worker
     environment: staging
 spec:
-  replicas: 2
+  replicas: 1
+  revisionHistoryLimit: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -27,10 +28,17 @@ spec:
       annotations:
         cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
     spec:
-      # Staging mirrors production's 24h grace so drain semantics are
-      # exercised under real load. Ops can always force-delete a stuck
-      # staging pod with `kubectl delete pod --grace-period=0 --force`.
-      terminationGracePeriodSeconds: 86400
+      serviceAccountName: unity-pipeline-worker
+      # Parse workers have no per-chunk checkpoint (one message =
+      # one download + one Docling parse + one manifest write), so a
+      # SIGKILL mid-parse means the whole message retries from
+      # scratch.  We keep a generous 30 min grace so an
+      # already-in-flight parse of a large PDF can finish even
+      # during rolling-restarts; the Pub/Sub DLQ
+      # (`unity-dead-letter` + maxDeliveryAttempts=15 from
+      # deploy/scripts/dev/setup_pipeline_infra.sh) still bounds
+      # worst-case loops for truly pathological files.
+      terminationGracePeriodSeconds: 1800
       containers:
       - name: parse-worker
         image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
@@ -41,14 +49,16 @@ spec:
         lifecycle:
           preStop:
             exec:
-              command: ["sh", "-c", "sleep 2"]
+              command: ["sh", "-c", "sleep 10"]
         resources:
           requests:
             cpu: "500m"
             memory: "2Gi"
+            ephemeral-storage: "4Gi"
           limits:
             cpu: "2"
             memory: "4Gi"
+            ephemeral-storage: "4Gi"
         env:
         - name: UNITY_GCP_PIPELINE_ENVIRONMENT
           value: "staging"
@@ -59,19 +69,24 @@ spec:
             secretKeyRef:
               name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: GCP_SA_KEY
-          valueFrom:
-            secretKeyRef:
-              name: unity-secrets
-              key: GCP_SA_KEY
         - name: UNITY_PUBSUB_PROJECT_ID
           value: "gcp-project-runtime"
+        livenessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 30
+          periodSeconds: 60
+        readinessProbe:
+          exec:
+            command: ["python", "-c", "import sys; sys.exit(0)"]
+          initialDelaySeconds: 10
+          periodSeconds: 30
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: unity-parse-worker-hpa
-  namespace: default
+  namespace: staging
   labels:
     environment: staging
 spec:
@@ -79,8 +94,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: unity-parse-worker
-  minReplicas: 2
-  maxReplicas: 3
+  minReplicas: 1
+  maxReplicas: 10
   metrics:
   - type: External
     external:
@@ -93,11 +108,14 @@ spec:
         type: AverageValue
         averageValue: "1"
   behavior:
+    # Same tuning as the ingest worker: percent-based scale-down
+    # on 5-min ticks, with a short 60s stabilization window so the
+    # HPA reacts quickly once parse backlog is worked off.
     scaleDown:
-      stabilizationWindowSeconds: 3600
+      stabilizationWindowSeconds: 60
       policies:
-      - type: Pods
-        value: 1
+      - type: Percent
+        value: 50
         periodSeconds: 300
     scaleUp:
       stabilizationWindowSeconds: 30
@@ -110,7 +128,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: unity-parse-worker-pdb
-  namespace: default
+  namespace: staging
   labels:
     environment: staging
 spec:

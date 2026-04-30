@@ -156,10 +156,10 @@ def _make_plan(
     )
 
 
-def test_stage_remote_handles_downloads_gs_artifacts_and_sets_local_path(
+def test_stage_remote_handles_skips_jsonl_gs_artifacts(
     tmp_path,
 ) -> None:
-    """gs:// handles get downloaded and ``source_local_path`` populated."""
+    """JSONL gs:// handles are NOT staged — they stream directly from GCS."""
     content = ObjectStoreArtifactHandle(
         storage_uri="gs://bucket/art/__content__.jsonl",
         logical_path="demo.csv/content",
@@ -182,17 +182,36 @@ def test_stage_remote_handles_downloads_gs_artifacts_and_sets_local_path(
         scratch_dir=tmp_path,
     )
 
-    assert staged is not plan, "plan should be rebuilt when handles change"
-    assert staged.content_rows_handle.source_local_path
-    assert Path(staged.content_rows_handle.source_local_path).exists()
+    assert staged is plan, "JSONL handles stream from GCS; plan must not be rebuilt"
+    assert store.downloads == [], "no downloads should occur for JSONL handles"
+
+
+def test_stage_remote_handles_downloads_non_jsonl_gs_artifacts(
+    tmp_path,
+) -> None:
+    """Non-JSONL gs:// handles still get downloaded and staged locally."""
+    parquet_handle = ObjectStoreArtifactHandle(
+        storage_uri="gs://bucket/art/table_1.parquet",
+        logical_path="demo.csv/t1",
+        artifact_format="parquet",
+    )
+    plan = _make_plan(table_inputs={"table_1": parquet_handle})
+
+    store = _FakeArtifactStore()
+    staged = ingest_worker._stage_remote_handles(
+        plan,
+        artifact_store=store,
+        scratch_dir=tmp_path,
+    )
+
+    assert (
+        staged is not plan
+    ), "plan should be rebuilt when non-JSONL handles are staged"
     assert staged.table_inputs["table_1"].source_local_path
     assert Path(staged.table_inputs["table_1"].source_local_path).exists()
 
-    uris = sorted(src for src, _ in store.downloads)
-    assert uris == [
-        "gs://bucket/art/__content__.jsonl",
-        "gs://bucket/art/table_1.jsonl",
-    ]
+    uris = [src for src, _ in store.downloads]
+    assert uris == ["gs://bucket/art/table_1.parquet"]
 
 
 def test_stage_remote_handles_is_noop_for_inline_and_already_staged(
@@ -225,11 +244,11 @@ def test_stage_remote_handles_is_noop_for_inline_and_already_staged(
 def test_stage_remote_handles_raises_when_store_has_no_downloader(
     tmp_path,
 ) -> None:
-    """A misconfigured store surfaces loudly rather than silently skipping."""
+    """A misconfigured store surfaces loudly for non-JSONL formats."""
     handle = ObjectStoreArtifactHandle(
-        storage_uri="gs://bucket/art/x.jsonl",
+        storage_uri="gs://bucket/art/x.parquet",
         logical_path="demo.csv/x",
-        artifact_format="jsonl",
+        artifact_format="parquet",
     )
     plan = _make_plan(table_inputs={"x": handle})
 
@@ -242,3 +261,368 @@ def test_stage_remote_handles_raises_when_store_has_no_downloader(
             artifact_store=_BadStore(),
             scratch_dir=tmp_path,
         )
+
+
+# ---------------------------------------------------------------------------
+# Per-table context resolution (multi-sheet XLSX support)
+# ---------------------------------------------------------------------------
+
+
+def test_table_meta_context_used_over_default_target():
+    """Each table's meta.context overrides the message-level default_target.
+
+    This is the core mechanism for multi-sheet XLSX files where each
+    sheet targets a different DM context.
+    """
+    handle_a = InlineRowsHandle(rows=[{"x": 1}], columns=["x"], row_count=1)
+    handle_b = InlineRowsHandle(rows=[{"y": 2}], columns=["y"], row_count=1)
+
+    plan = IngestPlan(
+        run_id="run-ctx",
+        file_path="multi_sheet.xlsx",
+        parse_summary=FileParseResult(
+            logical_path="multi_sheet.xlsx",
+            status="success",
+        ),
+        tables_meta=[
+            TableMeta(
+                table_id="sheet_a",
+                label="SheetA",
+                columns=["x"],
+                context="Org/v2/DRS/AprilJune24",
+            ),
+            TableMeta(
+                table_id="sheet_b",
+                label="SheetB",
+                columns=["y"],
+                context="Org/v2/DRS/SepDec24",
+            ),
+        ],
+        table_inputs={"sheet_a": handle_a, "sheet_b": handle_b},
+    )
+
+    default_target = "Org/v2/DRS/FallbackContext"
+
+    for meta in plan.tables_meta:
+        resolved = meta.context or default_target
+        assert resolved == meta.context, (
+            f"Expected per-table context {meta.context!r}, "
+            f"got fallback {default_target!r}"
+        )
+
+
+def test_table_meta_falls_back_to_default_when_context_absent():
+    """Tables without an explicit context fall back to default_target."""
+    plan = IngestPlan(
+        run_id="run-fb",
+        file_path="single.csv",
+        parse_summary=FileParseResult(
+            logical_path="single.csv",
+            status="success",
+        ),
+        tables_meta=[
+            TableMeta(table_id="t1", label="Orders", columns=["a"]),
+        ],
+        table_inputs={
+            "t1": InlineRowsHandle(rows=[{"a": 1}], columns=["a"], row_count=1),
+        },
+    )
+
+    default_target = "Adhoc/Orders"
+    meta = plan.tables_meta[0]
+    resolved = meta.context or default_target
+    assert resolved == default_target
+
+
+# ---------------------------------------------------------------------------
+# _merge_table_config: context flows through parse worker merge
+# ---------------------------------------------------------------------------
+
+
+def test_merge_table_config_threads_context():
+    """_merge_table_config picks up 'context' from table_config entries."""
+    from unity_deploy.infra.workers.parse_worker import _merge_table_config
+
+    plan = IngestPlan(
+        run_id="run-merge",
+        file_path="multi.xlsx",
+        parse_summary=FileParseResult(
+            logical_path="multi.xlsx",
+            status="success",
+        ),
+        tables_meta=[
+            TableMeta(
+                table_id="s1",
+                label="SheetA",
+                sheet_name="SheetA",
+                columns=["a"],
+            ),
+            TableMeta(
+                table_id="s2",
+                label="SheetB",
+                sheet_name="SheetB",
+                columns=["b"],
+            ),
+        ],
+        table_inputs={},
+    )
+
+    table_config = {
+        "SheetA": {
+            "context": "Org/DRS/AprilJune24",
+            "description": "Sheet A desc",
+        },
+        "SheetB": {
+            "context": "Org/DRS/SepDec24",
+            "description": "Sheet B desc",
+        },
+    }
+
+    merged = _merge_table_config(plan, table_config)
+    assert merged.tables_meta[0].context == "Org/DRS/AprilJune24"
+    assert merged.tables_meta[1].context == "Org/DRS/SepDec24"
+    assert merged.tables_meta[0].description == "Sheet A desc"
+    assert merged.tables_meta[1].description == "Sheet B desc"
+
+
+# ---------------------------------------------------------------------------
+# CSV/XLSX gs:// staging (skip-tabular-materialization path)
+# ---------------------------------------------------------------------------
+
+
+from unity.common.pipeline.types import CsvFileHandle, XlsxSheetHandle
+
+
+def test_stage_csv_handle_with_gs_uri(tmp_path) -> None:
+    """A CsvFileHandle with gs:// storage_uri is downloaded to scratch."""
+    csv_handle = CsvFileHandle(
+        storage_uri="gs://bucket/data.csv",
+        logical_path="data.csv",
+        source_local_path="/nonexistent/data.csv",
+        columns=["a", "b"],
+    )
+    plan = _make_plan(table_inputs={"t1": csv_handle})
+
+    store = _FakeArtifactStore()
+    staged = ingest_worker._stage_remote_handles(
+        plan,
+        artifact_store=store,
+        scratch_dir=tmp_path,
+    )
+
+    assert staged is not plan
+    staged_handle = staged.table_inputs["t1"]
+    assert isinstance(staged_handle, CsvFileHandle)
+    assert Path(staged_handle.source_local_path).exists()
+    assert len(store.downloads) == 1
+    assert store.downloads[0][0] == "gs://bucket/data.csv"
+
+
+def test_stage_xlsx_handles_dedup_same_source(tmp_path) -> None:
+    """Multiple XLSX sheets from the same gs:// source are downloaded once."""
+    sheet1 = XlsxSheetHandle(
+        storage_uri="gs://bucket/workbook.xlsx",
+        logical_path="workbook.xlsx",
+        source_local_path="/nonexistent/workbook.xlsx",
+        sheet_name="Sheet1",
+        columns=["a"],
+    )
+    sheet2 = XlsxSheetHandle(
+        storage_uri="gs://bucket/workbook.xlsx",
+        logical_path="workbook.xlsx",
+        source_local_path="/nonexistent/workbook.xlsx",
+        sheet_name="Sheet2",
+        columns=["b"],
+    )
+    plan = _make_plan(table_inputs={"s1": sheet1, "s2": sheet2})
+
+    store = _FakeArtifactStore()
+    staged = ingest_worker._stage_remote_handles(
+        plan,
+        artifact_store=store,
+        scratch_dir=tmp_path,
+    )
+
+    assert staged is not plan
+    assert len(store.downloads) == 1, "same gs:// should be downloaded only once"
+    local_s1 = staged.table_inputs["s1"].source_local_path
+    local_s2 = staged.table_inputs["s2"].source_local_path
+    assert local_s1 == local_s2, "both sheets should reference the same local file"
+    assert Path(local_s1).exists()
+
+
+def test_stage_csv_with_local_uri_is_noop(tmp_path) -> None:
+    """A CsvFileHandle with a file:// URI does not need staging."""
+    csv_handle = CsvFileHandle(
+        storage_uri="file:///tmp/data.csv",
+        logical_path="data.csv",
+        source_local_path="/tmp/data.csv",
+        columns=["a"],
+    )
+    plan = _make_plan(table_inputs={"t1": csv_handle})
+
+    store = _FakeArtifactStore()
+    staged = ingest_worker._stage_remote_handles(
+        plan,
+        artifact_store=store,
+        scratch_dir=tmp_path,
+    )
+
+    assert staged is plan, "local URI handles should not trigger staging"
+    assert store.downloads == []
+
+
+# ---------------------------------------------------------------------------
+# Control watcher (cancel + pause)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_control_watcher_trips_cancel_event() -> None:
+    """status=cancelled should set cancel_event on the next poll tick."""
+
+    class _Store:
+        def __init__(self):
+            self.status = "running"
+
+        def get_json(self, key):
+            return {"status": self.status}
+
+    store = _Store()
+    watch = ingest_worker._spawn_control_watcher(store, "run-1", interval=0.01)
+    try:
+        # First tick will see "running" and keep polling.
+        store.status = "cancelled"
+        # Give the watcher a few ticks to observe the flip.
+        for _ in range(50):
+            if watch.cancel_event.is_set():
+                break
+            await _asyncio_sleep(0.01)
+        assert watch.cancelled() is True
+        assert watch.paused() is False
+        assert watch.is_cancelled() is True
+    finally:
+        await watch.stop()
+
+
+@pytest.mark.asyncio
+async def test_control_watcher_trips_pause_event() -> None:
+    """status=paused should set pause_event on the next poll tick."""
+
+    class _Store:
+        def __init__(self):
+            self.status = "running"
+
+        def get_json(self, key):
+            return {"status": self.status}
+
+    store = _Store()
+    watch = ingest_worker._spawn_control_watcher(store, "run-1", interval=0.01)
+    try:
+        store.status = "paused"
+        for _ in range(50):
+            if watch.pause_event.is_set():
+                break
+            await _asyncio_sleep(0.01)
+        assert watch.paused() is True
+        assert watch.cancelled() is False
+        assert watch.is_cancelled() is True, (
+            "pause should be surfaced through the shared is_cancelled() closure "
+            "so hot loops raise PipelineCancelled just like on cancel"
+        )
+    finally:
+        await watch.stop()
+
+
+@pytest.mark.asyncio
+async def test_control_watcher_stop_is_idempotent() -> None:
+    """Calling stop() twice should not raise."""
+
+    class _Store:
+        def get_json(self, key):
+            return {"status": "running"}
+
+    watch = ingest_worker._spawn_control_watcher(_Store(), "run-1", interval=0.01)
+    await watch.stop()
+    await watch.stop()  # should be a no-op
+
+
+@pytest.mark.asyncio
+async def test_control_watcher_swallows_exceptions() -> None:
+    """Transient GCS errors must not leak out of the background task."""
+
+    class _Store:
+        def get_json(self, key):
+            raise RuntimeError("network error")
+
+    watch = ingest_worker._spawn_control_watcher(_Store(), "run-1", interval=0.01)
+    try:
+        # Run for a few ticks; the watcher should stay alive and neither
+        # event should trip.
+        await _asyncio_sleep(0.05)
+        assert watch.cancel_event.is_set() is False
+        assert watch.pause_event.is_set() is False
+    finally:
+        await watch.stop()
+
+
+async def _asyncio_sleep(seconds: float) -> None:
+    import asyncio as _a
+
+    await _a.sleep(seconds)
+
+
+# ---------------------------------------------------------------------------
+# _make_checkpoint_callback with cancellation
+# ---------------------------------------------------------------------------
+
+from unity.common.pipeline import PipelineCancelled
+
+
+def test_checkpoint_callback_raises_on_cancellation(tmp_path) -> None:
+    """The checkpoint callback should raise PipelineCancelled when cancelled."""
+
+    class _Store:
+        def write_checkpoint(self, *a, **kw):
+            pass
+
+    class _Task:
+        task_type = "insert_chunk_rows"
+
+    class _Result:
+        value = {"row_count": 10}
+
+    callback = ingest_worker._make_checkpoint_callback(
+        _Store(),
+        "job-1",
+        "content",
+        is_cancelled=lambda: True,
+    )
+
+    with pytest.raises(PipelineCancelled):
+        callback(_Task(), _Result())
+
+
+def test_checkpoint_callback_noop_when_not_cancelled(tmp_path) -> None:
+    """The callback runs normally when is_cancelled returns False."""
+    written = {"count": 0}
+
+    class _Store:
+        def write_checkpoint(self, *a, **kw):
+            written["count"] += 1
+
+    class _Task:
+        task_type = "insert_chunk_rows"
+
+    class _Result:
+        value = {"row_count": 10}
+
+    callback = ingest_worker._make_checkpoint_callback(
+        _Store(),
+        "job-1",
+        "content",
+        is_cancelled=lambda: False,
+    )
+
+    callback(_Task(), _Result())
+    assert written["count"] == 1

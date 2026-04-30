@@ -133,6 +133,7 @@ steps:
     UNITY_SHA=$$(cat /workspace/unity_sha.txt)
     gcloud builds triggers run unity-deploy-staging \
       --project=${PROJECT_ID} \
+      --region=${_REGION} \
       --branch=staging \
       --substitutions=_BASE_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:$${UNITY_SHA},_UNITY_SHA=$${UNITY_SHA}
   waitFor: ['push-sha-tag', 'push-latest-tag']

@@ -16,7 +16,7 @@ import importlib.util
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import Any, TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -83,6 +83,7 @@ class SeedLayer(BaseModel):
     knowledge: dict[str, dict] = Field(default_factory=dict)
     blacklist: list[dict] = Field(default_factory=list)
     secrets: list[Secret] = Field(default_factory=list)
+    integrations: list[str] = Field(default_factory=list)
 
 
 def _merge_actor_configs(base: ActorConfig, override: ActorConfig) -> ActorConfig:
@@ -134,6 +135,13 @@ class DeploymentSpec(BaseModel):
         default_factory=list,
         description="Credentials registered with the actor's SecretManager.",
     )
+    integrations: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Private integration package slugs enabled for this deployment. "
+            "Loaded from unity_deploy.customization.integrations.packages."
+        ),
+    )
     contacts: list[dict] = Field(
         default_factory=list,
         description="Contact records synced to the ContactManager.",
@@ -166,6 +174,16 @@ class DeploymentSpec(BaseModel):
     data_dir: Optional[Path] = Field(
         default=None,
         description="Absolute path to the data/ directory with raw assets (None if no local data).",
+    )
+    console_config: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Per-assistant console UI configuration (layout mode, tab "
+            "visibility, theme overrides). Reconciled to Orchestra at deploy "
+            "time via unity_deploy.scripts.reconcile_control_plane, with the "
+            "startup hook retaining a best-effort drift-repair PATCH. "
+            "Orchestra stores it in the assistant_console_config table."
+        ),
     )
 
     def derive(self, **overrides) -> "DeploymentSpec":

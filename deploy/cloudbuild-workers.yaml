@@ -5,7 +5,17 @@ steps:
   # cloudbuild.yaml already include an inline `refresh-pipeline-workers`
   # step that runs kubectl apply + rollout restart on every push. Keep
   # this file around as an operator escape hatch (see
-  # guides/PIPELINE_OPERATIONS.md § "Manual worker rollout").
+  # deploy/guides/PIPELINE_OPERATIONS.md § "Manual worker rollout").
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-pipeline-worker-serviceaccount'
+  args:
+  - 'apply'
+  - '-f'
+  - 'deploy/k8s/workers/pipeline-worker-serviceaccount.yaml'
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'deploy-parse-worker'
   args:
@@ -15,6 +25,7 @@ steps:
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['deploy-pipeline-worker-serviceaccount']
 
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'deploy-ingest-worker'
@@ -38,6 +49,17 @@ steps:
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
   waitFor: ['deploy-ingest-worker']
 
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'deploy-failed-pod-gc'
+  args:
+  - 'apply'
+  - '-f'
+  - 'deploy/k8s/workers/failed-pod-gc-cronjob.yaml'
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['deploy-ingest-worker']
+
   # Rolling restart to pick up new image
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'restart-workers'
@@ -51,12 +73,17 @@ steps:
     # credentials explicitly (otherwise kubectl talks to
     # localhost:8080 and the rollout restart fails).
     gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
-    kubectl rollout restart deployment/unity-parse-worker -n default || true
-    kubectl rollout restart deployment/unity-ingest-worker -n default || true
+    kubectl rollout restart deployment/unity-parse-worker -n production || true
+    kubectl rollout restart deployment/unity-ingest-worker -n production || true
+
+    echo "Waiting for new pods to be ready..."
+    kubectl rollout status deployment/unity-parse-worker -n production --timeout=120s || true
+    kubectl rollout status deployment/unity-ingest-worker -n production --timeout=120s || true
+    echo "Worker refresh complete."
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['deploy-weekly-cronjob']
+  waitFor: ['deploy-weekly-cronjob', 'deploy-failed-pod-gc']
 
 options:
   substitutionOption: ALLOW_LOOSE

@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import signal
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
-
-from google.cloud import storage
+from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from unity.common.pipeline.artifact_store import ArtifactStore
 from unity.common.pipeline.cost_ledger import CostLedger
@@ -25,6 +25,12 @@ from unity.common.pipeline.work_queue import WorkQueue
 
 from unity_deploy.infra.gcp.settings import GcpPipelineSettings
 
+from google.cloud import storage
+
+if TYPE_CHECKING:
+    from google.cloud import pubsub_v1
+
+
 logger = logging.getLogger(__name__)
 
 # Module-level shutdown Event used by all worker loops. Set on
@@ -32,6 +38,8 @@ logger = logging.getLogger(__name__)
 # ``asyncio.Event`` (rather than a bare bool) so that async sleeps can
 # wake immediately when shutdown is requested via ``shutdown_aware_sleep``.
 _shutdown_event: asyncio.Event | None = None
+_active_lease_lock = threading.Lock()
+_active_lease_controllers: set[Any] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -87,41 +95,14 @@ def get_shutdown_event() -> asyncio.Event:
     return _shutdown_event
 
 
-class LeaseExtender:
-    """Background task that periodically extends a Pub/Sub lease.
+class LeaseController:
+    """Deterministic thread-backed Pub/Sub lease controller.
 
-    One instance per in-flight message: started after ``receive()``,
-    stopped (in a ``finally`` block) when the handler terminates via
-    success, retry, or dead-letter.
-
-    Rationale:
-
-    * Messages take variable amounts of time (parsing a 100-page PDF
-      can exceed the 10-minute default ack deadline). Without lease
-      extension, Pub/Sub would redeliver to a second pod mid-work,
-      producing duplicate load.
-    * Keeping extension fully decoupled from the handler means the
-      handler never has to manage its own Pub/Sub concerns. If the
-      handler hangs, the extender keeps the lease alive until the pod
-      itself terminates (24h grace period), at which point the process
-      dies, extensions stop, and Pub/Sub redelivers. Pod liveness
-      becomes the ultimate watchdog.
-    * ``last_progress_at`` timestamps each extension as a coarse
-      heartbeat visible in kubectl logs — ops can tell at a glance if
-      a particular pod is actively working on a message.
-    * When a ``run_ledger`` is supplied, each successful extension
-      also writes a ``PipelineHeartbeatManifest`` to the ledger. This
-      turns the lease-extension tick into a persisted liveness signal
-      ops can query across all active runs to detect hung pods
-      (``max(now - last_progress_at) > threshold`` pages on-call).
-      Heartbeat ledger writes are best-effort: a GCS outage must NOT
-      stop the Pub/Sub lease from being extended, so failures there
-      are logged-and-swallowed.
-
-    Extension cadence is chosen so the deadline never lapses: we
-    extend by ``extension_seconds`` (default 600 = 10 min) every
-    ``period_seconds`` (default 300 = 5 min), leaving a 5-minute
-    safety margin against clock drift / request latency.
+    The ingest handler performs blocking GCS/DataManager work. An
+    asyncio-based lease heartbeat can therefore be starved by the same
+    event loop it is trying to protect. This controller uses a daemon
+    thread and a synchronous ``modify_ack_deadline`` path so a long
+    handler cannot accidentally allow Pub/Sub to redeliver the message.
     """
 
     def __init__(
@@ -130,25 +111,38 @@ class LeaseExtender:
         work_queue: WorkQueue,
         receipt_id: str,
         job_id: str | None = None,
-        period_seconds: float = 300.0,
-        extension_seconds: int = 600,
+        period_seconds: float = 120.0,
+        extension_seconds: int = 300,
         run_ledger: RunLedger | None = None,
         run_id: str | None = None,
         stage: str | None = None,
+        max_consecutive_failures: int = 3,
     ):
         self._work_queue = work_queue
         self._receipt_id = receipt_id
+        self._receipt_hash = hashlib.sha256(receipt_id.encode("utf-8")).hexdigest()[:12]
         self._job_id = job_id
         self._period_s = period_seconds
         self._extension_s = extension_seconds
         self._run_ledger = run_ledger
         self._run_id = run_id
         self._stage = stage
-        self._stop_event = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
+        self._max_consecutive_failures = max(1, int(max_consecutive_failures))
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._state: Literal[
+            "INIT",
+            "LEASED",
+            "STOPPING",
+            "ACKED",
+            "NACKED",
+            "FAILED",
+        ] = "INIT"
         self._started_at: float = 0.0
         self._last_progress_at: float = 0.0
+        self._last_extend_latency_ms: float = 0.0
         self._extensions: int = 0
+        self._consecutive_failures: int = 0
 
         # Heartbeat persistence requires run_id + stage. If only one
         # is supplied we treat it as a wiring bug (loud error instead
@@ -158,25 +152,70 @@ class LeaseExtender:
             self._run_id is None or self._stage is None
         ):
             raise ValueError(
-                "LeaseExtender with run_ledger requires run_id and stage "
+                "LeaseController with run_ledger requires run_id and stage "
                 "so heartbeats can be attributed to a specific run.",
             )
 
     def start(self) -> None:
+        if self._thread is not None:
+            return
         self._started_at = time.monotonic()
         self._last_progress_at = self._started_at
-        self._task = asyncio.create_task(self._run())
+        self._state = "LEASED"
+        with _active_lease_lock:
+            _active_lease_controllers.add(self)
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"lease-controller:{self._job_id or self._receipt_hash}",
+            daemon=True,
+        )
+        self._thread.start()
 
-    async def stop(self) -> None:
-        """Signal the extender to stop and wait for it to exit."""
-        self._stop_event.set()
-        task = self._task
-        if task is None:
+    def stop(self, outcome: Literal["ack", "nack", "error"] = "error") -> None:
+        """Signal the controller to stop and wait briefly for its thread."""
+        if self._state in {"ACKED", "NACKED", "FAILED"}:
             return
+        self._state = "STOPPING"
+        if outcome == "nack":
+            self.nack_now(reason="stop:nack")
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+        with _active_lease_lock:
+            _active_lease_controllers.discard(self)
+        self._state = {
+            "ack": "ACKED",
+            "nack": "NACKED",
+            "error": "FAILED",
+        }[
+            outcome
+        ]  # type: ignore[assignment]
+
+    def nack_now(self, *, reason: str) -> None:
+        """Request immediate redelivery for this receipt."""
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            self._extend_sync(0)
+            logger.warning(
+                "Lease nacked (job=%s receipt_hash=%s reason=%s)",
+                self._job_id or "?",
+                self._receipt_hash,
+                reason,
+            )
+        except Exception:
+            logger.exception(
+                "Lease nack failed (job=%s receipt_hash=%s reason=%s)",
+                self._job_id or "?",
+                self._receipt_hash,
+                reason,
+            )
+
+    @property
+    def extensions(self) -> int:
+        return self._extensions
+
+    @property
+    def state(self) -> str:
+        return self._state
 
     def _write_heartbeat(self, elapsed: float) -> None:
         """Append a liveness record to the heartbeat ledger.
@@ -196,7 +235,7 @@ class LeaseExtender:
                 stage=self._stage,  # type: ignore[arg-type]
                 elapsed_seconds=elapsed,
                 extensions_emitted=self._extensions,
-                receipt_id=self._receipt_id,
+                receipt_id=self._receipt_hash,
                 job_id=self._job_id,
             )
             ledger.write(manifest)
@@ -205,50 +244,81 @@ class LeaseExtender:
                 "Heartbeat write failed (run=%s stage=%s receipt=%s)",
                 self._run_id,
                 self._stage,
-                self._receipt_id,
+                self._receipt_hash,
             )
 
-    async def _run(self) -> None:
-        try:
-            while True:
-                try:
-                    await asyncio.wait_for(
-                        self._stop_event.wait(),
-                        timeout=self._period_s,
-                    )
-                    return
-                except asyncio.TimeoutError:
-                    pass
+    def _extend_sync(self, seconds: int) -> None:
+        fn = getattr(self._work_queue, "extend_lease_sync", None)
+        if fn is not None:
+            fn(self._receipt_id, seconds)
+            return
 
-                try:
-                    await self._work_queue.extend_lease(
-                        self._receipt_id,
-                        self._extension_s,
-                    )
-                    self._extensions += 1
-                    self._last_progress_at = time.monotonic()
-                    elapsed = self._last_progress_at - self._started_at
-                    logger.info(
-                        "Lease extended (job=%s receipt=%s "
-                        "elapsed=%.0fs extensions=%d last_progress_at=+%.0fs)",
-                        self._job_id or "?",
-                        self._receipt_id,
-                        elapsed,
-                        self._extensions,
-                        elapsed,
-                    )
-                    # Persist heartbeat AFTER a successful extension so
-                    # a heartbeat row never implies "still alive" when
-                    # the lease has actually lapsed.
-                    self._write_heartbeat(elapsed)
-                except Exception:
-                    logger.exception(
-                        "Lease extension failed (job=%s receipt=%s)",
-                        self._job_id or "?",
-                        self._receipt_id,
-                    )
-        except asyncio.CancelledError:
-            pass
+        # Test/backward-compatibility fallback for stubs that only expose
+        # the async protocol method. Production PubSubWorkQueue has the
+        # sync method and never relies on this path.
+        asyncio.run(self._work_queue.extend_lease(self._receipt_id, seconds))
+
+    def _run(self) -> None:
+        next_tick = time.monotonic() + self._period_s
+        while not self._stop_event.wait(timeout=max(next_tick - time.monotonic(), 0.0)):
+            now = time.monotonic()
+            late_by = now - next_tick
+            if late_by > 30.0:
+                logger.warning(
+                    "Lease extension loop late (job=%s receipt_hash=%s late_by=%.1fs)",
+                    self._job_id or "?",
+                    self._receipt_hash,
+                    late_by,
+                )
+            next_tick = now + self._period_s
+
+            try:
+                extend_started = time.monotonic()
+                self._extend_sync(self._extension_s)
+                self._last_extend_latency_ms = (
+                    time.monotonic() - extend_started
+                ) * 1000
+                self._consecutive_failures = 0
+                self._extensions += 1
+                self._last_progress_at = time.monotonic()
+                elapsed = self._last_progress_at - self._started_at
+                logger.info(
+                    "Lease extended (job=%s receipt_hash=%s elapsed=%.0fs "
+                    "extensions=%d state=%s deadline=%ds latency_ms=%.1f)",
+                    self._job_id or "?",
+                    self._receipt_hash,
+                    elapsed,
+                    self._extensions,
+                    self._state,
+                    self._extension_s,
+                    self._last_extend_latency_ms,
+                )
+                self._write_heartbeat(elapsed)
+            except Exception:
+                self._consecutive_failures += 1
+                log_fn = (
+                    logger.critical
+                    if self._consecutive_failures >= self._max_consecutive_failures
+                    else logger.exception
+                )
+                log_fn(
+                    "Lease extension failed (job=%s receipt_hash=%s failures=%d)",
+                    self._job_id or "?",
+                    self._receipt_hash,
+                    self._consecutive_failures,
+                    exc_info=True,
+                )
+
+
+LeaseExtender = LeaseController
+
+
+def nack_active_leases(*, reason: str) -> None:
+    """Best-effort immediate redelivery for all in-flight receipts."""
+    with _active_lease_lock:
+        controllers = list(_active_lease_controllers)
+    for controller in controllers:
+        controller.nack_now(reason=reason)
 
 
 async def shutdown_aware_sleep(seconds: float) -> bool:
@@ -294,6 +364,7 @@ def install_signal_handlers() -> None:
             signal.Signals(signum).name if isinstance(signum, int) else str(signum)
         )
         logger.info("Received %s — requesting graceful shutdown", sig_name)
+        nack_active_leases(reason=sig_name)
         if _shutdown_event is not None:
             _shutdown_event.set()
 
@@ -319,7 +390,7 @@ def initialize_worker_environment(*, debug: bool = False) -> Path:
 
     Returns the resolved repository root path for callers that need it.
     """
-    from unity_deploy.load_repo_env import unity_deploy_repo_root
+    from unity_deploy.utils.load_repo_env import unity_deploy_repo_root
 
     level = logging.DEBUG if debug else logging.INFO
     root_logger = logging.getLogger()
@@ -346,8 +417,8 @@ def initialize_worker_environment(*, debug: bool = False) -> Path:
 
 def build_gcp_clients() -> tuple[
     storage.Client,
-    "pubsub_v1.PublisherClient",
-    "pubsub_v1.SubscriberClient",
+    pubsub_v1.PublisherClient,
+    pubsub_v1.SubscriberClient,
 ]:
     """Create authenticated GCP clients from environment / SA key."""
     from google.cloud import pubsub_v1
@@ -467,26 +538,45 @@ def activate_unify_context(
     *,
     user_id: str,
     assistant_id: str,
+    managers: list | None = None,
 ) -> None:
-    """Lightweight Unify context activation for worker processes.
+    """Lightweight ``unity.init``-style activation for worker processes.
 
-    Performs only what ``DataManager.ingest`` requires:
+    Mirrors the core sequence from :pyfunc:`unity.init` — project
+    activation, SDK context setup, and ``ContextRegistry`` provisioning —
+    but scoped to an explicitly supplied identity and manager list rather
+    than ``SESSION_DETAILS`` and the full manager catalogue.
 
-    1. ``unify.activate(project_name)``
-    2. ``unify.set_context("{user_id}/{assistant_id}")``
+    Steps (matching ``unity.init`` order):
+
+    1. ``unify.activate(project_name)``  (once per process)
+    2. Reset the SDK context via ``unset_context()`` to prevent the
+       relative-join accumulation bug across sequential messages.
+    3. ``unify.set_context("{user_id}/{assistant_id}")``  — idempotent,
+       tolerates concurrent creation.
+    4. ``ContextRegistry.clear()`` + ``setup_for_managers(managers)`` —
+       purge stale cached paths and provision only the contexts the
+       caller actually needs.
 
     Does **not** initialise the EventBus, LLM hooks, spending-limit
     hooks, billing context, or ``SESSION_DETAILS``.  Does **not**
     require ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY``.
 
-    Identity must be supplied explicitly by the caller. Shared workers
-    must not guess from ``USER_ID`` / ``ASSISTANT_ID`` environment
-    variables or synthetic defaults.
-
-    ``UNIFY_KEY`` must already be installed in the environment for the
-    current message by ``ingest_worker._with_unify_key``.
+    Parameters
+    ----------
+    project_name :
+        Unify project to activate.
+    user_id, assistant_id :
+        Identity from the ``IngestBinding`` on the current message.
+    managers :
+        Manager **classes** whose ``Config.required_contexts`` should be
+        provisioned (e.g. ``[FileManager, DataManager]``).  When *None*
+        the ``ContextRegistry`` is cleared but no contexts are created;
+        downstream managers will still resolve lazily on first access.
     """
     import unify as _unify
+
+    from unity.common.context_registry import ContextRegistry
 
     if not os.environ.get("UNIFY_KEY"):
         raise EnvironmentError(
@@ -495,9 +585,18 @@ def activate_unify_context(
             "activate_unify_context() runs.",
         )
 
+    # --- 1. Project activation (once per process) ---
     project_name = os.environ.get("UNIFY_PROJECT_NAME", project_name)
     if not _unify.active_project():
         _unify.activate(project_name)
+
+    # --- 2+3. Context reset & set (mirrors unity.init lines 92-102) ---
+    # The SDK's set_context defaults to relative=True, which _joins_ the
+    # new path onto the current one.  In a long-lived worker that
+    # processes many messages, this would produce
+    # "user/1821/user/1821/..." after the second call.  Resetting first
+    # ensures an absolute set regardless of prior state.
+    _unify.unset_context()
 
     ctx = f"{user_id}/{assistant_id}"
     try:
@@ -507,6 +606,11 @@ def activate_unify_context(
             _unify.set_context(ctx, skip_create=True)
         else:
             raise
+
+    # --- 4. ContextRegistry (mirrors unity.init line 104) ---
+    ContextRegistry.clear()
+    if managers:
+        ContextRegistry.setup_for_managers(managers)
 
     logger.info(
         "Unify context activated: project=%s, context=%s",
