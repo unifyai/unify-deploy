@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from unity_deploy.control_plane import reconcile
 from unity_deploy.customization.clients import ClientDeploymentEntry
 from unity_deploy.customization.configs.types.actor_config import ActorConfig
@@ -109,6 +111,62 @@ def test_build_control_plane_plan_filters_by_client():
     assert operations[0].assistant_id == "999"
 
 
+def test_build_control_plane_plan_projects_scenario_to_generic_task_activation():
+    registry = {
+        "client_alpha": ClientDeploymentEntry(
+            mapping=DeploymentMapping(
+                targets=[
+                    DeploymentTarget(
+                        scope="assistant",
+                        scope_id="1851",
+                        deployment="v2",
+                    ),
+                ],
+            ),
+            specs={
+                "v2": DeploymentSpec(
+                    name="v2",
+                    actor_config=ActorConfig(guidelines="v2 guidelines"),
+                    integrations=["client_alpha_repairs_mock"],
+                ),
+            },
+            environment="staging",
+        ),
+    }
+
+    operations = reconcile.build_control_plane_plan(
+        environment="staging",
+        client="client_alpha",
+        registry=registry,
+    )
+
+    task_ops = [op for op in operations if op.field == "task_activation"]
+    assert len(task_ops) == 1
+    operation = task_ops[0]
+    assert operation.service == "communication"
+    assert operation.method == "post"
+    assert operation.action == "unresolved"
+    assert operation.path == "/infra/task-activation/upsert"
+    assert operation.payload["assistant_id"] == "1851"
+    assert operation.payload["task_id"] is None
+    assert operation.payload["source_task_log_id"] is None
+    assert operation.payload["execution_mode"] == "offline"
+    assert operation.payload["task_label"] == "Client Alpha repairs monitoring tick"
+    assert operation.payload["deployment_context"]["scenario_id"] == (
+        "client_alpha_repairs_alerts_v1"
+    )
+    assert operation.payload["deployment_context"]["schedule_id"] == (
+        "repairs_monitoring_tick"
+    )
+    assert operation.payload["deployment_context"]["entrypoint_function"] == (
+        "run_client_alpha_repairs_monitoring_tick"
+    )
+    assert (
+        "FunctionManager/TaskScheduler seeded ids"
+        in operation.payload["unresolved_reason"]
+    )
+
+
 def test_build_control_plane_plan_skips_environment_mismatch():
     operations = reconcile.build_control_plane_plan(
         environment="production",
@@ -141,6 +199,51 @@ def test_apply_operations_patches_each_assistant(monkeypatch):
         (operations[0].path, operations[0].payload),
         (operations[1].path, operations[1].payload),
     ]
+
+
+def test_apply_operations_posts_communication_operations(monkeypatch):
+    captured: list[tuple[str, dict]] = []
+
+    monkeypatch.setattr(
+        reconcile,
+        "_post_communication_json",
+        lambda path, payload: captured.append((path, payload)) or {"ok": True},
+    )
+    operation = reconcile.ReconcileOperation(
+        client_name="client_alpha",
+        assistant_id="1851",
+        deployment="v2",
+        field="task_activation",
+        action="upsert",
+        path="/infra/task-activation/upsert",
+        payload={"task_id": 1},
+        service="communication",
+        method="post",
+    )
+
+    responses = reconcile.apply_operations([operation])
+
+    assert responses == [{"ok": True}]
+    assert captured == [
+        ("/infra/task-activation/upsert", operation.payload),
+    ]
+
+
+def test_apply_operations_rejects_unresolved_task_activation():
+    operation = reconcile.ReconcileOperation(
+        client_name="client_alpha",
+        assistant_id="1851",
+        deployment="v2",
+        field="task_activation",
+        action="unresolved",
+        path="/infra/task-activation/upsert",
+        payload={"unresolved_reason": "missing task ids"},
+        service="communication",
+        method="post",
+    )
+
+    with pytest.raises(RuntimeError, match="missing task ids"):
+        reconcile.apply_operations([operation])
 
 
 def test_cli_returns_error_when_environment_variables_missing(monkeypatch, caplog):
