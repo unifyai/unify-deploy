@@ -71,8 +71,7 @@ steps:
     set -euo pipefail
     CANONICAL_REV=$(gcloud run services describe ${_SERVICE_NAME} \
       --region=${_REGION} --platform=managed \
-      --format=json \
-      | python3 -c 'import sys, json; print([t["revisionName"] for t in json.load(sys.stdin)["status"]["traffic"] if t.get("percent") == 100][0])')
+      --format='value(status.traffic[0].revisionName)')
     gcloud run revisions describe "$$CANONICAL_REV" \
       --region=${_REGION} --platform=managed \
       --format='value(spec.containers[0].image)' > /workspace/canonical-image.txt
