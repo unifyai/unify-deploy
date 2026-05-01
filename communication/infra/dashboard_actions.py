@@ -162,6 +162,7 @@ def _build_dashboard_action_env(
         "ASSISTANT_USER_DESKTOP_MODE": "",
         "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
         "ASSISTANT_USER_DESKTOP_URL": "",
+        "ASSISTANT_IS_COORDINATOR": "False",
         "USER_ID": str(assistant_data.get("user_id") or ""),
         "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
         "USER_SURNAME": str(assistant_data.get("user_surname") or ""),

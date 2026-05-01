@@ -473,6 +473,7 @@ def _build_startup_payload(
     user_desktop_mode: str,
     user_desktop_filesys_sync: str,
     user_desktop_url: str,
+    is_coordinator: str,
     demo_id: str,
     team_ids: str,
     space_ids: str,
@@ -518,6 +519,7 @@ def _build_startup_payload(
         "user_desktop_mode": user_desktop_mode if user_desktop_mode else None,
         "user_desktop_filesys_sync": user_desktop_filesys_sync.lower() == "true",
         "user_desktop_url": user_desktop_url if user_desktop_url else None,
+        "is_coordinator": is_coordinator.lower() == "true",
         "demo_id": int(demo_id) if demo_id else None,
         "team_ids": json.loads(team_ids) if team_ids else [],
         "space_ids": _decode_space_ids_form(space_ids),
@@ -944,6 +946,7 @@ async def start_job(
     user_desktop_mode: str = Form(""),
     user_desktop_filesys_sync: str = Form("false"),
     user_desktop_url: str = Form(""),
+    is_coordinator: str = Form("false"),
     demo_id: str = Form(""),
     team_ids: str = Form(""),
     space_ids: str = Form(""),
@@ -987,6 +990,7 @@ async def start_job(
         user_desktop_mode: User's own desktop mode - ubuntu/windows/macos (optional)
         user_desktop_filesys_sync: Whether to sync user desktop filesystem (optional, defaults to "false")
         user_desktop_url: URL to user's own desktop (optional)
+        is_coordinator: Whether this assistant is the Coordinator (optional, defaults to "false")
         demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
         team_ids: JSON-encoded list of team IDs the user belongs to (optional, defaults to empty)
         space_ids: JSON-encoded list of space IDs the assistant belongs to (optional, defaults to empty)
@@ -1047,6 +1051,7 @@ async def start_job(
             user_desktop_mode=user_desktop_mode,
             user_desktop_filesys_sync=user_desktop_filesys_sync,
             user_desktop_url=user_desktop_url,
+            is_coordinator=is_coordinator,
             demo_id=demo_id,
             team_ids=team_ids,
             space_ids=space_ids,
