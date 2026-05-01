@@ -274,6 +274,7 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "user_desktop_mode": None,
         "user_desktop_filesys_sync": False,
         "user_desktop_url": None,
+        "is_coordinator": False,
         "demo_id": demo_id,
         "is_local": False,
         "space_ids": [11, 22],
@@ -287,6 +288,75 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "self_contact_id": 42,
         "boss_contact_id": 43,
     }
+
+
+def _orchestra_assistant_record(**overrides):
+    record = {
+        "agent_id": "12345",
+        "deploy_env": None,
+        "user_id": "user-123",
+        "api_key": "test-api-key",
+        "user_first_name": "Test",
+        "user_last_name": "User",
+        "first_name": "Test",
+        "surname": "Assistant",
+        "age": 25,
+        "nationality": "US",
+        "about": "Test assistant",
+        "job_title": "",
+        "timezone": "UTC",
+        "phone": "+0987654321",
+        "assistant_whatsapp_number": "+18501234567",
+        "assistant_discord_bot_id": "",
+        "email": "assistant@example.com",
+        "email_provider": "google_workspace",
+        "user_phone": "+1234567890",
+        "user_whatsapp_number": "+1234567890",
+        "user_email": "test@example.com",
+        "voice_provider": "elevenlabs",
+        "voice_id": "voice-123",
+        "secrets": {},
+        "desktop_mode": "none",
+        "user_desktop_mode": None,
+        "user_desktop_filesys_sync": False,
+        "user_desktop_url": None,
+        "demo_id": None,
+        "is_local": False,
+        "is_coordinator": True,
+        "team_ids": [],
+        "organization_id": None,
+    }
+    record.update(overrides)
+    return record
+
+
+def test_get_assistant_local_payload_defaults_to_non_coordinator():
+    """Local assistants should carry the same Coordinator flag shape as Orchestra rows."""
+
+    assistant_data = get_assistant(assistant_id="local-assistant")
+
+    assert assistant_data["is_coordinator"] is False
+
+
+@patch("adapters.helpers.requests.get")
+def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
+    """The assistant allowlist should keep Orchestra's Coordinator role bool."""
+
+    mock_get.return_value = MagicMock(
+        json=MagicMock(
+            return_value={
+                "info": [
+                    _orchestra_assistant_record(
+                        is_coordinator=True,
+                    ),
+                ],
+            },
+        ),
+    )
+
+    assistant_data = get_assistant(assistant_id="12345")
+
+    assert assistant_data["is_coordinator"] is True
 
 
 @patch("adapters.helpers.requests.post")
@@ -394,6 +464,7 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     mock_response.status_code = 200
     mock_post.return_value = mock_response
     assistant_data = _create_mock_assistant_data(demo_id=7)
+    assistant_data["is_coordinator"] = True
     wake_reasons = [{"type": "task_due", "task_id": 101}]
 
     response = dispatch_unity_start_intent(
@@ -408,6 +479,7 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     assert call_kwargs["timeout"] == 12
     assert json.loads(call_kwargs["data"]["wake_reasons"]) == wake_reasons
     assert call_kwargs["data"]["medium"] == "api_message"
+    assert call_kwargs["data"]["is_coordinator"] == "true"
 
 
 @patch("adapters.helpers.requests.post")

@@ -280,6 +280,27 @@ def test_offline_dispatch_skips_revoked_space_destination():
     mock_launch.assert_not_called()
 
 
+def test_offline_runner_env_marks_assistant_as_non_coordinator():
+    """Headless task execution should never inherit the Coordinator role."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    env = task_activation._build_offline_runner_env(
+        request=request,
+        activation=_activation(),
+        assistant_data={
+            "assistant_id": "assistant-123",
+            "api_key": "test-api-key",
+            "is_coordinator": True,
+        },
+        run_key="offline:scheduled:assistant-123:101",
+        job_name="unity-offline-abc",
+    )
+
+    assert env["ASSISTANT_IS_COORDINATOR"] == "False"
+
+
 def test_offline_run_key_uses_canonical_trigger_provenance_shape():
     """Triggered offline runs should use the same provenance ingredients as live."""
 

@@ -71,6 +71,7 @@ def _start_job_payload() -> dict[str, str]:
         "user_desktop_mode": "",
         "user_desktop_filesys_sync": "false",
         "user_desktop_url": "",
+        "is_coordinator": "false",
         "demo_id": "",
         "team_ids": "[]",
         "org_id": "",

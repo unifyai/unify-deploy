@@ -1902,6 +1902,7 @@ def _admin_record_to_data(a: dict) -> dict:
             a.get("user_desktop_filesys_sync", False),
         ).lower(),
         "user_desktop_url": a.get("user_desktop_url") or "",
+        "is_coordinator": str(a.get("is_coordinator", False)).lower(),
         "demo_id": "",
         "team_ids": json.dumps(a.get("team_ids", [])),
         "space_ids": json.dumps(a.get("space_ids", [])),
