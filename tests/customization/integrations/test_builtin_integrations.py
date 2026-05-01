@@ -22,8 +22,8 @@ from unity_deploy.customization.integrations.types import (
 from unity_deploy.customization.integrations.validation import validate_integration
 
 GENERIC_SLUGS = ["github", "fetch_mcp"]
-CLIENT_SLUGS = ["client_alpha_repairs"]
-MOCK_SLUGS = ["client_alpha_repairs_mock"]
+CLIENT_SLUGS = ["clientepsilon_homes_compliance", "client_alpha_repairs"]
+MOCK_SLUGS = ["clientepsilon_homes_compliance_mock", "client_alpha_repairs_mock"]
 
 
 @pytest.fixture(params=GENERIC_SLUGS)
@@ -234,6 +234,33 @@ class TestClientAlphaRealRepairsClientSpecifics:
         assert "repairs_snapshot" in ids
 
 
+class TestClientEpsilonHomesComplianceClientSpecifics:
+    """Specifics for the private real ClientEpsilon compliance connector."""
+
+    def _manifest(self):
+        return _load_manifest(
+            _CLIENT_DIR / "clientepsilon_homes_compliance" / "manifest.yaml",
+        )
+
+    def test_tier_is_api(self):
+        assert self._manifest().tier == "api"
+
+    def test_has_required_sharepoint_configuration(self):
+        names = {s.name for s in self._manifest().secrets}
+        assert "CLIENTEPSILON_SHAREPOINT_SITE_ID" in names
+        assert "CLIENTEPSILON_SHAREPOINT_DRIVE_ID" in names
+        assert "CLIENTEPSILON_SHAREPOINT_ROOT_PATH" in names
+
+    def test_not_also_in_generic_root(self):
+        assert not (
+            _BUILTIN_DIR / "clientepsilon_homes_compliance" / "manifest.yaml"
+        ).is_file(), "Real ClientEpsilon connector must live only under client_packages/."
+
+    def test_has_compliance_snapshot_capability(self):
+        ids = {c.id for c in self._manifest().capabilities}
+        assert "compliance_snapshot" in ids
+
+
 class TestClientAlphaRepairsMockSpecifics:
     """Specifics for the deterministic mock used by ClientAlpha scenarios."""
 
@@ -258,3 +285,35 @@ class TestClientAlphaRepairsMockSpecifics:
     def test_capability_advertises_repairs_snapshot(self):
         ids = {c.id for c in self._manifest().capabilities}
         assert "repairs_snapshot" in ids
+
+
+class TestClientEpsilonHomesComplianceMockSpecifics:
+    """Specifics for the deterministic ClientEpsilon compliance demo mock."""
+
+    def _manifest(self):
+        return _load_manifest(
+            _MOCK_DIR / "clientepsilon_homes_compliance_mock" / "manifest.yaml",
+        )
+
+    def test_tier_is_api(self):
+        assert self._manifest().tier == "api"
+
+    def test_no_required_credentials(self):
+        for s in self._manifest().secrets:
+            assert (
+                s.required is False
+            ), f"Mock package secret '{s.name}' must not be required."
+
+    def test_declares_compliance_monitoring_scenario(self):
+        manifest = self._manifest()
+        assert "compliance_monitoring.yaml" in manifest.scenarios
+
+    def test_declares_demo_site(self):
+        manifest = self._manifest()
+        assert manifest.demo_site is not None
+        assert manifest.demo_site.dir == "demo_site"
+
+    def test_capability_advertises_compliance_snapshot(self):
+        ids = {c.id for c in self._manifest().capabilities}
+        assert "compliance_snapshot" in ids
+        assert "sharepoint_reasoning_scan" in ids

@@ -51,6 +51,27 @@ def test_loads_client_alpha_mock_scenario_only_when_mock_packages_enabled():
     )
 
 
+def test_loads_clientepsilon_mock_scenario_only_when_mock_packages_enabled():
+    assert load_scenarios_from_integration("clientepsilon_homes_compliance_mock") == []
+
+    scenarios = load_scenarios_from_integration(
+        "clientepsilon_homes_compliance_mock",
+        include_mock_packages=True,
+    )
+
+    assert len(scenarios) == 1
+    assert scenarios[0].scenario_id == "clientepsilon_compliance_assurance_v1"
+    assert scenarios[0].integration.mode == "mock"
+    assert scenarios[0].tasks[0].execution_mode == "offline"
+    assert scenarios[0].tasks[0].schedule.type == "cron"
+    assert scenarios[0].tasks[0].activation.entrypoint_function == (
+        "run_clientepsilon_compliance_sync_tick"
+    )
+    assert (
+        scenarios[0].timeline[1].function == "run_clientepsilon_compliance_reasoning_tick"
+    )
+
+
 def test_expand_integrations_includes_mock_package_and_scenario():
     resolved = ResolvedCustomization(
         config=ActorConfig(),
@@ -71,6 +92,30 @@ def test_expand_integrations_includes_mock_package_and_scenario():
     assert len(expanded.scenarios) == 1
     assert (
         expanded.scenarios[0].integration.package_slug == "client_alpha_repairs_mock"
+    )
+
+
+def test_expand_integrations_includes_clientepsilon_mock_package_and_scenario():
+    resolved = ResolvedCustomization(
+        config=ActorConfig(),
+        environments=[],
+        function_dirs=[],
+        venv_dirs=[],
+        contacts=[],
+        guidance=[],
+        knowledge={},
+        blacklist=[],
+        secrets=[],
+        integrations=["clientepsilon_homes_compliance_mock"],
+    )
+
+    expanded = expand_integrations(resolved)
+
+    assert any(path.name == "functions" for path in expanded.function_dirs)
+    assert len(expanded.scenarios) == 1
+    assert (
+        expanded.scenarios[0].integration.package_slug
+        == "clientepsilon_homes_compliance_mock"
     )
 
 
@@ -95,6 +140,97 @@ async def test_run_scenario_tick_materializes_and_alerts():
     assert {alert["rule_id"] for alert in result.alerts} == {
         "no_access_rate_spike",
         "emergency_backlog_spike",
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_clientepsilon_scenario_tick_materializes_and_alerts():
+    scenario = load_scenarios_from_integration(
+        "clientepsilon_homes_compliance_mock",
+        include_mock_packages=True,
+    )[0]
+    fake_dm = FakeDataManager()
+
+    result = await run_scenario_tick(
+        scenario,
+        tick=0,
+        data_manager=fake_dm,
+        include_mock_packages=True,
+    )
+
+    contexts = [entry[0] for entry in fake_dm.ingests]
+    assert "ClientEpsilonHomes/Demo/Compliance/Certificates" in contexts
+    assert "ClientEpsilonHomes/Demo/Compliance/Alerts/Outbox" in contexts
+    assert {alert["rule_id"] for alert in result.alerts} == {
+        "certificate_enters_renewal_window",
+        "missing_sharepoint_certificate",
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_clientepsilon_reasoning_tick_materializes_reasoned_tables(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    scenario = load_scenarios_from_integration(
+        "clientepsilon_homes_compliance_mock",
+        include_mock_packages=True,
+    )[0]
+    fake_dm = FakeDataManager()
+
+    async def fake_invoke_connector(*args, **kwargs):
+        return {
+            "schema_version": "clientepsilon.compliance.snapshot.v1",
+            "tables": {
+                "certificates": [
+                    {
+                        "certificate_id": "CERT-GH-1001-GAS-1",
+                        "property_id": "GH-1001",
+                        "certificate_type": "gas",
+                        "certificate_present": True,
+                        "days_until_expiry": 45,
+                        "renewal_status": "renewal_due",
+                    },
+                    {
+                        "certificate_id": "CERT-GH-1002-ELECTRICAL-1",
+                        "property_id": "GH-1002",
+                        "certificate_type": "electrical",
+                        "certificate_present": False,
+                        "days_until_expiry": 9999,
+                        "renewal_status": "missing_certificate",
+                    },
+                ],
+                "reasoned_certificate_decisions": [
+                    {
+                        "decision_id": "DECISION-1",
+                        "property_id": "GH-1001",
+                        "certificate_type": "gas",
+                        "renewal_status": "renewal_due",
+                    },
+                ],
+                "email_delivery_results": [
+                    {
+                        "delivery_id": "EMAIL-1",
+                        "status": "simulated",
+                    },
+                ],
+            },
+        }
+
+    monkeypatch.setattr(scenario_runtime, "invoke_connector", fake_invoke_connector)
+
+    result = await run_scenario_tick(
+        scenario,
+        tick=1,
+        data_manager=fake_dm,
+        include_mock_packages=True,
+    )
+
+    contexts = [entry[0] for entry in fake_dm.ingests]
+    assert "ClientEpsilonHomes/Demo/Compliance/ReasonedCertificateDecisions" in contexts
+    assert "ClientEpsilonHomes/Demo/Compliance/EmailDeliveryResults" in contexts
+    assert {alert["rule_id"] for alert in result.alerts} == {
+        "certificate_enters_renewal_window",
+        "missing_sharepoint_certificate",
     }
 
 

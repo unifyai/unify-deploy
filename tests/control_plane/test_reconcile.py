@@ -144,6 +144,39 @@ def test_build_control_plane_plan_projects_scenario_to_generic_task_activation()
     assert task_ops == []
 
 
+def test_build_control_plane_plan_keeps_clientepsilon_disabled_schedule_private():
+    registry = {
+        "clientepsilon_homes": ClientDeploymentEntry(
+            mapping=DeploymentMapping(
+                targets=[
+                    DeploymentTarget(
+                        scope="assistant",
+                        scope_id="2999",
+                        deployment="demo",
+                    ),
+                ],
+            ),
+            specs={
+                "demo": DeploymentSpec(
+                    name="demo",
+                    actor_config=ActorConfig(guidelines="demo guidelines"),
+                    integrations=["clientepsilon_homes_compliance_mock"],
+                ),
+            },
+            environment="staging",
+        ),
+    }
+
+    operations = reconcile.build_control_plane_plan(
+        environment="staging",
+        client="clientepsilon_homes",
+        registry=registry,
+    )
+
+    task_ops = [op for op in operations if op.field == "task_activation"]
+    assert task_ops == []
+
+
 def test_build_control_plane_plan_skips_environment_mismatch():
     operations = reconcile.build_control_plane_plan(
         environment="production",

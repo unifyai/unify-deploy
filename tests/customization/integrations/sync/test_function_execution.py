@@ -54,6 +54,11 @@ EXECUTION_CONFIG: Dict[str, Dict[str, Any]] = {
         "call_kwargs": {"tick": 0},
         "expected_keys": {"schema_version", "tables", "metadata"},
     },
+    "clientepsilon_homes_compliance_mock": {
+        "representative_function": "fetch_compliance_snapshot",
+        "call_kwargs": {"tick": 0},
+        "expected_keys": {"schema_version", "tables", "metadata"},
+    },
 }
 
 
@@ -89,6 +94,45 @@ requires-python = ">=3.11"
 dependencies = [
     "httpx",
 ]
+""".strip(),
+    "clientepsilon_homes_compliance": """
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clientepsilon-homes-compliance-test"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx",
+]
+""".strip(),
+    "clientepsilon_homes_compliance_mock": """
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clientepsilon-homes-compliance-mock-test"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx",
+    "pydantic",
+    "pypdf",
+]
+""".strip(),
+    "client_alpha_repairs_mock": """
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "client-alpha-repairs-mock-test"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
 """.strip(),
 }
 
