@@ -70,22 +70,6 @@ steps:
     docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:preview-$${SLUG}-${SHORT_SHA}
   waitFor: ['build-image']
 
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'snapshot-canonical-template'
-  entrypoint: 'bash'
-  args:
-  - '-c'
-  - |
-    set -euo pipefail
-    CANONICAL_REV=$(gcloud run services describe ${_SERVICE_NAME} \
-      --region=${_REGION} --platform=managed \
-      --format='value(status.traffic[0].revisionName)')
-    gcloud run revisions describe "$$CANONICAL_REV" \
-      --region=${_REGION} --platform=managed \
-      --format='value(spec.containers[0].image)' > /workspace/canonical-image.txt
-    echo "canonical image pinned for restore: $(cat /workspace/canonical-image.txt)"
-  waitFor: ['-']
-
   # Deploy as a tagged, no-traffic revision so the canonical staging URL
   # keeps serving the un-tagged revision and only the tagged URL routes
   # this build.  Peer URLs are pinned to the matching tagged revisions
@@ -109,12 +93,16 @@ steps:
       --update-env-vars=DEPLOY_ENV=staging,BRANCH_TAG=$${SLUG},ORCHESTRA_URL=$${ORCHESTRA_URL},UNITY_ADAPTERS_URL=$${ADAPTERS_URL} \
       --quiet
     echo "preview revision URL: https://$${SLUG}---${_PEER_COMMS_HOST}"
-  waitFor: ['push-image', 'snapshot-canonical-template']
+  waitFor: ['push-image']
 
-  # Restore the canonical service template (image + env) so the next
-  # canonical deploy via cloudbuild.yaml is not poisoned by the slug
-  # values pushed in deploy-tagged.  The slug-tagged revision keeps its
-  # own immutable env-var snapshot and remains reachable via its tag URL.
+  # Reset the shared service template back to the canonical staging image
+  # and canonical peer URLs, undoing the env-var mutation that
+  # ``gcloud run deploy --update-env-vars=...`` applied to the template
+  # in ``deploy-tagged``.  The canonical image is referenced by the
+  # ``:latest`` tag, which the canonical staging cloudbuild publishes on
+  # every push and the Artifact Registry cleanup policy protects from
+  # garbage collection.  The slug-tagged revision keeps its own
+  # immutable env snapshot and remains reachable via its tag URL.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'restore-canonical-template'
   entrypoint: 'bash'
@@ -122,7 +110,7 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    CANONICAL_IMAGE=$(cat /workspace/canonical-image.txt)
+    CANONICAL_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest
     gcloud run services update ${_SERVICE_NAME} \
       --region=${_REGION} --platform=managed \
       --image="$$CANONICAL_IMAGE" \
