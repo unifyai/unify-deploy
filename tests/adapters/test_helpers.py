@@ -16,6 +16,7 @@ from adapters.helpers import (
     START_INTENT_DISPATCH_TIMEOUT_SECONDS,
     build_webhook_context,
     cleanup_idle_pool,
+    check_valid_contact,
     expire_all_stale_jobs,
     get_default_contacts,
     get_assistant,
@@ -67,6 +68,27 @@ def test_get_default_contacts_includes_phone_number():
     assert len(contacts) == 2
     assert contacts[0]["phone_number"] == "+1234567890"  # assistant
     assert contacts[1]["phone_number"] == "+0987654321"  # user
+
+
+def test_get_default_contacts_uses_resolved_contact_ids():
+    """Fallback contacts use the assistant's resolved self and boss ids."""
+    assistant_data = {
+        "assistant_first_name": "Test",
+        "assistant_surname": "Assistant",
+        "assistant_email": "test@example.com",
+        "assistant_number": "+1234567890",
+        "user_first_name": "Test",
+        "user_surname": "User",
+        "user_email": "user@example.com",
+        "user_number": "+0987654321",
+        "self_contact_id": 42,
+        "boss_contact_id": 43,
+    }
+
+    contacts = get_default_contacts(assistant_data)
+
+    assert contacts[0]["contact_id"] == 42
+    assert contacts[1]["contact_id"] == 43
 
 
 # --- check_contact_details tests ---
@@ -135,6 +157,62 @@ def test_check_contact_details_returns_false_for_unknown_medium():
     assert result is False
 
 
+@patch("adapters.helpers.get_contacts")
+def test_check_valid_contact_uses_resolved_boss_contact_id(mock_get_contacts):
+    """Inbound boss validation follows the resolved boss id, not contact 1."""
+    assistant_data = {
+        "assistant_first_name": "Test",
+        "assistant_surname": "Assistant",
+        "assistant_email": "assistant@example.com",
+        "assistant_number": "+1234567890",
+        "user_first_name": "Boss",
+        "user_surname": "User",
+        "user_email": "boss@example.com",
+        "user_number": "+0987654321",
+        "user_whatsapp_number": "+0987654321",
+        "self_contact_id": 42,
+        "boss_contact_id": 43,
+    }
+    mock_get_contacts.return_value = (
+        {
+            "logs": [
+                {
+                    "entries": {
+                        "contact_id": 42,
+                        "first_name": "Test",
+                        "surname": "Assistant",
+                        "email_address": "assistant@example.com",
+                        "phone_number": "+1234567890",
+                    },
+                },
+                {
+                    "entries": {
+                        "contact_id": 43,
+                        "first_name": "Boss",
+                        "surname": "User",
+                        "email_address": "boss@example.com",
+                        "phone_number": "+0987654321",
+                    },
+                },
+            ],
+        },
+        200,
+    )
+
+    contacts, is_valid, matched_contact = check_valid_contact(
+        email_address="boss@example.com",
+        medium="email",
+        assistant_context="user-123/assistant-123",
+        api_key="test-api-key",
+        user_email="boss@example.com",
+        assistant_data=assistant_data,
+    )
+
+    assert is_valid is True
+    assert matched_contact["contact_id"] == 43
+    assert [contact["contact_id"] for contact in contacts] == [42, 43]
+
+
 # --- start_unity_job demo mode tests ---
 
 
@@ -172,6 +250,8 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "demo_id": demo_id,
         "is_local": False,
         "space_ids": [11, 22],
+        "self_contact_id": 42,
+        "boss_contact_id": 43,
     }
 
 
@@ -311,6 +391,8 @@ def test_dispatch_unity_start_intent_encodes_space_ids_for_form(mock_post):
     assert response is mock_response
     data = mock_post.call_args.kwargs["data"]
     assert json.loads(data["space_ids"]) == [11, 22]
+    assert data["self_contact_id"] == "42"
+    assert data["boss_contact_id"] == "43"
 
 
 @patch("adapters.helpers.requests.post")
@@ -368,6 +450,8 @@ def test_get_assistant_preserves_space_ids(mock_get):
                         "is_local": False,
                         "team_ids": [7],
                         "space_ids": [3, 4],
+                        "self_contact_id": 42,
+                        "boss_contact_id": 43,
                         "organization_id": 42,
                     },
                 ],
@@ -379,6 +463,8 @@ def test_get_assistant_preserves_space_ids(mock_get):
 
     assert assistant["space_ids"] == [3, 4]
     assert assistant["team_ids"] == [7]
+    assert assistant["self_contact_id"] == 42
+    assert assistant["boss_contact_id"] == 43
 
 
 @patch("adapters.helpers._fetch_infra_jobs")

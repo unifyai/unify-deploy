@@ -47,6 +47,8 @@ def _local_assistant_data() -> dict[str, Any]:
         "user_desktop_url": None,
         "is_local": True,
         "space_ids": [],
+        "self_contact_id": 0,
+        "boss_contact_id": 1,
     }
 
 
@@ -85,6 +87,8 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "is_local": assistant.get("is_local", False),
         "team_ids": assistant.get("team_ids", []),
         "space_ids": assistant.get("space_ids", []),
+        "self_contact_id": assistant.get("self_contact_id", 0),
+        "boss_contact_id": assistant.get("boss_contact_id", 1),
         "org_id": assistant.get("organization_id"),
     }
 

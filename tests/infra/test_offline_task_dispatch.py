@@ -312,12 +312,16 @@ def test_offline_runner_env_carries_space_ids_as_csv():
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
             "space_ids": [1, 2],
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
         },
         run_key="run-123",
         job_name="unity-offline-abc",
     )
 
     assert env["SPACE_IDS"] == "1,2"
+    assert env["SELF_CONTACT_ID"] == "42"
+    assert env["BOSS_CONTACT_ID"] == "43"
     assert "TASK_DESTINATION" not in env
 
 

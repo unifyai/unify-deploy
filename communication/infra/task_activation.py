@@ -676,6 +676,8 @@ def _build_offline_runner_env(
     entrypoint = activation.get("entrypoint") or request.entrypoint
     team_ids = assistant_data.get("team_ids") or []
     space_ids = assistant_data.get("space_ids") or []
+    self_contact_id = assistant_data.get("self_contact_id", 0)
+    boss_contact_id = assistant_data.get("boss_contact_id", 1)
     # Layer 1 — shared task-specific env (single source of truth in Unity).
     env = _build_offline_runner_env_shared(
         assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
@@ -721,6 +723,7 @@ def _build_offline_runner_env(
             "ASSISTANT_WHATSAPP_NUMBER": str(
                 assistant_data.get("assistant_whatsapp_number") or "",
             ),
+            "SELF_CONTACT_ID": str(self_contact_id),
             "ASSISTANT_DESKTOP_MODE": "none",
             "ASSISTANT_USER_DESKTOP_MODE": "",
             "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
@@ -733,6 +736,7 @@ def _build_offline_runner_env(
             "USER_WHATSAPP_NUMBER": str(
                 assistant_data.get("user_whatsapp_number") or "",
             ),
+            "BOSS_CONTACT_ID": str(boss_contact_id),
             "VOICE_PROVIDER": str(
                 assistant_data.get("voice_provider") or "cartesia",
             ),

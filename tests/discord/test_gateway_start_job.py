@@ -62,6 +62,8 @@ async def test_discord_start_job_encodes_space_ids_for_form(monkeypatch):
             "voice_id": "voice-123",
             "desktop_mode": "ubuntu",
             "space_ids": [8, 9],
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
         },
     )
 
@@ -69,3 +71,5 @@ async def test_discord_start_job_encodes_space_ids_for_form(monkeypatch):
     assert post["url"] == "http://comms.test/infra/job/start"
     assert json.loads(post["data"]["space_ids"]) == [8, 9]
     assert json.loads(post["data"]["team_ids"]) == []
+    assert post["data"]["self_contact_id"] == "42"
+    assert post["data"]["boss_contact_id"] == "43"

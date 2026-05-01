@@ -2998,8 +2998,8 @@ async def teams_notification_processor(request: Request):
         # same mailbox we're monitoring; any outbound message the
         # runtime itself posts would otherwise loop back here.  Guard
         # *before* resolving contacts — resolution may otherwise match
-        # the assistant to its own contact_id=0 default row and mis-
-        # attribute the message as inbound-from-boss.
+        # the assistant to its own contact row and misattribute the
+        # message as inbound-from-boss.
         if sender_email and sender_email.lower() == assistant_email.lower():
             logger.info(
                 f"Skipping self-message from {_redact_email(sender_email)}",
@@ -3034,9 +3034,12 @@ async def teams_notification_processor(request: Request):
             return Response(status_code=200)
 
         # Second-tier self-guard: if the resolver pinned the assistant's
-        # own default contact (``contact_id == 0``), we are looking at
-        # an outbound/loopback message.  Drop it rather than publish.
-        if matched_contact and matched_contact.get("contact_id") == 0:
+        # own contact, we are looking at an outbound/loopback message.
+        # Drop it rather than publish.
+        if matched_contact and matched_contact.get("contact_id") == assistant_data.get(
+            "self_contact_id",
+            0,
+        ):
             logger.info(
                 f"Skipping message that resolved to assistant's own contact "
                 f"(sender_email={_redact_email(sender_email)})",

@@ -1,4 +1,4 @@
-"""Tests for space membership bootstrap payload plumbing."""
+"""Tests for membership bootstrap payload plumbing."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -135,11 +135,20 @@ def _post_start_job(client: TestClient, **payload_overrides):
     return response, bootstrap
 
 
+def _bootstrap_payload(bootstrap: MagicMock) -> dict:
+    core_api, namespace, assistant_id, activation_id, payload = bootstrap.call_args.args
+    assert core_api is not None
+    assert namespace
+    assert assistant_id == "assistant-123"
+    assert activation_id
+    return payload
+
+
 def test_form_json_string_parsed_to_list(client):
     response, bootstrap = _post_start_job(client, space_ids="[1, 2, 3]")
 
     assert response.status_code == 200
-    payload = bootstrap.call_args.args[4]
+    payload = _bootstrap_payload(bootstrap)
     assert payload["space_ids"] == [1, 2, 3]
 
 
@@ -147,8 +156,30 @@ def test_empty_form_means_empty_list(client):
     response, bootstrap = _post_start_job(client, space_ids="")
 
     assert response.status_code == 200
-    payload = bootstrap.call_args.args[4]
+    payload = _bootstrap_payload(bootstrap)
     assert payload["space_ids"] == []
+
+
+def test_contact_ids_default_in_bootstrap_payload(client):
+    response, bootstrap = _post_start_job(client)
+
+    assert response.status_code == 200
+    payload = _bootstrap_payload(bootstrap)
+    assert payload["self_contact_id"] == 0
+    assert payload["boss_contact_id"] == 1
+
+
+def test_contact_ids_override_in_bootstrap_payload(client):
+    response, bootstrap = _post_start_job(
+        client,
+        self_contact_id="42",
+        boss_contact_id="43",
+    )
+
+    assert response.status_code == 200
+    payload = _bootstrap_payload(bootstrap)
+    assert payload["self_contact_id"] == 42
+    assert payload["boss_contact_id"] == 43
 
 
 def test_invalid_form_returns_400(client):

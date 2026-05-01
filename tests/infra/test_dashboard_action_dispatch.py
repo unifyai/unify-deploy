@@ -22,12 +22,16 @@ def test_dashboard_action_env_carries_space_ids_as_csv():
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
             "space_ids": [3, 4],
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
         },
         run_key="run-123",
         job_name="unity-dashboard-action-abc",
     )
 
     assert env["SPACE_IDS"] == "3,4"
+    assert env["SELF_CONTACT_ID"] == "42"
+    assert env["BOSS_CONTACT_ID"] == "43"
 
 
 def test_dashboard_action_env_uses_empty_space_ids_for_solo_assistant():

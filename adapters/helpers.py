@@ -89,9 +89,11 @@ def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]
 
 
 def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
+    self_contact_id = assistant_data.get("self_contact_id", 0)
+    boss_contact_id = assistant_data.get("boss_contact_id", 1)
     return [
         {
-            "contact_id": 0,
+            "contact_id": self_contact_id,
             "first_name": assistant_data["assistant_first_name"],
             "surname": assistant_data["assistant_surname"],
             "email_address": assistant_data["assistant_email"],
@@ -105,7 +107,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "response_policy": "",
         },
         {
-            "contact_id": 1,
+            "contact_id": boss_contact_id,
             "first_name": assistant_data["user_first_name"],
             "surname": assistant_data["user_surname"],
             "email_address": assistant_data["user_email"],
@@ -474,7 +476,10 @@ def check_valid_contact(
         return default_contacts, False, None
 
     # check for boss user
-    boss_contact = [contact for contact in contacts if contact["contact_id"] == 1]
+    boss_contact_id = assistant_data.get("boss_contact_id", 1)
+    boss_contact = [
+        contact for contact in contacts if contact["contact_id"] == boss_contact_id
+    ]
     logger.info(f"Boss contact: {boss_contact}")
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
@@ -870,6 +875,8 @@ def _build_start_job_request_data(
             assistant.get("space_ids") or [],
             field_name="space_ids",
         ),
+        "self_contact_id": str(assistant.get("self_contact_id", 0)),
+        "boss_contact_id": str(assistant.get("boss_contact_id", 1)),
         "org_id": (
             str(assistant.get("org_id", ""))
             if assistant.get("org_id") is not None

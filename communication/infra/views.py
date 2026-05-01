@@ -463,6 +463,8 @@ def _build_startup_payload(
     demo_id: str,
     team_ids: str,
     space_ids: str,
+    self_contact_id: int,
+    boss_contact_id: int,
     org_id: str,
     assistant_job_title: str = "",
     wake_reasons: list[dict[str, Any]] | None = None,
@@ -505,6 +507,8 @@ def _build_startup_payload(
         "demo_id": int(demo_id) if demo_id else None,
         "team_ids": json.loads(team_ids) if team_ids else [],
         "space_ids": _decode_space_ids_form(space_ids),
+        "self_contact_id": self_contact_id,
+        "boss_contact_id": boss_contact_id,
         "org_id": int(org_id) if org_id else None,
     }
     if wake_reasons:
@@ -928,6 +932,8 @@ async def start_job(
     demo_id: str = Form(""),
     team_ids: str = Form(""),
     space_ids: str = Form(""),
+    self_contact_id: int = Form(0),
+    boss_contact_id: int = Form(1),
     org_id: str = Form(""),
     wake_reasons: str = Form(""),
 ):
@@ -968,6 +974,8 @@ async def start_job(
         demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
         team_ids: JSON-encoded list of team IDs the user belongs to (optional, defaults to empty)
         space_ids: JSON-encoded list of space IDs the assistant belongs to (optional, defaults to empty)
+        self_contact_id: Resolved assistant-self contact ID (optional, defaults to 0)
+        boss_contact_id: Resolved boss contact ID (optional, defaults to 1)
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
     session_name = assistant_session_name(assistant_id)
@@ -1025,6 +1033,8 @@ async def start_job(
             demo_id=demo_id,
             team_ids=team_ids,
             space_ids=space_ids,
+            self_contact_id=self_contact_id,
+            boss_contact_id=boss_contact_id,
             org_id=org_id,
             wake_reasons=requested_wake_reasons,
         )

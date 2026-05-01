@@ -117,6 +117,8 @@ def _build_dashboard_action_env(
 
     team_ids = assistant_data.get("team_ids") or []
     space_ids = assistant_data.get("space_ids") or []
+    self_contact_id = assistant_data.get("self_contact_id", 0)
+    boss_contact_id = assistant_data.get("boss_contact_id", 1)
     return {
         "UNITY_OFFLINE_TASK_MODE": "function",
         "UNITY_OFFLINE_TASK_FUNCTION_ID": str(action_metadata["function_id"]),
@@ -152,6 +154,7 @@ def _build_dashboard_action_env(
         "ASSISTANT_WHATSAPP_NUMBER": str(
             assistant_data.get("assistant_whatsapp_number") or "",
         ),
+        "SELF_CONTACT_ID": str(self_contact_id),
         "ASSISTANT_DESKTOP_MODE": "none",
         "ASSISTANT_USER_DESKTOP_MODE": "",
         "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
@@ -162,6 +165,7 @@ def _build_dashboard_action_env(
         "USER_NUMBER": str(assistant_data.get("user_number") or ""),
         "USER_EMAIL": str(assistant_data.get("user_email") or ""),
         "USER_WHATSAPP_NUMBER": str(assistant_data.get("user_whatsapp_number") or ""),
+        "BOSS_CONTACT_ID": str(boss_contact_id),
         "VOICE_PROVIDER": str(assistant_data.get("voice_provider") or "cartesia"),
         "VOICE_ID": str(assistant_data.get("voice_id") or ""),
         "VOICE_MODE": "tts",

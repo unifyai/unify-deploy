@@ -1905,6 +1905,8 @@ def _admin_record_to_data(a: dict) -> dict:
         "demo_id": "",
         "team_ids": json.dumps(a.get("team_ids", [])),
         "space_ids": json.dumps(a.get("space_ids", [])),
+        "self_contact_id": str(a.get("self_contact_id", 0)),
+        "boss_contact_id": str(a.get("boss_contact_id", 1)),
         "org_id": (
             str(a.get("organization_id", "")) if a.get("organization_id") else ""
         ),
