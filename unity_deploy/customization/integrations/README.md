@@ -129,6 +129,8 @@ is preserved and duplicate slugs are removed.
 |------|------|------|---------|
 | `github` | `packages/` | API | GitHub REST API example with mock-safe functions for users, repos, and issues |
 | `fetch_mcp` | `packages/` | MCP | Official MCP Fetch server example (`@modelcontextprotocol/server-fetch`) |
+| `clientepsilon_homes_compliance` | `client_packages/` | API | Private ClientEpsilon Homes compliance connector for SharePoint-backed certificate assurance (fail-closed until Graph credentials land) |
+| `clientepsilon_homes_compliance_mock` | `mock_packages/` | API | Deterministic ClientEpsilon compliance mock used for certificate renewal demo and video capture |
 | `client_alpha_repairs` | `client_packages/` | API | Private Client Alpha repairs client connector (fail-closed until live credentials land) |
 | `client_alpha_repairs_mock` | `mock_packages/` | API | Deterministic Client Alpha repairs mock used by scenario E2Es; activated only when `include_mock_packages=True` or a `*_mock` slug is enabled |
 
@@ -216,6 +218,8 @@ tests/parallel_run.sh --timeout 300 tests/customization/integrations/sync/test_f
 tests/parallel_run.sh tests/customization/scenarios
 .venv/bin/python tests/customization/integrations/validate_e2e.py
 .venv/bin/python tests/customization/integrations/validate_e2e.py --real
+.venv/bin/python deploy/scripts/dev/run_clientepsilon_compliance_scenario.py --no-materialize --no-outbox
+.venv/bin/python deploy/scripts/dev/run_clientepsilon_compliance_scenario.py --tick 0
 ```
 
 To add live callable execution coverage for a new API-tier integration in any
