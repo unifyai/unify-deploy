@@ -30,7 +30,7 @@ class _Publisher:
         return _PublishFuture()
 
 
-def _context(space_ids=None) -> dict:
+def _context(space_ids=None, space_summaries=None) -> dict:
     return {
         "assistant": {
             "assistant_id": "assistant-123",
@@ -45,6 +45,7 @@ def _context(space_ids=None) -> dict:
             "assistant_surname": "Assistant",
             "assistant_timezone": "UTC",
             "space_ids": space_ids or [],
+            "space_summaries": space_summaries or [],
         },
         "contacts": [],
         "is_valid_contact": True,
@@ -70,12 +71,20 @@ def test_membership_update_publishes_space_ids_inside_event(
     publisher = _Publisher()
     mock_get_pubsub_client.return_value = publisher
     mock_build_context.return_value = _context(space_ids=[9])
+    summaries = [
+        {
+            "space_id": 3,
+            "name": "Ops",
+            "description": "Operations workspace for customer support.",
+        },
+    ]
 
     response = _client().post(
         "/assistant/update",
         data={
             "assistant_id": "assistant-123",
             "space_ids": "[3, 4]",
+            "space_summaries": json.dumps(summaries),
             "update_kind": "membership",
         },
         headers={"Authorization": "Bearer test-key"},
@@ -87,6 +96,7 @@ def test_membership_update_publishes_space_ids_inside_event(
     assert published["thread"] == "assistant_update"
     assert published["event"]["assistant_id"] == "assistant-123"
     assert published["event"]["space_ids"] == [3, 4]
+    assert published["event"]["space_summaries"] == summaries
     assert published["event"]["update_kind"] == "membership"
 
 
@@ -98,7 +108,17 @@ def test_general_update_invokes_ensure_job(mock_build_context, mock_get_pubsub_c
 
     publisher = _Publisher()
     mock_get_pubsub_client.return_value = publisher
-    mock_build_context.return_value = _context(space_ids=[5, 6])
+    summaries = [
+        {
+            "space_id": 5,
+            "name": "Support",
+            "description": "Support workspace for customer issues.",
+        },
+    ]
+    mock_build_context.return_value = _context(
+        space_ids=[5, 6],
+        space_summaries=summaries,
+    )
 
     response = _client().post(
         "/assistant/update",
@@ -110,6 +130,7 @@ def test_general_update_invokes_ensure_job(mock_build_context, mock_get_pubsub_c
     assert mock_build_context.call_args.kwargs["ensure_job"] is True
     published = json.loads(publisher.published["data"].decode("utf-8"))
     assert published["event"]["space_ids"] == [5, 6]
+    assert published["event"]["space_summaries"] == summaries
     assert published["event"]["update_kind"] == "general"
 
 
@@ -140,4 +161,23 @@ def test_invalid_space_ids_returns_400_before_wake(mock_build_context):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "space_ids must be a list of integers"
+    mock_build_context.assert_not_called()
+
+
+@patch.object(SETTINGS, "orchestra_admin_key", "test-key")
+@patch("adapters.main.build_webhook_context")
+def test_invalid_space_summaries_returns_400_before_wake(mock_build_context):
+    """Malformed summary payloads fail before any startup side effect."""
+
+    response = _client().post(
+        "/assistant/update",
+        data={
+            "assistant_id": "assistant-123",
+            "space_summaries": '[{"space_id": "bad", "name": "Ops", "description": "Bad"}]',
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "space_summaries.space_id must be an integer"
     mock_build_context.assert_not_called()

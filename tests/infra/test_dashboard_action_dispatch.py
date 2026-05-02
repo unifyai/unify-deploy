@@ -1,5 +1,7 @@
 """Tests for dashboard action offline runner payloads."""
 
+import json
+
 from communication.infra.dashboard_actions import (
     DashboardActionDispatchRequest,
     _build_dashboard_action_env,
@@ -22,6 +24,13 @@ def test_dashboard_action_env_carries_space_ids_as_csv():
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
             "space_ids": [3, 4],
+            "space_summaries": [
+                {
+                    "space_id": 3,
+                    "name": "Ops",
+                    "description": "Operations workspace for dashboard actions.",
+                },
+            ],
             "self_contact_id": 42,
             "boss_contact_id": 43,
         },
@@ -30,6 +39,13 @@ def test_dashboard_action_env_carries_space_ids_as_csv():
     )
 
     assert env["SPACE_IDS"] == "3,4"
+    assert json.loads(env["SPACE_SUMMARIES"]) == [
+        {
+            "space_id": 3,
+            "name": "Ops",
+            "description": "Operations workspace for dashboard actions.",
+        },
+    ]
     assert env["SELF_CONTACT_ID"] == "42"
     assert env["BOSS_CONTACT_ID"] == "43"
 
@@ -56,3 +72,4 @@ def test_dashboard_action_env_uses_empty_space_ids_for_solo_assistant():
     )
 
     assert env["SPACE_IDS"] == ""
+    assert env["SPACE_SUMMARIES"] == ""

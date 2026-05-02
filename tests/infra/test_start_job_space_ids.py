@@ -55,6 +55,7 @@ def _start_job_payload(**overrides) -> dict[str, str]:
         "demo_id": "",
         "team_ids": "[]",
         "space_ids": "",
+        "space_summaries": "",
         "org_id": "",
     }
     payload.update(overrides)
@@ -145,11 +146,25 @@ def _bootstrap_payload(bootstrap: MagicMock) -> dict:
 
 
 def test_form_json_string_parsed_to_list(client):
-    response, bootstrap = _post_start_job(client, space_ids="[1, 2, 3]")
+    response, bootstrap = _post_start_job(
+        client,
+        space_ids="[1, 2, 3]",
+        space_summaries=(
+            '[{"space_id": 1, "name": "Ops", '
+            '"description": "Operations workspace for customer support."}]'
+        ),
+    )
 
     assert response.status_code == 200
     payload = _bootstrap_payload(bootstrap)
     assert payload["space_ids"] == [1, 2, 3]
+    assert payload["space_summaries"] == [
+        {
+            "space_id": 1,
+            "name": "Ops",
+            "description": "Operations workspace for customer support.",
+        },
+    ]
 
 
 def test_empty_form_means_empty_list(client):
@@ -158,6 +173,7 @@ def test_empty_form_means_empty_list(client):
     assert response.status_code == 200
     payload = _bootstrap_payload(bootstrap)
     assert payload["space_ids"] == []
+    assert payload["space_summaries"] == []
 
 
 def test_contact_ids_default_in_bootstrap_payload(client):
@@ -187,4 +203,15 @@ def test_invalid_form_returns_400(client):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "space_ids must be a list of integers"
+    bootstrap.assert_not_called()
+
+
+def test_invalid_space_summaries_form_returns_400(client):
+    response, bootstrap = _post_start_job(
+        client,
+        space_summaries='[{"space_id": "not-int", "name": "Ops", "description": "Bad"}]',
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "space_summaries.space_id must be an integer"
     bootstrap.assert_not_called()

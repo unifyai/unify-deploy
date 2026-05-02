@@ -118,6 +118,10 @@ from common.livekit import (
 
 from common.oauth import OAuthStateError, verify_oauth_state
 from common.int_list_codec import decode_int_list_from_form, normalize_int_list
+from common.space_summaries_codec import (
+    decode_space_summaries_from_form,
+    normalize_space_summaries,
+)
 from common.settings import SETTINGS
 from common.task_destination import assistant_has_task_destination
 
@@ -2386,6 +2390,7 @@ async def assistant_update_webhook(request: Request):
         form_data = await request.form()
         assistant_id = form_data.get("assistant_id")
         raw_space_ids = form_data.get("space_ids")
+        raw_space_summaries = form_data.get("space_summaries")
         update_kind = str(form_data.get("update_kind") or "general")
         if update_kind not in {"general", "membership"}:
             raise HTTPException(
@@ -2398,6 +2403,15 @@ async def assistant_update_webhook(request: Request):
                 space_ids_from_form = decode_int_list_from_form(
                     str(raw_space_ids),
                     field_name="space_ids",
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        space_summaries_from_form: list[dict[str, int | str]] | None = None
+        if raw_space_summaries not in (None, ""):
+            try:
+                space_summaries_from_form = decode_space_summaries_from_form(
+                    str(raw_space_summaries),
+                    field_name="space_summaries",
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2421,9 +2435,17 @@ async def assistant_update_webhook(request: Request):
             )
         else:
             space_ids = space_ids_from_form
+        if space_summaries_from_form is None:
+            space_summaries = normalize_space_summaries(
+                assistant_data.get("space_summaries") or [],
+                field_name="space_summaries",
+            )
+        else:
+            space_summaries = space_summaries_from_form
         assistant_event = {
             **assistant_data,
             "space_ids": space_ids,
+            "space_summaries": space_summaries,
             "update_kind": update_kind,
         }
         logger.info(

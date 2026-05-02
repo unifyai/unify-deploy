@@ -15,6 +15,7 @@ import uuid
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
 from common.int_list_codec import decode_int_list_from_form
+from common.space_summaries_codec import decode_space_summaries_from_form
 from .helpers import (
     acquire_named_lease,
     create_unity_job,
@@ -230,6 +231,18 @@ def _decode_space_ids_form(space_ids: str) -> list[int]:
 
     try:
         return decode_int_list_from_form(space_ids, field_name="space_ids")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _decode_space_summaries_form(space_summaries: str) -> list[dict[str, int | str]]:
+    """Decode shared-space summaries carried by the start-job form."""
+
+    try:
+        return decode_space_summaries_from_form(
+            space_summaries,
+            field_name="space_summaries",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -463,6 +476,7 @@ def _build_startup_payload(
     demo_id: str,
     team_ids: str,
     space_ids: str,
+    space_summaries: str,
     self_contact_id: int,
     boss_contact_id: int,
     org_id: str,
@@ -507,6 +521,7 @@ def _build_startup_payload(
         "demo_id": int(demo_id) if demo_id else None,
         "team_ids": json.loads(team_ids) if team_ids else [],
         "space_ids": _decode_space_ids_form(space_ids),
+        "space_summaries": _decode_space_summaries_form(space_summaries),
         "self_contact_id": self_contact_id,
         "boss_contact_id": boss_contact_id,
         "org_id": int(org_id) if org_id else None,
@@ -932,6 +947,7 @@ async def start_job(
     demo_id: str = Form(""),
     team_ids: str = Form(""),
     space_ids: str = Form(""),
+    space_summaries: str = Form(""),
     self_contact_id: int = Form(0),
     boss_contact_id: int = Form(1),
     org_id: str = Form(""),
@@ -974,6 +990,7 @@ async def start_job(
         demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
         team_ids: JSON-encoded list of team IDs the user belongs to (optional, defaults to empty)
         space_ids: JSON-encoded list of space IDs the assistant belongs to (optional, defaults to empty)
+        space_summaries: JSON-encoded list of shared space metadata (optional, defaults to empty)
         self_contact_id: Resolved assistant-self contact ID (optional, defaults to 0)
         boss_contact_id: Resolved boss contact ID (optional, defaults to 1)
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
@@ -1033,6 +1050,7 @@ async def start_job(
             demo_id=demo_id,
             team_ids=team_ids,
             space_ids=space_ids,
+            space_summaries=space_summaries,
             self_contact_id=self_contact_id,
             boss_contact_id=boss_contact_id,
             org_id=org_id,

@@ -177,10 +177,18 @@ def test_scheduled_task_due_rejects_revoked_space_destination():
     """Revoked shared due delivery should ack without waking the assistant."""
 
     client = TestClient(app)
+    assistant_data = _assistant_data()
+    assistant_data["space_summaries"] = [
+        {
+            "space_id": 7,
+            "name": "Revoked",
+            "description": "Revoked workspace retained only in stale display metadata.",
+        },
+    ]
 
     with (
         patch("adapters.main.SETTINGS.orchestra_admin_key", "test-admin-key"),
-        patch("adapters.main.get_assistant", return_value=_assistant_data()),
+        patch("adapters.main.get_assistant", return_value=assistant_data),
         patch("adapters.main.dispatch_unity_start_intent") as mock_dispatch,
         patch("adapters.main._publish_unity_system_event") as mock_publish,
     ):

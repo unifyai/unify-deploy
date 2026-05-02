@@ -40,6 +40,7 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
 )
 
 from common.int_list_codec import encode_int_list_for_form
+from common.space_summaries_codec import encode_space_summaries_for_form
 from common.settings import SETTINGS
 
 _pubsub_client = None
@@ -874,6 +875,10 @@ def _build_start_job_request_data(
         "space_ids": encode_int_list_for_form(
             assistant.get("space_ids") or [],
             field_name="space_ids",
+        ),
+        "space_summaries": encode_space_summaries_for_form(
+            assistant.get("space_summaries") or [],
+            field_name="space_summaries",
         ),
         "self_contact_id": str(assistant.get("self_contact_id", 0)),
         "boss_contact_id": str(assistant.get("boss_contact_id", 1)),

@@ -1,6 +1,7 @@
 """Unit tests for the hidden offline task dispatch lane."""
 
 import hashlib
+import json
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -312,6 +313,13 @@ def test_offline_runner_env_carries_space_ids_as_csv():
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
             "space_ids": [1, 2],
+            "space_summaries": [
+                {
+                    "space_id": 1,
+                    "name": "Ops",
+                    "description": "Operations workspace for customer support.",
+                },
+            ],
             "self_contact_id": 42,
             "boss_contact_id": 43,
         },
@@ -320,6 +328,13 @@ def test_offline_runner_env_carries_space_ids_as_csv():
     )
 
     assert env["SPACE_IDS"] == "1,2"
+    assert json.loads(env["SPACE_SUMMARIES"]) == [
+        {
+            "space_id": 1,
+            "name": "Ops",
+            "description": "Operations workspace for customer support.",
+        },
+    ]
     assert env["SELF_CONTACT_ID"] == "42"
     assert env["BOSS_CONTACT_ID"] == "43"
     assert "TASK_DESTINATION" not in env
@@ -369,6 +384,7 @@ def test_offline_runner_env_uses_empty_space_ids_for_solo_assistant():
     )
 
     assert env["SPACE_IDS"] == ""
+    assert env["SPACE_SUMMARIES"] == ""
 
 
 def test_offline_dispatch_persists_trigger_provenance_on_run_create():

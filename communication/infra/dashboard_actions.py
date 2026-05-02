@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from common.assistant_lookup import get_assistant
 from common.int_list_codec import encode_int_list_for_env
+from common.space_summaries_codec import encode_space_summaries_for_env
 from common.settings import SETTINGS
 
 from .helpers import create_unity_job
@@ -117,6 +118,7 @@ def _build_dashboard_action_env(
 
     team_ids = assistant_data.get("team_ids") or []
     space_ids = assistant_data.get("space_ids") or []
+    space_summaries = assistant_data.get("space_summaries") or []
     self_contact_id = assistant_data.get("self_contact_id", 0)
     boss_contact_id = assistant_data.get("boss_contact_id", 1)
     return {
@@ -171,6 +173,10 @@ def _build_dashboard_action_env(
         "VOICE_MODE": "tts",
         "TEAM_IDS": ",".join(str(tid) for tid in team_ids),
         "SPACE_IDS": encode_int_list_for_env(space_ids, field_name="space_ids"),
+        "SPACE_SUMMARIES": encode_space_summaries_for_env(
+            space_summaries,
+            field_name="space_summaries",
+        ),
         "ORG_ID": (
             str(assistant_data.get("org_id"))
             if assistant_data.get("org_id") is not None
