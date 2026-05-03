@@ -20,17 +20,15 @@ wake after a deployment spec changes.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import logging
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
+from unity.logger import LOGGER as logger
 from unity_deploy.utils.orchestra_client import OrchestraClientError, patch_json
 
 if TYPE_CHECKING:
     from unity.conversation_manager.conversation_manager import ConversationManager
     from unity.session_details import SessionDetails
-
-logger = logging.getLogger(__name__)
 
 
 @contextmanager
