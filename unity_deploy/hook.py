@@ -19,7 +19,9 @@ wake after a deployment spec changes.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
+from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
 from unity_deploy.utils.orchestra_client import OrchestraClientError, patch_json
@@ -29,6 +31,19 @@ if TYPE_CHECKING:
     from unity.session_details import SessionDetails
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _timed_hook_phase(name: str):
+    start = perf_counter()
+    try:
+        yield
+    finally:
+        logger.info(
+            "Enterprise startup hook phase '%s' completed in %.2fs",
+            name,
+            perf_counter() - start,
+        )
 
 
 def _sync_console_config(
@@ -81,35 +96,43 @@ def startup_hook(
     from unity_deploy.customization.clients import resolve
     from unity_deploy.customization.integrations.activation import expand_integrations
     from unity_deploy.customization.seed_sync import sync_all_seed_data
-    from unity_deploy.runtime import get_runtime_backend_overrides
     from unity.function_manager.custom_functions import (
         collect_functions_from_directories,
         collect_venvs_from_directories,
     )
+    from unity_deploy.runtime import get_runtime_backend_overrides
     from unity.manager_registry import ManagerRegistry
 
-    resolved = resolve(
-        org_id=session_details.org_id,
-        team_ids=session_details.team_ids or None,
-        user_id=session_details.user.id,
-        assistant_id=session_details.assistant.agent_id,
-    )
-    resolved = expand_integrations(resolved)
+    assistant_id = session_details.assistant.agent_id
+    with _timed_hook_phase("resolve"):
+        resolved = resolve(
+            org_id=session_details.org_id,
+            team_ids=session_details.team_ids or None,
+            user_id=session_details.user.id,
+            assistant_id=assistant_id,
+        )
+    with _timed_hook_phase("expand_integrations"):
+        resolved = expand_integrations(resolved)
 
-    sync_all_seed_data(resolved)
+    with _timed_hook_phase("sync_all_seed_data"):
+        sync_all_seed_data(resolved)
 
     if resolved.console_config:
-        _sync_console_config(
-            session_details.assistant.agent_id,
-            resolved.console_config,
-        )
+        with _timed_hook_phase("sync_console_config"):
+            _sync_console_config(
+                assistant_id,
+                resolved.console_config,
+            )
 
     if resolved.function_dirs or resolved.venv_dirs:
-        source_fns = collect_functions_from_directories(resolved.function_dirs)
-        source_venvs = collect_venvs_from_directories(resolved.venv_dirs)
+        with _timed_hook_phase("collect_functions_from_directories"):
+            source_fns = collect_functions_from_directories(resolved.function_dirs)
+        with _timed_hook_phase("collect_venvs_from_directories"):
+            source_venvs = collect_venvs_from_directories(resolved.venv_dirs)
         fm = ManagerRegistry.get_function_manager()
         if source_fns or source_venvs:
-            fm.sync_custom(source_functions=source_fns, source_venvs=source_venvs)
+            with _timed_hook_phase("fm.sync_custom"):
+                fm.sync_custom(source_functions=source_fns, source_venvs=source_venvs)
 
     if resolved.mcp_configs:
         logger.info(
@@ -120,20 +143,21 @@ def startup_hook(
     config = resolved.config
     url_mappings = dict(config.url_mappings or {})
     url_mappings.update(resolved.url_mappings)
-    return {
-        "environments": resolved.environments,
-        "url_mappings": url_mappings or None,
-        "runtime_backends": get_runtime_backend_overrides(),
-        "actor_kwargs": {
-            k: v
-            for k, v in {
-                "can_compose": config.can_compose,
-                "can_store": config.can_store,
-                "timeout": config.timeout,
-                "model": config.model,
-                "prompt_caching": config.prompt_caching,
-                "guidelines": config.guidelines,
-            }.items()
-            if v is not None
-        },
-    }
+    with _timed_hook_phase("build_startup_config"):
+        return {
+            "environments": resolved.environments,
+            "url_mappings": url_mappings or None,
+            "runtime_backends": get_runtime_backend_overrides(),
+            "actor_kwargs": {
+                k: v
+                for k, v in {
+                    "can_compose": config.can_compose,
+                    "can_store": config.can_store,
+                    "timeout": config.timeout,
+                    "model": config.model,
+                    "prompt_caching": config.prompt_caching,
+                    "guidelines": config.guidelines,
+                }.items()
+                if v is not None
+            },
+        }
