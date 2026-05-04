@@ -69,7 +69,41 @@ steps:
   - '--timeout=300'
   - '--cpu-boost'
   - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=staging,PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc'
-  waitFor: ['push-sha-tag', 'pause-legacy-infra-schedulers']
+  - '--labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID}'
+  waitFor: ['push-sha-tag', 'push-latest-tag', 'pause-legacy-infra-schedulers']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'route-canonical-traffic'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    REVISION=$$(gcloud run revisions list \
+      --service=${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --filter="metadata.labels.gcb-build-id=${BUILD_ID}" \
+      --sort-by="~metadata.creationTimestamp" \
+      --limit=1 \
+      --format="value(metadata.name)")
+    if [ -z "$$REVISION" ]; then
+      echo "No deployed revision found for build ${BUILD_ID}" >&2
+      exit 1
+    fi
+    LATEST_CREATED=$$(gcloud run services describe ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --format="value(status.latestCreatedRevisionName)")
+    if [ "$$REVISION" != "$$LATEST_CREATED" ]; then
+      echo "Skipping traffic route for $$REVISION because $$LATEST_CREATED is newer"
+      exit 0
+    fi
+    gcloud run services update-traffic ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --to-revisions="$$REVISION=100" \
+      --quiet
+  waitFor: ['deploy']
 
   # Update Cloud Scheduler: Email Watches Staging
   # 00:10 UTC daily.  Offset from the 00:00 spike (microsoft-tokens,

@@ -114,11 +114,46 @@ steps:
     gcloud run services update ${_SERVICE_NAME} \
       --region=${_REGION} --platform=managed \
       --image="$$CANONICAL_IMAGE" \
+      --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=${BUILD_ID},preview-restore=true \
       --remove-env-vars=BRANCH_TAG \
       --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
       --quiet
     echo "canonical service template restored to image $$CANONICAL_IMAGE"
   waitFor: ['deploy-tagged']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'restore-canonical-traffic'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    REVISION=$$(gcloud run revisions list \
+      --service=${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --filter="metadata.labels.gcb-build-id=${BUILD_ID} AND metadata.labels.preview-restore=true" \
+      --sort-by="~metadata.creationTimestamp" \
+      --limit=1 \
+      --format="value(metadata.name)")
+    if [ -z "$$REVISION" ]; then
+      echo "No canonical restore revision found for build ${BUILD_ID}" >&2
+      exit 1
+    fi
+    LATEST_CREATED=$$(gcloud run services describe ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --format="value(status.latestCreatedRevisionName)")
+    if [ "$$REVISION" != "$$LATEST_CREATED" ]; then
+      echo "Skipping traffic restore for $$REVISION because $$LATEST_CREATED is newer"
+      exit 0
+    fi
+    gcloud run services update-traffic ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --to-revisions="$$REVISION=100" \
+      --quiet
+    echo "canonical traffic restored to revision $$REVISION"
+  waitFor: ['restore-canonical-template']
 
 options:
   substitutionOption: ALLOW_LOOSE

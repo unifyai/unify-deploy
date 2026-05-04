@@ -81,10 +81,44 @@ steps:
   - '--region=${_REGION}'
   - '--min-instances=1'
   - '--update-env-vars=DEPLOY_ENV=staging'
+  - '--labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID}'
   - '--quiet'
   id: Deploy Unity Comms App
   entrypoint: gcloud
-  waitFor: ['push-sha-tag', 'deploy-assistant-session-controller']
+  waitFor: ['push-sha-tag', 'push-latest-tag', 'deploy-assistant-session-controller']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'route-canonical-traffic'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    REVISION=$$(gcloud run revisions list \
+      --service=${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --filter="metadata.labels.gcb-build-id=${BUILD_ID}" \
+      --sort-by="~metadata.creationTimestamp" \
+      --limit=1 \
+      --format="value(metadata.name)")
+    if [ -z "$$REVISION" ]; then
+      echo "No deployed revision found for build ${BUILD_ID}" >&2
+      exit 1
+    fi
+    LATEST_CREATED=$$(gcloud run services describe ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --format="value(status.latestCreatedRevisionName)")
+    if [ "$$REVISION" != "$$LATEST_CREATED" ]; then
+      echo "Skipping traffic route for $$REVISION because $$LATEST_CREATED is newer"
+      exit 0
+    fi
+    gcloud run services update-traffic ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --to-revisions="$$REVISION=100" \
+      --quiet
+  waitFor: ['Deploy Unity Comms App']
 
 # Options
 options:
