@@ -6,9 +6,10 @@ group name declared in this package's ``pyproject.toml``.
 
 Keeps the wake-time path intentionally thin:
 
-1. Resolve assistant deployment spec (deployment-matched spec; shared seed layers merged org→team→user→assistant; secrets from ``.secrets.json`` applied last)
+1. Resolve assistant deployment spec (deployment-matched spec; shared seed layers merged org/team/user/assistant; secrets from ``.secrets.json`` applied last)
 2. Expand integrations into in-memory runtime config.
-3. Build actor startup config.
+3. Start assistant-scoped runtime reconciliation in the background.
+4. Build actor startup config.
 
 Deploy-time control-plane metadata, such as Console ``console_config``, is
 primarily reconciled by ``unity_deploy.scripts.reconcile_deployment`` with the
@@ -85,9 +86,9 @@ def startup_hook(
     cm : ConversationManager
         The conversation manager instance (fully constructed minus the Actor).
     session_details : SessionDetails
-        Runtime identity carrying org_id, team_ids, user.id, assistant.agent_id.
-        Console control-plane state should already have been reconciled before
-        this hook runs.
+        Runtime identity carrying org_id, team_ids, user.id, assistant.agent_id,
+        and the assistant-scoped UNIFY_KEY. Console control-plane state should
+        already have been reconciled before this hook runs.
 
     Returns
     -------
@@ -116,41 +117,67 @@ def startup_hook(
     with _timed_hook_phase("expand_integrations"):
         resolved = expand_startup_integrations(resolved)
 
-    wake_hydration_mode = (
-        os.environ.get(
-            "UNITY_DEPLOY_WAKE_HYDRATION_MODE",
-            "off",
-        )
-        .strip()
-        .lower()
+    runtime_reconcile_mode = (
+        os.environ.get("UNITY_DEPLOY_RUNTIME_RECONCILE_MODE", "async").strip().lower()
     )
-    if wake_hydration_mode not in {"off", "blocking"}:
+    if runtime_reconcile_mode not in {"async", "off", "blocking"}:
         logger.warning(
-            "Unknown UNITY_DEPLOY_WAKE_HYDRATION_MODE=%r; using off",
-            wake_hydration_mode,
+            "Unknown runtime reconcile mode %r; using async",
+            runtime_reconcile_mode,
         )
-        wake_hydration_mode = "off"
+        runtime_reconcile_mode = "async"
 
-    if wake_hydration_mode == "blocking":
-        from unity_deploy.deployment_reconcile.runtime_state import (
-            RuntimeIdentity,
-            materialize_runtime_state,
-        )
-
+    if runtime_reconcile_mode == "blocking":
         logger.warning(
-            "Running explicit blocking runtime state repair for assistant %s",
+            "Running explicit blocking runtime reconciliation for assistant %s",
             assistant_id,
         )
-        with _timed_hook_phase("materialize_runtime_state"):
-            materialize_runtime_state(
+
+    from unity_deploy.runtime_reconcile.context import runtime_identity_from_session
+    from unity_deploy.runtime_reconcile.runner import (
+        RuntimeReconcileHandle,
+        start_runtime_reconcile,
+    )
+    from unity_deploy.runtime_reconcile.status import (
+        RuntimeReconcileStatusHandle,
+        runtime_reconcile_prompt_note,
+    )
+
+    try:
+        with _timed_hook_phase("start_runtime_reconcile"):
+            reconcile_handle = start_runtime_reconcile(
+                cm,
                 resolved,
-                RuntimeIdentity(
-                    assistant_id=identity.assistant_id,
-                    user_id=identity.user_id,
-                    org_id=identity.org_id,
-                    team_ids=identity.team_ids,
-                ),
+                runtime_identity_from_session(session_details),
+                mode=runtime_reconcile_mode,
             )
+    except Exception as exc:
+        logger.exception(
+            "Failed to schedule runtime reconciliation for assistant %s; continuing degraded",
+            assistant_id,
+        )
+        logging.getLogger(__name__).exception(
+            "Failed to schedule runtime reconciliation for assistant %s; continuing degraded",
+            assistant_id,
+        )
+        status = RuntimeReconcileStatusHandle()
+        status.update(
+            phase="failed",
+            message="Background assistant setup failed to start.",
+            error=str(exc),
+            blocking_resources=("contacts", "guidance", "knowledge", "functions"),
+            resources={
+                "contacts": "failed",
+                "guidance": "failed",
+                "knowledge": "failed",
+                "secrets": "failed",
+                "functions": "failed",
+            },
+            data_freshness="failed",
+        )
+        if cm is not None:
+            setattr(cm, "deployment_runtime_reconcile_status", status)
+        reconcile_handle = RuntimeReconcileHandle(status=status)
 
     if resolved.console_config and os.environ.get(
         "UNITY_DEPLOY_WAKE_CONSOLE_REPAIR",
@@ -169,4 +196,19 @@ def startup_hook(
         )
 
     with _timed_hook_phase("build_actor_startup_config"):
-        return build_actor_startup_config(resolved)
+        actor_config = build_actor_startup_config(resolved)
+
+    setup_note = runtime_reconcile_prompt_note(reconcile_handle.status)
+    if setup_note:
+        actor_kwargs = actor_config.setdefault("actor_kwargs", {})
+        actor_kwargs["guidelines"] = "\n\n".join(
+            filter(
+                None,
+                [
+                    actor_kwargs.get("guidelines"),
+                    setup_note,
+                ],
+            ),
+        )
+
+    return actor_config
