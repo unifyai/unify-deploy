@@ -73,7 +73,9 @@ def test_seed_layer_integrations_merge_with_spec_integrations():
         },
     )
 
-    resolved = _spec_to_resolved(spec, entry, assistant_id=123)
+    resolved = _spec_to_resolved(
+        spec, entry, client_name="test", assistant_id=123,
+    )
 
     assert resolved.integrations == ["github", "fetch_mcp"]
 

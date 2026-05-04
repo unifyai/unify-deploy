@@ -271,3 +271,147 @@ class ScenarioSpec(BaseModel):
             if target.table == table:
                 return target
         raise KeyError(f"No data target configured for table '{table}'")
+
+
+# ---------------------------------------------------------------------------
+# Scenario activation — deployment-side template instantiation
+# ---------------------------------------------------------------------------
+
+
+class ScenarioActivation(BaseModel):
+    """Deployment-side activation of a generic scenario template.
+
+    Platform integration packages ship reusable scenario templates under
+    ``<package>/scenarios/`` with placeholder fields (empty ``client`` /
+    ``deployment``, empty ``tasks[*].target.assistant_id``).  A
+    ``ScenarioActivation`` instance, declared on
+    :class:`unity_deploy.customization.deployment_types.SeedLayer` or
+    :class:`unity_deploy.customization.deployment_types.DeploymentSpec`,
+    instructs the framework to load that template, substitute the
+    placeholders with per-client values, validate the result as a
+    concrete :class:`ScenarioSpec`, and register it into the resolved
+    customization the offline task lane consumes.
+
+    This eliminates the need for ``client_packages/<client>_<integration>_sync/``
+    wrapper packages whose only purpose is to copy a template and fill
+    placeholders.
+    """
+
+    scenario_template: str = Field(
+        ...,
+        description=(
+            "Identifier of the generic scenario YAML to activate, in the "
+            "form '<package_slug>/<scenario_filename_stem>'.  E.g. "
+            "'hubspot/crm_full_sync_v0' resolves to "
+            "packages/hubspot/scenarios/crm_full_sync_v0.yaml.  Templates "
+            "referenced here MUST exist; missing templates raise a "
+            "FileNotFoundError at materialisation time."
+        ),
+    )
+
+    assistant_id: str = Field(
+        ...,
+        description=(
+            "Assistant id this activation binds to.  Substituted into "
+            "every tasks[*].target.assistant_id at materialisation time."
+        ),
+    )
+
+    scenario_id_override: str | None = Field(
+        default=None,
+        description=(
+            "Override the materialised scenario's ``scenario_id`` (and "
+            "every tasks[*].target.scenario_id to keep them consistent).  "
+            "Required when activating the same template for multiple "
+            "assistants/clients on the same control-plane to avoid id "
+            "collisions.  When omitted, defaults to "
+            "'{client}_{template_stem}'."
+        ),
+    )
+
+    client_override: str | None = Field(
+        default=None,
+        description=(
+            "Stamp into the materialised scenario's ``client`` field.  "
+            "Defaults to the slug of the client whose register_layer / "
+            "DeploymentSpec hosts this activation."
+        ),
+    )
+
+    deployment_override: str | None = Field(
+        default=None,
+        description=(
+            "Stamp into the materialised scenario's ``deployment`` field.  "
+            "Defaults to the resolved deployment name."
+        ),
+    )
+
+    tasks_enabled: bool = Field(
+        default=False,
+        description=(
+            "Initial state of every tasks[*].enabled in the materialised "
+            "scenario.  Default false (per the a71a840 convention — "
+            "operators flip after control-plane seeding).  Set true to "
+            "ship enabled."
+        ),
+    )
+
+    task_description_override: str | None = Field(
+        default=None,
+        description=(
+            "Substitute into tasks[*].activation.task_description when "
+            "the template's value is empty or starts with 'REPLACE_ME'.  "
+            "Templates that already include a usable description leave "
+            "this unset."
+        ),
+    )
+
+    object_intervals_override: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Per-object cadence overrides.  Materialised as a single env "
+            "var '<PACKAGE_SLUG_UPPER>_SYNC_OBJECT_INTERVALS' with value "
+            "'key1:int,key2:int,...' and merged into the resolved "
+            "secrets bundle so the orchestrator picks it up at runtime."
+        ),
+    )
+
+    config_overrides: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Free-form package-config env-var overrides.  Each entry is "
+            "materialised as a Secret with the same name on the resolved "
+            "customization.  Useful for per-deployment policy differences "
+            "(retention windows, redaction toggles, etc.) without editing "
+            "the platform template."
+        ),
+    )
+
+    @field_validator("scenario_template")
+    @classmethod
+    def _validate_template_format(cls, v: str) -> str:
+        if "/" not in v:
+            raise ValueError(
+                "scenario_template must be '<package_slug>/<filename_stem>', "
+                f"got {v!r}",
+            )
+        slug, _, stem = v.partition("/")
+        if not slug.strip() or not stem.strip():
+            raise ValueError(
+                "scenario_template package_slug and stem must both be non-empty, "
+                f"got {v!r}",
+            )
+        if stem.endswith(".yaml") or stem.endswith(".yml"):
+            raise ValueError(
+                "scenario_template stem must not include a file extension; "
+                f"got {v!r}.  Use 'hubspot/crm_full_sync_v0' not "
+                "'hubspot/crm_full_sync_v0.yaml'.",
+            )
+        return v
+
+    @field_validator("assistant_id")
+    @classmethod
+    def _validate_assistant_id(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("assistant_id must be non-empty")
+        return v

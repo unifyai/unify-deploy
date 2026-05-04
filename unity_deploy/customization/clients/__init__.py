@@ -200,6 +200,7 @@ def _spec_to_resolved(
     spec: "DeploymentSpec",
     entry: ClientDeploymentEntry,
     *,
+    client_name: str,
     org_id: int | None = None,
     team_ids: list[int] | None = None,
     user_id: str | None = None,
@@ -211,7 +212,19 @@ def _spec_to_resolved(
     scope order (org -> team -> user -> assistant) and merged onto
     the spec's seed data.  File-based secrets from ``.secrets.json``
     are applied last.
+
+    Scenario activations declared on the deployment spec and on each
+    matching seed layer are materialised here: their generic templates
+    are loaded from disk, placeholder fields substituted with the
+    per-client values, validated as :class:`ScenarioSpec`, and appended
+    to ``resolved.scenarios``.  Env-var overlay produced by activations
+    is merged into the secrets bundle.
     """
+    from unity_deploy.customization.deployment_types import resolve_deployment_name
+    from unity_deploy.customization.scenarios.loader import (
+        materialise_scenario_activations,
+    )
+    from unity_deploy.customization.scenarios.types import ScenarioActivation
     from unity_deploy.customization.secrets_file import load_secrets
 
     contacts: list[dict] = list(spec.contacts)
@@ -220,6 +233,7 @@ def _spec_to_resolved(
     blacklist: list[dict] = list(spec.blacklist)
     secrets: list[Secret] = list(spec.secrets)
     integrations: list[str] = list(spec.integrations)
+    activations: list[ScenarioActivation] = list(spec.scenarios)
 
     for layer in _collect_layers(
         entry,
@@ -240,6 +254,25 @@ def _spec_to_resolved(
             secrets = _merge_by_key(secrets, list(layer.secrets), _secret_key)
         if layer.integrations:
             integrations = _merge_integrations(integrations, list(layer.integrations))
+        if layer.scenarios:
+            activations = [*activations, *layer.scenarios]
+
+    materialised_scenarios: list[Any] = []
+    if activations:
+        deployment_name = resolve_deployment_name(
+            entry.mapping,
+            user_id=user_id,
+            org_id=org_id,
+            team_ids=team_ids,
+            assistant_id=assistant_id,
+        )
+        materialised_scenarios, activation_secrets = materialise_scenario_activations(
+            activations,
+            client_slug=client_name,
+            deployment_name=deployment_name,
+        )
+        if activation_secrets:
+            secrets = _merge_by_key(secrets, activation_secrets, _secret_key)
 
     file_secrets = load_secrets(
         org_id=org_id,
@@ -265,7 +298,7 @@ def _spec_to_resolved(
         mcp_configs=[],
         url_mappings={},
         console_config=spec.console_config,
-        scenarios=[],
+        scenarios=list(materialised_scenarios),
     )
 
 
@@ -321,6 +354,7 @@ def resolve_from_deployments(
         return _spec_to_resolved(
             spec,
             entry,
+            client_name=client_name,
             org_id=org_id,
             team_ids=team_ids,
             user_id=user_id,
