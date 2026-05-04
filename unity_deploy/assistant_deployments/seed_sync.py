@@ -110,6 +110,22 @@ class SeedMetaStore:
 # ---------------------------------------------------------------------------
 
 
+def _manager_api(manager: Any, method_name: str) -> Callable[..., Any]:
+    """Resolve a manager API method across public/private naming variants."""
+
+    method_names = (method_name, f"_{method_name}")
+    for name in method_names:
+        method = getattr(manager, name, None)
+        if callable(method):
+            return method
+
+    manager_name = type(manager).__name__
+    candidates = ", ".join(method_names)
+    raise AttributeError(
+        f"{manager_name} has none of the expected methods: {candidates}",
+    )
+
+
 def sync_seed_data(
     *,
     manager_key: str,
@@ -195,21 +211,24 @@ def _sync_contacts(records: list[dict], meta: SeedMetaStore) -> bool:
     from unity.manager_registry import ManagerRegistry
 
     cm = ManagerRegistry.get_contact_manager()
+    filter_contacts = _manager_api(cm, "filter_contacts")
+    create_contact = _manager_api(cm, "create_contact")
+    update_contact = _manager_api(cm, "update_contact")
 
     def natural_key(r: dict) -> str:
         return f"{r.get('first_name') or ''}|{r.get('surname') or ''}".lower()
 
     def get_existing() -> list[dict]:
-        result = cm.filter_contacts(limit=1000)
+        result = filter_contacts(limit=1000)
         contacts = result.get("contacts", [])
         return [c.model_dump() if hasattr(c, "model_dump") else c for c in contacts]
 
     def create(rec: dict) -> Any:
-        return cm.create_contact(**{k: v for k, v in rec.items() if k != "contact_id"})
+        return create_contact(**{k: v for k, v in rec.items() if k != "contact_id"})
 
     def update(contact_id: int, rec: dict) -> Any:
         fields = {k: v for k, v in rec.items() if k != "contact_id"}
-        return cm.update_contact(contact_id=contact_id, **fields)
+        return update_contact(contact_id=contact_id, **fields)
 
     return sync_seed_data(
         manager_key="contacts",
@@ -230,6 +249,10 @@ def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
     from unity.manager_registry import ManagerRegistry
 
     gm = ManagerRegistry.get_guidance_manager()
+    filter_guidance = _manager_api(gm, "filter")
+    add_guidance = _manager_api(gm, "add_guidance")
+    update_guidance = _manager_api(gm, "update_guidance")
+    delete_guidance = _manager_api(gm, "delete_guidance")
     source_dicts = [r.model_dump() for r in records]
     readonly_fields = {"authoring_assistant_id"}
 
@@ -242,18 +265,18 @@ def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
         return str(r.get("title", ""))
 
     def get_existing() -> list[dict]:
-        entries = gm.filter(limit=1000)
+        entries = filter_guidance(limit=1000)
         return [g.model_dump() if hasattr(g, "model_dump") else g for g in entries]
 
     def create(rec: dict) -> Any:
-        return gm.add_guidance(**writable_fields(rec))
+        return add_guidance(**writable_fields(rec))
 
     def update(guidance_id: int, rec: dict) -> Any:
         fields = writable_fields(rec)
-        return gm.update_guidance(guidance_id=guidance_id, **fields)
+        return update_guidance(guidance_id=guidance_id, **fields)
 
     def delete(guidance_id: int) -> Any:
-        return gm.delete_guidance(guidance_id=guidance_id)
+        return delete_guidance(guidance_id=guidance_id)
 
     return sync_seed_data(
         manager_key="guidance",
@@ -275,6 +298,10 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
     from unity.manager_registry import ManagerRegistry
 
     sm = ManagerRegistry.get_secret_manager()
+    list_secret_keys = _manager_api(sm, "list_secret_keys")
+    create_secret = _manager_api(sm, "create_secret")
+    update_secret = _manager_api(sm, "update_secret")
+    delete_secret = _manager_api(sm, "delete_secret")
     source_dicts = [r.model_dump() for r in records]
 
     # Cache the existing secret values so the update closure can preserve
@@ -289,7 +316,7 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
         return str(r.get("name", ""))
 
     def get_existing() -> list[dict]:
-        keys = sm._list_secret_keys()
+        keys = list_secret_keys()
         result = []
         for name in keys:
             logs = unify.get_logs(
@@ -307,7 +334,7 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
         return result
 
     def create(rec: dict) -> Any:
-        return sm._create_secret(
+        return create_secret(
             name=rec["name"],
             value=rec["value"],
             description=rec.get("description"),
@@ -325,12 +352,12 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
                     rec["name"],
                 )
                 # Still allow description to update without touching value.
-                return sm._update_secret(
+                return update_secret(
                     name=rec["name"],
                     value=existing_value,
                     description=rec.get("description"),
                 )
-        return sm._update_secret(
+        return update_secret(
             name=rec["name"],
             value=rec.get("value"),
             description=rec.get("description"),
@@ -344,7 +371,7 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
             from_fields=["name"],
         )
         if logs:
-            return sm._delete_secret(name=logs[0].entries["name"])
+            return delete_secret(name=logs[0].entries["name"])
 
     return sync_seed_data(
         manager_key="secrets",
@@ -365,24 +392,28 @@ def _sync_blacklist(records: list[dict], meta: SeedMetaStore) -> bool:
     from unity.manager_registry import ManagerRegistry
 
     bm = ManagerRegistry.get_blacklist_manager()
+    filter_blacklist = _manager_api(bm, "filter_blacklist")
+    create_blacklist_entry = _manager_api(bm, "create_blacklist_entry")
+    update_blacklist_entry = _manager_api(bm, "update_blacklist_entry")
+    delete_blacklist_entry = _manager_api(bm, "delete_blacklist_entry")
 
     def natural_key(r: dict) -> str:
         return f"{r.get('medium', '')}|{r.get('contact_detail', '')}"
 
     def get_existing() -> list[dict]:
-        result = bm.filter_blacklist(limit=1000)
+        result = filter_blacklist(limit=1000)
         entries = result.get("entries", [])
         return [e.model_dump() if hasattr(e, "model_dump") else e for e in entries]
 
     def create(rec: dict) -> Any:
-        return bm.create_blacklist_entry(
+        return create_blacklist_entry(
             medium=rec["medium"],
             contact_detail=rec["contact_detail"],
             reason=rec.get("reason", ""),
         )
 
     def update(blacklist_id: int, rec: dict) -> Any:
-        return bm.update_blacklist_entry(
+        return update_blacklist_entry(
             blacklist_id=blacklist_id,
             medium=rec.get("medium"),
             contact_detail=rec.get("contact_detail"),
@@ -390,7 +421,7 @@ def _sync_blacklist(records: list[dict], meta: SeedMetaStore) -> bool:
         )
 
     def delete(blacklist_id: int) -> Any:
-        return bm.delete_blacklist_entry(blacklist_id=blacklist_id)
+        return delete_blacklist_entry(blacklist_id=blacklist_id)
 
     return sync_seed_data(
         manager_key="blacklist",
@@ -424,6 +455,12 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
     from unity.manager_registry import ManagerRegistry
 
     km = ManagerRegistry.get_knowledge_manager()
+    tables_overview = _manager_api(km, "tables_overview")
+    create_table = _manager_api(km, "create_table")
+    filter_rows = _manager_api(km, "filter")
+    add_rows = _manager_api(km, "add_rows")
+    update_rows = _manager_api(km, "update_rows")
+    delete_rows = _manager_api(km, "delete_rows")
 
     any_changed = False
     for table_name, table_spec in tables.items():
@@ -439,9 +476,9 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
             )
             continue
 
-        existing_tables = km._tables_overview()
+        existing_tables = tables_overview()
         if table_name not in existing_tables:
-            km._create_table(
+            create_table(
                 name=table_name,
                 description=table_spec.get("description"),
                 columns=table_spec.get("columns"),
@@ -451,7 +488,7 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
             return str(r.get(_sk, ""))
 
         def get_existing(_tn: str = table_name) -> list[dict]:
-            result = km._filter(tables=[_tn], limit=1000)
+            result = filter_rows(tables=[_tn], limit=1000)
             return result.get(_tn, [])
 
         unique_key = "row_id"
@@ -462,7 +499,7 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
 
         def create(rec: dict, _tn: str = table_name, _uk: str = unique_key) -> Any:
             clean = {k: v for k, v in rec.items() if k != _uk}
-            return km._add_rows(table=_tn, rows=[clean])
+            return add_rows(table=_tn, rows=[clean])
 
         def update(
             row_id: int,
@@ -471,10 +508,10 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
             _uk: str = unique_key,
         ) -> Any:
             clean = {k: v for k, v in rec.items() if k != _uk}
-            return km._update_rows(table=_tn, updates={row_id: clean})
+            return update_rows(table=_tn, updates={row_id: clean})
 
         def delete(row_id: int, _tn: str = table_name, _uk: str = unique_key) -> Any:
-            return km._delete_rows(filter=f"{_uk} == {row_id}", tables=[_tn])
+            return delete_rows(filter=f"{_uk} == {row_id}", tables=[_tn])
 
         changed = sync_seed_data(
             manager_key=f"knowledge/{table_name}",
