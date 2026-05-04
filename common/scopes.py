@@ -21,7 +21,6 @@ GOOGLE_SCOPE_BUNDLES: dict[str, list[str]] = {
     ],
     "drive": [
         "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/drive.readonly",
     ],
     "contacts": [
         "https://www.googleapis.com/auth/contacts.readonly",
