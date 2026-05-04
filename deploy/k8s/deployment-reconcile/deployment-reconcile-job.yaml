@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: unity-deployment-reconcile-
+  namespace: __NAMESPACE__
+  labels:
+    app: unity-deployment-reconcile
+    component: deployment-reconcile
+    environment: __ENVIRONMENT__
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: unity-deployment-reconcile
+        component: deployment-reconcile
+        environment: __ENVIRONMENT__
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: reconciler
+        image: __IMAGE__
+        imagePullPolicy: Always
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          set -- python -m unity_deploy.scripts.reconcile_deployment \
+            --environment "${UNITY_DEPLOYMENT_ENVIRONMENT}" \
+            --planes "${UNITY_DEPLOYMENT_PLANES}" \
+            --concurrency "${UNITY_DEPLOYMENT_CONCURRENCY}" \
+            --apply
+          if [ -n "${UNITY_DEPLOYMENT_CLIENT:-}" ]; then
+            set -- "$@" --client "${UNITY_DEPLOYMENT_CLIENT}"
+          fi
+          if [ -n "${UNITY_DEPLOYMENT_ASSISTANT_ID:-}" ]; then
+            set -- "$@" --assistant-id "${UNITY_DEPLOYMENT_ASSISTANT_ID}"
+          fi
+          exec "$@"
+        env:
+        - name: UNITY_DEPLOYMENT_ENVIRONMENT
+          value: "__ENVIRONMENT__"
+        - name: UNITY_DEPLOYMENT_PLANES
+          value: "__PLANES__"
+        - name: UNITY_DEPLOYMENT_CONCURRENCY
+          value: "__CONCURRENCY__"
+        - name: UNITY_DEPLOYMENT_CLIENT
+          value: "__CLIENT__"
+        - name: UNITY_DEPLOYMENT_ASSISTANT_ID
+          value: "__ASSISTANT_ID__"
+        - name: ORCHESTRA_URL
+          value: "__ORCHESTRA_URL__"
+        - name: UNITY_COMMS_URL
+          value: "__UNITY_COMMS_URL__"
+        - name: ORCHESTRA_ADMIN_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: ORCHESTRA_ADMIN_KEY
+        - name: UNIFY_KEY
+          valueFrom:
+            secretKeyRef:
+              name: unity-secrets
+              key: UNIFY_KEY

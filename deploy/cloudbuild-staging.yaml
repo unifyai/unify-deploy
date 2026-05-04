@@ -45,11 +45,11 @@ steps:
     echo ${_UNITY_SHA} | gsutil cp - gs://bucket/image_hash_staging.txt
   waitFor: ['push-latest-tag']
 
-  # Reconcile durable control-plane state before any deploy step wakes
-  # Unity containers. The reconciler runs inside GKE with the just-built
-  # image and the namespace-local unity-secrets.
+  # Reconcile deploy-time state before any deploy step wakes Unity
+  # containers. The reconciler runs inside GKE with the just-built image
+  # and namespace-local unity-secrets.
 - name: 'gcr.io/cloud-builders/kubectl'
-  id: 'reconcile-control-plane'
+  id: 'reconcile-deployment'
   entrypoint: 'bash'
   args:
   - '-c'
@@ -57,13 +57,15 @@ steps:
     set -eu
     gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
 
-    bash deploy/scripts/run_control_plane_reconcile_job.sh \
+    bash deploy/scripts/run_deployment_reconcile_job.sh \
       --environment staging \
       --namespace staging \
       --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_SHA}" \
       --orchestra-url "${_ORCHESTRA_URL}" \
       --unity-comms-url "${_UNITY_COMMS_URL}" \
-      --timeout 300s
+      --planes control-plane,runtime \
+      --concurrency 8 \
+      --timeout 600s
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
@@ -90,7 +92,7 @@ steps:
     curl -sf -X POST -H "$${AUTH}" "$${ADAPTERS}/scheduled/jobs/cleanup" && echo
     echo "Idle job refresh complete."
   secretEnv: ['ORCHESTRA_ADMIN_KEY']
-  waitFor: ['reconcile-control-plane']
+  waitFor: ['reconcile-deployment']
 
   # Refresh pipeline workers so parse/ingest pods pick up the new image.
   # Mirrors refresh-idle-jobs above for the adapter Cloud Run jobs;
