@@ -4,6 +4,17 @@ description: >-
   Incremental HubSpot sync into the assistant's DataManager. Runs on an
   interval; the orchestrator gates per-object cadence by config so the
   scheduler tick rate is decoupled from actual sync work.
+#
+# TEMPLATE - this generic scenario is shipped for reference only.  The
+# hubspot package's manifest does NOT declare ``scenarios: [...]``, so
+# this file is not auto-loaded.  Per-client deployments that want
+# scheduled HubSpot sync should copy this YAML into their own
+# client_package (e.g. ``client_packages/<client>_hubspot_sync/scenarios/``)
+# and replace the placeholder fields below:
+#   - ``client``                      -> client slug
+#   - ``deployment``                  -> client deployment name (e.g. "v0")
+#   - ``tasks[0].target.assistant_id`` -> the assistant id this task binds to
+#
 client: ""           # set per-client (e.g. "clientzeta")
 deployment: ""       # set per-client (e.g. "v0")
 
@@ -145,9 +156,15 @@ tasks:
       # take effect on the next tick without redeploying the YAML.
       interval_seconds: 60
     target:
+      assistant_id: ""           # set per-client - the assistant this task binds to
       scenario_id: hubspot_crm_full_sync_v0
       tick_policy: incrementing
     activation:
       entrypoint_function: run_hubspot_sync_tick
       task_name: HubSpot CRM sync tick
+      task_description: >-
+        Periodic HubSpot CRM sync into the assistant's DataManager.  Pulls
+        deltas from HubSpot using the orchestrator's per-object cadence
+        config, upserts into HubSpot/CRM/* contexts, and appends an audit
+        row to HubSpot/CRM/Meta/SyncRuns.
       recurrence_hint: every_5_minutes

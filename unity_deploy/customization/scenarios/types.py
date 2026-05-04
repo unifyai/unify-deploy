@@ -38,8 +38,35 @@ class DataTarget(BaseModel):
     table: str = Field(description="Key in the connector snapshot tables map.")
     context: str = Field(description="DataManager context for this table.")
     description: str = ""
-    unique_key: str | None = None
+    unique_key: str | list[str] | None = Field(
+        default=None,
+        description=(
+            "Column(s) used for upsert.  A scalar string keys on a single "
+            "column; a list keys on the tuple (composite primary key).  "
+            "Composite keys are required for junction tables and "
+            "discriminated-union tables in CRM/HRIS-style schemas where "
+            "no single natural column is unique."
+        ),
+    )
     fields: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("unique_key")
+    @classmethod
+    def _unique_key_non_empty(
+        cls,
+        value: str | list[str] | None,
+    ) -> str | list[str] | None:
+        if isinstance(value, list):
+            if not value:
+                raise ValueError("unique_key list must not be empty")
+            for k in value:
+                if not isinstance(k, str) or not k.strip():
+                    raise ValueError(
+                        "unique_key list entries must be non-empty strings",
+                    )
+        elif isinstance(value, str) and not value.strip():
+            raise ValueError("unique_key must be a non-empty string when scalar")
+        return value
 
 
 class TimelineEvent(BaseModel):

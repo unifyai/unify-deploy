@@ -148,7 +148,15 @@ def materialize_snapshot(
             rows = [rows]
         if not rows:
             continue
-        unique_keys = {target.unique_key: "str"} if target.unique_key else None
+        if target.unique_key:
+            keys = (
+                target.unique_key
+                if isinstance(target.unique_key, list)
+                else [target.unique_key]
+            )
+            unique_keys = {k: "str" for k in keys}
+        else:
+            unique_keys = None
         data_manager.ingest(
             target.context,
             rows=list(rows),
