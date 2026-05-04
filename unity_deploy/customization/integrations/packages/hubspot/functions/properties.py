@@ -1,0 +1,129 @@
+"""HubSpot Properties - field/property schema metadata + custom property creation."""
+
+from __future__ import annotations
+
+from unity.function_manager.custom import custom_function
+
+_OBJECT_TYPES = ("contacts", "companies", "deals", "tickets",
+                 "line_items", "products", "quotes")
+
+
+@custom_function()
+async def list_properties(object_type: str, mock: bool = True) -> dict:
+    """List properties (fields) defined on the given object type."""
+    if mock:
+        return {
+            "object_type": object_type,
+            "results": [
+                {"name": "firstname", "label": "First Name", "type": "string",
+                 "fieldType": "text", "groupName": "contactinformation",
+                 "hubspotDefined": True, "calculated": False, "hidden": False,
+                 "options": [], "description": ""},
+                {"name": "lastname", "label": "Last Name", "type": "string",
+                 "fieldType": "text", "groupName": "contactinformation",
+                 "hubspotDefined": True, "calculated": False, "hidden": False,
+                 "options": [], "description": ""},
+            ],
+        }
+
+    from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
+        hubspot_get,
+    )
+
+    body = await hubspot_get(f"/crm/v3/properties/{object_type}")
+    return body if "error" in body else {"object_type": object_type, "results": body.get("results", [])}
+
+
+@custom_function()
+async def get_property(object_type: str, property_name: str, mock: bool = True) -> dict:
+    """Fetch a single property definition."""
+    if mock:
+        return {"object_type": object_type, "name": property_name,
+                "label": property_name.replace("_", " ").title(),
+                "type": "string", "fieldType": "text"}
+
+    from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
+        hubspot_get,
+    )
+
+    return await hubspot_get(f"/crm/v3/properties/{object_type}/{property_name}")
+
+
+@custom_function()
+async def create_property(
+    object_type: str,
+    name: str,
+    label: str,
+    field_type: str = "text",
+    group_name: str = "contactinformation",
+    options: list | None = None,
+    mock: bool = True,
+) -> dict:
+    """Create a custom property on an object type."""
+    if mock:
+        return {"object_type": object_type, "name": name, "label": label,
+                "fieldType": field_type, "groupName": group_name,
+                "options": options or [], "hubspotDefined": False}
+
+    from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
+        hubspot_post,
+    )
+
+    body: dict = {
+        "name": name,
+        "label": label,
+        "groupName": group_name,
+        "type": "enumeration" if field_type in ("select", "checkbox", "radio") else "string",
+        "fieldType": field_type,
+    }
+    if options:
+        body["options"] = options
+    return await hubspot_post(f"/crm/v3/properties/{object_type}", body)
+
+
+@custom_function()
+async def sync_properties(
+    schema_version: str = "hubspot.crm.properties.v1",
+    mock: bool = True,
+) -> dict:
+    """Sync property definitions across all canonical object types."""
+    from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
+        normalize_property_def,
+    )
+
+    if mock:
+        rows = []
+        for obj in _OBJECT_TYPES:
+            rows.extend([
+                normalize_property_def(
+                    {"name": "firstname", "label": "First Name", "type": "string",
+                     "fieldType": "text", "groupName": "info", "hubspotDefined": True},
+                    object_type=obj,
+                ),
+            ])
+        return {
+            "schema_version": schema_version,
+            "tables": {"properties": rows},
+            "metadata": {"object_type": "properties", "mode": "mock", "row_count": len(rows)},
+        }
+
+    from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
+        hubspot_get,
+    )
+
+    rows: list[dict] = []
+    errors: list[dict] = []
+    for obj in _OBJECT_TYPES:
+        body = await hubspot_get(f"/crm/v3/properties/{obj}")
+        if "error" in body:
+            errors.append({"object_type": obj, "error": body["error"]})
+            continue
+        rows.extend(normalize_property_def(p, object_type=obj) for p in body.get("results", []))
+
+    return {
+        "schema_version": schema_version,
+        "tables": {"properties": rows},
+        "metadata": {"object_type": "properties", "mode": "real",
+                     "row_count": len(rows), "errors": errors,
+                     "partial": bool(errors)},
+    }
