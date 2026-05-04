@@ -380,10 +380,14 @@ def resolve(
 # Add new clients here.
 # ---------------------------------------------------------------------------
 
-from . import client_alpha  # noqa: F401, E402
-from . import unify_company  # noqa: F401, E402
-from . import clientepsilon_homes  # noqa: F401, E402
-from . import clientzeta  # noqa: F401, E402
+# Specific-scope clients (those targeting specific assistant/org/team IDs)
+# must register BEFORE ``unify_company`` because resolution is first-match-
+# wins in insertion order, and ``unify_company`` uses ``scope="default"``
+# which acts as a catch-all that silently shadows everything below it.
+from . import client_alpha  # noqa: F401, E402  (specific assistant ids)
+from . import clientepsilon_homes  # noqa: F401, E402  (specific assistant ids)
+from . import clientzeta  # noqa: F401, E402  (specific assistant ids)
+from . import unify_company  # noqa: F401, E402  (scope="default" catch-all)
 
 # TODO: Yasser has left the team.  Re-enable when a new ClientGamma deployment
 # owner is assigned and _ENVIRONMENTS is populated in clientgamma/__init__.py.
