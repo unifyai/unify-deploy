@@ -1,6 +1,6 @@
-"""Deploy-time reconciliation for client control-plane state.
+"""Control-plane plane for deploy-time reconciliation.
 
-The Unity startup hook is wake-time runtime hydration. This module handles
+This module handles
 durable metadata that the control plane needs before any assistant wakes,
 including Orchestra assistant metadata and Communication task activations.
 """
@@ -15,7 +15,7 @@ import os
 from typing import Any, Mapping, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from unity_deploy.customization.clients import ClientDeploymentEntry
+    from unity_deploy.assistant_deployments.clients import ClientDeploymentEntry
 
 _ASSISTANT_UPDATE_PATH = "/admin/assistant/{assistant_id}"
 _TASK_ACTIVATION_UPSERT_PATH = "/infra/task-activation/upsert"
@@ -38,7 +38,7 @@ class ReconcileOperation:
 
 def _load_registry() -> Mapping[str, "ClientDeploymentEntry"]:
     # Importing the clients package self-registers environment-active clients.
-    from unity_deploy.customization.clients import _CLIENT_DEPLOYMENTS
+    from unity_deploy.assistant_deployments.clients import _CLIENT_DEPLOYMENTS
 
     return _CLIENT_DEPLOYMENTS
 
@@ -106,8 +106,10 @@ def _build_scenario_schedule_operations(
 ) -> list[ReconcileOperation]:
     """Project private scenario schedules into generic task activation operations."""
 
-    from unity_deploy.customization.clients import _spec_to_resolved
-    from unity_deploy.customization.integrations.activation import expand_integrations
+    from unity_deploy.assistant_deployments.clients import _spec_to_resolved
+    from unity_deploy.assistant_deployments.integrations.activation import (
+        expand_integrations,
+    )
 
     assistant_id_int = int(assistant_id) if str(assistant_id).isdigit() else None
     resolved = _spec_to_resolved(

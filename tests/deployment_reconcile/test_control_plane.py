@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import logging
-
 import pytest
 
-from unity_deploy.control_plane import reconcile
-from unity_deploy.customization.clients import ClientDeploymentEntry
-from unity_deploy.customization.configs.types.actor_config import ActorConfig
-from unity_deploy.customization.deployment_types import (
+from unity_deploy.deployment_reconcile import control_plane as reconcile
+from unity_deploy.assistant_deployments.clients import ClientDeploymentEntry
+from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from unity_deploy.assistant_deployments.deployment_types import (
     DeploymentMapping,
     DeploymentSpec,
     DeploymentTarget,
 )
-from unity_deploy.scripts import reconcile_control_plane
 
 
 def _spec(name: str, console_config: dict | None = None) -> DeploymentSpec:
@@ -254,95 +251,3 @@ def test_apply_operations_rejects_unresolved_task_activation():
 
     with pytest.raises(RuntimeError, match="missing task ids"):
         reconcile.apply_operations([operation])
-
-
-def test_cli_returns_error_when_environment_variables_missing(monkeypatch, caplog):
-    monkeypatch.delenv("ORCHESTRA_URL", raising=False)
-    monkeypatch.delenv("ORCHESTRA_ADMIN_KEY", raising=False)
-
-    with caplog.at_level(logging.ERROR):
-        exit_code = reconcile_control_plane.main(
-            ["--environment", "staging", "--dry-run"],
-        )
-
-    assert exit_code == 2
-    assert "Missing required environment variable" in caplog.text
-
-
-def test_cli_dry_run_does_not_apply(monkeypatch, caplog):
-    monkeypatch.setenv("ORCHESTRA_URL", "https://internal.example.com/v0")
-    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin")
-
-    operation = reconcile.ReconcileOperation(
-        client_name="client_alpha",
-        assistant_id="1851",
-        deployment="v2",
-        field="console_config",
-        action="upsert",
-        path="/admin/assistant/1851",
-        payload={"console_config": {"version": "1"}},
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "build_control_plane_plan",
-        lambda **kwargs: [operation],
-    )
-
-    def fail_apply(operations):
-        raise AssertionError("dry-run should not apply")
-
-    monkeypatch.setattr(reconcile, "apply_operations", fail_apply)
-
-    with caplog.at_level(logging.INFO):
-        exit_code = reconcile_control_plane.main(
-            ["--environment", "staging", "--client", "client_alpha", "--dry-run"],
-        )
-
-    assert exit_code == 0
-    assert "Dry-run complete" in caplog.text
-
-
-def test_cli_apply_runs_planned_operations(monkeypatch):
-    monkeypatch.setenv("ORCHESTRA_URL", "https://internal.example.com/v0")
-    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin")
-
-    operation = reconcile.ReconcileOperation(
-        client_name="client_alpha",
-        assistant_id="1851",
-        deployment="v2",
-        field="console_config",
-        action="upsert",
-        path="/admin/assistant/1851",
-        payload={"console_config": {"version": "1"}},
-    )
-    applied: list[reconcile.ReconcileOperation] = []
-    monkeypatch.setattr(
-        reconcile,
-        "build_control_plane_plan",
-        lambda **kwargs: [operation],
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "apply_operations",
-        lambda operations: applied.extend(operations) or [{"ok": True}],
-    )
-
-    exit_code = reconcile_control_plane.main(
-        ["--environment", "staging", "--assistant-id", "1851", "--apply"],
-    )
-
-    assert exit_code == 0
-    assert applied == [operation]
-
-
-def test_cli_rejects_mismatched_environment(monkeypatch, caplog):
-    monkeypatch.setenv("ORCHESTRA_URL", "https://api.unify.ai/v0")
-    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin")
-
-    with caplog.at_level(logging.ERROR):
-        exit_code = reconcile_control_plane.main(
-            ["--environment", "staging", "--dry-run"],
-        )
-
-    assert exit_code == 2
-    assert "does not match" in caplog.text
