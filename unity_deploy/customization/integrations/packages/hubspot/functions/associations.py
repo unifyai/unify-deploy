@@ -4,18 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-# Common pairs we sync.  HubSpot exposes many more; these cover the canonical
-# CRM relationships.
-_ASSOCIATION_PAIRS = [
-    ("contacts", "companies"),
-    ("contacts", "deals"),
-    ("contacts", "tickets"),
-    ("companies", "deals"),
-    ("companies", "tickets"),
-    ("deals", "line_items"),
-    ("deals", "quotes"),
-]
-
 
 @custom_function()
 async def list_associations(
@@ -114,6 +102,16 @@ async def sync_associations(
         normalize_association,
     )
 
+    association_pairs = [
+        ("contacts", "companies"),
+        ("contacts", "deals"),
+        ("contacts", "tickets"),
+        ("companies", "deals"),
+        ("companies", "tickets"),
+        ("deals", "line_items"),
+        ("deals", "quotes"),
+    ]
+
     if mock:
         rows = [
             normalize_association(
@@ -140,9 +138,6 @@ async def sync_associations(
                          "row_count": len(rows)},
         }
 
-    # Real-mode v0: returns an empty rowset with a hint - a full association
-    # sync needs to enumerate source IDs and is wired by the orchestrator
-    # in a later iteration.
     return {
         "schema_version": schema_version,
         "tables": {"associations": []},
@@ -151,6 +146,6 @@ async def sync_associations(
             "row_count": 0,
             "note": ("v0 association sync seeds nothing; production "
                      "iteration drives this from the synced dimension tables."),
-            "pairs": [{"from": a, "to": b} for a, b in _ASSOCIATION_PAIRS],
+            "pairs": [{"from": a, "to": b} for a, b in association_pairs],
         },
     }

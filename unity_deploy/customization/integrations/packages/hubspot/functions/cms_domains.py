@@ -4,20 +4,19 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_DOMAIN = {
-    "id": "dom-13001",
-    "domain": "example.com",
-    "primarySite": True,
-    "manuallyMarkedAsResolving": True,
-    "createdAt": "2025-08-01T10:00:00Z",
-    "updatedAt": "2026-01-01T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_cms_domains(mock: bool = True) -> dict:
+    """List configured CMS domains."""
     if mock:
-        return {"results": [{**_MOCK_DOMAIN, "id": f"dom-{13000 + i}"} for i in range(2)]}
+        base = {
+            "domain": "example.com",
+            "primarySite": True,
+            "manuallyMarkedAsResolving": True,
+            "createdAt": "2025-08-01T10:00:00Z",
+            "updatedAt": "2026-01-01T12:00:00Z",
+        }
+        return {"results": [{**base, "id": f"dom-{13000 + i}"} for i in range(2)]}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -34,13 +33,14 @@ async def sync_cms_domains(
     schema_version: str = "hubspot.cms.domains.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync configured CMS domains into a tables envelope."""
     if mock:
         rows = [{
-            "domain": _MOCK_DOMAIN["domain"],
-            "primary_site": _MOCK_DOMAIN["primarySite"],
-            "created_at": _MOCK_DOMAIN["createdAt"],
-            "updated_at": _MOCK_DOMAIN["updatedAt"],
-        } for _ in range(1)]
+            "domain": "example.com",
+            "primary_site": True,
+            "created_at": "2025-08-01T10:00:00Z",
+            "updated_at": "2026-01-01T12:00:00Z",
+        }]
         return {
             "schema_version": schema_version,
             "tables": {"cms_domains": rows},

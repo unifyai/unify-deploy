@@ -4,19 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_EVENT = {
-    "id": "evt-7001",
-    "eventName": "Spring Property Tour Day",
-    "eventOrganizer": "ClientZeta Properties",
-    "eventDescription": "Open-house tour at Sunset Tower and three sister properties.",
-    "eventUrl": "https://example.com/events/spring-tour",
-    "eventType": "PHYSICAL",
-    "startDateTime": "2026-05-10T14:00:00Z",
-    "endDateTime": "2026-05-10T17:00:00Z",
-    "createdAt": "2026-04-01T10:00:00Z",
-    "updatedAt": "2026-04-15T11:00:00Z",
-}
-
 
 @custom_function()
 async def list_marketing_events(
@@ -24,9 +11,23 @@ async def list_marketing_events(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through marketing events."""
     if mock:
-        return {"results": [{**_MOCK_EVENT, "id": f"evt-{7000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "eventName": "Spring Property Tour Day",
+            "eventOrganizer": "ClientZeta Properties",
+            "eventDescription": "Open-house tour at Sunset Tower.",
+            "eventUrl": "https://example.com/events/spring-tour",
+            "eventType": "PHYSICAL",
+            "startDateTime": "2026-05-10T14:00:00Z",
+            "endDateTime": "2026-05-10T17:00:00Z",
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T11:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"evt-{7000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -46,7 +47,16 @@ async def list_marketing_events(
 async def create_marketing_event(properties: dict, mock: bool = True) -> dict:
     """Create an external marketing event."""
     if mock:
-        return {**_MOCK_EVENT, "id": "evt-99001", **properties}
+        base = {
+            "eventName": "Spring Property Tour Day",
+            "eventOrganizer": "ClientZeta Properties",
+            "eventType": "PHYSICAL",
+            "startDateTime": "2026-05-10T14:00:00Z",
+            "endDateTime": "2026-05-10T17:00:00Z",
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T11:00:00Z",
+        }
+        return {**base, "id": "evt-99001", **properties}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -57,8 +67,14 @@ async def create_marketing_event(properties: dict, mock: bool = True) -> dict:
 
 @custom_function()
 async def update_marketing_event(event_id: str, properties: dict, mock: bool = True) -> dict:
+    """Patch a marketing event's properties."""
     if mock:
-        return {**_MOCK_EVENT, "id": str(event_id), **properties}
+        base = {
+            "eventName": "Spring Property Tour Day",
+            "eventOrganizer": "ClientZeta Properties",
+            "eventType": "PHYSICAL",
+        }
+        return {**base, "id": str(event_id), **properties}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -73,8 +89,9 @@ async def list_event_attendance(
     state: str = "registered",
     mock: bool = True,
 ) -> dict:
-    """List attendance records for a marketing event.  ``state`` is one of
-    ``registered``, ``attended``, ``cancelled``, ``no_show``."""
+    """List attendance records for a marketing event.
+
+    ``state`` is one of ``registered``, ``attended``, ``cancelled``, ``no_show``."""
     if mock:
         return {
             "event_id": str(event_id), "state": state,
@@ -95,17 +112,18 @@ async def sync_marketing_events(
     schema_version: str = "hubspot.marketing.events.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync marketing event definitions into a tables envelope."""
     if mock:
         rows = [{
             "event_id": f"evt-{7000 + i}",
-            "name": _MOCK_EVENT["eventName"],
-            "organizer": _MOCK_EVENT["eventOrganizer"],
-            "type": _MOCK_EVENT["eventType"],
-            "start_time": _MOCK_EVENT["startDateTime"],
-            "end_time": _MOCK_EVENT["endDateTime"],
-            "url": _MOCK_EVENT["eventUrl"],
-            "created_at": _MOCK_EVENT["createdAt"],
-            "updated_at": _MOCK_EVENT["updatedAt"],
+            "name": "Spring Property Tour Day",
+            "organizer": "ClientZeta Properties",
+            "type": "PHYSICAL",
+            "start_time": "2026-05-10T14:00:00Z",
+            "end_time": "2026-05-10T17:00:00Z",
+            "url": "https://example.com/events/spring-tour",
+            "created_at": "2026-04-01T10:00:00Z",
+            "updated_at": "2026-04-15T11:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

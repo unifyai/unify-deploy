@@ -4,15 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_WORKFLOW = {
-    "id": "wf-3001",
-    "name": "Prospective Tenant Nurture",
-    "type": "DRIP_DELAY",
-    "enabled": True,
-    "createdAt": "2025-10-01T09:00:00Z",
-    "updatedAt": "2026-04-01T11:00:00Z",
-}
-
 
 @custom_function()
 async def list_marketing_workflows(
@@ -20,9 +11,18 @@ async def list_marketing_workflows(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """List marketing workflows."""
     if mock:
-        return {"results": [{**_MOCK_WORKFLOW, "id": f"wf-{3000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Prospective Tenant Nurture",
+            "type": "DRIP_DELAY", "enabled": True,
+            "createdAt": "2025-10-01T09:00:00Z",
+            "updatedAt": "2026-04-01T11:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"wf-{3000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -84,12 +84,19 @@ async def sync_marketing_workflows(
     schema_version: str = "hubspot.marketing.workflows.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync marketing workflow definitions into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_workflow,
     )
 
     if mock:
-        rows = [normalize_workflow({**_MOCK_WORKFLOW, "id": f"wf-{3000 + i}"}) for i in range(3)]
+        base = {
+            "name": "Prospective Tenant Nurture",
+            "type": "DRIP_DELAY", "enabled": True,
+            "createdAt": "2025-10-01T09:00:00Z",
+            "updatedAt": "2026-04-01T11:00:00Z",
+        }
+        rows = [normalize_workflow({**base, "id": f"wf-{3000 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"marketing_workflows": rows},

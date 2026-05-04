@@ -4,15 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_TEMPLATE = {
-    "id": "tpl-9501",
-    "name": "Initial Owner Outreach",
-    "subject": "Quick question about {{company.name}}",
-    "body": "Hi {{contact.firstname}},\n\nI noticed your portfolio includes ...",
-    "createdAt": "2025-10-01T10:00:00Z",
-    "updatedAt": "2026-02-15T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_sales_templates(
@@ -20,9 +11,19 @@ async def list_sales_templates(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through sales email templates."""
     if mock:
-        return {"results": [{**_MOCK_TEMPLATE, "id": f"tpl-{9500 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Initial Owner Outreach",
+            "subject": "Quick question about {{company.name}}",
+            "body": "Hi {{contact.firstname}},\n\nI noticed your portfolio includes ...",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-02-15T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"tpl-{9500 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -40,8 +41,16 @@ async def list_sales_templates(
 
 @custom_function()
 async def get_sales_template(template_id: str, mock: bool = True) -> dict:
+    """Fetch a sales email template by ID."""
     if mock:
-        return {**_MOCK_TEMPLATE, "id": str(template_id)}
+        return {
+            "id": str(template_id),
+            "name": "Initial Owner Outreach",
+            "subject": "Quick question about {{company.name}}",
+            "body": "Hi {{contact.firstname}},\n\nI noticed your portfolio includes ...",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-02-15T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -55,13 +64,15 @@ async def sync_sales_templates(
     schema_version: str = "hubspot.sales.templates.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync sales template metadata into a tables envelope."""
     if mock:
         rows = [{
             "template_id": f"tpl-{9500 + i}",
-            "name": _MOCK_TEMPLATE["name"], "subject": _MOCK_TEMPLATE["subject"],
-            "body_preview": _MOCK_TEMPLATE["body"][:200],
-            "created_at": _MOCK_TEMPLATE["createdAt"],
-            "updated_at": _MOCK_TEMPLATE["updatedAt"],
+            "name": "Initial Owner Outreach",
+            "subject": "Quick question about {{company.name}}",
+            "body_preview": "Hi {{contact.firstname}},\n\nI noticed your portfolio includes ...",
+            "created_at": "2025-10-01T10:00:00Z",
+            "updated_at": "2026-02-15T12:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

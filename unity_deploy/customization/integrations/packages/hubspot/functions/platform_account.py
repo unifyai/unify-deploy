@@ -4,22 +4,20 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_ACCOUNT = {
-    "portalId": 12345,
-    "uiDomain": "app.hubspot.com",
-    "dataHostingLocation": "NA",
-    "timeZone": "US/Eastern",
-    "companyCurrency": "USD",
-    "additionalCurrencies": [],
-}
-
 
 @custom_function()
 async def get_account_info(mock: bool = True) -> dict:
     """Fetch HubSpot account details.  Bootstraps HUBSPOT_PORTAL_ID and tier
     detection in one call."""
     if mock:
-        return _MOCK_ACCOUNT
+        return {
+            "portalId": 12345,
+            "uiDomain": "app.hubspot.com",
+            "dataHostingLocation": "NA",
+            "timeZone": "US/Eastern",
+            "companyCurrency": "USD",
+            "additionalCurrencies": [],
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -99,12 +97,16 @@ async def list_business_units(mock: bool = True) -> dict:
 
 @custom_function()
 async def list_imports(after: str | None = None, limit: int = 50, mock: bool = True) -> dict:
+    """List HubSpot import jobs."""
     if mock:
-        return {"results": [
-            {"id": f"imp-{15000 + i}", "name": f"Import {i}",
-             "state": "DONE", "createdAt": "2026-04-01T10:00:00Z"}
-            for i in range(min(limit, 3))
-        ], "next_after": None}
+        return {
+            "results": [
+                {"id": f"imp-{15000 + i}", "name": f"Import {i}",
+                 "state": "DONE", "createdAt": "2026-04-01T10:00:00Z"}
+                for i in range(min(limit, 3))
+            ],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -130,11 +132,11 @@ async def sync_platform(
     config flags."""
     if mock:
         account_rows = [{
-            "portal_id": str(_MOCK_ACCOUNT["portalId"]),
-            "ui_domain": _MOCK_ACCOUNT["uiDomain"],
-            "data_hosting_location": _MOCK_ACCOUNT["dataHostingLocation"],
-            "time_zone": _MOCK_ACCOUNT["timeZone"],
-            "company_currency": _MOCK_ACCOUNT["companyCurrency"],
+            "portal_id": "12345",
+            "ui_domain": "app.hubspot.com",
+            "data_hosting_location": "NA",
+            "time_zone": "US/Eastern",
+            "company_currency": "USD",
         }]
         currency_rows = [
             {"code": "USD", "exchange_rate": 1.0, "active": True},

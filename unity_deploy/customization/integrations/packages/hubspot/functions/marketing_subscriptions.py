@@ -4,21 +4,19 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_TYPE = {
-    "id": "sub-5001",
-    "name": "Owner Updates",
-    "description": "Quarterly portfolio summary for property owners.",
-    "active": True,
-}
-
 
 @custom_function()
 async def list_subscription_types(mock: bool = True) -> dict:
     """List all subscription types defined in the portal."""
     if mock:
+        base = {
+            "name": "Owner Updates",
+            "description": "Quarterly portfolio summary for property owners.",
+            "active": True,
+        }
         return {"results": [
-            {**_MOCK_TYPE, "id": "sub-5001"},
-            {**_MOCK_TYPE, "id": "sub-5002", "name": "Tenant Newsletter"},
+            {**base, "id": "sub-5001"},
+            {**base, "id": "sub-5002", "name": "Tenant Newsletter"},
         ]}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
@@ -61,6 +59,7 @@ async def subscribe_contact(
     legal_basis_explanation: str = "Customer requested updates.",
     mock: bool = True,
 ) -> dict:
+    """Subscribe a contact to a subscription type."""
     if mock:
         return {"status": "subscribed", "email": contact_email,
                 "subscription_id": str(subscription_id)}
@@ -86,6 +85,7 @@ async def unsubscribe_contact(
     subscription_id: str,
     mock: bool = True,
 ) -> dict:
+    """Unsubscribe a contact from a subscription type."""
     if mock:
         return {"status": "unsubscribed", "email": contact_email,
                 "subscription_id": str(subscription_id)}
@@ -108,10 +108,15 @@ async def sync_subscriptions(
     """Sync subscription type definitions.  Per-contact status is fetched
     on-demand (too expensive to bulk-pull)."""
     if mock:
+        base = {
+            "name": "Owner Updates",
+            "description": "Quarterly portfolio summary for property owners.",
+            "active": True,
+        }
         rows = [{
             "subscription_id": f"sub-{5000 + i}",
-            "name": _MOCK_TYPE["name"], "description": _MOCK_TYPE["description"],
-            "active": _MOCK_TYPE["active"],
+            "name": base["name"], "description": base["description"],
+            "active": base["active"],
         } for i in range(2)]
         return {
             "schema_version": schema_version,

@@ -2,51 +2,39 @@
 
 The canonical CRM object.  Other CRM objects (companies, deals, tickets)
 follow this file's structure.
+
+Per integrations/README.md, all module-level constants are kept inside
+function bodies so FunctionManager can exec each function in an isolated
+namespace.
 """
 
 from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_DEFAULT_PROPERTIES = [
-    "firstname", "lastname", "email", "phone", "company", "jobtitle",
-    "lifecyclestage", "hs_lead_status", "createdate", "lastmodifieddate",
-    "hs_object_id",
-]
-
-_MOCK_CONTACT = {
-    "id": "12345",
-    "properties": {
-        "firstname": "Sample", "lastname": "Contact",
-        "email": "sample.contact@example.com",
-        "phone": "+1 555 123 4567",
-        "company": "Acme Properties LLC",
-        "jobtitle": "Property Owner",
-        "lifecyclestage": "lead",
-        "hs_lead_status": "NEW",
-        "createdate": "2026-04-01T10:00:00Z",
-        "lastmodifieddate": "2026-04-15T14:30:00Z",
-        "hs_object_id": "12345",
-    },
-    "createdAt": "2026-04-01T10:00:00Z",
-    "updatedAt": "2026-04-15T14:30:00Z",
-    "archived": False,
-}
-
 
 @custom_function()
 async def get_contact(contact_id: str, mock: bool = True) -> dict:
-    """Fetch a single HubSpot contact by ID.  Returns the raw HubSpot record.
-
-    Parameters
-    ----------
-    contact_id : str
-        HubSpot contact ID (numeric string).
-    mock : bool
-        If True, returns deterministic fixture data without hitting the API.
-    """
+    """Fetch a single HubSpot contact by ID.  Returns the raw HubSpot record."""
     if mock:
-        return {**_MOCK_CONTACT, "id": str(contact_id)}
+        return {
+            "id": str(contact_id),
+            "properties": {
+                "firstname": "Sample", "lastname": "Contact",
+                "email": "sample.contact@example.com",
+                "phone": "+1 555 123 4567",
+                "company": "Acme Properties LLC",
+                "jobtitle": "Property Owner",
+                "lifecyclestage": "lead",
+                "hs_lead_status": "NEW",
+                "createdate": "2026-04-01T10:00:00Z",
+                "lastmodifieddate": "2026-04-15T14:30:00Z",
+                "hs_object_id": str(contact_id),
+            },
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T14:30:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -55,11 +43,16 @@ async def get_contact(contact_id: str, mock: bool = True) -> dict:
         get_hubspot_config,
     )
 
+    default_props = [
+        "firstname", "lastname", "email", "phone", "company", "jobtitle",
+        "lifecyclestage", "hs_lead_status", "createdate", "lastmodifieddate",
+        "hs_object_id",
+    ]
     cfg = get_hubspot_config()
     properties = (
         ",".join(cfg["contact_properties"])
         if isinstance(cfg["contact_properties"], list)
-        else ",".join(_DEFAULT_PROPERTIES)
+        else ",".join(default_props)
     )
     return await hubspot_get(
         f"/crm/v3/objects/contacts/{contact_id}",
@@ -69,18 +62,28 @@ async def get_contact(contact_id: str, mock: bool = True) -> dict:
 
 @custom_function()
 async def search_contacts(query: str, limit: int = 10, mock: bool = True) -> dict:
-    """Full-text search HubSpot contacts.  Searches firstname, lastname,
-    email, company by default.
-
-    Returns ``{"results": [...], "total": int}``.
-    """
+    """Full-text search HubSpot contacts."""
     if mock:
+        base_props = {
+            "firstname": "Sample", "lastname": "Contact",
+            "email": "sample.contact@example.com",
+            "phone": "+1 555 123 4567",
+            "company": "Acme Properties LLC",
+            "jobtitle": "Property Owner",
+            "lifecyclestage": "lead", "hs_lead_status": "NEW",
+            "createdate": "2026-04-01T10:00:00Z",
+            "lastmodifieddate": "2026-04-15T14:30:00Z",
+        }
         return {
             "results": [
-                {**_MOCK_CONTACT, "id": "12345"},
-                {**_MOCK_CONTACT, "id": "67890",
-                 "properties": {**_MOCK_CONTACT["properties"],
-                                "firstname": "Another", "email": "another@example.com"}},
+                {"id": "12345", "properties": {**base_props, "hs_object_id": "12345"},
+                 "createdAt": "2026-04-01T10:00:00Z", "updatedAt": "2026-04-15T14:30:00Z",
+                 "archived": False},
+                {"id": "67890",
+                 "properties": {**base_props, "firstname": "Another",
+                                "email": "another@example.com", "hs_object_id": "67890"},
+                 "createdAt": "2026-04-01T10:00:00Z", "updatedAt": "2026-04-15T14:30:00Z",
+                 "archived": False},
             ],
             "total": 2,
         }
@@ -89,11 +92,13 @@ async def search_contacts(query: str, limit: int = 10, mock: bool = True) -> dic
         hubspot_search,
     )
 
+    default_props = [
+        "firstname", "lastname", "email", "phone", "company", "jobtitle",
+        "lifecyclestage", "hs_lead_status", "createdate", "lastmodifieddate",
+        "hs_object_id",
+    ]
     return await hubspot_search(
-        "contacts",
-        query=query,
-        properties=_DEFAULT_PROPERTIES,
-        limit=min(limit, 100),
+        "contacts", query=query, properties=default_props, limit=min(limit, 100),
     )
 
 
@@ -103,11 +108,26 @@ async def list_contacts(
     limit: int = 25,
     mock: bool = True,
 ) -> dict:
-    """Paginate through all HubSpot contacts.  Returns
-    ``{"results": [...], "next_after": str | None}``."""
+    """Paginate through all HubSpot contacts."""
     if mock:
+        base_props = {
+            "firstname": "Sample", "lastname": "Contact",
+            "email": "sample.contact@example.com",
+            "phone": "+1 555 123 4567", "company": "Acme Properties LLC",
+            "jobtitle": "Property Owner", "lifecyclestage": "lead",
+            "hs_lead_status": "NEW",
+            "createdate": "2026-04-01T10:00:00Z",
+            "lastmodifieddate": "2026-04-15T14:30:00Z",
+        }
         return {
-            "results": [{**_MOCK_CONTACT, "id": str(10000 + i)} for i in range(min(limit, 3))],
+            "results": [
+                {"id": str(10000 + i),
+                 "properties": {**base_props, "hs_object_id": str(10000 + i)},
+                 "createdAt": "2026-04-01T10:00:00Z",
+                 "updatedAt": "2026-04-15T14:30:00Z",
+                 "archived": False}
+                for i in range(min(limit, 3))
+            ],
             "next_after": None,
         }
 
@@ -115,10 +135,12 @@ async def list_contacts(
         hubspot_get,
     )
 
-    params: dict = {
-        "limit": min(limit, 100),
-        "properties": ",".join(_DEFAULT_PROPERTIES),
-    }
+    default_props = [
+        "firstname", "lastname", "email", "phone", "company", "jobtitle",
+        "lifecyclestage", "hs_lead_status", "createdate", "lastmodifieddate",
+        "hs_object_id",
+    ]
+    params: dict = {"limit": min(limit, 100), "properties": ",".join(default_props)}
     if after:
         params["after"] = after
     body = await hubspot_get("/crm/v3/objects/contacts", params=params)
@@ -135,10 +157,21 @@ async def create_contact(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot contact.  ``properties`` is a flat dict of HubSpot
     property names -> values.  At minimum HubSpot expects ``email``."""
     if mock:
+        base_props = {
+            "firstname": "Sample", "lastname": "Contact",
+            "email": "sample.contact@example.com",
+            "phone": "+1 555 123 4567", "company": "Acme Properties LLC",
+            "jobtitle": "Property Owner", "lifecyclestage": "lead",
+            "hs_lead_status": "NEW",
+            "createdate": "2026-04-01T10:00:00Z",
+            "lastmodifieddate": "2026-04-15T14:30:00Z",
+        }
         return {
-            **_MOCK_CONTACT,
             "id": "99999",
-            "properties": {**_MOCK_CONTACT["properties"], **properties},
+            "properties": {**base_props, "hs_object_id": "99999", **properties},
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T14:30:00Z",
+            "archived": False,
         }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
@@ -146,8 +179,7 @@ async def create_contact(properties: dict, mock: bool = True) -> dict:
     )
 
     return await hubspot_post(
-        "/crm/v3/objects/contacts",
-        {"properties": properties},
+        "/crm/v3/objects/contacts", {"properties": properties},
     )
 
 
@@ -155,10 +187,21 @@ async def create_contact(properties: dict, mock: bool = True) -> dict:
 async def update_contact(contact_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot contact properties.  Only sends the keys provided."""
     if mock:
+        base_props = {
+            "firstname": "Sample", "lastname": "Contact",
+            "email": "sample.contact@example.com",
+            "phone": "+1 555 123 4567", "company": "Acme Properties LLC",
+            "jobtitle": "Property Owner", "lifecyclestage": "lead",
+            "hs_lead_status": "NEW",
+            "createdate": "2026-04-01T10:00:00Z",
+            "lastmodifieddate": "2026-04-15T14:30:00Z",
+        }
         return {
-            **_MOCK_CONTACT,
             "id": str(contact_id),
-            "properties": {**_MOCK_CONTACT["properties"], **properties},
+            "properties": {**base_props, "hs_object_id": str(contact_id), **properties},
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T14:30:00Z",
+            "archived": False,
         }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
@@ -205,7 +248,25 @@ async def sync_contacts(
         from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
             normalize_contact,
         )
-        rows = [normalize_contact({**_MOCK_CONTACT, "id": str(10000 + i)}) for i in range(3)]
+        base_props = {
+            "firstname": "Sample", "lastname": "Contact",
+            "email": "sample.contact@example.com",
+            "phone": "+1 555 123 4567", "company": "Acme Properties LLC",
+            "jobtitle": "Property Owner", "lifecyclestage": "lead",
+            "hs_lead_status": "NEW",
+            "createdate": "2026-04-01T10:00:00Z",
+            "lastmodifieddate": "2026-04-15T14:30:00Z",
+        }
+        rows = [
+            normalize_contact({
+                "id": str(10000 + i),
+                "properties": {**base_props, "hs_object_id": str(10000 + i)},
+                "createdAt": "2026-04-01T10:00:00Z",
+                "updatedAt": "2026-04-15T14:30:00Z",
+                "archived": False,
+            })
+            for i in range(3)
+        ]
         return {
             "schema_version": schema_version,
             "tables": {"contacts": rows},
@@ -223,11 +284,16 @@ async def sync_contacts(
         normalize_contact,
     )
 
+    default_props = [
+        "firstname", "lastname", "email", "phone", "company", "jobtitle",
+        "lifecyclestage", "hs_lead_status", "createdate", "lastmodifieddate",
+        "hs_object_id",
+    ]
     cfg = get_hubspot_config()
     properties = (
         cfg["contact_properties"]
         if isinstance(cfg["contact_properties"], list)
-        else _DEFAULT_PROPERTIES
+        else default_props
     )
     filter_groups = (
         [{"filters": [{

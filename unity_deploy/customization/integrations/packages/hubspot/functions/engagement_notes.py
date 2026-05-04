@@ -4,25 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_DEFAULT_PROPERTIES = [
-    "hs_note_body", "hs_timestamp", "hubspot_owner_id",
-    "hs_object_id", "hs_lastmodifieddate",
-]
-
-_MOCK_NOTE = {
-    "id": "N1001",
-    "properties": {
-        "hs_note_body": "Owner prefers monthly statements via email; quarterly board updates.",
-        "hs_timestamp": "2026-04-22T16:00:00Z",
-        "hubspot_owner_id": "60001",
-        "hs_object_id": "N1001",
-        "hs_lastmodifieddate": "2026-04-22T16:00:00Z",
-    },
-    "createdAt": "2026-04-22T16:00:00Z",
-    "updatedAt": "2026-04-22T16:00:00Z",
-    "archived": False,
-}
-
 
 @custom_function()
 async def create_note(
@@ -33,37 +14,69 @@ async def create_note(
 ) -> dict:
     """Create a note attached to one or more CRM records."""
     if mock:
-        return {**_MOCK_NOTE, "id": "N99001",
-                "properties": {**_MOCK_NOTE["properties"], "hs_note_body": body}}
+        return {
+            "id": "N99001",
+            "properties": {
+                "hs_note_body": body,
+                "hs_timestamp": timestamp_iso or "2026-04-22T16:00:00Z",
+                "hubspot_owner_id": "60001",
+                "hs_object_id": "N99001",
+                "hs_lastmodifieddate": "2026-04-22T16:00:00Z",
+            },
+            "createdAt": "2026-04-22T16:00:00Z",
+            "updatedAt": "2026-04-22T16:00:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
+    )
+    from unity_deploy.customization.integrations.packages.hubspot.functions._engagement_helpers import (
+        build_associations, now_ms_str,
     )
 
     body_payload: dict = {
         "properties": {
             "hs_note_body": body,
-            "hs_timestamp": timestamp_iso or _now_ms_str(),
+            "hs_timestamp": timestamp_iso or now_ms_str(),
         },
     }
     if associations:
-        body_payload["associations"] = _build_associations(
-            associations, {"contact": 202, "company": 190, "deal": 214, "ticket": 228},
-        )
+        type_ids = {"contact": 202, "company": 190, "deal": 214, "ticket": 228}
+        body_payload["associations"] = build_associations(associations, type_ids)
     return await hubspot_post("/crm/v3/objects/notes", body_payload)
 
 
 @custom_function()
 async def list_notes(after: str | None = None, limit: int = 25, mock: bool = True) -> dict:
+    """Paginate through HubSpot notes."""
     if mock:
-        return {"results": [{**_MOCK_NOTE, "id": f"N{1000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base_props = {
+            "hs_note_body": "Owner prefers monthly statements via email; quarterly board updates.",
+            "hs_timestamp": "2026-04-22T16:00:00Z",
+            "hubspot_owner_id": "60001",
+        }
+        return {
+            "results": [
+                {"id": f"N{1000 + i}",
+                 "properties": {**base_props, "hs_object_id": f"N{1000 + i}"},
+                 "createdAt": "2026-04-22T16:00:00Z",
+                 "updatedAt": "2026-04-22T16:00:00Z",
+                 "archived": False}
+                for i in range(min(limit, 3))
+            ],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
     )
 
-    params: dict = {"limit": min(limit, 100), "properties": ",".join(_DEFAULT_PROPERTIES)}
+    default_props = [
+        "hs_note_body", "hs_timestamp", "hubspot_owner_id",
+        "hs_object_id", "hs_lastmodifieddate",
+    ]
+    params: dict = {"limit": min(limit, 100), "properties": ",".join(default_props)}
     if after:
         params["after"] = after
     body = await hubspot_get("/crm/v3/objects/notes", params=params)
@@ -79,12 +92,27 @@ async def sync_notes(
     schema_version: str = "hubspot.engagements.notes.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync notes modified since ``since`` into a tables envelope."""
     if mock:
         from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
             normalize_engagement,
         )
-        rows = [normalize_engagement({**_MOCK_NOTE, "id": f"N{1000 + i}"},
-                                     engagement_type="note") for i in range(3)]
+        base_props = {
+            "hs_note_body": "Owner prefers monthly statements via email.",
+            "hs_timestamp": "2026-04-22T16:00:00Z",
+            "hubspot_owner_id": "60001",
+        }
+        rows = [
+            normalize_engagement(
+                {"id": f"N{1000 + i}",
+                 "properties": {**base_props, "hs_object_id": f"N{1000 + i}"},
+                 "createdAt": "2026-04-22T16:00:00Z",
+                 "updatedAt": "2026-04-22T16:00:00Z",
+                 "archived": False},
+                engagement_type="note",
+            )
+            for i in range(3)
+        ]
         return {
             "schema_version": schema_version,
             "tables": {"notes": rows},
@@ -102,6 +130,10 @@ async def sync_notes(
         normalize_engagement,
     )
 
+    default_props = [
+        "hs_note_body", "hs_timestamp", "hubspot_owner_id",
+        "hs_object_id", "hs_lastmodifieddate",
+    ]
     cfg = get_hubspot_config()
     filter_groups = (
         [{"filters": [{"propertyName": "hs_lastmodifieddate", "operator": "GT", "value": since}]}]
@@ -113,7 +145,7 @@ async def sync_notes(
             "notes",
             filter_groups=filter_groups,
             sorts=[{"propertyName": "hs_lastmodifieddate", "direction": "ASCENDING"}],
-            properties=_DEFAULT_PROPERTIES,
+            properties=default_props,
             after=after,
             limit=cfg["api_page_size"],
         )
@@ -135,23 +167,3 @@ async def sync_notes(
         "metadata": {"object_type": "notes", "mode": "real",
                      "since": since, "row_count": len(rows), "pages": page_count},
     }
-
-
-def _build_associations(refs: list[dict], type_ids: dict[str, int]) -> list[dict]:
-    out = []
-    for ref in refs:
-        obj = ref.get("object_type", "").rstrip("s")
-        type_id = type_ids.get(obj)
-        if type_id is None:
-            continue
-        out.append({
-            "to": {"id": str(ref["id"])},
-            "types": [{"associationCategory": "HUBSPOT_DEFINED",
-                       "associationTypeId": type_id}],
-        })
-    return out
-
-
-def _now_ms_str() -> str:
-    import datetime as _dt
-    return str(int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp() * 1000))

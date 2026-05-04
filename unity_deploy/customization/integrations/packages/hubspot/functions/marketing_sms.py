@@ -59,8 +59,10 @@ async def list_sms_messages(
         return {
             "results": [
                 {
-                    "id": f"sms-{8000 + i}", "phoneNumber": "+1 555 123 4567",
-                    "status": "DELIVERED", "createdAt": "2026-04-25T15:00:00Z",
+                    "id": f"sms-{8000 + i}",
+                    "phoneNumber": "+1 555 123 4567",
+                    "status": "DELIVERED",
+                    "createdAt": "2026-04-25T15:00:00Z",
                 }
                 for i in range(min(limit, 3))
             ],

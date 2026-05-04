@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_OBJECT_TYPES = ("contacts", "companies", "deals", "tickets",
-                 "line_items", "products", "quotes")
-
 
 @custom_function()
 async def list_properties(object_type: str, mock: bool = True) -> dict:
@@ -91,16 +88,19 @@ async def sync_properties(
         normalize_property_def,
     )
 
+    object_types = ("contacts", "companies", "deals", "tickets",
+                    "line_items", "products", "quotes")
+
     if mock:
         rows = []
-        for obj in _OBJECT_TYPES:
-            rows.extend([
+        for obj in object_types:
+            rows.append(
                 normalize_property_def(
                     {"name": "firstname", "label": "First Name", "type": "string",
                      "fieldType": "text", "groupName": "info", "hubspotDefined": True},
                     object_type=obj,
-                ),
-            ])
+                )
+            )
         return {
             "schema_version": schema_version,
             "tables": {"properties": rows},
@@ -113,7 +113,7 @@ async def sync_properties(
 
     rows: list[dict] = []
     errors: list[dict] = []
-    for obj in _OBJECT_TYPES:
+    for obj in object_types:
         body = await hubspot_get(f"/crm/v3/properties/{obj}")
         if "error" in body:
             errors.append({"object_type": obj, "error": body["error"]})

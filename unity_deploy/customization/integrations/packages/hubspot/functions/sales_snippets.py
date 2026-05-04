@@ -4,14 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_SNIPPET = {
-    "id": "snip-1001",
-    "shortcut": "managementfee",
-    "text": "Our standard management fee is 7% of monthly rents collected, with a $150 onboarding fee per unit.",
-    "createdAt": "2025-09-01T10:00:00Z",
-    "updatedAt": "2025-12-01T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_sales_snippets(
@@ -19,17 +11,23 @@ async def list_sales_snippets(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """List sales snippets."""
     if mock:
-        return {"results": [{**_MOCK_SNIPPET, "id": f"snip-{1000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "shortcut": "managementfee",
+            "text": "Our standard management fee is 7% of monthly rents collected, with a $150 onboarding fee per unit.",
+            "createdAt": "2025-09-01T10:00:00Z",
+            "updatedAt": "2025-12-01T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"snip-{1000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
     )
 
-    # The snippets endpoint isn't currently part of the public v3 API, so fall
-    # back gracefully if HubSpot returns 404 - the function is still useful in
-    # mock mode for the assistant to reason about snippets conceptually.
     body = await hubspot_get("/sales/v1/snippets")
     if "error" in body:
         return body
@@ -39,8 +37,15 @@ async def list_sales_snippets(
 
 @custom_function()
 async def get_sales_snippet(snippet_id: str, mock: bool = True) -> dict:
+    """Fetch a sales snippet by ID."""
     if mock:
-        return {**_MOCK_SNIPPET, "id": str(snippet_id)}
+        return {
+            "id": str(snippet_id),
+            "shortcut": "managementfee",
+            "text": "Our standard management fee is 7% of monthly rents collected, with a $150 onboarding fee per unit.",
+            "createdAt": "2025-09-01T10:00:00Z",
+            "updatedAt": "2025-12-01T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -54,13 +59,15 @@ async def sync_sales_snippets(
     schema_version: str = "hubspot.sales.snippets.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync sales snippet definitions.  v0 is mock-only - the snippets API
+    requires a beta scope."""
     if mock:
         rows = [{
             "snippet_id": f"snip-{1000 + i}",
-            "shortcut": _MOCK_SNIPPET["shortcut"],
-            "text": _MOCK_SNIPPET["text"],
-            "created_at": _MOCK_SNIPPET["createdAt"],
-            "updated_at": _MOCK_SNIPPET["updatedAt"],
+            "shortcut": "managementfee",
+            "text": "Our standard management fee is 7% of monthly rents collected, with a $150 onboarding fee per unit.",
+            "created_at": "2025-09-01T10:00:00Z",
+            "updated_at": "2025-12-01T12:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

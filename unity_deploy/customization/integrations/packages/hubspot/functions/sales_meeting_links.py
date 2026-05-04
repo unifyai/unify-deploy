@@ -4,16 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_MEETING_LINK = {
-    "id": "ml-3001",
-    "name": "Property Tour - 30 minute slot",
-    "slug": "tour-30",
-    "userIdsOfLinkMembers": ["60001"],
-    "type": "PERSONAL",
-    "createdAt": "2025-10-01T10:00:00Z",
-    "updatedAt": "2026-01-15T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_meeting_links(
@@ -21,9 +11,20 @@ async def list_meeting_links(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """List meeting scheduling pages."""
     if mock:
-        return {"results": [{**_MOCK_MEETING_LINK, "id": f"ml-{3000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Property Tour - 30 minute slot",
+            "slug": "tour-30",
+            "userIdsOfLinkMembers": ["60001"],
+            "type": "PERSONAL",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-01-15T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"ml-{3000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -41,8 +42,17 @@ async def list_meeting_links(
 
 @custom_function()
 async def get_meeting_link(link_id: str, mock: bool = True) -> dict:
+    """Fetch a meeting scheduling page by ID."""
     if mock:
-        return {**_MOCK_MEETING_LINK, "id": str(link_id)}
+        return {
+            "id": str(link_id),
+            "name": "Property Tour - 30 minute slot",
+            "slug": "tour-30",
+            "userIdsOfLinkMembers": ["60001"],
+            "type": "PERSONAL",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-01-15T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -56,15 +66,16 @@ async def sync_meeting_links(
     schema_version: str = "hubspot.sales.meeting_links.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync meeting link metadata into a tables envelope."""
     if mock:
         rows = [{
             "link_id": f"ml-{3000 + i}",
-            "name": _MOCK_MEETING_LINK["name"],
-            "slug": _MOCK_MEETING_LINK["slug"],
-            "type": _MOCK_MEETING_LINK["type"],
-            "owners_json": str(_MOCK_MEETING_LINK["userIdsOfLinkMembers"]),
-            "created_at": _MOCK_MEETING_LINK["createdAt"],
-            "updated_at": _MOCK_MEETING_LINK["updatedAt"],
+            "name": "Property Tour - 30 minute slot",
+            "slug": "tour-30",
+            "type": "PERSONAL",
+            "owners_json": "['60001']",
+            "created_at": "2025-10-01T10:00:00Z",
+            "updated_at": "2026-01-15T12:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

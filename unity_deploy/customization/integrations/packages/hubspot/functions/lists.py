@@ -4,20 +4,18 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_LIST = {
-    "listId": "401",
-    "name": "Q3 Prospective Tenants",
-    "listType": "STATIC",
-    "processingType": "MANUAL",
-    "createdAt": "2026-04-01T10:00:00Z",
-    "updatedAt": "2026-04-25T15:00:00Z",
-}
-
 
 @custom_function()
 async def get_list(list_id: str, mock: bool = True) -> dict:
+    """Fetch a single contact list by ID."""
     if mock:
-        return {**_MOCK_LIST, "listId": str(list_id)}
+        return {
+            "listId": str(list_id),
+            "name": "Q3 Prospective Tenants",
+            "listType": "STATIC", "processingType": "MANUAL",
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-25T15:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -31,7 +29,16 @@ async def list_lists(after: str | None = None, limit: int = 50, mock: bool = Tru
     """List all contact lists in the portal."""
     if mock:
         return {
-            "results": [{**_MOCK_LIST, "listId": str(400 + i)} for i in range(min(limit, 3))],
+            "results": [
+                {
+                    "listId": str(400 + i),
+                    "name": "Q3 Prospective Tenants",
+                    "listType": "STATIC", "processingType": "MANUAL",
+                    "createdAt": "2026-04-01T10:00:00Z",
+                    "updatedAt": "2026-04-25T15:00:00Z",
+                }
+                for i in range(min(limit, 3))
+            ],
             "next_after": None,
         }
 
@@ -58,8 +65,12 @@ async def create_list(
 ) -> dict:
     """Create a contact list.  ``list_type`` can be ``STATIC`` or ``DYNAMIC``."""
     if mock:
-        return {**_MOCK_LIST, "listId": "99001", "name": name,
-                "listType": list_type, "processingType": processing_type}
+        return {
+            "listId": "99001", "name": name,
+            "listType": list_type, "processingType": processing_type,
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-25T15:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -73,6 +84,7 @@ async def create_list(
 
 @custom_function()
 async def delete_list(list_id: str, mock: bool = True) -> dict:
+    """Delete a contact list.  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "list_id": str(list_id)}
 
@@ -101,11 +113,6 @@ async def add_contact_to_list(
         return {"status": "added", "list_id": str(list_id), "contact_id": str(contact_id)}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
-        hubspot_put,
-    )
-
-    # /crm/v3/lists/{listId}/memberships/add (PUT) - implemented via PATCH semantics here.
-    from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
     )
 
@@ -121,6 +128,7 @@ async def remove_contact_from_list(
     contact_id: str,
     mock: bool = True,
 ) -> dict:
+    """Remove a contact from a STATIC list."""
     if mock:
         return {"status": "removed", "list_id": str(list_id), "contact_id": str(contact_id)}
 
@@ -146,7 +154,16 @@ async def sync_lists(
     )
 
     if mock:
-        rows = [normalize_list({**_MOCK_LIST, "listId": str(400 + i)}) for i in range(3)]
+        rows = [
+            normalize_list({
+                "listId": str(400 + i),
+                "name": "Q3 Prospective Tenants",
+                "listType": "STATIC", "processingType": "MANUAL",
+                "createdAt": "2026-04-01T10:00:00Z",
+                "updatedAt": "2026-04-25T15:00:00Z",
+            })
+            for i in range(3)
+        ]
         return {
             "schema_version": schema_version,
             "tables": {"lists": rows, "list_membership": []},

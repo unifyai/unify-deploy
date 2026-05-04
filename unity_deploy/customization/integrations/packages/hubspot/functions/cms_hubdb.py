@@ -4,32 +4,24 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_TABLE = {
-    "id": "11001",
-    "name": "properties",
-    "label": "Properties Catalog",
-    "columns": [
-        {"name": "name", "label": "Name", "type": "TEXT"},
-        {"name": "address", "label": "Address", "type": "TEXT"},
-        {"name": "unit_count", "label": "Units", "type": "NUMBER"},
-    ],
-    "createdAt": "2025-09-01T10:00:00Z",
-    "updatedAt": "2026-04-15T12:00:00Z",
-    "publishedAt": "2026-04-15T12:00:00Z",
-}
-
-_MOCK_ROW = {
-    "id": "21001",
-    "values": {"name": "Sunset Tower", "address": "100 Main St", "unit_count": 120},
-    "createdAt": "2026-01-15T10:00:00Z",
-    "updatedAt": "2026-04-01T11:00:00Z",
-}
-
 
 @custom_function()
 async def list_hubdb_tables(mock: bool = True) -> dict:
+    """List all HubDB table definitions."""
     if mock:
-        return {"results": [{**_MOCK_TABLE, "id": str(11000 + i)} for i in range(2)]}
+        base = {
+            "name": "properties",
+            "label": "Properties Catalog",
+            "columns": [
+                {"name": "name", "label": "Name", "type": "TEXT"},
+                {"name": "address", "label": "Address", "type": "TEXT"},
+                {"name": "unit_count", "label": "Units", "type": "NUMBER"},
+            ],
+            "createdAt": "2025-09-01T10:00:00Z",
+            "updatedAt": "2026-04-15T12:00:00Z",
+            "publishedAt": "2026-04-15T12:00:00Z",
+        }
+        return {"results": [{**base, "id": str(11000 + i)} for i in range(2)]}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -43,8 +35,21 @@ async def list_hubdb_tables(mock: bool = True) -> dict:
 
 @custom_function()
 async def get_hubdb_table(table_id: str, mock: bool = True) -> dict:
+    """Fetch a HubDB table definition by ID."""
     if mock:
-        return {**_MOCK_TABLE, "id": str(table_id)}
+        return {
+            "id": str(table_id),
+            "name": "properties",
+            "label": "Properties Catalog",
+            "columns": [
+                {"name": "name", "label": "Name", "type": "TEXT"},
+                {"name": "address", "label": "Address", "type": "TEXT"},
+                {"name": "unit_count", "label": "Units", "type": "NUMBER"},
+            ],
+            "createdAt": "2025-09-01T10:00:00Z",
+            "updatedAt": "2026-04-15T12:00:00Z",
+            "publishedAt": "2026-04-15T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -60,10 +65,18 @@ async def list_hubdb_rows(
     limit: int = 100,
     mock: bool = True,
 ) -> dict:
+    """Paginate through rows in a HubDB table."""
     if mock:
-        return {"table_id": str(table_id),
-                "results": [{**_MOCK_ROW, "id": str(21000 + i)} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "values": {"name": "Sunset Tower", "address": "100 Main St", "unit_count": 120},
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-04-01T11:00:00Z",
+        }
+        return {
+            "table_id": str(table_id),
+            "results": [{**base, "id": str(21000 + i)} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -82,8 +95,13 @@ async def list_hubdb_rows(
 
 @custom_function()
 async def create_hubdb_row(table_id: str, values: dict, mock: bool = True) -> dict:
+    """Insert a draft row into a HubDB table."""
     if mock:
-        return {**_MOCK_ROW, "id": "29001", "values": values}
+        return {
+            "id": "29001", "values": values,
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-04-01T11:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -102,8 +120,13 @@ async def update_hubdb_row(
     values: dict,
     mock: bool = True,
 ) -> dict:
+    """Patch a HubDB row's values (draft state)."""
     if mock:
-        return {**_MOCK_ROW, "id": str(row_id), "values": values}
+        return {
+            "id": str(row_id), "values": values,
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-04-01T11:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -117,6 +140,7 @@ async def update_hubdb_row(
 
 @custom_function()
 async def delete_hubdb_row(table_id: str, row_id: str, mock: bool = True) -> dict:
+    """Delete a HubDB row.  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "table_id": str(table_id), "row_id": str(row_id)}
 
@@ -171,18 +195,30 @@ async def sync_hubdb(
     """Sync HubDB tables + rows.  Each row's ``values`` dict is flattened
     into the row dict alongside its identifier columns."""
     if mock:
+        mock_table = {
+            "name": "properties",
+            "label": "Properties Catalog",
+            "columns": [
+                {"name": "name", "label": "Name", "type": "TEXT"},
+                {"name": "address", "label": "Address", "type": "TEXT"},
+                {"name": "unit_count", "label": "Units", "type": "NUMBER"},
+            ],
+            "createdAt": "2025-09-01T10:00:00Z",
+            "updatedAt": "2026-04-15T12:00:00Z",
+        }
+        mock_row_values = {"name": "Sunset Tower", "address": "100 Main St", "unit_count": 120}
         tables_rows = [{
             "table_id": str(11000 + i),
-            "name": _MOCK_TABLE["name"], "label": _MOCK_TABLE["label"],
-            "columns_json": str(_MOCK_TABLE["columns"]),
-            "created_at": _MOCK_TABLE["createdAt"],
-            "updated_at": _MOCK_TABLE["updatedAt"],
+            "name": mock_table["name"], "label": mock_table["label"],
+            "columns_json": str(mock_table["columns"]),
+            "created_at": mock_table["createdAt"],
+            "updated_at": mock_table["updatedAt"],
         } for i in range(2)]
         rows = [{
             "table_id": "11001", "row_id": str(21000 + j),
-            **_MOCK_ROW["values"],
-            "created_at": _MOCK_ROW["createdAt"],
-            "updated_at": _MOCK_ROW["updatedAt"],
+            **mock_row_values,
+            "created_at": "2026-01-15T10:00:00Z",
+            "updated_at": "2026-04-01T11:00:00Z",
         } for j in range(3)]
         return {
             "schema_version": schema_version,
@@ -212,7 +248,6 @@ async def sync_hubdb(
             "created_at": t.get("createdAt", ""),
             "updated_at": t.get("updatedAt", ""),
         })
-        # Pull rows for the table.
         after: str | None = None
         while True:
             params: dict = {"limit": 1000}

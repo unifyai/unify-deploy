@@ -4,41 +4,28 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_DEFAULT_PROPERTIES = [
-    "dealname", "dealstage", "pipeline", "amount", "closedate",
-    "createdate", "hs_lastmodifieddate", "hubspot_owner_id",
-    "dealtype", "description", "hs_object_id", "hs_priority",
-    "num_associated_contacts",
-]
-
-_MOCK_DEAL = {
-    "id": "9001",
-    "properties": {
-        "dealname": "Acme Properties - Q3 Management Contract",
-        "dealstage": "presentationscheduled",
-        "pipeline": "default",
-        "amount": "120000",
-        "closedate": "2026-09-30T00:00:00Z",
-        "createdate": "2026-04-10T08:00:00Z",
-        "hs_lastmodifieddate": "2026-04-22T15:00:00Z",
-        "hubspot_owner_id": "60001",
-        "dealtype": "newbusiness",
-        "description": "Annual property management contract for portfolio of 12 multifamily assets.",
-        "hs_object_id": "9001",
-        "hs_priority": "high",
-        "num_associated_contacts": "3",
-    },
-    "createdAt": "2026-04-10T08:00:00Z",
-    "updatedAt": "2026-04-22T15:00:00Z",
-    "archived": False,
-}
-
 
 @custom_function()
 async def get_deal(deal_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot deal by ID."""
     if mock:
-        return {**_MOCK_DEAL, "id": str(deal_id)}
+        return {
+            "id": str(deal_id),
+            "properties": {
+                "dealname": "Acme Properties - Q3 Management Contract",
+                "dealstage": "presentationscheduled", "pipeline": "default",
+                "amount": "120000", "closedate": "2026-09-30T00:00:00Z",
+                "createdate": "2026-04-10T08:00:00Z",
+                "hs_lastmodifieddate": "2026-04-22T15:00:00Z",
+                "hubspot_owner_id": "60001", "dealtype": "newbusiness",
+                "description": "Annual property management contract for portfolio of 12 multifamily assets.",
+                "hs_object_id": str(deal_id), "hs_priority": "high",
+                "num_associated_contacts": "3",
+            },
+            "createdAt": "2026-04-10T08:00:00Z",
+            "updatedAt": "2026-04-22T15:00:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -47,11 +34,17 @@ async def get_deal(deal_id: str, mock: bool = True) -> dict:
         get_hubspot_config,
     )
 
+    default_props = [
+        "dealname", "dealstage", "pipeline", "amount", "closedate",
+        "createdate", "hs_lastmodifieddate", "hubspot_owner_id",
+        "dealtype", "description", "hs_object_id", "hs_priority",
+        "num_associated_contacts",
+    ]
     cfg = get_hubspot_config()
     properties = (
         ",".join(cfg["deal_properties"])
         if isinstance(cfg["deal_properties"], list)
-        else ",".join(_DEFAULT_PROPERTIES)
+        else ",".join(default_props)
     )
     return await hubspot_get(
         f"/crm/v3/objects/deals/{deal_id}",
@@ -63,17 +56,34 @@ async def get_deal(deal_id: str, mock: bool = True) -> dict:
 async def search_deals(query: str, limit: int = 10, mock: bool = True) -> dict:
     """Search HubSpot deals (matches dealname + description)."""
     if mock:
-        return {"results": [{**_MOCK_DEAL, "id": "9001"}], "total": 1}
+        return {
+            "results": [{
+                "id": "9001",
+                "properties": {
+                    "dealname": "Acme Properties - Q3 Management Contract",
+                    "dealstage": "presentationscheduled", "pipeline": "default",
+                    "amount": "120000", "hs_object_id": "9001",
+                    "hubspot_owner_id": "60001",
+                },
+                "createdAt": "2026-04-10T08:00:00Z",
+                "updatedAt": "2026-04-22T15:00:00Z",
+                "archived": False,
+            }],
+            "total": 1,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_search,
     )
 
+    default_props = [
+        "dealname", "dealstage", "pipeline", "amount", "closedate",
+        "createdate", "hs_lastmodifieddate", "hubspot_owner_id",
+        "dealtype", "description", "hs_object_id", "hs_priority",
+        "num_associated_contacts",
+    ]
     return await hubspot_search(
-        "deals",
-        query=query,
-        properties=_DEFAULT_PROPERTIES,
-        limit=min(limit, 100),
+        "deals", query=query, properties=default_props, limit=min(limit, 100),
     )
 
 
@@ -85,8 +95,22 @@ async def list_deals(
 ) -> dict:
     """Paginate through HubSpot deals."""
     if mock:
+        base_props = {
+            "dealname": "Acme Properties - Q3 Management Contract",
+            "dealstage": "presentationscheduled", "pipeline": "default",
+            "amount": "120000", "hubspot_owner_id": "60001",
+            "createdate": "2026-04-10T08:00:00Z",
+            "hs_lastmodifieddate": "2026-04-22T15:00:00Z",
+        }
         return {
-            "results": [{**_MOCK_DEAL, "id": str(9000 + i)} for i in range(min(limit, 3))],
+            "results": [
+                {"id": str(9000 + i),
+                 "properties": {**base_props, "hs_object_id": str(9000 + i)},
+                 "createdAt": "2026-04-10T08:00:00Z",
+                 "updatedAt": "2026-04-22T15:00:00Z",
+                 "archived": False}
+                for i in range(min(limit, 3))
+            ],
             "next_after": None,
         }
 
@@ -94,7 +118,13 @@ async def list_deals(
         hubspot_get,
     )
 
-    params: dict = {"limit": min(limit, 100), "properties": ",".join(_DEFAULT_PROPERTIES)}
+    default_props = [
+        "dealname", "dealstage", "pipeline", "amount", "closedate",
+        "createdate", "hs_lastmodifieddate", "hubspot_owner_id",
+        "dealtype", "description", "hs_object_id", "hs_priority",
+        "num_associated_contacts",
+    ]
+    params: dict = {"limit": min(limit, 100), "properties": ",".join(default_props)}
     if after:
         params["after"] = after
     body = await hubspot_get("/crm/v3/objects/deals", params=params)
@@ -110,8 +140,19 @@ async def list_deals(
 async def create_deal(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot deal.  At minimum supply ``dealname`` and ``pipeline``."""
     if mock:
-        return {**_MOCK_DEAL, "id": "99001",
-                "properties": {**_MOCK_DEAL["properties"], **properties}}
+        base_props = {
+            "dealname": "New Deal", "dealstage": "appointmentscheduled",
+            "pipeline": "default", "amount": "0",
+            "createdate": "2026-04-10T08:00:00Z",
+            "hs_lastmodifieddate": "2026-04-10T08:00:00Z",
+        }
+        return {
+            "id": "99001",
+            "properties": {**base_props, "hs_object_id": "99001", **properties},
+            "createdAt": "2026-04-10T08:00:00Z",
+            "updatedAt": "2026-04-10T08:00:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -124,8 +165,18 @@ async def create_deal(properties: dict, mock: bool = True) -> dict:
 async def update_deal(deal_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot deal properties."""
     if mock:
-        return {**_MOCK_DEAL, "id": str(deal_id),
-                "properties": {**_MOCK_DEAL["properties"], **properties}}
+        base_props = {
+            "dealname": "Acme Properties - Q3 Management Contract",
+            "dealstage": "presentationscheduled", "pipeline": "default",
+            "amount": "120000",
+        }
+        return {
+            "id": str(deal_id),
+            "properties": {**base_props, "hs_object_id": str(deal_id), **properties},
+            "createdAt": "2026-04-10T08:00:00Z",
+            "updatedAt": "2026-04-22T15:00:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -147,12 +198,21 @@ async def transition_deal_stage(
     """Move a deal to a new pipeline stage.  Optionally records a note
     explaining the transition."""
     if mock:
+        base_props = {
+            "dealname": "Acme Properties - Q3 Management Contract",
+            "pipeline": "default", "amount": "120000",
+        }
         return {
-            **_MOCK_DEAL,
             "id": str(deal_id),
-            "properties": {**_MOCK_DEAL["properties"], "dealstage": new_stage_id},
+            "properties": {**base_props, "dealstage": new_stage_id,
+                           "hs_object_id": str(deal_id)},
+            "createdAt": "2026-04-10T08:00:00Z",
+            "updatedAt": "2026-04-22T15:00:00Z",
+            "archived": False,
             "note_added": bool(note),
         }
+
+    import datetime as _dt
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch, hubspot_post,
@@ -163,8 +223,9 @@ async def transition_deal_stage(
         {"properties": {"dealstage": new_stage_id}},
     )
     if note and "error" not in result:
+        ts_ms = int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp() * 1000)
         await hubspot_post("/crm/v3/objects/notes", {
-            "properties": {"hs_note_body": note, "hs_timestamp": _now_ms()},
+            "properties": {"hs_note_body": note, "hs_timestamp": str(ts_ms)},
             "associations": [{
                 "to": {"id": str(deal_id)},
                 "types": [{"associationCategory": "HUBSPOT_DEFINED",
@@ -204,7 +265,23 @@ async def sync_deals(
         from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
             normalize_deal,
         )
-        rows = [normalize_deal({**_MOCK_DEAL, "id": str(9000 + i)}) for i in range(3)]
+        base_props = {
+            "dealname": "Acme Properties - Q3 Management Contract",
+            "dealstage": "presentationscheduled", "pipeline": "default",
+            "amount": "120000", "hubspot_owner_id": "60001",
+            "createdate": "2026-04-10T08:00:00Z",
+            "hs_lastmodifieddate": "2026-04-22T15:00:00Z",
+        }
+        rows = [
+            normalize_deal({
+                "id": str(9000 + i),
+                "properties": {**base_props, "hs_object_id": str(9000 + i)},
+                "createdAt": "2026-04-10T08:00:00Z",
+                "updatedAt": "2026-04-22T15:00:00Z",
+                "archived": False,
+            })
+            for i in range(3)
+        ]
         return {
             "schema_version": schema_version,
             "tables": {"deals": rows},
@@ -222,11 +299,17 @@ async def sync_deals(
         normalize_deal,
     )
 
+    default_props = [
+        "dealname", "dealstage", "pipeline", "amount", "closedate",
+        "createdate", "hs_lastmodifieddate", "hubspot_owner_id",
+        "dealtype", "description", "hs_object_id", "hs_priority",
+        "num_associated_contacts",
+    ]
     cfg = get_hubspot_config()
     properties = (
         cfg["deal_properties"]
         if isinstance(cfg["deal_properties"], list)
-        else _DEFAULT_PROPERTIES
+        else default_props
     )
     filter_groups = (
         [{"filters": [{"propertyName": "hs_lastmodifieddate", "operator": "GT", "value": since}]}]
@@ -259,8 +342,3 @@ async def sync_deals(
         "metadata": {"object_type": "deals", "mode": "real",
                      "since": since, "row_count": len(rows), "pages": page_count},
     }
-
-
-def _now_ms() -> int:
-    import datetime as _dt
-    return int(_dt.datetime.now(tz=_dt.timezone.utc).timestamp() * 1000)

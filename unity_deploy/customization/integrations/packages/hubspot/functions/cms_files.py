@@ -4,19 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_FILE = {
-    "id": "fl-1001",
-    "name": "sunset-tower-floorplan.pdf",
-    "extension": "pdf",
-    "type": "DOCUMENT",
-    "size": 1234567,
-    "url": "https://example.com/files/sunset-tower-floorplan.pdf",
-    "alt": "Sunset Tower floor plan",
-    "parentFolderId": None,
-    "createdAt": "2026-01-15T10:00:00Z",
-    "updatedAt": "2026-04-01T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_cms_files(
@@ -25,9 +12,21 @@ async def list_cms_files(
     parent_folder_id: int | None = None,
     mock: bool = True,
 ) -> dict:
+    """Paginate through CMS files."""
     if mock:
-        return {"results": [{**_MOCK_FILE, "id": f"fl-{1000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "sunset-tower-floorplan.pdf",
+            "extension": "pdf", "type": "DOCUMENT", "size": 1234567,
+            "url": "https://example.com/files/sunset-tower-floorplan.pdf",
+            "alt": "Sunset Tower floor plan",
+            "parentFolderId": None,
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-04-01T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"fl-{1000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -47,8 +46,18 @@ async def list_cms_files(
 
 @custom_function()
 async def get_cms_file(file_id: str, mock: bool = True) -> dict:
+    """Fetch a CMS file by ID."""
     if mock:
-        return {**_MOCK_FILE, "id": str(file_id)}
+        return {
+            "id": str(file_id),
+            "name": "sunset-tower-floorplan.pdf",
+            "extension": "pdf", "type": "DOCUMENT", "size": 1234567,
+            "url": "https://example.com/files/sunset-tower-floorplan.pdf",
+            "alt": "Sunset Tower floor plan",
+            "parentFolderId": None,
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-04-01T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -66,8 +75,14 @@ async def upload_cms_file(
 ) -> dict:
     """Upload a local file to the HubSpot Files library."""
     if mock:
-        return {**_MOCK_FILE, "id": "fl-99001",
-                "name": file_path.rsplit("/", 1)[-1]}
+        return {
+            "id": "fl-99001",
+            "name": file_path.rsplit("/", 1)[-1],
+            "extension": "pdf", "type": "DOCUMENT", "size": 1234567,
+            "url": "https://example.com/files/uploaded.pdf",
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-04-01T12:00:00Z",
+        }
 
     import os
     import httpx
@@ -128,12 +143,22 @@ async def sync_cms_files(
     schema_version: str = "hubspot.cms.files.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync CMS file metadata into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_file,
     )
 
     if mock:
-        rows = [normalize_file({**_MOCK_FILE, "id": f"fl-{1000 + i}"}) for i in range(3)]
+        base = {
+            "name": "sunset-tower-floorplan.pdf",
+            "extension": "pdf", "type": "DOCUMENT", "size": 1234567,
+            "url": "https://example.com/files/sunset-tower-floorplan.pdf",
+            "alt": "Sunset Tower floor plan",
+            "parentFolderId": None,
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-04-01T12:00:00Z",
+        }
+        rows = [normalize_file({**base, "id": f"fl-{1000 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"cms_files": rows},

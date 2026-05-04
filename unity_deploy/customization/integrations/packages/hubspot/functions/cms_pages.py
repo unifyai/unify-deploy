@@ -4,19 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_PAGE = {
-    "id": "pg-8001",
-    "name": "Sunset Tower - Property Listing",
-    "slug": "properties/sunset-tower",
-    "url": "https://example.com/properties/sunset-tower",
-    "htmlTitle": "Sunset Tower - Luxury Multifamily | Example",
-    "metaDescription": "Discover Sunset Tower, a luxury multifamily property in Tampa, FL.",
-    "currentState": "PUBLISHED",
-    "publishDate": "2025-12-15T10:00:00Z",
-    "created": "2025-11-01T10:00:00Z",
-    "updated": "2026-04-15T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_cms_pages(
@@ -24,9 +11,23 @@ async def list_cms_pages(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through CMS site pages."""
     if mock:
-        return {"results": [{**_MOCK_PAGE, "id": f"pg-{8000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Sunset Tower - Property Listing",
+            "slug": "properties/sunset-tower",
+            "url": "https://example.com/properties/sunset-tower",
+            "htmlTitle": "Sunset Tower - Luxury Multifamily | Example",
+            "metaDescription": "Discover Sunset Tower, a luxury multifamily property in Tampa, FL.",
+            "currentState": "PUBLISHED",
+            "publishDate": "2025-12-15T10:00:00Z",
+            "created": "2025-11-01T10:00:00Z",
+            "updated": "2026-04-15T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"pg-{8000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -44,8 +45,20 @@ async def list_cms_pages(
 
 @custom_function()
 async def get_cms_page(page_id: str, mock: bool = True) -> dict:
+    """Fetch a CMS page by ID."""
     if mock:
-        return {**_MOCK_PAGE, "id": str(page_id)}
+        return {
+            "id": str(page_id),
+            "name": "Sunset Tower - Property Listing",
+            "slug": "properties/sunset-tower",
+            "url": "https://example.com/properties/sunset-tower",
+            "htmlTitle": "Sunset Tower - Luxury Multifamily | Example",
+            "metaDescription": "Discover Sunset Tower, a luxury multifamily property in Tampa, FL.",
+            "currentState": "PUBLISHED",
+            "publishDate": "2025-12-15T10:00:00Z",
+            "created": "2025-11-01T10:00:00Z",
+            "updated": "2026-04-15T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -65,9 +78,16 @@ async def create_cms_page(
 ) -> dict:
     """Create a CMS page in DRAFT state.  Use ``publish_cms_page`` to go live."""
     if mock:
-        return {**_MOCK_PAGE, "id": "pg-99001", "name": name, "slug": slug,
-                "htmlTitle": html_title, "metaDescription": meta_description,
-                "currentState": "DRAFT"}
+        return {
+            "id": "pg-99001",
+            "name": name, "slug": slug,
+            "htmlTitle": html_title, "metaDescription": meta_description,
+            "currentState": "DRAFT",
+            "url": "",
+            "publishDate": "",
+            "created": "2025-11-01T10:00:00Z",
+            "updated": "2026-04-15T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -85,8 +105,15 @@ async def create_cms_page(
 
 @custom_function()
 async def update_cms_page(page_id: str, properties: dict, mock: bool = True) -> dict:
+    """Patch CMS page properties."""
     if mock:
-        return {**_MOCK_PAGE, "id": str(page_id), **properties}
+        base = {
+            "name": "Sunset Tower - Property Listing",
+            "slug": "properties/sunset-tower",
+            "htmlTitle": "Sunset Tower - Luxury Multifamily | Example",
+            "currentState": "PUBLISHED",
+        }
+        return {**base, "id": str(page_id), **properties}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -116,7 +143,12 @@ async def publish_cms_page(
                 "page_id": str(page_id)}
 
     if mock:
-        return {**_MOCK_PAGE, "id": str(page_id), "currentState": "PUBLISHED"}
+        base = {
+            "name": "Sunset Tower - Property Listing",
+            "slug": "properties/sunset-tower",
+            "htmlTitle": "Sunset Tower - Luxury Multifamily | Example",
+        }
+        return {**base, "id": str(page_id), "currentState": "PUBLISHED"}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -133,12 +165,24 @@ async def sync_cms_pages(
     schema_version: str = "hubspot.cms.pages.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync CMS site pages into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_cms_page,
     )
 
     if mock:
-        rows = [normalize_cms_page({**_MOCK_PAGE, "id": f"pg-{8000 + i}"}) for i in range(3)]
+        base = {
+            "name": "Sunset Tower - Property Listing",
+            "slug": "properties/sunset-tower",
+            "url": "https://example.com/properties/sunset-tower",
+            "htmlTitle": "Sunset Tower - Luxury Multifamily | Example",
+            "metaDescription": "Discover Sunset Tower.",
+            "currentState": "PUBLISHED",
+            "publishDate": "2025-12-15T10:00:00Z",
+            "created": "2025-11-01T10:00:00Z",
+            "updated": "2026-04-15T12:00:00Z",
+        }
+        rows = [normalize_cms_page({**base, "id": f"pg-{8000 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"cms_pages": rows},

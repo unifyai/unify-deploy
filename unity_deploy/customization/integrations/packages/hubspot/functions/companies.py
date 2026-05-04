@@ -4,41 +4,27 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_DEFAULT_PROPERTIES = [
-    "name", "domain", "industry", "phone", "city", "state", "country",
-    "numberofemployees", "annualrevenue", "lifecyclestage", "type",
-    "createdate", "hs_lastmodifieddate", "hs_object_id",
-]
-
-_MOCK_COMPANY = {
-    "id": "5001",
-    "properties": {
-        "name": "Acme Properties LLC",
-        "domain": "acme-properties.com",
-        "industry": "REAL_ESTATE",
-        "phone": "+1 555 200 0100",
-        "city": "Tampa",
-        "state": "FL",
-        "country": "United States",
-        "numberofemployees": "120",
-        "annualrevenue": "8000000",
-        "lifecyclestage": "customer",
-        "type": "PROSPECT",
-        "createdate": "2025-09-01T09:00:00Z",
-        "hs_lastmodifieddate": "2026-04-20T11:00:00Z",
-        "hs_object_id": "5001",
-    },
-    "createdAt": "2025-09-01T09:00:00Z",
-    "updatedAt": "2026-04-20T11:00:00Z",
-    "archived": False,
-}
-
 
 @custom_function()
 async def get_company(company_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot company by ID."""
     if mock:
-        return {**_MOCK_COMPANY, "id": str(company_id)}
+        return {
+            "id": str(company_id),
+            "properties": {
+                "name": "Acme Properties LLC", "domain": "acme-properties.com",
+                "industry": "REAL_ESTATE", "phone": "+1 555 200 0100",
+                "city": "Tampa", "state": "FL", "country": "United States",
+                "numberofemployees": "120", "annualrevenue": "8000000",
+                "lifecyclestage": "customer", "type": "PROSPECT",
+                "createdate": "2025-09-01T09:00:00Z",
+                "hs_lastmodifieddate": "2026-04-20T11:00:00Z",
+                "hs_object_id": str(company_id),
+            },
+            "createdAt": "2025-09-01T09:00:00Z",
+            "updatedAt": "2026-04-20T11:00:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -47,11 +33,16 @@ async def get_company(company_id: str, mock: bool = True) -> dict:
         get_hubspot_config,
     )
 
+    default_props = [
+        "name", "domain", "industry", "phone", "city", "state", "country",
+        "numberofemployees", "annualrevenue", "lifecyclestage", "type",
+        "createdate", "hs_lastmodifieddate", "hs_object_id",
+    ]
     cfg = get_hubspot_config()
     properties = (
         ",".join(cfg["company_properties"])
         if isinstance(cfg["company_properties"], list)
-        else ",".join(_DEFAULT_PROPERTIES)
+        else ",".join(default_props)
     )
     return await hubspot_get(
         f"/crm/v3/objects/companies/{company_id}",
@@ -63,17 +54,32 @@ async def get_company(company_id: str, mock: bool = True) -> dict:
 async def search_companies(query: str, limit: int = 10, mock: bool = True) -> dict:
     """Full-text search HubSpot companies."""
     if mock:
-        return {"results": [{**_MOCK_COMPANY, "id": "5001"}], "total": 1}
+        return {
+            "results": [{
+                "id": "5001",
+                "properties": {
+                    "name": "Acme Properties LLC", "domain": "acme-properties.com",
+                    "industry": "REAL_ESTATE", "city": "Tampa", "state": "FL",
+                    "lifecyclestage": "customer", "hs_object_id": "5001",
+                },
+                "createdAt": "2025-09-01T09:00:00Z",
+                "updatedAt": "2026-04-20T11:00:00Z",
+                "archived": False,
+            }],
+            "total": 1,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_search,
     )
 
+    default_props = [
+        "name", "domain", "industry", "phone", "city", "state", "country",
+        "numberofemployees", "annualrevenue", "lifecyclestage", "type",
+        "createdate", "hs_lastmodifieddate", "hs_object_id",
+    ]
     return await hubspot_search(
-        "companies",
-        query=query,
-        properties=_DEFAULT_PROPERTIES,
-        limit=min(limit, 100),
+        "companies", query=query, properties=default_props, limit=min(limit, 100),
     )
 
 
@@ -81,8 +87,20 @@ async def search_companies(query: str, limit: int = 10, mock: bool = True) -> di
 async def list_companies(after: str | None = None, limit: int = 25, mock: bool = True) -> dict:
     """Paginate through HubSpot companies."""
     if mock:
+        base_props = {
+            "name": "Acme Properties LLC", "domain": "acme-properties.com",
+            "industry": "REAL_ESTATE", "city": "Tampa", "state": "FL",
+            "lifecyclestage": "customer",
+        }
         return {
-            "results": [{**_MOCK_COMPANY, "id": str(5000 + i)} for i in range(min(limit, 3))],
+            "results": [
+                {"id": str(5000 + i),
+                 "properties": {**base_props, "hs_object_id": str(5000 + i)},
+                 "createdAt": "2025-09-01T09:00:00Z",
+                 "updatedAt": "2026-04-20T11:00:00Z",
+                 "archived": False}
+                for i in range(min(limit, 3))
+            ],
             "next_after": None,
         }
 
@@ -90,7 +108,12 @@ async def list_companies(after: str | None = None, limit: int = 25, mock: bool =
         hubspot_get,
     )
 
-    params: dict = {"limit": min(limit, 100), "properties": ",".join(_DEFAULT_PROPERTIES)}
+    default_props = [
+        "name", "domain", "industry", "phone", "city", "state", "country",
+        "numberofemployees", "annualrevenue", "lifecyclestage", "type",
+        "createdate", "hs_lastmodifieddate", "hs_object_id",
+    ]
+    params: dict = {"limit": min(limit, 100), "properties": ",".join(default_props)}
     if after:
         params["after"] = after
     body = await hubspot_get("/crm/v3/objects/companies", params=params)
@@ -106,8 +129,17 @@ async def list_companies(after: str | None = None, limit: int = 25, mock: bool =
 async def create_company(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot company.  At minimum supply ``name`` or ``domain``."""
     if mock:
-        return {**_MOCK_COMPANY, "id": "99001",
-                "properties": {**_MOCK_COMPANY["properties"], **properties}}
+        base_props = {
+            "name": "Acme Properties LLC", "domain": "acme-properties.com",
+            "industry": "REAL_ESTATE",
+        }
+        return {
+            "id": "99001",
+            "properties": {**base_props, "hs_object_id": "99001", **properties},
+            "createdAt": "2025-09-01T09:00:00Z",
+            "updatedAt": "2026-04-20T11:00:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -120,8 +152,17 @@ async def create_company(properties: dict, mock: bool = True) -> dict:
 async def update_company(company_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot company properties."""
     if mock:
-        return {**_MOCK_COMPANY, "id": str(company_id),
-                "properties": {**_MOCK_COMPANY["properties"], **properties}}
+        base_props = {
+            "name": "Acme Properties LLC", "domain": "acme-properties.com",
+            "industry": "REAL_ESTATE",
+        }
+        return {
+            "id": str(company_id),
+            "properties": {**base_props, "hs_object_id": str(company_id), **properties},
+            "createdAt": "2025-09-01T09:00:00Z",
+            "updatedAt": "2026-04-20T11:00:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -165,7 +206,23 @@ async def sync_companies(
         from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
             normalize_company,
         )
-        rows = [normalize_company({**_MOCK_COMPANY, "id": str(5000 + i)}) for i in range(3)]
+        base_props = {
+            "name": "Acme Properties LLC", "domain": "acme-properties.com",
+            "industry": "REAL_ESTATE", "city": "Tampa", "state": "FL",
+            "lifecyclestage": "customer",
+            "createdate": "2025-09-01T09:00:00Z",
+            "hs_lastmodifieddate": "2026-04-20T11:00:00Z",
+        }
+        rows = [
+            normalize_company({
+                "id": str(5000 + i),
+                "properties": {**base_props, "hs_object_id": str(5000 + i)},
+                "createdAt": "2025-09-01T09:00:00Z",
+                "updatedAt": "2026-04-20T11:00:00Z",
+                "archived": False,
+            })
+            for i in range(3)
+        ]
         return {
             "schema_version": schema_version,
             "tables": {"companies": rows},
@@ -183,11 +240,16 @@ async def sync_companies(
         normalize_company,
     )
 
+    default_props = [
+        "name", "domain", "industry", "phone", "city", "state", "country",
+        "numberofemployees", "annualrevenue", "lifecyclestage", "type",
+        "createdate", "hs_lastmodifieddate", "hs_object_id",
+    ]
     cfg = get_hubspot_config()
     properties = (
         cfg["company_properties"]
         if isinstance(cfg["company_properties"], list)
-        else _DEFAULT_PROPERTIES
+        else default_props
     )
     filter_groups = (
         [{"filters": [{"propertyName": "hs_lastmodifieddate", "operator": "GT", "value": since}]}]

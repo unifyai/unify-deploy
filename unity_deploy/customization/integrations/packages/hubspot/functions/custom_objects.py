@@ -9,39 +9,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_SCHEMA = {
-    "name": "property",
-    "fullyQualifiedName": "p_demo_property",
-    "labels": {"singular": "Property", "plural": "Properties"},
-    "primaryDisplayProperty": "name",
-    "secondaryDisplayProperties": ["address", "city", "state"],
-    "requiredProperties": ["name", "address"],
-    "searchableProperties": ["name", "address", "city"],
-    "associatedObjects": ["CONTACT", "COMPANY", "DEAL"],
-    "objectTypeId": "2-12345",
-    "createdAt": "2026-01-01T00:00:00Z",
-    "updatedAt": "2026-04-01T00:00:00Z",
-    "archived": False,
-    "properties": [
-        {"name": "name", "type": "string", "label": "Property Name"},
-        {"name": "address", "type": "string", "label": "Street Address"},
-        {"name": "city", "type": "string", "label": "City"},
-        {"name": "state", "type": "string", "label": "State"},
-        {"name": "unit_count", "type": "number", "label": "Unit Count"},
-    ],
-}
-
-_MOCK_RECORD = {
-    "id": "11001",
-    "properties": {
-        "name": "Sunset Tower", "address": "100 Main St",
-        "city": "Tampa", "state": "FL", "unit_count": "120",
-    },
-    "createdAt": "2026-04-01T10:00:00Z",
-    "updatedAt": "2026-04-15T14:30:00Z",
-    "archived": False,
-}
-
 
 @custom_function()
 async def discover_custom_object_schemas(mock: bool = True) -> dict:
@@ -51,7 +18,27 @@ async def discover_custom_object_schemas(mock: bool = True) -> dict:
     fully-qualified names (e.g. ``p_<portalId>_property``) come from here.
     """
     if mock:
-        return {"results": [_MOCK_SCHEMA]}
+        return {"results": [{
+            "name": "property",
+            "fullyQualifiedName": "p_demo_property",
+            "labels": {"singular": "Property", "plural": "Properties"},
+            "primaryDisplayProperty": "name",
+            "secondaryDisplayProperties": ["address", "city", "state"],
+            "requiredProperties": ["name", "address"],
+            "searchableProperties": ["name", "address", "city"],
+            "associatedObjects": ["CONTACT", "COMPANY", "DEAL"],
+            "objectTypeId": "2-12345",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-04-01T00:00:00Z",
+            "archived": False,
+            "properties": [
+                {"name": "name", "type": "string", "label": "Property Name"},
+                {"name": "address", "type": "string", "label": "Street Address"},
+                {"name": "city", "type": "string", "label": "City"},
+                {"name": "state", "type": "string", "label": "State"},
+                {"name": "unit_count", "type": "number", "label": "Unit Count"},
+            ],
+        }]}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -74,7 +61,17 @@ async def get_custom_object_record(
     ``object_type`` is the fully-qualified name from
     ``discover_custom_object_schemas``."""
     if mock:
-        return {**_MOCK_RECORD, "id": str(record_id), "object_type": object_type}
+        return {
+            "id": str(record_id),
+            "object_type": object_type,
+            "properties": {
+                "name": "Sunset Tower", "address": "100 Main St",
+                "city": "Tampa", "state": "FL", "unit_count": "120",
+            },
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T14:30:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -92,7 +89,19 @@ async def search_custom_objects(
 ) -> dict:
     """Search records of a custom object type."""
     if mock:
-        return {"results": [{**_MOCK_RECORD, "id": "11001"}], "total": 1}
+        return {
+            "results": [{
+                "id": "11001",
+                "properties": {
+                    "name": "Sunset Tower", "address": "100 Main St",
+                    "city": "Tampa", "state": "FL", "unit_count": "120",
+                },
+                "createdAt": "2026-04-01T10:00:00Z",
+                "updatedAt": "2026-04-15T14:30:00Z",
+                "archived": False,
+            }],
+            "total": 1,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_search,
@@ -110,8 +119,20 @@ async def list_custom_objects(
 ) -> dict:
     """Paginate records of a custom object type."""
     if mock:
-        return {"results": [{**_MOCK_RECORD, "id": str(11000 + i)} for i in range(min(limit, 3))],
-                "next_after": None}
+        base_props = {
+            "name": "Sunset Tower", "address": "100 Main St",
+            "city": "Tampa", "state": "FL", "unit_count": "120",
+        }
+        return {
+            "results": [
+                {"id": str(11000 + i), "properties": base_props,
+                 "createdAt": "2026-04-01T10:00:00Z",
+                 "updatedAt": "2026-04-15T14:30:00Z",
+                 "archived": False}
+                for i in range(min(limit, 3))
+            ],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -133,9 +154,19 @@ async def create_custom_object_record(
     properties: dict,
     mock: bool = True,
 ) -> dict:
+    """Create a new custom-object record."""
     if mock:
-        return {**_MOCK_RECORD, "id": "99001",
-                "properties": {**_MOCK_RECORD["properties"], **properties}}
+        base_props = {
+            "name": "New Record", "address": "Address",
+            "city": "City", "state": "ST", "unit_count": "0",
+        }
+        return {
+            "id": "99001",
+            "properties": {**base_props, **properties},
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T14:30:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -151,9 +182,19 @@ async def update_custom_object_record(
     properties: dict,
     mock: bool = True,
 ) -> dict:
+    """Patch properties on a custom-object record."""
     if mock:
-        return {**_MOCK_RECORD, "id": str(record_id),
-                "properties": {**_MOCK_RECORD["properties"], **properties}}
+        base_props = {
+            "name": "Sunset Tower", "address": "100 Main St",
+            "city": "Tampa", "state": "FL", "unit_count": "120",
+        }
+        return {
+            "id": str(record_id),
+            "properties": {**base_props, **properties},
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T14:30:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -180,10 +221,34 @@ async def sync_custom_objects(
     )
 
     if mock:
-        schemas = [normalize_custom_object_schema(_MOCK_SCHEMA)]
+        mock_schema = {
+            "name": "property",
+            "fullyQualifiedName": "p_demo_property",
+            "labels": {"singular": "Property", "plural": "Properties"},
+            "primaryDisplayProperty": "name",
+            "secondaryDisplayProperties": ["address", "city", "state"],
+            "requiredProperties": ["name", "address"],
+            "searchableProperties": ["name", "address", "city"],
+            "associatedObjects": ["CONTACT", "COMPANY", "DEAL"],
+            "objectTypeId": "2-12345",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-04-01T00:00:00Z",
+            "archived": False,
+        }
+        base_props = {
+            "name": "Sunset Tower", "address": "100 Main St",
+            "city": "Tampa", "state": "FL", "unit_count": "120",
+        }
+        schemas = [normalize_custom_object_schema(mock_schema)]
         records = [
-            normalize_object({**_MOCK_RECORD, "id": str(11000 + i)},
-                             object_type="p_demo_property") for i in range(3)
+            normalize_object(
+                {"id": str(11000 + i), "properties": base_props,
+                 "createdAt": "2026-04-01T10:00:00Z",
+                 "updatedAt": "2026-04-15T14:30:00Z",
+                 "archived": False},
+                object_type="p_demo_property",
+            )
+            for i in range(3)
         ]
         return {
             "schema_version": schema_version,
@@ -231,9 +296,6 @@ async def sync_custom_objects(
                 errors.append({"object_type": full_name, "error": body["error"]})
                 break
             for r in body.get("results", []):
-                from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
-                    normalize_object,
-                )
                 records.append(normalize_object(r, object_type=full_name))
             pages += 1
             after = body.get("paging", {}).get("next", {}).get("after")

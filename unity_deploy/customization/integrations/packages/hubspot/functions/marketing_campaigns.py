@@ -4,22 +4,21 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_CAMPAIGN = {
-    "id": "cmp-1001",
-    "name": "Spring 2026 Tenant Outreach",
-    "type": "EMAIL",
-    "status": "active",
-    "createdAt": "2026-03-01T10:00:00Z",
-    "updatedAt": "2026-04-25T15:00:00Z",
-}
-
 
 @custom_function()
 async def list_campaigns(after: str | None = None, limit: int = 50, mock: bool = True) -> dict:
     """List marketing campaigns.  Tier-gated (Marketing Hub Pro+)."""
     if mock:
-        return {"results": [{**_MOCK_CAMPAIGN, "id": f"cmp-{1000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Spring 2026 Tenant Outreach",
+            "type": "EMAIL", "status": "active",
+            "createdAt": "2026-03-01T10:00:00Z",
+            "updatedAt": "2026-04-25T15:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"cmp-{1000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -37,8 +36,15 @@ async def list_campaigns(after: str | None = None, limit: int = 50, mock: bool =
 
 @custom_function()
 async def get_campaign(campaign_id: str, mock: bool = True) -> dict:
+    """Fetch a marketing campaign by ID."""
     if mock:
-        return {**_MOCK_CAMPAIGN, "id": str(campaign_id)}
+        return {
+            "id": str(campaign_id),
+            "name": "Spring 2026 Tenant Outreach",
+            "type": "EMAIL", "status": "active",
+            "createdAt": "2026-03-01T10:00:00Z",
+            "updatedAt": "2026-04-25T15:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -52,14 +58,14 @@ async def sync_campaigns(
     schema_version: str = "hubspot.marketing.campaigns.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync marketing campaign definitions."""
     if mock:
         rows = [{
             "campaign_id": f"cmp-{1000 + i}",
-            "name": _MOCK_CAMPAIGN["name"],
-            "type": _MOCK_CAMPAIGN["type"],
-            "status": _MOCK_CAMPAIGN["status"],
-            "created_at": _MOCK_CAMPAIGN["createdAt"],
-            "updated_at": _MOCK_CAMPAIGN["updatedAt"],
+            "name": "Spring 2026 Tenant Outreach",
+            "type": "EMAIL", "status": "active",
+            "created_at": "2026-03-01T10:00:00Z",
+            "updated_at": "2026-04-25T15:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

@@ -4,17 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_EMAIL = {
-    "id": "me-2001",
-    "name": "Owner Newsletter - April 2026",
-    "subject": "Q1 portfolio update + spring projects",
-    "fromName": "ClientZeta Properties",
-    "state": "PUBLISHED",
-    "createdAt": "2026-04-01T10:00:00Z",
-    "updatedAt": "2026-04-15T12:00:00Z",
-    "publishDate": "2026-04-15T13:00:00Z",
-}
-
 
 @custom_function()
 async def list_marketing_emails(
@@ -22,9 +11,21 @@ async def list_marketing_emails(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through marketing email definitions."""
     if mock:
-        return {"results": [{**_MOCK_EMAIL, "id": f"me-{2000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Owner Newsletter - April 2026",
+            "subject": "Q1 portfolio update + spring projects",
+            "fromName": "ClientZeta Properties",
+            "state": "PUBLISHED",
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T12:00:00Z",
+            "publishDate": "2026-04-15T13:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"me-{2000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -42,8 +43,18 @@ async def list_marketing_emails(
 
 @custom_function()
 async def get_marketing_email(email_id: str, mock: bool = True) -> dict:
+    """Fetch a marketing email by ID."""
     if mock:
-        return {**_MOCK_EMAIL, "id": str(email_id)}
+        return {
+            "id": str(email_id),
+            "name": "Owner Newsletter - April 2026",
+            "subject": "Q1 portfolio update + spring projects",
+            "fromName": "ClientZeta Properties",
+            "state": "PUBLISHED",
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T12:00:00Z",
+            "publishDate": "2026-04-15T13:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -59,10 +70,7 @@ async def send_single_marketing_email(
     confirm: bool = False,
     mock: bool = True,
 ) -> dict:
-    """Send a transactional / single-send marketing email to one contact.
-
-    Lower-stakes than broadcast (one recipient), but still gated by
-    ``confirm=True`` because the recipient sees a real email."""
+    """Send a transactional / single-send marketing email to one contact."""
     if not confirm:
         return {
             "error": "send_single_marketing_email requires confirm=True.  "
@@ -130,12 +138,22 @@ async def sync_marketing_emails(
     schema_version: str = "hubspot.marketing.emails.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync marketing email definitions into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_marketing_email,
     )
 
     if mock:
-        rows = [normalize_marketing_email({**_MOCK_EMAIL, "id": f"me-{2000 + i}"}) for i in range(3)]
+        base = {
+            "name": "Owner Newsletter - April 2026",
+            "subject": "Q1 portfolio update + spring projects",
+            "fromName": "ClientZeta Properties",
+            "state": "PUBLISHED",
+            "createdAt": "2026-04-01T10:00:00Z",
+            "updatedAt": "2026-04-15T12:00:00Z",
+            "publishDate": "2026-04-15T13:00:00Z",
+        }
+        rows = [normalize_marketing_email({**base, "id": f"me-{2000 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"marketing_emails": rows},

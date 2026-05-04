@@ -4,24 +4,25 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_OWNER = {
-    "id": "60001",
-    "email": "owner@example.com",
-    "firstName": "Sample", "lastName": "Owner",
-    "userId": 5001, "teams": [{"id": "1", "name": "Sales"}],
-    "createdAt": "2025-01-15T10:00:00Z",
-    "updatedAt": "2026-04-15T10:00:00Z",
-    "archived": False,
-}
-
 
 @custom_function()
 async def list_owners(after: str | None = None, limit: int = 100, mock: bool = True) -> dict:
     """List HubSpot users who can own CRM records."""
     if mock:
         return {
-            "results": [{**_MOCK_OWNER, "id": str(60000 + i),
-                         "email": f"owner{i}@example.com"} for i in range(min(limit, 5))],
+            "results": [
+                {
+                    "id": str(60000 + i),
+                    "email": f"owner{i}@example.com",
+                    "firstName": "Sample", "lastName": "Owner",
+                    "userId": 5000 + i,
+                    "teams": [{"id": "1", "name": "Sales"}],
+                    "createdAt": "2025-01-15T10:00:00Z",
+                    "updatedAt": "2026-04-15T10:00:00Z",
+                    "archived": False,
+                }
+                for i in range(min(limit, 5))
+            ],
             "next_after": None,
         }
 
@@ -50,8 +51,19 @@ async def sync_owners(
     )
 
     if mock:
-        rows = [normalize_owner({**_MOCK_OWNER, "id": str(60000 + i),
-                                 "email": f"owner{i}@example.com"}) for i in range(5)]
+        rows = [
+            normalize_owner({
+                "id": str(60000 + i),
+                "email": f"owner{i}@example.com",
+                "firstName": "Sample", "lastName": "Owner",
+                "userId": 5000 + i,
+                "teams": [{"id": "1", "name": "Sales"}],
+                "createdAt": "2025-01-15T10:00:00Z",
+                "updatedAt": "2026-04-15T10:00:00Z",
+                "archived": False,
+            })
+            for i in range(5)
+        ]
         return {
             "schema_version": schema_version,
             "tables": {"owners": rows},
@@ -83,5 +95,6 @@ async def sync_owners(
     return {
         "schema_version": schema_version,
         "tables": {"owners": rows},
-        "metadata": {"object_type": "owners", "mode": "real", "row_count": len(rows), "pages": pages},
+        "metadata": {"object_type": "owners", "mode": "real",
+                     "row_count": len(rows), "pages": pages},
     }

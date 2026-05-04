@@ -4,27 +4,28 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_GOAL = {
-    "id": "G1001",
-    "properties": {
-        "hs_goal_name": "Q3 Lease Conversions",
-        "hs_goal_target": "50",
-        "hs_goal_progress": "32",
-        "hs_owner_id": "60001",
-        "hs_period_start": "2026-07-01",
-        "hs_period_end": "2026-09-30",
-    },
-    "createdAt": "2026-06-15T10:00:00Z",
-    "updatedAt": "2026-09-01T15:00:00Z",
-    "archived": False,
-}
-
 
 @custom_function()
 async def list_goals(after: str | None = None, limit: int = 25, mock: bool = True) -> dict:
+    """Paginate through HubSpot goals."""
     if mock:
-        return {"results": [{**_MOCK_GOAL, "id": f"G{1000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base_props = {
+            "hs_goal_name": "Q3 Lease Conversions",
+            "hs_goal_target": "50", "hs_goal_progress": "32",
+            "hs_owner_id": "60001",
+            "hs_period_start": "2026-07-01",
+            "hs_period_end": "2026-09-30",
+        }
+        return {
+            "results": [
+                {"id": f"G{1000 + i}", "properties": base_props,
+                 "createdAt": "2026-06-15T10:00:00Z",
+                 "updatedAt": "2026-09-01T15:00:00Z",
+                 "archived": False}
+                for i in range(min(limit, 3))
+            ],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -45,13 +46,29 @@ async def sync_goals(
     schema_version: str = "hubspot.crm.goals.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync goal targets into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_object,
     )
 
     if mock:
-        rows = [normalize_object({**_MOCK_GOAL, "id": f"G{1000 + i}"},
-                                 object_type="goal") for i in range(3)]
+        base_props = {
+            "hs_goal_name": "Q3 Lease Conversions",
+            "hs_goal_target": "50", "hs_goal_progress": "32",
+            "hs_owner_id": "60001",
+            "hs_period_start": "2026-07-01",
+            "hs_period_end": "2026-09-30",
+        }
+        rows = [
+            normalize_object(
+                {"id": f"G{1000 + i}", "properties": base_props,
+                 "createdAt": "2026-06-15T10:00:00Z",
+                 "updatedAt": "2026-09-01T15:00:00Z",
+                 "archived": False},
+                object_type="goal",
+            )
+            for i in range(3)
+        ]
         return {
             "schema_version": schema_version,
             "tables": {"goals": rows},

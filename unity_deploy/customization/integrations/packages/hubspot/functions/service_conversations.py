@@ -4,30 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_THREAD = {
-    "id": "th-4001",
-    "inboxId": 1,
-    "status": "OPEN",
-    "subject": "Question about lease renewal",
-    "createdAt": "2026-04-25T11:00:00Z",
-    "latestMessageReceivedAt": "2026-04-26T15:00:00Z",
-    "latestMessageSentAt": "2026-04-26T16:00:00Z",
-    "assignedTo": "60001",
-}
-
-_MOCK_MESSAGE = {
-    "id": "msg-5001",
-    "type": "MESSAGE",
-    "text": "When does my lease renewal go out?  I'd like to extend a year.",
-    "subject": "Question about lease renewal",
-    "createdAt": "2026-04-26T15:00:00Z",
-    "senders": [{"actorId": "V-12345", "deliveryIdentifier": {"type": "HS_EMAIL_ADDRESS",
-                                                              "value": "tenant@example.com"}}],
-    "recipients": [{"actorId": "A-60001"}],
-    "channelId": 1,
-    "channelAccountId": 100,
-}
-
 
 @custom_function()
 async def list_conversation_threads(
@@ -37,9 +13,20 @@ async def list_conversation_threads(
     status: str | None = None,
     mock: bool = True,
 ) -> dict:
+    """Paginate through conversations inbox threads."""
     if mock:
-        return {"results": [{**_MOCK_THREAD, "id": f"th-{4000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "inboxId": 1, "status": "OPEN",
+            "subject": "Question about lease renewal",
+            "createdAt": "2026-04-25T11:00:00Z",
+            "latestMessageReceivedAt": "2026-04-26T15:00:00Z",
+            "latestMessageSentAt": "2026-04-26T16:00:00Z",
+            "assignedTo": "60001",
+        }
+        return {
+            "results": [{**base, "id": f"th-{4000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -61,8 +48,17 @@ async def list_conversation_threads(
 
 @custom_function()
 async def get_conversation_thread(thread_id: str, mock: bool = True) -> dict:
+    """Fetch a conversations inbox thread by ID."""
     if mock:
-        return {**_MOCK_THREAD, "id": str(thread_id)}
+        return {
+            "id": str(thread_id),
+            "inboxId": 1, "status": "OPEN",
+            "subject": "Question about lease renewal",
+            "createdAt": "2026-04-25T11:00:00Z",
+            "latestMessageReceivedAt": "2026-04-26T15:00:00Z",
+            "latestMessageSentAt": "2026-04-26T16:00:00Z",
+            "assignedTo": "60001",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -78,10 +74,23 @@ async def list_conversation_messages(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through messages on one inbox thread."""
     if mock:
-        return {"thread_id": str(thread_id),
-                "results": [{**_MOCK_MESSAGE, "id": f"msg-{5000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "type": "MESSAGE",
+            "text": "When does my lease renewal go out?  I'd like to extend a year.",
+            "subject": "Question about lease renewal",
+            "createdAt": "2026-04-26T15:00:00Z",
+            "senders": [{"actorId": "V-12345", "deliveryIdentifier": {"type": "HS_EMAIL_ADDRESS",
+                                                                       "value": "tenant@example.com"}}],
+            "recipients": [{"actorId": "A-60001"}],
+            "channelId": 1, "channelAccountId": 100,
+        }
+        return {
+            "thread_id": str(thread_id),
+            "results": [{**base, "id": f"msg-{5000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -125,7 +134,7 @@ async def send_conversation_reply(
         "type": "MESSAGE",
         "text": text,
         "richText": rich_text or text,
-        "senderActorId": None,  # uses the bound channel default
+        "senderActorId": None,
     }
     return await hubspot_post(
         f"/conversations/v3/conversations/threads/{thread_id}/messages",
@@ -138,14 +147,22 @@ async def sync_conversations(
     schema_version: str = "hubspot.service.conversations.v1",
     mock: bool = True,
 ) -> dict:
-    """Sync thread metadata.  Per-thread message bodies are fetched
-    on-demand by ``list_conversation_messages``."""
+    """Sync thread metadata into a tables envelope.  Per-thread message bodies
+    are fetched on-demand by ``list_conversation_messages``."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_thread,
     )
 
     if mock:
-        rows = [normalize_thread({**_MOCK_THREAD, "id": f"th-{4000 + i}"}) for i in range(3)]
+        base = {
+            "inboxId": 1, "status": "OPEN",
+            "subject": "Question about lease renewal",
+            "createdAt": "2026-04-25T11:00:00Z",
+            "latestMessageReceivedAt": "2026-04-26T15:00:00Z",
+            "latestMessageSentAt": "2026-04-26T16:00:00Z",
+            "assignedTo": "60001",
+        }
+        rows = [normalize_thread({**base, "id": f"th-{4000 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"conversation_threads": rows},

@@ -4,19 +4,20 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_CTA = {
-    "id": "cta-4001",
-    "name": "Schedule a Tour",
-    "createdAt": "2025-09-15T10:00:00Z",
-    "updatedAt": "2026-03-01T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_ctas(after: str | None = None, limit: int = 50, mock: bool = True) -> dict:
+    """List marketing CTAs."""
     if mock:
-        return {"results": [{**_MOCK_CTA, "id": f"cta-{4000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Schedule a Tour",
+            "createdAt": "2025-09-15T10:00:00Z",
+            "updatedAt": "2026-03-01T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"cta-{4000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -37,12 +38,13 @@ async def sync_ctas(
     schema_version: str = "hubspot.marketing.ctas.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync CTA definitions into a tables envelope."""
     if mock:
         rows = [{
             "cta_id": f"cta-{4000 + i}",
-            "name": _MOCK_CTA["name"],
-            "created_at": _MOCK_CTA["createdAt"],
-            "updated_at": _MOCK_CTA["updatedAt"],
+            "name": "Schedule a Tour",
+            "created_at": "2025-09-15T10:00:00Z",
+            "updated_at": "2026-03-01T12:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

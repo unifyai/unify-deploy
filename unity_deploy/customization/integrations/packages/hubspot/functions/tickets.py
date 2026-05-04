@@ -4,37 +4,27 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_DEFAULT_PROPERTIES = [
-    "subject", "content", "hs_pipeline", "hs_pipeline_stage",
-    "hs_ticket_priority", "source_type", "hubspot_owner_id",
-    "createdate", "hs_lastmodifieddate", "hs_object_id",
-]
-
-_MOCK_TICKET = {
-    "id": "8001",
-    "properties": {
-        "subject": "Maintenance: leaky faucet in unit 3B",
-        "content": "Resident reports a steady drip from the kitchen faucet.",
-        "hs_pipeline": "0",
-        "hs_pipeline_stage": "1",
-        "hs_ticket_priority": "MEDIUM",
-        "source_type": "EMAIL",
-        "hubspot_owner_id": "60001",
-        "createdate": "2026-04-25T09:30:00Z",
-        "hs_lastmodifieddate": "2026-04-25T09:30:00Z",
-        "hs_object_id": "8001",
-    },
-    "createdAt": "2026-04-25T09:30:00Z",
-    "updatedAt": "2026-04-25T09:30:00Z",
-    "archived": False,
-}
-
 
 @custom_function()
 async def get_ticket(ticket_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot ticket by ID."""
     if mock:
-        return {**_MOCK_TICKET, "id": str(ticket_id)}
+        return {
+            "id": str(ticket_id),
+            "properties": {
+                "subject": "Maintenance: leaky faucet in unit 3B",
+                "content": "Resident reports a steady drip from the kitchen faucet.",
+                "hs_pipeline": "0", "hs_pipeline_stage": "1",
+                "hs_ticket_priority": "MEDIUM", "source_type": "EMAIL",
+                "hubspot_owner_id": "60001",
+                "createdate": "2026-04-25T09:30:00Z",
+                "hs_lastmodifieddate": "2026-04-25T09:30:00Z",
+                "hs_object_id": str(ticket_id),
+            },
+            "createdAt": "2026-04-25T09:30:00Z",
+            "updatedAt": "2026-04-25T09:30:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -43,11 +33,16 @@ async def get_ticket(ticket_id: str, mock: bool = True) -> dict:
         get_hubspot_config,
     )
 
+    default_props = [
+        "subject", "content", "hs_pipeline", "hs_pipeline_stage",
+        "hs_ticket_priority", "source_type", "hubspot_owner_id",
+        "createdate", "hs_lastmodifieddate", "hs_object_id",
+    ]
     cfg = get_hubspot_config()
     properties = (
         ",".join(cfg["ticket_properties"])
         if isinstance(cfg["ticket_properties"], list)
-        else ",".join(_DEFAULT_PROPERTIES)
+        else ",".join(default_props)
     )
     return await hubspot_get(
         f"/crm/v3/objects/tickets/{ticket_id}",
@@ -59,17 +54,32 @@ async def get_ticket(ticket_id: str, mock: bool = True) -> dict:
 async def search_tickets(query: str, limit: int = 10, mock: bool = True) -> dict:
     """Search HubSpot tickets (matches subject + content)."""
     if mock:
-        return {"results": [{**_MOCK_TICKET, "id": "8001"}], "total": 1}
+        return {
+            "results": [{
+                "id": "8001",
+                "properties": {
+                    "subject": "Maintenance: leaky faucet in unit 3B",
+                    "hs_pipeline_stage": "1", "hs_ticket_priority": "MEDIUM",
+                    "hs_object_id": "8001",
+                },
+                "createdAt": "2026-04-25T09:30:00Z",
+                "updatedAt": "2026-04-25T09:30:00Z",
+                "archived": False,
+            }],
+            "total": 1,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_search,
     )
 
+    default_props = [
+        "subject", "content", "hs_pipeline", "hs_pipeline_stage",
+        "hs_ticket_priority", "source_type", "hubspot_owner_id",
+        "createdate", "hs_lastmodifieddate", "hs_object_id",
+    ]
     return await hubspot_search(
-        "tickets",
-        query=query,
-        properties=_DEFAULT_PROPERTIES,
-        limit=min(limit, 100),
+        "tickets", query=query, properties=default_props, limit=min(limit, 100),
     )
 
 
@@ -77,8 +87,23 @@ async def search_tickets(query: str, limit: int = 10, mock: bool = True) -> dict
 async def list_tickets(after: str | None = None, limit: int = 25, mock: bool = True) -> dict:
     """Paginate through HubSpot tickets."""
     if mock:
+        base_props = {
+            "subject": "Maintenance: leaky faucet in unit 3B",
+            "content": "Resident reports a steady drip.",
+            "hs_pipeline": "0", "hs_pipeline_stage": "1",
+            "hs_ticket_priority": "MEDIUM", "hubspot_owner_id": "60001",
+            "createdate": "2026-04-25T09:30:00Z",
+            "hs_lastmodifieddate": "2026-04-25T09:30:00Z",
+        }
         return {
-            "results": [{**_MOCK_TICKET, "id": str(8000 + i)} for i in range(min(limit, 3))],
+            "results": [
+                {"id": str(8000 + i),
+                 "properties": {**base_props, "hs_object_id": str(8000 + i)},
+                 "createdAt": "2026-04-25T09:30:00Z",
+                 "updatedAt": "2026-04-25T09:30:00Z",
+                 "archived": False}
+                for i in range(min(limit, 3))
+            ],
             "next_after": None,
         }
 
@@ -86,7 +111,12 @@ async def list_tickets(after: str | None = None, limit: int = 25, mock: bool = T
         hubspot_get,
     )
 
-    params: dict = {"limit": min(limit, 100), "properties": ",".join(_DEFAULT_PROPERTIES)}
+    default_props = [
+        "subject", "content", "hs_pipeline", "hs_pipeline_stage",
+        "hs_ticket_priority", "source_type", "hubspot_owner_id",
+        "createdate", "hs_lastmodifieddate", "hs_object_id",
+    ]
+    params: dict = {"limit": min(limit, 100), "properties": ",".join(default_props)}
     if after:
         params["after"] = after
     body = await hubspot_get("/crm/v3/objects/tickets", params=params)
@@ -102,8 +132,17 @@ async def list_tickets(after: str | None = None, limit: int = 25, mock: bool = T
 async def create_ticket(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot ticket.  ``subject`` and ``hs_pipeline_stage`` recommended."""
     if mock:
-        return {**_MOCK_TICKET, "id": "99001",
-                "properties": {**_MOCK_TICKET["properties"], **properties}}
+        base_props = {
+            "subject": "New Ticket", "hs_pipeline": "0",
+            "hs_pipeline_stage": "1", "hs_ticket_priority": "MEDIUM",
+        }
+        return {
+            "id": "99001",
+            "properties": {**base_props, "hs_object_id": "99001", **properties},
+            "createdAt": "2026-04-25T09:30:00Z",
+            "updatedAt": "2026-04-25T09:30:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -116,8 +155,18 @@ async def create_ticket(properties: dict, mock: bool = True) -> dict:
 async def update_ticket(ticket_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot ticket properties (useful for stage transitions)."""
     if mock:
-        return {**_MOCK_TICKET, "id": str(ticket_id),
-                "properties": {**_MOCK_TICKET["properties"], **properties}}
+        base_props = {
+            "subject": "Maintenance: leaky faucet in unit 3B",
+            "hs_pipeline": "0", "hs_pipeline_stage": "1",
+            "hs_ticket_priority": "MEDIUM",
+        }
+        return {
+            "id": str(ticket_id),
+            "properties": {**base_props, "hs_object_id": str(ticket_id), **properties},
+            "createdAt": "2026-04-25T09:30:00Z",
+            "updatedAt": "2026-04-25T09:30:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -140,7 +189,24 @@ async def sync_tickets(
         from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
             normalize_ticket,
         )
-        rows = [normalize_ticket({**_MOCK_TICKET, "id": str(8000 + i)}) for i in range(3)]
+        base_props = {
+            "subject": "Maintenance: leaky faucet in unit 3B",
+            "content": "Resident reports a steady drip.",
+            "hs_pipeline": "0", "hs_pipeline_stage": "1",
+            "hs_ticket_priority": "MEDIUM", "hubspot_owner_id": "60001",
+            "createdate": "2026-04-25T09:30:00Z",
+            "hs_lastmodifieddate": "2026-04-25T09:30:00Z",
+        }
+        rows = [
+            normalize_ticket({
+                "id": str(8000 + i),
+                "properties": {**base_props, "hs_object_id": str(8000 + i)},
+                "createdAt": "2026-04-25T09:30:00Z",
+                "updatedAt": "2026-04-25T09:30:00Z",
+                "archived": False,
+            })
+            for i in range(3)
+        ]
         return {
             "schema_version": schema_version,
             "tables": {"tickets": rows},
@@ -158,11 +224,16 @@ async def sync_tickets(
         normalize_ticket,
     )
 
+    default_props = [
+        "subject", "content", "hs_pipeline", "hs_pipeline_stage",
+        "hs_ticket_priority", "source_type", "hubspot_owner_id",
+        "createdate", "hs_lastmodifieddate", "hs_object_id",
+    ]
     cfg = get_hubspot_config()
     properties = (
         cfg["ticket_properties"]
         if isinstance(cfg["ticket_properties"], list)
-        else _DEFAULT_PROPERTIES
+        else default_props
     )
     filter_groups = (
         [{"filters": [{"propertyName": "hs_lastmodifieddate", "operator": "GT", "value": since}]}]

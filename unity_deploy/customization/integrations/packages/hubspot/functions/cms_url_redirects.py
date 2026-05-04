@@ -4,22 +4,22 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_REDIRECT = {
-    "id": "rd-12001",
-    "routePrefix": "/old-properties/sunset-tower",
-    "destination": "https://example.com/properties/sunset-tower",
-    "redirectStyle": 301,
-    "isOnlyAfterNotFound": False,
-    "createdAt": "2026-01-15T10:00:00Z",
-    "updatedAt": "2026-01-15T10:00:00Z",
-}
-
 
 @custom_function()
 async def list_url_redirects(after: str | None = None, limit: int = 50, mock: bool = True) -> dict:
+    """Paginate through URL redirects."""
     if mock:
-        return {"results": [{**_MOCK_REDIRECT, "id": f"rd-{12000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "routePrefix": "/old-properties/sunset-tower",
+            "destination": "https://example.com/properties/sunset-tower",
+            "redirectStyle": 301, "isOnlyAfterNotFound": False,
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-01-15T10:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"rd-{12000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -42,10 +42,15 @@ async def create_url_redirect(
     redirect_style: int = 301,
     mock: bool = True,
 ) -> dict:
+    """Create a URL redirect."""
     if mock:
-        return {**_MOCK_REDIRECT, "id": "rd-99001",
-                "routePrefix": route_prefix, "destination": destination,
-                "redirectStyle": redirect_style}
+        return {
+            "id": "rd-99001",
+            "routePrefix": route_prefix, "destination": destination,
+            "redirectStyle": redirect_style, "isOnlyAfterNotFound": False,
+            "createdAt": "2026-01-15T10:00:00Z",
+            "updatedAt": "2026-01-15T10:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -60,8 +65,14 @@ async def create_url_redirect(
 
 @custom_function()
 async def update_url_redirect(redirect_id: str, properties: dict, mock: bool = True) -> dict:
+    """Patch URL redirect properties."""
     if mock:
-        return {**_MOCK_REDIRECT, "id": str(redirect_id), **properties}
+        base = {
+            "routePrefix": "/old-properties/sunset-tower",
+            "destination": "https://example.com/properties/sunset-tower",
+            "redirectStyle": 301,
+        }
+        return {**base, "id": str(redirect_id), **properties}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -72,6 +83,7 @@ async def update_url_redirect(redirect_id: str, properties: dict, mock: bool = T
 
 @custom_function()
 async def delete_url_redirect(redirect_id: str, mock: bool = True) -> dict:
+    """Delete a URL redirect."""
     if mock:
         return {"status": "deleted", "id": str(redirect_id)}
 
@@ -92,14 +104,15 @@ async def sync_url_redirects(
     schema_version: str = "hubspot.cms.url_redirects.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync URL redirect definitions into a tables envelope."""
     if mock:
         rows = [{
             "redirect_id": f"rd-{12000 + i}",
-            "route_prefix": _MOCK_REDIRECT["routePrefix"],
-            "destination": _MOCK_REDIRECT["destination"],
-            "redirect_style": _MOCK_REDIRECT["redirectStyle"],
-            "created_at": _MOCK_REDIRECT["createdAt"],
-            "updated_at": _MOCK_REDIRECT["updatedAt"],
+            "route_prefix": "/old-properties/sunset-tower",
+            "destination": "https://example.com/properties/sunset-tower",
+            "redirect_style": 301,
+            "created_at": "2026-01-15T10:00:00Z",
+            "updated_at": "2026-01-15T10:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

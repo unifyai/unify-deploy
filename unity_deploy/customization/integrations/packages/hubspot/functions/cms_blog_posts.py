@@ -4,22 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_POST = {
-    "id": "bp-8501",
-    "name": "Spring Maintenance Tips for Property Owners",
-    "slug": "spring-maintenance-tips",
-    "url": "https://example.com/blog/spring-maintenance-tips",
-    "htmlTitle": "Spring Maintenance Tips for Property Owners",
-    "metaDescription": "Practical tips owners should action before peak leasing season.",
-    "blogAuthorId": "ba-9001",
-    "currentState": "PUBLISHED",
-    "publishDate": "2026-03-15T10:00:00Z",
-    "postSummary": "Five maintenance items to action this spring.",
-    "tagIds": [101, 102],
-    "created": "2026-03-01T10:00:00Z",
-    "updated": "2026-04-01T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_blog_posts(
@@ -27,9 +11,26 @@ async def list_blog_posts(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through blog posts."""
     if mock:
-        return {"results": [{**_MOCK_POST, "id": f"bp-{8500 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Spring Maintenance Tips for Property Owners",
+            "slug": "spring-maintenance-tips",
+            "url": "https://example.com/blog/spring-maintenance-tips",
+            "htmlTitle": "Spring Maintenance Tips for Property Owners",
+            "metaDescription": "Practical tips owners should action before peak leasing season.",
+            "blogAuthorId": "ba-9001",
+            "currentState": "PUBLISHED",
+            "publishDate": "2026-03-15T10:00:00Z",
+            "postSummary": "Five maintenance items to action this spring.",
+            "tagIds": [101, 102],
+            "created": "2026-03-01T10:00:00Z",
+            "updated": "2026-04-01T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"bp-{8500 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -47,8 +48,23 @@ async def list_blog_posts(
 
 @custom_function()
 async def get_blog_post(post_id: str, mock: bool = True) -> dict:
+    """Fetch a blog post by ID."""
     if mock:
-        return {**_MOCK_POST, "id": str(post_id)}
+        return {
+            "id": str(post_id),
+            "name": "Spring Maintenance Tips for Property Owners",
+            "slug": "spring-maintenance-tips",
+            "url": "https://example.com/blog/spring-maintenance-tips",
+            "htmlTitle": "Spring Maintenance Tips for Property Owners",
+            "metaDescription": "Practical tips owners should action before peak leasing season.",
+            "blogAuthorId": "ba-9001",
+            "currentState": "PUBLISHED",
+            "publishDate": "2026-03-15T10:00:00Z",
+            "postSummary": "Five maintenance items to action this spring.",
+            "tagIds": [101, 102],
+            "created": "2026-03-01T10:00:00Z",
+            "updated": "2026-04-01T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -69,12 +85,20 @@ async def create_blog_post(
     tag_ids: list[int] | None = None,
     mock: bool = True,
 ) -> dict:
+    """Create a blog post in DRAFT state."""
     if mock:
-        return {**_MOCK_POST, "id": "bp-99001",
-                "name": name, "slug": slug, "htmlTitle": html_title,
-                "metaDescription": meta_description,
-                "blogAuthorId": blog_author_id, "postSummary": post_summary,
-                "tagIds": tag_ids or [], "currentState": "DRAFT"}
+        return {
+            "id": "bp-99001",
+            "name": name, "slug": slug, "htmlTitle": html_title,
+            "metaDescription": meta_description,
+            "blogAuthorId": blog_author_id, "postSummary": post_summary,
+            "tagIds": tag_ids or [],
+            "currentState": "DRAFT",
+            "url": "",
+            "publishDate": "",
+            "created": "2026-03-01T10:00:00Z",
+            "updated": "2026-04-01T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -95,8 +119,14 @@ async def create_blog_post(
 
 @custom_function()
 async def update_blog_post(post_id: str, properties: dict, mock: bool = True) -> dict:
+    """Patch blog post properties."""
     if mock:
-        return {**_MOCK_POST, "id": str(post_id), **properties}
+        base = {
+            "name": "Spring Maintenance Tips for Property Owners",
+            "slug": "spring-maintenance-tips",
+            "currentState": "PUBLISHED",
+        }
+        return {**base, "id": str(post_id), **properties}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -124,7 +154,11 @@ async def publish_blog_post(
                 "post_id": str(post_id)}
 
     if mock:
-        return {**_MOCK_POST, "id": str(post_id), "currentState": "PUBLISHED"}
+        base = {
+            "name": "Spring Maintenance Tips for Property Owners",
+            "slug": "spring-maintenance-tips",
+        }
+        return {**base, "id": str(post_id), "currentState": "PUBLISHED"}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -141,12 +175,27 @@ async def sync_blog_posts(
     schema_version: str = "hubspot.cms.blog_posts.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync blog posts into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_blog_post,
     )
 
     if mock:
-        rows = [normalize_blog_post({**_MOCK_POST, "id": f"bp-{8500 + i}"}) for i in range(3)]
+        base = {
+            "name": "Spring Maintenance Tips for Property Owners",
+            "slug": "spring-maintenance-tips",
+            "url": "https://example.com/blog/spring-maintenance-tips",
+            "htmlTitle": "Spring Maintenance Tips for Property Owners",
+            "metaDescription": "Practical tips owners should action.",
+            "blogAuthorId": "ba-9001",
+            "currentState": "PUBLISHED",
+            "publishDate": "2026-03-15T10:00:00Z",
+            "postSummary": "Five maintenance items.",
+            "tagIds": [101, 102],
+            "created": "2026-03-01T10:00:00Z",
+            "updated": "2026-04-01T12:00:00Z",
+        }
+        rows = [normalize_blog_post({**base, "id": f"bp-{8500 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"blog_posts": rows},

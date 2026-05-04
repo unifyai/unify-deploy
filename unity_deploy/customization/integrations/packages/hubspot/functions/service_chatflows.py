@@ -4,20 +4,21 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_CHATFLOW = {
-    "id": "cf-7001",
-    "name": "Property Inquiry Bot",
-    "type": "BOT",
-    "createdAt": "2025-10-01T10:00:00Z",
-    "updatedAt": "2026-03-01T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_chatflows(after: str | None = None, limit: int = 50, mock: bool = True) -> dict:
+    """List chat flow definitions."""
     if mock:
-        return {"results": [{**_MOCK_CHATFLOW, "id": f"cf-{7000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Property Inquiry Bot",
+            "type": "BOT",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-03-01T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"cf-{7000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -35,8 +36,15 @@ async def list_chatflows(after: str | None = None, limit: int = 50, mock: bool =
 
 @custom_function()
 async def get_chatflow(chatflow_id: str, mock: bool = True) -> dict:
+    """Fetch a chat flow by ID."""
     if mock:
-        return {**_MOCK_CHATFLOW, "id": str(chatflow_id)}
+        return {
+            "id": str(chatflow_id),
+            "name": "Property Inquiry Bot",
+            "type": "BOT",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-03-01T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -50,12 +58,14 @@ async def sync_chatflows(
     schema_version: str = "hubspot.service.chatflows.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync chat flow definitions into a tables envelope."""
     if mock:
         rows = [{
-            "chatflow_id": f"cf-{7000 + i}", "name": _MOCK_CHATFLOW["name"],
-            "type": _MOCK_CHATFLOW["type"],
-            "created_at": _MOCK_CHATFLOW["createdAt"],
-            "updated_at": _MOCK_CHATFLOW["updatedAt"],
+            "chatflow_id": f"cf-{7000 + i}",
+            "name": "Property Inquiry Bot",
+            "type": "BOT",
+            "created_at": "2025-10-01T10:00:00Z",
+            "updated_at": "2026-03-01T12:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

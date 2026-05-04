@@ -4,31 +4,21 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_FORM = {
-    "id": "f-1001",
-    "name": "Property Inquiry",
-    "formType": "hubspot",
-    "createdAt": "2025-10-01T10:00:00Z",
-    "updatedAt": "2026-04-01T12:00:00Z",
-    "archived": False,
-}
-
-_MOCK_SUBMISSION = {
-    "submittedAt": "2026-04-25T14:00:00Z",
-    "values": [
-        {"name": "email", "value": "tenant@example.com"},
-        {"name": "firstname", "value": "Jane"},
-        {"name": "message", "value": "Interested in 2-bedroom unit at Sunset Tower."},
-    ],
-    "pageUrl": "https://example.com/properties/sunset-tower",
-}
-
 
 @custom_function()
 async def list_marketing_forms(after: str | None = None, limit: int = 50, mock: bool = True) -> dict:
+    """Paginate through HubSpot marketing forms."""
     if mock:
-        return {"results": [{**_MOCK_FORM, "id": f"f-{1000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Property Inquiry", "formType": "hubspot",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-04-01T12:00:00Z",
+            "archived": False,
+        }
+        return {
+            "results": [{**base, "id": f"f-{1000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -46,8 +36,15 @@ async def list_marketing_forms(after: str | None = None, limit: int = 50, mock: 
 
 @custom_function()
 async def get_marketing_form(form_id: str, mock: bool = True) -> dict:
+    """Fetch a marketing form definition by ID."""
     if mock:
-        return {**_MOCK_FORM, "id": str(form_id)}
+        return {
+            "id": str(form_id), "name": "Property Inquiry",
+            "formType": "hubspot",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-04-01T12:00:00Z",
+            "archived": False,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -63,8 +60,18 @@ async def list_form_submissions(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through submissions for one form."""
     if mock:
-        return {"results": [_MOCK_SUBMISSION] * min(limit, 3), "next_after": None}
+        submission = {
+            "submittedAt": "2026-04-25T14:00:00Z",
+            "values": [
+                {"name": "email", "value": "tenant@example.com"},
+                {"name": "firstname", "value": "Jane"},
+                {"name": "message", "value": "Interested in 2-bedroom unit at Sunset Tower."},
+            ],
+            "pageUrl": "https://example.com/properties/sunset-tower",
+        }
+        return {"results": [submission] * min(limit, 3), "next_after": None}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -88,8 +95,7 @@ async def submit_form(
     page_uri: str = "",
     mock: bool = True,
 ) -> dict:
-    """Programmatically submit a HubSpot form (no auth required - uses
-    the public submission endpoint)."""
+    """Programmatically submit a HubSpot form (no auth - public submission endpoint)."""
     if mock:
         return {"status": "ok", "form_id": form_id, "fields": fields, "mock": True}
 
@@ -112,12 +118,19 @@ async def sync_marketing_forms(
     schema_version: str = "hubspot.marketing.forms.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync form definitions into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_form,
     )
 
     if mock:
-        rows = [normalize_form({**_MOCK_FORM, "id": f"f-{1000 + i}"}) for i in range(3)]
+        base = {
+            "name": "Property Inquiry", "formType": "hubspot",
+            "createdAt": "2025-10-01T10:00:00Z",
+            "updatedAt": "2026-04-01T12:00:00Z",
+            "archived": False,
+        }
+        rows = [normalize_form({**base, "id": f"f-{1000 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"marketing_forms": rows},

@@ -1,7 +1,8 @@
 """HubSpot Email Events - per-message delivery/open/click/bounce (high volume).
 
 Sync-only.  Opt-in via HUBSPOT_SYNC_EMAIL_EVENTS=true because volumes can
-overwhelm DataManager (one row per recipient per event)."""
+overwhelm DataManager (one row per recipient per event).
+"""
 
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ async def sync_email_events(
     schema_version: str = "hubspot.marketing.email_events.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync per-recipient email events into a tables envelope."""
     if mock:
         return {
             "schema_version": schema_version,

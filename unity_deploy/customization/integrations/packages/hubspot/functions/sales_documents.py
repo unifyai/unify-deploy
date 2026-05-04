@@ -4,15 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_DOCUMENT = {
-    "id": "doc-2001",
-    "name": "Property Management Services Brochure",
-    "createdAt": "2025-09-01T10:00:00Z",
-    "updatedAt": "2026-01-15T12:00:00Z",
-    "size": 2456789,
-    "shareableUrl": "https://example.com/docs/pm-brochure",
-}
-
 
 @custom_function()
 async def list_sales_documents(
@@ -20,9 +11,19 @@ async def list_sales_documents(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through sales documents."""
     if mock:
-        return {"results": [{**_MOCK_DOCUMENT, "id": f"doc-{2000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Property Management Services Brochure",
+            "createdAt": "2025-09-01T10:00:00Z",
+            "updatedAt": "2026-01-15T12:00:00Z",
+            "size": 2456789,
+            "shareableUrl": "https://example.com/docs/pm-brochure",
+        }
+        return {
+            "results": [{**base, "id": f"doc-{2000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -40,8 +41,16 @@ async def list_sales_documents(
 
 @custom_function()
 async def get_sales_document(document_id: str, mock: bool = True) -> dict:
+    """Fetch a sales document by ID."""
     if mock:
-        return {**_MOCK_DOCUMENT, "id": str(document_id)}
+        return {
+            "id": str(document_id),
+            "name": "Property Management Services Brochure",
+            "createdAt": "2025-09-01T10:00:00Z",
+            "updatedAt": "2026-01-15T12:00:00Z",
+            "size": 2456789,
+            "shareableUrl": "https://example.com/docs/pm-brochure",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -64,7 +73,7 @@ async def get_document_view_summary(document_id: str, mock: bool = True) -> dict
     return {
         "document_id": str(document_id),
         "note": ("Document view-tracking summaries require the documents-tracking "
-                 "scope; v0 is mock-only.  Drive from the v4 events endpoint when needed."),
+                 "scope; v0 is mock-only."),
     }
 
 
@@ -73,13 +82,15 @@ async def sync_sales_documents(
     schema_version: str = "hubspot.sales.documents.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync sales document metadata into a tables envelope."""
     if mock:
         rows = [{
             "document_id": f"doc-{2000 + i}",
-            "name": _MOCK_DOCUMENT["name"], "size": _MOCK_DOCUMENT["size"],
-            "shareable_url": _MOCK_DOCUMENT["shareableUrl"],
-            "created_at": _MOCK_DOCUMENT["createdAt"],
-            "updated_at": _MOCK_DOCUMENT["updatedAt"],
+            "name": "Property Management Services Brochure",
+            "size": 2456789,
+            "shareable_url": "https://example.com/docs/pm-brochure",
+            "created_at": "2025-09-01T10:00:00Z",
+            "updated_at": "2026-01-15T12:00:00Z",
         } for i in range(3)]
         return {
             "schema_version": schema_version,

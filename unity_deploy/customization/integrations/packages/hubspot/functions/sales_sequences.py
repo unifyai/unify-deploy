@@ -4,20 +4,21 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_SEQUENCE = {
-    "id": "seq-9001",
-    "name": "Owner Outreach - Discovery",
-    "folderId": None,
-    "createdAt": "2025-09-15T10:00:00Z",
-    "updatedAt": "2026-01-15T11:00:00Z",
-}
-
 
 @custom_function()
 async def list_sequences(after: str | None = None, limit: int = 50, mock: bool = True) -> dict:
+    """List sales sequences."""
     if mock:
-        return {"results": [{**_MOCK_SEQUENCE, "id": f"seq-{9000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "name": "Owner Outreach - Discovery",
+            "folderId": None,
+            "createdAt": "2025-09-15T10:00:00Z",
+            "updatedAt": "2026-01-15T11:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"seq-{9000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -35,8 +36,15 @@ async def list_sequences(after: str | None = None, limit: int = 50, mock: bool =
 
 @custom_function()
 async def get_sequence(sequence_id: str, mock: bool = True) -> dict:
+    """Fetch a sales sequence by ID."""
     if mock:
-        return {**_MOCK_SEQUENCE, "id": str(sequence_id)}
+        return {
+            "id": str(sequence_id),
+            "name": "Owner Outreach - Discovery",
+            "folderId": None,
+            "createdAt": "2025-09-15T10:00:00Z",
+            "updatedAt": "2026-01-15T11:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -73,6 +81,7 @@ async def unenroll_from_sequence(
     contact_email: str,
     mock: bool = True,
 ) -> dict:
+    """Unenroll a contact from a sequence."""
     if mock:
         return {"status": "unenrolled", "sequence_id": str(sequence_id),
                 "contact_email": contact_email}
@@ -92,12 +101,19 @@ async def sync_sequences(
     schema_version: str = "hubspot.sales.sequences.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync sales sequence definitions into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_sequence,
     )
 
     if mock:
-        rows = [normalize_sequence({**_MOCK_SEQUENCE, "id": f"seq-{9000 + i}"}) for i in range(3)]
+        base = {
+            "name": "Owner Outreach - Discovery",
+            "folderId": None,
+            "createdAt": "2025-09-15T10:00:00Z",
+            "updatedAt": "2026-01-15T11:00:00Z",
+        }
+        rows = [normalize_sequence({**base, "id": f"seq-{9000 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"sales_sequences": rows},

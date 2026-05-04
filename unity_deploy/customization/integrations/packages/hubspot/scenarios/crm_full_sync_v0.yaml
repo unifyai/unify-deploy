@@ -131,7 +131,10 @@ timeline:
 
 tasks:
   - id: hubspot_crm_sync_tick
-    enabled: true
+    # Disabled by default per a71a840 - keep recurring tasks off until the
+    # control-plane has real TaskScheduler + FunctionManager IDs seeded.
+    # Operators flip to true after seeding (or override per-client).
+    enabled: false
     execution_mode: live
     schedule:
       type: interval

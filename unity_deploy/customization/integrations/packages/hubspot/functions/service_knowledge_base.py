@@ -4,20 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-_MOCK_ARTICLE = {
-    "id": "kb-6001",
-    "title": "How do I submit a maintenance request?",
-    "slug": "how-to-submit-maintenance-request",
-    "language": "en",
-    "categoryId": 1, "subcategoryId": None,
-    "currentState": "PUBLISHED",
-    "url": "https://example.com/kb/how-to-submit-maintenance-request",
-    "htmlTitle": "Maintenance Requests | Help Center",
-    "metaDescription": "Steps to submit a maintenance request for your unit.",
-    "created": "2025-09-15T10:00:00Z",
-    "updated": "2026-04-01T12:00:00Z",
-}
-
 
 @custom_function()
 async def list_kb_articles(
@@ -25,9 +11,24 @@ async def list_kb_articles(
     limit: int = 50,
     mock: bool = True,
 ) -> dict:
+    """Paginate through KB articles."""
     if mock:
-        return {"results": [{**_MOCK_ARTICLE, "id": f"kb-{6000 + i}"} for i in range(min(limit, 3))],
-                "next_after": None}
+        base = {
+            "title": "How do I submit a maintenance request?",
+            "slug": "how-to-submit-maintenance-request",
+            "language": "en",
+            "categoryId": 1, "subcategoryId": None,
+            "currentState": "PUBLISHED",
+            "url": "https://example.com/kb/how-to-submit-maintenance-request",
+            "htmlTitle": "Maintenance Requests | Help Center",
+            "metaDescription": "Steps to submit a maintenance request for your unit.",
+            "created": "2025-09-15T10:00:00Z",
+            "updated": "2026-04-01T12:00:00Z",
+        }
+        return {
+            "results": [{**base, "id": f"kb-{6000 + i}"} for i in range(min(limit, 3))],
+            "next_after": None,
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -45,8 +46,19 @@ async def list_kb_articles(
 
 @custom_function()
 async def get_kb_article(article_id: str, mock: bool = True) -> dict:
+    """Fetch a KB article by ID."""
     if mock:
-        return {**_MOCK_ARTICLE, "id": str(article_id)}
+        return {
+            "id": str(article_id),
+            "title": "How do I submit a maintenance request?",
+            "slug": "how-to-submit-maintenance-request",
+            "language": "en", "currentState": "PUBLISHED",
+            "url": "https://example.com/kb/how-to-submit-maintenance-request",
+            "htmlTitle": "Maintenance Requests | Help Center",
+            "metaDescription": "Steps to submit a maintenance request for your unit.",
+            "created": "2025-09-15T10:00:00Z",
+            "updated": "2026-04-01T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_get,
@@ -64,10 +76,16 @@ async def create_kb_article(
     category_id: int | None = None,
     mock: bool = True,
 ) -> dict:
+    """Create a KB article in DRAFT state."""
     if mock:
-        return {**_MOCK_ARTICLE, "id": "kb-99001",
-                "title": title, "slug": slug, "language": language,
-                "categoryId": category_id, "currentState": "DRAFT"}
+        return {
+            "id": "kb-99001",
+            "title": title, "slug": slug, "language": language,
+            "categoryId": category_id, "currentState": "DRAFT",
+            "url": "",
+            "created": "2025-09-15T10:00:00Z",
+            "updated": "2026-04-01T12:00:00Z",
+        }
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_post,
@@ -84,8 +102,14 @@ async def create_kb_article(
 
 @custom_function()
 async def update_kb_article(article_id: str, properties: dict, mock: bool = True) -> dict:
+    """Patch a KB article's properties."""
     if mock:
-        return {**_MOCK_ARTICLE, "id": str(article_id), **properties}
+        base = {
+            "title": "How do I submit a maintenance request?",
+            "slug": "how-to-submit-maintenance-request",
+            "currentState": "PUBLISHED",
+        }
+        return {**base, "id": str(article_id), **properties}
 
     from unity_deploy.customization.integrations.packages.hubspot.functions._client import (
         hubspot_patch,
@@ -99,12 +123,23 @@ async def sync_kb_articles(
     schema_version: str = "hubspot.service.kb_articles.v1",
     mock: bool = True,
 ) -> dict:
+    """Sync KB articles into a tables envelope."""
     from unity_deploy.customization.integrations.packages.hubspot.functions._normalize import (
         normalize_kb_article,
     )
 
     if mock:
-        rows = [normalize_kb_article({**_MOCK_ARTICLE, "id": f"kb-{6000 + i}"}) for i in range(3)]
+        base = {
+            "title": "How do I submit a maintenance request?",
+            "slug": "how-to-submit-maintenance-request",
+            "language": "en", "currentState": "PUBLISHED",
+            "url": "https://example.com/kb/how-to-submit-maintenance-request",
+            "htmlTitle": "Maintenance Requests | Help Center",
+            "metaDescription": "Steps to submit a maintenance request for your unit.",
+            "created": "2025-09-15T10:00:00Z",
+            "updated": "2026-04-01T12:00:00Z",
+        }
+        rows = [normalize_kb_article({**base, "id": f"kb-{6000 + i}"}) for i in range(3)]
         return {
             "schema_version": schema_version,
             "tables": {"kb_articles": rows},
