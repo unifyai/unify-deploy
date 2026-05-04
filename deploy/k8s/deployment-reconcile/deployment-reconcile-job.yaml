@@ -60,8 +60,3 @@ spec:
             secretKeyRef:
               name: unity-secrets
               key: ORCHESTRA_ADMIN_KEY
-        - name: UNIFY_KEY
-          valueFrom:
-            secretKeyRef:
-              name: unity-secrets
-              key: UNIFY_KEY

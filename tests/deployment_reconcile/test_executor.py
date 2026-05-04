@@ -153,8 +153,36 @@ def test_unified_cli_dry_run(monkeypatch, caplog):
                 "--environment",
                 "staging",
                 "--planes",
-                "control-plane,runtime",
+                "control-plane",
                 "--dry-run",
+            ],
+        )
+
+    assert exit_code == 0
+    assert "No deployment reconciliation work planned" in caplog.text
+
+
+def test_unified_cli_runtime_apply_does_not_require_global_unify_key(
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setenv("ORCHESTRA_URL", "https://internal.example.com/v0")
+    monkeypatch.setenv("ORCHESTRA_ADMIN_KEY", "admin")
+    monkeypatch.delenv("UNIFY_KEY", raising=False)
+    monkeypatch.setattr(
+        deployment_reconcile,
+        "build_deployment_work_items",
+        lambda **kwargs: [],
+    )
+
+    with caplog.at_level(logging.INFO):
+        exit_code = reconcile_deployment.main(
+            [
+                "--environment",
+                "staging",
+                "--planes",
+                "runtime",
+                "--apply",
             ],
         )
 

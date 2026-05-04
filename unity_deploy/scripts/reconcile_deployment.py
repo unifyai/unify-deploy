@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified deploy-time reconciliation for control-plane and runtime work."""
+"""Deploy-time reconciliation for assistant control-plane work."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Reconcile Unity deployment state before assistant wake.",
+        description="Reconcile Unity deployment control-plane state before assistant wake.",
     )
     parser.add_argument(
         "--environment",
@@ -26,7 +26,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--planes",
         default="control-plane",
-        help="Comma-separated planes: control-plane,runtime.",
+        help=(
+            "Comma-separated planes. Cloud Build uses control-plane only; runtime "
+            "is reserved for explicit repair/prewarm runs with per-assistant identity."
+        ),
     )
     parser.add_argument(
         "--client",
@@ -68,18 +71,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _validate_required_environment(
-    requested_environment: str,
-    *,
-    needs_unify_key: bool,
-) -> None:
+def _validate_required_environment(requested_environment: str) -> None:
     missing = [
         name
         for name in ("ORCHESTRA_URL", "ORCHESTRA_ADMIN_KEY")
         if not os.environ.get(name)
     ]
-    if needs_unify_key and not os.environ.get("UNIFY_KEY"):
-        missing.append("UNIFY_KEY")
     if missing:
         raise ValueError(
             f"Missing required environment variable(s): {', '.join(missing)}",
@@ -113,10 +110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         planes = parse_planes(args.planes)
-        _validate_required_environment(
-            args.environment,
-            needs_unify_key="runtime" in planes and args.apply,
-        )
+        _validate_required_environment(args.environment)
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
