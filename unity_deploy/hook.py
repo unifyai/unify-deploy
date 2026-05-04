@@ -4,22 +4,23 @@ Discovered at runtime via Python entry points when the
 ``_UNITY_STARTUP_HOOK_GROUP`` environment variable is set to the
 group name declared in this package's ``pyproject.toml``.
 
-Performs runtime hydration tasks that were previously steps 7-9 in
-``_init_managers``:
+Keeps the wake-time path intentionally thin:
 
-1. Resolve client customization (deployment-matched spec; shared seed layers merged org→team→user→assistant; secrets from ``.secrets.json`` applied last)
-2. Sync seed data (contacts, guidance, knowledge, secrets, blacklist)
-3. Sync custom functions and virtual environments
+1. Resolve assistant deployment spec (deployment-matched spec; shared seed layers merged org→team→user→assistant; secrets from ``.secrets.json`` applied last)
+2. Expand integrations into in-memory runtime config.
+3. Build actor startup config.
 
 Deploy-time control-plane metadata, such as Console ``console_config``, is
-primarily reconciled by ``unity_deploy.scripts.reconcile_control_plane``.  The
-hook keeps a best-effort idempotent PATCH as drift repair for assistants that
-wake after a deployment spec changes.
+primarily reconciled by ``unity_deploy.scripts.reconcile_deployment`` with the
+``control-plane`` plane enabled.  The hook keeps a best-effort idempotent PATCH
+as drift repair for assistants that wake after a deployment spec changes.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
+import logging
+import os
 from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
@@ -66,13 +67,18 @@ def _sync_console_config(
             assistant_id,
             exc_info=True,
         )
+        logging.getLogger(__name__).warning(
+            "Failed to sync console_config for assistant %s",
+            assistant_id,
+            exc_info=True,
+        )
 
 
 def startup_hook(
     cm: "ConversationManager",
     session_details: "SessionDetails",
 ) -> dict[str, Any] | None:
-    """Enterprise runtime hydration hook called during ``_init_managers``.
+    """Enterprise startup config hook called during ``_init_managers``.
 
     Parameters
     ----------
@@ -91,46 +97,70 @@ def startup_hook(
         - ``url_mappings``: URL rewrites for ComputerPrimitives
         - ``actor_kwargs``: kwargs passed to ``CodeActActor.__init__``
     """
-    from unity_deploy.customization.clients import resolve
-    from unity_deploy.customization.integrations.activation import expand_integrations
-    from unity_deploy.customization.seed_sync import sync_all_seed_data
-    from unity.function_manager.custom_functions import (
-        collect_functions_from_directories,
-        collect_venvs_from_directories,
+    from unity_deploy.startup_config import (
+        StartupIdentity,
+        build_actor_startup_config,
+        expand_startup_integrations,
+        resolve_startup_spec,
     )
-    from unity_deploy.runtime import get_runtime_backend_overrides
-    from unity.manager_registry import ManagerRegistry
 
     assistant_id = session_details.assistant.agent_id
+    identity = StartupIdentity(
+        assistant_id=str(assistant_id),
+        user_id=session_details.user.id,
+        org_id=session_details.org_id,
+        team_ids=tuple(session_details.team_ids or ()),
+    )
     with _timed_hook_phase("resolve"):
-        resolved = resolve(
-            org_id=session_details.org_id,
-            team_ids=session_details.team_ids or None,
-            user_id=session_details.user.id,
-            assistant_id=assistant_id,
-        )
+        resolved = resolve_startup_spec(identity)
     with _timed_hook_phase("expand_integrations"):
-        resolved = expand_integrations(resolved)
+        resolved = expand_startup_integrations(resolved)
 
-    with _timed_hook_phase("sync_all_seed_data"):
-        sync_all_seed_data(resolved)
+    wake_hydration_mode = (
+        os.environ.get(
+            "UNITY_DEPLOY_WAKE_HYDRATION_MODE",
+            "off",
+        )
+        .strip()
+        .lower()
+    )
+    if wake_hydration_mode not in {"off", "blocking"}:
+        logger.warning(
+            "Unknown UNITY_DEPLOY_WAKE_HYDRATION_MODE=%r; using off",
+            wake_hydration_mode,
+        )
+        wake_hydration_mode = "off"
 
-    if resolved.console_config:
+    if wake_hydration_mode == "blocking":
+        from unity_deploy.deployment_reconcile.runtime_state import (
+            RuntimeIdentity,
+            materialize_runtime_state,
+        )
+
+        logger.warning(
+            "Running explicit blocking runtime state repair for assistant %s",
+            assistant_id,
+        )
+        with _timed_hook_phase("materialize_runtime_state"):
+            materialize_runtime_state(
+                resolved,
+                RuntimeIdentity(
+                    assistant_id=identity.assistant_id,
+                    user_id=identity.user_id,
+                    org_id=identity.org_id,
+                    team_ids=identity.team_ids,
+                ),
+            )
+
+    if resolved.console_config and os.environ.get(
+        "UNITY_DEPLOY_WAKE_CONSOLE_REPAIR",
+        "",
+    ).lower() in {"1", "true", "yes"}:
         with _timed_hook_phase("sync_console_config"):
             _sync_console_config(
                 assistant_id,
                 resolved.console_config,
             )
-
-    if resolved.function_dirs or resolved.venv_dirs:
-        with _timed_hook_phase("collect_functions_from_directories"):
-            source_fns = collect_functions_from_directories(resolved.function_dirs)
-        with _timed_hook_phase("collect_venvs_from_directories"):
-            source_venvs = collect_venvs_from_directories(resolved.venv_dirs)
-        fm = ManagerRegistry.get_function_manager()
-        if source_fns or source_venvs:
-            with _timed_hook_phase("fm.sync_custom"):
-                fm.sync_custom(source_functions=source_fns, source_venvs=source_venvs)
 
     if resolved.mcp_configs:
         logger.info(
@@ -138,24 +168,5 @@ def startup_hook(
             len(resolved.mcp_configs),
         )
 
-    config = resolved.config
-    url_mappings = dict(config.url_mappings or {})
-    url_mappings.update(resolved.url_mappings)
-    with _timed_hook_phase("build_startup_config"):
-        return {
-            "environments": resolved.environments,
-            "url_mappings": url_mappings or None,
-            "runtime_backends": get_runtime_backend_overrides(),
-            "actor_kwargs": {
-                k: v
-                for k, v in {
-                    "can_compose": config.can_compose,
-                    "can_store": config.can_store,
-                    "timeout": config.timeout,
-                    "model": config.model,
-                    "prompt_caching": config.prompt_caching,
-                    "guidelines": config.guidelines,
-                }.items()
-                if v is not None
-            },
-        }
+    with _timed_hook_phase("build_actor_startup_config"):
+        return build_actor_startup_config(resolved)
