@@ -16,9 +16,9 @@ _RUNTIME_STATE_LOCK = threading.Lock()
 
 
 def _resolve_runtime_identity(item: DeploymentWorkItem):
-    """Resolve required deploy-time assistant identity for runtime state."""
+    """Resolve explicit assistant identity for runtime repair/prewarm runs."""
 
-    from unity_deploy.deployment_reconcile.runtime_state import RuntimeIdentity
+    from unity_deploy.runtime_reconcile import RuntimeIdentity
 
     info = _fetch_assistant_info(item.target.assistant_id)
 
@@ -115,7 +115,7 @@ def apply_work_item(item: DeploymentWorkItem) -> DeploymentWorkResult:
                 message=f"applied {len(item.target.control_plane_operations)} operation(s)",
             )
 
-        from unity_deploy.deployment_reconcile.runtime_state import (
+        from unity_deploy.runtime_reconcile import (
             activate_runtime_context,
             materialize_runtime_state,
         )

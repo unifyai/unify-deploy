@@ -7,7 +7,7 @@ import json
 from typing import Any, Iterable, Mapping
 
 from unity_deploy.deployment_reconcile.control_plane import build_control_plane_plan
-from unity_deploy.deployment_reconcile.runtime_state import (
+from unity_deploy.runtime_reconcile import (
     compute_runtime_state_fingerprint,
 )
 from unity_deploy.deployment_reconcile.types import (

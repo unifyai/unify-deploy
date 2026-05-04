@@ -1,0 +1,214 @@
+"""Assistant-scoped runtime state materialization."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import json
+import logging
+from pathlib import Path
+from time import perf_counter
+from typing import Any
+
+from unity_deploy.assistant_deployments.clients import ResolvedAssistantDeployment
+from unity_deploy.runtime_reconcile.context import RuntimeIdentity
+from unity_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RuntimeStateResult:
+    """Summary of runtime-state materialization."""
+
+    identity: RuntimeIdentity
+    revision: str
+    seed_changed: bool = False
+    custom_changed: bool = False
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in sorted(value.items())}
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _jsonable(model_dump(mode="json"))
+    if hasattr(value, "__dict__"):
+        return _jsonable(value.__dict__)
+    return value
+
+
+def _hash_payload(payload: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(_jsonable(payload), sort_keys=True, default=str).encode("utf-8"),
+    ).hexdigest()
+
+
+def _hash_path(path: Path) -> str:
+    """Return a deterministic digest for a file or directory tree."""
+
+    path = Path(path)
+    if not path.exists():
+        return hashlib.sha256(f"missing:{path}".encode("utf-8")).hexdigest()
+    if path.is_file():
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    parts: list[str] = []
+    for child in sorted(p for p in path.rglob("*") if p.is_file()):
+        rel = child.relative_to(path).as_posix()
+        digest = hashlib.sha256(child.read_bytes()).hexdigest()
+        parts.append(f"{rel}:{digest}")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def compute_runtime_state_fingerprint(
+    resolved: ResolvedAssistantDeployment,
+) -> str:
+    """Compute a deterministic fingerprint for side-effectful runtime state."""
+
+    payload = {
+        "contacts": resolved.contacts,
+        "guidance": resolved.guidance,
+        "knowledge": resolved.knowledge,
+        "blacklist": resolved.blacklist,
+        "secrets": resolved.secrets,
+        "integrations": resolved.integrations,
+        "mcp_configs": resolved.mcp_configs,
+        "url_mappings": resolved.url_mappings,
+        "function_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.function_dirs
+        ],
+        "venv_dirs": [
+            {"path": str(path), "digest": _hash_path(path)}
+            for path in resolved.venv_dirs
+        ],
+    }
+    return _hash_payload(payload)
+
+
+def materialize_runtime_state(
+    resolved: ResolvedAssistantDeployment,
+    identity: RuntimeIdentity,
+    *,
+    revision: str | None = None,
+    status: RuntimeReconcileStatusHandle | None = None,
+) -> RuntimeStateResult:
+    """Apply side-effectful runtime state for a resolved assistant deployment."""
+
+    from unity.function_manager.custom_functions import (
+        collect_functions_from_directories,
+        collect_venvs_from_directories,
+    )
+    from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.seed_sync import sync_all_seed_data
+
+    revision = revision or compute_runtime_state_fingerprint(resolved)
+    logger.info(
+        "Runtime reconcile phase starting: assistant=%s phase=syncing_seed_data revision=%s",
+        identity.assistant_id,
+        revision[:16],
+    )
+    if status is not None:
+        status.update(
+            phase="syncing_seed_data",
+            message=(
+                "Preparing deployment-defined contacts, guidance, knowledge, "
+                "secrets, and blacklist."
+            ),
+            blocking_resources=("contacts", "guidance", "knowledge", "secrets"),
+            resources={
+                "contacts": "syncing",
+                "guidance": "syncing",
+                "knowledge": "syncing",
+                "secrets": "syncing",
+                "functions": "pending",
+            },
+            data_freshness="partial",
+        )
+    seed_start = perf_counter()
+    seed_changed = sync_all_seed_data(resolved)
+    logger.info(
+        "Runtime reconcile phase completed: assistant=%s phase=syncing_seed_data duration=%.2fs seed_changed=%s",
+        identity.assistant_id,
+        perf_counter() - seed_start,
+        seed_changed,
+    )
+
+    function_resources = {
+        "contacts": "ready",
+        "guidance": "ready",
+        "knowledge": "ready",
+        "secrets": "ready",
+        "functions": "syncing",
+    }
+    logger.info(
+        "Runtime reconcile phase starting: assistant=%s phase=syncing_custom_functions function_dirs=%d venv_dirs=%d",
+        identity.assistant_id,
+        len(resolved.function_dirs),
+        len(resolved.venv_dirs),
+    )
+    if status is not None:
+        status.update(
+            phase="syncing_custom_functions",
+            message="Preparing deployment-defined custom tools.",
+            blocking_resources=("functions",),
+            resources=function_resources,
+            data_freshness="partial",
+        )
+
+    custom_changed = False
+    custom_start = perf_counter()
+    if resolved.function_dirs or resolved.venv_dirs:
+        source_fns = collect_functions_from_directories(resolved.function_dirs)
+        source_venvs = collect_venvs_from_directories(resolved.venv_dirs)
+        if source_fns or source_venvs:
+            fm = ManagerRegistry.get_function_manager()
+            custom_changed = fm.sync_custom(
+                source_functions=source_fns,
+                source_venvs=source_venvs,
+            )
+    logger.info(
+        "Runtime reconcile phase completed: assistant=%s phase=syncing_custom_functions duration=%.2fs custom_changed=%s",
+        identity.assistant_id,
+        perf_counter() - custom_start,
+        custom_changed,
+    )
+
+    if status is not None:
+        status.update(
+            phase="complete",
+            message=(
+                "Background assistant setup is complete. Deployment-defined "
+                "data, guidance, secrets, and custom tools are ready."
+            ),
+            blocking_resources=(),
+            resources={
+                "contacts": "ready",
+                "guidance": "ready",
+                "knowledge": "ready",
+                "secrets": "ready",
+                "functions": "ready",
+            },
+            data_freshness="ready",
+        )
+    logger.info(
+        "Runtime reconcile complete: assistant=%s revision=%s seed_changed=%s custom_changed=%s",
+        identity.assistant_id,
+        revision[:16],
+        seed_changed,
+        custom_changed,
+    )
+
+    return RuntimeStateResult(
+        identity=identity,
+        revision=revision,
+        seed_changed=seed_changed,
+        custom_changed=custom_changed,
+    )
