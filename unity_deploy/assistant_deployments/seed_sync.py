@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from time import perf_counter
 from typing import Any, Callable, TYPE_CHECKING
 
 import unify
@@ -19,6 +20,7 @@ import unify
 from unity.common.hierarchical_logger import ICONS
 from unity.guidance_manager.types.guidance import Guidance
 from unity.secret_manager.types import Secret
+from unity_deploy.timing import log_startup_timing
 
 if TYPE_CHECKING:
     from unity_deploy.assistant_deployments.clients import ResolvedAssistantDeployment
@@ -117,6 +119,14 @@ def _manager_api(manager: Any, method_name: str) -> Callable[..., Any]:
     for name in method_names:
         method = getattr(manager, name, None)
         if callable(method):
+            if name != method_name:
+                log_startup_timing(
+                    logger,
+                    "⏱️ [StartupTiming] seed_sync.manager_api fallback manager=%s method=%s resolved=%s",
+                    type(manager).__name__,
+                    method_name,
+                    name,
+                )
             return method
 
     manager_name = type(manager).__name__
@@ -144,8 +154,17 @@ def sync_seed_data(
     Returns True if any changes were made.
     """
     exclude_fields = {id_field, *(exclude_fields or set())}
+    total_start = perf_counter()
     expected_hash = _aggregate_hash(source_records, natural_key_fn, exclude_fields)
+    meta_start = perf_counter()
     current_hash = meta_store.get_hash(manager_key)
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] seed_sync.%s.get_hash duration=%.2fs records=%d",
+        manager_key,
+        perf_counter() - meta_start,
+        len(source_records),
+    )
 
     if current_hash == expected_hash:
         logger.debug("%s Seed data for %s unchanged, skipping sync", _ICON, manager_key)
@@ -159,7 +178,15 @@ def sync_seed_data(
         expected_hash,
     )
 
+    existing_start = perf_counter()
     existing = get_existing_fn()
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] seed_sync.%s.get_existing duration=%.2fs existing=%d",
+        manager_key,
+        perf_counter() - existing_start,
+        len(existing),
+    )
     existing_by_key: dict[str, dict] = {}
     for rec in existing:
         try:
@@ -170,6 +197,10 @@ def sync_seed_data(
     source_by_key = {natural_key_fn(r): r for r in source_records}
     processed_keys: set[str] = set()
 
+    create_count = 0
+    update_count = 0
+    delete_count = 0
+    apply_start = perf_counter()
     for key, src in source_by_key.items():
         processed_keys.add(key)
         if key in existing_by_key:
@@ -184,9 +215,11 @@ def sync_seed_data(
                 if db_id is not None:
                     logger.info("%s Updating %s record: %s", _ICON, manager_key, key)
                     update_fn(db_id, src)
+                    update_count += 1
         else:
             logger.info("%s Creating %s record: %s", _ICON, manager_key, key)
             create_fn(src)
+            create_count += 1
 
     if delete_fn is not None:
         for key, db_rec in existing_by_key.items():
@@ -195,8 +228,26 @@ def sync_seed_data(
                 if db_id is not None:
                     logger.info("%s Deleting %s record: %s", _ICON, manager_key, key)
                     delete_fn(db_id)
+                    delete_count += 1
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] seed_sync.%s.apply_changes duration=%.2fs creates=%d updates=%d deletes=%d",
+        manager_key,
+        perf_counter() - apply_start,
+        create_count,
+        update_count,
+        delete_count,
+    )
 
+    meta_start = perf_counter()
     meta_store.set_hash(manager_key, expected_hash)
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] seed_sync.%s.set_hash duration=%.2fs total=%.2fs",
+        manager_key,
+        perf_counter() - meta_start,
+        perf_counter() - total_start,
+    )
     return True
 
 
@@ -557,31 +608,61 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
 
     if resolved.contacts:
         try:
+            sync_start = perf_counter()
             changed |= _sync_contacts(resolved.contacts, meta)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] seed_sync.contacts total=%.2fs",
+                perf_counter() - sync_start,
+            )
         except Exception:
             logger.exception("Failed to sync seed contacts")
 
     if resolved.guidance:
         try:
+            sync_start = perf_counter()
             changed |= _sync_guidance(resolved.guidance, meta)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] seed_sync.guidance total=%.2fs",
+                perf_counter() - sync_start,
+            )
         except Exception:
             logger.exception("Failed to sync seed guidance")
 
     if resolved.secrets:
         try:
+            sync_start = perf_counter()
             changed |= _sync_secrets(resolved.secrets, meta)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] seed_sync.secrets total=%.2fs",
+                perf_counter() - sync_start,
+            )
         except Exception:
             logger.exception("Failed to sync seed secrets")
 
     if resolved.blacklist:
         try:
+            sync_start = perf_counter()
             changed |= _sync_blacklist(resolved.blacklist, meta)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] seed_sync.blacklist total=%.2fs",
+                perf_counter() - sync_start,
+            )
         except Exception:
             logger.exception("Failed to sync seed blacklist")
 
     if resolved.knowledge:
         try:
+            sync_start = perf_counter()
             changed |= _sync_knowledge(resolved.knowledge, meta)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] seed_sync.knowledge total=%.2fs",
+                perf_counter() - sync_start,
+            )
         except Exception:
             logger.exception("Failed to sync seed knowledge")
 

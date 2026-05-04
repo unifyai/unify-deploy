@@ -13,6 +13,7 @@ from typing import Any
 from unity_deploy.assistant_deployments.clients import ResolvedAssistantDeployment
 from unity_deploy.runtime_reconcile.context import RuntimeIdentity
 from unity_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
+from unity_deploy.timing import log_startup_timing
 
 logger = logging.getLogger(__name__)
 
@@ -166,13 +167,37 @@ def materialize_runtime_state(
     custom_changed = False
     custom_start = perf_counter()
     if resolved.function_dirs or resolved.venv_dirs:
+        collect_start = perf_counter()
         source_fns = collect_functions_from_directories(resolved.function_dirs)
         source_venvs = collect_venvs_from_directories(resolved.venv_dirs)
+        log_startup_timing(
+            logger,
+            "⏱️ [StartupTiming] runtime_reconcile.collect_custom_sources assistant=%s duration=%.2fs functions=%d venvs=%d",
+            identity.assistant_id,
+            perf_counter() - collect_start,
+            len(source_fns),
+            len(source_venvs),
+        )
         if source_fns or source_venvs:
+            fm_start = perf_counter()
             fm = ManagerRegistry.get_function_manager()
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] runtime_reconcile.get_function_manager assistant=%s duration=%.2fs",
+                identity.assistant_id,
+                perf_counter() - fm_start,
+            )
+            sync_start = perf_counter()
             custom_changed = fm.sync_custom(
                 source_functions=source_fns,
                 source_venvs=source_venvs,
+            )
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] runtime_reconcile.sync_custom assistant=%s duration=%.2fs changed=%s",
+                identity.assistant_id,
+                perf_counter() - sync_start,
+                custom_changed,
             )
     logger.info(
         "Runtime reconcile phase completed: assistant=%s phase=syncing_custom_functions duration=%.2fs custom_changed=%s",

@@ -26,6 +26,7 @@ from time import perf_counter
 from typing import Any, TYPE_CHECKING
 
 from unity.logger import LOGGER as logger
+from unity_deploy.timing import log_startup_timing
 from unity_deploy.utils.orchestra_client import OrchestraClientError, patch_json
 
 if TYPE_CHECKING:
@@ -112,8 +113,32 @@ def startup_hook(
         org_id=session_details.org_id,
         team_ids=tuple(session_details.team_ids or ()),
     )
+    log_startup_timing(
+        logger,
+        "⏱️ [StartupTiming] unity_deploy.startup_hook identity assistant=%s user=%s org=%s teams=%d",
+        identity.assistant_id,
+        identity.user_id,
+        identity.org_id,
+        len(identity.team_ids),
+    )
     with _timed_hook_phase("resolve"):
         resolved = resolve_startup_spec(identity)
+    log_startup_timing(
+        logger,
+        (
+            "⏱️ [StartupTiming] unity_deploy.startup_hook resolved "
+            "contacts=%d guidance=%d knowledge_tables=%d secrets=%d blacklist=%d "
+            "function_dirs=%d venv_dirs=%d integrations=%d"
+        ),
+        len(resolved.contacts),
+        len(resolved.guidance),
+        len(resolved.knowledge),
+        len(resolved.secrets),
+        len(resolved.blacklist),
+        len(resolved.function_dirs),
+        len(resolved.venv_dirs),
+        len(resolved.integrations),
+    )
     with _timed_hook_phase("expand_integrations"):
         resolved = expand_startup_integrations(resolved)
 

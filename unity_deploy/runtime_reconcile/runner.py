@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import asyncio
 import threading
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 from unity.logger import LOGGER as logger
@@ -16,6 +17,7 @@ from unity_deploy.runtime_reconcile.context import (
 )
 from unity_deploy.runtime_reconcile.materialize import materialize_runtime_state
 from unity_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
+from unity_deploy.timing import log_startup_timing
 
 if TYPE_CHECKING:
     from unity.conversation_manager.conversation_manager import ConversationManager
@@ -78,6 +80,7 @@ def _run_runtime_reconcile(
         "Starting assistant-scoped runtime reconciliation for assistant %s",
         identity.assistant_id,
     )
+    reconcile_start = perf_counter()
     try:
         status.update(
             phase="starting",
@@ -92,7 +95,14 @@ def _run_runtime_reconcile(
             },
             data_freshness="partial",
         )
+        context_start = perf_counter()
         activate_runtime_context(identity)
+        log_startup_timing(
+            logger,
+            "⏱️ [StartupTiming] runtime_reconcile.activate_runtime_context assistant=%s duration=%.2fs",
+            identity.assistant_id,
+            perf_counter() - context_start,
+        )
         materialize_runtime_state(
             resolved,
             identity,
@@ -106,6 +116,12 @@ def _run_runtime_reconcile(
         logger.info(
             "Assistant-scoped runtime reconciliation completed for assistant %s",
             identity.assistant_id,
+        )
+        log_startup_timing(
+            logger,
+            "⏱️ [StartupTiming] runtime_reconcile.total assistant=%s duration=%.2fs",
+            identity.assistant_id,
+            perf_counter() - reconcile_start,
         )
     except Exception as exc:
         status.update(
