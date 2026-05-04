@@ -19,11 +19,14 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING, Literal, Optional
 
 from pydantic import BaseModel, Field
+from unity.guidance_manager.types.guidance import Guidance
+from unity.secret_manager.types import Secret
+from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
+from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivation
+from unity_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
 
 if TYPE_CHECKING:
     from types import ModuleType
-
-from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +63,6 @@ def detect_environment() -> str:
 # Core deployment models
 # ---------------------------------------------------------------------------
 
-
-from unity.guidance_manager.types.guidance import Guidance
-from unity.secret_manager.types import Secret
-
 GuidanceEntry = Guidance
 SecretEntry = Secret
 
@@ -84,6 +83,16 @@ class SeedLayer(BaseModel):
     blacklist: list[dict] = Field(default_factory=list)
     secrets: list[Secret] = Field(default_factory=list)
     integrations: list[str] = Field(default_factory=list)
+    scenarios: list[ScenarioActivation] = Field(
+        default_factory=list,
+        description=(
+            "Scenario activations for this layer.  Each activation names "
+            "a generic template from a platform integration package and "
+            "supplies the client-specific overrides needed to materialise "
+            "a concrete scenario.  Empty list (default) means no per-layer "
+            "scenarios; backwards compatible with all existing layers."
+        ),
+    )
 
 
 def _merge_actor_configs(base: ActorConfig, override: ActorConfig) -> ActorConfig:
@@ -140,6 +149,18 @@ class DeploymentSpec(BaseModel):
         description=(
             "Private integration package slugs enabled for this deployment. "
             "Loaded from unity_deploy.assistant_deployments.integrations.packages."
+        ),
+    )
+    scenarios: list[ScenarioActivation] = Field(
+        default_factory=list,
+        description=(
+            "Static scenario activations bound to this deployment regardless "
+            "of layer overlays.  Each activation names a generic scenario "
+            "template from a platform integration package and supplies the "
+            "client-specific overrides (assistant_id, scenario_id, etc.) "
+            "needed to materialise a concrete scenario.  Use SeedLayer."
+            "scenarios for activations that should only apply to specific "
+            "scopes via register_layer overlays."
         ),
     )
     contacts: list[dict] = Field(
@@ -488,10 +509,5 @@ def register_layer(
         key,
     )
 
-
-# Resolve the PipelineConfig forward reference in DeploymentSpec
-from unity_deploy.assistant_deployments.types.pipeline_config import (
-    PipelineConfig,
-)  # noqa: E402
 
 DeploymentSpec.model_rebuild()

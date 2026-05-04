@@ -111,6 +111,7 @@ def build_deployment_target_plans(
             resolved = _spec_to_resolved(
                 spec,
                 entry,
+                client_name=client_name,
                 assistant_id=assistant_id_int,
             )
             resolved = expand_startup_integrations(resolved)

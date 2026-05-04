@@ -277,6 +277,14 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
     sm = ManagerRegistry.get_secret_manager()
     source_dicts = [r.model_dump() for r in records]
 
+    # Cache the existing secret values so the update closure can preserve
+    # user-set values when a seed record carries an empty placeholder.
+    # Manifest-declared secrets in integration packages emit
+    # ``Secret(value="")`` (the loader has no value to inject), and without
+    # this guard each sync would clobber a user's frontend-set token with
+    # empty string on every assistant wakeup.
+    _existing_value_cache: dict[str, str] = {}
+
     def natural_key(r: dict) -> str:
         return str(r.get("name", ""))
 
@@ -291,7 +299,11 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
                 from_fields=["secret_id", "name", "value", "description"],
             )
             if logs:
-                result.append(logs[0].entries)
+                entries = logs[0].entries
+                result.append(entries)
+                _existing_value_cache[str(entries.get("name", ""))] = (
+                    entries.get("value") or ""
+                )
         return result
 
     def create(rec: dict) -> Any:
@@ -302,6 +314,22 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
         )
 
     def update(_secret_id: int, rec: dict) -> Any:
+        seed_value = (rec.get("value") or "").strip()
+        if not seed_value:
+            existing_value = _existing_value_cache.get(rec["name"], "").strip()
+            if existing_value:
+                logger.info(
+                    "%s Preserving user-set value for secret %r "
+                    "(seed record has empty value).",
+                    _ICON,
+                    rec["name"],
+                )
+                # Still allow description to update without touching value.
+                return sm._update_secret(
+                    name=rec["name"],
+                    value=existing_value,
+                    description=rec.get("description"),
+                )
         return sm._update_secret(
             name=rec["name"],
             value=rec.get("value"),

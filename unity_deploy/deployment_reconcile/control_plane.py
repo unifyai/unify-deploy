@@ -115,6 +115,7 @@ def _build_scenario_schedule_operations(
     resolved = _spec_to_resolved(
         spec,
         entry,
+        client_name=client_name,
         assistant_id=assistant_id_int,
     )
     resolved = expand_integrations(resolved)
