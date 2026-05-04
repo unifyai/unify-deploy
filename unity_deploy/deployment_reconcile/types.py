@@ -1,4 +1,4 @@
-"""Shared types for deploy-time reconciliation."""
+"""Shared types for deploy-time control-plane reconciliation."""
 
 from __future__ import annotations
 
@@ -33,7 +33,11 @@ class DeploymentTargetPlan:
 
 @dataclass(frozen=True)
 class DeploymentWorkItem:
-    """One independently executable deploy-time work item."""
+    """One independently executable deploy-time work item.
+
+    The `runtime` plane remains available for explicit repair/prewarm runs, but
+    normal Cloud Build deploys use only `control-plane`.
+    """
 
     target: DeploymentTargetPlan
     plane: Plane

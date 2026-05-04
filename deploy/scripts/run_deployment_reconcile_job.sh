@@ -10,14 +10,14 @@ Usage:
     --image IMAGE \
     --orchestra-url URL \
     --unity-comms-url URL \
-    [--planes control-plane,runtime] \
+    [--planes control-plane] \
     [--concurrency N] \
     [--timeout 600s] \
     [--template deploy/k8s/deployment-reconcile/deployment-reconcile-job.yaml] \
     [--client CLIENT] \
     [--assistant-id ASSISTANT_ID]
 
-Creates a one-off Kubernetes Job that reconciles deploy-time Unity state,
+Creates a one-off Kubernetes Job that reconciles deploy-time Unity control-plane state,
 waits for it, prints logs, and deletes it.
 USAGE
 }

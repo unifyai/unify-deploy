@@ -1,9 +1,10 @@
 # Deployment Reconciliation Job
 
-Unity deploys reconcile deploy-time state with a one-off Kubernetes Job. The
-same generic entrypoint can run the `control-plane`, `runtime`, or both planes.
-Control-plane work keeps metadata such as assistant `console_config` available
-before Console is opened and before a Unity assistant wakes.
+Unity deploys reconcile deploy-time control-plane state with a one-off
+Kubernetes Job. Control-plane work keeps metadata such as assistant
+`console_config` available before Console is opened and before a Unity assistant
+wakes. Runtime seed/function sync runs later inside the woken assistant, using
+that assistant's `UNIFY_KEY`.
 
 ## Deploy Flow
 
@@ -40,7 +41,7 @@ bash deploy/scripts/run_deployment_reconcile_job.sh \
   --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_SHA}" \
   --orchestra-url "https://internal.example.com/v0" \
   --unity-comms-url "https://unity-comms-app-staging-000000000000.us-central1.run.app" \
-  --planes control-plane,runtime \
+  --planes control-plane \
   --timeout 600s
 ```
 
@@ -53,7 +54,7 @@ bash deploy/scripts/run_deployment_reconcile_job.sh \
   --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
   --orchestra-url "https://api.unify.ai/v0" \
   --unity-comms-url "https://unity-comms-app-000000000000.us-central1.run.app" \
-  --planes control-plane,runtime \
+  --planes control-plane \
   --timeout 600s
 ```
 

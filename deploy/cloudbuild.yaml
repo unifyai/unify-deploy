@@ -44,9 +44,9 @@ steps:
     echo ${SHORT_SHA} | gsutil cp - gs://bucket/image_hash.txt
   waitFor: ['push-latest-tag']
 
-  # Reconcile deploy-time state before any deploy step wakes Unity
-  # containers. The reconciler runs inside GKE with the just-built image
-  # and namespace-local unity-secrets.
+  # Reconcile deploy-time control-plane state before any deploy step wakes Unity
+  # containers. Runtime seed/function sync runs per assistant after wake with
+  # that assistant's UNIFY_KEY.
 - name: 'gcr.io/cloud-builders/kubectl'
   id: 'reconcile-deployment'
   entrypoint: 'bash'
@@ -62,7 +62,7 @@ steps:
       --image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
       --orchestra-url "${_ORCHESTRA_URL}" \
       --unity-comms-url "${_UNITY_COMMS_URL}" \
-      --planes control-plane,runtime \
+      --planes control-plane \
       --concurrency 8 \
       --timeout 600s
   env:

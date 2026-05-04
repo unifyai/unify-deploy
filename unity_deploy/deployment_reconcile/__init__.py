@@ -1,4 +1,4 @@
-"""Unified deploy-time reconciliation planner and executor."""
+"""Deploy-time control-plane reconciliation planner and executor."""
 
 from unity_deploy.deployment_reconcile.executor import (
     apply_work_item,
