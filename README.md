@@ -1,6 +1,6 @@
 # unity-deploy
 
-Private enterprise deployment overlay for [Unity](https://github.com/unifyai/unity). Contains client-specific customizations, seed data, ingestion pipelines, and the CI/CD infrastructure that produces production Docker images.
+Private enterprise deployment overlay for [Unity](https://github.com/unifyai/unity). Contains client-specific assistant deployments, seed data, ingestion pipelines, and the CI/CD infrastructure that produces production Docker images.
 
 Unity is the open-source AI assistant framework. This repository adds the enterprise layer on top -- client configurations, memoized functions, business rules, and deployment automation -- without modifying Unity's core.
 
@@ -11,7 +11,7 @@ unity (public)          unity-deploy (private)
 ┌──────────────────┐    ┌──────────────────────────┐
 │  _init_managers   │    │  unity_deploy/            │
 │    ↓              │    │    hook.py ← startup_hook │
-│  entry_points()  ─┼──→ │    customization/         │
+│  entry_points()  ─┼──→ │    assistant_deployments/         │
 │    ↓              │    │      clients/             │
 │  Actor(**kwargs)  │    │        client_alpha/     │
 │                   │    │        clientgamma/           │
@@ -27,7 +27,7 @@ Unity discovers this package at runtime via Python [entry points](https://packag
 
 The startup hook performs three tasks during manager initialization:
 
-1. **Resolve client customization** -- deployment-matched spec with optional shared seed layers (org/team/user/assistant) merged in scope order, plus secrets from `.secrets.json`.
+1. **Resolve assistant deployment** -- deployment-matched spec with optional shared seed layers (org/team/user/assistant) merged in scope order, plus secrets from `.secrets.json`.
 2. **Sync seed data** -- hash-based idempotent sync of contacts, guidance, knowledge, secrets, and blacklist entries to the Unify backend.
 3. **Sync custom functions** -- upsert client-specific memoized Python functions and virtual environments via `FunctionManager.sync_custom()`.
 
@@ -51,7 +51,7 @@ unity-deploy/
 │   └── cloudbuild-preview.yaml       # Overlay build trigger for preview
 └── unity_deploy/
     ├── hook.py                       # Entry point: startup_hook()
-    └── customization/
+    └── assistant_deployments/
         ├── clients/
         │   ├── __init__.py           # Deployment registry, resolve()
         │   ├── client_alpha/        # Client Alpha config, seed data, ingestion
@@ -83,9 +83,9 @@ pre-commit install
 
 ## Adding a New Client
 
-1. Create a new directory under `unity_deploy/customization/clients/<client_name>/`.
-2. Define deployment packages under `deployments/<name>/` (each exposes a `DeploymentSpec`, typically via `get_deployment()`), and an `__init__.py` that builds an `EnvironmentConfig` / `DeploymentMapping` and calls `register_client()` from `unity_deploy.customization.deployment_types`.
-3. Add the client import to the bottom of `unity_deploy/customization/clients/__init__.py` so the client self-registers at module load time.
+1. Create a new directory under `unity_deploy/assistant_deployments/clients/<client_name>/`.
+2. Define deployment packages under `deployments/<name>/` (each exposes a `DeploymentSpec`, typically via `get_deployment()`), and an `__init__.py` that builds an `EnvironmentConfig` / `DeploymentMapping` and calls `register_client()` from `unity_deploy.assistant_deployments.deployment_types`.
+3. Add the client import to the bottom of `unity_deploy/assistant_deployments/clients/__init__.py` so the client self-registers at module load time.
 4. If the client has seed secrets with runtime values, add entries to `.secrets.json` (gitignored, never committed).
 
 ## Deployment

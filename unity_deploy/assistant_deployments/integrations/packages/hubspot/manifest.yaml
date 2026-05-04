@@ -1,0 +1,280 @@
+name: HubSpot
+slug: hubspot
+version: "0.1.0"
+sector: crm
+tier: api
+quality: silver
+description: >
+  HubSpot integration covering CRM, Engagements, Marketing, Sales, Service,
+  CMS, Platform, and Analytics surfaces via the HubSpot v3 APIs.  Provides
+  on-demand lookups + mutations and an incremental sync that mirrors objects
+  into the assistant's DataManager so the LLM can answer locally and reduce
+  round-trips to HubSpot.  Authenticated using a HubSpot Private App access
+  token supplied via the assistant Secret Manager.  On-demand functions
+  default to mock=True for safe testing; sync functions require a live token.
+  Tier-gated capabilities (Sequences, Workflows, SMS, Custom Reports, etc.)
+  detect 403 responses and return a graceful error rather than raising.
+homepage: https://developers.hubspot.com/docs/api/private-apps
+
+secrets:
+- name: HUBSPOT_PRIVATE_APP_TOKEN
+  description: >
+    HubSpot Private App access token.  Create at Settings -> Integrations
+    -> Private Apps in HubSpot.  Recommended scopes for full functionality:
+    crm.objects.contacts.read/write, crm.objects.companies.read/write,
+    crm.objects.deals.read/write, crm.objects.tickets.read/write,
+    crm.objects.line_items.read/write, crm.objects.products.read/write,
+    crm.objects.quotes.read/write, crm.objects.owners.read,
+    crm.objects.calls.read/write, crm.objects.emails.read/write,
+    crm.objects.meetings.read/write, crm.objects.notes.read/write,
+    crm.objects.tasks.read/write, crm.lists.read/write,
+    crm.schemas.contacts.read, crm.schemas.companies.read,
+    crm.schemas.deals.read, crm.schemas.tickets.read,
+    crm.schemas.custom.read, crm.objects.custom.read/write,
+    forms, content, files, hubdb, automation, sales-email-read.
+    Optional scopes unlock specific Hubs (sequences, conversations, etc.).
+  required: false
+  sensitive: true
+
+- name: HUBSPOT_PORTAL_ID
+  description: >
+    Numeric HubSpot account/portal ID.  Optional - used to construct
+    HubSpot UI deep links in assistant responses.  If unset,
+    platform_account_info() will populate it from the API.
+  required: false
+  sensitive: false
+
+capabilities:
+  # ----- CRM ---------------------------------------------------------------
+- id: contact_management
+  name: Contact Management
+  description: Look up, create, update, and delete HubSpot contacts.
+  functions: [get_contact, search_contacts, list_contacts, create_contact, update_contact, delete_contact, sync_contacts]
+  guidance: [crm_contacts, overview, local_vs_live]
+
+- id: company_records
+  name: Company Records
+  description: Look up and maintain company records.
+  functions: [get_company, search_companies, list_companies, create_company, update_company, delete_company, sync_companies]
+  guidance: [crm_companies, overview, local_vs_live]
+
+- id: deal_pipeline
+  name: Deal Pipeline
+  description: Inspect and progress deals in the sales pipeline.
+  functions: [get_deal, search_deals, list_deals, create_deal, update_deal, delete_deal, transition_deal_stage, sync_deals]
+  guidance: [crm_deals, overview, local_vs_live]
+
+- id: ticket_management
+  name: Ticket Management
+  description: Service ticket CRUD.
+  functions: [get_ticket, search_tickets, list_tickets, create_ticket, update_ticket, sync_tickets]
+  guidance: [crm_tickets, overview]
+
+- id: line_items_and_products
+  name: Line Items and Products
+  description: Catalog products and deal line items.
+  functions: [get_line_item, list_line_items, create_line_item, update_line_item, sync_line_items, get_product, list_products, search_products, create_product, update_product, sync_products]
+  guidance: [overview]
+
+- id: quotes
+  name: Quotes
+  description: Build and send quotes from deals.
+  functions: [get_quote, list_quotes, create_quote, update_quote, send_quote, sync_quotes]
+  guidance: [crm_quotes, high_stakes_writes]
+
+- id: custom_objects
+  name: Custom Objects
+  description: Discover and work with portal-specific custom object schemas.
+  functions: [discover_custom_object_schemas, get_custom_object_record, search_custom_objects, list_custom_objects, create_custom_object_record, update_custom_object_record, sync_custom_objects]
+  guidance: [crm_custom_objects, overview]
+
+- id: associations
+  name: Associations
+  description: Link records across object types using the v4 association API.
+  functions: [list_associations, create_association, delete_association, sync_associations]
+  guidance: [overview]
+
+- id: lists_and_segments
+  name: Lists and Segments
+  description: CRUD on contact lists; manage memberships of static lists.
+  functions: [get_list, list_lists, create_list, delete_list, add_contact_to_list, remove_contact_from_list, sync_lists]
+  guidance: [crm_lists_and_workflows]
+
+- id: properties_metadata
+  name: Properties Metadata
+  description: Property schemas per object type, and create custom properties.
+  functions: [list_properties, get_property, create_property, sync_properties]
+  guidance: [overview]
+
+- id: feedback_and_goals
+  name: Feedback and Goals
+  description: NPS/CSAT feedback submissions and HubSpot goals.
+  functions: [list_feedback_submissions, sync_feedback, list_goals, sync_goals]
+  guidance: [overview]
+
+  # ----- Engagements -------------------------------------------------------
+- id: engagement_logging
+  name: Engagement Logging
+  description: Log activity (calls, emails, meetings, notes, tasks) against CRM records.
+  functions: [log_call, list_calls, sync_calls, log_email, list_emails, sync_emails, log_meeting, list_meetings, sync_meetings, create_note, list_notes, sync_notes, create_task, update_task, complete_task, list_tasks, sync_tasks]
+  guidance: [engagements]
+
+  # ----- Marketing Hub -----------------------------------------------------
+- id: marketing_forms
+  name: Marketing Forms
+  description: Form definitions, submissions, programmatic submission.
+  functions: [list_marketing_forms, get_marketing_form, list_form_submissions, submit_form, sync_marketing_forms]
+  guidance: [marketing]
+
+- id: marketing_emails
+  name: Marketing Emails
+  description: Marketing email definitions and sending (single + broadcast).
+  functions: [list_marketing_emails, get_marketing_email, send_single_marketing_email, broadcast_marketing_email, sync_marketing_emails]
+  guidance: [marketing, high_stakes_writes]
+
+- id: marketing_workflows
+  name: Marketing Workflows
+  description: Workflow enrollments (enroll/unenroll contacts).
+  functions: [list_marketing_workflows, enroll_in_workflow, unenroll_from_workflow, sync_marketing_workflows]
+  guidance: [marketing, crm_lists_and_workflows]
+
+- id: marketing_campaigns_and_ctas
+  name: Campaigns and CTAs
+  description: Marketing campaigns and call-to-action assets.
+  functions: [list_campaigns, get_campaign, sync_campaigns, list_ctas, sync_ctas]
+  guidance: [marketing]
+
+- id: marketing_subscriptions
+  name: Marketing Subscriptions
+  description: Subscription types and per-contact subscription status.
+  functions: [list_subscription_types, get_contact_subscription_status, subscribe_contact, unsubscribe_contact, sync_subscriptions]
+  guidance: [marketing]
+
+- id: marketing_events
+  name: Marketing Events
+  description: External marketing events with attendance tracking.
+  functions: [list_marketing_events, create_marketing_event, update_marketing_event, list_event_attendance, sync_marketing_events]
+  guidance: [marketing]
+
+- id: marketing_sms
+  name: Marketing SMS
+  description: SMS messaging to contacts (tier-gated).
+  functions: [send_marketing_sms, list_sms_messages]
+  guidance: [marketing, high_stakes_writes, tier_gating]
+
+- id: marketing_email_events
+  name: Marketing Email Events
+  description: Per-message delivery, open, click, bounce events (high volume).
+  functions: [sync_email_events]
+  guidance: [marketing, sync_runbook]
+
+  # ----- Sales Hub ---------------------------------------------------------
+- id: sales_sequences
+  name: Sales Sequences
+  description: Outbound cadences (tier-gated, Sales Hub Pro+).
+  functions: [list_sequences, get_sequence, enroll_in_sequence, unenroll_from_sequence, sync_sequences]
+  guidance: [sales, tier_gating]
+
+- id: sales_templates_and_snippets
+  name: Sales Templates and Snippets
+  description: Email templates and reusable text snippets.
+  functions: [list_sales_templates, get_sales_template, sync_sales_templates, list_sales_snippets, get_sales_snippet, sync_sales_snippets]
+  guidance: [sales]
+
+- id: sales_documents
+  name: Sales Documents
+  description: Document library and view-tracking summaries.
+  functions: [list_sales_documents, get_sales_document, get_document_view_summary, sync_sales_documents]
+  guidance: [sales]
+
+- id: sales_meeting_links
+  name: Meeting Scheduling Links
+  description: HubSpot meeting links (scheduling pages).
+  functions: [list_meeting_links, get_meeting_link, sync_meeting_links]
+  guidance: [sales]
+
+  # ----- Service Hub -------------------------------------------------------
+- id: service_conversations
+  name: Conversations Inbox
+  description: Read inbox threads and send replies (tier-gated).
+  functions: [list_conversation_threads, get_conversation_thread, list_conversation_messages, send_conversation_reply, sync_conversations]
+  guidance: [service, high_stakes_writes, tier_gating]
+
+- id: knowledge_base
+  name: Knowledge Base
+  description: KB articles - browse, create, update.
+  functions: [list_kb_articles, get_kb_article, create_kb_article, update_kb_article, sync_kb_articles]
+  guidance: [service, cms]
+
+- id: chatflows
+  name: Chatflows
+  description: Read chat flow definitions.
+  functions: [list_chatflows, get_chatflow, sync_chatflows]
+  guidance: [service]
+
+  # ----- CMS Hub -----------------------------------------------------------
+- id: cms_content
+  name: CMS Pages and Blog
+  description: Site/landing pages and blog posts.
+  functions: [list_cms_pages, get_cms_page, create_cms_page, update_cms_page, publish_cms_page, list_blog_posts, get_blog_post, create_blog_post, update_blog_post, publish_blog_post, list_blog_authors, sync_cms_pages, sync_blog_posts]
+  guidance: [cms, high_stakes_writes]
+
+- id: cms_files
+  name: CMS Files
+  description: File library upload, list, download, delete.
+  functions: [list_cms_files, get_cms_file, upload_cms_file, delete_cms_file, sync_cms_files]
+  guidance: [cms, high_stakes_writes]
+
+- id: cms_hubdb
+  name: HubDB
+  description: HubDB tables (structured data) - rows CRUD + table publish.
+  functions: [list_hubdb_tables, get_hubdb_table, list_hubdb_rows, create_hubdb_row, update_hubdb_row, delete_hubdb_row, publish_hubdb_table, sync_hubdb]
+  guidance: [cms]
+
+- id: cms_url_redirects
+  name: URL Redirects
+  description: Manage CMS URL redirects.
+  functions: [list_url_redirects, create_url_redirect, update_url_redirect, delete_url_redirect, sync_url_redirects]
+  guidance: [cms]
+
+- id: cms_domains
+  name: CMS Domains
+  description: List configured CMS domains.
+  functions: [list_cms_domains, sync_cms_domains]
+  guidance: [cms]
+
+  # ----- Platform ----------------------------------------------------------
+- id: platform_account
+  name: Account Information
+  description: Portal info, currencies, business units, import history.
+  functions: [get_account_info, list_audit_logs, list_currencies, list_business_units, list_imports, sync_platform]
+  guidance: [overview]
+
+  # ----- Analytics ---------------------------------------------------------
+- id: crm_analytics
+  name: CRM Analytics
+  description: Deal velocity, pipeline funnel, owner performance reports.
+  functions: [get_deal_velocity_report, get_pipeline_funnel_report, list_crm_reports, run_crm_report]
+  guidance: [analytics]
+
+- id: email_analytics
+  name: Email Analytics
+  description: Marketing email performance metrics.
+  functions: [get_email_performance, list_email_event_summary]
+  guidance: [analytics]
+
+  # ----- Sync + local query ------------------------------------------------
+- id: incremental_sync
+  name: Incremental Sync
+  description: Orchestrates a single sync tick across all enabled object types.
+  functions: [run_hubspot_sync_tick, get_sync_state]
+  guidance: [sync_runbook, local_vs_live]
+
+- id: local_query
+  name: Local DataManager Query
+  description: Query the synced HubSpot copy in DataManager (preferred over live calls when freshness allows).
+  functions: [query_local_contacts, query_local_companies, query_local_deals, query_local_tickets, query_local_engagements, query_local_custom_objects]
+  guidance: [local_vs_live, overview]
+
+requirements: [httpx]
+tags: [hubspot, crm, sales, marketing, service, cms, sync, datamanager]

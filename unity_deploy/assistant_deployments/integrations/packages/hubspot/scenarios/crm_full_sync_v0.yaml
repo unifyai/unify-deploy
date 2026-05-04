@@ -1,0 +1,170 @@
+scenario_id: hubspot_crm_full_sync_v0
+name: HubSpot CRM Full Sync (v0)
+description: >-
+  Incremental HubSpot sync into the assistant's DataManager. Runs on an
+  interval; the orchestrator gates per-object cadence by config so the
+  scheduler tick rate is decoupled from actual sync work.
+#
+# TEMPLATE - this generic scenario is shipped for reference only.  The
+# hubspot package's manifest does NOT declare ``scenarios: [...]``, so
+# this file is not auto-loaded.  Per-client deployments that want
+# scheduled HubSpot sync should copy this YAML into their own
+# client_package (e.g. ``client_packages/<client>_hubspot_sync/scenarios/``)
+# and replace the placeholder fields below:
+#   - ``client``                      -> client slug
+#   - ``deployment``                  -> client deployment name (e.g. "v0")
+#   - ``tasks[0].target.assistant_id`` -> the assistant id this task binds to
+#
+client: ""           # set per-client (e.g. "clientzeta")
+deployment: ""       # set per-client (e.g. "v0")
+
+integration:
+  package_slug: hubspot
+  mode: real
+  required_capabilities:
+  - contact_management
+  - company_records
+  - deal_pipeline
+  - ticket_management
+  - line_items_and_products
+  - quotes
+  - custom_objects
+  - associations
+  - lists_and_segments
+  - properties_metadata
+  - feedback_and_goals
+  - engagement_logging
+  - marketing_forms
+  - marketing_emails
+  - marketing_workflows
+  - marketing_campaigns_and_ctas
+  - marketing_subscriptions
+  - marketing_events
+  - sales_sequences
+  - sales_templates_and_snippets
+  - sales_documents
+  - sales_meeting_links
+  - service_conversations
+  - knowledge_base
+  - chatflows
+  - cms_content
+  - cms_files
+  - cms_hubdb
+  - cms_url_redirects
+  - cms_domains
+  - platform_account
+  - incremental_sync
+  schema_version: hubspot.crm.sync.v1
+
+data_targets:
+  # ----- CRM Dimensions ----------------------------------------------------
+- {table: contacts, context: HubSpot/CRM/Dimensions/Contacts, unique_key: hubspot_id, description: HubSpot contact master records.}
+- {table: companies, context: HubSpot/CRM/Dimensions/Companies, unique_key: hubspot_id, description: HubSpot company master records.}
+- {table: deals, context: HubSpot/CRM/Dimensions/Deals, unique_key: hubspot_id, description: HubSpot deal master records.}
+- {table: tickets, context: HubSpot/CRM/Dimensions/Tickets, unique_key: hubspot_id, description: HubSpot ticket master records.}
+- {table: line_items, context: HubSpot/CRM/Dimensions/LineItems, unique_key: hubspot_id, description: Per-deal line items.}
+- {table: products, context: HubSpot/CRM/Dimensions/Products, unique_key: hubspot_id, description: Product catalog.}
+- {table: quotes, context: HubSpot/CRM/Dimensions/Quotes, unique_key: hubspot_id, description: Sales quotes.}
+- {table: feedback, context: HubSpot/CRM/Dimensions/Feedback, unique_key: hubspot_id, description: NPS/CSAT submissions.}
+- {table: goals, context: HubSpot/CRM/Dimensions/Goals, unique_key: hubspot_id, description: HubSpot goal targets.}
+- {table: owners, context: HubSpot/CRM/Dimensions/Owners, unique_key: owner_id, description: HubSpot users who own records.}
+- {table: pipelines, context: HubSpot/CRM/Dimensions/Pipelines, unique_key: [pipeline_id, stage_id], description: Pipeline + stage definitions.}
+- {table: properties, context: HubSpot/CRM/Dimensions/PropertyDefinitions, unique_key: [object_type, name], description: Property/field schemas.}
+- {table: lists, context: HubSpot/CRM/Dimensions/Lists, unique_key: list_id, description: Contact list definitions.}
+- {table: custom_object_schemas, context: HubSpot/CRM/Dimensions/CustomObjectSchemas, unique_key: object_type, description: Custom object schemas.}
+
+  # ----- CRM Custom Objects (records, all types in one table) --------------
+- {table: custom_object_records, context: HubSpot/CRM/CustomObjects/Records, unique_key: [object_type, hubspot_id], description: All custom-object records (object_type discriminator).}
+
+  # ----- CRM Facts ---------------------------------------------------------
+- {table: associations, context: HubSpot/CRM/Facts/Associations, unique_key: [from_id, to_id, association_type], description: Cross-object associations.}
+- {table: list_membership, context: HubSpot/CRM/Facts/ListMembership, unique_key: [list_id, contact_id], description: Static-list memberships.}
+
+  # ----- CRM Engagements ---------------------------------------------------
+- {table: calls, context: HubSpot/CRM/Engagements/Calls, unique_key: hubspot_id, description: Logged calls.}
+- {table: emails, context: HubSpot/CRM/Engagements/Emails, unique_key: hubspot_id, description: Logged emails.}
+- {table: meetings, context: HubSpot/CRM/Engagements/Meetings, unique_key: hubspot_id, description: Logged meetings.}
+- {table: notes, context: HubSpot/CRM/Engagements/Notes, unique_key: hubspot_id, description: Notes.}
+- {table: tasks, context: HubSpot/CRM/Engagements/Tasks, unique_key: hubspot_id, description: Tasks.}
+
+  # ----- Marketing Hub -----------------------------------------------------
+- {table: marketing_forms, context: HubSpot/Marketing/Forms, unique_key: form_id, description: Form definitions.}
+- {table: marketing_campaigns, context: HubSpot/Marketing/Campaigns, unique_key: campaign_id, description: Marketing campaigns.}
+- {table: marketing_emails, context: HubSpot/Marketing/Emails, unique_key: email_id, description: Marketing email definitions.}
+- {table: marketing_workflows, context: HubSpot/Marketing/Workflows, unique_key: workflow_id, description: Workflow definitions.}
+- {table: marketing_ctas, context: HubSpot/Marketing/CTAs, unique_key: cta_id, description: CTA assets.}
+- {table: subscription_types, context: HubSpot/Marketing/SubscriptionTypes, unique_key: subscription_id, description: Subscription type definitions.}
+- {table: contact_subscriptions, context: HubSpot/Marketing/ContactSubscriptions, unique_key: [contact_id, subscription_id], description: Per-contact subscription status.}
+- {table: marketing_events, context: HubSpot/Marketing/Events, unique_key: event_id, description: External marketing events.}
+- {table: marketing_email_events, context: HubSpot/Marketing/EmailEvents, unique_key: event_id, description: Per-recipient email events (opt-in).}
+
+  # ----- Sales Hub ---------------------------------------------------------
+- {table: sales_sequences, context: HubSpot/Sales/Sequences, unique_key: sequence_id, description: Sales sequences.}
+- {table: sales_templates, context: HubSpot/Sales/Templates, unique_key: template_id, description: Sales email templates.}
+- {table: sales_snippets, context: HubSpot/Sales/Snippets, unique_key: snippet_id, description: Sales snippets.}
+- {table: sales_documents, context: HubSpot/Sales/Documents, unique_key: document_id, description: Sales document library.}
+- {table: meeting_links, context: HubSpot/Sales/MeetingLinks, unique_key: link_id, description: Scheduling page metadata.}
+
+  # ----- Service Hub -------------------------------------------------------
+- {table: conversation_threads, context: HubSpot/Service/ConversationThreads, unique_key: thread_id, description: Inbox thread metadata.}
+- {table: kb_articles, context: HubSpot/Service/KnowledgeBaseArticles, unique_key: article_id, description: Knowledge base articles.}
+- {table: chatflows, context: HubSpot/Service/Chatflows, unique_key: chatflow_id, description: Chat flow definitions.}
+
+  # ----- CMS Hub -----------------------------------------------------------
+- {table: cms_pages, context: HubSpot/CMS/Pages, unique_key: page_id, description: CMS site/landing pages.}
+- {table: blog_posts, context: HubSpot/CMS/BlogPosts, unique_key: post_id, description: Blog posts.}
+- {table: cms_files, context: HubSpot/CMS/Files, unique_key: file_id, description: CMS file library.}
+- {table: hubdb_tables, context: HubSpot/CMS/HubDBTables, unique_key: table_id, description: HubDB table definitions.}
+- {table: hubdb_rows, context: HubSpot/CMS/HubDBRows, unique_key: [table_id, row_id], description: HubDB rows (flattened).}
+- {table: url_redirects, context: HubSpot/CMS/UrlRedirects, unique_key: redirect_id, description: URL redirects.}
+- {table: cms_domains, context: HubSpot/CMS/Domains, unique_key: domain, description: Configured CMS domains.}
+
+  # ----- Platform ----------------------------------------------------------
+- {table: account_info, context: HubSpot/Platform/AccountInfo, unique_key: portal_id, description: HubSpot account details.}
+- {table: currencies, context: HubSpot/Platform/Currencies, unique_key: code, description: Active currencies.}
+- {table: business_units, context: HubSpot/Platform/BusinessUnits, unique_key: unit_id, description: Business units (multi-brand).}
+
+  # ----- Sync metadata -----------------------------------------------------
+- {table: sync_state, context: HubSpot/CRM/Meta/SyncState, unique_key: object_type, description: Per-object-type last_synced_at watermarks.}
+- {table: sync_runs, context: HubSpot/CRM/Meta/SyncRuns, description: Append-only audit log of sync ticks.}
+
+timeline:
+- tick: 0
+  capability: incremental_sync
+  function: run_hubspot_sync_tick
+  label: Initial sync
+  args: {full: true}
+- tick: 1
+  capability: incremental_sync
+  function: run_hubspot_sync_tick
+  label: Incremental delta
+  args: {}
+
+tasks:
+- id: hubspot_crm_sync_tick
+    # Disabled by default per a71a840 - keep recurring tasks off until the
+    # control-plane has real TaskScheduler + FunctionManager IDs seeded.
+    # Operators flip to true after seeding (or override per-client).
+  enabled: false
+  execution_mode: live
+  schedule:
+    type: interval
+      # Scheduler tick rate.  Actual sync cadence is gated inside
+      # run_hubspot_sync_tick by HUBSPOT_SYNC_MIN_INTERVAL_SECONDS
+      # (default 300) and HUBSPOT_SYNC_OBJECT_INTERVALS for per-object
+      # overrides.  A small scheduler interval lets env-var changes
+      # take effect on the next tick without redeploying the YAML.
+    interval_seconds: 60
+  target:
+    assistant_id: ""             # set per-client - the assistant this task binds to
+    scenario_id: hubspot_crm_full_sync_v0
+    tick_policy: incrementing
+  activation:
+    entrypoint_function: run_hubspot_sync_tick
+    task_name: HubSpot CRM sync tick
+    task_description: >-
+      Periodic HubSpot CRM sync into the assistant's DataManager.  Pulls
+      deltas from HubSpot using the orchestrator's per-object cadence
+      config, upserts into HubSpot/CRM/* contexts, and appends an audit
+      row to HubSpot/CRM/Meta/SyncRuns.
+    recurrence_hint: every_5_minutes

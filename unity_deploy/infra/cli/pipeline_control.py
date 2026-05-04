@@ -285,7 +285,9 @@ async def cmd_submit(args: argparse.Namespace) -> None:
     )
     from unity.common.pipeline.types import DmBinding, FmBinding
 
-    from unity_deploy.customization.scripts.ingest_utils import load_pipeline_config
+    from unity_deploy.assistant_deployments.scripts.ingest_utils import (
+        load_pipeline_config,
+    )
 
     infra = _init_infra(debug=args.debug)
     job_store = _get_job_store(infra)

@@ -46,7 +46,7 @@ def test_initialize_worker_environment_skips_offline_ingest_initializer(
     fake_module = types.SimpleNamespace(initialize_environment=_boom)
     monkeypatch.setitem(
         sys.modules,
-        "unity_deploy.customization.scripts.ingest_utils",
+        "unity_deploy.assistant_deployments.scripts.ingest_utils",
         fake_module,
     )
 
