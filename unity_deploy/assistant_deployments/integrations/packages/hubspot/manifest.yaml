@@ -24,16 +24,16 @@ secrets:
     crm.objects.contacts.read/write, crm.objects.companies.read/write,
     crm.objects.deals.read/write, crm.objects.tickets.read/write,
     crm.objects.line_items.read/write, crm.objects.products.read/write,
-    crm.objects.hubspot_quotes.read/write, crm.objects.owners.read,
+    crm.objects.quotes.read/write, crm.objects.owners.read,
     crm.objects.calls.read/write, crm.objects.emails.read/write,
     crm.objects.meetings.read/write, crm.objects.notes.read/write,
     crm.objects.tasks.read/write, crm.lists.read/write,
     crm.schemas.contacts.read, crm.schemas.companies.read,
     crm.schemas.deals.read, crm.schemas.tickets.read,
     crm.schemas.custom.read, crm.objects.custom.read/write,
-    forms, content, files, hubdb, automation, hubspot_sales-email-read.
+    forms, content, files, hubdb, automation, sales-email-read.
     Optional scopes unlock specific Hubs (sequences, conversations, etc.).
-  required: false
+  required: true
   sensitive: true
 
 - name: HUBSPOT_PORTAL_ID
@@ -78,7 +78,7 @@ capabilities:
 
 - id: hubspot_quotes
   name: Quotes
-  description: Build and send hubspot_quotes from deals.
+  description: Build and send quotes from deals.
   functions: [get_hubspot_quote, list_hubspot_quotes, create_hubspot_quote, update_hubspot_quote, send_hubspot_quote, sync_hubspot_quotes]
   guidance: [hubspot_crm_quotes, hubspot_high_stakes_writes]
 
