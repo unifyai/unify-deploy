@@ -11,7 +11,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_banking_details(
+async def get_employmenthero_banking_details(
     employee_id: str,
     confirm_user_authorised: bool = False,
     mock: bool = True,
@@ -75,7 +75,7 @@ async def get_banking_details(
 
 
 @custom_function()
-async def list_super_funds(
+async def list_employmenthero_super_funds(
     employee_id: str | None = None,
     confirm_user_authorised: bool = False,
     mock: bool = True,
@@ -140,7 +140,7 @@ async def list_super_funds(
 
 
 @custom_function()
-async def get_tax_declaration(
+async def get_employmenthero_tax_declaration(
     employee_id: str,
     confirm_user_authorised: bool = False,
     mock: bool = True,

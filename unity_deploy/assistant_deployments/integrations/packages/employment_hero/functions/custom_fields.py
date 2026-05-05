@@ -12,7 +12,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_custom_field_definitions(mock: bool = True) -> dict:
+async def list_employmenthero_custom_field_definitions(mock: bool = True) -> dict:
     if mock:
         return {
             "definitions": [
@@ -46,7 +46,7 @@ async def list_custom_field_definitions(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_custom_field_values(
+async def list_employmenthero_custom_field_values(
     employee_id: str | None = None,
     field_id: str | None = None,
     mock: bool = True,
@@ -82,7 +82,7 @@ async def list_custom_field_values(
 
 
 @custom_function()
-async def get_employee_custom_field_values(
+async def get_employmenthero_employee_custom_field_values(
     employee_id: str,
     mock: bool = True,
 ) -> dict:
@@ -113,7 +113,7 @@ async def get_employee_custom_field_values(
 
 
 @custom_function()
-async def sync_custom_fields(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_custom_fields(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot custom-field definitions and per-employee values (long format)."""
     import datetime as _dt
 

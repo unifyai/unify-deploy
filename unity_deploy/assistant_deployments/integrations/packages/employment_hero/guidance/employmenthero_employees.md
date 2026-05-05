@@ -30,5 +30,5 @@ separate tables joinable on `employee_id`.
 ## High-tier personal details
 
 `list_emergency_contacts`, `list_dependants`, `get_visa_details`,
-`get_probation_status` — see `sensitive_data.md`.  These are read-only
+`get_probation_status` — see `employmenthero_sensitive_data.md`.  These are read-only
 in v1; updates happen in EH directly.

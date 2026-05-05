@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_courses(mock: bool = True) -> dict:
+async def list_employmenthero_courses(mock: bool = True) -> dict:
     if mock:
         return {
             "courses": [
@@ -35,7 +35,7 @@ async def list_courses(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_course(course_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_course(course_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(course_id),
@@ -59,7 +59,7 @@ async def get_course(course_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_course_assignments(
+async def list_employmenthero_course_assignments(
     course_id: str | None = None,
     employee_id: str | None = None,
     mock: bool = True,
@@ -98,7 +98,7 @@ async def list_course_assignments(
 
 
 @custom_function()
-async def list_course_completions(
+async def list_employmenthero_course_completions(
     course_id: str | None = None,
     employee_id: str | None = None,
     mock: bool = True,
@@ -136,7 +136,7 @@ async def list_course_completions(
 
 
 @custom_function()
-async def sync_learning(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_learning(mock: bool = False, since: str | None = None) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.learning.snapshot.v1"

@@ -17,7 +17,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_qualifications(mock: bool = True) -> dict:
+async def list_employmenthero_qualifications(mock: bool = True) -> dict:
     """List the organisation's qualification catalogue (definitions)."""
     if mock:
         return {
@@ -69,7 +69,7 @@ async def list_qualifications(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_qualification(qualification_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_qualification(qualification_id: str, mock: bool = True) -> dict:
     """Get one qualification definition by id."""
     if mock:
         return {
@@ -97,7 +97,7 @@ async def get_qualification(qualification_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_employee_qualifications(
+async def list_employmenthero_employee_qualifications(
     employee_id: str | None = None,
     qualification_id: str | None = None,
     expires_before: str | None = None,
@@ -158,7 +158,7 @@ async def list_employee_qualifications(
 
 
 @custom_function()
-async def sync_qualifications(
+async def sync_employmenthero_qualifications(
     mock: bool = False,
     since: str | None = None,
 ) -> dict:

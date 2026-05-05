@@ -10,7 +10,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_leave_categories(mock: bool = True) -> dict:
+async def list_employmenthero_leave_categories(mock: bool = True) -> dict:
     """List leave categories (annual, sick, maternity, etc.) for the org."""
     if mock:
         return {
@@ -62,7 +62,7 @@ async def list_leave_categories(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_leave_category(category_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_leave_category(category_id: str, mock: bool = True) -> dict:
     """Get one leave category by id."""
     if mock:
         return {
@@ -93,7 +93,7 @@ async def get_leave_category(category_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_leave_balances(
+async def list_employmenthero_leave_balances(
     employee_id: str | None = None,
     mock: bool = True,
 ) -> dict:
@@ -138,7 +138,7 @@ async def list_leave_balances(
 
 
 @custom_function()
-async def get_leave_balance(
+async def get_employmenthero_leave_balance(
     employee_id: str,
     category_id: str | None = None,
     mock: bool = True,
@@ -190,7 +190,7 @@ async def get_leave_balance(
 
 
 @custom_function()
-async def list_leave_requests(
+async def list_employmenthero_leave_requests(
     employee_id: str | None = None,
     status: str | None = None,
     from_date: str | None = None,
@@ -240,7 +240,7 @@ async def list_leave_requests(
 
 
 @custom_function()
-async def get_leave_request(request_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_leave_request(request_id: str, mock: bool = True) -> dict:
     """Get one leave request by id."""
     if mock:
         return {
@@ -268,7 +268,7 @@ async def get_leave_request(request_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def submit_leave_request(
+async def submit_employmenthero_leave_request(
     employee_id: str,
     category_id: str,
     start_date: str,
@@ -339,7 +339,11 @@ async def submit_leave_request(
         return body
     created = body.get("data") or body
     if cfg["mirror_mutations_to_datamanager"]:
-        await _mirror_leave_request(created)
+        from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._sync_helpers import (
+            mirror_leave_request,
+        )
+
+        await mirror_leave_request(created)
     return created
 
 
@@ -349,7 +353,7 @@ async def submit_leave_request(
 
 
 @custom_function()
-async def sync_leave(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_leave(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot leave categories, balances, and requests."""
     import datetime as _dt
 
@@ -496,31 +500,3 @@ async def sync_leave(mock: bool = False, since: str | None = None) -> dict:
             },
         },
     }
-
-
-@custom_function()
-async def _mirror_leave_request(record: dict) -> None:
-    """Write a single leave request row back into DataManager same-tick."""
-    from unity.manager_registry import ManagerRegistry
-
-    dm = ManagerRegistry.get_data_manager()
-    try:
-        dm.ingest(
-            "EmploymentHero/Leave/Requests",
-            rows=[
-                {
-                    "id": record.get("id"),
-                    "employee_id": record.get("employee_id"),
-                    "category_id": record.get("category_id"),
-                    "start_date": record.get("start_date"),
-                    "end_date": record.get("end_date"),
-                    "status": record.get("status"),
-                    "total_hours": record.get("total_hours"),
-                    "updated_at": record.get("updated_at"),
-                }
-            ],
-            unique_keys={"id": "str"},
-            infer_untyped_fields=True,
-        )
-    except Exception:
-        pass

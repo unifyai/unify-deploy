@@ -10,7 +10,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_employee_notes(
+async def list_employmenthero_employee_notes(
     employee_id: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -51,7 +51,7 @@ async def list_employee_notes(
 
 
 @custom_function()
-async def get_employee_note(note_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_employee_note(note_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(note_id),
@@ -78,7 +78,7 @@ async def get_employee_note(note_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def create_employee_note(
+async def create_employmenthero_employee_note(
     employee_id: str,
     body: str,
     category: str | None = None,
@@ -126,7 +126,7 @@ async def create_employee_note(
 
 
 @custom_function()
-async def sync_employee_notes(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_employee_notes(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot employee notes — body redacted to length + hash."""
     import datetime as _dt
     import hashlib

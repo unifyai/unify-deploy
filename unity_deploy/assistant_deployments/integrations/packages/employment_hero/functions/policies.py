@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_policies(mock: bool = True) -> dict:
+async def list_employmenthero_policies(mock: bool = True) -> dict:
     if mock:
         return {
             "policies": [
@@ -49,7 +49,7 @@ async def list_policies(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_policy(policy_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_policy(policy_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(policy_id),
@@ -74,7 +74,7 @@ async def get_policy(policy_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_policy_acknowledgements(
+async def list_employmenthero_policy_acknowledgements(
     policy_id: str | None = None,
     employee_id: str | None = None,
     mock: bool = True,
@@ -110,7 +110,7 @@ async def list_policy_acknowledgements(
 
 
 @custom_function()
-async def acknowledge_policy(
+async def acknowledge_employmenthero_policy(
     policy_id: str,
     employee_id: str,
     confirm: bool = False,
@@ -150,7 +150,7 @@ async def acknowledge_policy(
 
 
 @custom_function()
-async def sync_policies(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_policies(mock: bool = False, since: str | None = None) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.policies.snapshot.v1"

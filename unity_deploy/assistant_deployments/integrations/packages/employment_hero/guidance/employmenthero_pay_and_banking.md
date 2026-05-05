@@ -1,6 +1,6 @@
 # Pay, Banking, Tax
 
-**CRITICAL TIER.**  Refer to `sensitive_data.md` for the full refusal
+**CRITICAL TIER.**  Refer to `employmenthero_sensitive_data.md` for the full refusal
 patterns.  This page covers the practical workflows.
 
 ## Pay runs (`pay_runs`)

@@ -12,20 +12,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-def _mask_currency(amount: float | None, currency: str = "GBP") -> str | None:
-    """Return a masked currency representation (e.g. '£***.**').
-
-    Decorated so the live payslip functions can depend on it as a
-    registered helper per the FunctionManager isolation rules.
-    """
-    if amount is None:
-        return None
-    sym = "£" if currency.upper() == "GBP" else currency
-    return f"{sym}***.**"
-
-
-@custom_function()
-async def list_employee_payslips(
+async def list_employmenthero_employee_payslips(
     employee_id: str,
     confirm_user_authorised: bool = False,
     limit: int = 12,
@@ -69,6 +56,9 @@ async def list_employee_payslips(
         org_path,
         _org_id_or_error,
     )
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._payslip_helpers import (
+        mask_currency,
+    )
 
     _, err = _org_id_or_error()
     if err is not None:
@@ -88,9 +78,9 @@ async def list_employee_payslips(
                 "id": p.get("id"),
                 "period_start": p.get("period_start"),
                 "period_end": p.get("period_end"),
-                "gross_masked": _mask_currency(p.get("gross"), currency),
-                "net_masked": _mask_currency(p.get("net"), currency),
-                "tax_masked": _mask_currency(p.get("tax"), currency),
+                "gross_masked": mask_currency(p.get("gross"), currency),
+                "net_masked": mask_currency(p.get("net"), currency),
+                "tax_masked": mask_currency(p.get("tax"), currency),
                 "currency": currency,
                 "issued_at": p.get("issued_at"),
                 "_warning": (
@@ -103,7 +93,7 @@ async def list_employee_payslips(
 
 
 @custom_function()
-async def get_payslip(
+async def get_employmenthero_payslip(
     payslip_id: str,
     confirm_user_authorised: bool = False,
     mock: bool = True,
@@ -132,6 +122,9 @@ async def get_payslip(
         org_path,
         _org_id_or_error,
     )
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._payslip_helpers import (
+        mask_currency,
+    )
 
     _, err = _org_id_or_error()
     if err is not None:
@@ -146,9 +139,9 @@ async def get_payslip(
         "employee_id": p.get("employee_id"),
         "period_start": p.get("period_start"),
         "period_end": p.get("period_end"),
-        "gross_masked": _mask_currency(p.get("gross"), currency),
-        "net_masked": _mask_currency(p.get("net"), currency),
-        "tax_masked": _mask_currency(p.get("tax"), currency),
+        "gross_masked": mask_currency(p.get("gross"), currency),
+        "net_masked": mask_currency(p.get("net"), currency),
+        "tax_masked": mask_currency(p.get("tax"), currency),
         "currency": currency,
         "issued_at": p.get("issued_at"),
         "_warning": "Masked payslip — exact line-items must be viewed in EH.",

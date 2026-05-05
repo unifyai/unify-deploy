@@ -95,7 +95,7 @@ edits required.
 |---|---|---|
 | `Employment Hero is not connected for this assistant.` | One or more of `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` / `REFRESH_TOKEN` is unset | Open Integrations modal; the listed `missing_secrets` show what's needed.  Either paste the OAuth credentials and click Connect, or click Reconnect if previously connected. |
 | `Employment Hero refresh failed — reconnect required.` | Refresh token invalid (expired, revoked, or rotated) | User clicks Reconnect in Console → Integrations |
-| `403` on specific capabilities | Customer's EH developer-portal app lacks that scope, or their EH role doesn't permit it | Edit the app's scope catalogue in EH developer portal, then click Reconnect.  See `tier_gating.md`. |
+| `403` on specific capabilities | Customer's EH developer-portal app lacks that scope, or their EH role doesn't permit it | Edit the app's scope catalogue in EH developer portal, then click Reconnect.  See `employmenthero_tier_gating.md`. |
 | `Multiple organisations may be available` hint | Token has access to >1 organisation and `ORGANISATION_ID` not set | Captured automatically by Connect; if missing, set manually via Settings → Secrets after calling `list_organisations(mock=False)`. |
 | `429` rate-limit | Sync too aggressive | Increase `EMPLOYMENTHERO_RATE_LIMIT_BACKOFF_FACTOR` or reduce per-object cadence in `EMPLOYMENTHERO_SYNC_OBJECT_INTERVALS`. |
 

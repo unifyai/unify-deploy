@@ -43,5 +43,5 @@ Operators can disable unavailable objects via
 `payslips`, `banking_and_tax`, and `medical` may 403 even on a
 fully-scoped token if the calling user's role isn't payroll-admin or
 HR-confidant.  This is **expected** — the assistant should follow the
-refusal patterns in `sensitive_data.md` rather than treating the 403 as
+refusal patterns in `employmenthero_sensitive_data.md` rather than treating the 403 as
 an error.

@@ -40,27 +40,32 @@ async def run_employmenthero_sync_tick(
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
     )
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._sync_helpers import (
+        get_state_watermark,
+        load_sync_state,
+        seconds_since,
+    )
 
     # Object key -> (module stem, function name).  Inlined per
     # FunctionManager isolation rule — no module-level globals.
     object_to_sync_fn: dict[str, tuple[str, str]] = {
-        "workforce": ("workforce", "sync_workforce"),
-        "employee_personal": ("employee_personal", "sync_employee_personal"),
-        "employee_notes": ("employee_notes", "sync_employee_notes"),
-        "leave": ("leave", "sync_leave"),
-        "timesheets": ("timesheets", "sync_timesheets"),
-        "expenses": ("expenses", "sync_expenses"),
-        "policies": ("policies", "sync_policies"),
-        "documents": ("documents", "sync_documents"),
-        "custom_fields": ("custom_fields", "sync_custom_fields"),
-        "onboarding": ("onboarding", "sync_onboarding"),
-        "qualifications": ("qualifications", "sync_qualifications"),
-        "performance": ("performance", "sync_performance"),
-        "recognition": ("recognition", "sync_recognition"),
-        "surveys": ("surveys", "sync_surveys"),
-        "learning": ("learning", "sync_learning"),
-        "recruitment": ("recruitment", "sync_recruitment"),
-        "pay": ("pay", "sync_pay"),
+        "workforce": ("workforce", "sync_employmenthero_workforce"),
+        "employee_personal": ("employee_personal", "sync_employmenthero_employee_personal"),
+        "employee_notes": ("employee_notes", "sync_employmenthero_employee_notes"),
+        "leave": ("leave", "sync_employmenthero_leave"),
+        "timesheets": ("timesheets", "sync_employmenthero_timesheets"),
+        "expenses": ("expenses", "sync_employmenthero_expenses"),
+        "policies": ("policies", "sync_employmenthero_policies"),
+        "documents": ("documents", "sync_employmenthero_documents"),
+        "custom_fields": ("custom_fields", "sync_employmenthero_custom_fields"),
+        "onboarding": ("onboarding", "sync_employmenthero_onboarding"),
+        "qualifications": ("qualifications", "sync_employmenthero_qualifications"),
+        "performance": ("performance", "sync_employmenthero_performance"),
+        "recognition": ("recognition", "sync_employmenthero_recognition"),
+        "surveys": ("surveys", "sync_employmenthero_surveys"),
+        "learning": ("learning", "sync_employmenthero_learning"),
+        "recruitment": ("recruitment", "sync_employmenthero_recruitment"),
+        "pay": ("pay", "sync_employmenthero_pay"),
     }
 
     cfg = get_employmenthero_config()
@@ -70,14 +75,14 @@ async def run_employmenthero_sync_tick(
     if mock:
         # Minimal aggregated mock envelope - exercises the contract.
         from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions.workforce import (
-            sync_workforce,
+            sync_employmenthero_workforce,
         )
         from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions.qualifications import (
-            sync_qualifications,
+            sync_employmenthero_qualifications,
         )
 
-        wf = await sync_workforce(mock=True)
-        qu = await sync_qualifications(mock=True)
+        wf = await sync_employmenthero_workforce(mock=True)
+        qu = await sync_employmenthero_qualifications(mock=True)
         finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
         tables = {**wf["tables"], **qu["tables"]}
         tables["sync_state"] = [
@@ -123,7 +128,7 @@ async def run_employmenthero_sync_tick(
             },
         }
 
-    sync_state = await _load_sync_state()
+    sync_state = await load_sync_state()
     errors: list[dict] = []
     skipped: list[dict] = []
     row_totals: dict[str, int] = {}
@@ -134,7 +139,7 @@ async def run_employmenthero_sync_tick(
             return  # operator disabled this object via env
         if object_key not in object_to_sync_fn:
             return
-        gap = _seconds_since(_get_state_watermark(sync_state, object_key))
+        gap = seconds_since(get_state_watermark(sync_state, object_key))
         min_gap = cfg["object_intervals"].get(
             object_key,
             cfg["sync_min_interval_seconds"],
@@ -168,7 +173,7 @@ async def run_employmenthero_sync_tick(
             )
             return
         kwargs: dict = {"mock": False}
-        watermark = _get_state_watermark(sync_state, object_key)
+        watermark = get_state_watermark(sync_state, object_key)
         if not full and watermark:
             kwargs["since"] = watermark
         try:
@@ -239,7 +244,7 @@ async def run_employmenthero_sync_tick(
 
 
 @custom_function()
-async def get_sync_state(mock: bool = True) -> dict:
+async def get_employmenthero_sync_state(mock: bool = True) -> dict:
     """Return current per-object watermarks plus the most recent run."""
     if mock:
         return {
@@ -264,13 +269,18 @@ async def get_sync_state(mock: bool = True) -> dict:
             },
         }
 
-    state_rows = await _load_sync_state_rows()
-    latest = await _load_latest_run()
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._sync_helpers import (
+        load_latest_run,
+        load_sync_state_rows,
+    )
+
+    state_rows = await load_sync_state_rows()
+    latest = await load_latest_run()
     return {"sync_state": state_rows, "latest_run": latest}
 
 
 @custom_function()
-async def probe_tier(force: bool = False, mock: bool = True) -> dict:
+async def probe_employmenthero_tier(force: bool = False, mock: bool = True) -> dict:
     """Discover which Employment Hero capabilities the active token covers.
 
     Caches results in ``EmploymentHero/Workforce/Meta/Capabilities`` for
@@ -302,6 +312,9 @@ async def probe_tier(force: bool = False, mock: bool = True) -> dict:
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._capabilities import (
         run_tier_probe,
     )
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._sync_helpers import (
+        seconds_since,
+    )
 
     cfg = get_employmenthero_config()
     dm = ManagerRegistry.get_data_manager()
@@ -319,7 +332,7 @@ async def probe_tier(force: bool = False, mock: bool = True) -> dict:
             row = cached[0]
             probed = row.get("probed_at")
             if probed:
-                age = _seconds_since(probed)
+                age = seconds_since(probed)
                 if age is not None and age < cfg["tier_probe_ttl_seconds"]:
                     return {
                         "probed_at": probed,
@@ -353,82 +366,3 @@ async def probe_tier(force: bool = False, mock: bool = True) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Helpers (decorated so FunctionManager registers them; depended on by the
-# entrypoints above)
-# ---------------------------------------------------------------------------
-
-
-@custom_function()
-async def _load_sync_state() -> dict:
-    """Read the per-object watermark map from DataManager.  Returns an
-    empty dict on the first run before any state row has been written.
-    """
-    from unity.manager_registry import ManagerRegistry
-
-    dm = ManagerRegistry.get_data_manager()
-    try:
-        rows = await dm.filter(
-            "EmploymentHero/Workforce/Meta/SyncState",
-            limit=200,
-        )
-    except Exception:
-        return {}
-    return {r["object_type"]: r for r in (rows or []) if r.get("object_type")}
-
-
-@custom_function()
-async def _load_sync_state_rows() -> list:
-    """Same as ``_load_sync_state`` but returns the raw row list (stable
-    shape for the public ``get_sync_state``)."""
-    from unity.manager_registry import ManagerRegistry
-
-    dm = ManagerRegistry.get_data_manager()
-    try:
-        return await dm.filter(
-            "EmploymentHero/Workforce/Meta/SyncState",
-            limit=200,
-        )
-    except Exception:
-        return []
-
-
-@custom_function()
-async def _load_latest_run() -> dict | None:
-    """Most recent sync_runs row, or None."""
-    from unity.manager_registry import ManagerRegistry
-
-    dm = ManagerRegistry.get_data_manager()
-    try:
-        rows = await dm.filter(
-            "EmploymentHero/Workforce/Meta/SyncRuns",
-            limit=1,
-            order_by="started_at desc",
-        )
-    except Exception:
-        return None
-    return (rows or [None])[0]
-
-
-@custom_function()
-def _get_state_watermark(state: dict, object_key: str) -> str | None:
-    """Pull the ``last_synced_at`` timestamp for an object type."""
-    row = state.get(object_key) if state else None
-    if not row:
-        return None
-    return row.get("last_synced_at")
-
-
-@custom_function()
-def _seconds_since(iso_ts: str | None) -> int | None:
-    """Return seconds since an ISO-8601 timestamp; None if no input."""
-    if not iso_ts:
-        return None
-    import datetime as _dt
-
-    try:
-        parsed = _dt.datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-    delta = _dt.datetime.now(tz=_dt.timezone.utc) - parsed
-    return int(delta.total_seconds())

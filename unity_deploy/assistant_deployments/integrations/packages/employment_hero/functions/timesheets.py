@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_timesheets(
+async def list_employmenthero_timesheets(
     employee_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -57,7 +57,7 @@ async def list_timesheets(
 
 
 @custom_function()
-async def get_timesheet_entry(entry_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_timesheet_entry(entry_id: str, mock: bool = True) -> dict:
     """Get one timesheet entry by id."""
     if mock:
         return {
@@ -83,7 +83,7 @@ async def get_timesheet_entry(entry_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def submit_timesheet_entry(
+async def submit_employmenthero_timesheet_entry(
     employee_id: str,
     date: str,
     hours: float,
@@ -143,7 +143,7 @@ async def submit_timesheet_entry(
 
 
 @custom_function()
-async def update_timesheet_entry(
+async def update_employmenthero_timesheet_entry(
     entry_id: str,
     hours: float | None = None,
     start_time: str | None = None,
@@ -192,7 +192,7 @@ async def update_timesheet_entry(
 
 
 @custom_function()
-async def sync_timesheets(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_timesheets(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot timesheet entries (incremental by ``since`` watermark)."""
     import datetime as _dt
 

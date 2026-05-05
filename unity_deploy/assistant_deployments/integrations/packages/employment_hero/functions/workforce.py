@@ -15,7 +15,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_employee(employee_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_employee(employee_id: str, mock: bool = True) -> dict:
     """Get a single employee record by id."""
     if mock:
         return {
@@ -53,7 +53,7 @@ async def get_employee(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_employees(
+async def list_employmenthero_employees(
     limit: int = 50,
     cursor: str | None = None,
     include_terminated: bool = False,
@@ -122,7 +122,7 @@ async def list_employees(
 
 
 @custom_function()
-async def search_employees(
+async def search_employmenthero_employees(
     query: str,
     limit: int = 20,
     mock: bool = True,
@@ -162,7 +162,7 @@ async def search_employees(
 
 
 @custom_function()
-async def list_employments(employee_id: str, mock: bool = True) -> dict:
+async def list_employmenthero_employments(employee_id: str, mock: bool = True) -> dict:
     """Employment history for one employee."""
     if mock:
         return {
@@ -194,7 +194,7 @@ async def list_employments(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_positions(employee_id: str, mock: bool = True) -> dict:
+async def list_employmenthero_positions(employee_id: str, mock: bool = True) -> dict:
     """Position history for one employee."""
     if mock:
         return {
@@ -226,7 +226,7 @@ async def list_positions(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_managers(employee_id: str, mock: bool = True) -> dict:
+async def list_employmenthero_managers(employee_id: str, mock: bool = True) -> dict:
     """Manager assignments for one employee."""
     if mock:
         return {
@@ -261,7 +261,7 @@ async def list_managers(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_teams(mock: bool = True) -> dict:
+async def list_employmenthero_teams(mock: bool = True) -> dict:
     """List teams in the active organisation."""
     if mock:
         return {
@@ -297,7 +297,7 @@ async def list_teams(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_team(team_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_team(team_id: str, mock: bool = True) -> dict:
     """Get one team by id."""
     if mock:
         return {
@@ -325,7 +325,7 @@ async def get_team(team_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_team_members(team_id: str, mock: bool = True) -> dict:
+async def list_employmenthero_team_members(team_id: str, mock: bool = True) -> dict:
     """List members of one team."""
     if mock:
         return {
@@ -351,7 +351,7 @@ async def list_team_members(team_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_locations(mock: bool = True) -> dict:
+async def list_employmenthero_locations(mock: bool = True) -> dict:
     """List organisation locations.
 
     For ClientZeta these correspond to managed UK properties /
@@ -395,7 +395,7 @@ async def list_locations(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_location(location_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_location(location_id: str, mock: bool = True) -> dict:
     """Get one location by id."""
     if mock:
         return {
@@ -429,7 +429,7 @@ async def get_location(location_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_workforce(
+async def sync_employmenthero_workforce(
     mock: bool = False,
     since: str | None = None,
 ) -> dict:

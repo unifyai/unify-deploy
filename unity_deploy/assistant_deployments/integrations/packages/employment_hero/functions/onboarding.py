@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_onboardings(mock: bool = True) -> dict:
+async def list_employmenthero_onboardings(mock: bool = True) -> dict:
     if mock:
         return {
             "onboardings": [
@@ -40,7 +40,7 @@ async def list_onboardings(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_onboarding(onboarding_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_onboarding(onboarding_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(onboarding_id),
@@ -64,7 +64,7 @@ async def get_onboarding(onboarding_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_onboarding_tasks(
+async def list_employmenthero_onboarding_tasks(
     onboarding_id: str | None = None,
     mock: bool = True,
 ) -> dict:
@@ -109,7 +109,7 @@ async def list_onboarding_tasks(
 
 
 @custom_function()
-async def list_employee_onboarding_status(
+async def list_employmenthero_employee_onboarding_status(
     employee_id: str | None = None,
     status: str | None = None,
     mock: bool = True,
@@ -157,7 +157,7 @@ async def list_employee_onboarding_status(
 
 
 @custom_function()
-async def sync_onboarding(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_onboarding(mock: bool = False, since: str | None = None) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.onboarding.snapshot.v1"

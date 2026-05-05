@@ -1,6 +1,6 @@
 # Performance, Goals, 1:1s, Feedback
 
-**Free-text content is high-tier sensitive — see `sensitive_data.md`.**
+**Free-text content is high-tier sensitive — see `employmenthero_sensitive_data.md`.**
 The synced copy redacts review feedback, 1:1 notes, peer feedback
 bodies to length+hash.  Use live API for full content with appropriate
 authorisation.

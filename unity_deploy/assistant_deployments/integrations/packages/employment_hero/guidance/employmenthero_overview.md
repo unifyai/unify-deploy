@@ -11,7 +11,7 @@ public API.  The assistant uses this when:
 - Submitting writes (leave requests, timesheets, expenses, policy
   acknowledgements, goals, 1:1s, feedback, recognition).  Writes are
   gated by `confirm=True` AND a deployment-level config flag — see
-  `high_stakes_writes.md`.
+  `employmenthero_high_stakes_writes.md`.
 
 ## Authentication
 
@@ -31,7 +31,7 @@ sets `EMPLOYMENTHERO_ORGANISATION_ID` to pin the active organisation.
 | `query_local_*` (DataManager) | Analytics, cross-record joins, "who across all properties has X expiring" |
 | `get_*` / `list_*` / `search_*` (live API) | Fresh single-record fetches, "right now" queries, immediate post-write confirmations |
 
-See `local_vs_live.md` for the decision rule.
+See `employmenthero_local_vs_live.md` for the decision rule.
 
 ## Three write tiers
 
@@ -40,7 +40,7 @@ See `local_vs_live.md` for the decision rule.
    Requires `confirm=True` plus `EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES=true`.
 2. **High-tier read** — free-text fields are redacted at snapshot time;
    live API returns full content but the assistant follows
-   `sensitive_data.md` refusal patterns.  Examples: performance reviews,
+   `employmenthero_sensitive_data.md` refusal patterns.  Examples: performance reviews,
    1:1 notes, feedback, employee notes.
 3. **Critical-tier read** — never synced; live-only with masked returns.
    Examples: payslips, banking, tax declarations, medical disclosures.
@@ -52,4 +52,4 @@ See `local_vs_live.md` for the decision rule.
 A single scenario per client (`<client>_eh_full_sync_v0.yaml`) drives
 `run_employmenthero_sync_tick` on a 60-second scheduler tick.  The
 orchestrator gates per-object cadence by env var so freshness is tunable
-without redeploying the YAML.  See `sync_runbook.md`.
+without redeploying the YAML.  See `employmenthero_sync_runbook.md`.

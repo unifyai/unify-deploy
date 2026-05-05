@@ -11,7 +11,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_medical_disclosures_count(
+async def list_employmenthero_medical_disclosures_count(
     employee_id: str | None = None,
     mock: bool = True,
 ) -> dict:
@@ -70,7 +70,7 @@ async def list_medical_disclosures_count(
 
 
 @custom_function()
-async def get_medical_disclosure(
+async def get_employmenthero_medical_disclosure(
     disclosure_id: str,
     confirm_user_authorised: bool = False,
     mock: bool = True,

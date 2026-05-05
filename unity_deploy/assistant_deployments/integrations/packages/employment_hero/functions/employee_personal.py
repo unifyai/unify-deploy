@@ -10,7 +10,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_emergency_contacts(employee_id: str, mock: bool = True) -> dict:
+async def list_employmenthero_emergency_contacts(employee_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "contacts": [
@@ -39,7 +39,7 @@ async def list_emergency_contacts(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_dependants(employee_id: str, mock: bool = True) -> dict:
+async def list_employmenthero_dependants(employee_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "dependants": [
@@ -67,7 +67,7 @@ async def list_dependants(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_visa_details(employee_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_visa_details(employee_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "employee_id": employee_id,
@@ -90,7 +90,7 @@ async def get_visa_details(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_probation_status(employee_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_probation_status(employee_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "employee_id": employee_id,
@@ -113,7 +113,7 @@ async def get_probation_status(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_employee_personal(
+async def sync_employmenthero_employee_personal(
     mock: bool = False,
     since: str | None = None,
 ) -> dict:

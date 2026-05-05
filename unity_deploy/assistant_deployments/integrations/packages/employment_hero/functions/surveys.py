@@ -13,7 +13,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_surveys(mock: bool = True) -> dict:
+async def list_employmenthero_surveys(mock: bool = True) -> dict:
     if mock:
         return {
             "surveys": [
@@ -44,7 +44,7 @@ async def list_surveys(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_survey(survey_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_survey(survey_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(survey_id),
@@ -75,7 +75,7 @@ async def get_survey(survey_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_survey_responses(survey_id: str, mock: bool = True) -> dict:
+async def list_employmenthero_survey_responses(survey_id: str, mock: bool = True) -> dict:
     """List responses for a survey.  Returns aggregates only when the
     survey is flagged ``is_anonymous`` upstream."""
     if mock:
@@ -126,7 +126,7 @@ async def list_survey_responses(survey_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_surveys(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_surveys(mock: bool = False, since: str | None = None) -> dict:
     import datetime as _dt
     import hashlib
 

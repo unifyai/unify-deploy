@@ -12,44 +12,12 @@ from __future__ import annotations
 from unity.function_manager.custom import custom_function
 
 # ---------------------------------------------------------------------------
-# Pay rate banding
-# ---------------------------------------------------------------------------
-
-
-@custom_function()
-def _band_rate(amount: float | None, currency: str = "GBP") -> str:
-    """Convert exact rate to coarse band (e.g. '<45,000 GBP').
-
-    Bands are inlined per FunctionManager isolation rule — no module-level
-    globals referenced from within a function body.  Decorated so the
-    sync_pay function can depend on it as a registered helper.
-    """
-    bands = [
-        25_000,
-        35_000,
-        45_000,
-        60_000,
-        80_000,
-        100_000,
-        130_000,
-        170_000,
-        220_000,
-    ]
-    if amount is None:
-        return "unknown"
-    for upper in bands:
-        if amount < upper:
-            return f"<{upper:,} {currency}"
-    return f">={bands[-1]:,} {currency}"
-
-
-# ---------------------------------------------------------------------------
 # Pay runs
 # ---------------------------------------------------------------------------
 
 
 @custom_function()
-async def list_pay_runs(
+async def list_employmenthero_pay_runs(
     period: str | None = None,
     status: str | None = None,
     limit: int = 24,
@@ -99,7 +67,7 @@ async def list_pay_runs(
 
 
 @custom_function()
-async def get_pay_run(pay_run_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_pay_run(pay_run_id: str, mock: bool = True) -> dict:
     """Get one pay run (org-totals only)."""
     if mock:
         return {
@@ -128,7 +96,7 @@ async def get_pay_run(pay_run_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_pay_categories(mock: bool = True) -> dict:
+async def list_employmenthero_pay_categories(mock: bool = True) -> dict:
     if mock:
         return {
             "categories": [
@@ -173,7 +141,7 @@ async def list_pay_categories(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_employment_terms(
+async def get_employmenthero_employment_terms(
     employee_id: str,
     confirm_user_authorised: bool = False,
     mock: bool = True,
@@ -222,7 +190,7 @@ async def get_employment_terms(
 
 
 @custom_function()
-async def list_employment_terms(
+async def list_employmenthero_employment_terms(
     confirm_user_authorised: bool = False,
     mock: bool = True,
 ) -> dict:
@@ -267,7 +235,7 @@ async def list_employment_terms(
 
 
 @custom_function()
-async def sync_pay(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_pay(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot pay run aggregates + banded employment terms.
 
     Pay runs: org-level totals (gross/tax/net) per period.  No
@@ -403,6 +371,10 @@ async def sync_pay(mock: bool = False, since: str | None = None) -> dict:
         page_size=page_size,
         max_pages=max_pages,
     )
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._pay_helpers import (
+        band_rate,
+    )
+
     employment_terms: list[dict] = []
     for t in et_raw:
         amount = t.get("annualised_amount") or t.get("amount")
@@ -417,7 +389,7 @@ async def sync_pay(mock: bool = False, since: str | None = None) -> dict:
             "updated_at": t.get("updated_at"),
         }
         if apply_bands:
-            row["annualised_band"] = _band_rate(amount, currency)
+            row["annualised_band"] = band_rate(amount, currency)
         else:
             row["annualised_amount"] = amount
         employment_terms.append(row)

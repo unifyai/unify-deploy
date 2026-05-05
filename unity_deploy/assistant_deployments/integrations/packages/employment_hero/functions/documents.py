@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_documents(
+async def list_employmenthero_documents(
     employee_id: str | None = None,
     document_type: str | None = None,
     limit: int = 50,
@@ -45,7 +45,7 @@ async def list_documents(
 
 
 @custom_function()
-async def list_employee_documents(employee_id: str, mock: bool = True) -> dict:
+async def list_employmenthero_employee_documents(employee_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "documents": [
@@ -74,7 +74,7 @@ async def list_employee_documents(employee_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_document_metadata(document_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_document_metadata(document_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(document_id),
@@ -100,7 +100,7 @@ async def get_document_metadata(document_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_document_templates(mock: bool = True) -> dict:
+async def list_employmenthero_document_templates(mock: bool = True) -> dict:
     if mock:
         return {
             "templates": [
@@ -128,7 +128,7 @@ async def list_document_templates(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_documents(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_documents(mock: bool = False, since: str | None = None) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.documents.snapshot.v1"

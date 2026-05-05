@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_account_info(mock: bool = True) -> dict:
+async def get_employmenthero_account_info(mock: bool = True) -> dict:
     """Return identity for the active EH token.
 
     Mirrors HubSpot's ``get_account_info``.  Resolves the current user
@@ -55,7 +55,7 @@ async def get_account_info(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_organisations(mock: bool = True) -> dict:
+async def list_employmenthero_organisations(mock: bool = True) -> dict:
     """List organisations the active token can access."""
     if mock:
         return {
@@ -77,7 +77,7 @@ async def list_organisations(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_active_organisation(mock: bool = True) -> dict:
+async def get_employmenthero_active_organisation(mock: bool = True) -> dict:
     """Resolve and return the active organisation details.
 
     If ``EMPLOYMENTHERO_ORGANISATION_ID`` is set, fetches that

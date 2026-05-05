@@ -14,7 +14,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def query_local_employees(
+async def query_local_employmenthero_employees(
     name_query: str | None = None,
     team_id: str | None = None,
     location_id: str | None = None,
@@ -44,6 +44,10 @@ async def query_local_employees(
         }
 
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
 
@@ -58,7 +62,7 @@ async def query_local_employees(
         safe = name_query.replace("'", "''")
         filters.append(f"(`first_name` LIKE '%{safe}%' OR `last_name` LIKE '%{safe}%')")
 
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Employees",
         filter=" AND ".join(filters) if filters else None,
@@ -67,12 +71,12 @@ async def query_local_employees(
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("workforce"),
+        "freshness": await freshness("workforce"),
     }
 
 
 @custom_function()
-async def query_local_teams(
+async def query_local_employmenthero_teams(
     location_id: str | None = None,
     mock: bool = True,
 ) -> dict:
@@ -89,19 +93,23 @@ async def query_local_teams(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     f = f"`location_id` == '{location_id}'" if location_id else None
-    rows = await _safe_filter(dm, "EmploymentHero/Teams", filter=f, limit=200)
+    rows = await safe_filter(dm, "EmploymentHero/Teams", filter=f, limit=200)
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("workforce"),
+        "freshness": await freshness("workforce"),
     }
 
 
 @custom_function()
-async def query_local_locations(mock: bool = True) -> dict:
+async def query_local_employmenthero_locations(mock: bool = True) -> dict:
     if mock:
         return {
             "rows": [
@@ -117,18 +125,22 @@ async def query_local_locations(mock: bool = True) -> dict:
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
-    rows = await _safe_filter(dm, "EmploymentHero/Locations", limit=500)
+    rows = await safe_filter(dm, "EmploymentHero/Locations", limit=500)
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("workforce"),
+        "freshness": await freshness("workforce"),
     }
 
 
 @custom_function()
-async def query_local_leave_requests(
+async def query_local_employmenthero_leave_requests(
     employee_id: str | None = None,
     status: str | None = None,
     from_date: str | None = None,
@@ -152,6 +164,10 @@ async def query_local_leave_requests(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -163,17 +179,17 @@ async def query_local_leave_requests(
         filters.append(f"`start_date` >= '{from_date}'")
     if to_date:
         filters.append(f"`end_date` <= '{to_date}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Leave/Requests",
         filter=" AND ".join(filters) if filters else None,
         limit=limit,
     )
-    return {"rows": rows, "count": len(rows), "freshness": await _freshness("leave")}
+    return {"rows": rows, "count": len(rows), "freshness": await freshness("leave")}
 
 
 @custom_function()
-async def query_local_leave_balances(
+async def query_local_employmenthero_leave_balances(
     employee_id: str | None = None,
     category_id: str | None = None,
     mock: bool = True,
@@ -192,6 +208,10 @@ async def query_local_leave_balances(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -199,17 +219,17 @@ async def query_local_leave_balances(
         filters.append(f"`employee_id` == '{employee_id}'")
     if category_id:
         filters.append(f"`category_id` == '{category_id}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Leave/Balances",
         filter=" AND ".join(filters) if filters else None,
         limit=500,
     )
-    return {"rows": rows, "count": len(rows), "freshness": await _freshness("leave")}
+    return {"rows": rows, "count": len(rows), "freshness": await freshness("leave")}
 
 
 @custom_function()
-async def query_local_timesheets(
+async def query_local_employmenthero_timesheets(
     employee_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -232,6 +252,10 @@ async def query_local_timesheets(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -243,7 +267,7 @@ async def query_local_timesheets(
         filters.append(f"`date` <= '{to_date}'")
     if status:
         filters.append(f"`status` == '{status}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Timesheets",
         filter=" AND ".join(filters) if filters else None,
@@ -252,12 +276,12 @@ async def query_local_timesheets(
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("timesheets"),
+        "freshness": await freshness("timesheets"),
     }
 
 
 @custom_function()
-async def query_local_expenses(
+async def query_local_employmenthero_expenses(
     employee_id: str | None = None,
     status: str | None = None,
     from_date: str | None = None,
@@ -281,6 +305,10 @@ async def query_local_expenses(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -292,17 +320,17 @@ async def query_local_expenses(
         filters.append(f"`date` >= '{from_date}'")
     if to_date:
         filters.append(f"`date` <= '{to_date}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Expenses/Claims",
         filter=" AND ".join(filters) if filters else None,
         limit=limit,
     )
-    return {"rows": rows, "count": len(rows), "freshness": await _freshness("expenses")}
+    return {"rows": rows, "count": len(rows), "freshness": await freshness("expenses")}
 
 
 @custom_function()
-async def query_local_qualifications(
+async def query_local_employmenthero_qualifications(
     employee_id: str | None = None,
     qualification_id: str | None = None,
     mock: bool = True,
@@ -324,6 +352,10 @@ async def query_local_qualifications(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -331,7 +363,7 @@ async def query_local_qualifications(
         filters.append(f"`employee_id` == '{employee_id}'")
     if qualification_id:
         filters.append(f"`qualification_id` == '{qualification_id}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Qualifications/EmployeeRecords",
         filter=" AND ".join(filters) if filters else None,
@@ -340,12 +372,12 @@ async def query_local_qualifications(
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("qualifications"),
+        "freshness": await freshness("qualifications"),
     }
 
 
 @custom_function()
-async def query_local_expiring_qualifications(
+async def query_local_employmenthero_expiring_qualifications(
     days_ahead: int = 90,
     location_id: str | None = None,
     qualification_id: str | None = None,
@@ -385,6 +417,10 @@ async def query_local_expiring_qualifications(
         }
 
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
 
@@ -433,7 +469,7 @@ async def query_local_expiring_qualifications(
                 "list_employee_qualifications(expires_before=...) live "
                 "instead, or run probe_tier() to confirm data freshness."
             ),
-            "freshness": await _freshness("qualifications"),
+            "freshness": await freshness("qualifications"),
         }
 
     return {
@@ -444,12 +480,12 @@ async def query_local_expiring_qualifications(
             "to": cutoff.isoformat(),
             "days_ahead": days_ahead,
         },
-        "freshness": await _freshness("qualifications"),
+        "freshness": await freshness("qualifications"),
     }
 
 
 @custom_function()
-async def query_local_onboarding_status(
+async def query_local_employmenthero_onboarding_status(
     employee_id: str | None = None,
     status: str | None = None,
     mock: bool = True,
@@ -467,6 +503,10 @@ async def query_local_onboarding_status(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -474,7 +514,7 @@ async def query_local_onboarding_status(
         filters.append(f"`employee_id` == '{employee_id}'")
     if status:
         filters.append(f"`status` == '{status}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Onboarding/EmployeeStatus",
         filter=" AND ".join(filters) if filters else None,
@@ -483,12 +523,12 @@ async def query_local_onboarding_status(
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("onboarding"),
+        "freshness": await freshness("onboarding"),
     }
 
 
 @custom_function()
-async def query_local_documents(
+async def query_local_employmenthero_documents(
     employee_id: str | None = None,
     document_type: str | None = None,
     mock: bool = True,
@@ -507,6 +547,10 @@ async def query_local_documents(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -514,7 +558,7 @@ async def query_local_documents(
         filters.append(f"`employee_id` == '{employee_id}'")
     if document_type:
         filters.append(f"`type` == '{document_type}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Documents",
         filter=" AND ".join(filters) if filters else None,
@@ -523,12 +567,12 @@ async def query_local_documents(
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("documents"),
+        "freshness": await freshness("documents"),
     }
 
 
 @custom_function()
-async def query_local_goals(
+async def query_local_employmenthero_goals(
     employee_id: str | None = None,
     status: str | None = None,
     mock: bool = True,
@@ -549,6 +593,10 @@ async def query_local_goals(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -556,7 +604,7 @@ async def query_local_goals(
         filters.append(f"`employee_id` == '{employee_id}'")
     if status:
         filters.append(f"`status` == '{status}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Performance/Goals",
         filter=" AND ".join(filters) if filters else None,
@@ -565,12 +613,12 @@ async def query_local_goals(
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("performance"),
+        "freshness": await freshness("performance"),
     }
 
 
 @custom_function()
-async def query_local_reviews(
+async def query_local_employmenthero_reviews(
     employee_id: str | None = None,
     period: str | None = None,
     mock: bool = True,
@@ -590,6 +638,10 @@ async def query_local_reviews(
             "freshness": {"is_fresh": True},
         }
     from unity.manager_registry import ManagerRegistry
+    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
+        freshness,
+        safe_filter,
+    )
 
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
@@ -597,7 +649,7 @@ async def query_local_reviews(
         filters.append(f"`employee_id` == '{employee_id}'")
     if period:
         filters.append(f"`period` == '{period}'")
-    rows = await _safe_filter(
+    rows = await safe_filter(
         dm,
         "EmploymentHero/Performance/Reviews",
         filter=" AND ".join(filters) if filters else None,
@@ -606,7 +658,7 @@ async def query_local_reviews(
     return {
         "rows": rows,
         "count": len(rows),
-        "freshness": await _freshness("performance"),
+        "freshness": await freshness("performance"),
         "_note": (
             "Free-text fields (self_assessment, manager_feedback, "
             "improvement_areas) are redacted to length+hash in the "
@@ -615,80 +667,3 @@ async def query_local_reviews(
     }
 
 
-# ---------------------------------------------------------------------------
-# Helpers (decorated; depended on by the public queries above)
-# ---------------------------------------------------------------------------
-
-
-@custom_function()
-async def _safe_filter(
-    dm, context: str, *, filter: str | None = None, limit: int = 100
-) -> list:
-    """Wrapper around ``dm.filter`` that returns [] on error."""
-    try:
-        return await dm.filter(context, filter=filter, limit=limit) or []
-    except Exception:
-        return []
-
-
-@custom_function()
-async def _freshness(object_type: str) -> dict:
-    """Return ``{last_synced_at, is_fresh, threshold_seconds}`` for an object.
-
-    Threshold is the configured per-object cadence × 2 unless
-    ``EMPLOYMENTHERO_LOCAL_FRESHNESS_THRESHOLD_SECONDS`` is set.
-    """
-    from unity.manager_registry import ManagerRegistry
-    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
-        get_employmenthero_config,
-    )
-
-    dm = ManagerRegistry.get_data_manager()
-    cfg = get_employmenthero_config()
-
-    try:
-        rows = await dm.filter(
-            "EmploymentHero/Workforce/Meta/SyncState",
-            filter=f"`object_type` == '{object_type}'",
-            limit=1,
-        )
-    except Exception:
-        rows = []
-    last = rows[0]["last_synced_at"] if rows else None
-
-    override = cfg["local_freshness_threshold_seconds"]
-    threshold = (
-        override
-        if override is not None
-        else (
-            cfg["object_intervals"].get(object_type, cfg["sync_min_interval_seconds"])
-            * 2
-        )
-    )
-
-    if not last:
-        return {
-            "last_synced_at": None,
-            "is_fresh": False,
-            "threshold_seconds": threshold,
-            "hint": "No sync state row — has the sync orchestrator run?",
-        }
-
-    import datetime as _dt
-
-    try:
-        parsed = _dt.datetime.fromisoformat(last.replace("Z", "+00:00"))
-        age = (_dt.datetime.now(tz=_dt.timezone.utc) - parsed).total_seconds()
-    except (ValueError, TypeError):
-        return {
-            "last_synced_at": last,
-            "is_fresh": False,
-            "threshold_seconds": threshold,
-            "hint": "Unparseable last_synced_at.",
-        }
-    return {
-        "last_synced_at": last,
-        "is_fresh": age <= threshold,
-        "threshold_seconds": threshold,
-        "age_seconds": int(age),
-    }

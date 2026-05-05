@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_expense_categories(mock: bool = True) -> dict:
+async def list_employmenthero_expense_categories(mock: bool = True) -> dict:
     """List expense categories defined for the organisation."""
     if mock:
         return {
@@ -47,7 +47,7 @@ async def list_expense_categories(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_expense_claims(
+async def list_employmenthero_expense_claims(
     employee_id: str | None = None,
     status: str | None = None,
     from_date: str | None = None,
@@ -96,7 +96,7 @@ async def list_expense_claims(
 
 
 @custom_function()
-async def get_expense_claim(claim_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_expense_claim(claim_id: str, mock: bool = True) -> dict:
     """Get one expense claim by id."""
     if mock:
         return {
@@ -123,7 +123,7 @@ async def get_expense_claim(claim_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def submit_expense_claim(
+async def submit_employmenthero_expense_claim(
     employee_id: str,
     category_id: str,
     amount: float,
@@ -176,7 +176,7 @@ async def submit_expense_claim(
 
 
 @custom_function()
-async def sync_expenses(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_expenses(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot expense claims and categories."""
     import datetime as _dt
 

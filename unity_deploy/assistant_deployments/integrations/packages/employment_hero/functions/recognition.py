@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_cheers(
+async def list_employmenthero_cheers(
     employee_id: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -42,7 +42,7 @@ async def list_cheers(
 
 
 @custom_function()
-async def give_cheer(
+async def give_employmenthero_cheer(
     to_employee_id: str,
     value: str,
     message: str | None = None,
@@ -83,7 +83,7 @@ async def give_cheer(
 
 
 @custom_function()
-async def list_hi_fives(
+async def list_employmenthero_hi_fives(
     employee_id: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -118,7 +118,7 @@ async def list_hi_fives(
 
 
 @custom_function()
-async def give_hi_five(
+async def give_employmenthero_hi_five(
     to_employee_id: str,
     message: str | None = None,
     confirm: bool = False,
@@ -153,7 +153,7 @@ async def give_hi_five(
 
 
 @custom_function()
-async def list_recognition_awards(mock: bool = True) -> dict:
+async def list_employmenthero_recognition_awards(mock: bool = True) -> dict:
     if mock:
         return {
             "awards": [
@@ -181,7 +181,7 @@ async def list_recognition_awards(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_recognition(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_recognition(mock: bool = False, since: str | None = None) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.recognition.snapshot.v1"

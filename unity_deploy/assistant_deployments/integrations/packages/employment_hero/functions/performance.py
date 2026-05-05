@@ -15,7 +15,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_reviews(
+async def list_employmenthero_reviews(
     employee_id: str | None = None,
     period: str | None = None,
     mock: bool = True,
@@ -56,7 +56,7 @@ async def list_reviews(
 
 
 @custom_function()
-async def get_review(review_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_review(review_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(review_id),
@@ -89,7 +89,7 @@ async def get_review(review_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_goals(
+async def list_employmenthero_goals(
     employee_id: str | None = None,
     status: str | None = None,
     mock: bool = True,
@@ -130,7 +130,7 @@ async def list_goals(
 
 
 @custom_function()
-async def get_goal(goal_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_goal(goal_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(goal_id),
@@ -156,7 +156,7 @@ async def get_goal(goal_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def create_goal(
+async def create_employmenthero_goal(
     employee_id: str,
     title: str,
     target_value: float | None = None,
@@ -206,7 +206,7 @@ async def create_goal(
 
 
 @custom_function()
-async def update_goal_progress(
+async def update_employmenthero_goal_progress(
     goal_id: str,
     current_value: float,
     note: str | None = None,
@@ -247,7 +247,7 @@ async def update_goal_progress(
 
 
 @custom_function()
-async def list_one_on_ones(
+async def list_employmenthero_one_on_ones(
     employee_id: str | None = None,
     manager_id: str | None = None,
     limit: int = 50,
@@ -287,7 +287,7 @@ async def list_one_on_ones(
 
 
 @custom_function()
-async def get_one_on_one(one_on_one_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_one_on_one(one_on_one_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(one_on_one_id),
@@ -314,7 +314,7 @@ async def get_one_on_one(one_on_one_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def create_one_on_one(
+async def create_employmenthero_one_on_one(
     employee_id: str,
     manager_id: str,
     scheduled_at: str,
@@ -363,7 +363,7 @@ async def create_one_on_one(
 
 
 @custom_function()
-async def update_one_on_one_notes(
+async def update_employmenthero_one_on_one_notes(
     one_on_one_id: str,
     discussion_notes: str | None = None,
     action_items: str | None = None,
@@ -406,7 +406,7 @@ async def update_one_on_one_notes(
 
 
 @custom_function()
-async def list_feedback(
+async def list_employmenthero_feedback(
     employee_id: str | None = None,
     feedback_type: str | None = None,
     mock: bool = True,
@@ -444,7 +444,7 @@ async def list_feedback(
 
 
 @custom_function()
-async def list_peer_feedback(
+async def list_employmenthero_peer_feedback(
     employee_id: str,
     mock: bool = True,
 ) -> dict:
@@ -476,7 +476,7 @@ async def list_peer_feedback(
 
 
 @custom_function()
-async def give_feedback(
+async def give_employmenthero_feedback(
     subject_employee_id: str,
     feedback_type: str,
     body: str,
@@ -526,7 +526,7 @@ async def give_feedback(
 
 
 @custom_function()
-async def sync_performance(
+async def sync_employmenthero_performance(
     mock: bool = False,
     since: str | None = None,
 ) -> dict:

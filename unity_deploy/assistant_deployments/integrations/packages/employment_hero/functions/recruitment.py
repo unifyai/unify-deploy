@@ -12,7 +12,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_jobs(
+async def list_employmenthero_jobs(
     status: str | None = None,
     mock: bool = True,
 ) -> dict:
@@ -48,7 +48,7 @@ async def list_jobs(
 
 
 @custom_function()
-async def get_job(job_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_job(job_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(job_id),
@@ -71,7 +71,7 @@ async def get_job(job_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_applicants(
+async def list_employmenthero_applicants(
     job_id: str | None = None,
     stage: str | None = None,
     mock: bool = True,
@@ -111,7 +111,7 @@ async def list_applicants(
 
 
 @custom_function()
-async def get_applicant(applicant_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_applicant(applicant_id: str, mock: bool = True) -> dict:
     if mock:
         return {
             "id": str(applicant_id),
@@ -136,7 +136,7 @@ async def get_applicant(applicant_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_offers(job_id: str | None = None, mock: bool = True) -> dict:
+async def list_employmenthero_offers(job_id: str | None = None, mock: bool = True) -> dict:
     if mock:
         return {
             "offers": [
@@ -168,7 +168,7 @@ async def list_offers(job_id: str | None = None, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_interview_stages(mock: bool = True) -> dict:
+async def list_employmenthero_interview_stages(mock: bool = True) -> dict:
     if mock:
         return {
             "stages": [
@@ -194,7 +194,7 @@ async def list_interview_stages(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_recruitment(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_recruitment(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot jobs, applicants, offers, interview stages.
 
     Applicants are filtered to those updated within the last
