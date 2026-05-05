@@ -124,56 +124,56 @@ steps:
     gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
 
     latest_replicaset() {
-      deployment="$1"
-      namespace="$2"
-      kubectl get rs -n "$namespace" \
-        -o jsonpath="{range .items[?(@.metadata.ownerReferences[0].name=='$deployment')]}{.metadata.creationTimestamp}{'\t'}{.metadata.name}{'\n'}{end}" \
-        | sort | tail -n 1 | awk '{print $2}'
+      deployment="$$1"
+      namespace="$$2"
+      kubectl get rs -n "$$namespace" \
+        -o jsonpath="{range .items[?(@.metadata.ownerReferences[0].name=='$$deployment')]}{.metadata.creationTimestamp}{'\t'}{.metadata.name}{'\n'}{end}" \
+        | sort | tail -n 1 | awk '{print $$2}'
     }
 
     wait_for_new_replicaset_available() {
-      deployment="$1"
-      namespace="$2"
-      previous_rs="$3"
-      desired="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.replicas}')"
-      desired="${desired:-1}"
-      if [ "$desired" = "0" ]; then
-        echo "$deployment has 0 desired replicas; skipping readiness wait."
+      deployment="$$1"
+      namespace="$$2"
+      previous_rs="$$3"
+      desired="$$(kubectl get deployment "$$deployment" -n "$$namespace" -o jsonpath='{.spec.replicas}')"
+      desired="$${desired:-1}"
+      if [ "$$desired" = "0" ]; then
+        echo "$$deployment has 0 desired replicas; skipping readiness wait."
         return 0
       fi
 
-      echo "Waiting for $deployment to create a new ReplicaSet..."
-      deadline=$((SECONDS + 300))
+      echo "Waiting for $$deployment to create a new ReplicaSet..."
+      deadline=$$(($$SECONDS + 300))
       new_rs=""
-      while [ "$SECONDS" -lt "$deadline" ]; do
-        candidate="$(latest_replicaset "$deployment" "$namespace" || true)"
-        if [ -n "$candidate" ] && [ "$candidate" != "$previous_rs" ]; then
-          new_rs="$candidate"
+      while [ "$$SECONDS" -lt "$$deadline" ]; do
+        candidate="$$(latest_replicaset "$$deployment" "$$namespace" || true)"
+        if [ -n "$$candidate" ] && [ "$$candidate" != "$$previous_rs" ]; then
+          new_rs="$$candidate"
           break
         fi
         sleep 5
       done
-      if [ -z "$new_rs" ]; then
-        echo "Timed out waiting for a new ReplicaSet for $deployment" >&2
-        kubectl get deployment "$deployment" -n "$namespace" -o wide || true
-        kubectl get rs -n "$namespace" || true
+      if [ -z "$$new_rs" ]; then
+        echo "Timed out waiting for a new ReplicaSet for $$deployment" >&2
+        kubectl get deployment "$$deployment" -n "$$namespace" -o wide || true
+        kubectl get rs -n "$$namespace" || true
         return 1
       fi
 
-      echo "Waiting for new ReplicaSet $new_rs to have $desired available replica(s)..."
-      while [ "$SECONDS" -lt "$deadline" ]; do
-        available="$(kubectl get rs "$new_rs" -n "$namespace" -o jsonpath='{.status.availableReplicas}')"
-        available="${available:-0}"
-        if [ "$available" -ge "$desired" ]; then
-          echo "$deployment new ReplicaSet $new_rs is available ($available/$desired)."
+      echo "Waiting for new ReplicaSet $$new_rs to have $$desired available replica(s)..."
+      while [ "$$SECONDS" -lt "$$deadline" ]; do
+        available="$$(kubectl get rs "$$new_rs" -n "$$namespace" -o jsonpath='{.status.availableReplicas}')"
+        available="$${available:-0}"
+        if [ "$$available" -ge "$$desired" ]; then
+          echo "$$deployment new ReplicaSet $$new_rs is available ($$available/$$desired)."
           return 0
         fi
         sleep 5
       done
 
-      echo "Timed out waiting for new ReplicaSet $new_rs to become available" >&2
-      kubectl describe deployment "$deployment" -n "$namespace" || true
-      kubectl describe rs "$new_rs" -n "$namespace" || true
+      echo "Timed out waiting for new ReplicaSet $$new_rs to become available" >&2
+      kubectl describe deployment "$$deployment" -n "$$namespace" || true
+      kubectl describe rs "$$new_rs" -n "$$namespace" || true
       return 1
     }
 
@@ -184,16 +184,16 @@ steps:
     kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml
     kubectl apply -f deploy/k8s/workers/failed-pod-gc-cronjob.yaml
 
-    previous_parse_rs="$(latest_replicaset unity-parse-worker staging || true)"
-    previous_ingest_rs="$(latest_replicaset unity-ingest-worker staging || true)"
+    previous_parse_rs="$$(latest_replicaset unity-parse-worker staging || true)"
+    previous_ingest_rs="$$(latest_replicaset unity-ingest-worker staging || true)"
 
     echo "Triggering rolling restart to pick up new image..."
     # The apply above guarantees the Deployments exist before restart.
     kubectl rollout restart deployment/unity-parse-worker -n staging
     kubectl rollout restart deployment/unity-ingest-worker -n staging
 
-    wait_for_new_replicaset_available unity-parse-worker staging "$previous_parse_rs"
-    wait_for_new_replicaset_available unity-ingest-worker staging "$previous_ingest_rs"
+    wait_for_new_replicaset_available unity-parse-worker staging "$$previous_parse_rs"
+    wait_for_new_replicaset_available unity-ingest-worker staging "$$previous_ingest_rs"
     echo "Worker refresh complete; old pods may continue draining asynchronously."
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
