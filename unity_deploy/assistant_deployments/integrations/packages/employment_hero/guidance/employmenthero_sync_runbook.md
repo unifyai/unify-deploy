@@ -79,14 +79,16 @@ without redeploy.
 
 ### Initial bootstrap (first tick on a new deployment)
 
-1. Confirm `EMPLOYMENTHERO_ACCESS_TOKEN` is set in Console -> Secrets.
-2. Confirm `EMPLOYMENTHERO_ORGANISATION_ID` is set if the token has
-   access to multiple organisations.
-3. Run `probe_tier(force=true)` to discover which capabilities the
-   token covers.  Disable unavailable objects via
-   `EMPLOYMENTHERO_SYNC_OBJECTS` to reduce 403 noise.
-4. Trigger one sync manually with `run_employmenthero_sync_tick(full=true, mock=false)`.
-5. Verify `EmploymentHero/Workforce/Meta/SyncRuns` has an "ok" row.
+1. Confirm the customer has connected via Console -> Integrations ->
+   Employment Hero.  After Connect, the assistant's secrets include
+   `EMPLOYMENTHERO_OAUTH_CLIENT_ID`, `EMPLOYMENTHERO_OAUTH_CLIENT_SECRET`,
+   `EMPLOYMENTHERO_REFRESH_TOKEN`, and `EMPLOYMENTHERO_ORGANISATION_ID`.
+2. Run `probe_employmenthero_tier(force=true)` to discover which
+   capabilities the customer's dev-app scopes cover.  Disable
+   unavailable objects via `EMPLOYMENTHERO_SYNC_OBJECTS` to reduce 403
+   noise.
+3. Trigger one sync manually with `run_employmenthero_sync_tick(full=true, mock=false)`.
+4. Verify `EmploymentHero/Workforce/Meta/SyncRuns` has an "ok" row.
 6. Flip the scenario's `tasks[*].enabled` to `true` so the schedule
    takes over.
 

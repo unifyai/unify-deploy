@@ -33,12 +33,16 @@ Lives under `integrations/packages/` so any client can opt in via
 
 ## Configuration
 
-The customer adds an Employment Hero bearer token to the assistant's
-Secret Manager as `EMPLOYMENTHERO_ACCESS_TOKEN`. Optional metadata:
-`EMPLOYMENTHERO_ORGANISATION_ID` to pin the active organisation when the
-token has access to multiple, and `EMPLOYMENTHERO_BASE_URL` to override
-the API host (UK customers occasionally need
-`https://api.employmenthero.co.uk`).
+The customer creates an Employment Hero developer-portal app at
+https://developer.employmenthero.com, then pastes its Client ID and
+Client Secret into the assistant's Secret Manager as
+`EMPLOYMENTHERO_OAUTH_CLIENT_ID` and `EMPLOYMENTHERO_OAUTH_CLIENT_SECRET`.
+Clicking Connect in Console -> Integrations runs the OAuth round-trip
+and writes `EMPLOYMENTHERO_REFRESH_TOKEN`, `EMPLOYMENTHERO_ORGANISATION_ID`,
+and `EMPLOYMENTHERO_HUB_DOMAIN` automatically.
+
+`EMPLOYMENTHERO_BASE_URL` is an optional override (UK customers
+occasionally need `https://api.employmenthero.co.uk`).
 
 All other behaviour is tunable via env vars. Full table in
 `guidance/sync_runbook.md`. The most common knobs:

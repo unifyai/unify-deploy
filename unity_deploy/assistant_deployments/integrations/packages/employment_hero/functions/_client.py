@@ -7,21 +7,16 @@ FunctionManager's isolation rule.
 
 Authentication resolution order:
 
-1. **OAuth refresh path** (preferred) — when ``EMPLOYMENTHERO_OAUTH_CLIENT_ID``,
+1. **OAuth refresh path** — when ``EMPLOYMENTHERO_OAUTH_CLIENT_ID``,
    ``EMPLOYMENTHERO_OAUTH_CLIENT_SECRET``, and ``EMPLOYMENTHERO_REFRESH_TOKEN``
    are all set, the client mints a fresh access token via the EH OAuth
    ``/oauth2/token`` endpoint and caches it in-process for ~55 minutes.
    The refresh token + client credentials are written by the Console
    integrations Connect flow; the runtime never touches them beyond
    passing them to EH.
-2. **Legacy paste-token path** — when ``EMPLOYMENTHERO_ACCESS_TOKEN`` is
-   set, it's used directly with no refresh.  Kept for backward compat
-   with deployments that pre-date the OAuth flow and for quick
-   testing.  Deprecated; will be removed once telemetry confirms zero
-   usage.
-3. **Not connected** — none of the above; functions return a structured
-   ``"not connected"`` envelope so the actor can prompt the user to
-   connect via Console -> Integrations.
+2. **Not connected** — any of the above unset; functions return a
+   structured ``"not connected"`` envelope so the actor can prompt the
+   user to connect via Console -> Integrations.
 
 403 responses are returned as a structured error envelope rather than
 raised, so capability gating is uniform across the package: any function
@@ -126,12 +121,6 @@ async def _resolve_access_token() -> tuple[str | None, dict | None]:
     """
     import os
     import httpx
-
-    # Path 1 (legacy): direct access token.  Used by old deployments that
-    # paste a token manually and by quick test setups.
-    legacy = os.environ.get("EMPLOYMENTHERO_ACCESS_TOKEN")
-    if legacy:
-        return legacy, None
 
     client_id = os.environ.get("EMPLOYMENTHERO_OAUTH_CLIENT_ID")
     client_secret = os.environ.get("EMPLOYMENTHERO_OAUTH_CLIENT_SECRET")

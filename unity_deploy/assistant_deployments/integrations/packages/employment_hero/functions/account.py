@@ -114,8 +114,9 @@ async def get_employmenthero_active_organisation(mock: bool = True) -> dict:
         return {
             "error": (
                 "Token has access to no organisations.  Confirm with the "
-                "user that the EMPLOYMENTHERO_ACCESS_TOKEN belongs to a "
-                "user enrolled in at least one EH organisation."
+                "user that the connected Employment Hero account belongs "
+                "to a user enrolled in at least one EH organisation, then "
+                "reconnect via Console -> Integrations."
             ),
         }
     first = items[0]

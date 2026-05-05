@@ -35,7 +35,7 @@ secrets:
       Required for the OAuth Connect flow.  Add this BEFORE clicking
       Connect in the Integrations modal.  Not sensitive — client_id is
       a public identifier per the OAuth spec.
-    required: false
+    required: true
     sensitive: false
 
   - name: EMPLOYMENTHERO_OAUTH_CLIENT_SECRET
@@ -43,7 +43,7 @@ secrets:
       Client Secret from the customer's Employment Hero developer-portal
       app.  Required for the OAuth Connect flow.  Add alongside
       EMPLOYMENTHERO_OAUTH_CLIENT_ID.
-    required: false
+    required: true
     sensitive: true
 
   # ----- OAuth-managed secrets (set by the Console Connect flow) -------
@@ -95,17 +95,6 @@ secrets:
       regional EH instances that route OAuth differently.
     required: false
     sensitive: false
-
-  # ----- Legacy paste-token (deprecated) ------------------------------
-  - name: EMPLOYMENTHERO_ACCESS_TOKEN
-    description: >
-      LEGACY: direct EH bearer token, used for paste-once setups before
-      the OAuth Connect flow existed.  Deprecated; will be removed once
-      telemetry confirms zero usage.  When set, takes precedence over
-      the OAuth path (no auto-refresh).  Do not use for new deployments
-      — click Connect in the Integrations modal instead.
-    required: false
-    sensitive: true
 
 capabilities:
   # ----- Account ----------------------------------------------------------

@@ -2,7 +2,7 @@
 
 All fields have safe defaults.  Override via env vars on the assistant
 (set them through Settings -> Secrets in the console exactly like
-``EMPLOYMENTHERO_ACCESS_TOKEN``).  Optional ``EMPLOYMENTHERO_CONFIG_JSON``
+``EMPLOYMENTHERO_OAUTH_CLIENT_ID``).  Optional ``EMPLOYMENTHERO_CONFIG_JSON``
 env var can override anything in one blob.
 
 Underscore-prefixed so FunctionManager skips this file - it's library

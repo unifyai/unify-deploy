@@ -46,17 +46,14 @@ After Connect, the OAuth callback writes these secrets automatically:
 
 `functions/_client.py` resolves a usable access token at every call:
 
-1. **Legacy fallback** — if `EMPLOYMENTHERO_ACCESS_TOKEN` is set on the
-   assistant (deprecated paste-token mode), use it directly with no
-   refresh.  Kept for backward compat and quick test setups.
-2. **OAuth refresh path** — if `EMPLOYMENTHERO_OAUTH_CLIENT_ID`,
+1. **OAuth refresh path** — if `EMPLOYMENTHERO_OAUTH_CLIENT_ID`,
    `EMPLOYMENTHERO_OAUTH_CLIENT_SECRET`, and `EMPLOYMENTHERO_REFRESH_TOKEN`
    are all set, mint a fresh access token via `oauth2/token` and cache
    it in-process for ~55 minutes (well under EH's typical 60-minute
    access-token lifetime).
-3. **Not connected** — none of the above; functions return a structured
-   error envelope listing the missing secret names so the assistant can
-   tell the user exactly what to do.
+2. **Not connected** — any of those three secrets is missing; functions
+   return a structured error envelope listing the missing secret names
+   so the assistant can tell the user exactly what to do.
 
 The cache lives in worker process memory.  Workers refresh independently
 after restart.  No persistent access-token storage — only the

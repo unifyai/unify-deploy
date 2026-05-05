@@ -1,13 +1,12 @@
 """Tests for the Employment Hero package's OAuth refresh + cache resolver
 in functions/_client.py.
 
-The resolver has three paths:
+The resolver has two paths:
 
-1. Legacy: ``EMPLOYMENTHERO_ACCESS_TOKEN`` is set -> use it directly.
-2. OAuth: ``CLIENT_ID``/``CLIENT_SECRET``/``REFRESH_TOKEN`` are set -> POST
+1. OAuth: ``CLIENT_ID``/``CLIENT_SECRET``/``REFRESH_TOKEN`` are set -> POST
    ``oauth2/token`` with ``grant_type=refresh_token``, cache the result
    for ``expires_in - 300`` seconds.
-3. Not connected: structured envelope listing the missing secret names.
+2. Not connected: structured envelope listing the missing secret names.
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ def _isolate_token_cache():
 def _clean_env(monkeypatch: pytest.MonkeyPatch):
     """Strip every EH env var so each test starts from a known baseline."""
     for key in (
-        "EMPLOYMENTHERO_ACCESS_TOKEN",
         "EMPLOYMENTHERO_OAUTH_CLIENT_ID",
         "EMPLOYMENTHERO_OAUTH_CLIENT_SECRET",
         "EMPLOYMENTHERO_REFRESH_TOKEN",
@@ -47,32 +45,7 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch):
 
 
 # ---------------------------------------------------------------------------
-# Path 1: legacy paste-token
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_legacy_access_token_short_circuits(_clean_env):
-    _clean_env.setenv("EMPLOYMENTHERO_ACCESS_TOKEN", "legacy-tok")
-    token, err = await _client._resolve_access_token()
-    assert token == "legacy-tok"
-    assert err is None
-
-
-@pytest.mark.asyncio
-async def test_legacy_token_wins_over_oauth(_clean_env):
-    """When both legacy and OAuth secrets are set, legacy short-circuits."""
-    _clean_env.setenv("EMPLOYMENTHERO_ACCESS_TOKEN", "legacy-tok")
-    _clean_env.setenv("EMPLOYMENTHERO_OAUTH_CLIENT_ID", "cid")
-    _clean_env.setenv("EMPLOYMENTHERO_OAUTH_CLIENT_SECRET", "csec")
-    _clean_env.setenv("EMPLOYMENTHERO_REFRESH_TOKEN", "rt")
-    token, err = await _client._resolve_access_token()
-    assert token == "legacy-tok"
-    assert err is None
-
-
-# ---------------------------------------------------------------------------
-# Path 3: not connected
+# Path 2: not connected
 # ---------------------------------------------------------------------------
 
 
@@ -102,7 +75,7 @@ async def test_not_connected_lists_only_missing_secrets(_clean_env):
 
 
 # ---------------------------------------------------------------------------
-# Path 2: OAuth refresh
+# Path 1: OAuth refresh
 # ---------------------------------------------------------------------------
 
 

@@ -9,7 +9,7 @@ returns a structured envelope:
 {
   "error": "Employment Hero GET /api/v1/organisations/.../pay_runs returned 403",
   "status_code": 403,
-  "hint": "403 typically indicates the user's EMPLOYMENTHERO_ACCESS_TOKEN lacks the scope for this endpoint, or the user's role in EH doesn't have permission for it. Tell the user which capability is unavailable and suggest they regenerate the token with the needed scope, or contact their EH admin."
+  "hint": "403 typically indicates the user's Employment Hero developer-portal app lacks the scope for this endpoint, or the user's role in EH doesn't have permission for it. Tell the user which capability is unavailable and suggest they extend their EH dev-app's scope catalogue and reconnect via Console -> Integrations, or contact their EH admin."
 }
 ```
 
