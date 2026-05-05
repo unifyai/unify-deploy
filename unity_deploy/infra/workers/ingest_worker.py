@@ -30,7 +30,6 @@ import contextlib
 import json
 import logging
 import os
-import shutil
 import tempfile
 import time
 from dataclasses import dataclass
@@ -248,15 +247,43 @@ def _scratch_guard_threshold_bytes() -> int:
     return int(3.5 * 1024 * 1024 * 1024)
 
 
-def _guard_tmp_usage(*, run_id: str, phase: str) -> None:
-    usage = shutil.disk_usage(tempfile.gettempdir())
+def _scratch_dir_size_bytes(scratch_dir: Path) -> int:
+    """Return the total file bytes owned by a per-message scratch dir.
+
+    Do not use filesystem-wide stats here: in GKE the container's /tmp is
+    backed by the node overlay filesystem, so df/statvfs includes shared
+    container image/snapshot usage unrelated to this worker.
+    """
+    if not scratch_dir.exists():
+        return 0
+
+    total = 0
+    for root, _, files in os.walk(scratch_dir):
+        for name in files:
+            path = Path(root) / name
+            try:
+                total += path.stat().st_size
+            except OSError:
+                # Cleanup can race with the guard; disappeared files no
+                # longer contribute to scratch pressure.
+                continue
+    return total
+
+
+def _guard_scratch_usage(
+    *,
+    scratch_dir: Path,
+    run_id: str,
+    phase: str,
+) -> None:
+    scratch_used = _scratch_dir_size_bytes(scratch_dir)
     threshold = _scratch_guard_threshold_bytes()
-    if usage.used <= threshold:
+    if scratch_used <= threshold:
         return
     raise RuntimeError(
-        "ingest worker /tmp usage exceeded guard threshold "
-        f"(job={run_id}, phase={phase}, used={usage.used}, "
-        f"threshold={threshold}, total={usage.total})",
+        "ingest worker scratch usage exceeded guard threshold "
+        f"(job={run_id}, phase={phase}, scratch_used={scratch_used}, "
+        f"threshold={threshold}, scratch_dir={scratch_dir})",
     )
 
 
@@ -649,6 +676,7 @@ async def handle_ingest_message(
     total_rows = 0
     file_path: str = ""
     scratch_dir_ctx = tempfile.TemporaryDirectory(prefix=f"ingest_{run_id}_")
+    scratch_dir = Path(scratch_dir_ctx.name)
     acked = False
 
     # Start the control watcher before any heavy work so a pause/cancel
@@ -667,9 +695,13 @@ async def handle_ingest_message(
         plan = _stage_remote_handles(
             plan,
             artifact_store=artifact_store,
-            scratch_dir=Path(scratch_dir_ctx.name),
+            scratch_dir=scratch_dir,
         )
-        _guard_tmp_usage(run_id=run_id, phase="after_staging")
+        _guard_scratch_usage(
+            scratch_dir=scratch_dir,
+            run_id=run_id,
+            phase="after_staging",
+        )
         file_path = plan.file_path
 
         if is_shutdown_requested() or await work_queue.is_cancelled(run_id):
@@ -704,8 +736,12 @@ async def handle_ingest_message(
                     run_ledger=run_ledger,
                     is_cancelled=check_cancelled,
                 )
-            _delete_staged_scratch_files(Path(scratch_dir_ctx.name), run_id=run_id)
-            _guard_tmp_usage(run_id=run_id, phase="after_durable_ingest")
+            _delete_staged_scratch_files(scratch_dir, run_id=run_id)
+            _guard_scratch_usage(
+                scratch_dir=scratch_dir,
+                run_id=run_id,
+                phase="after_durable_ingest",
+            )
 
         if overall_error is None and ack_receipt is not None:
             await ack_receipt()
