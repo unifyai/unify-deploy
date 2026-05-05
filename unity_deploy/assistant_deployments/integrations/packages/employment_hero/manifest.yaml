@@ -22,25 +22,63 @@ description: >
 homepage: https://employmenthero.com
 
 secrets:
-  - name: EMPLOYMENTHERO_ACCESS_TOKEN
+  # ----- Customer-provided OAuth app credentials ------------------------
+  # Pasted by the admin via Console -> Settings -> Secrets BEFORE clicking
+  # Connect.  Source: an Employment Hero developer-portal app the
+  # customer creates at https://developer.employmenthero.com.  The redirect
+  # URI registered on that app must match the Console callback URL
+  # documented in guidance/setup.md.
+
+  - name: EMPLOYMENTHERO_OAUTH_CLIENT_ID
     description: >
-      Employment Hero bearer access token.  Generate from the EH developer
-      portal (organisation owner or admin) or the API access page.  The
-      token's scope determines which capabilities are usable; capabilities
-      the token doesn't cover surface as 403 envelopes rather than
-      breaking the assistant.
+      Client ID from the customer's Employment Hero developer-portal app.
+      Required for the OAuth Connect flow.  Add this BEFORE clicking
+      Connect in the Integrations modal.  Not sensitive — client_id is
+      a public identifier per the OAuth spec.
+    required: false
+    sensitive: false
+
+  - name: EMPLOYMENTHERO_OAUTH_CLIENT_SECRET
+    description: >
+      Client Secret from the customer's Employment Hero developer-portal
+      app.  Required for the OAuth Connect flow.  Add alongside
+      EMPLOYMENTHERO_OAUTH_CLIENT_ID.
+    required: false
+    sensitive: true
+
+  # ----- OAuth-managed secrets (set by the Console Connect flow) -------
+  # Written automatically by the Console OAuth callback after the user
+  # grants consent on Employment Hero.  Do not edit manually.
+
+  - name: EMPLOYMENTHERO_REFRESH_TOKEN
+    description: >
+      Long-lived OAuth refresh token, written automatically by the
+      Console Connect flow after the user grants consent on Employment
+      Hero.  The package uses this with the customer's CLIENT_ID and
+      CLIENT_SECRET to mint short-lived access tokens at runtime.  Do
+      not edit manually.
     required: false
     sensitive: true
 
   - name: EMPLOYMENTHERO_ORGANISATION_ID
     description: >
-      The Employment Hero organisation id the assistant operates against.
-      Required when the token can access more than one organisation.  If
-      unset, ``get_active_organisation`` reads the first organisation the
-      token has access to and caches its id.
+      Active organisation id, captured during Connect from the EH
+      ``/me`` endpoint.  Pinned per-assistant so org-scoped calls
+      target a single EH organisation.  Required when the token has
+      access to more than one organisation.
     required: false
     sensitive: false
 
+  - name: EMPLOYMENTHERO_HUB_DOMAIN
+    description: >
+      Subdomain of the connected EH organisation
+      (e.g. ``acme.employmenthero.com``), captured during Connect.
+      Used by the Console UI for deep-links and "connected to ..."
+      labels.
+    required: false
+    sensitive: false
+
+  # ----- Optional overrides -------------------------------------------
   - name: EMPLOYMENTHERO_BASE_URL
     description: >
       API base URL override.  Defaults to https://api.employmenthero.com
@@ -49,6 +87,25 @@ secrets:
       region-mismatch errors.
     required: false
     sensitive: false
+
+  - name: EMPLOYMENTHERO_OAUTH_TOKEN_URL
+    description: >
+      OAuth token endpoint override.  Defaults to
+      https://oauth.employmenthero.com/oauth2/token.  Set only for
+      regional EH instances that route OAuth differently.
+    required: false
+    sensitive: false
+
+  # ----- Legacy paste-token (deprecated) ------------------------------
+  - name: EMPLOYMENTHERO_ACCESS_TOKEN
+    description: >
+      LEGACY: direct EH bearer token, used for paste-once setups before
+      the OAuth Connect flow existed.  Deprecated; will be removed once
+      telemetry confirms zero usage.  When set, takes precedence over
+      the OAuth path (no auto-refresh).  Do not use for new deployments
+      — click Connect in the Integrations modal instead.
+    required: false
+    sensitive: true
 
 capabilities:
   # ----- Account ----------------------------------------------------------
