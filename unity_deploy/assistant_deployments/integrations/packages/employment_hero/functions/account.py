@@ -48,7 +48,8 @@ async def get_account_info(mock: bool = True) -> dict:
         "user": me.get("data") or me,
         "active_organisation": active,
         "base_url": os.environ.get(
-            "EMPLOYMENTHERO_BASE_URL", "https://api.employmenthero.com",
+            "EMPLOYMENTHERO_BASE_URL",
+            "https://api.employmenthero.com",
         ),
     }
 

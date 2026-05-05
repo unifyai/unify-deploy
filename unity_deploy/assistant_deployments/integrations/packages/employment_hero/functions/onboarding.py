@@ -8,15 +8,28 @@ from unity.function_manager.custom import custom_function
 @custom_function()
 async def list_onboardings(mock: bool = True) -> dict:
     if mock:
-        return {"onboardings": [
-            {"id": "ob-1", "name": "Maintenance Operative Onboarding",
-             "version": "2", "is_active": True},
-            {"id": "ob-2", "name": "Property Manager Onboarding",
-             "version": "1", "is_active": True},
-        ]}
+        return {
+            "onboardings": [
+                {
+                    "id": "ob-1",
+                    "name": "Maintenance Operative Onboarding",
+                    "version": "2",
+                    "is_active": True,
+                },
+                {
+                    "id": "ob-2",
+                    "name": "Property Manager Onboarding",
+                    "version": "1",
+                    "is_active": True,
+                },
+            ]
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -29,12 +42,18 @@ async def list_onboardings(mock: bool = True) -> dict:
 @custom_function()
 async def get_onboarding(onboarding_id: str, mock: bool = True) -> dict:
     if mock:
-        return {"id": str(onboarding_id),
-                "name": "Maintenance Operative Onboarding",
-                "version": "2", "is_active": True}
+        return {
+            "id": str(onboarding_id),
+            "name": "Maintenance Operative Onboarding",
+            "version": "2",
+            "is_active": True,
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -50,17 +69,32 @@ async def list_onboarding_tasks(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"tasks": [
-            {"id": "obt-1", "onboarding_id": "ob-1",
-             "name": "Right to Work check",
-             "category": "compliance", "is_required": True, "order": 1},
-            {"id": "obt-2", "onboarding_id": "ob-1",
-             "name": "Gas Safe certificate upload",
-             "category": "qualification", "is_required": True, "order": 2},
-        ]}
+        return {
+            "tasks": [
+                {
+                    "id": "obt-1",
+                    "onboarding_id": "ob-1",
+                    "name": "Right to Work check",
+                    "category": "compliance",
+                    "is_required": True,
+                    "order": 1,
+                },
+                {
+                    "id": "obt-2",
+                    "onboarding_id": "ob-1",
+                    "name": "Gas Safe certificate upload",
+                    "category": "qualification",
+                    "is_required": True,
+                    "order": 2,
+                },
+            ]
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -82,17 +116,30 @@ async def list_employee_onboarding_status(
 ) -> dict:
     """Per-employee onboarding completion status."""
     if mock:
-        return {"statuses": [
-            {"employee_id": "emp-mock-2", "onboarding_id": "ob-1",
-             "task_id": "obt-1", "status": "completed",
-             "completed_at": "2024-02-13T09:00:00Z"},
-            {"employee_id": "emp-mock-2", "onboarding_id": "ob-1",
-             "task_id": "obt-2", "status": "outstanding",
-             "completed_at": None},
-        ]}
+        return {
+            "statuses": [
+                {
+                    "employee_id": "emp-mock-2",
+                    "onboarding_id": "ob-1",
+                    "task_id": "obt-1",
+                    "status": "completed",
+                    "completed_at": "2024-02-13T09:00:00Z",
+                },
+                {
+                    "employee_id": "emp-mock-2",
+                    "onboarding_id": "ob-1",
+                    "task_id": "obt-2",
+                    "status": "outstanding",
+                    "completed_at": None,
+                },
+            ]
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -112,6 +159,7 @@ async def list_employee_onboarding_status(
 @custom_function()
 async def sync_onboarding(mock: bool = False, since: str | None = None) -> dict:
     import datetime as _dt
+
     schema_version = "employment-hero.onboarding.snapshot.v1"
     started = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
 
@@ -119,33 +167,54 @@ async def sync_onboarding(mock: bool = False, since: str | None = None) -> dict:
         return {
             "schema_version": schema_version,
             "tables": {
-                "onboardings": [{"id": "ob-1",
-                                  "name": "Maintenance Operative Onboarding",
-                                  "version": "2", "is_active": True,
-                                  "updated_at": started}],
-                "onboarding_tasks": [{"id": "obt-1", "onboarding_id": "ob-1",
-                                       "name": "Right to Work check",
-                                       "is_required": True, "order": 1,
-                                       "updated_at": started}],
+                "onboardings": [
+                    {
+                        "id": "ob-1",
+                        "name": "Maintenance Operative Onboarding",
+                        "version": "2",
+                        "is_active": True,
+                        "updated_at": started,
+                    }
+                ],
+                "onboarding_tasks": [
+                    {
+                        "id": "obt-1",
+                        "onboarding_id": "ob-1",
+                        "name": "Right to Work check",
+                        "is_required": True,
+                        "order": 1,
+                        "updated_at": started,
+                    }
+                ],
                 "employee_onboarding_status": [
-                    {"id": "eos-1", "employee_id": "emp-mock-2",
-                     "onboarding_id": "ob-1", "task_id": "obt-1",
-                     "status": "completed",
-                     "completed_at": "2024-02-13T09:00:00Z",
-                     "updated_at": started},
+                    {
+                        "id": "eos-1",
+                        "employee_id": "emp-mock-2",
+                        "onboarding_id": "ob-1",
+                        "task_id": "obt-1",
+                        "status": "completed",
+                        "completed_at": "2024-02-13T09:00:00Z",
+                        "updated_at": started,
+                    },
                 ],
             },
-            "metadata": {"integration": "employment_hero",
-                         "object_type": "onboarding",
-                         "started_at": started, "mode": "mock"},
+            "metadata": {
+                "integration": "employment_hero",
+                "object_type": "onboarding",
+                "started_at": started,
+                "mode": "mock",
+            },
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_paginate, org_path, _org_id_or_error,
+        eh_paginate,
+        org_path,
+        _org_id_or_error,
     )
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
     )
+
     org_id, err = _org_id_or_error()
     if err is not None:
         err.update({"schema_version": schema_version, "tables": {}})
@@ -157,23 +226,35 @@ async def sync_onboarding(mock: bool = False, since: str | None = None) -> dict:
         page_size=cfg["api_page_size"],
         max_pages=cfg["max_pages_per_sync"],
     )
-    onboardings = [{
-        "id": o.get("id"), "name": o.get("name"),
-        "version": o.get("version"), "is_active": o.get("is_active"),
-        "created_at": o.get("created_at"), "updated_at": o.get("updated_at"),
-    } for o in obs_raw]
+    onboardings = [
+        {
+            "id": o.get("id"),
+            "name": o.get("name"),
+            "version": o.get("version"),
+            "is_active": o.get("is_active"),
+            "created_at": o.get("created_at"),
+            "updated_at": o.get("updated_at"),
+        }
+        for o in obs_raw
+    ]
 
     tasks_raw = await eh_paginate(
         org_path("/onboarding_tasks"),
         page_size=cfg["api_page_size"],
         max_pages=cfg["max_pages_per_sync"],
     )
-    onboarding_tasks = [{
-        "id": t.get("id"), "onboarding_id": t.get("onboarding_id"),
-        "name": t.get("name"), "category": t.get("category"),
-        "is_required": t.get("is_required"), "order": t.get("order"),
-        "updated_at": t.get("updated_at"),
-    } for t in tasks_raw]
+    onboarding_tasks = [
+        {
+            "id": t.get("id"),
+            "onboarding_id": t.get("onboarding_id"),
+            "name": t.get("name"),
+            "category": t.get("category"),
+            "is_required": t.get("is_required"),
+            "order": t.get("order"),
+            "updated_at": t.get("updated_at"),
+        }
+        for t in tasks_raw
+    ]
 
     status_params: dict = {}
     if since:
@@ -184,15 +265,18 @@ async def sync_onboarding(mock: bool = False, since: str | None = None) -> dict:
         page_size=cfg["api_page_size"],
         max_pages=cfg["max_pages_per_sync"],
     )
-    statuses = [{
-        "id": s.get("id"),
-        "employee_id": s.get("employee_id"),
-        "onboarding_id": s.get("onboarding_id"),
-        "task_id": s.get("task_id"),
-        "status": s.get("status"),
-        "completed_at": s.get("completed_at"),
-        "updated_at": s.get("updated_at"),
-    } for s in status_raw]
+    statuses = [
+        {
+            "id": s.get("id"),
+            "employee_id": s.get("employee_id"),
+            "onboarding_id": s.get("onboarding_id"),
+            "task_id": s.get("task_id"),
+            "status": s.get("status"),
+            "completed_at": s.get("completed_at"),
+            "updated_at": s.get("updated_at"),
+        }
+        for s in status_raw
+    ]
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
     return {
@@ -203,9 +287,12 @@ async def sync_onboarding(mock: bool = False, since: str | None = None) -> dict:
             "employee_onboarding_status": statuses,
         },
         "metadata": {
-            "integration": "employment_hero", "object_type": "onboarding",
-            "organisation_id": org_id, "started_at": started,
-            "finished_at": finished, "since": since,
+            "integration": "employment_hero",
+            "object_type": "onboarding",
+            "organisation_id": org_id,
+            "started_at": started,
+            "finished_at": finished,
+            "since": since,
             "row_counts": {
                 "onboardings": len(onboardings),
                 "onboarding_tasks": len(onboarding_tasks),

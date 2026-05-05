@@ -26,18 +26,25 @@ async def query_local_employees(
     if mock:
         return {
             "rows": [
-                {"id": "emp-mock-1", "first_name": "Alex",
-                 "last_name": "Example", "team_id": "team-mock-1",
-                 "location_id": "loc-mock-1", "status": "active"},
+                {
+                    "id": "emp-mock-1",
+                    "first_name": "Alex",
+                    "last_name": "Example",
+                    "team_id": "team-mock-1",
+                    "location_id": "loc-mock-1",
+                    "status": "active",
+                },
             ],
             "count": 1,
             "freshness": {
                 "last_synced_at": "2026-04-30T02:15:00Z",
-                "is_fresh": True, "threshold_seconds": 172_800,
+                "is_fresh": True,
+                "threshold_seconds": 172_800,
             },
         }
 
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
 
     filters: list[str] = []
@@ -49,17 +56,17 @@ async def query_local_employees(
         filters.append(f"`location_id` == '{location_id}'")
     if name_query:
         safe = name_query.replace("'", "''")
-        filters.append(
-            f"(`first_name` LIKE '%{safe}%' OR `last_name` LIKE '%{safe}%')"
-        )
+        filters.append(f"(`first_name` LIKE '%{safe}%' OR `last_name` LIKE '%{safe}%')")
 
     rows = await _safe_filter(
-        dm, "EmploymentHero/Employees",
+        dm,
+        "EmploymentHero/Employees",
         filter=" AND ".join(filters) if filters else None,
         limit=limit,
     )
     return {
-        "rows": rows, "count": len(rows),
+        "rows": rows,
+        "count": len(rows),
         "freshness": await _freshness("workforce"),
     }
 
@@ -70,28 +77,54 @@ async def query_local_teams(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"id": "team-mock-1", "name": "Property Management",
-                          "location_id": "loc-mock-1"}], "count": 1,
-                "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "team-mock-1",
+                    "name": "Property Management",
+                    "location_id": "loc-mock-1",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     f = f"`location_id` == '{location_id}'" if location_id else None
     rows = await _safe_filter(dm, "EmploymentHero/Teams", filter=f, limit=200)
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("workforce")}
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "freshness": await _freshness("workforce"),
+    }
 
 
 @custom_function()
 async def query_local_locations(mock: bool = True) -> dict:
     if mock:
-        return {"rows": [{"id": "loc-mock-1", "name": "Battersea Portfolio",
-                          "city": "London", "postcode": "SW11", "country": "GB"}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "loc-mock-1",
+                    "name": "Battersea Portfolio",
+                    "city": "London",
+                    "postcode": "SW11",
+                    "country": "GB",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     rows = await _safe_filter(dm, "EmploymentHero/Locations", limit=500)
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("workforce")}
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "freshness": await _freshness("workforce"),
+    }
 
 
 @custom_function()
@@ -104,11 +137,22 @@ async def query_local_leave_requests(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"id": "lr-mock-1", "employee_id": "emp-mock-1",
-                          "status": "approved", "start_date": "2026-05-12",
-                          "end_date": "2026-05-16", "total_hours": 32.0}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "lr-mock-1",
+                    "employee_id": "emp-mock-1",
+                    "status": "approved",
+                    "start_date": "2026-05-12",
+                    "end_date": "2026-05-16",
+                    "total_hours": 32.0,
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -120,12 +164,12 @@ async def query_local_leave_requests(
     if to_date:
         filters.append(f"`end_date` <= '{to_date}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Leave/Requests",
+        dm,
+        "EmploymentHero/Leave/Requests",
         filter=" AND ".join(filters) if filters else None,
         limit=limit,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("leave")}
+    return {"rows": rows, "count": len(rows), "freshness": await _freshness("leave")}
 
 
 @custom_function()
@@ -135,10 +179,20 @@ async def query_local_leave_balances(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"employee_id": "emp-mock-1", "category_id": "lc-1",
-                          "balance_hours": 168.0, "accrued_hours": 224.0}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "employee_id": "emp-mock-1",
+                    "category_id": "lc-1",
+                    "balance_hours": 168.0,
+                    "accrued_hours": 224.0,
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -146,12 +200,12 @@ async def query_local_leave_balances(
     if category_id:
         filters.append(f"`category_id` == '{category_id}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Leave/Balances",
+        dm,
+        "EmploymentHero/Leave/Balances",
         filter=" AND ".join(filters) if filters else None,
         limit=500,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("leave")}
+    return {"rows": rows, "count": len(rows), "freshness": await _freshness("leave")}
 
 
 @custom_function()
@@ -164,11 +218,21 @@ async def query_local_timesheets(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"id": "ts-mock-1", "employee_id": "emp-mock-2",
-                          "date": "2026-04-29", "hours": 8.5,
-                          "status": "submitted"}], "count": 1,
-                "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "ts-mock-1",
+                    "employee_id": "emp-mock-2",
+                    "date": "2026-04-29",
+                    "hours": 8.5,
+                    "status": "submitted",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -180,12 +244,16 @@ async def query_local_timesheets(
     if status:
         filters.append(f"`status` == '{status}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Timesheets",
+        dm,
+        "EmploymentHero/Timesheets",
         filter=" AND ".join(filters) if filters else None,
         limit=limit,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("timesheets")}
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "freshness": await _freshness("timesheets"),
+    }
 
 
 @custom_function()
@@ -198,11 +266,22 @@ async def query_local_expenses(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"id": "ex-mock-1", "employee_id": "emp-mock-2",
-                          "amount": 12.40, "currency": "GBP",
-                          "date": "2026-04-28", "status": "submitted"}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "ex-mock-1",
+                    "employee_id": "emp-mock-2",
+                    "amount": 12.40,
+                    "currency": "GBP",
+                    "date": "2026-04-28",
+                    "status": "submitted",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -214,12 +293,12 @@ async def query_local_expenses(
     if to_date:
         filters.append(f"`date` <= '{to_date}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Expenses/Claims",
+        dm,
+        "EmploymentHero/Expenses/Claims",
         filter=" AND ".join(filters) if filters else None,
         limit=limit,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("expenses")}
+    return {"rows": rows, "count": len(rows), "freshness": await _freshness("expenses")}
 
 
 @custom_function()
@@ -230,12 +309,22 @@ async def query_local_qualifications(
 ) -> dict:
     """List per-employee qualification records from the synced table."""
     if mock:
-        return {"rows": [{"id": "eq-mock-1", "employee_id": "emp-mock-2",
-                          "qualification_id": "qual-mock-1",
-                          "qualification_name": "Gas Safe Registration",
-                          "expires_at": "2026-06-01", "status": "active"}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "eq-mock-1",
+                    "employee_id": "emp-mock-2",
+                    "qualification_id": "qual-mock-1",
+                    "qualification_name": "Gas Safe Registration",
+                    "expires_at": "2026-06-01",
+                    "status": "active",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -243,12 +332,16 @@ async def query_local_qualifications(
     if qualification_id:
         filters.append(f"`qualification_id` == '{qualification_id}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Qualifications/EmployeeRecords",
+        dm,
+        "EmploymentHero/Qualifications/EmployeeRecords",
         filter=" AND ".join(filters) if filters else None,
         limit=1000,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("qualifications")}
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "freshness": await _freshness("qualifications"),
+    }
 
 
 @custom_function()
@@ -266,26 +359,33 @@ async def query_local_expiring_qualifications(
     assistant can pass straight to a property manager.
     """
     import datetime as _dt
+
     today = _dt.date.today()
     cutoff = today + _dt.timedelta(days=days_ahead)
 
     if mock:
         return {
             "rows": [
-                {"employee_first_name": "Sam", "employee_last_name": "Sample",
-                 "property": "Battersea Portfolio",
-                 "certification": "Gas Safe Registration",
-                 "expires_at": "2026-06-01",
-                 "days_to_expiry": 32},
+                {
+                    "employee_first_name": "Sam",
+                    "employee_last_name": "Sample",
+                    "property": "Battersea Portfolio",
+                    "certification": "Gas Safe Registration",
+                    "expires_at": "2026-06-01",
+                    "days_to_expiry": 32,
+                },
             ],
             "count": 1,
-            "window": {"from": today.isoformat(),
-                        "to": cutoff.isoformat(),
-                        "days_ahead": days_ahead},
+            "window": {
+                "from": today.isoformat(),
+                "to": cutoff.isoformat(),
+                "days_ahead": days_ahead,
+            },
             "freshness": {"is_fresh": True},
         }
 
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
 
     filters = [
@@ -339,8 +439,11 @@ async def query_local_expiring_qualifications(
     return {
         "rows": rows or [],
         "count": len(rows or []),
-        "window": {"from": today.isoformat(), "to": cutoff.isoformat(),
-                   "days_ahead": days_ahead},
+        "window": {
+            "from": today.isoformat(),
+            "to": cutoff.isoformat(),
+            "days_ahead": days_ahead,
+        },
         "freshness": await _freshness("qualifications"),
     }
 
@@ -352,10 +455,19 @@ async def query_local_onboarding_status(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"employee_id": "emp-mock-2",
-                          "task_id": "obt-2", "status": "outstanding"}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "employee_id": "emp-mock-2",
+                    "task_id": "obt-2",
+                    "status": "outstanding",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -363,12 +475,16 @@ async def query_local_onboarding_status(
     if status:
         filters.append(f"`status` == '{status}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Onboarding/EmployeeStatus",
+        dm,
+        "EmploymentHero/Onboarding/EmployeeStatus",
         filter=" AND ".join(filters) if filters else None,
         limit=500,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("onboarding")}
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "freshness": await _freshness("onboarding"),
+    }
 
 
 @custom_function()
@@ -378,11 +494,20 @@ async def query_local_documents(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"id": "doc-1", "employee_id": "emp-mock-1",
-                          "name": "Right To Work — Passport.pdf",
-                          "type": "right_to_work"}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "doc-1",
+                    "employee_id": "emp-mock-1",
+                    "name": "Right To Work — Passport.pdf",
+                    "type": "right_to_work",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -390,12 +515,16 @@ async def query_local_documents(
     if document_type:
         filters.append(f"`type` == '{document_type}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Documents",
+        dm,
+        "EmploymentHero/Documents",
         filter=" AND ".join(filters) if filters else None,
         limit=500,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("documents")}
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "freshness": await _freshness("documents"),
+    }
 
 
 @custom_function()
@@ -405,12 +534,22 @@ async def query_local_goals(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"id": "goal-1", "employee_id": "emp-mock-1",
-                          "title": "Q2 occupancy ≥ 92%",
-                          "current_value": 88.5, "target_value": 92.0,
-                          "status": "in_progress"}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "goal-1",
+                    "employee_id": "emp-mock-1",
+                    "title": "Q2 occupancy ≥ 92%",
+                    "current_value": 88.5,
+                    "target_value": 92.0,
+                    "status": "in_progress",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -418,12 +557,16 @@ async def query_local_goals(
     if status:
         filters.append(f"`status` == '{status}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Performance/Goals",
+        dm,
+        "EmploymentHero/Performance/Goals",
         filter=" AND ".join(filters) if filters else None,
         limit=200,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("performance")}
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "freshness": await _freshness("performance"),
+    }
 
 
 @custom_function()
@@ -433,11 +576,21 @@ async def query_local_reviews(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"rows": [{"id": "rev-1", "employee_id": "emp-mock-1",
-                          "period": "2026Q1", "rating": 4,
-                          "_note": "Free-text fields are redacted in the synced copy."}],
-                "count": 1, "freshness": {"is_fresh": True}}
+        return {
+            "rows": [
+                {
+                    "id": "rev-1",
+                    "employee_id": "emp-mock-1",
+                    "period": "2026Q1",
+                    "rating": 4,
+                    "_note": "Free-text fields are redacted in the synced copy.",
+                }
+            ],
+            "count": 1,
+            "freshness": {"is_fresh": True},
+        }
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     filters: list[str] = []
     if employee_id:
@@ -445,17 +598,21 @@ async def query_local_reviews(
     if period:
         filters.append(f"`period` == '{period}'")
     rows = await _safe_filter(
-        dm, "EmploymentHero/Performance/Reviews",
+        dm,
+        "EmploymentHero/Performance/Reviews",
         filter=" AND ".join(filters) if filters else None,
         limit=200,
     )
-    return {"rows": rows, "count": len(rows),
-            "freshness": await _freshness("performance"),
-            "_note": (
-                "Free-text fields (self_assessment, manager_feedback, "
-                "improvement_areas) are redacted to length+hash in the "
-                "synced copy.  Use get_review() live for full content."
-            )}
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "freshness": await _freshness("performance"),
+        "_note": (
+            "Free-text fields (self_assessment, manager_feedback, "
+            "improvement_areas) are redacted to length+hash in the "
+            "synced copy.  Use get_review() live for full content."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -464,9 +621,9 @@ async def query_local_reviews(
 
 
 @custom_function()
-async def _safe_filter(dm, context: str, *,
-                        filter: str | None = None,
-                        limit: int = 100) -> list:
+async def _safe_filter(
+    dm, context: str, *, filter: str | None = None, limit: int = 100
+) -> list:
     """Wrapper around ``dm.filter`` that returns [] on error."""
     try:
         return await dm.filter(context, filter=filter, limit=limit) or []
@@ -485,6 +642,7 @@ async def _freshness(object_type: str) -> dict:
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
     )
+
     dm = ManagerRegistry.get_data_manager()
     cfg = get_employmenthero_config()
 
@@ -499,26 +657,38 @@ async def _freshness(object_type: str) -> dict:
     last = rows[0]["last_synced_at"] if rows else None
 
     override = cfg["local_freshness_threshold_seconds"]
-    threshold = override if override is not None else (
-        cfg["object_intervals"].get(
-            object_type, cfg["sync_min_interval_seconds"]
-        ) * 2
+    threshold = (
+        override
+        if override is not None
+        else (
+            cfg["object_intervals"].get(object_type, cfg["sync_min_interval_seconds"])
+            * 2
+        )
     )
 
     if not last:
-        return {"last_synced_at": None, "is_fresh": False,
-                "threshold_seconds": threshold,
-                "hint": "No sync state row — has the sync orchestrator run?"}
+        return {
+            "last_synced_at": None,
+            "is_fresh": False,
+            "threshold_seconds": threshold,
+            "hint": "No sync state row — has the sync orchestrator run?",
+        }
 
     import datetime as _dt
+
     try:
         parsed = _dt.datetime.fromisoformat(last.replace("Z", "+00:00"))
         age = (_dt.datetime.now(tz=_dt.timezone.utc) - parsed).total_seconds()
     except (ValueError, TypeError):
-        return {"last_synced_at": last, "is_fresh": False,
-                "threshold_seconds": threshold,
-                "hint": "Unparseable last_synced_at."}
-    return {"last_synced_at": last,
-            "is_fresh": age <= threshold,
+        return {
+            "last_synced_at": last,
+            "is_fresh": False,
             "threshold_seconds": threshold,
-            "age_seconds": int(age)}
+            "hint": "Unparseable last_synced_at.",
+        }
+    return {
+        "last_synced_at": last,
+        "is_fresh": age <= threshold,
+        "threshold_seconds": threshold,
+        "age_seconds": int(age),
+    }

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-
 # ---------------------------------------------------------------------------
 # Employees: live reads
 # ---------------------------------------------------------------------------
@@ -117,8 +116,7 @@ async def list_employees(
     items = body.get("data") or body.get("items") or []
     return {
         "employees": items,
-        "next_cursor": body.get("next_cursor")
-                      or body.get("paging", {}).get("next"),
+        "next_cursor": body.get("next_cursor") or body.get("paging", {}).get("next"),
         "total": body.get("total", len(items)),
     }
 
@@ -268,10 +266,18 @@ async def list_teams(mock: bool = True) -> dict:
     if mock:
         return {
             "teams": [
-                {"id": "team-mock-1", "name": "Property Management",
-                 "manager_id": None, "location_id": "loc-mock-1"},
-                {"id": "team-mock-2", "name": "Maintenance",
-                 "manager_id": None, "location_id": "loc-mock-1"},
+                {
+                    "id": "team-mock-1",
+                    "name": "Property Management",
+                    "manager_id": None,
+                    "location_id": "loc-mock-1",
+                },
+                {
+                    "id": "team-mock-2",
+                    "name": "Maintenance",
+                    "manager_id": None,
+                    "location_id": "loc-mock-1",
+                },
             ],
         }
 
@@ -354,12 +360,22 @@ async def list_locations(mock: bool = True) -> dict:
     if mock:
         return {
             "locations": [
-                {"id": "loc-mock-1", "name": "Battersea Portfolio",
-                 "address_line_1": "21 Lavender Hill", "city": "London",
-                 "postcode": "SW11", "country": "GB"},
-                {"id": "loc-mock-2", "name": "Camden Portfolio",
-                 "address_line_1": "8 Camden Lock Place", "city": "London",
-                 "postcode": "NW1", "country": "GB"},
+                {
+                    "id": "loc-mock-1",
+                    "name": "Battersea Portfolio",
+                    "address_line_1": "21 Lavender Hill",
+                    "city": "London",
+                    "postcode": "SW11",
+                    "country": "GB",
+                },
+                {
+                    "id": "loc-mock-2",
+                    "name": "Camden Portfolio",
+                    "address_line_1": "8 Camden Lock Place",
+                    "city": "London",
+                    "postcode": "NW1",
+                    "country": "GB",
+                },
             ],
         }
 
@@ -435,40 +451,65 @@ async def sync_workforce(
     if mock:
         employees = [
             {
-                "id": "emp-mock-1", "first_name": "Alex", "last_name": "Example",
+                "id": "emp-mock-1",
+                "first_name": "Alex",
+                "last_name": "Example",
                 "work_email": "alex@example.test",
                 "position": "Property Manager",
-                "team_id": "team-mock-1", "location_id": "loc-mock-1",
-                "employment_type": "full_time", "status": "active",
-                "start_date": "2023-09-01", "country": "GB",
+                "team_id": "team-mock-1",
+                "location_id": "loc-mock-1",
+                "employment_type": "full_time",
+                "status": "active",
+                "start_date": "2023-09-01",
+                "country": "GB",
                 "updated_at": started,
             },
             {
-                "id": "emp-mock-2", "first_name": "Sam", "last_name": "Sample",
+                "id": "emp-mock-2",
+                "first_name": "Sam",
+                "last_name": "Sample",
                 "work_email": "sam@example.test",
                 "position": "Maintenance Operative",
-                "team_id": "team-mock-2", "location_id": "loc-mock-1",
-                "employment_type": "full_time", "status": "active",
-                "start_date": "2024-02-12", "country": "GB",
+                "team_id": "team-mock-2",
+                "location_id": "loc-mock-1",
+                "employment_type": "full_time",
+                "status": "active",
+                "start_date": "2024-02-12",
+                "country": "GB",
                 "updated_at": started,
             },
         ]
         teams = [
-            {"id": "team-mock-1", "name": "Property Management",
-             "manager_id": None, "location_id": "loc-mock-1",
-             "parent_team_id": None, "updated_at": started},
-            {"id": "team-mock-2", "name": "Maintenance",
-             "manager_id": None, "location_id": "loc-mock-1",
-             "parent_team_id": None, "updated_at": started},
+            {
+                "id": "team-mock-1",
+                "name": "Property Management",
+                "manager_id": None,
+                "location_id": "loc-mock-1",
+                "parent_team_id": None,
+                "updated_at": started,
+            },
+            {
+                "id": "team-mock-2",
+                "name": "Maintenance",
+                "manager_id": None,
+                "location_id": "loc-mock-1",
+                "parent_team_id": None,
+                "updated_at": started,
+            },
         ]
         memberships = [
             {"team_id": "team-mock-1", "employee_id": "emp-mock-1", "role": "lead"},
             {"team_id": "team-mock-2", "employee_id": "emp-mock-2", "role": None},
         ]
         locations = [
-            {"id": "loc-mock-1", "name": "Battersea Portfolio",
-             "address_line_1": "21 Lavender Hill", "city": "London",
-             "postcode": "SW11", "country": "GB"},
+            {
+                "id": "loc-mock-1",
+                "name": "Battersea Portfolio",
+                "address_line_1": "21 Lavender Hill",
+                "city": "London",
+                "postcode": "SW11",
+                "country": "GB",
+            },
         ]
         return {
             "schema_version": schema_version,
@@ -516,24 +557,26 @@ async def sync_workforce(
     )
     employees: list[dict] = []
     for e in emp_rows_raw:
-        employees.append({
-            "id": e.get("id"),
-            "first_name": e.get("first_name"),
-            "last_name": e.get("last_name"),
-            "work_email": e.get("work_email"),
-            "personal_email": e.get("personal_email"),
-            "phone": e.get("phone"),
-            "position": e.get("position"),
-            "team_id": e.get("team_id"),
-            "manager_id": e.get("manager_id"),
-            "employment_type": e.get("employment_type"),
-            "start_date": e.get("start_date"),
-            "termination_date": e.get("termination_date"),
-            "status": e.get("status"),
-            "location_id": e.get("location_id"),
-            "country": e.get("country"),
-            "updated_at": e.get("updated_at"),
-        })
+        employees.append(
+            {
+                "id": e.get("id"),
+                "first_name": e.get("first_name"),
+                "last_name": e.get("last_name"),
+                "work_email": e.get("work_email"),
+                "personal_email": e.get("personal_email"),
+                "phone": e.get("phone"),
+                "position": e.get("position"),
+                "team_id": e.get("team_id"),
+                "manager_id": e.get("manager_id"),
+                "employment_type": e.get("employment_type"),
+                "start_date": e.get("start_date"),
+                "termination_date": e.get("termination_date"),
+                "status": e.get("status"),
+                "location_id": e.get("location_id"),
+                "country": e.get("country"),
+                "updated_at": e.get("updated_at"),
+            }
+        )
 
     teams_raw = await eh_paginate(
         org_path("/teams"),
@@ -543,26 +586,30 @@ async def sync_workforce(
     teams: list[dict] = []
     memberships: list[dict] = []
     for t in teams_raw:
-        teams.append({
-            "id": t.get("id"),
-            "name": t.get("name"),
-            "description": t.get("description"),
-            "manager_id": t.get("manager_id"),
-            "location_id": t.get("location_id"),
-            "parent_team_id": t.get("parent_team_id"),
-            "created_at": t.get("created_at"),
-            "updated_at": t.get("updated_at"),
-        })
+        teams.append(
+            {
+                "id": t.get("id"),
+                "name": t.get("name"),
+                "description": t.get("description"),
+                "manager_id": t.get("manager_id"),
+                "location_id": t.get("location_id"),
+                "parent_team_id": t.get("parent_team_id"),
+                "created_at": t.get("created_at"),
+                "updated_at": t.get("updated_at"),
+            }
+        )
         # Members per team — best-effort; tier-gated 403 returns empty.
         members_body = await eh_get(org_path(f"/teams/{t.get('id')}/members"))
         if "error" not in members_body:
             members = members_body.get("data") or members_body.get("items") or []
             for m in members:
-                memberships.append({
-                    "team_id": t.get("id"),
-                    "employee_id": m.get("employee_id") or m.get("id"),
-                    "role": m.get("role"),
-                })
+                memberships.append(
+                    {
+                        "team_id": t.get("id"),
+                        "employee_id": m.get("employee_id") or m.get("id"),
+                        "role": m.get("role"),
+                    }
+                )
 
     locations_raw = await eh_paginate(
         org_path("/locations"),
@@ -595,25 +642,29 @@ async def sync_workforce(
         emps_body = await eh_get(org_path(f"/employees/{emp_id}/employments"))
         if "error" not in emps_body:
             for empl in emps_body.get("data") or emps_body.get("items") or []:
-                employments.append({
-                    "id": empl.get("id"),
-                    "employee_id": emp_id,
-                    "position": empl.get("position"),
-                    "start_date": empl.get("start_date"),
-                    "end_date": empl.get("end_date"),
-                    "is_current": empl.get("is_current"),
-                })
+                employments.append(
+                    {
+                        "id": empl.get("id"),
+                        "employee_id": emp_id,
+                        "position": empl.get("position"),
+                        "start_date": empl.get("start_date"),
+                        "end_date": empl.get("end_date"),
+                        "is_current": empl.get("is_current"),
+                    }
+                )
         pos_body = await eh_get(org_path(f"/employees/{emp_id}/positions"))
         if "error" not in pos_body:
             for p in pos_body.get("data") or pos_body.get("items") or []:
-                positions.append({
-                    "id": p.get("id"),
-                    "employee_id": emp_id,
-                    "title": p.get("title"),
-                    "start_date": p.get("start_date"),
-                    "end_date": p.get("end_date"),
-                    "is_current": p.get("is_current"),
-                })
+                positions.append(
+                    {
+                        "id": p.get("id"),
+                        "employee_id": emp_id,
+                        "title": p.get("title"),
+                        "start_date": p.get("start_date"),
+                        "end_date": p.get("end_date"),
+                        "is_current": p.get("is_current"),
+                    }
+                )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
     return {

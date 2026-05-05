@@ -135,16 +135,23 @@ class _FakeAsyncClient:
         return self._queued.pop(0)
 
 
-def _patch_httpx(monkeypatch: pytest.MonkeyPatch, *, queued: list[_FakeResponse]) -> _FakeAsyncClient:
+def _patch_httpx(
+    monkeypatch: pytest.MonkeyPatch, *, queued: list[_FakeResponse]
+) -> _FakeAsyncClient:
     fake = _FakeAsyncClient(queued=queued)
 
     def _factory(*args, **kwargs):
         return fake
 
-    monkeypatch.setattr(_client.httpx if hasattr(_client, "httpx") else "httpx.AsyncClient", _factory, raising=False)
+    monkeypatch.setattr(
+        _client.httpx if hasattr(_client, "httpx") else "httpx.AsyncClient",
+        _factory,
+        raising=False,
+    )
     # _client.py imports httpx inside function bodies, so patch at the module
     # level the function actually references.
     import httpx
+
     monkeypatch.setattr(httpx, "AsyncClient", _factory)
     return fake
 
@@ -223,7 +230,9 @@ async def test_oauth_refresh_expired_cache_re_resolves(_clean_env, monkeypatch):
     _patch_httpx(
         monkeypatch,
         queued=[
-            _FakeResponse(200, json_body={"access_token": "fresh-tok", "expires_in": 3600}),
+            _FakeResponse(
+                200, json_body={"access_token": "fresh-tok", "expires_in": 3600}
+            ),
         ],
     )
 
@@ -321,14 +330,18 @@ async def test_oauth_refresh_token_rotation_re_keys_cache(_clean_env, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_oauth_response_missing_access_token_returns_error(_clean_env, monkeypatch):
+async def test_oauth_response_missing_access_token_returns_error(
+    _clean_env, monkeypatch
+):
     _clean_env.setenv("EMPLOYMENTHERO_OAUTH_CLIENT_ID", "cid")
     _clean_env.setenv("EMPLOYMENTHERO_OAUTH_CLIENT_SECRET", "csec")
     _clean_env.setenv("EMPLOYMENTHERO_REFRESH_TOKEN", "rt")
 
     _patch_httpx(
         monkeypatch,
-        queued=[_FakeResponse(200, json_body={"expires_in": 3600})],  # missing access_token
+        queued=[
+            _FakeResponse(200, json_body={"expires_in": 3600})
+        ],  # missing access_token
     )
 
     token, err = await _client._resolve_access_token()
@@ -345,7 +358,10 @@ async def test_oauth_response_missing_access_token_returns_error(_clean_env, mon
 def test_invalidate_cached_token_drops_matching_entries():
     _client._TOKEN_CACHE[("c1", "r1")] = ("tok-1", time.time() + 1000)
     _client._TOKEN_CACHE[("c2", "r2")] = ("tok-2", time.time() + 1000)
-    _client._TOKEN_CACHE[("c3", "r3")] = ("tok-1", time.time() + 1000)  # same token, different keys
+    _client._TOKEN_CACHE[("c3", "r3")] = (
+        "tok-1",
+        time.time() + 1000,
+    )  # same token, different keys
 
     _client._invalidate_cached_token("tok-1")
 

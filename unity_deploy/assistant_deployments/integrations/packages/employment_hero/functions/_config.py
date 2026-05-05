@@ -11,7 +11,6 @@ code, not a registered tool.
 
 from __future__ import annotations
 
-
 # ---------------------------------------------------------------------------
 # Per-object cadence defaults (seconds).  Overridden by
 # EMPLOYMENTHERO_SYNC_OBJECT_INTERVALS.
@@ -24,23 +23,23 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 _DEFAULT_OBJECT_INTERVALS_SECONDS: dict[str, int] = {
-    "workforce":          86_400,
-    "employee_personal":  86_400,
-    "employee_notes":     21_600,
-    "leave":              3_600,
-    "timesheets":         1_800,
-    "expenses":           3_600,
-    "policies":           86_400,
-    "documents":          43_200,
-    "custom_fields":      86_400,
-    "onboarding":         21_600,
-    "qualifications":     43_200,
-    "performance":        86_400,
-    "recognition":        3_600,
-    "surveys":            86_400,
-    "learning":           21_600,
-    "recruitment":        3_600,
-    "pay":                86_400,
+    "workforce": 86_400,
+    "employee_personal": 86_400,
+    "employee_notes": 21_600,
+    "leave": 3_600,
+    "timesheets": 1_800,
+    "expenses": 3_600,
+    "policies": 86_400,
+    "documents": 43_200,
+    "custom_fields": 86_400,
+    "onboarding": 21_600,
+    "qualifications": 43_200,
+    "performance": 86_400,
+    "recognition": 3_600,
+    "surveys": 86_400,
+    "learning": 21_600,
+    "recruitment": 3_600,
+    "pay": 86_400,
 }
 
 _ALL_SYNC_OBJECTS: list[str] = list(_DEFAULT_OBJECT_INTERVALS_SECONDS.keys())
@@ -59,92 +58,97 @@ def get_employmenthero_config() -> dict:
             "https://api.employmenthero.com",
         ),
         "organisation_id": _env("EMPLOYMENTHERO_ORGANISATION_ID", "") or None,
-
         # ----- Sync cadence -----------------------------------------------
         "sync_min_interval_seconds": _int(
-            "EMPLOYMENTHERO_SYNC_MIN_INTERVAL_SECONDS", 300,
+            "EMPLOYMENTHERO_SYNC_MIN_INTERVAL_SECONDS",
+            300,
         ),
         "object_intervals": _kv_int(
             "EMPLOYMENTHERO_SYNC_OBJECT_INTERVALS",
             default=dict(_DEFAULT_OBJECT_INTERVALS_SECONDS),
         ),
-
         # ----- Object selection -------------------------------------------
         "sync_objects": _list(
             "EMPLOYMENTHERO_SYNC_OBJECTS",
             default=list(_ALL_SYNC_OBJECTS),
         ),
-
         # ----- API behaviour ----------------------------------------------
         "api_page_size": _int("EMPLOYMENTHERO_API_PAGE_SIZE", 100),
         "max_pages_per_sync": _int_or_none(
-            "EMPLOYMENTHERO_MAX_PAGES_PER_SYNC", None,
+            "EMPLOYMENTHERO_MAX_PAGES_PER_SYNC",
+            None,
         ),
         "request_timeout_seconds": _int(
-            "EMPLOYMENTHERO_REQUEST_TIMEOUT_SECONDS", 30,
+            "EMPLOYMENTHERO_REQUEST_TIMEOUT_SECONDS",
+            30,
         ),
         "rate_limit_max_retries": _int(
-            "EMPLOYMENTHERO_RATE_LIMIT_MAX_RETRIES", 3,
+            "EMPLOYMENTHERO_RATE_LIMIT_MAX_RETRIES",
+            3,
         ),
         "rate_limit_backoff_factor": _float(
-            "EMPLOYMENTHERO_RATE_LIMIT_BACKOFF_FACTOR", 1.5,
+            "EMPLOYMENTHERO_RATE_LIMIT_BACKOFF_FACTOR",
+            1.5,
         ),
-
         # ----- Sensitivity / redaction ------------------------------------
         # Critical at the snapshot boundary so DataManager analytics never
         # holds the raw values even if the live API would.
         "redact_performance_free_text": _bool(
-            "EMPLOYMENTHERO_REVIEWS_REDACT_FREE_TEXT", default=True,
+            "EMPLOYMENTHERO_REVIEWS_REDACT_FREE_TEXT",
+            default=True,
         ),
         "redact_employee_personal": _bool(
-            "EMPLOYMENTHERO_EMPLOYEE_PERSONAL_REDACT", default=True,
+            "EMPLOYMENTHERO_EMPLOYEE_PERSONAL_REDACT",
+            default=True,
         ),
         "pay_rate_bands": _bool(
-            "EMPLOYMENTHERO_PAY_RATE_BANDS", default=True,
+            "EMPLOYMENTHERO_PAY_RATE_BANDS",
+            default=True,
         ),
-
         # ----- Recruitment hyperparams ------------------------------------
         "recruitment_retention_days": _int(
-            "EMPLOYMENTHERO_RECRUITMENT_RETENTION_DAYS", 180,
+            "EMPLOYMENTHERO_RECRUITMENT_RETENTION_DAYS",
+            180,
         ),
         "recruitment_redact_pii": _bool(
-            "EMPLOYMENTHERO_RECRUITMENT_REDACT_PII", default=True,
+            "EMPLOYMENTHERO_RECRUITMENT_REDACT_PII",
+            default=True,
         ),
         "recruitment_include_rejected": _bool(
-            "EMPLOYMENTHERO_RECRUITMENT_INCLUDE_REJECTED", default=False,
+            "EMPLOYMENTHERO_RECRUITMENT_INCLUDE_REJECTED",
+            default=False,
         ),
-
         # ----- Surveys ----------------------------------------------------
         # Always defer to EH's per-survey is_anonymous flag.  This env var
         # only forces an extra-conservative "treat all as anonymous" pass.
         "surveys_force_anonymous": _bool(
-            "EMPLOYMENTHERO_SURVEYS_FORCE_ANONYMOUS", default=False,
+            "EMPLOYMENTHERO_SURVEYS_FORCE_ANONYMOUS",
+            default=False,
         ),
-
         # ----- Mutation mirroring -----------------------------------------
         "mirror_mutations_to_datamanager": _bool(
-            "EMPLOYMENTHERO_MIRROR_MUTATIONS_TO_DATAMANAGER", default=True,
+            "EMPLOYMENTHERO_MIRROR_MUTATIONS_TO_DATAMANAGER",
+            default=True,
         ),
-
         # ----- High-stakes write master gate ------------------------------
         # Required to be true for every submit_*/acknowledge_*/give_*/create_*
         # function to actually mutate live data.  Without it those functions
         # return a structured refusal envelope.
         "allow_high_stakes_writes": _bool(
-            "EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES", default=False,
+            "EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES",
+            default=False,
         ),
-
         # ----- Capability probe cache TTL ---------------------------------
         "tier_probe_ttl_seconds": _int(
-            "EMPLOYMENTHERO_TIER_PROBE_TTL_SECONDS", 86_400,
+            "EMPLOYMENTHERO_TIER_PROBE_TTL_SECONDS",
+            86_400,
         ),
-
         # ----- Local-query freshness --------------------------------------
         # If unset, falls back to (object_interval * 2) inside local.py.
         "local_freshness_threshold_seconds": _int_or_none(
-            "EMPLOYMENTHERO_LOCAL_FRESHNESS_THRESHOLD_SECONDS", None,
+            "EMPLOYMENTHERO_LOCAL_FRESHNESS_THRESHOLD_SECONDS",
+            None,
         ),
-
         # ----- Embeddings -------------------------------------------------
         "embed_enabled": _bool("EMPLOYMENTHERO_EMBED_ENABLED", default=False),
         "embed_strategy": _choice(
@@ -157,6 +161,7 @@ def get_employmenthero_config() -> dict:
     raw = _env("EMPLOYMENTHERO_CONFIG_JSON", "").strip()
     if raw:
         import json
+
         try:
             override = json.loads(raw)
             if isinstance(override, dict):
@@ -170,8 +175,10 @@ def get_employmenthero_config() -> dict:
 # Coercion helpers
 # ---------------------------------------------------------------------------
 
+
 def _env(name: str, default: str = "") -> str:
     import os
+
     return os.environ.get(name, default)
 
 

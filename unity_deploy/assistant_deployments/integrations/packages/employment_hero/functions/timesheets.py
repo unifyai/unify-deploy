@@ -18,16 +18,26 @@ async def list_timesheets(
     if mock:
         return {
             "entries": [
-                {"id": "ts-mock-1", "employee_id": "emp-mock-2",
-                 "date": "2026-04-29", "start_time": "08:00", "end_time": "17:00",
-                 "hours": 8.5, "project": "Battersea Portfolio",
-                 "status": "submitted", "notes": "Routine maintenance"},
+                {
+                    "id": "ts-mock-1",
+                    "employee_id": "emp-mock-2",
+                    "date": "2026-04-29",
+                    "start_time": "08:00",
+                    "end_time": "17:00",
+                    "hours": 8.5,
+                    "project": "Battersea Portfolio",
+                    "status": "submitted",
+                    "notes": "Routine maintenance",
+                },
             ],
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -50,11 +60,19 @@ async def list_timesheets(
 async def get_timesheet_entry(entry_id: str, mock: bool = True) -> dict:
     """Get one timesheet entry by id."""
     if mock:
-        return {"id": str(entry_id), "employee_id": "emp-mock-2",
-                "date": "2026-04-29", "hours": 8.5, "status": "submitted"}
+        return {
+            "id": str(entry_id),
+            "employee_id": "emp-mock-2",
+            "date": "2026-04-29",
+            "hours": 8.5,
+            "status": "submitted",
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -82,12 +100,19 @@ async def submit_timesheet_entry(
     ``EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES=true``.
     """
     if mock:
-        return {"id": "ts-mock-new", "employee_id": employee_id,
-                "date": date, "hours": hours, "status": "submitted",
-                "_mocked": True}
+        return {
+            "id": "ts-mock-new",
+            "employee_id": employee_id,
+            "date": date,
+            "hours": hours,
+            "status": "submitted",
+            "_mocked": True,
+        }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_post, org_path, _org_id_or_error,
+        eh_post,
+        org_path,
+        _org_id_or_error,
     )
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
@@ -95,7 +120,9 @@ async def submit_timesheet_entry(
 
     cfg = get_employmenthero_config()
     if not cfg["allow_high_stakes_writes"]:
-        return {"error": "Refused: EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES is not true."}
+        return {
+            "error": "Refused: EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES is not true."
+        }
     if not confirm:
         return {"error": "Refused: confirm=True is required for live mutations."}
 
@@ -131,7 +158,9 @@ async def update_timesheet_entry(
         return {"id": str(entry_id), "hours": hours, "_mocked": True}
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_patch, org_path, _org_id_or_error,
+        eh_patch,
+        org_path,
+        _org_id_or_error,
     )
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
@@ -139,7 +168,9 @@ async def update_timesheet_entry(
 
     cfg = get_employmenthero_config()
     if not cfg["allow_high_stakes_writes"]:
-        return {"error": "Refused: EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES is not true."}
+        return {
+            "error": "Refused: EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES is not true."
+        }
     if not confirm:
         return {"error": "Refused: confirm=True is required for live mutations."}
 
@@ -164,26 +195,40 @@ async def update_timesheet_entry(
 async def sync_timesheets(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot timesheet entries (incremental by ``since`` watermark)."""
     import datetime as _dt
+
     schema_version = "employment-hero.timesheets.snapshot.v1"
     started = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
 
     if mock:
         return {
             "schema_version": schema_version,
-            "tables": {"timesheets": [
-                {"id": "ts-mock-1", "employee_id": "emp-mock-2",
-                 "date": "2026-04-29", "start_time": "08:00",
-                 "end_time": "17:00", "hours": 8.5,
-                 "project": "Battersea Portfolio", "status": "submitted",
-                 "updated_at": started},
-            ]},
-            "metadata": {"integration": "employment_hero",
-                         "object_type": "timesheets",
-                         "started_at": started, "mode": "mock"},
+            "tables": {
+                "timesheets": [
+                    {
+                        "id": "ts-mock-1",
+                        "employee_id": "emp-mock-2",
+                        "date": "2026-04-29",
+                        "start_time": "08:00",
+                        "end_time": "17:00",
+                        "hours": 8.5,
+                        "project": "Battersea Portfolio",
+                        "status": "submitted",
+                        "updated_at": started,
+                    },
+                ]
+            },
+            "metadata": {
+                "integration": "employment_hero",
+                "object_type": "timesheets",
+                "started_at": started,
+                "mode": "mock",
+            },
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_paginate, org_path, _org_id_or_error,
+        eh_paginate,
+        org_path,
+        _org_id_or_error,
     )
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
@@ -210,22 +255,25 @@ async def sync_timesheets(mock: bool = False, since: str | None = None) -> dict:
         page_size=cfg["api_page_size"],
         max_pages=cfg["max_pages_per_sync"],
     )
-    rows = [{
-        "id": r.get("id"),
-        "employee_id": r.get("employee_id"),
-        "date": r.get("date"),
-        "start_time": r.get("start_time"),
-        "end_time": r.get("end_time"),
-        "hours": r.get("hours"),
-        "project": r.get("project"),
-        "location_id": r.get("location_id"),
-        "status": r.get("status"),
-        "approved_by": r.get("approved_by"),
-        "approved_at": r.get("approved_at"),
-        "notes": r.get("notes"),
-        "created_at": r.get("created_at"),
-        "updated_at": r.get("updated_at"),
-    } for r in raw]
+    rows = [
+        {
+            "id": r.get("id"),
+            "employee_id": r.get("employee_id"),
+            "date": r.get("date"),
+            "start_time": r.get("start_time"),
+            "end_time": r.get("end_time"),
+            "hours": r.get("hours"),
+            "project": r.get("project"),
+            "location_id": r.get("location_id"),
+            "status": r.get("status"),
+            "approved_by": r.get("approved_by"),
+            "approved_at": r.get("approved_at"),
+            "notes": r.get("notes"),
+            "created_at": r.get("created_at"),
+            "updated_at": r.get("updated_at"),
+        }
+        for r in raw
+    ]
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
     return {

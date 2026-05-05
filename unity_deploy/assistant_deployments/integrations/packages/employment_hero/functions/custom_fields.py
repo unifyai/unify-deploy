@@ -14,16 +14,28 @@ from unity.function_manager.custom import custom_function
 @custom_function()
 async def list_custom_field_definitions(mock: bool = True) -> dict:
     if mock:
-        return {"definitions": [
-            {"id": "cf-property", "name": "Primary Property",
-             "data_type": "string",
-             "options": ["Battersea", "Camden", "Manchester"]},
-            {"id": "cf-asset-class", "name": "Specialist Asset Class",
-             "data_type": "string", "options": ["BTL", "HMO", "Leasehold"]},
-        ]}
+        return {
+            "definitions": [
+                {
+                    "id": "cf-property",
+                    "name": "Primary Property",
+                    "data_type": "string",
+                    "options": ["Battersea", "Camden", "Manchester"],
+                },
+                {
+                    "id": "cf-asset-class",
+                    "name": "Specialist Asset Class",
+                    "data_type": "string",
+                    "options": ["BTL", "HMO", "Leasehold"],
+                },
+            ]
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -40,13 +52,21 @@ async def list_custom_field_values(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"values": [
-            {"employee_id": "emp-mock-1", "field_id": "cf-property",
-             "value": "Battersea"},
-        ]}
+        return {
+            "values": [
+                {
+                    "employee_id": "emp-mock-1",
+                    "field_id": "cf-property",
+                    "value": "Battersea",
+                },
+            ]
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -67,13 +87,19 @@ async def get_employee_custom_field_values(
     mock: bool = True,
 ) -> dict:
     if mock:
-        return {"employee_id": employee_id, "values": [
-            {"field_id": "cf-property", "value": "Battersea"},
-            {"field_id": "cf-asset-class", "value": "BTL"},
-        ]}
+        return {
+            "employee_id": employee_id,
+            "values": [
+                {"field_id": "cf-property", "value": "Battersea"},
+                {"field_id": "cf-asset-class", "value": "BTL"},
+            ],
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -90,6 +116,7 @@ async def get_employee_custom_field_values(
 async def sync_custom_fields(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot custom-field definitions and per-employee values (long format)."""
     import datetime as _dt
+
     schema_version = "employment-hero.custom-fields.snapshot.v1"
     started = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
 
@@ -98,27 +125,40 @@ async def sync_custom_fields(mock: bool = False, since: str | None = None) -> di
             "schema_version": schema_version,
             "tables": {
                 "custom_field_definitions": [
-                    {"id": "cf-property", "name": "Primary Property",
-                     "data_type": "string",
-                     "options_json": "['Battersea','Camden','Manchester']",
-                     "updated_at": started},
+                    {
+                        "id": "cf-property",
+                        "name": "Primary Property",
+                        "data_type": "string",
+                        "options_json": "['Battersea','Camden','Manchester']",
+                        "updated_at": started,
+                    },
                 ],
                 "custom_field_values": [
-                    {"employee_id": "emp-mock-1", "field_id": "cf-property",
-                     "value": "Battersea", "updated_at": started},
+                    {
+                        "employee_id": "emp-mock-1",
+                        "field_id": "cf-property",
+                        "value": "Battersea",
+                        "updated_at": started,
+                    },
                 ],
             },
-            "metadata": {"integration": "employment_hero",
-                         "object_type": "custom_fields",
-                         "started_at": started, "mode": "mock"},
+            "metadata": {
+                "integration": "employment_hero",
+                "object_type": "custom_fields",
+                "started_at": started,
+                "mode": "mock",
+            },
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_paginate, org_path, _org_id_or_error,
+        eh_paginate,
+        org_path,
+        _org_id_or_error,
     )
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
     )
+
     org_id, err = _org_id_or_error()
     if err is not None:
         err.update({"schema_version": schema_version, "tables": {}})
@@ -130,15 +170,18 @@ async def sync_custom_fields(mock: bool = False, since: str | None = None) -> di
         page_size=cfg["api_page_size"],
         max_pages=cfg["max_pages_per_sync"],
     )
-    custom_field_definitions = [{
-        "id": d.get("id"),
-        "name": d.get("name"),
-        "data_type": d.get("data_type"),
-        "options_json": str(d.get("options")) if d.get("options") else None,
-        "is_required": d.get("is_required"),
-        "applies_to": d.get("applies_to"),
-        "updated_at": d.get("updated_at"),
-    } for d in defs_raw]
+    custom_field_definitions = [
+        {
+            "id": d.get("id"),
+            "name": d.get("name"),
+            "data_type": d.get("data_type"),
+            "options_json": str(d.get("options")) if d.get("options") else None,
+            "is_required": d.get("is_required"),
+            "applies_to": d.get("applies_to"),
+            "updated_at": d.get("updated_at"),
+        }
+        for d in defs_raw
+    ]
 
     values_params: dict = {}
     if since:
@@ -161,12 +204,14 @@ async def sync_custom_fields(mock: bool = False, since: str | None = None) -> di
             value_str = str(raw_val)
         else:
             value_str = str(raw_val)
-        custom_field_values.append({
-            "employee_id": v.get("employee_id"),
-            "field_id": v.get("field_id"),
-            "value": value_str,
-            "updated_at": v.get("updated_at"),
-        })
+        custom_field_values.append(
+            {
+                "employee_id": v.get("employee_id"),
+                "field_id": v.get("field_id"),
+                "value": value_str,
+                "updated_at": v.get("updated_at"),
+            }
+        )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
     return {
@@ -176,9 +221,12 @@ async def sync_custom_fields(mock: bool = False, since: str | None = None) -> di
             "custom_field_values": custom_field_values,
         },
         "metadata": {
-            "integration": "employment_hero", "object_type": "custom_fields",
-            "organisation_id": org_id, "started_at": started,
-            "finished_at": finished, "since": since,
+            "integration": "employment_hero",
+            "object_type": "custom_fields",
+            "organisation_id": org_id,
+            "started_at": started,
+            "finished_at": finished,
+            "since": since,
             "row_counts": {
                 "custom_field_definitions": len(custom_field_definitions),
                 "custom_field_values": len(custom_field_values),

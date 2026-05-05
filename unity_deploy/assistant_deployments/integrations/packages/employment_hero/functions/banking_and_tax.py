@@ -41,7 +41,9 @@ async def get_banking_details(
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
 
     def _mask_tail(value, keep=4):
@@ -80,19 +82,25 @@ async def list_super_funds(
 ) -> dict:
     """List superannuation / pension fund records (AU + UK).  CRITICAL TIER."""
     if mock:
-        return {"super_funds": [
-            {"employee_id": "emp-mock-1",
-             "scheme_name": "NEST Pensions (UK)",
-             "member_id_masked": "****5678",
-             "contribution_pct": 5.0,
-             "_warning": "Masked pension record."},
-        ]}
+        return {
+            "super_funds": [
+                {
+                    "employee_id": "emp-mock-1",
+                    "scheme_name": "NEST Pensions (UK)",
+                    "member_id_masked": "****5678",
+                    "contribution_pct": 5.0,
+                    "_warning": "Masked pension record.",
+                },
+            ]
+        }
 
     if not confirm_user_authorised:
         return {"error": "Refused: confirm_user_authorised=True is required."}
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
 
     def _mask_tail(value, keep=4):
@@ -116,15 +124,18 @@ async def list_super_funds(
     rows = body.get("data") or body.get("items") or []
     masked = []
     for r in rows:
-        masked.append({
-            "employee_id": r.get("employee_id"),
-            "scheme_name": r.get("scheme_name") or r.get("fund_name"),
-            "member_id_masked": _mask_tail(
-                r.get("member_id") or r.get("usi"), keep=4,
-            ),
-            "contribution_pct": r.get("contribution_pct"),
-            "is_active": r.get("is_active"),
-        })
+        masked.append(
+            {
+                "employee_id": r.get("employee_id"),
+                "scheme_name": r.get("scheme_name") or r.get("fund_name"),
+                "member_id_masked": _mask_tail(
+                    r.get("member_id") or r.get("usi"),
+                    keep=4,
+                ),
+                "contribution_pct": r.get("contribution_pct"),
+                "is_active": r.get("is_active"),
+            }
+        )
     return {"super_funds": masked}
 
 
@@ -161,8 +172,11 @@ async def get_tax_declaration(
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -177,8 +191,7 @@ async def get_tax_declaration(
         "ni_number_status": "PRESENT" if t.get("ni_number") else "MISSING",
         "tfn_status": "PRESENT" if t.get("tfn") else "MISSING",
         "is_student_loan": t.get("is_student_loan"),
-        "declaration_signed_at": t.get("declaration_signed_at")
-                                or t.get("signed_at"),
+        "declaration_signed_at": t.get("declaration_signed_at") or t.get("signed_at"),
         "_warning": (
             "Masked tax declaration.  NI numbers / TFNs / personal tax "
             "codes must be viewed in Employment Hero directly."

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-
 # ---------------------------------------------------------------------------
 # Categories
 # ---------------------------------------------------------------------------
@@ -16,20 +15,43 @@ async def list_leave_categories(mock: bool = True) -> dict:
     if mock:
         return {
             "categories": [
-                {"id": "lc-1", "name": "Annual Leave", "is_paid": True,
-                 "accrual_rule": "statutory_uk_28_days", "country": "GB"},
-                {"id": "lc-2", "name": "Sick Leave (SSP)", "is_paid": True,
-                 "accrual_rule": "uk_ssp", "country": "GB"},
-                {"id": "lc-3", "name": "Maternity Leave (SMP)", "is_paid": True,
-                 "accrual_rule": "uk_smp", "country": "GB"},
-                {"id": "lc-4", "name": "Unpaid Leave", "is_paid": False,
-                 "accrual_rule": None, "country": "GB"},
+                {
+                    "id": "lc-1",
+                    "name": "Annual Leave",
+                    "is_paid": True,
+                    "accrual_rule": "statutory_uk_28_days",
+                    "country": "GB",
+                },
+                {
+                    "id": "lc-2",
+                    "name": "Sick Leave (SSP)",
+                    "is_paid": True,
+                    "accrual_rule": "uk_ssp",
+                    "country": "GB",
+                },
+                {
+                    "id": "lc-3",
+                    "name": "Maternity Leave (SMP)",
+                    "is_paid": True,
+                    "accrual_rule": "uk_smp",
+                    "country": "GB",
+                },
+                {
+                    "id": "lc-4",
+                    "name": "Unpaid Leave",
+                    "is_paid": False,
+                    "accrual_rule": None,
+                    "country": "GB",
+                },
             ],
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -43,12 +65,19 @@ async def list_leave_categories(mock: bool = True) -> dict:
 async def get_leave_category(category_id: str, mock: bool = True) -> dict:
     """Get one leave category by id."""
     if mock:
-        return {"id": str(category_id), "name": "Annual Leave",
-                "is_paid": True, "accrual_rule": "statutory_uk_28_days",
-                "country": "GB"}
+        return {
+            "id": str(category_id),
+            "name": "Annual Leave",
+            "is_paid": True,
+            "accrual_rule": "statutory_uk_28_days",
+            "country": "GB",
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -72,18 +101,29 @@ async def list_leave_balances(
     if mock:
         return {
             "balances": [
-                {"employee_id": "emp-mock-1", "category_id": "lc-1",
-                 "balance_hours": 168.0, "accrued_hours": 224.0,
-                 "category_name": "Annual Leave"},
-                {"employee_id": "emp-mock-1", "category_id": "lc-2",
-                 "balance_hours": 280.0, "accrued_hours": 280.0,
-                 "category_name": "Sick Leave (SSP)"},
+                {
+                    "employee_id": "emp-mock-1",
+                    "category_id": "lc-1",
+                    "balance_hours": 168.0,
+                    "accrued_hours": 224.0,
+                    "category_name": "Annual Leave",
+                },
+                {
+                    "employee_id": "emp-mock-1",
+                    "category_id": "lc-2",
+                    "balance_hours": 280.0,
+                    "accrued_hours": 280.0,
+                    "category_name": "Sick Leave (SSP)",
+                },
             ],
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -106,19 +146,29 @@ async def get_leave_balance(
     """Get an employee's leave balance, optionally for a single category."""
     if mock:
         if category_id:
-            return {"employee_id": employee_id, "category_id": category_id,
-                    "balance_hours": 168.0, "accrued_hours": 224.0}
+            return {
+                "employee_id": employee_id,
+                "category_id": category_id,
+                "balance_hours": 168.0,
+                "accrued_hours": 224.0,
+            }
         return {
             "employee_id": employee_id,
             "balances": [
-                {"category_id": "lc-1", "balance_hours": 168.0,
-                 "category_name": "Annual Leave"},
+                {
+                    "category_id": "lc-1",
+                    "balance_hours": 168.0,
+                    "category_name": "Annual Leave",
+                },
             ],
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -152,16 +202,25 @@ async def list_leave_requests(
     if mock:
         return {
             "requests": [
-                {"id": "lr-mock-1", "employee_id": "emp-mock-1",
-                 "category_id": "lc-1", "start_date": "2026-05-12",
-                 "end_date": "2026-05-16", "status": "approved",
-                 "total_hours": 32.0, "notes": None},
+                {
+                    "id": "lr-mock-1",
+                    "employee_id": "emp-mock-1",
+                    "category_id": "lc-1",
+                    "start_date": "2026-05-12",
+                    "end_date": "2026-05-16",
+                    "status": "approved",
+                    "total_hours": 32.0,
+                    "notes": None,
+                },
             ],
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -184,13 +243,21 @@ async def list_leave_requests(
 async def get_leave_request(request_id: str, mock: bool = True) -> dict:
     """Get one leave request by id."""
     if mock:
-        return {"id": str(request_id), "employee_id": "emp-mock-1",
-                "category_id": "lc-1", "start_date": "2026-05-12",
-                "end_date": "2026-05-16", "status": "approved",
-                "total_hours": 32.0}
+        return {
+            "id": str(request_id),
+            "employee_id": "emp-mock-1",
+            "category_id": "lc-1",
+            "start_date": "2026-05-12",
+            "end_date": "2026-05-16",
+            "status": "approved",
+            "total_hours": 32.0,
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -218,13 +285,20 @@ async def submit_leave_request(
     ``confirm=True``.
     """
     if mock:
-        return {"id": "lr-mock-new", "employee_id": employee_id,
-                "category_id": category_id, "start_date": start_date,
-                "end_date": end_date, "status": "pending",
-                "_mocked": True}
+        return {
+            "id": "lr-mock-new",
+            "employee_id": employee_id,
+            "category_id": category_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "status": "pending",
+            "_mocked": True,
+        }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_post, org_path, _org_id_or_error,
+        eh_post,
+        org_path,
+        _org_id_or_error,
     )
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
@@ -278,6 +352,7 @@ async def submit_leave_request(
 async def sync_leave(mock: bool = False, since: str | None = None) -> dict:
     """Snapshot leave categories, balances, and requests."""
     import datetime as _dt
+
     schema_version = "employment-hero.leave.snapshot.v1"
     started = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
 
@@ -285,29 +360,48 @@ async def sync_leave(mock: bool = False, since: str | None = None) -> dict:
         return {
             "schema_version": schema_version,
             "tables": {
-                "leave_categories": [{"id": "lc-1", "name": "Annual Leave",
-                                       "is_paid": True, "country": "GB"}],
-                "leave_balances": [{"employee_id": "emp-mock-1",
-                                     "category_id": "lc-1",
-                                     "balance_key": "emp-mock-1:lc-1",
-                                     "balance_hours": 168.0,
-                                     "accrued_hours": 224.0}],
-                "leave_requests": [{"id": "lr-mock-1",
-                                     "employee_id": "emp-mock-1",
-                                     "category_id": "lc-1",
-                                     "start_date": "2026-05-12",
-                                     "end_date": "2026-05-16",
-                                     "status": "approved",
-                                     "total_hours": 32.0,
-                                     "updated_at": started}],
+                "leave_categories": [
+                    {
+                        "id": "lc-1",
+                        "name": "Annual Leave",
+                        "is_paid": True,
+                        "country": "GB",
+                    }
+                ],
+                "leave_balances": [
+                    {
+                        "employee_id": "emp-mock-1",
+                        "category_id": "lc-1",
+                        "balance_key": "emp-mock-1:lc-1",
+                        "balance_hours": 168.0,
+                        "accrued_hours": 224.0,
+                    }
+                ],
+                "leave_requests": [
+                    {
+                        "id": "lr-mock-1",
+                        "employee_id": "emp-mock-1",
+                        "category_id": "lc-1",
+                        "start_date": "2026-05-12",
+                        "end_date": "2026-05-16",
+                        "status": "approved",
+                        "total_hours": 32.0,
+                        "updated_at": started,
+                    }
+                ],
             },
-            "metadata": {"integration": "employment_hero",
-                         "object_type": "leave",
-                         "started_at": started, "mode": "mock"},
+            "metadata": {
+                "integration": "employment_hero",
+                "object_type": "leave",
+                "started_at": started,
+                "mode": "mock",
+            },
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_paginate, org_path, _org_id_or_error,
+        eh_paginate,
+        org_path,
+        _org_id_or_error,
     )
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
@@ -324,29 +418,35 @@ async def sync_leave(mock: bool = False, since: str | None = None) -> dict:
         page_size=cfg["api_page_size"],
         max_pages=cfg["max_pages_per_sync"],
     )
-    leave_categories = [{
-        "id": c.get("id"),
-        "name": c.get("name"),
-        "is_paid": c.get("is_paid"),
-        "accrual_rule": c.get("accrual_rule"),
-        "country": c.get("country"),
-        "created_at": c.get("created_at"),
-        "updated_at": c.get("updated_at"),
-    } for c in cats_raw]
+    leave_categories = [
+        {
+            "id": c.get("id"),
+            "name": c.get("name"),
+            "is_paid": c.get("is_paid"),
+            "accrual_rule": c.get("accrual_rule"),
+            "country": c.get("country"),
+            "created_at": c.get("created_at"),
+            "updated_at": c.get("updated_at"),
+        }
+        for c in cats_raw
+    ]
 
     balances_raw = await eh_paginate(
         org_path("/leave_balances"),
         page_size=cfg["api_page_size"],
         max_pages=cfg["max_pages_per_sync"],
     )
-    leave_balances = [{
-        "balance_key": f"{b.get('employee_id')}:{b.get('category_id')}",
-        "employee_id": b.get("employee_id"),
-        "category_id": b.get("category_id"),
-        "balance_hours": b.get("balance_hours"),
-        "accrued_hours": b.get("accrued_hours"),
-        "as_of": b.get("as_of") or b.get("updated_at"),
-    } for b in balances_raw]
+    leave_balances = [
+        {
+            "balance_key": f"{b.get('employee_id')}:{b.get('category_id')}",
+            "employee_id": b.get("employee_id"),
+            "category_id": b.get("category_id"),
+            "balance_hours": b.get("balance_hours"),
+            "accrued_hours": b.get("accrued_hours"),
+            "as_of": b.get("as_of") or b.get("updated_at"),
+        }
+        for b in balances_raw
+    ]
 
     req_params: dict = {}
     if since:
@@ -357,19 +457,22 @@ async def sync_leave(mock: bool = False, since: str | None = None) -> dict:
         page_size=cfg["api_page_size"],
         max_pages=cfg["max_pages_per_sync"],
     )
-    leave_requests = [{
-        "id": r.get("id"),
-        "employee_id": r.get("employee_id"),
-        "category_id": r.get("category_id"),
-        "start_date": r.get("start_date"),
-        "end_date": r.get("end_date"),
-        "status": r.get("status"),
-        "total_hours": r.get("total_hours"),
-        "approved_by": r.get("approved_by"),
-        "approved_at": r.get("approved_at"),
-        "created_at": r.get("created_at"),
-        "updated_at": r.get("updated_at"),
-    } for r in requests_raw]
+    leave_requests = [
+        {
+            "id": r.get("id"),
+            "employee_id": r.get("employee_id"),
+            "category_id": r.get("category_id"),
+            "start_date": r.get("start_date"),
+            "end_date": r.get("end_date"),
+            "status": r.get("status"),
+            "total_hours": r.get("total_hours"),
+            "approved_by": r.get("approved_by"),
+            "approved_at": r.get("approved_at"),
+            "created_at": r.get("created_at"),
+            "updated_at": r.get("updated_at"),
+        }
+        for r in requests_raw
+    ]
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
     return {
@@ -399,20 +502,23 @@ async def sync_leave(mock: bool = False, since: str | None = None) -> dict:
 async def _mirror_leave_request(record: dict) -> None:
     """Write a single leave request row back into DataManager same-tick."""
     from unity.manager_registry import ManagerRegistry
+
     dm = ManagerRegistry.get_data_manager()
     try:
         dm.ingest(
             "EmploymentHero/Leave/Requests",
-            rows=[{
-                "id": record.get("id"),
-                "employee_id": record.get("employee_id"),
-                "category_id": record.get("category_id"),
-                "start_date": record.get("start_date"),
-                "end_date": record.get("end_date"),
-                "status": record.get("status"),
-                "total_hours": record.get("total_hours"),
-                "updated_at": record.get("updated_at"),
-            }],
+            rows=[
+                {
+                    "id": record.get("id"),
+                    "employee_id": record.get("employee_id"),
+                    "category_id": record.get("category_id"),
+                    "start_date": record.get("start_date"),
+                    "end_date": record.get("end_date"),
+                    "status": record.get("status"),
+                    "total_hours": record.get("total_hours"),
+                    "updated_at": record.get("updated_at"),
+                }
+            ],
             unique_keys={"id": "str"},
             infer_untyped_fields=True,
         )

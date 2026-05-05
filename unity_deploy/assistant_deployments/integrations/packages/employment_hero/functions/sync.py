@@ -44,23 +44,23 @@ async def run_employmenthero_sync_tick(
     # Object key -> (module stem, function name).  Inlined per
     # FunctionManager isolation rule — no module-level globals.
     object_to_sync_fn: dict[str, tuple[str, str]] = {
-        "workforce":          ("workforce",         "sync_workforce"),
-        "employee_personal":  ("employee_personal", "sync_employee_personal"),
-        "employee_notes":     ("employee_notes",    "sync_employee_notes"),
-        "leave":              ("leave",             "sync_leave"),
-        "timesheets":         ("timesheets",        "sync_timesheets"),
-        "expenses":           ("expenses",          "sync_expenses"),
-        "policies":           ("policies",          "sync_policies"),
-        "documents":          ("documents",         "sync_documents"),
-        "custom_fields":      ("custom_fields",     "sync_custom_fields"),
-        "onboarding":         ("onboarding",        "sync_onboarding"),
-        "qualifications":     ("qualifications",    "sync_qualifications"),
-        "performance":        ("performance",       "sync_performance"),
-        "recognition":        ("recognition",       "sync_recognition"),
-        "surveys":            ("surveys",           "sync_surveys"),
-        "learning":           ("learning",          "sync_learning"),
-        "recruitment":        ("recruitment",       "sync_recruitment"),
-        "pay":                ("pay",               "sync_pay"),
+        "workforce": ("workforce", "sync_workforce"),
+        "employee_personal": ("employee_personal", "sync_employee_personal"),
+        "employee_notes": ("employee_notes", "sync_employee_notes"),
+        "leave": ("leave", "sync_leave"),
+        "timesheets": ("timesheets", "sync_timesheets"),
+        "expenses": ("expenses", "sync_expenses"),
+        "policies": ("policies", "sync_policies"),
+        "documents": ("documents", "sync_documents"),
+        "custom_fields": ("custom_fields", "sync_custom_fields"),
+        "onboarding": ("onboarding", "sync_onboarding"),
+        "qualifications": ("qualifications", "sync_qualifications"),
+        "performance": ("performance", "sync_performance"),
+        "recognition": ("recognition", "sync_recognition"),
+        "surveys": ("surveys", "sync_surveys"),
+        "learning": ("learning", "sync_learning"),
+        "recruitment": ("recruitment", "sync_recruitment"),
+        "pay": ("pay", "sync_pay"),
     }
 
     cfg = get_employmenthero_config()
@@ -81,25 +81,45 @@ async def run_employmenthero_sync_tick(
         finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
         tables = {**wf["tables"], **qu["tables"]}
         tables["sync_state"] = [
-            {"object_type": "workforce",      "last_synced_at": finished, "last_status": "ok"},
-            {"object_type": "qualifications", "last_synced_at": finished, "last_status": "ok"},
+            {
+                "object_type": "workforce",
+                "last_synced_at": finished,
+                "last_status": "ok",
+            },
+            {
+                "object_type": "qualifications",
+                "last_synced_at": finished,
+                "last_status": "ok",
+            },
         ]
-        tables["sync_runs"] = [{
-            "started_at": started,
-            "finished_at": finished,
-            "row_totals_json": str({k: len(v) for k, v in tables.items() if k not in ("sync_state", "sync_runs")}),
-            "errors_json": "[]",
-            "config_snapshot_json": str({
-                "sync_min_interval_seconds": cfg["sync_min_interval_seconds"],
-                "api_page_size": cfg["api_page_size"],
-            }),
-            "mode": "mock",
-        }]
+        tables["sync_runs"] = [
+            {
+                "started_at": started,
+                "finished_at": finished,
+                "row_totals_json": str(
+                    {
+                        k: len(v)
+                        for k, v in tables.items()
+                        if k not in ("sync_state", "sync_runs")
+                    }
+                ),
+                "errors_json": "[]",
+                "config_snapshot_json": str(
+                    {
+                        "sync_min_interval_seconds": cfg["sync_min_interval_seconds"],
+                        "api_page_size": cfg["api_page_size"],
+                    }
+                ),
+                "mode": "mock",
+            }
+        ]
         return {
             "schema_version": schema_version,
             "tables": tables,
             "metadata": {
-                "started_at": started, "finished_at": finished, "mode": "mock",
+                "started_at": started,
+                "finished_at": finished,
+                "mode": "mock",
             },
         }
 
@@ -116,10 +136,18 @@ async def run_employmenthero_sync_tick(
             return
         gap = _seconds_since(_get_state_watermark(sync_state, object_key))
         min_gap = cfg["object_intervals"].get(
-            object_key, cfg["sync_min_interval_seconds"],
+            object_key,
+            cfg["sync_min_interval_seconds"],
         )
         if not full and gap is not None and gap < min_gap:
-            skipped.append({"object_type": object_key, "reason": "cadence_not_due", "gap_seconds": gap, "min_gap_seconds": min_gap})
+            skipped.append(
+                {
+                    "object_type": object_key,
+                    "reason": "cadence_not_due",
+                    "gap_seconds": gap,
+                    "min_gap_seconds": min_gap,
+                }
+            )
             return
         module_stem, fn_name = object_to_sync_fn[object_key]
         try:
@@ -132,10 +160,12 @@ async def run_employmenthero_sync_tick(
             return
         fn = getattr(module, fn_name, None)
         if fn is None:
-            errors.append({
-                "object_type": object_key,
-                "error": f"missing function {fn_name} in module {module_stem}",
-            })
+            errors.append(
+                {
+                    "object_type": object_key,
+                    "error": f"missing function {fn_name} in module {module_stem}",
+                }
+            )
             return
         kwargs: dict = {"mock": False}
         watermark = _get_state_watermark(sync_state, object_key)
@@ -170,25 +200,30 @@ async def run_employmenthero_sync_tick(
         for k in cfg["sync_objects"]
         if k not in {entry["object_type"] for entry in errors}
     ]
-    aggregated["sync_runs"] = [{
-        "started_at": started,
-        "finished_at": finished,
-        "row_totals_json": str(row_totals),
-        "errors_json": str(errors),
-        "skipped_json": str(skipped),
-        "config_snapshot_json": str({
-            k: cfg[k] for k in (
-                "sync_min_interval_seconds",
-                "api_page_size",
-                "recruitment_retention_days",
-                "recruitment_redact_pii",
-                "redact_performance_free_text",
-                "pay_rate_bands",
-                "redact_employee_personal",
-            )
-        }),
-        "mode": "live",
-    }]
+    aggregated["sync_runs"] = [
+        {
+            "started_at": started,
+            "finished_at": finished,
+            "row_totals_json": str(row_totals),
+            "errors_json": str(errors),
+            "skipped_json": str(skipped),
+            "config_snapshot_json": str(
+                {
+                    k: cfg[k]
+                    for k in (
+                        "sync_min_interval_seconds",
+                        "api_page_size",
+                        "recruitment_retention_days",
+                        "recruitment_redact_pii",
+                        "redact_performance_free_text",
+                        "pay_rate_bands",
+                        "redact_employee_personal",
+                    )
+                }
+            ),
+            "mode": "live",
+        }
+    ]
 
     return {
         "schema_version": schema_version,
@@ -209,8 +244,16 @@ async def get_sync_state(mock: bool = True) -> dict:
     if mock:
         return {
             "sync_state": [
-                {"object_type": "workforce", "last_synced_at": "2026-04-30T02:00:00Z", "last_status": "ok"},
-                {"object_type": "leave", "last_synced_at": "2026-04-30T09:00:00Z", "last_status": "ok"},
+                {
+                    "object_type": "workforce",
+                    "last_synced_at": "2026-04-30T02:00:00Z",
+                    "last_status": "ok",
+                },
+                {
+                    "object_type": "leave",
+                    "last_synced_at": "2026-04-30T09:00:00Z",
+                    "last_status": "ok",
+                },
             ],
             "latest_run": {
                 "started_at": "2026-04-30T09:00:00Z",
@@ -235,16 +278,20 @@ async def probe_tier(force: bool = False, mock: bool = True) -> dict:
     ``force=True`` to bypass the cache.
     """
     import datetime as _dt
+
     if mock:
         return {
             "probed_at": _dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
             "ttl_seconds": 86_400,
             "capabilities": {
-                "workforce":      {"available": True, "status_code": 200},
-                "leave":          {"available": True, "status_code": 200},
+                "workforce": {"available": True, "status_code": 200},
+                "leave": {"available": True, "status_code": 200},
                 "qualifications": {"available": True, "status_code": 200},
-                "pay":            {"available": False, "status_code": 403,
-                                   "hint": "Token lacks pay scope."},
+                "pay": {
+                    "available": False,
+                    "status_code": 403,
+                    "hint": "Token lacks pay scope.",
+                },
             },
         }
 
@@ -286,10 +333,12 @@ async def probe_tier(force: bool = False, mock: bool = True) -> dict:
     try:
         dm.ingest(
             "EmploymentHero/Workforce/Meta/Capabilities",
-            rows=[{
-                "probed_at": probed_at,
-                "capabilities": capabilities,
-            }],
+            rows=[
+                {
+                    "probed_at": probed_at,
+                    "capabilities": capabilities,
+                }
+            ],
             description="Most recent token capability probe.",
             unique_keys={"probed_at": "str"},
             infer_untyped_fields=True,
@@ -376,6 +425,7 @@ def _seconds_since(iso_ts: str | None) -> int | None:
     if not iso_ts:
         return None
     import datetime as _dt
+
     try:
         parsed = _dt.datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
     except (ValueError, TypeError):

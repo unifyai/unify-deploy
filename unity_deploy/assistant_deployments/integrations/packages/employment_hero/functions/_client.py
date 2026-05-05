@@ -33,7 +33,6 @@ from __future__ import annotations
 import asyncio
 import time
 
-
 # ---------------------------------------------------------------------------
 # In-process access-token cache
 # ---------------------------------------------------------------------------
@@ -54,7 +53,8 @@ def _base_url() -> str:
     import os
 
     return os.environ.get(
-        "EMPLOYMENTHERO_BASE_URL", "https://api.employmenthero.com",
+        "EMPLOYMENTHERO_BASE_URL",
+        "https://api.employmenthero.com",
     )
 
 
@@ -139,11 +139,13 @@ async def _resolve_access_token() -> tuple[str | None, dict | None]:
 
     if not (client_id and client_secret and refresh_token):
         missing = [
-            n for n, v in (
+            n
+            for n, v in (
                 ("EMPLOYMENTHERO_OAUTH_CLIENT_ID", client_id),
                 ("EMPLOYMENTHERO_OAUTH_CLIENT_SECRET", client_secret),
                 ("EMPLOYMENTHERO_REFRESH_TOKEN", refresh_token),
-            ) if not v
+            )
+            if not v
         ]
         return None, _not_connected_envelope(missing)
 
@@ -220,7 +222,9 @@ def _invalidate_cached_token(token: str) -> None:
     next call retries via :func:`_resolve_access_token` which re-mints
     a fresh token.
     """
-    stale_keys = [k for k, (cached_token, _) in _TOKEN_CACHE.items() if cached_token == token]
+    stale_keys = [
+        k for k, (cached_token, _) in _TOKEN_CACHE.items() if cached_token == token
+    ]
     for k in stale_keys:
         _TOKEN_CACHE.pop(k, None)
 
@@ -442,6 +446,7 @@ async def eh_delete(path: str, *, timeout: float | None = None) -> dict:
 # Pagination
 # ---------------------------------------------------------------------------
 
+
 async def eh_paginate(
     path: str,
     *,
@@ -480,6 +485,7 @@ async def eh_paginate(
 # ---------------------------------------------------------------------------
 # Org-scoped path helpers
 # ---------------------------------------------------------------------------
+
 
 def _org_id_or_error() -> tuple[str | None, dict | None]:
     """Return ``(organisation_id, None)`` on success or ``(None, error_envelope)``

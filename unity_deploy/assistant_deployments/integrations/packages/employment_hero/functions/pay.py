@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-
 # ---------------------------------------------------------------------------
 # Pay rate banding
 # ---------------------------------------------------------------------------
@@ -26,8 +25,15 @@ def _band_rate(amount: float | None, currency: str = "GBP") -> str:
     sync_pay function can depend on it as a registered helper.
     """
     bands = [
-        25_000, 35_000, 45_000, 60_000, 80_000,
-        100_000, 130_000, 170_000, 220_000,
+        25_000,
+        35_000,
+        45_000,
+        60_000,
+        80_000,
+        100_000,
+        130_000,
+        170_000,
+        220_000,
     ]
     if amount is None:
         return "unknown"
@@ -55,18 +61,29 @@ async def list_pay_runs(
     period-totals across the organisation, never per-employee.
     """
     if mock:
-        return {"pay_runs": [
-            {"id": "pr-1", "period_start": "2026-04-01",
-             "period_end": "2026-04-30", "status": "finalised",
-             "employee_count": 124,
-             "total_gross_pay": 412_500.00, "total_tax": 91_300.00,
-             "total_net_pay": 321_200.00, "currency": "GBP",
-             "finalised_at": "2026-04-29T16:00:00Z"},
-        ]}
+        return {
+            "pay_runs": [
+                {
+                    "id": "pr-1",
+                    "period_start": "2026-04-01",
+                    "period_end": "2026-04-30",
+                    "status": "finalised",
+                    "employee_count": 124,
+                    "total_gross_pay": 412_500.00,
+                    "total_tax": 91_300.00,
+                    "total_net_pay": 321_200.00,
+                    "currency": "GBP",
+                    "finalised_at": "2026-04-29T16:00:00Z",
+                },
+            ]
+        }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -85,14 +102,22 @@ async def list_pay_runs(
 async def get_pay_run(pay_run_id: str, mock: bool = True) -> dict:
     """Get one pay run (org-totals only)."""
     if mock:
-        return {"id": str(pay_run_id),
-                "period_start": "2026-04-01", "period_end": "2026-04-30",
-                "status": "finalised", "employee_count": 124,
-                "total_gross_pay": 412_500.00, "currency": "GBP",
-                "finalised_at": "2026-04-29T16:00:00Z"}
+        return {
+            "id": str(pay_run_id),
+            "period_start": "2026-04-01",
+            "period_end": "2026-04-30",
+            "status": "finalised",
+            "employee_count": 124,
+            "total_gross_pay": 412_500.00,
+            "currency": "GBP",
+            "finalised_at": "2026-04-29T16:00:00Z",
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -105,17 +130,34 @@ async def get_pay_run(pay_run_id: str, mock: bool = True) -> dict:
 @custom_function()
 async def list_pay_categories(mock: bool = True) -> dict:
     if mock:
-        return {"categories": [
-            {"id": "pc-1", "name": "Ordinary Hours", "is_taxable": True,
-             "is_pensionable": True},
-            {"id": "pc-2", "name": "Overtime", "is_taxable": True,
-             "is_pensionable": False},
-            {"id": "pc-3", "name": "Holiday Pay", "is_taxable": True,
-             "is_pensionable": True},
-        ]}
+        return {
+            "categories": [
+                {
+                    "id": "pc-1",
+                    "name": "Ordinary Hours",
+                    "is_taxable": True,
+                    "is_pensionable": True,
+                },
+                {
+                    "id": "pc-2",
+                    "name": "Overtime",
+                    "is_taxable": True,
+                    "is_pensionable": False,
+                },
+                {
+                    "id": "pc-3",
+                    "name": "Holiday Pay",
+                    "is_taxable": True,
+                    "is_pensionable": True,
+                },
+            ]
+        }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -143,14 +185,16 @@ async def get_employment_terms(
     employee themselves).
     """
     if mock:
-        return {"employee_id": employee_id,
-                "classification": "full_time",
-                "rate_type": "salary",
-                "annualised_amount": 42_500.00,
-                "currency": "GBP",
-                "effective_from": "2025-04-01",
-                "effective_to": None,
-                "_warning": "Mock data; live API returns exact figures."}
+        return {
+            "employee_id": employee_id,
+            "classification": "full_time",
+            "rate_type": "salary",
+            "annualised_amount": 42_500.00,
+            "currency": "GBP",
+            "effective_from": "2025-04-01",
+            "effective_to": None,
+            "_warning": "Mock data; live API returns exact figures.",
+        }
 
     if not confirm_user_authorised:
         return {
@@ -163,8 +207,11 @@ async def get_employment_terms(
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -181,12 +228,18 @@ async def list_employment_terms(
 ) -> dict:
     """List employment terms across all employees (CRITICAL TIER)."""
     if mock:
-        return {"terms": [
-            {"employee_id": "emp-mock-1",
-             "classification": "full_time", "rate_type": "salary",
-             "annualised_amount": 42_500.00, "currency": "GBP",
-             "effective_from": "2025-04-01"},
-        ]}
+        return {
+            "terms": [
+                {
+                    "employee_id": "emp-mock-1",
+                    "classification": "full_time",
+                    "rate_type": "salary",
+                    "annualised_amount": 42_500.00,
+                    "currency": "GBP",
+                    "effective_from": "2025-04-01",
+                },
+            ]
+        }
 
     if not confirm_user_authorised:
         return {
@@ -194,8 +247,11 @@ async def list_employment_terms(
             "hint": "Bulk pay-rate data — confirm authorisation before retrying.",
         }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -220,6 +276,7 @@ async def sync_pay(mock: bool = False, since: str | None = None) -> dict:
     analytics work without exposing exact salaries.
     """
     import datetime as _dt
+
     schema_version = "employment-hero.pay.snapshot.v1"
     started = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
 
@@ -227,43 +284,63 @@ async def sync_pay(mock: bool = False, since: str | None = None) -> dict:
         return {
             "schema_version": schema_version,
             "tables": {
-                "pay_runs": [{"id": "pr-1",
-                               "period_start": "2026-04-01",
-                               "period_end": "2026-04-30",
-                               "status": "finalised",
-                               "employee_count": 124,
-                               "total_gross_pay": 412_500.00,
-                               "total_tax": 91_300.00,
-                               "total_net_pay": 321_200.00,
-                               "currency": "GBP",
-                               "finalised_at": "2026-04-29T16:00:00Z",
-                               "updated_at": started}],
-                "pay_categories": [{"id": "pc-1", "name": "Ordinary Hours",
-                                     "is_taxable": True, "is_pensionable": True,
-                                     "updated_at": started}],
-                "employment_terms": [{"employee_id": "emp-mock-1",
-                                       "effective_from": "2025-04-01",
-                                       "effective_to": None,
-                                       "classification": "full_time",
-                                       "rate_type": "salary",
-                                       "annualised_band": "<45,000 GBP",
-                                       "currency": "GBP",
-                                       "updated_at": started}],
+                "pay_runs": [
+                    {
+                        "id": "pr-1",
+                        "period_start": "2026-04-01",
+                        "period_end": "2026-04-30",
+                        "status": "finalised",
+                        "employee_count": 124,
+                        "total_gross_pay": 412_500.00,
+                        "total_tax": 91_300.00,
+                        "total_net_pay": 321_200.00,
+                        "currency": "GBP",
+                        "finalised_at": "2026-04-29T16:00:00Z",
+                        "updated_at": started,
+                    }
+                ],
+                "pay_categories": [
+                    {
+                        "id": "pc-1",
+                        "name": "Ordinary Hours",
+                        "is_taxable": True,
+                        "is_pensionable": True,
+                        "updated_at": started,
+                    }
+                ],
+                "employment_terms": [
+                    {
+                        "employee_id": "emp-mock-1",
+                        "effective_from": "2025-04-01",
+                        "effective_to": None,
+                        "classification": "full_time",
+                        "rate_type": "salary",
+                        "annualised_band": "<45,000 GBP",
+                        "currency": "GBP",
+                        "updated_at": started,
+                    }
+                ],
             },
-            "metadata": {"integration": "employment_hero",
-                         "object_type": "pay",
-                         "started_at": started, "mode": "mock",
-                         "banded_fields": [
-                             "employment_terms.annualised_amount -> annualised_band",
-                         ]},
+            "metadata": {
+                "integration": "employment_hero",
+                "object_type": "pay",
+                "started_at": started,
+                "mode": "mock",
+                "banded_fields": [
+                    "employment_terms.annualised_amount -> annualised_band",
+                ],
+            },
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_paginate, org_path, _org_id_or_error,
+        eh_paginate,
+        org_path,
+        _org_id_or_error,
     )
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._config import (
         get_employmenthero_config,
     )
+
     org_id, err = _org_id_or_error()
     if err is not None:
         err.update({"schema_version": schema_version, "tables": {}})
@@ -277,42 +354,54 @@ async def sync_pay(mock: bool = False, since: str | None = None) -> dict:
     if since:
         pr_params["updated_since"] = since
     pr_raw = await eh_paginate(
-        org_path("/pay_runs"), params=pr_params,
-        page_size=page_size, max_pages=max_pages,
+        org_path("/pay_runs"),
+        params=pr_params,
+        page_size=page_size,
+        max_pages=max_pages,
     )
-    pay_runs = [{
-        "id": p.get("id"),
-        "period_start": p.get("period_start"),
-        "period_end": p.get("period_end"),
-        "status": p.get("status"),
-        "employee_count": p.get("employee_count"),
-        "total_gross_pay": p.get("total_gross_pay"),
-        "total_tax": p.get("total_tax"),
-        "total_ni": p.get("total_ni") or p.get("total_employee_ni"),
-        "total_pension": p.get("total_pension"),
-        "total_net_pay": p.get("total_net_pay"),
-        "currency": p.get("currency"),
-        "finalised_at": p.get("finalised_at"),
-        "updated_at": p.get("updated_at"),
-    } for p in pr_raw]
+    pay_runs = [
+        {
+            "id": p.get("id"),
+            "period_start": p.get("period_start"),
+            "period_end": p.get("period_end"),
+            "status": p.get("status"),
+            "employee_count": p.get("employee_count"),
+            "total_gross_pay": p.get("total_gross_pay"),
+            "total_tax": p.get("total_tax"),
+            "total_ni": p.get("total_ni") or p.get("total_employee_ni"),
+            "total_pension": p.get("total_pension"),
+            "total_net_pay": p.get("total_net_pay"),
+            "currency": p.get("currency"),
+            "finalised_at": p.get("finalised_at"),
+            "updated_at": p.get("updated_at"),
+        }
+        for p in pr_raw
+    ]
 
     pc_raw = await eh_paginate(
         org_path("/pay_categories"),
-        page_size=page_size, max_pages=max_pages,
+        page_size=page_size,
+        max_pages=max_pages,
     )
-    pay_categories = [{
-        "id": pc.get("id"), "name": pc.get("name"),
-        "is_taxable": pc.get("is_taxable"),
-        "is_pensionable": pc.get("is_pensionable"),
-        "updated_at": pc.get("updated_at"),
-    } for pc in pc_raw]
+    pay_categories = [
+        {
+            "id": pc.get("id"),
+            "name": pc.get("name"),
+            "is_taxable": pc.get("is_taxable"),
+            "is_pensionable": pc.get("is_pensionable"),
+            "updated_at": pc.get("updated_at"),
+        }
+        for pc in pc_raw
+    ]
 
     et_params: dict = {}
     if since:
         et_params["updated_since"] = since
     et_raw = await eh_paginate(
-        org_path("/employment_terms"), params=et_params,
-        page_size=page_size, max_pages=max_pages,
+        org_path("/employment_terms"),
+        params=et_params,
+        page_size=page_size,
+        max_pages=max_pages,
     )
     employment_terms: list[dict] = []
     for t in et_raw:
@@ -342,12 +431,16 @@ async def sync_pay(mock: bool = False, since: str | None = None) -> dict:
             "employment_terms": employment_terms,
         },
         "metadata": {
-            "integration": "employment_hero", "object_type": "pay",
+            "integration": "employment_hero",
+            "object_type": "pay",
             "organisation_id": org_id,
-            "started_at": started, "finished_at": finished, "since": since,
+            "started_at": started,
+            "finished_at": finished,
+            "since": since,
             "banded_fields": (
                 ["employment_terms.annualised_amount -> annualised_band"]
-                if apply_bands else []
+                if apply_bands
+                else []
             ),
             "row_counts": {
                 "pay_runs": len(pay_runs),

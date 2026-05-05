@@ -17,15 +17,23 @@ async def list_medical_disclosures_count(
 ) -> dict:
     """Return counts of disclosures per employee — never the content."""
     if mock:
-        return {"counts": [
-            {"employee_id": "emp-mock-1", "count": 0},
-            {"employee_id": "emp-mock-2", "count": 1,
-             "_warning": "Disclosure exists; content not returned."},
-        ]}
+        return {
+            "counts": [
+                {"employee_id": "emp-mock-1", "count": 0},
+                {
+                    "employee_id": "emp-mock-2",
+                    "count": 1,
+                    "_warning": "Disclosure exists; content not returned.",
+                },
+            ]
+        }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -36,9 +44,11 @@ async def list_medical_disclosures_count(
         if "error" in body:
             return body
         rows = body.get("data") or body.get("items") or []
-        return {"counts": [
-            {"employee_id": employee_id, "count": len(rows)},
-        ]}
+        return {
+            "counts": [
+                {"employee_id": employee_id, "count": len(rows)},
+            ]
+        }
 
     # Org-wide count: iterate employees - tier-gated 403 returns empty.
     emps = await eh_get(org_path("/employees?include_terminated=false&limit=200"))
@@ -92,8 +102,11 @@ async def get_medical_disclosure(
             ),
         }
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err

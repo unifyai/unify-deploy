@@ -37,16 +37,22 @@ async def list_employee_payslips(
     Hero directly.
     """
     if mock:
-        return {"employee_id": employee_id, "payslips": [
-            {"id": "ps-1", "period_start": "2026-04-01",
-             "period_end": "2026-04-30",
-             "gross_masked": "£***.**",
-             "net_masked": "£***.**",
-             "tax_masked": "£***.**",
-             "currency": "GBP",
-             "issued_at": "2026-04-29T16:00:00Z",
-             "_warning": "Masked payslip — view exact figures in Employment Hero."},
-        ]}
+        return {
+            "employee_id": employee_id,
+            "payslips": [
+                {
+                    "id": "ps-1",
+                    "period_start": "2026-04-01",
+                    "period_end": "2026-04-30",
+                    "gross_masked": "£***.**",
+                    "net_masked": "£***.**",
+                    "tax_masked": "£***.**",
+                    "currency": "GBP",
+                    "issued_at": "2026-04-29T16:00:00Z",
+                    "_warning": "Masked payslip — view exact figures in Employment Hero.",
+                },
+            ],
+        }
 
     if not confirm_user_authorised:
         return {
@@ -59,8 +65,11 @@ async def list_employee_payslips(
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err
@@ -74,20 +83,22 @@ async def list_employee_payslips(
     masked = []
     for p in rows:
         currency = p.get("currency") or "GBP"
-        masked.append({
-            "id": p.get("id"),
-            "period_start": p.get("period_start"),
-            "period_end": p.get("period_end"),
-            "gross_masked": _mask_currency(p.get("gross"), currency),
-            "net_masked": _mask_currency(p.get("net"), currency),
-            "tax_masked": _mask_currency(p.get("tax"), currency),
-            "currency": currency,
-            "issued_at": p.get("issued_at"),
-            "_warning": (
-                "Masked payslip.  Exact line-item values must be viewed "
-                "in Employment Hero directly."
-            ),
-        })
+        masked.append(
+            {
+                "id": p.get("id"),
+                "period_start": p.get("period_start"),
+                "period_end": p.get("period_end"),
+                "gross_masked": _mask_currency(p.get("gross"), currency),
+                "net_masked": _mask_currency(p.get("net"), currency),
+                "tax_masked": _mask_currency(p.get("tax"), currency),
+                "currency": currency,
+                "issued_at": p.get("issued_at"),
+                "_warning": (
+                    "Masked payslip.  Exact line-item values must be viewed "
+                    "in Employment Hero directly."
+                ),
+            }
+        )
     return {"employee_id": employee_id, "payslips": masked}
 
 
@@ -99,11 +110,16 @@ async def get_payslip(
 ) -> dict:
     """Get one payslip.  CRITICAL TIER, masked return."""
     if mock:
-        return {"id": str(payslip_id),
-                "period_start": "2026-04-01", "period_end": "2026-04-30",
-                "gross_masked": "£***.**", "net_masked": "£***.**",
-                "tax_masked": "£***.**", "currency": "GBP",
-                "_warning": "Masked payslip."}
+        return {
+            "id": str(payslip_id),
+            "period_start": "2026-04-01",
+            "period_end": "2026-04-30",
+            "gross_masked": "£***.**",
+            "net_masked": "£***.**",
+            "tax_masked": "£***.**",
+            "currency": "GBP",
+            "_warning": "Masked payslip.",
+        }
 
     if not confirm_user_authorised:
         return {
@@ -112,8 +128,11 @@ async def get_payslip(
         }
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get, org_path, _org_id_or_error,
+        eh_get,
+        org_path,
+        _org_id_or_error,
     )
+
     _, err = _org_id_or_error()
     if err is not None:
         return err

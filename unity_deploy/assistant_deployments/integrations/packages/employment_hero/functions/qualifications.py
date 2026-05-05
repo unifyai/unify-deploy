@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
 
-
 # ---------------------------------------------------------------------------
 # Live reads
 # ---------------------------------------------------------------------------
@@ -23,18 +22,34 @@ async def list_qualifications(mock: bool = True) -> dict:
     if mock:
         return {
             "qualifications": [
-                {"id": "qual-mock-1", "name": "Gas Safe Registration",
-                 "category": "trade", "validity_months": 12,
-                 "is_mandatory_for_role": True},
-                {"id": "qual-mock-2", "name": "NICEIC Approved Contractor",
-                 "category": "trade", "validity_months": 12,
-                 "is_mandatory_for_role": True},
-                {"id": "qual-mock-3", "name": "ARLA Propertymark Level 3",
-                 "category": "professional", "validity_months": 12,
-                 "is_mandatory_for_role": False},
-                {"id": "qual-mock-4", "name": "NEBOSH General Certificate",
-                 "category": "safety", "validity_months": 36,
-                 "is_mandatory_for_role": False},
+                {
+                    "id": "qual-mock-1",
+                    "name": "Gas Safe Registration",
+                    "category": "trade",
+                    "validity_months": 12,
+                    "is_mandatory_for_role": True,
+                },
+                {
+                    "id": "qual-mock-2",
+                    "name": "NICEIC Approved Contractor",
+                    "category": "trade",
+                    "validity_months": 12,
+                    "is_mandatory_for_role": True,
+                },
+                {
+                    "id": "qual-mock-3",
+                    "name": "ARLA Propertymark Level 3",
+                    "category": "professional",
+                    "validity_months": 12,
+                    "is_mandatory_for_role": False,
+                },
+                {
+                    "id": "qual-mock-4",
+                    "name": "NEBOSH General Certificate",
+                    "category": "safety",
+                    "validity_months": 36,
+                    "is_mandatory_for_role": False,
+                },
             ],
         }
 
@@ -97,10 +112,15 @@ async def list_employee_qualifications(
     if mock:
         return {
             "employee_qualifications": [
-                {"id": "eq-mock-1", "employee_id": "emp-mock-2",
-                 "qualification_id": "qual-mock-1",
-                 "issued_at": "2025-06-01", "expires_at": "2026-06-01",
-                 "evidence_url": None, "status": "active"},
+                {
+                    "id": "eq-mock-1",
+                    "employee_id": "emp-mock-2",
+                    "qualification_id": "qual-mock-1",
+                    "issued_at": "2025-06-01",
+                    "expires_at": "2026-06-01",
+                    "evidence_url": None,
+                    "status": "active",
+                },
             ],
         }
 
@@ -153,20 +173,27 @@ async def sync_qualifications(
             "schema_version": schema_version,
             "tables": {
                 "qualifications": [
-                    {"id": "qual-mock-1", "name": "Gas Safe Registration",
-                     "category": "trade", "validity_months": 12,
-                     "is_mandatory_for_role": True},
+                    {
+                        "id": "qual-mock-1",
+                        "name": "Gas Safe Registration",
+                        "category": "trade",
+                        "validity_months": 12,
+                        "is_mandatory_for_role": True,
+                    },
                 ],
                 "employee_qualifications": [
-                    {"id": "eq-mock-1", "employee_id": "emp-mock-2",
-                     "qualification_id": "qual-mock-1",
-                     "qualification_name": "Gas Safe Registration",
-                     "issued_at": "2025-06-01",
-                     "expires_at": "2026-06-01",
-                     "status": "active",
-                     "days_to_expiry": 32,
-                     "evidence_url": None,
-                     "updated_at": started},
+                    {
+                        "id": "eq-mock-1",
+                        "employee_id": "emp-mock-2",
+                        "qualification_id": "qual-mock-1",
+                        "qualification_name": "Gas Safe Registration",
+                        "issued_at": "2025-06-01",
+                        "expires_at": "2026-06-01",
+                        "status": "active",
+                        "days_to_expiry": 32,
+                        "evidence_url": None,
+                        "updated_at": started,
+                    },
                 ],
             },
             "metadata": {
@@ -202,16 +229,18 @@ async def sync_qualifications(
     qualifications: list[dict] = []
     qual_name_by_id: dict[str, str] = {}
     for q in quals_raw:
-        qualifications.append({
-            "id": q.get("id"),
-            "name": q.get("name"),
-            "category": q.get("category"),
-            "description": q.get("description"),
-            "validity_months": q.get("validity_months"),
-            "is_mandatory_for_role": q.get("is_mandatory_for_role"),
-            "created_at": q.get("created_at"),
-            "updated_at": q.get("updated_at"),
-        })
+        qualifications.append(
+            {
+                "id": q.get("id"),
+                "name": q.get("name"),
+                "category": q.get("category"),
+                "description": q.get("description"),
+                "validity_months": q.get("validity_months"),
+                "is_mandatory_for_role": q.get("is_mandatory_for_role"),
+                "created_at": q.get("created_at"),
+                "updated_at": q.get("updated_at"),
+            }
+        )
         if q.get("id"):
             qual_name_by_id[q["id"]] = q.get("name")
 
@@ -236,18 +265,20 @@ async def sync_qualifications(
                 days_to_expiry = (exp - today).days
             except (ValueError, TypeError):
                 pass
-        employee_qualifications.append({
-            "id": r.get("id"),
-            "employee_id": r.get("employee_id"),
-            "qualification_id": r.get("qualification_id"),
-            "qualification_name": qual_name_by_id.get(r.get("qualification_id")),
-            "issued_at": r.get("issued_at"),
-            "expires_at": expires_at,
-            "status": r.get("status"),
-            "days_to_expiry": days_to_expiry,
-            "evidence_url": r.get("evidence_url"),
-            "updated_at": r.get("updated_at"),
-        })
+        employee_qualifications.append(
+            {
+                "id": r.get("id"),
+                "employee_id": r.get("employee_id"),
+                "qualification_id": r.get("qualification_id"),
+                "qualification_name": qual_name_by_id.get(r.get("qualification_id")),
+                "issued_at": r.get("issued_at"),
+                "expires_at": expires_at,
+                "status": r.get("status"),
+                "days_to_expiry": days_to_expiry,
+                "evidence_url": r.get("evidence_url"),
+                "updated_at": r.get("updated_at"),
+            }
+        )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
     return {

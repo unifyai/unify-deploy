@@ -11,28 +11,27 @@ The runtime-callable wrapper lives in ``sync.py`` as ``probe_tier``.
 
 from __future__ import annotations
 
-
 # Probe endpoint per sync-object key.  Each is a cheap GET that should
 # succeed if the token has the relevant scope and EH module is enabled
 # on the customer's plan.
 _PROBE_ENDPOINTS: dict[str, str] = {
-    "workforce":          "/employees?limit=1",
-    "employee_personal":  "/emergency_contacts?limit=1",
-    "employee_notes":     "/notes?limit=1",
-    "leave":              "/leave_categories?limit=1",
-    "timesheets":         "/timesheet_entries?limit=1",
-    "expenses":           "/expense_categories?limit=1",
-    "policies":           "/policies?limit=1",
-    "documents":          "/documents?limit=1",
-    "custom_fields":      "/custom_fields?limit=1",
-    "onboarding":         "/onboardings?limit=1",
-    "qualifications":     "/qualifications?limit=1",
-    "performance":        "/reviews?limit=1",
-    "recognition":        "/cheers?limit=1",
-    "surveys":            "/surveys?limit=1",
-    "learning":           "/courses?limit=1",
-    "recruitment":        "/jobs?limit=1",
-    "pay":                "/pay_runs?limit=1",
+    "workforce": "/employees?limit=1",
+    "employee_personal": "/emergency_contacts?limit=1",
+    "employee_notes": "/notes?limit=1",
+    "leave": "/leave_categories?limit=1",
+    "timesheets": "/timesheet_entries?limit=1",
+    "expenses": "/expense_categories?limit=1",
+    "policies": "/policies?limit=1",
+    "documents": "/documents?limit=1",
+    "custom_fields": "/custom_fields?limit=1",
+    "onboarding": "/onboardings?limit=1",
+    "qualifications": "/qualifications?limit=1",
+    "performance": "/reviews?limit=1",
+    "recognition": "/cheers?limit=1",
+    "surveys": "/surveys?limit=1",
+    "learning": "/courses?limit=1",
+    "recruitment": "/jobs?limit=1",
+    "pay": "/pay_runs?limit=1",
 }
 
 
