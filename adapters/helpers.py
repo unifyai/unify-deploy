@@ -43,7 +43,23 @@ from common.int_list_codec import encode_int_list_for_form
 from common.space_summaries_codec import encode_space_summaries_for_form
 from common.settings import SETTINGS
 
+LOCAL_ASSISTANT_SELF_CONTACT_ID = 0
+LOCAL_ASSISTANT_BOSS_CONTACT_ID = 1
+
 _pubsub_client = None
+
+
+def _required_contact_id(assistant_data: dict, field_name: str) -> int:
+    """Return a resolved contact id required by runtime-facing adapter paths."""
+    value = assistant_data.get(field_name)
+    if value is None:
+        assistant_id = assistant_data.get("assistant_id") or assistant_data.get(
+            "agent_id",
+        )
+        raise ValueError(
+            f"Assistant {assistant_id} is missing required {field_name}",
+        )
+    return int(value)
 
 
 def get_pubsub_client():
@@ -90,8 +106,8 @@ def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]
 
 
 def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
-    self_contact_id = assistant_data.get("self_contact_id", 0)
-    boss_contact_id = assistant_data.get("boss_contact_id", 1)
+    self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
+    boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     return [
         {
             "contact_id": self_contact_id,
@@ -477,7 +493,7 @@ def check_valid_contact(
         return default_contacts, False, None
 
     # check for boss user
-    boss_contact_id = assistant_data.get("boss_contact_id", 1)
+    boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     boss_contact = [
         contact for contact in contacts if contact["contact_id"] == boss_contact_id
     ]
@@ -880,8 +896,8 @@ def _build_start_job_request_data(
             assistant.get("space_summaries") or [],
             field_name="space_summaries",
         ),
-        "self_contact_id": str(assistant.get("self_contact_id", 0)),
-        "boss_contact_id": str(assistant.get("boss_contact_id", 1)),
+        "self_contact_id": str(_required_contact_id(assistant, "self_contact_id")),
+        "boss_contact_id": str(_required_contact_id(assistant, "boss_contact_id")),
         "org_id": (
             str(assistant.get("org_id", ""))
             if assistant.get("org_id") is not None

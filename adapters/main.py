@@ -1752,7 +1752,7 @@ async def api_message_webhook(request: Request):
         event_data = {
             "api_message_id": api_message_id,
             "body": body,
-            "contact_id": 1,
+            "contact_id": int(context["assistant"]["boss_contact_id"]),
             "assistant_id": assistant_id,
         }
         if validated_attachments:
@@ -3058,9 +3058,11 @@ async def teams_notification_processor(request: Request):
         # Second-tier self-guard: if the resolver pinned the assistant's
         # own contact, we are looking at an outbound/loopback message.
         # Drop it rather than publish.
-        if matched_contact and matched_contact.get("contact_id") == assistant_data.get(
-            "self_contact_id",
-            0,
+        matched_contact_id = (
+            matched_contact.get("contact_id") if matched_contact else None
+        )
+        if matched_contact_id is not None and int(matched_contact_id) == int(
+            assistant_data["self_contact_id"],
         ):
             logger.info(
                 f"Skipping message that resolved to assistant's own contact "
@@ -3133,6 +3135,7 @@ async def teams_notification_processor(request: Request):
                 roster=augmented,
                 contacts=contacts,
                 assistant_email=assistant_email,
+                self_contact_id=int(assistant_data["self_contact_id"]),
             )
             logger.info(
                 f"teams roster: {len(participants)} participants "
@@ -3593,6 +3596,7 @@ def _resolve_roster_participants(
     roster: list[dict],
     contacts: list[dict],
     assistant_email: str,
+    self_contact_id: int,
 ) -> list[dict]:
     """Resolve each roster member to ``contact_id`` where possible.
 
@@ -3606,8 +3610,7 @@ def _resolve_roster_participants(
 
     Resolution order per member:
 
-    1. Assistant's own mailbox → ``contact_id = 0`` (the Unity
-       convention for "the assistant itself").
+    1. Assistant's own mailbox → the resolved assistant self contact id.
     2. Exact email match (case-insensitive) against any contact's
        ``email_address``.
     3. Name match via :func:`_match_contact_by_name` — only succeeds
@@ -3646,7 +3649,7 @@ def _resolve_roster_participants(
 
         contact_id: int | None = None
         if email_l and email_l == assistant_email_l:
-            contact_id = 0
+            contact_id = self_contact_id
         elif email_l and email_l in contacts_by_email:
             cid = contacts_by_email[email_l].get("contact_id")
             contact_id = int(cid) if cid is not None else None
@@ -3665,10 +3668,10 @@ def _resolve_roster_participants(
             },
         )
 
-    if not any(p.get("contact_id") == 0 for p in out):
+    if not any(p.get("contact_id") == self_contact_id for p in out):
         out.append(
             {
-                "contact_id": 0,
+                "contact_id": self_contact_id,
                 "email": assistant_email,
                 "display_name": "",
                 "aad_user_id": None,

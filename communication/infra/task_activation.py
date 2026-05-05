@@ -118,6 +118,19 @@ def _offline_dispatch_event_fields(
     return fields
 
 
+def _required_contact_id(assistant_data: dict[str, Any], field_name: str) -> int:
+    """Return a resolved contact id required by offline Unity launches."""
+    value = assistant_data.get(field_name)
+    if value is None:
+        assistant_id = assistant_data.get("assistant_id") or assistant_data.get(
+            "agent_id",
+        )
+        raise RuntimeError(
+            f"Assistant {assistant_id} is missing required {field_name}",
+        )
+    return int(value)
+
+
 def _task_due_queue_parent() -> str:
     """Return the Cloud Tasks parent resource for scheduled task queues."""
 
@@ -678,8 +691,8 @@ def _build_offline_runner_env(
     team_ids = assistant_data.get("team_ids") or []
     space_ids = assistant_data.get("space_ids") or []
     space_summaries = assistant_data.get("space_summaries") or []
-    self_contact_id = assistant_data.get("self_contact_id", 0)
-    boss_contact_id = assistant_data.get("boss_contact_id", 1)
+    self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
+    boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     # Layer 1 — shared task-specific env (single source of truth in Unity).
     env = _build_offline_runner_env_shared(
         assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),

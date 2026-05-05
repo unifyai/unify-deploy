@@ -7,6 +7,27 @@ import pytest
 from communication.discord import gateway
 
 
+def test_discord_default_contacts_use_resolved_contact_ids():
+    """Discord fallback contacts follow the assistant's membership overlays."""
+
+    contacts = gateway._default_contacts(
+        {
+            "agent_id": "assistant-123",
+            "first_name": "Test",
+            "surname": "Assistant",
+            "email": "assistant@example.com",
+            "user_first_name": "Test",
+            "user_last_name": "User",
+            "user_email": "user@example.com",
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
+        },
+    )
+
+    assert contacts[0]["contact_id"] == 42
+    assert contacts[1]["contact_id"] == 43
+
+
 class _Response:
     status_code = 200
     text = "ok"

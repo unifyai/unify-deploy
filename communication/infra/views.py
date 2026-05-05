@@ -948,8 +948,8 @@ async def start_job(
     team_ids: str = Form(""),
     space_ids: str = Form(""),
     space_summaries: str = Form(""),
-    self_contact_id: int = Form(0),
-    boss_contact_id: int = Form(1),
+    self_contact_id: int = Form(...),
+    boss_contact_id: int = Form(...),
     org_id: str = Form(""),
     wake_reasons: str = Form(""),
 ):
@@ -991,8 +991,8 @@ async def start_job(
         team_ids: JSON-encoded list of team IDs the user belongs to (optional, defaults to empty)
         space_ids: JSON-encoded list of space IDs the assistant belongs to (optional, defaults to empty)
         space_summaries: JSON-encoded list of shared space metadata (optional, defaults to empty)
-        self_contact_id: Resolved assistant-self contact ID (optional, defaults to 0)
-        boss_contact_id: Resolved boss contact ID (optional, defaults to 1)
+        self_contact_id: Resolved assistant-self contact ID
+        boss_contact_id: Resolved boss contact ID
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
     """
     session_name = assistant_session_name(assistant_id)

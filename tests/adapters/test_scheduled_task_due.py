@@ -38,6 +38,8 @@ def _assistant_data() -> dict:
         "org_id": None,
         "deploy_env": "staging",
         "is_local": False,
+        "self_contact_id": 42,
+        "boss_contact_id": 43,
     }
 
 

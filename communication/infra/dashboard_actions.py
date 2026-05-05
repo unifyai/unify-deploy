@@ -29,6 +29,7 @@ from .task_activation import (
     _create_or_adopt_task_run,
     _normalize_task_id_component,
     _orchestra_admin_headers,
+    _required_contact_id,
     _running_task_run_updates,
     _update_task_run,
     TASK_DUE_HTTP_TIMEOUT_SECONDS,
@@ -119,8 +120,8 @@ def _build_dashboard_action_env(
     team_ids = assistant_data.get("team_ids") or []
     space_ids = assistant_data.get("space_ids") or []
     space_summaries = assistant_data.get("space_summaries") or []
-    self_contact_id = assistant_data.get("self_contact_id", 0)
-    boss_contact_id = assistant_data.get("boss_contact_id", 1)
+    self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
+    boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     return {
         "UNITY_OFFLINE_TASK_MODE": "function",
         "UNITY_OFFLINE_TASK_FUNCTION_ID": str(action_metadata["function_id"]),

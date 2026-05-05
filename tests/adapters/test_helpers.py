@@ -12,6 +12,9 @@ import json
 import requests
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
+
+import pytest
+
 from adapters.helpers import (
     START_INTENT_DISPATCH_TIMEOUT_SECONDS,
     build_webhook_context,
@@ -27,6 +30,9 @@ from adapters.helpers import (
     start_unity_job,
 )
 from common.settings import SETTINGS
+
+TEST_SELF_CONTACT_ID = 42
+TEST_BOSS_CONTACT_ID = 43
 
 # --- get_default_contacts tests ---
 
@@ -44,6 +50,8 @@ def test_get_default_contacts_includes_whatsapp_number():
         "user_email": "user@example.com",
         "user_number": "+0987654321",
         "user_whatsapp_number": "+4445556666",
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
     }
     contacts = get_default_contacts(assistant_data)
 
@@ -62,6 +70,8 @@ def test_get_default_contacts_includes_phone_number():
         "user_surname": "User",
         "user_email": "user@example.com",
         "user_number": "+0987654321",
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
     }
     contacts = get_default_contacts(assistant_data)
 
@@ -81,14 +91,31 @@ def test_get_default_contacts_uses_resolved_contact_ids():
         "user_surname": "User",
         "user_email": "user@example.com",
         "user_number": "+0987654321",
-        "self_contact_id": 42,
-        "boss_contact_id": 43,
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
     }
 
     contacts = get_default_contacts(assistant_data)
 
-    assert contacts[0]["contact_id"] == 42
-    assert contacts[1]["contact_id"] == 43
+    assert contacts[0]["contact_id"] == TEST_SELF_CONTACT_ID
+    assert contacts[1]["contact_id"] == TEST_BOSS_CONTACT_ID
+
+
+def test_get_default_contacts_requires_resolved_contact_ids():
+    """Fallback contacts fail loudly when assistant identity has not resolved."""
+    with pytest.raises(ValueError, match="self_contact_id"):
+        get_default_contacts(
+            {
+                "assistant_first_name": "Test",
+                "assistant_surname": "Assistant",
+                "assistant_email": "test@example.com",
+                "assistant_number": "+1234567890",
+                "user_first_name": "Test",
+                "user_surname": "User",
+                "user_email": "user@example.com",
+                "user_number": "+0987654321",
+            },
+        )
 
 
 # --- check_contact_details tests ---

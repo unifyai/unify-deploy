@@ -15,6 +15,9 @@ os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
 os.environ["OUTLOOK_WEBHOOK_SECRET"] = "test-outlook-secret"
 os.environ["TEAMS_WEBHOOK_SECRET"] = "test-teams-secret"
 
+TEST_SELF_CONTACT_ID = 42
+TEST_BOSS_CONTACT_ID = 43
+
 
 class _GraphResponse:
     def __init__(self, payload: dict, status_code: int = 200):
@@ -132,6 +135,8 @@ def _assistant_data(*, is_local: bool) -> dict:
         "org_id": "",
         "deploy_env": "staging",
         "is_local": is_local,
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
         "secrets": {"MICROSOFT_ACCESS_TOKEN": "test-token"},
     }
 
@@ -180,7 +185,11 @@ def test_outlook_notification_respects_local_runtime(
         patch.object(
             app_module,
             "check_valid_contact",
-            return_value=([{"contact_id": 1}], True, {"contact_id": 1}),
+            return_value=(
+                [{"contact_id": TEST_BOSS_CONTACT_ID}],
+                True,
+                {"contact_id": TEST_BOSS_CONTACT_ID},
+            ),
         ),
         patch.object(app_module, "publish_outlook_thread_id") as mock_publish_thread,
         patch.object(app_module, "start_unity_job") as mock_start_unity_job,
@@ -236,7 +245,11 @@ def test_teams_notification_respects_local_runtime(
         patch.object(
             app_module,
             "check_valid_contact",
-            return_value=([{"contact_id": 1}], True, {"contact_id": 1}),
+            return_value=(
+                [{"contact_id": TEST_BOSS_CONTACT_ID}],
+                True,
+                {"contact_id": TEST_BOSS_CONTACT_ID},
+            ),
         ),
         patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
         patch.object(app_module, "start_unity_job") as mock_start_unity_job,
@@ -303,7 +316,11 @@ def test_teams_notification_us_provisioned_uses_admin_bearer(app_module):
         patch.object(
             app_module,
             "check_valid_contact",
-            return_value=([{"contact_id": 1}], True, {"contact_id": 1}),
+            return_value=(
+                [{"contact_id": TEST_BOSS_CONTACT_ID}],
+                True,
+                {"contact_id": TEST_BOSS_CONTACT_ID},
+            ),
         ),
         patch.object(app_module, "get_pubsub_client", return_value=mock_publisher),
         patch.object(app_module, "start_unity_job"),
@@ -355,7 +372,7 @@ def test_teams_notification_us_provisioned_uses_admin_bearer(app_module):
 
 def test_teams_notification_emits_resolved_participants(app_module):
     """Group chat inbound must publish a ``participants`` list with the
-    assistant resolved to contact_id=0, known senders matched to their
+    assistant resolved to its self contact, known senders matched to their
     contact row by email, and unknowns preserved with ``contact_id=None``
     so Unity finishes the resolve via its unknown-contact path.
     """
@@ -403,7 +420,7 @@ def test_teams_notification_emits_resolved_participants(app_module):
     }
 
     contacts = [
-        {"contact_id": 0, "email_address": assistant_email},
+        {"contact_id": TEST_SELF_CONTACT_ID, "email_address": assistant_email},
         {
             "contact_id": 5,
             "email_address": "alice@acme.com",
@@ -466,7 +483,7 @@ def test_teams_notification_emits_resolved_participants(app_module):
 
     assistant_entry = by_email.get(assistant_email)
     assert assistant_entry is not None, "assistant must be in participants"
-    assert assistant_entry["contact_id"] == 0
+    assert assistant_entry["contact_id"] == TEST_SELF_CONTACT_ID
 
     alice_entry = by_email.get("alice@acme.com")
     assert alice_entry is not None, "known sender must be in participants"
@@ -561,7 +578,7 @@ def _run_channel_participants_test(
     }
 
     contacts = [
-        {"contact_id": 0, "email_address": assistant_email},
+        {"contact_id": TEST_SELF_CONTACT_ID, "email_address": assistant_email},
         {
             "contact_id": 5,
             "email_address": "alice@acme.com",
@@ -655,10 +672,10 @@ def _run_channel_participants_test(
     assert bob_entry is not None, "@mentioned user must be in participants"
     assert bob_entry["contact_id"] is None
 
-    # Assistant is always present at contact_id=0.
+    # Assistant is always present under its resolved self contact.
     assistant_entry = by_email.get(assistant_email)
     assert assistant_entry is not None, "assistant must always be a participant"
-    assert assistant_entry["contact_id"] == 0
+    assert assistant_entry["contact_id"] == TEST_SELF_CONTACT_ID
 
     team_members_calls = [
         c for c in captured if c["url"].endswith(f"/teams/{team_id}/members")

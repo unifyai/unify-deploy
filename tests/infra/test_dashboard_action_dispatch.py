@@ -66,6 +66,8 @@ def test_dashboard_action_env_uses_empty_space_ids_for_solo_assistant():
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
             "space_ids": [],
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
         },
         run_key="run-123",
         job_name="unity-dashboard-action-abc",

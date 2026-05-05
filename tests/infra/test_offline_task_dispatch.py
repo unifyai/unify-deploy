@@ -5,6 +5,7 @@ import json
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 from unittest.mock import patch
 
 
@@ -35,6 +36,17 @@ def _activation(**overrides):
     }
     activation.update(overrides)
     return activation
+
+
+def _assistant_data(**overrides):
+    assistant_data = {
+        "assistant_id": "assistant-123",
+        "space_ids": [],
+        "self_contact_id": 42,
+        "boss_contact_id": 43,
+    }
+    assistant_data.update(overrides)
+    return assistant_data
 
 
 def _client() -> TestClient:
@@ -79,7 +91,7 @@ def test_offline_dispatch_launches_job_for_current_activation():
         ),
         patch(
             "communication.infra.task_activation._get_assistant_data",
-            return_value={"assistant_id": "assistant-123", "space_ids": []},
+            return_value=_assistant_data(),
         ),
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
@@ -202,7 +214,7 @@ def test_offline_dispatch_persists_authorized_destination_on_run_create():
         ) as mock_lookup,
         patch(
             "communication.infra.task_activation._get_assistant_data",
-            return_value={"assistant_id": "assistant-123", "space_ids": [7]},
+            return_value=_assistant_data(space_ids=[7]),
         ),
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
@@ -244,7 +256,7 @@ def test_offline_dispatch_skips_revoked_space_destination():
         ),
         patch(
             "communication.infra.task_activation._get_assistant_data",
-            return_value={"assistant_id": "assistant-123", "space_ids": [8]},
+            return_value=_assistant_data(space_ids=[8]),
         ),
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
@@ -356,6 +368,8 @@ def test_offline_runner_env_carries_task_destination():
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
             "space_ids": [7],
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
         },
         run_key="run-123",
         job_name="unity-offline-abc",
@@ -378,6 +392,8 @@ def test_offline_runner_env_uses_empty_space_ids_for_solo_assistant():
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
             "space_ids": [],
+            "self_contact_id": 42,
+            "boss_contact_id": 43,
         },
         run_key="run-123",
         job_name="unity-offline-abc",
@@ -385,6 +401,23 @@ def test_offline_runner_env_uses_empty_space_ids_for_solo_assistant():
 
     assert env["SPACE_IDS"] == ""
     assert env["SPACE_SUMMARIES"] == ""
+
+
+def test_offline_runner_env_requires_resolved_contact_ids():
+    """Offline jobs fail before launching if assistant identity is incomplete."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+
+    with pytest.raises(RuntimeError, match="self_contact_id"):
+        task_activation._build_offline_runner_env(
+            request=request,
+            activation=_activation(),
+            assistant_data={"assistant_id": "assistant-123", "api_key": "test-api-key"},
+            run_key="run-123",
+            job_name="unity-offline-abc",
+        )
 
 
 def test_offline_dispatch_persists_trigger_provenance_on_run_create():
@@ -402,7 +435,7 @@ def test_offline_dispatch_persists_trigger_provenance_on_run_create():
         ),
         patch(
             "communication.infra.task_activation._get_assistant_data",
-            return_value={"assistant_id": "assistant-123", "space_ids": []},
+            return_value=_assistant_data(),
         ),
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",

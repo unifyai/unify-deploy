@@ -56,6 +56,8 @@ def _start_job_payload(**overrides) -> dict[str, str]:
         "team_ids": "[]",
         "space_ids": "",
         "space_summaries": "",
+        "self_contact_id": "42",
+        "boss_contact_id": "43",
         "org_id": "",
     }
     payload.update(overrides)
@@ -176,13 +178,13 @@ def test_empty_form_means_empty_list(client):
     assert payload["space_summaries"] == []
 
 
-def test_contact_ids_default_in_bootstrap_payload(client):
+def test_contact_ids_required_in_bootstrap_payload(client):
     response, bootstrap = _post_start_job(client)
 
     assert response.status_code == 200
     payload = _bootstrap_payload(bootstrap)
-    assert payload["self_contact_id"] == 0
-    assert payload["boss_contact_id"] == 1
+    assert payload["self_contact_id"] == 42
+    assert payload["boss_contact_id"] == 43
 
 
 def test_contact_ids_override_in_bootstrap_payload(client):
@@ -196,6 +198,15 @@ def test_contact_ids_override_in_bootstrap_payload(client):
     payload = _bootstrap_payload(bootstrap)
     assert payload["self_contact_id"] == 42
     assert payload["boss_contact_id"] == 43
+
+
+def test_missing_contact_ids_returns_422(client):
+    payload = _start_job_payload()
+    del payload["self_contact_id"]
+
+    response = client.post("/infra/job/start", data=payload)
+
+    assert response.status_code == 422
 
 
 def test_invalid_form_returns_400(client):

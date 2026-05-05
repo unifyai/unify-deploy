@@ -1905,8 +1905,8 @@ def _admin_record_to_data(a: dict) -> dict:
         "demo_id": "",
         "team_ids": json.dumps(a.get("team_ids", [])),
         "space_ids": json.dumps(a.get("space_ids", [])),
-        "self_contact_id": str(a.get("self_contact_id", 0)),
-        "boss_contact_id": str(a.get("boss_contact_id", 1)),
+        "self_contact_id": str(a["self_contact_id"]),
+        "boss_contact_id": str(a["boss_contact_id"]),
         "org_id": (
             str(a.get("organization_id", "")) if a.get("organization_id") else ""
         ),
@@ -2166,7 +2166,7 @@ def send_test_message(assistant_data: dict, body: str = "Integration test messag
         f"{ADAPTERS_URL}/unify/message",
         json={
             "assistant_id": str(assistant_data["assistant_id"]),
-            "contact_id": 1,
+            "contact_id": int(assistant_data["boss_contact_id"]),
             "body": body,
         },
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},

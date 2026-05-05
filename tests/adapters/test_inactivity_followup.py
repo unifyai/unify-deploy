@@ -37,6 +37,8 @@ def _assistant_data() -> dict:
         "org_id": None,
         "deploy_env": "staging",
         "is_local": False,
+        "self_contact_id": 42,
+        "boss_contact_id": 43,
     }
 
 
@@ -117,7 +119,7 @@ def test_inactivity_followup_publishes_event_for_running_session():
     mock_publish.assert_called_once()
     assert mock_publish.call_args.kwargs["event_type"] == "inactivity_followup"
     assert mock_publish.call_args.kwargs["extra_event_fields"] == {
-        "type": "inactivity_followup"
+        "type": "inactivity_followup",
     }
 
 
