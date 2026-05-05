@@ -120,7 +120,7 @@ steps:
     REVISION=$$(gcloud run revisions list \
       --service=${_SERVICE_NAME} \
       --region=${_REGION} \
-      --filter="metadata.labels.gcb-build-id=${BUILD_ID} AND metadata.labels.preview-restore=true" \
+      --filter="metadata.labels.gcb-build-id=${BUILD_ID} metadata.labels.preview-restore=true" \
       --sort-by="~metadata.creationTimestamp" \
       --limit=1 \
       --format="value(metadata.name)")
