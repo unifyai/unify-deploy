@@ -629,7 +629,9 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
         return existing
 
     def create(rec: dict) -> Any:
-        unify.log(context=ctx, **{k: v for k, v in rec.items() if not k.startswith("_")})
+        unify.log(
+            context=ctx, **{k: v for k, v in rec.items() if not k.startswith("_")}
+        )
         return None
 
     def update(_unused_id: int, rec: dict) -> Any:

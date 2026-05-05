@@ -170,6 +170,7 @@ class TestLoadIntegration:
         assert loaded.registry_row["tier"] == "api"
         # GITHUB_TOKEN is required=False in the fixture.
         import json
+
         assert json.loads(loaded.registry_row["required_secrets_json"]) == []
         assert json.loads(loaded.registry_row["optional_secrets_json"]) == [
             "GITHUB_TOKEN",
@@ -201,7 +202,9 @@ class TestRegistryRowFromCapabilities:
             description="A demo integration",
             secrets=[
                 SecretSchema(name="DEMO_API_KEY", description="API key", required=True),
-                SecretSchema(name="DEMO_OPTIONAL", description="Optional", required=False),
+                SecretSchema(
+                    name="DEMO_OPTIONAL", description="Optional", required=False
+                ),
             ],
             capabilities=[
                 Capability(
@@ -227,6 +230,7 @@ class TestRegistryRowFromCapabilities:
         manifest, root = self._make_pkg(tmp_path)
         loaded = load_integration(manifest, root)
         import json
+
         row = loaded.registry_row
         assert json.loads(row["required_secrets_json"]) == ["DEMO_API_KEY"]
         assert json.loads(row["optional_secrets_json"]) == ["DEMO_OPTIONAL"]
@@ -235,9 +239,12 @@ class TestRegistryRowFromCapabilities:
         manifest, root = self._make_pkg(tmp_path)
         loaded = load_integration(manifest, root)
         import json
+
         # Sorted in registry to make hash-based seed sync deterministic.
         assert json.loads(loaded.registry_row["function_names_json"]) == [
-            "get_contact", "list_contacts", "run_workflow",
+            "get_contact",
+            "list_contacts",
+            "run_workflow",
         ]
 
     def test_guidance_titles_match_loader_title_transform(self, tmp_path):
@@ -246,6 +253,7 @@ class TestRegistryRowFromCapabilities:
         manifest, root = self._make_pkg(tmp_path)
         loaded = load_integration(manifest, root)
         import json
+
         seeded_titles = sorted(g.title for g in loaded.guidance_entries)
         registry_titles = json.loads(loaded.registry_row["guidance_titles_json"])
         assert registry_titles == seeded_titles
@@ -254,8 +262,10 @@ class TestRegistryRowFromCapabilities:
         manifest, root = self._make_pkg(tmp_path)
         loaded = load_integration(manifest, root)
         import json
+
         assert json.loads(loaded.registry_row["capability_ids_json"]) == [
-            "contacts", "workflows",
+            "contacts",
+            "workflows",
         ]
 
 

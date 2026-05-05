@@ -166,7 +166,11 @@ def _build_registry_row(manifest: IntegrationManifest) -> dict:
         "category": manifest.sector,
         "version": manifest.version,
         "tier": manifest.tier,
-        "quality": manifest.quality.value if hasattr(manifest.quality, "value") else str(manifest.quality),
+        "quality": (
+            manifest.quality.value
+            if hasattr(manifest.quality, "value")
+            else str(manifest.quality)
+        ),
         "required_secrets_json": json.dumps(required),
         "optional_secrets_json": json.dumps(optional),
         "capability_ids_json": json.dumps(capability_ids),
