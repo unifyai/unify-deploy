@@ -1,11 +1,9 @@
 # Cloud Build pipeline for preview-environment Comms App revisions.
 #
 # Triggered on push to ``feature/*`` branches.  Builds the comms-app
-# image and deploys it as a tagged Cloud Run revision against the
+# image and deploys it as a Cloud Run preview revision against the
 # existing ``unity-comms-app-staging`` service with ``--no-traffic``,
-# so the regular staging URL is unaffected and only the tagged URL
-# (``https://<slug>service.a.run.app``)
-# routes to this build.
+# then assigns the slug tag only after the revision is ready.
 #
 # Singletons that staging deploys manage (assistant-session-controller,
 # Cloud Scheduler jobs, GKE Deployments) are intentionally left alone:
@@ -70,35 +68,153 @@ steps:
     docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:preview-$${SLUG}-${SHORT_SHA}
   waitFor: ['build-image']
 
-  # Deploy as a tagged, no-traffic revision so the canonical staging URL
-  # keeps serving the un-tagged revision and only the tagged URL routes
-  # this build.  Peer URLs are pinned to the matching tagged revisions
-  # so service-to-service hops stay inside the preview environment.
+  # Deploy a no-traffic preview revision. The slug tag is assigned only
+  # after Cloud Run reports the revision ready. Peer URLs are pinned to
+  # the matching tagged revisions so service-to-service hops stay inside
+  # the preview environment.
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'deploy-tagged'
+  id: 'repair-traffic-state'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    SERVICE_JSON=/tmp/service.json
+    gcloud run services describe ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --format=json > "$$SERVICE_JSON"
+    python3 - "$$SERVICE_JSON" > /tmp/traffic-args.txt <<'PY'
+    import json
+    import sys
+
+    with open(sys.argv[1], encoding="utf-8") as service_file:
+        service = json.load(service_file)
+
+    revisions: list[str] = []
+    status_tags: dict[str, str] = {}
+    for entry in service.get("status", {}).get("traffic", []):
+        revision = entry.get("revisionName")
+        if not revision:
+            continue
+        percent = entry.get("percent")
+        if percent is not None and int(percent) > 0:
+            revisions.append(f"{revision}={int(percent)}")
+        tag = entry.get("tag")
+        if tag:
+            status_tags[tag] = revision
+
+    if not revisions:
+        raise SystemExit("No live traffic revision found to preserve")
+
+    spec_tags = {
+        entry["tag"]: entry.get("revisionName")
+        for entry in service.get("spec", {}).get("traffic", [])
+        if entry.get("tag")
+    }
+    update_tags = [
+        f"{tag}={revision}"
+        for tag, revision in sorted(status_tags.items())
+        if spec_tags.get(tag) != revision
+    ]
+    remove_tags = sorted(
+        tag for tag in spec_tags
+        if tag not in status_tags
+    )
+
+    print("--to-revisions=" + ",".join(revisions))
+    if update_tags:
+        print("--update-tags=" + ",".join(update_tags))
+    if remove_tags:
+        print("--remove-tags=" + ",".join(remove_tags))
+    PY
+    mapfile -t TRAFFIC_ARGS < /tmp/traffic-args.txt
+    gcloud run services update-traffic ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      "$${TRAFFIC_ARGS[@]}" \
+      --quiet
+  waitFor: ['push-image']
+
+  # Deploy the preview revision without assigning the slug tag first. Cloud Run
+  # can mutate tag traffic before a revision is ready, so the tag is assigned in
+  # a later step after the revision has successfully materialized.
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'deploy-preview'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
     set -euo pipefail
     SLUG=$(cat /workspace/slug.txt)
-    ORCHESTRA_URL="https://$${SLUG}---${_PEER_ORCHESTRA_HOST}/v0"
+    SERVICE_NAME=${_SERVICE_NAME}
+    BUILD_PART=$(printf '%s' "${BUILD_ID}" | cut -c1-8)
+    MAX_SUFFIX_LEN=$((63 - $${#SERVICE_NAME} - 1))
+    MAX_SLUG_LEN=$((MAX_SUFFIX_LEN - $${#BUILD_PART} - 3))
+    if [ "$$MAX_SLUG_LEN" -lt 1 ]; then
+      echo "No room for preview revision suffix on service $$SERVICE_NAME" >&2
+      exit 1
+    fi
+    REVISION_SLUG=$(printf '%s' "$$SLUG" | cut -c1-$$MAX_SLUG_LEN)
+    REVISION_SUFFIX="p-$${REVISION_SLUG}-$${BUILD_PART}"
+    REVISION="$${SERVICE_NAME}-$${REVISION_SUFFIX}"
+    echo "$$REVISION" > /workspace/preview-revision.txt
+    ORCHESTRA_URL="https://$${SLUG}.${_PEER_ORCHESTRA_HOST}/v0"
     ADAPTERS_URL="https://$${SLUG}---${_PEER_ADAPTERS_HOST}"
-    gcloud run deploy ${_SERVICE_NAME} \
+    CANONICAL_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest
+    if ! gcloud run deploy ${_SERVICE_NAME} \
       --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:preview-$${SLUG}-${SHORT_SHA} \
       --region=${_REGION} \
       --platform=managed \
-      --tag=$${SLUG} \
+      --revision-suffix=$$REVISION_SUFFIX \
       --no-traffic \
+      --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID},preview=true \
       --update-env-vars=DEPLOY_ENV=staging,BRANCH_TAG=$${SLUG},ORCHESTRA_URL=$${ORCHESTRA_URL},UNITY_ADAPTERS_URL=$${ADAPTERS_URL} \
-      --quiet
+      --quiet; then
+      echo "preview deploy failed; restoring canonical service template"
+      gcloud run services update ${_SERVICE_NAME} \
+        --region=${_REGION} --platform=managed \
+        --image="$$CANONICAL_IMAGE" \
+        --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=${BUILD_ID},preview-restore=true \
+        --remove-env-vars=BRANCH_TAG \
+        --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
+        --quiet
+      exit 1
+    fi
     echo "preview revision URL: https://$${SLUG}---${_PEER_COMMS_HOST}"
-  waitFor: ['push-image']
+  waitFor: ['repair-traffic-state']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'assign-preview-tag'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    SLUG=$(cat /workspace/slug.txt)
+    REVISION=$(cat /workspace/preview-revision.txt)
+    CANONICAL_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest
+    if ! gcloud run services update-traffic ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --update-tags="$${SLUG}=$${REVISION}" \
+      --quiet; then
+      echo "preview tag assignment failed; restoring canonical service template"
+      gcloud run services update ${_SERVICE_NAME} \
+        --region=${_REGION} --platform=managed \
+        --image="$$CANONICAL_IMAGE" \
+        --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=${BUILD_ID},preview-restore=true \
+        --remove-env-vars=BRANCH_TAG \
+        --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
+        --quiet
+      exit 1
+    fi
+  waitFor: ['deploy-preview']
 
   # Reset the shared service template back to the canonical staging image
   # and canonical peer URLs, undoing the env-var mutation that
   # ``gcloud run deploy --update-env-vars=...`` applied to the template
-  # in ``deploy-tagged``.  The canonical image is referenced by the
+  # in ``deploy-preview``.  The canonical image is referenced by the
   # ``:latest`` tag, which the canonical staging cloudbuild publishes on
   # every push and the Artifact Registry cleanup policy protects from
   # garbage collection.  The slug-tagged revision keeps its own
@@ -119,7 +235,7 @@ steps:
       --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
       --quiet
     echo "canonical service template restored to image $$CANONICAL_IMAGE"
-  waitFor: ['deploy-tagged']
+  waitFor: ['assign-preview-tag']
 
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'restore-canonical-traffic'
@@ -164,7 +280,7 @@ substitutions:
   _SERVICE_NAME: 'unity-comms-app-staging'
   _PEER_COMMS_HOST: 'service.a.run.app'
   _PEER_ADAPTERS_HOST: 'service.a.run.app'
-  _PEER_ORCHESTRA_HOST: 'service.a.run.app'
+  _PEER_ORCHESTRA_HOST: 'internal.example.com'
   _CANONICAL_ORCHESTRA_URL: 'https://internal.example.com/v0'
 
 availableSecrets:

@@ -68,6 +68,70 @@ steps:
     kubectl rollout status deployment/assistant-session-controller-staging -n staging --timeout=300s
   waitFor: ['push-assistant-session-controller']
 
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+  id: 'repair-traffic-state'
+  entrypoint: bash
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    SERVICE_JSON=/tmp/service.json
+    gcloud run services describe ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      --format=json > "$$SERVICE_JSON"
+    python3 - "$$SERVICE_JSON" > /tmp/traffic-args.txt <<'PY'
+    import json
+    import sys
+
+    with open(sys.argv[1], encoding="utf-8") as service_file:
+        service = json.load(service_file)
+
+    revisions: list[str] = []
+    status_tags: dict[str, str] = {}
+    for entry in service.get("status", {}).get("traffic", []):
+        revision = entry.get("revisionName")
+        if not revision:
+            continue
+        percent = entry.get("percent")
+        if percent is not None and int(percent) > 0:
+            revisions.append(f"{revision}={int(percent)}")
+        tag = entry.get("tag")
+        if tag:
+            status_tags[tag] = revision
+
+    if not revisions:
+        raise SystemExit("No live traffic revision found to preserve")
+
+    spec_tags = {
+        entry["tag"]: entry.get("revisionName")
+        for entry in service.get("spec", {}).get("traffic", [])
+        if entry.get("tag")
+    }
+    update_tags = [
+        f"{tag}={revision}"
+        for tag, revision in sorted(status_tags.items())
+        if spec_tags.get(tag) != revision
+    ]
+    remove_tags = sorted(
+        tag for tag in spec_tags
+        if tag not in status_tags
+    )
+
+    print("--to-revisions=" + ",".join(revisions))
+    if update_tags:
+        print("--update-tags=" + ",".join(update_tags))
+    if remove_tags:
+        print("--remove-tags=" + ",".join(remove_tags))
+    PY
+    mapfile -t TRAFFIC_ARGS < /tmp/traffic-args.txt
+    gcloud run services update-traffic ${_SERVICE_NAME} \
+      --region=${_REGION} \
+      --platform=managed \
+      "$${TRAFFIC_ARGS[@]}" \
+      --quiet
+  waitFor: ['push-sha-tag', 'push-latest-tag', 'deploy-assistant-session-controller']
+
   # Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   args:
@@ -85,7 +149,7 @@ steps:
   - '--quiet'
   id: Deploy Unity Comms App
   entrypoint: gcloud
-  waitFor: ['push-sha-tag', 'push-latest-tag', 'deploy-assistant-session-controller']
+  waitFor: ['repair-traffic-state']
 
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
   id: 'route-canonical-traffic'
