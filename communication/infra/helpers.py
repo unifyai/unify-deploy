@@ -299,6 +299,8 @@ def create_unity_job(
                 "PROJECT_ID",
                 "VERTEXAI_LOCATION",
                 "VERTEXAI_PROJECT",
+                "UNITY_STARTUP_TIMING",
+                "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE",
             )
         ]
         unity_secret_env = [
