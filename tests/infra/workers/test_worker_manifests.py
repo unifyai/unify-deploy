@@ -45,3 +45,23 @@ def test_job_watcher_uses_explicit_secret_allowlist() -> None:
         assert "envFrom:" not in text
         assert "GCP_SA_KEY" not in text
         assert "key: ORCHESTRA_ADMIN_KEY" in text
+
+
+def test_deployment_reconcile_job_does_not_require_global_unify_key() -> None:
+    text = (
+        ROOT / "deploy/k8s/deployment-reconcile/deployment-reconcile-job.yaml"
+    ).read_text()
+
+    assert "key: ORCHESTRA_ADMIN_KEY" in text
+    assert "name: UNIFY_KEY" not in text
+    assert "key: UNIFY_KEY" not in text
+
+
+def test_cloud_build_deployment_reconcile_is_control_plane_only() -> None:
+    for relative_path in [
+        "deploy/cloudbuild-staging.yaml",
+        "deploy/cloudbuild.yaml",
+    ]:
+        text = (ROOT / relative_path).read_text()
+        assert "--planes control-plane \\" in text
+        assert "--planes control-plane,runtime" not in text

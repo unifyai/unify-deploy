@@ -292,7 +292,7 @@ def _build_table_config(config, sf) -> dict:
 
 def _collect_config_items(args: argparse.Namespace) -> list[DispatchItem]:
     """Build dispatch items from --config."""
-    from unity_deploy.customization.types.pipeline_config import PipelineConfig
+    from unity_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
 
     config = PipelineConfig.from_file(args.config)
     config.resolve_paths(Path(args.project_root).resolve())

@@ -1,0 +1,280 @@
+name: HubSpot
+slug: hubspot
+version: "0.1.0"
+sector: crm
+tier: api
+quality: silver
+description: >
+  HubSpot integration covering CRM, Engagements, Marketing, Sales, Service,
+  CMS, Platform, and Analytics surfaces via the HubSpot v3 APIs.  Provides
+  on-demand lookups + mutations and an incremental sync that mirrors objects
+  into the assistant's DataManager so the LLM can answer locally and reduce
+  round-trips to HubSpot.  Authenticated using a HubSpot Private App access
+  token supplied via the assistant Secret Manager.  On-demand functions
+  default to mock=True for safe testing; sync functions require a live token.
+  Tier-gated capabilities (Sequences, Workflows, SMS, Custom Reports, etc.)
+  detect 403 responses and return a graceful error rather than raising.
+homepage: https://developers.hubspot.com/docs/api/private-apps
+
+secrets:
+- name: HUBSPOT_PRIVATE_APP_TOKEN
+  description: >
+    HubSpot Private App access token.  Create at Settings -> Integrations
+    -> Private Apps in HubSpot.  Recommended scopes for full functionality:
+    crm.objects.contacts.read/write, crm.objects.companies.read/write,
+    crm.objects.deals.read/write, crm.objects.tickets.read/write,
+    crm.objects.line_items.read/write, crm.objects.products.read/write,
+    crm.objects.quotes.read/write, crm.objects.owners.read,
+    crm.objects.calls.read/write, crm.objects.emails.read/write,
+    crm.objects.meetings.read/write, crm.objects.notes.read/write,
+    crm.objects.tasks.read/write, crm.lists.read/write,
+    crm.schemas.contacts.read, crm.schemas.companies.read,
+    crm.schemas.deals.read, crm.schemas.tickets.read,
+    crm.schemas.custom.read, crm.objects.custom.read/write,
+    forms, content, files, hubdb, automation, sales-email-read.
+    Optional scopes unlock specific Hubs (sequences, conversations, etc.).
+  required: true
+  sensitive: true
+
+- name: HUBSPOT_PORTAL_ID
+  description: >
+    Numeric HubSpot account/portal ID.  Optional - used to construct
+    HubSpot UI deep links in assistant responses.  If unset,
+    platform_account_info() will populate it from the API.
+  required: false
+  sensitive: false
+
+capabilities:
+  # ----- CRM ---------------------------------------------------------------
+- id: hubspot_contact_management
+  name: Contact Management
+  description: Look up, create, update, and delete HubSpot contacts.
+  functions: [get_hubspot_contact, search_hubspot_contacts, list_hubspot_contacts, create_hubspot_contact, update_hubspot_contact, delete_hubspot_contact, sync_hubspot_contacts]
+  guidance: [hubspot_crm_contacts, hubspot_overview, hubspot_local_vs_live]
+
+- id: hubspot_company_records
+  name: Company Records
+  description: Look up and maintain company records.
+  functions: [get_hubspot_company, search_hubspot_companies, list_hubspot_companies, create_hubspot_company, update_hubspot_company, delete_hubspot_company, sync_hubspot_companies]
+  guidance: [hubspot_crm_companies, hubspot_overview, hubspot_local_vs_live]
+
+- id: hubspot_deal_pipeline
+  name: Deal Pipeline
+  description: Inspect and progress deals in the hubspot_sales pipeline.
+  functions: [get_hubspot_deal, search_hubspot_deals, list_hubspot_deals, create_hubspot_deal, update_hubspot_deal, delete_hubspot_deal, transition_hubspot_deal_stage, sync_hubspot_deals]
+  guidance: [hubspot_crm_deals, hubspot_overview, hubspot_local_vs_live]
+
+- id: hubspot_ticket_management
+  name: Ticket Management
+  description: Service ticket CRUD.
+  functions: [get_hubspot_ticket, search_hubspot_tickets, list_hubspot_tickets, create_hubspot_ticket, update_hubspot_ticket, sync_hubspot_tickets]
+  guidance: [hubspot_crm_tickets, hubspot_overview]
+
+- id: hubspot_line_items_and_products
+  name: Line Items and Products
+  description: Catalog products and deal line items.
+  functions: [get_hubspot_line_item, list_hubspot_line_items, create_hubspot_line_item, update_hubspot_line_item, sync_hubspot_line_items, get_hubspot_product, list_hubspot_products, search_hubspot_products, create_hubspot_product, update_hubspot_product, sync_hubspot_products]
+  guidance: [hubspot_overview]
+
+- id: hubspot_quotes
+  name: Quotes
+  description: Build and send quotes from deals.
+  functions: [get_hubspot_quote, list_hubspot_quotes, create_hubspot_quote, update_hubspot_quote, send_hubspot_quote, sync_hubspot_quotes]
+  guidance: [hubspot_crm_quotes, hubspot_high_stakes_writes]
+
+- id: hubspot_custom_objects
+  name: Custom Objects
+  description: Discover and work with portal-specific custom object schemas.
+  functions: [discover_hubspot_custom_object_schemas, get_hubspot_custom_object_record, search_hubspot_custom_objects, list_hubspot_custom_objects, create_hubspot_custom_object_record, update_hubspot_custom_object_record, sync_hubspot_custom_objects]
+  guidance: [hubspot_crm_custom_objects, hubspot_overview]
+
+- id: hubspot_associations
+  name: Associations
+  description: Link records across object types using the v4 association API.
+  functions: [list_hubspot_associations, create_hubspot_association, delete_hubspot_association, sync_hubspot_associations]
+  guidance: [hubspot_overview]
+
+- id: hubspot_lists_and_segments
+  name: Lists and Segments
+  description: CRUD on contact lists; manage memberships of static lists.
+  functions: [get_hubspot_list, list_hubspot_lists, create_hubspot_list, delete_hubspot_list, add_contact_to_hubspot_list, remove_contact_from_hubspot_list, sync_hubspot_lists]
+  guidance: [hubspot_crm_lists_and_workflows]
+
+- id: hubspot_properties_metadata
+  name: Properties Metadata
+  description: Property schemas per object type, and create custom properties.
+  functions: [list_hubspot_properties, get_hubspot_property, create_hubspot_property, sync_hubspot_properties]
+  guidance: [hubspot_overview]
+
+- id: hubspot_feedback_and_goals
+  name: Feedback and Goals
+  description: NPS/CSAT feedback submissions and HubSpot goals.
+  functions: [list_hubspot_feedback_submissions, sync_hubspot_feedback, list_hubspot_goals, sync_hubspot_goals]
+  guidance: [hubspot_overview]
+
+  # ----- Engagements -------------------------------------------------------
+- id: hubspot_engagement_logging
+  name: Engagement Logging
+  description: Log activity (calls, emails, meetings, notes, tasks) against CRM records.
+  functions: [log_hubspot_call, list_hubspot_calls, sync_hubspot_calls, log_hubspot_email, list_hubspot_emails, sync_hubspot_emails, log_hubspot_meeting, list_hubspot_meetings, sync_hubspot_meetings, create_hubspot_note, list_hubspot_notes, sync_hubspot_notes, create_hubspot_task, update_hubspot_task, complete_hubspot_task, list_hubspot_tasks, sync_hubspot_tasks]
+  guidance: [hubspot_engagements]
+
+  # ----- Marketing Hub -----------------------------------------------------
+- id: hubspot_marketing_forms
+  name: Marketing Forms
+  description: Form definitions, submissions, programmatic submission.
+  functions: [list_hubspot_marketing_forms, get_hubspot_marketing_form, list_hubspot_form_submissions, submit_hubspot_form, sync_hubspot_marketing_forms]
+  guidance: [hubspot_marketing]
+
+- id: hubspot_marketing_emails
+  name: Marketing Emails
+  description: Marketing email definitions and sending (single + broadcast).
+  functions: [list_hubspot_marketing_emails, get_hubspot_marketing_email, send_single_hubspot_marketing_email, broadcast_hubspot_marketing_email, sync_hubspot_marketing_emails]
+  guidance: [hubspot_marketing, hubspot_high_stakes_writes]
+
+- id: hubspot_marketing_workflows
+  name: Marketing Workflows
+  description: Workflow enrollments (enroll/unenroll contacts).
+  functions: [list_hubspot_marketing_workflows, enroll_in_hubspot_workflow, unenroll_from_hubspot_workflow, sync_hubspot_marketing_workflows]
+  guidance: [hubspot_marketing, hubspot_crm_lists_and_workflows]
+
+- id: hubspot_marketing_campaigns_and_ctas
+  name: Campaigns and CTAs
+  description: Marketing campaigns and call-to-action assets.
+  functions: [list_hubspot_campaigns, get_hubspot_campaign, sync_hubspot_campaigns, list_hubspot_ctas, sync_hubspot_ctas]
+  guidance: [hubspot_marketing]
+
+- id: hubspot_marketing_subscriptions
+  name: Marketing Subscriptions
+  description: Subscription types and per-contact subscription status.
+  functions: [list_hubspot_subscription_types, get_hubspot_contact_subscription_status, subscribe_hubspot_contact, unsubscribe_hubspot_contact, sync_hubspot_subscriptions]
+  guidance: [hubspot_marketing]
+
+- id: hubspot_marketing_events
+  name: Marketing Events
+  description: External hubspot_marketing events with attendance tracking.
+  functions: [list_hubspot_marketing_events, create_hubspot_marketing_event, update_hubspot_marketing_event, list_hubspot_event_attendance, sync_hubspot_marketing_events]
+  guidance: [hubspot_marketing]
+
+- id: hubspot_marketing_sms
+  name: Marketing SMS
+  description: SMS messaging to contacts (tier-gated).
+  functions: [send_hubspot_marketing_sms, list_hubspot_sms_messages]
+  guidance: [hubspot_marketing, hubspot_high_stakes_writes, hubspot_tier_gating]
+
+- id: hubspot_marketing_email_events
+  name: Marketing Email Events
+  description: Per-message delivery, open, click, bounce events (high volume).
+  functions: [sync_hubspot_email_events]
+  guidance: [hubspot_marketing, hubspot_sync_runbook]
+
+  # ----- Sales Hub ---------------------------------------------------------
+- id: hubspot_sales_sequences
+  name: Sales Sequences
+  description: Outbound cadences (tier-gated, Sales Hub Pro+).
+  functions: [list_hubspot_sequences, get_hubspot_sequence, enroll_in_hubspot_sequence, unenroll_from_hubspot_sequence, sync_hubspot_sequences]
+  guidance: [hubspot_sales, hubspot_tier_gating]
+
+- id: hubspot_sales_templates_and_snippets
+  name: Sales Templates and Snippets
+  description: Email templates and reusable text snippets.
+  functions: [list_hubspot_sales_templates, get_hubspot_sales_template, sync_hubspot_sales_templates, list_hubspot_sales_snippets, get_hubspot_sales_snippet, sync_hubspot_sales_snippets]
+  guidance: [hubspot_sales]
+
+- id: hubspot_sales_documents
+  name: Sales Documents
+  description: Document library and view-tracking summaries.
+  functions: [list_hubspot_sales_documents, get_hubspot_sales_document, get_hubspot_document_view_summary, sync_hubspot_sales_documents]
+  guidance: [hubspot_sales]
+
+- id: hubspot_sales_meeting_links
+  name: Meeting Scheduling Links
+  description: HubSpot meeting links (scheduling pages).
+  functions: [list_hubspot_meeting_links, get_hubspot_meeting_link, sync_hubspot_meeting_links]
+  guidance: [hubspot_sales]
+
+  # ----- Service Hub -------------------------------------------------------
+- id: hubspot_service_conversations
+  name: Conversations Inbox
+  description: Read inbox threads and send replies (tier-gated).
+  functions: [list_hubspot_conversation_threads, get_hubspot_conversation_thread, list_hubspot_conversation_messages, send_hubspot_conversation_reply, sync_hubspot_conversations]
+  guidance: [hubspot_service, hubspot_high_stakes_writes, hubspot_tier_gating]
+
+- id: hubspot_knowledge_base
+  name: Knowledge Base
+  description: KB articles - browse, create, update.
+  functions: [list_hubspot_kb_articles, get_hubspot_kb_article, create_hubspot_kb_article, update_hubspot_kb_article, sync_hubspot_kb_articles]
+  guidance: [hubspot_service, hubspot_cms]
+
+- id: hubspot_chatflows
+  name: Chatflows
+  description: Read chat flow definitions.
+  functions: [list_hubspot_chatflows, get_hubspot_chatflow, sync_hubspot_chatflows]
+  guidance: [hubspot_service]
+
+  # ----- CMS Hub -----------------------------------------------------------
+- id: hubspot_cms_content
+  name: CMS Pages and Blog
+  description: Site/landing pages and blog posts.
+  functions: [list_hubspot_cms_pages, get_hubspot_cms_page, create_hubspot_cms_page, update_hubspot_cms_page, publish_hubspot_cms_page, list_hubspot_blog_posts, get_hubspot_blog_post, create_hubspot_blog_post, update_hubspot_blog_post, publish_hubspot_blog_post, list_hubspot_blog_authors, sync_hubspot_cms_pages, sync_hubspot_blog_posts]
+  guidance: [hubspot_cms, hubspot_high_stakes_writes]
+
+- id: hubspot_cms_files
+  name: CMS Files
+  description: File library upload, list, download, delete.
+  functions: [list_hubspot_cms_files, get_hubspot_cms_file, upload_hubspot_cms_file, delete_hubspot_cms_file, sync_hubspot_cms_files]
+  guidance: [hubspot_cms, hubspot_high_stakes_writes]
+
+- id: hubspot_cms_hubdb
+  name: HubDB
+  description: HubDB tables (structured data) - rows CRUD + table publish.
+  functions: [list_hubspot_hubdb_tables, get_hubspot_hubdb_table, list_hubspot_hubdb_rows, create_hubspot_hubdb_row, update_hubspot_hubdb_row, delete_hubspot_hubdb_row, publish_hubspot_hubdb_table, sync_hubspot_hubdb]
+  guidance: [hubspot_cms]
+
+- id: hubspot_cms_url_redirects
+  name: URL Redirects
+  description: Manage CMS URL redirects.
+  functions: [list_hubspot_url_redirects, create_hubspot_url_redirect, update_hubspot_url_redirect, delete_hubspot_url_redirect, sync_hubspot_url_redirects]
+  guidance: [hubspot_cms]
+
+- id: hubspot_cms_domains
+  name: CMS Domains
+  description: List configured CMS domains.
+  functions: [list_hubspot_cms_domains, sync_hubspot_cms_domains]
+  guidance: [hubspot_cms]
+
+  # ----- Platform ----------------------------------------------------------
+- id: hubspot_platform_account
+  name: Account Information
+  description: Portal info, currencies, business units, import history.
+  functions: [get_hubspot_account_info, list_hubspot_audit_logs, list_hubspot_currencies, list_hubspot_business_units, list_hubspot_imports, sync_hubspot_platform]
+  guidance: [hubspot_overview]
+
+  # ----- Analytics ---------------------------------------------------------
+- id: hubspot_crm_analytics
+  name: CRM Analytics
+  description: Deal velocity, pipeline funnel, owner performance reports.
+  functions: [get_hubspot_deal_velocity_report, get_hubspot_pipeline_funnel_report, list_hubspot_crm_reports, run_hubspot_crm_report]
+  guidance: [hubspot_analytics]
+
+- id: hubspot_email_analytics
+  name: Email Analytics
+  description: Marketing email performance metrics.
+  functions: [get_hubspot_email_performance, list_hubspot_email_event_summary]
+  guidance: [hubspot_analytics]
+
+  # ----- Sync + local query ------------------------------------------------
+- id: hubspot_incremental_sync
+  name: Incremental Sync
+  description: Orchestrates a single sync tick across all enabled object types.
+  functions: [run_hubspot_sync_tick, get_hubspot_sync_state]
+  guidance: [hubspot_sync_runbook, hubspot_local_vs_live]
+
+- id: hubspot_local_query
+  name: Local DataManager Query
+  description: Query the synced HubSpot copy in DataManager (preferred over live calls when freshness allows).
+  functions: [query_local_hubspot_contacts, query_local_hubspot_companies, query_local_hubspot_deals, query_local_hubspot_tickets, query_local_hubspot_engagements, query_local_hubspot_custom_objects]
+  guidance: [hubspot_local_vs_live, hubspot_overview]
+
+requirements: [httpx]
+tags: [hubspot, crm, hubspot_sales, hubspot_marketing, hubspot_service, hubspot_cms, sync, datamanager]

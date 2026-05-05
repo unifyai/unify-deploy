@@ -1,13 +1,13 @@
 """Load the unity-deploy checkout ``.env`` without importing client packages.
 
-Importing ``unity_deploy.customization.clients.client_alpha`` (even to reach
+Importing ``unity_deploy.assistant_deployments.clients.client_alpha`` (even to reach
 ``ingest_utils``) executes ``client_alpha/__init__.py``, which pulls in
 ``pipeline_config`` and thus ``unity`` → ``unify``.  ``unify`` binds
 ``BASE_URL`` from ``os.environ`` at import time, so ``.env`` must be loaded
 **before** that chain runs.
 
 Call :func:`load_repo_dotenv` at the very start of CLI entrypoints that use
-package-qualified imports under ``unity_deploy.customization.clients``.
+package-qualified imports under ``unity_deploy.assistant_deployments.clients``.
 """
 
 from __future__ import annotations

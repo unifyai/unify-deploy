@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 from unity_deploy import hook
+from unity_deploy import startup_config
+from unity_deploy.runtime_reconcile import runner as runtime_runner
+from unity_deploy.runtime_reconcile.status import RuntimeReconcileStatusHandle
 from unity_deploy.utils.orchestra_client import OrchestraClientError
 
 
@@ -38,3 +42,137 @@ def test_sync_console_config_drift_repair_is_best_effort(monkeypatch, caplog):
         hook._sync_console_config(123, {"version": "1"})
 
     assert "Failed to sync console_config for assistant 123" in caplog.text
+
+
+def _session_details():
+    return SimpleNamespace(
+        assistant=SimpleNamespace(agent_id=123),
+        user=SimpleNamespace(id="user-1"),
+        org_id=7,
+        team_ids=[9],
+    )
+
+
+def test_startup_hook_starts_runtime_reconcile_async_by_default(monkeypatch):
+    resolved = SimpleNamespace(mcp_configs=[], console_config=None)
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        startup_config,
+        "resolve_startup_spec",
+        lambda identity: resolved,
+    )
+    monkeypatch.setattr(
+        startup_config,
+        "expand_startup_integrations",
+        lambda value: value,
+    )
+
+    def fake_start_runtime_reconcile(cm, resolved, identity, *, mode, revision=None):
+        calls.append((mode, identity.user_id))
+        status = RuntimeReconcileStatusHandle()
+        status.update(phase="starting")
+        return SimpleNamespace(status=status)
+
+    monkeypatch.setattr(
+        runtime_runner,
+        "start_runtime_reconcile",
+        fake_start_runtime_reconcile,
+    )
+    monkeypatch.setattr(
+        startup_config,
+        "build_actor_startup_config",
+        lambda value: {"actor_kwargs": {"guidelines": "ready"}},
+    )
+
+    result = hook.startup_hook(None, _session_details())
+
+    assert "ready" in result["actor_kwargs"]["guidelines"]
+    assert (
+        "Some assistant setup is still finishing"
+        in result["actor_kwargs"]["guidelines"]
+    )
+    assert calls == [("async", "user-1")]
+
+
+def test_startup_hook_runs_blocking_runtime_reconcile_when_explicitly_enabled(
+    monkeypatch,
+):
+    resolved = SimpleNamespace(mcp_configs=[], console_config=None)
+    calls: list[str] = []
+
+    monkeypatch.setenv("UNITY_DEPLOY_RUNTIME_RECONCILE_MODE", "blocking")
+    monkeypatch.setattr(
+        startup_config,
+        "resolve_startup_spec",
+        lambda identity: resolved,
+    )
+    monkeypatch.setattr(
+        startup_config,
+        "expand_startup_integrations",
+        lambda value: value,
+    )
+
+    def fake_start_runtime_reconcile(cm, resolved, identity, *, mode, revision=None):
+        calls.append(mode)
+        status = RuntimeReconcileStatusHandle()
+        status.update(phase="complete")
+        return SimpleNamespace(status=status)
+
+    monkeypatch.setattr(
+        runtime_runner,
+        "start_runtime_reconcile",
+        fake_start_runtime_reconcile,
+    )
+    monkeypatch.setattr(
+        startup_config,
+        "build_actor_startup_config",
+        lambda value: {"actor_kwargs": {"guidelines": "ready"}},
+    )
+
+    result = hook.startup_hook(None, _session_details())
+
+    assert result == {"actor_kwargs": {"guidelines": "ready"}}
+    assert calls == ["blocking"]
+
+
+def test_startup_hook_surfaces_runtime_reconcile_scheduling_failure(
+    monkeypatch,
+    caplog,
+):
+    resolved = SimpleNamespace(mcp_configs=[], console_config=None)
+    cm = SimpleNamespace()
+
+    monkeypatch.setattr(
+        startup_config,
+        "resolve_startup_spec",
+        lambda identity: resolved,
+    )
+    monkeypatch.setattr(
+        startup_config,
+        "expand_startup_integrations",
+        lambda value: value,
+    )
+
+    def fake_start_runtime_reconcile(cm, resolved, identity, *, mode, revision=None):
+        raise RuntimeError("thread scheduler unavailable")
+
+    monkeypatch.setattr(
+        runtime_runner,
+        "start_runtime_reconcile",
+        fake_start_runtime_reconcile,
+    )
+    monkeypatch.setattr(
+        startup_config,
+        "build_actor_startup_config",
+        lambda value: {"actor_kwargs": {"guidelines": "ready"}},
+    )
+
+    with caplog.at_level(logging.ERROR):
+        result = hook.startup_hook(cm, _session_details())
+
+    status = cm.deployment_runtime_reconcile_status.snapshot()
+    assert status.current_phase == "failed"
+    assert status.error == "thread scheduler unavailable"
+    assert "Background assistant setup failed" in result["actor_kwargs"]["guidelines"]
+    assert "Failed to schedule runtime reconciliation for assistant 123" in caplog.text
