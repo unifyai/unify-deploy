@@ -94,23 +94,19 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    REVISION=$$(gcloud run revisions list \
-      --service=${_SERVICE_NAME} \
+    REVISION=$$(gcloud run services describe ${_SERVICE_NAME} \
       --region=${_REGION} \
-      --filter="metadata.labels.gcb-build-id=${BUILD_ID}" \
-      --sort-by="~metadata.creationTimestamp" \
-      --limit=1 \
-      --format="value(metadata.name)")
+      --platform=managed \
+      --format="value(status.latestCreatedRevisionName)")
     if [ -z "$$REVISION" ]; then
       echo "No deployed revision found for build ${BUILD_ID}" >&2
       exit 1
     fi
-    LATEST_CREATED=$$(gcloud run services describe ${_SERVICE_NAME} \
+    REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
       --region=${_REGION} \
-      --platform=managed \
-      --format="value(status.latestCreatedRevisionName)")
-    if [ "$$REVISION" != "$$LATEST_CREATED" ]; then
-      echo "Skipping traffic route for $$REVISION because $$LATEST_CREATED is newer"
+      --format="value(metadata.labels.gcb-build-id)")
+    if [ "$$REVISION_BUILD_ID" != "${BUILD_ID}" ]; then
+      echo "Skipping traffic route for $$REVISION because it belongs to build $$REVISION_BUILD_ID"
       exit 0
     fi
     gcloud run services update-traffic ${_SERVICE_NAME} \

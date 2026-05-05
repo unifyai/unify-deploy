@@ -117,23 +117,22 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    REVISION=$$(gcloud run revisions list \
-      --service=${_SERVICE_NAME} \
+    REVISION=$$(gcloud run services describe ${_SERVICE_NAME} \
       --region=${_REGION} \
-      --filter="metadata.labels.gcb-build-id=${BUILD_ID} metadata.labels.preview-restore=true" \
-      --sort-by="~metadata.creationTimestamp" \
-      --limit=1 \
-      --format="value(metadata.name)")
+      --platform=managed \
+      --format="value(status.latestCreatedRevisionName)")
     if [ -z "$$REVISION" ]; then
       echo "No canonical restore revision found for build ${BUILD_ID}" >&2
       exit 1
     fi
-    LATEST_CREATED=$$(gcloud run services describe ${_SERVICE_NAME} \
+    REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
       --region=${_REGION} \
-      --platform=managed \
-      --format="value(status.latestCreatedRevisionName)")
-    if [ "$$REVISION" != "$$LATEST_CREATED" ]; then
-      echo "Skipping traffic restore for $$REVISION because $$LATEST_CREATED is newer"
+      --format="value(metadata.labels.gcb-build-id)")
+    REVISION_PREVIEW_RESTORE=$$(gcloud run revisions describe "$$REVISION" \
+      --region=${_REGION} \
+      --format="value(metadata.labels.preview-restore)")
+    if [ "$$REVISION_BUILD_ID" != "${BUILD_ID}" ] || [ "$$REVISION_PREVIEW_RESTORE" != "true" ]; then
+      echo "Skipping traffic restore for $$REVISION because it is not this build's restore revision"
       exit 0
     fi
     gcloud run services update-traffic ${_SERVICE_NAME} \
