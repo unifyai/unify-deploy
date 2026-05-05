@@ -68,7 +68,9 @@ async def get_hubspot_company(company_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def search_hubspot_companies(query: str, limit: int = 10, mock: bool = True) -> dict:
+async def search_hubspot_companies(
+    query: str, limit: int = 10, mock: bool = True
+) -> dict:
     """Full-text search HubSpot companies."""
     if mock:
         return {
@@ -207,7 +209,9 @@ async def create_hubspot_company(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_hubspot_company(company_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_company(
+    company_id: str, properties: dict, mock: bool = True
+) -> dict:
     """Patch HubSpot company properties."""
     if mock:
         base_props = {

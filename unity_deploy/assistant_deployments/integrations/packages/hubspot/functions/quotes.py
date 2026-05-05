@@ -135,7 +135,9 @@ async def create_hubspot_quote(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_hubspot_quote(quote_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_quote(
+    quote_id: str, properties: dict, mock: bool = True
+) -> dict:
     """Patch HubSpot quote properties."""
     if mock:
         base_props = {

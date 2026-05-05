@@ -52,7 +52,9 @@ async def list_hubspot_properties(object_type: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_hubspot_property(object_type: str, property_name: str, mock: bool = True) -> dict:
+async def get_hubspot_property(
+    object_type: str, property_name: str, mock: bool = True
+) -> dict:
     """Fetch a single property definition."""
     if mock:
         return {

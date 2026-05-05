@@ -126,7 +126,9 @@ async def create_hubspot_blog_post(
 
 
 @custom_function()
-async def update_hubspot_blog_post(post_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_blog_post(
+    post_id: str, properties: dict, mock: bool = True
+) -> dict:
     """Patch blog post properties."""
     if mock:
         base = {

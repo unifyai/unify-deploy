@@ -111,7 +111,9 @@ async def create_hubspot_cms_page(
 
 
 @custom_function()
-async def update_hubspot_cms_page(page_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_cms_page(
+    page_id: str, properties: dict, mock: bool = True
+) -> dict:
     """Patch CMS page properties."""
     if mock:
         base = {

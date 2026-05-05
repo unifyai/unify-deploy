@@ -100,7 +100,9 @@ async def list_hubspot_hubdb_rows(
 
 
 @custom_function()
-async def create_hubspot_hubdb_row(table_id: str, values: dict, mock: bool = True) -> dict:
+async def create_hubspot_hubdb_row(
+    table_id: str, values: dict, mock: bool = True
+) -> dict:
     """Insert a draft row into a HubDB table."""
     if mock:
         return {
@@ -147,7 +149,9 @@ async def update_hubspot_hubdb_row(
 
 
 @custom_function()
-async def delete_hubspot_hubdb_row(table_id: str, row_id: str, mock: bool = True) -> dict:
+async def delete_hubspot_hubdb_row(
+    table_id: str, row_id: str, mock: bool = True
+) -> dict:
     """Delete a HubDB row.  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "table_id": str(table_id), "row_id": str(row_id)}

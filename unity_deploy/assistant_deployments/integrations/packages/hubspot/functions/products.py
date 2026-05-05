@@ -49,7 +49,9 @@ async def get_hubspot_product(product_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def search_hubspot_products(query: str, limit: int = 10, mock: bool = True) -> dict:
+async def search_hubspot_products(
+    query: str, limit: int = 10, mock: bool = True
+) -> dict:
     """Search HubSpot products."""
     if mock:
         return {
@@ -178,7 +180,9 @@ async def create_hubspot_product(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_hubspot_product(product_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_product(
+    product_id: str, properties: dict, mock: bool = True
+) -> dict:
     """Patch HubSpot product properties."""
     if mock:
         base_props = {

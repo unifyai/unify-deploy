@@ -67,7 +67,9 @@ async def get_hubspot_sales_document(document_id: str, mock: bool = True) -> dic
 
 
 @custom_function()
-async def get_hubspot_document_view_summary(document_id: str, mock: bool = True) -> dict:
+async def get_hubspot_document_view_summary(
+    document_id: str, mock: bool = True
+) -> dict:
     """Aggregate view-tracking summary for a sales document."""
     if mock:
         return {

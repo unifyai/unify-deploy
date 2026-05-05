@@ -206,7 +206,9 @@ async def create_hubspot_deal(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_hubspot_deal(deal_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_deal(
+    deal_id: str, properties: dict, mock: bool = True
+) -> dict:
     """Patch HubSpot deal properties."""
     if mock:
         base_props = {

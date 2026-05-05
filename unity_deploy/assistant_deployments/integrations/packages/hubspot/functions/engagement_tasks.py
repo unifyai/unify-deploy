@@ -63,7 +63,9 @@ async def create_hubspot_task(
 
 
 @custom_function()
-async def update_hubspot_task(task_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_task(
+    task_id: str, properties: dict, mock: bool = True
+) -> dict:
     """Patch a task's properties (e.g. due date, priority)."""
     if mock:
         base_props = {

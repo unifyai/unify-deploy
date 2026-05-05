@@ -70,7 +70,9 @@ async def get_hubspot_contact(contact_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def search_hubspot_contacts(query: str, limit: int = 10, mock: bool = True) -> dict:
+async def search_hubspot_contacts(
+    query: str, limit: int = 10, mock: bool = True
+) -> dict:
     """Full-text search HubSpot contacts."""
     if mock:
         base_props = {
@@ -234,7 +236,9 @@ async def create_hubspot_contact(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_hubspot_contact(contact_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_contact(
+    contact_id: str, properties: dict, mock: bool = True
+) -> dict:
     """Patch HubSpot contact properties.  Only sends the keys provided."""
     if mock:
         base_props = {
