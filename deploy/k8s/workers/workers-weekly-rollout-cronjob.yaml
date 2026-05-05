@@ -16,9 +16,8 @@
 # Strategy: `kubectl rollout restart` mutates the pod-template
 # annotation, which triggers the Deployment's configured rolling
 # update. With maxSurge=100%, new pods come up immediately alongside
-# old pods that may still be draining (up to 10 min for ingest,
-# 30 min for parse per the asymmetric terminationGracePeriodSeconds
-# on each Deployment). Capacity never dips.
+# old pods that may still be draining (up to 10 min, matching the
+# GKE Autopilot terminationGracePeriodSeconds cap). Capacity never dips.
 #
 # The CronJob lives in the `default` namespace (neutral ground) and
 # restarts workers in both `staging` and `production` namespaces.
@@ -143,7 +142,7 @@ spec:
               kubectl rollout restart deployment/unity-ingest-worker -n staging
               kubectl rollout restart deployment/unity-parse-worker -n production
               kubectl rollout restart deployment/unity-ingest-worker -n production
-              echo "[$(date -u +%FT%TZ)] Rollout commands issued; ingest workers drain in <=10m, parse workers in <=30m"
+              echo "[$(date -u +%FT%TZ)] Rollout commands issued; workers drain in <=10m"
             resources:
               requests:
                 cpu: "50m"
