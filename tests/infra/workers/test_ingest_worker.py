@@ -137,6 +137,81 @@ class _FakeArtifactStore:
         return dest_path
 
 
+def test_scratch_dir_size_bytes_counts_nested_files(tmp_path) -> None:
+    """Scratch pressure is the sum of files owned by the message scratch dir."""
+    scratch_dir = tmp_path / "ingest_run_abc"
+    nested = scratch_dir / "nested"
+    nested.mkdir(parents=True)
+    (scratch_dir / "source.csv").write_bytes(b"abcde")
+    (nested / "sheet.jsonl").write_bytes(b"123")
+
+    assert ingest_worker._scratch_dir_size_bytes(scratch_dir) == 8
+
+
+def test_guard_scratch_usage_ignores_filesystem_wide_tmp_stats(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The guard must not consult /tmp filesystem-wide overlay usage."""
+    scratch_dir = tmp_path / "ingest_run_small"
+    scratch_dir.mkdir()
+    (scratch_dir / "tiny.csv").write_bytes(b"ok")
+
+    def fail_if_old_overlay_guard_is_used():
+        raise AssertionError("guard should not call tempfile.gettempdir()")
+
+    monkeypatch.setattr(
+        ingest_worker.tempfile,
+        "gettempdir",
+        fail_if_old_overlay_guard_is_used,
+    )
+    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "10")
+
+    ingest_worker._guard_scratch_usage(
+        scratch_dir=scratch_dir,
+        run_id="run-small",
+        phase="after_staging",
+    )
+
+
+def test_guard_scratch_usage_raises_when_scratch_exceeds_threshold(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Oversized staged source files still trip the worker scratch guard."""
+    scratch_dir = tmp_path / "ingest_run_large"
+    scratch_dir.mkdir()
+    (scratch_dir / "large.csv").write_bytes(b"abcdef")
+    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "5")
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "ingest worker scratch usage exceeded guard threshold.*"
+            "scratch_used=6.*threshold=5"
+        ),
+    ):
+        ingest_worker._guard_scratch_usage(
+            scratch_dir=scratch_dir,
+            run_id="run-large",
+            phase="after_staging",
+        )
+
+
+def test_guard_scratch_usage_treats_missing_scratch_dir_as_empty(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Cleanup may remove the scratch dir before the post-ingest guard runs."""
+    monkeypatch.setenv("UNITY_INGEST_TMP_MAX_BYTES", "1")
+
+    ingest_worker._guard_scratch_usage(
+        scratch_dir=tmp_path / "missing",
+        run_id="run-clean",
+        phase="after_durable_ingest",
+    )
+
+
 def _make_plan(
     *,
     content_rows_handle=None,

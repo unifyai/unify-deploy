@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -417,23 +417,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a7/1a/c9ee48a237512e49e6ab76fb1a723e910fd541aa7e86714e4c859cbe844f/browser_use-0.4.4.tar.gz", hash = "sha256:e517c8e1115786de79c21ad2caf02ff7263bd18c71dfa2cf66ac80f372eded90", size = 202770, upload-time = "2025-07-03T21:13:13.082Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/93/a49909c2c6416d7ccf0dd942bfd2dab0bac9bf6e9e243c5ec81a0021d383/browser_use-0.4.4-py3-none-any.whl", hash = "sha256:084c76d4de04f459807a57c93b6bde45eefbc6bfc1b57f2cd97f39ad63b20b5e", size = 243898, upload-time = "2025-07-03T21:13:11.608Z" },
-]
-
-[[package]]
-name = "browserbase"
-version = "1.7.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "distro" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "sniffio" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d8/72/27d4ca6fec8d107f3ee905675ce7a48b47fcf7918a5ce17fdbe40846beef/browserbase-1.7.0.tar.gz", hash = "sha256:e5b7acd33fad07666c1b9c7a33acea14d46a1693adaf5620c52839a746a342b8", size = 143680, upload-time = "2026-03-16T21:01:26.837Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/59/ae53543ca44b232f64f18413eaf5c3eb968d690ae6960ffb4b4d1a9449d9/browserbase-1.7.0-py3-none-any.whl", hash = "sha256:6ff0ad602f18a7b2034e9e564fbaee05f02954456f1709fc36061f53755356ce", size = 107840, upload-time = "2026-03-16T21:01:25.698Z" },
 ]
 
 [[package]]
@@ -8410,7 +8393,6 @@ dependencies = [
     { name = "aiohttp" },
     { name = "anticaptchaofficial" },
     { name = "browser-use" },
-    { name = "browserbase" },
     { name = "deepgram-sdk" },
     { name = "docling" },
     { name = "en-core-web-sm" },
@@ -8466,7 +8448,6 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "anticaptchaofficial", specifier = ">=1.0.69" },
     { name = "browser-use", specifier = ">=0.1.4" },
-    { name = "browserbase", specifier = ">=1.4.0" },
     { name = "deepgram-sdk", specifier = ">=4" },
     { name = "docling", specifier = ">=2.82.0" },
     { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },

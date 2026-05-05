@@ -32,13 +32,13 @@ spec:
       # Parse workers have no per-chunk checkpoint (one message =
       # one download + one Docling parse + one manifest write), so a
       # SIGKILL mid-parse means the whole message retries from
-      # scratch.  We keep a generous 30 min grace so an
-      # already-in-flight parse of a large PDF can finish even
-      # during rolling-restarts; the Pub/Sub DLQ
+      # scratch.  GKE Autopilot caps termination grace at 10 min,
+      # so large in-flight parses may retry after rollouts/drains;
+      # the Pub/Sub DLQ
       # (`unity-dead-letter` + maxDeliveryAttempts=15 from
       # deploy/scripts/dev/setup_pipeline_infra.sh) still bounds
       # worst-case loops for truly pathological files.
-      terminationGracePeriodSeconds: 1800
+      terminationGracePeriodSeconds: 600
       containers:
       - name: parse-worker
         image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
