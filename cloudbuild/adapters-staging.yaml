@@ -56,6 +56,32 @@ steps:
   - '-c'
   - |
     set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
+    repair_traffic_state() {
     SERVICE_JSON=/tmp/service.json
     gcloud run services describe ${_SERVICE_NAME} \
       --region=${_REGION} \
@@ -106,34 +132,65 @@ steps:
         print("--remove-tags=" + ",".join(remove_tags))
     PY
     mapfile -t TRAFFIC_ARGS < /tmp/traffic-args.txt
-    gcloud run services update-traffic ${_SERVICE_NAME} \
+    run_cloud_run_with_retry gcloud run services update-traffic ${_SERVICE_NAME} \
       --region=${_REGION} \
       --platform=managed \
       "$${TRAFFIC_ARGS[@]}" \
       --quiet
+    }
+    run_cloud_run_with_retry repair_traffic_state
   waitFor: ['push-sha-tag', 'push-latest-tag', 'pause-legacy-infra-schedulers']
 
   # Deploy to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
-  id: 'deploy'
-  entrypoint: gcloud
+  id: deploy
+  entrypoint: bash
   args:
-  - 'run'
-  - 'deploy'
-  - '${_SERVICE_NAME}'
-  - '--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA}'
-  - '--region=${_REGION}'
-  - '--platform=managed'
-  - '--allow-unauthenticated'
-  - '--min-instances=1'
-  - '--max-instances=100'
-  - '--concurrency=80'
-  - '--memory=2Gi'
-  - '--cpu=1'
-  - '--timeout=300'
-  - '--cpu-boost'
-  - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=staging,PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc'
-  - '--labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID}'
+  - '-c'
+  - |
+    set -euo pipefail
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
+    run_cloud_run_with_retry gcloud \
+      run \
+      deploy \
+      ${_SERVICE_NAME} \
+      --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
+      --region=${_REGION} \
+      --platform=managed \
+      --allow-unauthenticated \
+      --min-instances=1 \
+      --max-instances=100 \
+      --concurrency=80 \
+      --memory=2Gi \
+      --cpu=1 \
+      --timeout=300 \
+      --cpu-boost \
+      --set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},UNITY_MIN_IDLE_JOBS=3,UNITY_IDLE_JOB_DEMAND_FACTOR=4,DEPLOY_ENV=staging,PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc \
+      --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID}
   waitFor: ['repair-traffic-state']
 
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
@@ -143,26 +200,54 @@ steps:
   - '-c'
   - |
     set -euo pipefail
-    REVISION=$$(gcloud run services describe ${_SERVICE_NAME} \
-      --region=${_REGION} \
-      --platform=managed \
-      --format="value(status.latestCreatedRevisionName)")
-    if [ -z "$$REVISION" ]; then
-      echo "No deployed revision found for build ${BUILD_ID}" >&2
-      exit 1
-    fi
-    REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
-      --region=${_REGION} \
-      --format="value(metadata.labels.gcb-build-id)")
-    if [ "$$REVISION_BUILD_ID" != "${BUILD_ID}" ]; then
-      echo "Skipping traffic route for $$REVISION because it belongs to build $$REVISION_BUILD_ID"
-      exit 0
-    fi
-    gcloud run services update-traffic ${_SERVICE_NAME} \
-      --region=${_REGION} \
-      --platform=managed \
-      --to-revisions="$$REVISION=100" \
-      --quiet
+    run_cloud_run_with_retry() {
+      local attempt max_attempts delay output output_file sleep_for status
+      max_attempts=5
+      delay=5
+      for attempt in $$(seq 1 "$$max_attempts"); do
+        output_file=$$(mktemp)
+        set +e
+        (set -e; "$${@}") > "$$output_file" 2>&1
+        status=$$?
+        set -e
+        output=$$(cat "$$output_file")
+        rm -f "$$output_file"
+        printf '%s\n' "$$output"
+        if [ "$$status" -eq 0 ]; then
+          return 0
+        fi
+        if [[ "$$output" != *"ABORTED: Conflict for resource"* || "$$output" != *"was specified but current version is"* || "$$attempt" -eq "$$max_attempts" ]]; then
+          return "$$status"
+        fi
+        sleep_for=$$((delay + RANDOM % 5))
+        echo "Cloud Run service changed concurrently; retrying in $${sleep_for}s before attempt $$((attempt + 1))/$$max_attempts" >&2
+        sleep "$$sleep_for"
+        delay=$$((delay * 2))
+      done
+    }
+    route_canonical_traffic() {
+      REVISION=$$(gcloud run services describe ${_SERVICE_NAME} \
+        --region=${_REGION} \
+        --platform=managed \
+        --format="value(status.latestCreatedRevisionName)")
+      if [ -z "$$REVISION" ]; then
+        echo "No deployed revision found for build ${BUILD_ID}" >&2
+        return 1
+      fi
+      REVISION_BUILD_ID=$$(gcloud run revisions describe "$$REVISION" \
+        --region=${_REGION} \
+        --format="value(metadata.labels.gcb-build-id)")
+      if [ "$$REVISION_BUILD_ID" != "${BUILD_ID}" ]; then
+        echo "Skipping traffic route for $$REVISION because it belongs to build $$REVISION_BUILD_ID"
+        return 0
+      fi
+      gcloud run services update-traffic ${_SERVICE_NAME} \
+        --region=${_REGION} \
+        --platform=managed \
+        --to-revisions="$$REVISION=100" \
+        --quiet
+    }
+    run_cloud_run_with_retry route_canonical_traffic
   waitFor: ['deploy']
 
   # Update Cloud Scheduler: Email Watches Staging
