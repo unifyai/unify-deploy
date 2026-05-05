@@ -94,3 +94,40 @@ def test_unknown_integration_slug_logs_warning(caplog):
     assert expanded.integrations == ["does_not_exist"]
     assert not expanded.function_dirs
     assert "does_not_exist" in caplog.text
+
+
+def test_expand_seeds_integration_registry_with_one_row_per_slug():
+    """``ResolvedAssistantDeployment.integration_registry`` should carry one
+    row per loaded integration, ready for ``_sync_integration_registry`` to
+    push into the ``Integrations/Manifests`` DataManager context."""
+    resolved = _empty_resolved(integrations=["github", "fetch_mcp"])
+
+    expanded = expand_integrations(resolved)
+
+    slugs = sorted(row["slug"] for row in expanded.integration_registry)
+    assert slugs == ["fetch_mcp", "github"]
+    by_slug = {row["slug"]: row for row in expanded.integration_registry}
+    # Required vs optional secrets are split so the runtime detection can
+    # distinguish "must have to be enabled" from "informational hint".
+    assert "required_secrets_json" in by_slug["github"]
+    assert "optional_secrets_json" in by_slug["github"]
+    # Description carries through so the runtime can print human-readable
+    # status without a follow-up lookup.
+    assert by_slug["github"]["description"]
+
+
+def test_expand_idempotent_on_repeat_invocation():
+    """Re-running ``expand_integrations`` over the same resolved object must
+    not duplicate registry rows."""
+    resolved = _empty_resolved(integrations=["github"])
+    expand_integrations(resolved)
+    expand_integrations(resolved)
+    slugs = [row["slug"] for row in resolved.integration_registry]
+    assert slugs == ["github"]
+
+
+def test_unknown_slug_does_not_emit_registry_row(caplog):
+    resolved = _empty_resolved(integrations=["does_not_exist"])
+    with caplog.at_level(logging.WARNING):
+        expanded = expand_integrations(resolved)
+    assert expanded.integration_registry == []

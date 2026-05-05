@@ -582,6 +582,90 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Integration registry sync (Integrations/Manifests context)
+# ---------------------------------------------------------------------------
+
+
+_INTEGRATION_REGISTRY_CONTEXT_LEAF = "Integrations/Manifests"
+
+
+def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
+    """Push integration registry rows into the ``Integrations/Manifests`` context.
+
+    Each row was projected from a manifest by
+    ``integrations.loader._build_registry_row``.  Row identity is the ``slug``;
+    re-deploying with the same set of integrations is idempotent.  Removing an
+    integration from a deployment causes the corresponding row to be deleted so
+    the runtime detection in ``unity.integration_status`` doesn't keep
+    advertising a stale enablement target.
+    """
+    if not rows:
+        return False
+
+    active = unify.get_active_context()["read"]
+    ctx = f"{active}/{_INTEGRATION_REGISTRY_CONTEXT_LEAF}"
+    try:
+        unify.create_context(ctx)
+    except Exception:
+        pass
+
+    def natural_key(r: dict) -> str:
+        return str(r.get("slug", ""))
+
+    def get_existing() -> list[dict]:
+        try:
+            existing_logs = unify.get_logs(context=ctx, limit=1000)
+        except Exception:
+            return []
+        existing: list[dict] = []
+        for log in existing_logs:
+            entries = dict(log.entries or {})
+            # Stash the log id under ``_log_id`` so update/delete callbacks can
+            # find it; the generic ``sync_seed_data`` helper expects a dict with
+            # the natural key + an ``id_field``.
+            entries["_log_id"] = log.id
+            entries.setdefault("slug", entries.get("slug", ""))
+            existing.append(entries)
+        return existing
+
+    def create(rec: dict) -> Any:
+        unify.log(context=ctx, **{k: v for k, v in rec.items() if not k.startswith("_")})
+        return None
+
+    def update(_unused_id: int, rec: dict) -> Any:
+        # ``sync_seed_data`` calls update with ``rec[id_field]`` as the first arg;
+        # we route via ``_log_id`` instead.
+        log_id = rec.get("_log_id")
+        if log_id is None:
+            create(rec)
+            return None
+        unify.update_logs(
+            logs=[log_id],
+            context=ctx,
+            entries=[{k: v for k, v in rec.items() if not k.startswith("_")}],
+            overwrite=True,
+        )
+        return None
+
+    def delete(log_id: int) -> Any:
+        unify.delete_logs(context=ctx, logs=log_id)
+        return None
+
+    return sync_seed_data(
+        manager_key="integration_registry",
+        source_records=rows,
+        natural_key_fn=natural_key,
+        get_existing_fn=get_existing,
+        create_fn=create,
+        update_fn=update,
+        delete_fn=delete,
+        id_field="_log_id",
+        meta_store=meta,
+        exclude_fields={"_log_id"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -599,6 +683,7 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
         or resolved.knowledge
         or resolved.secrets
         or resolved.blacklist
+        or resolved.integration_registry
     )
     if not has_data:
         return False
@@ -665,5 +750,17 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
             )
         except Exception:
             logger.exception("Failed to sync seed knowledge")
+
+    if resolved.integration_registry:
+        try:
+            sync_start = perf_counter()
+            changed |= _sync_integration_registry(resolved.integration_registry, meta)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] seed_sync.integration_registry total=%.2fs",
+                perf_counter() - sync_start,
+            )
+        except Exception:
+            logger.exception("Failed to sync integration registry")
 
     return changed

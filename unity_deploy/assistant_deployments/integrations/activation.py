@@ -60,9 +60,30 @@ def expand_integrations(
     resolved.mcp_configs.extend(loaded.mcp_configs)
     resolved.scenarios.extend(loaded.scenarios)
 
+    # Seed-data sync (``_sync_integration_registry`` in ``seed_sync.py``) reads
+    # ``resolved.integration_registry`` and pushes the rows into the
+    # ``Integrations/Manifests`` DataManager context.  Idempotent on slug.
+    _merge_registry_rows(resolved.integration_registry, loaded.registry_rows)
+
     logger.info(
         "Expanded %d integration(s): %s",
         len(resolved.integrations),
         resolved.integrations,
     )
     return resolved
+
+
+def _merge_registry_rows(base: list[dict], overlay: list[dict]) -> None:
+    """Merge ``overlay`` into ``base`` in-place, last-write-wins on slug.
+
+    ``expand_integrations`` may run multiple times over the same
+    ``ResolvedAssistantDeployment`` (seed-layer chains, retry paths).
+    Keep a single row per slug so the runtime registry stays clean."""
+    by_slug = {row["slug"]: row for row in base if "slug" in row}
+    for row in overlay:
+        slug = row.get("slug")
+        if not slug:
+            continue
+        by_slug[slug] = row
+    base.clear()
+    base.extend(by_slug.values())
