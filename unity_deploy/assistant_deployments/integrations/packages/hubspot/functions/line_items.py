@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_line_item(line_item_id: str, mock: bool = True) -> dict:
+async def get_hubspot_line_item(line_item_id: str, mock: bool = True) -> dict:
     """Fetch a single line item."""
     if mock:
         return {
@@ -47,7 +47,7 @@ async def get_line_item(line_item_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_line_items(
+async def list_hubspot_line_items(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -104,7 +104,7 @@ async def list_line_items(
 
 
 @custom_function()
-async def create_line_item(properties: dict, mock: bool = True) -> dict:
+async def create_hubspot_line_item(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot line item."""
     if mock:
         base_props = {
@@ -131,7 +131,7 @@ async def create_line_item(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_line_item(
+async def update_hubspot_line_item(
     line_item_id: str,
     properties: dict,
     mock: bool = True,
@@ -167,7 +167,7 @@ async def update_line_item(
 
 
 @custom_function()
-async def sync_line_items(
+async def sync_hubspot_line_items(
     since: str | None = None,
     schema_version: str = "hubspot.crm.line_items.v1",
     mock: bool = True,

@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_associations(
+async def list_hubspot_associations(
     from_object_type: str,
     from_id: str,
     to_object_type: str,
@@ -42,7 +42,7 @@ async def list_associations(
 
 
 @custom_function()
-async def create_association(
+async def create_hubspot_association(
     from_object_type: str,
     from_id: str,
     to_object_type: str,
@@ -72,7 +72,7 @@ async def create_association(
 
 
 @custom_function()
-async def delete_association(
+async def delete_hubspot_association(
     from_object_type: str,
     from_id: str,
     to_object_type: str,
@@ -98,7 +98,7 @@ async def delete_association(
 
 
 @custom_function()
-async def sync_associations(
+async def sync_hubspot_associations(
     schema_version: str = "hubspot.crm.associations.v1",
     mock: bool = True,
 ) -> dict:

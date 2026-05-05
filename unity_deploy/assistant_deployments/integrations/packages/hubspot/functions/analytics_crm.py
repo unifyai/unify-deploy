@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_deal_velocity_report(
+async def get_hubspot_deal_velocity_report(
     pipeline_id: str = "default",
     period_days: int = 90,
     mock: bool = True,
@@ -43,7 +43,7 @@ async def get_deal_velocity_report(
 
 
 @custom_function()
-async def get_pipeline_funnel_report(
+async def get_hubspot_pipeline_funnel_report(
     pipeline_id: str = "default",
     mock: bool = True,
 ) -> dict:
@@ -95,7 +95,7 @@ async def get_pipeline_funnel_report(
 
 
 @custom_function()
-async def list_crm_reports(
+async def list_hubspot_crm_reports(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -127,7 +127,7 @@ async def list_crm_reports(
 
 
 @custom_function()
-async def run_crm_report(report_id: str, mock: bool = True) -> dict:
+async def run_hubspot_crm_report(report_id: str, mock: bool = True) -> dict:
     """Run a saved CRM report and return its result rows."""
     if mock:
         return {

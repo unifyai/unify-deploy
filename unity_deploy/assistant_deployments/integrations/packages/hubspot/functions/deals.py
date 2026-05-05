@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_deal(deal_id: str, mock: bool = True) -> dict:
+async def get_hubspot_deal(deal_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot deal by ID."""
     if mock:
         return {
@@ -66,7 +66,7 @@ async def get_deal(deal_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def search_deals(query: str, limit: int = 10, mock: bool = True) -> dict:
+async def search_hubspot_deals(query: str, limit: int = 10, mock: bool = True) -> dict:
     """Search HubSpot deals (matches dealname + description)."""
     if mock:
         return {
@@ -117,7 +117,7 @@ async def search_deals(query: str, limit: int = 10, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_deals(
+async def list_hubspot_deals(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -179,7 +179,7 @@ async def list_deals(
 
 
 @custom_function()
-async def create_deal(properties: dict, mock: bool = True) -> dict:
+async def create_hubspot_deal(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot deal.  At minimum supply ``dealname`` and ``pipeline``."""
     if mock:
         base_props = {
@@ -206,7 +206,7 @@ async def create_deal(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_deal(deal_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_deal(deal_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot deal properties."""
     if mock:
         base_props = {
@@ -234,7 +234,7 @@ async def update_deal(deal_id: str, properties: dict, mock: bool = True) -> dict
 
 
 @custom_function()
-async def transition_deal_stage(
+async def transition_hubspot_deal_stage(
     deal_id: str,
     new_stage_id: str,
     note: str | None = None,
@@ -295,7 +295,7 @@ async def transition_deal_stage(
 
 
 @custom_function()
-async def delete_deal(deal_id: str, mock: bool = True) -> dict:
+async def delete_hubspot_deal(deal_id: str, mock: bool = True) -> dict:
     """Soft-delete a HubSpot deal.  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "id": str(deal_id)}
@@ -316,7 +316,7 @@ async def delete_deal(deal_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_deals(
+async def sync_hubspot_deals(
     since: str | None = None,
     schema_version: str = "hubspot.crm.deals.v1",
     mock: bool = True,

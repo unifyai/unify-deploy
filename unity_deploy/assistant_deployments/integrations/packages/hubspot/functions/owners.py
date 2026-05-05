@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_owners(
+async def list_hubspot_owners(
     after: str | None = None,
     limit: int = 100,
     mock: bool = True,
@@ -48,7 +48,7 @@ async def list_owners(
 
 
 @custom_function()
-async def sync_owners(
+async def sync_hubspot_owners(
     schema_version: str = "hubspot.crm.owners.v1",
     mock: bool = True,
 ) -> dict:

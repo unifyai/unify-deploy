@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_sales_snippets(
+async def list_hubspot_sales_snippets(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -40,7 +40,7 @@ async def list_sales_snippets(
 
 
 @custom_function()
-async def get_sales_snippet(snippet_id: str, mock: bool = True) -> dict:
+async def get_hubspot_sales_snippet(snippet_id: str, mock: bool = True) -> dict:
     """Fetch a sales snippet by ID."""
     if mock:
         return {
@@ -59,7 +59,7 @@ async def get_sales_snippet(snippet_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_sales_snippets(
+async def sync_hubspot_sales_snippets(
     schema_version: str = "hubspot.sales.snippets.v1",
     mock: bool = True,
 ) -> dict:

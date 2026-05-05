@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_quote(quote_id: str, mock: bool = True) -> dict:
+async def get_hubspot_quote(quote_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot quote by ID."""
     if mock:
         return {
@@ -51,7 +51,7 @@ async def get_quote(quote_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_quotes(
+async def list_hubspot_quotes(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -109,7 +109,7 @@ async def list_quotes(
 
 
 @custom_function()
-async def create_quote(properties: dict, mock: bool = True) -> dict:
+async def create_hubspot_quote(properties: dict, mock: bool = True) -> dict:
     """Create a quote.  At minimum supply ``hs_title`` and ``hs_expiration_date``."""
     if mock:
         base_props = {
@@ -135,7 +135,7 @@ async def create_quote(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_quote(quote_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_quote(quote_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot quote properties."""
     if mock:
         base_props = {
@@ -162,7 +162,7 @@ async def update_quote(quote_id: str, properties: dict, mock: bool = True) -> di
 
 
 @custom_function()
-async def send_quote(
+async def send_hubspot_quote(
     quote_id: str,
     confirm: bool = False,
     mock: bool = True,
@@ -171,7 +171,7 @@ async def send_quote(
     the customer.  Requires ``confirm=True``."""
     if not confirm:
         return {
-            "error": "send_quote requires confirm=True.  Confirm with the user that "
+            "error": "send_hubspot_quote requires confirm=True.  Confirm with the user that "
             "the quote contents and recipients are correct first.",
             "id": str(quote_id),
         }
@@ -200,7 +200,7 @@ async def send_quote(
 
 
 @custom_function()
-async def sync_quotes(
+async def sync_hubspot_quotes(
     since: str | None = None,
     schema_version: str = "hubspot.crm.quotes.v1",
     mock: bool = True,

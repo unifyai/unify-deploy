@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_kb_articles(
+async def list_hubspot_kb_articles(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -48,7 +48,7 @@ async def list_kb_articles(
 
 
 @custom_function()
-async def get_kb_article(article_id: str, mock: bool = True) -> dict:
+async def get_hubspot_kb_article(article_id: str, mock: bool = True) -> dict:
     """Fetch a KB article by ID."""
     if mock:
         return {
@@ -72,7 +72,7 @@ async def get_kb_article(article_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def create_kb_article(
+async def create_hubspot_kb_article(
     title: str,
     content_html: str,
     slug: str,
@@ -111,7 +111,7 @@ async def create_kb_article(
 
 
 @custom_function()
-async def update_kb_article(
+async def update_hubspot_kb_article(
     article_id: str,
     properties: dict,
     mock: bool = True,
@@ -136,7 +136,7 @@ async def update_kb_article(
 
 
 @custom_function()
-async def sync_kb_articles(
+async def sync_hubspot_kb_articles(
     schema_version: str = "hubspot.service.kb_articles.v1",
     mock: bool = True,
 ) -> dict:

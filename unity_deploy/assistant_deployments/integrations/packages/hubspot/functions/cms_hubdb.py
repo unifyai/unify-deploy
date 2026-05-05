@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_hubdb_tables(mock: bool = True) -> dict:
+async def list_hubspot_hubdb_tables(mock: bool = True) -> dict:
     """List all HubDB table definitions."""
     if mock:
         base = {
@@ -34,7 +34,7 @@ async def list_hubdb_tables(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_hubdb_table(table_id: str, mock: bool = True) -> dict:
+async def get_hubspot_hubdb_table(table_id: str, mock: bool = True) -> dict:
     """Fetch a HubDB table definition by ID."""
     if mock:
         return {
@@ -59,7 +59,7 @@ async def get_hubdb_table(table_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_hubdb_rows(
+async def list_hubspot_hubdb_rows(
     table_id: str,
     after: str | None = None,
     limit: int = 100,
@@ -100,7 +100,7 @@ async def list_hubdb_rows(
 
 
 @custom_function()
-async def create_hubdb_row(table_id: str, values: dict, mock: bool = True) -> dict:
+async def create_hubspot_hubdb_row(table_id: str, values: dict, mock: bool = True) -> dict:
     """Insert a draft row into a HubDB table."""
     if mock:
         return {
@@ -121,7 +121,7 @@ async def create_hubdb_row(table_id: str, values: dict, mock: bool = True) -> di
 
 
 @custom_function()
-async def update_hubdb_row(
+async def update_hubspot_hubdb_row(
     table_id: str,
     row_id: str,
     values: dict,
@@ -147,7 +147,7 @@ async def update_hubdb_row(
 
 
 @custom_function()
-async def delete_hubdb_row(table_id: str, row_id: str, mock: bool = True) -> dict:
+async def delete_hubspot_hubdb_row(table_id: str, row_id: str, mock: bool = True) -> dict:
     """Delete a HubDB row.  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "table_id": str(table_id), "row_id": str(row_id)}
@@ -169,7 +169,7 @@ async def delete_hubdb_row(table_id: str, row_id: str, mock: bool = True) -> dic
 
 
 @custom_function()
-async def publish_hubdb_table(
+async def publish_hubspot_hubdb_table(
     table_id: str,
     confirm: bool = False,
     mock: bool = True,
@@ -178,7 +178,7 @@ async def publish_hubdb_table(
     Requires confirm=True + HUBSPOT_ALLOW_CMS_PUBLISH=true."""
     if not confirm:
         return {
-            "error": "publish_hubdb_table requires confirm=True.",
+            "error": "publish_hubspot_hubdb_table requires confirm=True.",
             "table_id": str(table_id),
         }
 
@@ -203,7 +203,7 @@ async def publish_hubdb_table(
 
 
 @custom_function()
-async def sync_hubdb(
+async def sync_hubspot_hubdb(
     schema_version: str = "hubspot.cms.hubdb.v1",
     mock: bool = True,
 ) -> dict:

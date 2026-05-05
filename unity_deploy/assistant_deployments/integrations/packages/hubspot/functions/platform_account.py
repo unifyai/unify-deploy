@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_account_info(mock: bool = True) -> dict:
+async def get_hubspot_account_info(mock: bool = True) -> dict:
     """Fetch HubSpot account details.  Bootstraps HUBSPOT_PORTAL_ID and tier
     detection in one call."""
     if mock:
@@ -27,7 +27,7 @@ async def get_account_info(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_audit_logs(
+async def list_hubspot_audit_logs(
     after: str | None = None,
     limit: int = 100,
     mock: bool = True,
@@ -66,7 +66,7 @@ async def list_audit_logs(
 
 
 @custom_function()
-async def list_currencies(mock: bool = True) -> dict:
+async def list_hubspot_currencies(mock: bool = True) -> dict:
     """List active currencies + exchange rates."""
     if mock:
         return {
@@ -87,7 +87,7 @@ async def list_currencies(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_business_units(mock: bool = True) -> dict:
+async def list_hubspot_business_units(mock: bool = True) -> dict:
     """List business units (multi-brand setups)."""
     if mock:
         return {
@@ -107,7 +107,7 @@ async def list_business_units(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_imports(
+async def list_hubspot_imports(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -144,7 +144,7 @@ async def list_imports(
 
 
 @custom_function()
-async def sync_platform(
+async def sync_hubspot_platform(
     schema_version: str = "hubspot.platform.v1",
     mock: bool = True,
 ) -> dict:

@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_marketing_workflows(
+async def list_hubspot_marketing_workflows(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -42,7 +42,7 @@ async def list_marketing_workflows(
 
 
 @custom_function()
-async def enroll_in_workflow(
+async def enroll_in_hubspot_workflow(
     workflow_id: str,
     contact_email: str,
     mock: bool = True,
@@ -66,7 +66,7 @@ async def enroll_in_workflow(
 
 
 @custom_function()
-async def unenroll_from_workflow(
+async def unenroll_from_hubspot_workflow(
     workflow_id: str,
     contact_email: str,
     mock: bool = True,
@@ -89,7 +89,7 @@ async def unenroll_from_workflow(
 
 
 @custom_function()
-async def sync_marketing_workflows(
+async def sync_hubspot_marketing_workflows(
     schema_version: str = "hubspot.marketing.workflows.v1",
     mock: bool = True,
 ) -> dict:

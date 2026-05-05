@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_goals(
+async def list_hubspot_goals(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -52,7 +52,7 @@ async def list_goals(
 
 
 @custom_function()
-async def sync_goals(
+async def sync_hubspot_goals(
     schema_version: str = "hubspot.crm.goals.v1",
     mock: bool = True,
 ) -> dict:

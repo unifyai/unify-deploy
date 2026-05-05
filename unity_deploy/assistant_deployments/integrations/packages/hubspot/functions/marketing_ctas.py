@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_ctas(
+async def list_hubspot_ctas(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -42,7 +42,7 @@ async def list_ctas(
 
 
 @custom_function()
-async def sync_ctas(
+async def sync_hubspot_ctas(
     schema_version: str = "hubspot.marketing.ctas.v1",
     mock: bool = True,
 ) -> dict:

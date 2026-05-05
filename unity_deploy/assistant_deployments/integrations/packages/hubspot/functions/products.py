@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_product(product_id: str, mock: bool = True) -> dict:
+async def get_hubspot_product(product_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot product by ID."""
     if mock:
         return {
@@ -49,7 +49,7 @@ async def get_product(product_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def search_products(query: str, limit: int = 10, mock: bool = True) -> dict:
+async def search_hubspot_products(query: str, limit: int = 10, mock: bool = True) -> dict:
     """Search HubSpot products."""
     if mock:
         return {
@@ -94,7 +94,7 @@ async def search_products(query: str, limit: int = 10, mock: bool = True) -> dic
 
 
 @custom_function()
-async def list_products(
+async def list_hubspot_products(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -152,7 +152,7 @@ async def list_products(
 
 
 @custom_function()
-async def create_product(properties: dict, mock: bool = True) -> dict:
+async def create_hubspot_product(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot product."""
     if mock:
         base_props = {
@@ -178,7 +178,7 @@ async def create_product(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_product(product_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_product(product_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot product properties."""
     if mock:
         base_props = {
@@ -205,7 +205,7 @@ async def update_product(product_id: str, properties: dict, mock: bool = True) -
 
 
 @custom_function()
-async def sync_products(
+async def sync_hubspot_products(
     since: str | None = None,
     schema_version: str = "hubspot.crm.products.v1",
     mock: bool = True,

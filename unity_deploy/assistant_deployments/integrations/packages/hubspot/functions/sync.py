@@ -45,18 +45,18 @@ async def run_hubspot_sync_tick(full: bool = False, mock: bool = True) -> dict:
     if mock:
         # Minimal aggregated mock envelope - exercises the contract.
         from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions.contacts import (
-            sync_contacts,
+            sync_hubspot_contacts,
         )
         from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions.companies import (
-            sync_companies,
+            sync_hubspot_companies,
         )
         from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions.deals import (
-            sync_deals,
+            sync_hubspot_deals,
         )
 
-        contacts_env = await sync_contacts(mock=True)
-        companies_env = await sync_companies(mock=True)
-        deals_env = await sync_deals(mock=True)
+        contacts_env = await sync_hubspot_contacts(mock=True)
+        companies_env = await sync_hubspot_companies(mock=True)
+        deals_env = await sync_hubspot_deals(mock=True)
 
         finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()
         tables = {
@@ -101,7 +101,7 @@ async def run_hubspot_sync_tick(full: bool = False, mock: bool = True) -> dict:
         }
 
     # ----- Real-mode dispatch -----------------------------------------------
-    sync_state = await _load_sync_state_inline()
+    sync_state = await _load_hubspot_sync_state_inline()
     errors: list[dict] = []
     row_totals: dict[str, int] = {}
     aggregated_tables: dict[str, list] = {}
@@ -223,7 +223,7 @@ async def run_hubspot_sync_tick(full: bool = False, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_sync_state(mock: bool = True) -> dict:
+async def get_hubspot_sync_state(mock: bool = True) -> dict:
     """Return the current sync watermarks per object type from DataManager."""
     if mock:
         return {
@@ -234,7 +234,7 @@ async def get_sync_state(mock: bool = True) -> dict:
             ],
         }
 
-    state = await _load_sync_state_inline()
+    state = await _load_hubspot_sync_state_inline()
     return {
         "sync_state": [
             {"object_type": k, "last_synced_at": v} for k, v in state.items()
@@ -252,7 +252,7 @@ async def get_sync_state(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def _load_sync_state_inline() -> dict[str, str]:
+async def _load_hubspot_sync_state_inline() -> dict[str, str]:
     """Read ``HubSpot/CRM/Meta/SyncState`` rows into a dict.  Internal helper."""
     try:
         rows = await primitives.data.filter(  # noqa: F821 - injected at runtime

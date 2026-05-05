@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def send_marketing_sms(
+async def send_hubspot_marketing_sms(
     contact_phone: str,
     message: str,
     confirm: bool = False,
@@ -19,7 +19,7 @@ async def send_marketing_sms(
     SMS add-on)."""
     if not confirm:
         return {
-            "error": "send_marketing_sms requires confirm=True.  Confirm "
+            "error": "send_hubspot_marketing_sms requires confirm=True.  Confirm "
             "with the user that the message and recipient are correct.",
             "phone": contact_phone,
         }
@@ -54,7 +54,7 @@ async def send_marketing_sms(
 
 
 @custom_function()
-async def list_sms_messages(
+async def list_hubspot_sms_messages(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,

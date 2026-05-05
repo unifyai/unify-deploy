@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_email_performance(
+async def get_hubspot_email_performance(
     email_id: str,
     mock: bool = True,
 ) -> dict:
@@ -37,7 +37,7 @@ async def get_email_performance(
 
 
 @custom_function()
-async def list_email_event_summary(
+async def list_hubspot_email_event_summary(
     days: int = 7,
     mock: bool = True,
 ) -> dict:

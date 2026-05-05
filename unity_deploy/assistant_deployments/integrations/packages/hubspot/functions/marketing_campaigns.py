@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_campaigns(
+async def list_hubspot_campaigns(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -44,7 +44,7 @@ async def list_campaigns(
 
 
 @custom_function()
-async def get_campaign(campaign_id: str, mock: bool = True) -> dict:
+async def get_hubspot_campaign(campaign_id: str, mock: bool = True) -> dict:
     """Fetch a marketing campaign by ID."""
     if mock:
         return {
@@ -64,7 +64,7 @@ async def get_campaign(campaign_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_campaigns(
+async def sync_hubspot_campaigns(
     schema_version: str = "hubspot.marketing.campaigns.v1",
     mock: bool = True,
 ) -> dict:

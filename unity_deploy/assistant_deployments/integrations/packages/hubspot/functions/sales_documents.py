@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_sales_documents(
+async def list_hubspot_sales_documents(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -47,7 +47,7 @@ async def list_sales_documents(
 
 
 @custom_function()
-async def get_sales_document(document_id: str, mock: bool = True) -> dict:
+async def get_hubspot_sales_document(document_id: str, mock: bool = True) -> dict:
     """Fetch a sales document by ID."""
     if mock:
         return {
@@ -67,7 +67,7 @@ async def get_sales_document(document_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_document_view_summary(document_id: str, mock: bool = True) -> dict:
+async def get_hubspot_document_view_summary(document_id: str, mock: bool = True) -> dict:
     """Aggregate view-tracking summary for a sales document."""
     if mock:
         return {
@@ -88,7 +88,7 @@ async def get_document_view_summary(document_id: str, mock: bool = True) -> dict
 
 
 @custom_function()
-async def sync_sales_documents(
+async def sync_hubspot_sales_documents(
     schema_version: str = "hubspot.sales.documents.v1",
     mock: bool = True,
 ) -> dict:

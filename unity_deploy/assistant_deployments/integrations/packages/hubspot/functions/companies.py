@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_company(company_id: str, mock: bool = True) -> dict:
+async def get_hubspot_company(company_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot company by ID."""
     if mock:
         return {
@@ -68,7 +68,7 @@ async def get_company(company_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def search_companies(query: str, limit: int = 10, mock: bool = True) -> dict:
+async def search_hubspot_companies(query: str, limit: int = 10, mock: bool = True) -> dict:
     """Full-text search HubSpot companies."""
     if mock:
         return {
@@ -121,7 +121,7 @@ async def search_companies(query: str, limit: int = 10, mock: bool = True) -> di
 
 
 @custom_function()
-async def list_companies(
+async def list_hubspot_companies(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -183,7 +183,7 @@ async def list_companies(
 
 
 @custom_function()
-async def create_company(properties: dict, mock: bool = True) -> dict:
+async def create_hubspot_company(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot company.  At minimum supply ``name`` or ``domain``."""
     if mock:
         base_props = {
@@ -207,7 +207,7 @@ async def create_company(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_company(company_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_company(company_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot company properties."""
     if mock:
         base_props = {
@@ -234,7 +234,7 @@ async def update_company(company_id: str, properties: dict, mock: bool = True) -
 
 
 @custom_function()
-async def delete_company(company_id: str, mock: bool = True) -> dict:
+async def delete_hubspot_company(company_id: str, mock: bool = True) -> dict:
     """Soft-delete a HubSpot company.  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "id": str(company_id)}
@@ -255,7 +255,7 @@ async def delete_company(company_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_companies(
+async def sync_hubspot_companies(
     since: str | None = None,
     schema_version: str = "hubspot.crm.companies.v1",
     mock: bool = True,

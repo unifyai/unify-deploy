@@ -10,7 +10,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def query_local_contacts(
+async def query_local_hubspot_contacts(
     email: str | None = None,
     name_query: str | None = None,
     lifecycle_stage: str | None = None,
@@ -63,7 +63,7 @@ async def query_local_contacts(
             filter=filt or None,
             limit=limit,
         )
-    freshness = await _freshness_inline("contacts")
+    freshness = await _hubspot_freshness_inline("contacts")
     return {
         "results": rows or [],
         "freshness": freshness,
@@ -72,7 +72,7 @@ async def query_local_contacts(
 
 
 @custom_function()
-async def query_local_companies(
+async def query_local_hubspot_companies(
     name_query: str | None = None,
     domain: str | None = None,
     limit: int = 25,
@@ -117,7 +117,7 @@ async def query_local_companies(
             filter=filt or None,
             limit=limit,
         )
-    freshness = await _freshness_inline("companies")
+    freshness = await _hubspot_freshness_inline("companies")
     return {
         "results": rows or [],
         "freshness": freshness,
@@ -126,7 +126,7 @@ async def query_local_companies(
 
 
 @custom_function()
-async def query_local_deals(
+async def query_local_hubspot_deals(
     stage: str | None = None,
     pipeline: str | None = None,
     owner_id: str | None = None,
@@ -181,7 +181,7 @@ async def query_local_deals(
             filter=filt or None,
             limit=limit,
         )
-    freshness = await _freshness_inline("deals")
+    freshness = await _hubspot_freshness_inline("deals")
     return {
         "results": rows or [],
         "freshness": freshness,
@@ -190,7 +190,7 @@ async def query_local_deals(
 
 
 @custom_function()
-async def query_local_tickets(
+async def query_local_hubspot_tickets(
     pipeline_stage: str | None = None,
     priority: str | None = None,
     subject_query: str | None = None,
@@ -241,7 +241,7 @@ async def query_local_tickets(
             filter=filt or None,
             limit=limit,
         )
-    freshness = await _freshness_inline("tickets")
+    freshness = await _hubspot_freshness_inline("tickets")
     return {
         "results": rows or [],
         "freshness": freshness,
@@ -250,7 +250,7 @@ async def query_local_tickets(
 
 
 @custom_function()
-async def query_local_engagements(
+async def query_local_hubspot_engagements(
     engagement_type: str = "note",
     body_query: str | None = None,
     owner_id: str | None = None,
@@ -305,7 +305,7 @@ async def query_local_engagements(
             filter=filt or None,
             limit=limit,
         )
-    freshness = await _freshness_inline(engagement_type + "s")
+    freshness = await _hubspot_freshness_inline(engagement_type + "s")
     return {
         "engagement_type": engagement_type,
         "results": rows or [],
@@ -315,7 +315,7 @@ async def query_local_engagements(
 
 
 @custom_function()
-async def query_local_custom_objects(
+async def query_local_hubspot_custom_objects(
     object_type: str,
     name_query: str | None = None,
     limit: int = 25,
@@ -352,7 +352,7 @@ async def query_local_custom_objects(
             ctx,
             limit=limit,
         )
-    freshness = await _freshness_inline("custom_objects")
+    freshness = await _hubspot_freshness_inline("custom_objects")
     return {
         "object_type": object_type,
         "results": rows or [],
@@ -362,7 +362,7 @@ async def query_local_custom_objects(
 
 
 @custom_function()
-async def _freshness_inline(object_key: str) -> dict:
+async def _hubspot_freshness_inline(object_key: str) -> dict:
     """Look up the latest sync_state row for ``object_key`` and decide if
     it's fresh enough.  Internal helper - decorated only because the
     compliance test requires every top-level def to have @custom_function."""

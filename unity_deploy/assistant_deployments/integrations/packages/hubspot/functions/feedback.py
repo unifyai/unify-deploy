@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_feedback_submissions(
+async def list_hubspot_feedback_submissions(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -52,7 +52,7 @@ async def list_feedback_submissions(
 
 
 @custom_function()
-async def sync_feedback(
+async def sync_hubspot_feedback(
     schema_version: str = "hubspot.crm.feedback.v1",
     mock: bool = True,
 ) -> dict:

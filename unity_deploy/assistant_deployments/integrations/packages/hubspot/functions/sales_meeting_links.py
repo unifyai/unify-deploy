@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_meeting_links(
+async def list_hubspot_meeting_links(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -43,7 +43,7 @@ async def list_meeting_links(
 
 
 @custom_function()
-async def get_meeting_link(link_id: str, mock: bool = True) -> dict:
+async def get_hubspot_meeting_link(link_id: str, mock: bool = True) -> dict:
     """Fetch a meeting scheduling page by ID."""
     if mock:
         return {
@@ -64,7 +64,7 @@ async def get_meeting_link(link_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_meeting_links(
+async def sync_hubspot_meeting_links(
     schema_version: str = "hubspot.sales.meeting_links.v1",
     mock: bool = True,
 ) -> dict:

@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_blog_authors(
+async def list_hubspot_blog_authors(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,

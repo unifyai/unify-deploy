@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_cms_domains(mock: bool = True) -> dict:
+async def list_hubspot_cms_domains(mock: bool = True) -> dict:
     """List configured CMS domains."""
     if mock:
         base = {
@@ -29,7 +29,7 @@ async def list_cms_domains(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_cms_domains(
+async def sync_hubspot_cms_domains(
     schema_version: str = "hubspot.cms.domains.v1",
     mock: bool = True,
 ) -> dict:

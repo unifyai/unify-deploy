@@ -11,7 +11,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def discover_custom_object_schemas(mock: bool = True) -> dict:
+async def discover_hubspot_custom_object_schemas(mock: bool = True) -> dict:
     """List all custom object schemas defined in this HubSpot portal.
 
     Call this BEFORE working with custom records - portal-specific
@@ -59,7 +59,7 @@ async def discover_custom_object_schemas(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_custom_object_record(
+async def get_hubspot_custom_object_record(
     object_type: str,
     record_id: str,
     mock: bool = True,
@@ -67,7 +67,7 @@ async def get_custom_object_record(
     """Fetch a single custom object record by ID.
 
     ``object_type`` is the fully-qualified name from
-    ``discover_custom_object_schemas``."""
+    ``discover_hubspot_custom_object_schemas``."""
     if mock:
         return {
             "id": str(record_id),
@@ -92,7 +92,7 @@ async def get_custom_object_record(
 
 
 @custom_function()
-async def search_custom_objects(
+async def search_hubspot_custom_objects(
     object_type: str,
     query: str,
     limit: int = 10,
@@ -127,7 +127,7 @@ async def search_custom_objects(
 
 
 @custom_function()
-async def list_custom_objects(
+async def list_hubspot_custom_objects(
     object_type: str,
     after: str | None = None,
     limit: int = 25,
@@ -173,7 +173,7 @@ async def list_custom_objects(
 
 
 @custom_function()
-async def create_custom_object_record(
+async def create_hubspot_custom_object_record(
     object_type: str,
     properties: dict,
     mock: bool = True,
@@ -206,7 +206,7 @@ async def create_custom_object_record(
 
 
 @custom_function()
-async def update_custom_object_record(
+async def update_hubspot_custom_object_record(
     object_type: str,
     record_id: str,
     properties: dict,
@@ -240,7 +240,7 @@ async def update_custom_object_record(
 
 
 @custom_function()
-async def sync_custom_objects(
+async def sync_hubspot_custom_objects(
     schema_version: str = "hubspot.crm.custom_objects.v1",
     mock: bool = True,
 ) -> dict:

@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def log_email(
+async def log_hubspot_email(
     subject: str,
     body_text: str,
     direction: str = "EMAIL",
@@ -65,7 +65,7 @@ async def log_email(
 
 
 @custom_function()
-async def list_emails(
+async def list_hubspot_emails(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -127,7 +127,7 @@ async def list_emails(
 
 
 @custom_function()
-async def sync_emails(
+async def sync_hubspot_emails(
     since: str | None = None,
     schema_version: str = "hubspot.engagements.emails.v1",
     mock: bool = True,

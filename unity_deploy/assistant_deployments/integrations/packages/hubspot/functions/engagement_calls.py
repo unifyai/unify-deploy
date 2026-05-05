@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def log_call(
+async def log_hubspot_call(
     title: str,
     body: str,
     direction: str = "OUTBOUND",
@@ -72,7 +72,7 @@ async def log_call(
 
 
 @custom_function()
-async def list_calls(
+async def list_hubspot_calls(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -133,7 +133,7 @@ async def list_calls(
 
 
 @custom_function()
-async def sync_calls(
+async def sync_hubspot_calls(
     since: str | None = None,
     schema_version: str = "hubspot.engagements.calls.v1",
     mock: bool = True,

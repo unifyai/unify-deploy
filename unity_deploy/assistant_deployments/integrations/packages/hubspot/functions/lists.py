@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_list(list_id: str, mock: bool = True) -> dict:
+async def get_hubspot_list(list_id: str, mock: bool = True) -> dict:
     """Fetch a single contact list by ID."""
     if mock:
         return {
@@ -26,7 +26,7 @@ async def get_list(list_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_lists(
+async def list_hubspot_lists(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -65,7 +65,7 @@ async def list_lists(
 
 
 @custom_function()
-async def create_list(
+async def create_hubspot_list(
     name: str,
     list_type: str = "STATIC",
     processing_type: str = "MANUAL",
@@ -93,7 +93,7 @@ async def create_list(
 
 
 @custom_function()
-async def delete_list(list_id: str, mock: bool = True) -> dict:
+async def delete_hubspot_list(list_id: str, mock: bool = True) -> dict:
     """Delete a contact list.  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "list_id": str(list_id)}
@@ -114,7 +114,7 @@ async def delete_list(list_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def add_contact_to_list(
+async def add_contact_to_hubspot_list(
     list_id: str,
     contact_id: str,
     mock: bool = True,
@@ -139,7 +139,7 @@ async def add_contact_to_list(
 
 
 @custom_function()
-async def remove_contact_from_list(
+async def remove_contact_from_hubspot_list(
     list_id: str,
     contact_id: str,
     mock: bool = True,
@@ -163,7 +163,7 @@ async def remove_contact_from_list(
 
 
 @custom_function()
-async def sync_lists(
+async def sync_hubspot_lists(
     schema_version: str = "hubspot.crm.lists.v1",
     mock: bool = True,
 ) -> dict:

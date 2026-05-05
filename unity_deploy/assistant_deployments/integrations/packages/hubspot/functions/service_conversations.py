@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_conversation_threads(
+async def list_hubspot_conversation_threads(
     after: str | None = None,
     limit: int = 50,
     inbox_id: int | None = None,
@@ -50,7 +50,7 @@ async def list_conversation_threads(
 
 
 @custom_function()
-async def get_conversation_thread(thread_id: str, mock: bool = True) -> dict:
+async def get_hubspot_conversation_thread(thread_id: str, mock: bool = True) -> dict:
     """Fetch a conversations inbox thread by ID."""
     if mock:
         return {
@@ -72,7 +72,7 @@ async def get_conversation_thread(thread_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_conversation_messages(
+async def list_hubspot_conversation_messages(
     thread_id: str,
     after: str | None = None,
     limit: int = 50,
@@ -127,7 +127,7 @@ async def list_conversation_messages(
 
 
 @custom_function()
-async def send_conversation_reply(
+async def send_hubspot_conversation_reply(
     thread_id: str,
     text: str,
     confirm: bool = False,
@@ -138,7 +138,7 @@ async def send_conversation_reply(
     to the customer.  Requires ``confirm=True``."""
     if not confirm:
         return {
-            "error": "send_conversation_reply requires confirm=True.",
+            "error": "send_hubspot_conversation_reply requires confirm=True.",
             "thread_id": str(thread_id),
         }
     if mock:
@@ -161,12 +161,12 @@ async def send_conversation_reply(
 
 
 @custom_function()
-async def sync_conversations(
+async def sync_hubspot_conversations(
     schema_version: str = "hubspot.service.conversations.v1",
     mock: bool = True,
 ) -> dict:
     """Sync thread metadata into a tables envelope.  Per-thread message bodies
-    are fetched on-demand by ``list_conversation_messages``."""
+    are fetched on-demand by ``list_hubspot_conversation_messages``."""
     from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions._normalize import (
         normalize_thread,
     )

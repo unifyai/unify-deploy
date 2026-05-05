@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_marketing_events(
+async def list_hubspot_marketing_events(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -48,7 +48,7 @@ async def list_marketing_events(
 
 
 @custom_function()
-async def create_marketing_event(properties: dict, mock: bool = True) -> dict:
+async def create_hubspot_marketing_event(properties: dict, mock: bool = True) -> dict:
     """Create an external marketing event."""
     if mock:
         base = {
@@ -70,7 +70,7 @@ async def create_marketing_event(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_marketing_event(
+async def update_hubspot_marketing_event(
     event_id: str,
     properties: dict,
     mock: bool = True,
@@ -92,7 +92,7 @@ async def update_marketing_event(
 
 
 @custom_function()
-async def list_event_attendance(
+async def list_hubspot_event_attendance(
     event_id: str,
     state: str = "registered",
     mock: bool = True,
@@ -117,7 +117,7 @@ async def list_event_attendance(
 
 
 @custom_function()
-async def sync_marketing_events(
+async def sync_hubspot_marketing_events(
     schema_version: str = "hubspot.marketing.events.v1",
     mock: bool = True,
 ) -> dict:

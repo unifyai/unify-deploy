@@ -10,7 +10,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def sync_email_events(
+async def sync_hubspot_email_events(
     since_ms: int | None = None,
     schema_version: str = "hubspot.marketing.email_events.v1",
     mock: bool = True,

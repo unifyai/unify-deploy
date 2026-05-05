@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_cms_files(
+async def list_hubspot_cms_files(
     after: str | None = None,
     limit: int = 50,
     parent_folder_id: int | None = None,
@@ -49,7 +49,7 @@ async def list_cms_files(
 
 
 @custom_function()
-async def get_cms_file(file_id: str, mock: bool = True) -> dict:
+async def get_hubspot_cms_file(file_id: str, mock: bool = True) -> dict:
     """Fetch a CMS file by ID."""
     if mock:
         return {
@@ -73,7 +73,7 @@ async def get_cms_file(file_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def upload_cms_file(
+async def upload_hubspot_cms_file(
     file_path: str,
     folder_path: str = "/",
     access: str = "PUBLIC_INDEXABLE",
@@ -133,7 +133,7 @@ async def upload_cms_file(
 
 
 @custom_function()
-async def delete_cms_file(file_id: str, mock: bool = True) -> dict:
+async def delete_hubspot_cms_file(file_id: str, mock: bool = True) -> dict:
     """Delete a CMS file.  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "id": str(file_id)}
@@ -154,7 +154,7 @@ async def delete_cms_file(file_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_cms_files(
+async def sync_hubspot_cms_files(
     schema_version: str = "hubspot.cms.files.v1",
     mock: bool = True,
 ) -> dict:

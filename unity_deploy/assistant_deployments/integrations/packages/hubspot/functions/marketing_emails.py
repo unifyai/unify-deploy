@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_marketing_emails(
+async def list_hubspot_marketing_emails(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -44,7 +44,7 @@ async def list_marketing_emails(
 
 
 @custom_function()
-async def get_marketing_email(email_id: str, mock: bool = True) -> dict:
+async def get_hubspot_marketing_email(email_id: str, mock: bool = True) -> dict:
     """Fetch a marketing email by ID."""
     if mock:
         return {
@@ -66,7 +66,7 @@ async def get_marketing_email(email_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def send_single_marketing_email(
+async def send_single_hubspot_marketing_email(
     email_id: str,
     contact_email: str,
     confirm: bool = False,
@@ -75,7 +75,7 @@ async def send_single_marketing_email(
     """Send a transactional / single-send marketing email to one contact."""
     if not confirm:
         return {
-            "error": "send_single_marketing_email requires confirm=True.  "
+            "error": "send_single_hubspot_marketing_email requires confirm=True.  "
             "Confirm with the user that the email and recipient are correct.",
             "email_id": str(email_id),
             "contact_email": contact_email,
@@ -99,7 +99,7 @@ async def send_single_marketing_email(
 
 
 @custom_function()
-async def broadcast_marketing_email(
+async def broadcast_hubspot_marketing_email(
     email_id: str,
     list_id: str,
     confirm: bool = False,
@@ -110,7 +110,7 @@ async def broadcast_marketing_email(
     Requires both ``confirm=True`` AND HUBSPOT_ALLOW_BROADCAST_EMAIL=true."""
     if not confirm:
         return {
-            "error": "broadcast_marketing_email requires confirm=True.  Confirm "
+            "error": "broadcast_hubspot_marketing_email requires confirm=True.  Confirm "
             "with the user that the recipient list and content are correct.",
             "email_id": str(email_id),
             "list_id": str(list_id),
@@ -147,7 +147,7 @@ async def broadcast_marketing_email(
 
 
 @custom_function()
-async def sync_marketing_emails(
+async def sync_hubspot_marketing_emails(
     schema_version: str = "hubspot.marketing.emails.v1",
     mock: bool = True,
 ) -> dict:

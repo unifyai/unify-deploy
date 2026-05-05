@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def create_note(
+async def create_hubspot_note(
     body: str,
     timestamp_iso: str | None = None,
     associations: list[dict] | None = None,
@@ -49,7 +49,7 @@ async def create_note(
 
 
 @custom_function()
-async def list_notes(
+async def list_hubspot_notes(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -99,7 +99,7 @@ async def list_notes(
 
 
 @custom_function()
-async def sync_notes(
+async def sync_hubspot_notes(
     since: str | None = None,
     schema_version: str = "hubspot.engagements.notes.v1",
     mock: bool = True,

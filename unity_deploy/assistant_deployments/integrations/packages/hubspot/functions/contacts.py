@@ -14,7 +14,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_contact(contact_id: str, mock: bool = True) -> dict:
+async def get_hubspot_contact(contact_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot contact by ID.  Returns the raw HubSpot record."""
     if mock:
         return {
@@ -70,7 +70,7 @@ async def get_contact(contact_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def search_contacts(query: str, limit: int = 10, mock: bool = True) -> dict:
+async def search_hubspot_contacts(query: str, limit: int = 10, mock: bool = True) -> dict:
     """Full-text search HubSpot contacts."""
     if mock:
         base_props = {
@@ -136,7 +136,7 @@ async def search_contacts(query: str, limit: int = 10, mock: bool = True) -> dic
 
 
 @custom_function()
-async def list_contacts(
+async def list_hubspot_contacts(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -199,7 +199,7 @@ async def list_contacts(
 
 
 @custom_function()
-async def create_contact(properties: dict, mock: bool = True) -> dict:
+async def create_hubspot_contact(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot contact.  ``properties`` is a flat dict of HubSpot
     property names -> values.  At minimum HubSpot expects ``email``."""
     if mock:
@@ -234,7 +234,7 @@ async def create_contact(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_contact(contact_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_contact(contact_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot contact properties.  Only sends the keys provided."""
     if mock:
         base_props = {
@@ -268,7 +268,7 @@ async def update_contact(contact_id: str, properties: dict, mock: bool = True) -
 
 
 @custom_function()
-async def delete_contact(contact_id: str, mock: bool = True) -> dict:
+async def delete_hubspot_contact(contact_id: str, mock: bool = True) -> dict:
     """Soft-delete a HubSpot contact (archive).  Gated by HUBSPOT_ALLOW_DELETE."""
     if mock:
         return {"status": "deleted", "id": str(contact_id)}
@@ -289,7 +289,7 @@ async def delete_contact(contact_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_contacts(
+async def sync_hubspot_contacts(
     since: str | None = None,
     schema_version: str = "hubspot.crm.contacts.v1",
     mock: bool = True,

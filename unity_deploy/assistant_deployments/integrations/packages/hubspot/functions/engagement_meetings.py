@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def log_meeting(
+async def log_hubspot_meeting(
     title: str,
     body: str,
     start_time_iso: str,
@@ -62,7 +62,7 @@ async def log_meeting(
 
 
 @custom_function()
-async def list_meetings(
+async def list_hubspot_meetings(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -123,7 +123,7 @@ async def list_meetings(
 
 
 @custom_function()
-async def sync_meetings(
+async def sync_hubspot_meetings(
     since: str | None = None,
     schema_version: str = "hubspot.engagements.meetings.v1",
     mock: bool = True,

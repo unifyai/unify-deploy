@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def create_task(
+async def create_hubspot_task(
     subject: str,
     body: str = "",
     due_iso: str | None = None,
@@ -63,7 +63,7 @@ async def create_task(
 
 
 @custom_function()
-async def update_task(task_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_task(task_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch a task's properties (e.g. due date, priority)."""
     if mock:
         base_props = {
@@ -91,7 +91,7 @@ async def update_task(task_id: str, properties: dict, mock: bool = True) -> dict
 
 
 @custom_function()
-async def complete_task(task_id: str, mock: bool = True) -> dict:
+async def complete_hubspot_task(task_id: str, mock: bool = True) -> dict:
     """Mark a task as completed."""
     if mock:
         base_props = {
@@ -119,7 +119,7 @@ async def complete_task(task_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_tasks(
+async def list_hubspot_tasks(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -177,7 +177,7 @@ async def list_tasks(
 
 
 @custom_function()
-async def sync_tasks(
+async def sync_hubspot_tasks(
     since: str | None = None,
     schema_version: str = "hubspot.engagements.tasks.v1",
     mock: bool = True,

@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_properties(object_type: str, mock: bool = True) -> dict:
+async def list_hubspot_properties(object_type: str, mock: bool = True) -> dict:
     """List properties (fields) defined on the given object type."""
     if mock:
         return {
@@ -52,7 +52,7 @@ async def list_properties(object_type: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_property(object_type: str, property_name: str, mock: bool = True) -> dict:
+async def get_hubspot_property(object_type: str, property_name: str, mock: bool = True) -> dict:
     """Fetch a single property definition."""
     if mock:
         return {
@@ -71,7 +71,7 @@ async def get_property(object_type: str, property_name: str, mock: bool = True) 
 
 
 @custom_function()
-async def create_property(
+async def create_hubspot_property(
     object_type: str,
     name: str,
     label: str,
@@ -111,7 +111,7 @@ async def create_property(
 
 
 @custom_function()
-async def sync_properties(
+async def sync_hubspot_properties(
     schema_version: str = "hubspot.crm.properties.v1",
     mock: bool = True,
 ) -> dict:

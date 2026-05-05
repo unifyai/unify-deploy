@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_marketing_forms(
+async def list_hubspot_marketing_forms(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -42,7 +42,7 @@ async def list_marketing_forms(
 
 
 @custom_function()
-async def get_marketing_form(form_id: str, mock: bool = True) -> dict:
+async def get_hubspot_marketing_form(form_id: str, mock: bool = True) -> dict:
     """Fetch a marketing form definition by ID."""
     if mock:
         return {
@@ -62,7 +62,7 @@ async def get_marketing_form(form_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def list_form_submissions(
+async def list_hubspot_form_submissions(
     form_id: str,
     after: str | None = None,
     limit: int = 50,
@@ -104,7 +104,7 @@ async def list_form_submissions(
 
 
 @custom_function()
-async def submit_form(
+async def submit_hubspot_form(
     portal_id: str,
     form_id: str,
     fields: dict,
@@ -132,7 +132,7 @@ async def submit_form(
 
 
 @custom_function()
-async def sync_marketing_forms(
+async def sync_hubspot_marketing_forms(
     schema_version: str = "hubspot.marketing.forms.v1",
     mock: bool = True,
 ) -> dict:

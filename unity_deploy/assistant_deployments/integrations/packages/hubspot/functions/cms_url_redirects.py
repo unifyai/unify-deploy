@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_url_redirects(
+async def list_hubspot_url_redirects(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -45,7 +45,7 @@ async def list_url_redirects(
 
 
 @custom_function()
-async def create_url_redirect(
+async def create_hubspot_url_redirect(
     route_prefix: str,
     destination: str,
     redirect_style: int = 301,
@@ -78,7 +78,7 @@ async def create_url_redirect(
 
 
 @custom_function()
-async def update_url_redirect(
+async def update_hubspot_url_redirect(
     redirect_id: str,
     properties: dict,
     mock: bool = True,
@@ -100,7 +100,7 @@ async def update_url_redirect(
 
 
 @custom_function()
-async def delete_url_redirect(redirect_id: str, mock: bool = True) -> dict:
+async def delete_hubspot_url_redirect(redirect_id: str, mock: bool = True) -> dict:
     """Delete a URL redirect."""
     if mock:
         return {"status": "deleted", "id": str(redirect_id)}
@@ -118,7 +118,7 @@ async def delete_url_redirect(redirect_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_url_redirects(
+async def sync_hubspot_url_redirects(
     schema_version: str = "hubspot.cms.url_redirects.v1",
     mock: bool = True,
 ) -> dict:

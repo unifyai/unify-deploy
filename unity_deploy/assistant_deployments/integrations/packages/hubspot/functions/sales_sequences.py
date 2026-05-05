@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_sequences(
+async def list_hubspot_sequences(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -43,7 +43,7 @@ async def list_sequences(
 
 
 @custom_function()
-async def get_sequence(sequence_id: str, mock: bool = True) -> dict:
+async def get_hubspot_sequence(sequence_id: str, mock: bool = True) -> dict:
     """Fetch a sales sequence by ID."""
     if mock:
         return {
@@ -62,7 +62,7 @@ async def get_sequence(sequence_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def enroll_in_sequence(
+async def enroll_in_hubspot_sequence(
     sequence_id: str,
     contact_email: str,
     sender_email: str | None = None,
@@ -87,7 +87,7 @@ async def enroll_in_sequence(
 
 
 @custom_function()
-async def unenroll_from_sequence(
+async def unenroll_from_hubspot_sequence(
     sequence_id: str,
     contact_email: str,
     mock: bool = True,
@@ -111,7 +111,7 @@ async def unenroll_from_sequence(
 
 
 @custom_function()
-async def sync_sequences(
+async def sync_hubspot_sequences(
     schema_version: str = "hubspot.sales.sequences.v1",
     mock: bool = True,
 ) -> dict:

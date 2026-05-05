@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def sync_pipelines(
+async def sync_hubspot_pipelines(
     schema_version: str = "hubspot.crm.pipelines.v1",
     mock: bool = True,
 ) -> dict:

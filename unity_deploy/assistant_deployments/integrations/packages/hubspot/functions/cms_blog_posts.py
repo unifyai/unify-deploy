@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_blog_posts(
+async def list_hubspot_blog_posts(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -49,7 +49,7 @@ async def list_blog_posts(
 
 
 @custom_function()
-async def get_blog_post(post_id: str, mock: bool = True) -> dict:
+async def get_hubspot_blog_post(post_id: str, mock: bool = True) -> dict:
     """Fetch a blog post by ID."""
     if mock:
         return {
@@ -76,7 +76,7 @@ async def get_blog_post(post_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def create_blog_post(
+async def create_hubspot_blog_post(
     name: str,
     slug: str,
     html_title: str,
@@ -126,7 +126,7 @@ async def create_blog_post(
 
 
 @custom_function()
-async def update_blog_post(post_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_blog_post(post_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch blog post properties."""
     if mock:
         base = {
@@ -144,7 +144,7 @@ async def update_blog_post(post_id: str, properties: dict, mock: bool = True) ->
 
 
 @custom_function()
-async def publish_blog_post(
+async def publish_hubspot_blog_post(
     post_id: str,
     confirm: bool = False,
     mock: bool = True,
@@ -152,7 +152,7 @@ async def publish_blog_post(
     """HIGH-STAKES.  Requires confirm=True AND HUBSPOT_ALLOW_CMS_PUBLISH=true."""
     if not confirm:
         return {
-            "error": "publish_blog_post requires confirm=True.",
+            "error": "publish_hubspot_blog_post requires confirm=True.",
             "post_id": str(post_id),
         }
 
@@ -184,7 +184,7 @@ async def publish_blog_post(
 
 
 @custom_function()
-async def sync_blog_posts(
+async def sync_hubspot_blog_posts(
     schema_version: str = "hubspot.cms.blog_posts.v1",
     mock: bool = True,
 ) -> dict:

@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_subscription_types(mock: bool = True) -> dict:
+async def list_hubspot_subscription_types(mock: bool = True) -> dict:
     """List all subscription types defined in the portal."""
     if mock:
         base = {
@@ -32,7 +32,7 @@ async def list_subscription_types(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_contact_subscription_status(
+async def get_hubspot_contact_subscription_status(
     contact_email: str,
     mock: bool = True,
 ) -> dict:
@@ -56,7 +56,7 @@ async def get_contact_subscription_status(
 
 
 @custom_function()
-async def subscribe_contact(
+async def subscribe_hubspot_contact(
     contact_email: str,
     subscription_id: str,
     legal_basis: str = "LEGITIMATE_INTEREST_PQL",
@@ -87,7 +87,7 @@ async def subscribe_contact(
 
 
 @custom_function()
-async def unsubscribe_contact(
+async def unsubscribe_hubspot_contact(
     contact_email: str,
     subscription_id: str,
     mock: bool = True,
@@ -111,7 +111,7 @@ async def unsubscribe_contact(
 
 
 @custom_function()
-async def sync_subscriptions(
+async def sync_hubspot_subscriptions(
     schema_version: str = "hubspot.marketing.subscriptions.v1",
     mock: bool = True,
 ) -> dict:

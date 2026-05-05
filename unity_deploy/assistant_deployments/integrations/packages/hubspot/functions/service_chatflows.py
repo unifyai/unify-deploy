@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_chatflows(
+async def list_hubspot_chatflows(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -41,7 +41,7 @@ async def list_chatflows(
 
 
 @custom_function()
-async def get_chatflow(chatflow_id: str, mock: bool = True) -> dict:
+async def get_hubspot_chatflow(chatflow_id: str, mock: bool = True) -> dict:
     """Fetch a chat flow by ID."""
     if mock:
         return {
@@ -60,7 +60,7 @@ async def get_chatflow(chatflow_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_chatflows(
+async def sync_hubspot_chatflows(
     schema_version: str = "hubspot.service.chatflows.v1",
     mock: bool = True,
 ) -> dict:

@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def list_cms_pages(
+async def list_hubspot_cms_pages(
     after: str | None = None,
     limit: int = 50,
     mock: bool = True,
@@ -46,7 +46,7 @@ async def list_cms_pages(
 
 
 @custom_function()
-async def get_cms_page(page_id: str, mock: bool = True) -> dict:
+async def get_hubspot_cms_page(page_id: str, mock: bool = True) -> dict:
     """Fetch a CMS page by ID."""
     if mock:
         return {
@@ -70,7 +70,7 @@ async def get_cms_page(page_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def create_cms_page(
+async def create_hubspot_cms_page(
     name: str,
     slug: str,
     html_title: str,
@@ -78,7 +78,7 @@ async def create_cms_page(
     meta_description: str = "",
     mock: bool = True,
 ) -> dict:
-    """Create a CMS page in DRAFT state.  Use ``publish_cms_page`` to go live."""
+    """Create a CMS page in DRAFT state.  Use ``publish_hubspot_cms_page`` to go live."""
     if mock:
         return {
             "id": "pg-99001",
@@ -111,7 +111,7 @@ async def create_cms_page(
 
 
 @custom_function()
-async def update_cms_page(page_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_cms_page(page_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch CMS page properties."""
     if mock:
         base = {
@@ -130,7 +130,7 @@ async def update_cms_page(page_id: str, properties: dict, mock: bool = True) -> 
 
 
 @custom_function()
-async def publish_cms_page(
+async def publish_hubspot_cms_page(
     page_id: str,
     confirm: bool = False,
     mock: bool = True,
@@ -139,7 +139,7 @@ async def publish_cms_page(
     ``confirm=True`` AND HUBSPOT_ALLOW_CMS_PUBLISH=true."""
     if not confirm:
         return {
-            "error": "publish_cms_page requires confirm=True.",
+            "error": "publish_hubspot_cms_page requires confirm=True.",
             "page_id": str(page_id),
         }
 
@@ -172,7 +172,7 @@ async def publish_cms_page(
 
 
 @custom_function()
-async def sync_cms_pages(
+async def sync_hubspot_cms_pages(
     schema_version: str = "hubspot.cms.pages.v1",
     mock: bool = True,
 ) -> dict:

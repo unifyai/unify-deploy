@@ -6,7 +6,7 @@ from unity.function_manager.custom import custom_function
 
 
 @custom_function()
-async def get_ticket(ticket_id: str, mock: bool = True) -> dict:
+async def get_hubspot_ticket(ticket_id: str, mock: bool = True) -> dict:
     """Fetch a single HubSpot ticket by ID."""
     if mock:
         return {
@@ -60,7 +60,7 @@ async def get_ticket(ticket_id: str, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def search_tickets(query: str, limit: int = 10, mock: bool = True) -> dict:
+async def search_hubspot_tickets(query: str, limit: int = 10, mock: bool = True) -> dict:
     """Search HubSpot tickets (matches subject + content)."""
     if mock:
         return {
@@ -106,7 +106,7 @@ async def search_tickets(query: str, limit: int = 10, mock: bool = True) -> dict
 
 
 @custom_function()
-async def list_tickets(
+async def list_hubspot_tickets(
     after: str | None = None,
     limit: int = 25,
     mock: bool = True,
@@ -166,7 +166,7 @@ async def list_tickets(
 
 
 @custom_function()
-async def create_ticket(properties: dict, mock: bool = True) -> dict:
+async def create_hubspot_ticket(properties: dict, mock: bool = True) -> dict:
     """Create a HubSpot ticket.  ``subject`` and ``hs_pipeline_stage`` recommended."""
     if mock:
         base_props = {
@@ -191,7 +191,7 @@ async def create_ticket(properties: dict, mock: bool = True) -> dict:
 
 
 @custom_function()
-async def update_ticket(ticket_id: str, properties: dict, mock: bool = True) -> dict:
+async def update_hubspot_ticket(ticket_id: str, properties: dict, mock: bool = True) -> dict:
     """Patch HubSpot ticket properties (useful for stage transitions)."""
     if mock:
         base_props = {
@@ -219,7 +219,7 @@ async def update_ticket(ticket_id: str, properties: dict, mock: bool = True) -> 
 
 
 @custom_function()
-async def sync_tickets(
+async def sync_hubspot_tickets(
     since: str | None = None,
     schema_version: str = "hubspot.crm.tickets.v1",
     mock: bool = True,
