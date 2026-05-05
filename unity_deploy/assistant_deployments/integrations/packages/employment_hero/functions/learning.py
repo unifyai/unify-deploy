@@ -136,7 +136,9 @@ async def list_employmenthero_course_completions(
 
 
 @custom_function()
-async def sync_employmenthero_learning(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_learning(
+    mock: bool = False, since: str | None = None
+) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.learning.snapshot.v1"

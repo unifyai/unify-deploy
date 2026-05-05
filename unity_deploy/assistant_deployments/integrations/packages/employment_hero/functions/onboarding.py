@@ -157,7 +157,9 @@ async def list_employmenthero_employee_onboarding_status(
 
 
 @custom_function()
-async def sync_employmenthero_onboarding(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_onboarding(
+    mock: bool = False, since: str | None = None
+) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.onboarding.snapshot.v1"

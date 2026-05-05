@@ -113,7 +113,9 @@ async def get_employmenthero_employee_custom_field_values(
 
 
 @custom_function()
-async def sync_employmenthero_custom_fields(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_custom_fields(
+    mock: bool = False, since: str | None = None
+) -> dict:
     """Snapshot custom-field definitions and per-employee values (long format)."""
     import datetime as _dt
 

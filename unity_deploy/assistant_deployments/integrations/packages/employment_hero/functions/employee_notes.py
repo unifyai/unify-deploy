@@ -126,7 +126,9 @@ async def create_employmenthero_employee_note(
 
 
 @custom_function()
-async def sync_employmenthero_employee_notes(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_employee_notes(
+    mock: bool = False, since: str | None = None
+) -> dict:
     """Snapshot employee notes — body redacted to length + hash."""
     import datetime as _dt
     import hashlib

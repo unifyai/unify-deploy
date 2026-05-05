@@ -62,7 +62,9 @@ async def list_employmenthero_leave_categories(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_employmenthero_leave_category(category_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_leave_category(
+    category_id: str, mock: bool = True
+) -> dict:
     """Get one leave category by id."""
     if mock:
         return {
@@ -353,7 +355,9 @@ async def submit_employmenthero_leave_request(
 
 
 @custom_function()
-async def sync_employmenthero_leave(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_leave(
+    mock: bool = False, since: str | None = None
+) -> dict:
     """Snapshot leave categories, balances, and requests."""
     import datetime as _dt
 

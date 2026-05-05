@@ -192,7 +192,9 @@ async def update_employmenthero_timesheet_entry(
 
 
 @custom_function()
-async def sync_employmenthero_timesheets(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_timesheets(
+    mock: bool = False, since: str | None = None
+) -> dict:
     """Snapshot timesheet entries (incremental by ``since`` watermark)."""
     import datetime as _dt
 

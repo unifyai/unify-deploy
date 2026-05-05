@@ -50,7 +50,10 @@ async def run_employmenthero_sync_tick(
     # FunctionManager isolation rule — no module-level globals.
     object_to_sync_fn: dict[str, tuple[str, str]] = {
         "workforce": ("workforce", "sync_employmenthero_workforce"),
-        "employee_personal": ("employee_personal", "sync_employmenthero_employee_personal"),
+        "employee_personal": (
+            "employee_personal",
+            "sync_employmenthero_employee_personal",
+        ),
         "employee_notes": ("employee_notes", "sync_employmenthero_employee_notes"),
         "leave": ("leave", "sync_employmenthero_leave"),
         "timesheets": ("timesheets", "sync_employmenthero_timesheets"),
@@ -364,5 +367,3 @@ async def probe_employmenthero_tier(force: bool = False, mock: bool = True) -> d
         "capabilities": capabilities,
         "_from_cache": False,
     }
-
-

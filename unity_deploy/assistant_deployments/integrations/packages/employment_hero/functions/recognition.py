@@ -181,7 +181,9 @@ async def list_employmenthero_recognition_awards(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_employmenthero_recognition(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_recognition(
+    mock: bool = False, since: str | None = None
+) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.recognition.snapshot.v1"

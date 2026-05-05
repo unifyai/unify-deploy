@@ -176,7 +176,9 @@ async def submit_employmenthero_expense_claim(
 
 
 @custom_function()
-async def sync_employmenthero_expenses(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_expenses(
+    mock: bool = False, since: str | None = None
+) -> dict:
     """Snapshot expense claims and categories."""
     import datetime as _dt
 

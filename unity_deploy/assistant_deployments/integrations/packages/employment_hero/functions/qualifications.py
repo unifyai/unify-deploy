@@ -69,7 +69,9 @@ async def list_employmenthero_qualifications(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def get_employmenthero_qualification(qualification_id: str, mock: bool = True) -> dict:
+async def get_employmenthero_qualification(
+    qualification_id: str, mock: bool = True
+) -> dict:
     """Get one qualification definition by id."""
     if mock:
         return {

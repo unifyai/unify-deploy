@@ -150,7 +150,9 @@ async def acknowledge_employmenthero_policy(
 
 
 @custom_function()
-async def sync_employmenthero_policies(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_policies(
+    mock: bool = False, since: str | None = None
+) -> dict:
     import datetime as _dt
 
     schema_version = "employment-hero.policies.snapshot.v1"

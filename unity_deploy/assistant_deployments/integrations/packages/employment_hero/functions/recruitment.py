@@ -136,7 +136,9 @@ async def get_employmenthero_applicant(applicant_id: str, mock: bool = True) -> 
 
 
 @custom_function()
-async def list_employmenthero_offers(job_id: str | None = None, mock: bool = True) -> dict:
+async def list_employmenthero_offers(
+    job_id: str | None = None, mock: bool = True
+) -> dict:
     if mock:
         return {
             "offers": [
@@ -194,7 +196,9 @@ async def list_employmenthero_interview_stages(mock: bool = True) -> dict:
 
 
 @custom_function()
-async def sync_employmenthero_recruitment(mock: bool = False, since: str | None = None) -> dict:
+async def sync_employmenthero_recruitment(
+    mock: bool = False, since: str | None = None
+) -> dict:
     """Snapshot jobs, applicants, offers, interview stages.
 
     Applicants are filtered to those updated within the last

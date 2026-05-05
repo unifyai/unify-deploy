@@ -665,5 +665,3 @@ async def query_local_employmenthero_reviews(
             "synced copy.  Use get_review() live for full content."
         ),
     }
-
-
