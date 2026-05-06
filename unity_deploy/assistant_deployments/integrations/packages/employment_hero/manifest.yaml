@@ -62,19 +62,13 @@ secrets:
 
   - name: EMPLOYMENTHERO_ORGANISATION_ID
     description: >
-      Active organisation id, captured during Connect from the EH
-      ``/me`` endpoint.  Pinned per-assistant so org-scoped calls
-      target a single EH organisation.  Required when the token has
-      access to more than one organisation.
-    required: false
-    sensitive: false
-
-  - name: EMPLOYMENTHERO_HUB_DOMAIN
-    description: >
-      Subdomain of the connected EH organisation
-      (e.g. ``acme.employmenthero.com``), captured during Connect.
-      Used by the Console UI for deep-links and "connected to ..."
-      labels.
+      Active organisation id.  Auto-pinned by the Console Connect flow
+      from ``/api/v1/organisations`` when exactly one named organisation
+      is found.  When the token has access to multiple named
+      organisations, Connect pins the lexicographically-first one and
+      surfaces a notice so the operator can override here via
+      Console -> Settings -> Secrets.  Pinned per-assistant so
+      org-scoped calls target a single EH organisation.
     required: false
     sensitive: false
 

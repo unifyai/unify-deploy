@@ -38,8 +38,11 @@ https://developer.employmenthero.com, then pastes its Client ID and
 Client Secret into the assistant's Secret Manager as
 `EMPLOYMENTHERO_OAUTH_CLIENT_ID` and `EMPLOYMENTHERO_OAUTH_CLIENT_SECRET`.
 Clicking Connect in Console -> Integrations runs the OAuth round-trip
-and writes `EMPLOYMENTHERO_REFRESH_TOKEN`, `EMPLOYMENTHERO_ORGANISATION_ID`,
-and `EMPLOYMENTHERO_HUB_DOMAIN` automatically.
+and writes `EMPLOYMENTHERO_REFRESH_TOKEN` automatically.
+`EMPLOYMENTHERO_ORGANISATION_ID` is auto-pinned when the token has a
+single named organisation; when multiple named orgs are accessible, the
+operator picks one via Console -> Settings -> Secrets (the success
+toast surfaces a hint).
 
 `EMPLOYMENTHERO_BASE_URL` is an optional override (UK customers
 occasionally need `https://api.employmenthero.co.uk`).

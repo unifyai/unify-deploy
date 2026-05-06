@@ -20,8 +20,10 @@ developer-portal app at https://developer.employmenthero.com and pastes
 its `EMPLOYMENTHERO_OAUTH_CLIENT_ID` + `EMPLOYMENTHERO_OAUTH_CLIENT_SECRET`
 into Console -> Settings -> Secrets.  Clicking Connect in
 Console -> Integrations runs the OAuth round-trip and writes
-`EMPLOYMENTHERO_REFRESH_TOKEN`, `EMPLOYMENTHERO_ORGANISATION_ID`, and
-`EMPLOYMENTHERO_HUB_DOMAIN` automatically.
+`EMPLOYMENTHERO_REFRESH_TOKEN` automatically; the active organisation
+id is auto-pinned to `EMPLOYMENTHERO_ORGANISATION_ID` when a single
+named organisation is found, otherwise the operator picks via
+Console -> Settings -> Secrets.
 
 The runtime mints short-lived access tokens from the refresh token
 behind the scenes and caches them in-process for ~55 minutes.  The
