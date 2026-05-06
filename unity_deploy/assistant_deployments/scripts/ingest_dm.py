@@ -750,6 +750,7 @@ def main() -> int:
                     add_to_all_context=not p["skip_all_context"],
                     post_ingest=p["post_ingest_config"],
                     on_task_complete=p["chunk_callback"],
+                    expected_total_rows=item.row_count,
                 )
                 return {
                     "ingest_result": result,
