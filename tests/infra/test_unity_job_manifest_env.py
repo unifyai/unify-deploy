@@ -10,9 +10,22 @@ def test_create_unity_job_uses_explicit_env_allowlist() -> None:
     create_job_source = create_job_source[
         : create_job_source.index("def get_job_logs(")
     ]
+    config_env_source = create_job_source[
+        create_job_source.index("unity_config_env = []") : create_job_source.index(
+            "unity_secret_env = [",
+        )
+    ]
+
     assert '"envFrom"' not in create_job_source
     assert "GCP_SA_KEY" not in create_job_source
     assert '"ORCHESTRA_ADMIN_KEY"' in create_job_source
     assert '"GCP_PROJECT_ID"' in create_job_source
     assert '"UNITY_STARTUP_TIMING"' in create_job_source
+    assert '"UNITY_STARTUP_TIMING"' not in config_env_source
+    assert '"value": "1" if deploy_env == "staging" else "0"' in create_job_source
     assert '"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"' in create_job_source
+    assert (
+        'optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}'
+        in create_job_source
+    )
+    assert 'config_ref["optional"] = True' in create_job_source
