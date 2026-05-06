@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,7 +16,12 @@ from unity.common.pipeline._utils import utc_now_iso
 from unity.common.pipeline.artifact_store import ArtifactStore
 from unity.common.pipeline.run_ledger import PipelineStageManifest
 from unity.common.pipeline.types import IngestRequested, ParseRequested
-from unity.common.pipeline.work_queue import ReceivedWorkItem
+from unity.common.pipeline.work_queue import ReceivedWorkItem, RetryWorkItem
+from unity_deploy.infra.gcp.artifact_store import (
+    LeaseNotAcquired,
+    LeaseRecord,
+    _is_not_found_error,
+)
 
 if TYPE_CHECKING:
     from unity.file_manager.file_parsers.types.contracts import FileParseResult
@@ -57,6 +64,55 @@ async def handle_parse_message(
     run_ledger = infra.run_ledger_factory(run_id)
     cost_ledger = infra.cost_ledger_factory(run_id)
 
+    try:
+        job = job_store.read_job(run_id)
+    except Exception:
+        job = None
+    if job is not None:
+        status = str(getattr(job, "status", "") or "")
+        if status in {"success", "error", "cancelled"}:
+            logger.info(
+                "[parse] Job=%s already terminal (%s); no-op",
+                run_id,
+                status,
+            )
+            run_ledger.close()
+            cost_ledger.close()
+            return
+
+    if len(msg.file_paths) != 1:
+        run_ledger.close()
+        cost_ledger.close()
+        raise RuntimeError(
+            "ParseRequested must contain exactly one file_path for durable "
+            f"outbox semantics; received {len(msg.file_paths)}.",
+        )
+
+    try:
+        if await _replay_parse_outbox_if_needed(artifact_store, work_queue, run_id):
+            run_ledger.close()
+            cost_ledger.close()
+            return
+    except Exception:
+        run_ledger.close()
+        cost_ledger.close()
+        raise
+
+    parse_attempt_id = uuid.uuid4().hex
+    parse_owner = f"parse:{uuid.uuid4().hex[:12]}"
+    try:
+        parse_lease: LeaseRecord = artifact_store.acquire_lease(
+            f"jobs/{run_id}/leases/parse.json",
+            owner_id=parse_owner,
+            attempt_id=parse_attempt_id,
+            stage="parse",
+            ttl_seconds=900,
+        )
+    except LeaseNotAcquired as exc:
+        run_ledger.close()
+        cost_ledger.close()
+        raise RetryWorkItem(str(exc), delay_seconds=60) from exc
+
     logger.info("[parse] Starting job=%s, files=%d", run_id, len(msg.file_paths))
     parse_start = time.perf_counter()
 
@@ -70,14 +126,14 @@ async def handle_parse_message(
             logger.debug("Could not update job status for %s", run_id)
 
         with tempfile.TemporaryDirectory(prefix="parse_worker_") as tmpdir:
-            local_paths: list[str] = []
+            local_entries: list[tuple[str, str]] = []
             for file_uri in msg.file_paths:
                 local_path = _download_source(
                     file_uri,
                     dest_dir=tmpdir,
                     storage_client=infra.storage_client,
                 )
-                local_paths.append(local_path)
+                local_entries.append((local_path, _logical_name_from_uri(file_uri)))
 
             from unity.file_manager.file_parsers.file_parser import FileParser
             from unity.file_manager.file_parsers.types.contracts import FileParseRequest
@@ -86,9 +142,9 @@ async def handle_parse_message(
             requests = [
                 FileParseRequest(
                     source_local_path=lp,
-                    logical_path=Path(lp).name,
+                    logical_path=logical_name,
                 )
-                for lp in local_paths
+                for lp, logical_name in local_entries
             ]
 
             parse_results = parser.parse_batch(
@@ -97,6 +153,24 @@ async def handle_parse_message(
             )
 
             parse_duration = time.perf_counter() - parse_start
+
+            failed_results = [pr for pr in parse_results if pr.status != "success"]
+            if failed_results:
+                for pr in failed_results:
+                    run_ledger.write(
+                        PipelineStageManifest(
+                            run_id=run_id,
+                            file_path=pr.logical_path,
+                            stage_name="parse",
+                            status="error",
+                            duration_ms=parse_duration * 1000,
+                            error=pr.error,
+                        ),
+                    )
+                raise RuntimeError(
+                    "Parse failed for configured source files: "
+                    + ", ".join(pr.logical_path for pr in failed_results),
+                )
 
             if is_shutdown_requested() or await work_queue.is_cancelled(run_id):
                 logger.info("[parse] Cancelled after parsing, job=%s", run_id)
@@ -119,20 +193,14 @@ async def handle_parse_message(
             # is driven by ``msg.artifact_format``.
             plan_config = FilePipelineConfig()
 
-            for file_uri, pr in zip(msg.file_paths, parse_results):
-                if pr.status != "success":
-                    run_ledger.write(
-                        PipelineStageManifest(
-                            run_id=run_id,
-                            file_path=pr.logical_path,
-                            stage_name="parse",
-                            status="error",
-                            duration_ms=parse_duration * 1000,
-                            error=pr.error,
-                        ),
-                    )
-                    continue
-
+            for source_index, (file_uri, pr) in enumerate(
+                zip(msg.file_paths, parse_results),
+            ):
+                parse_lease = _refresh_parse_lease(
+                    artifact_store,
+                    run_id=run_id,
+                    lease=parse_lease,
+                )
                 source_gs_uri = file_uri if file_uri.startswith("gs://") else ""
                 plan = lower_to_ingest_plan(
                     pr,
@@ -147,7 +215,13 @@ async def handle_parse_message(
                     plan = _merge_table_config(plan, msg.table_config)
 
                 manifest_key = (
-                    f"jobs/{run_id}/manifests/{Path(pr.logical_path).stem}.json"
+                    f"jobs/{run_id}/manifests/"
+                    f"{source_index:04d}-{_safe_manifest_stem(pr.logical_path)}.json"
+                )
+                parse_lease = _refresh_parse_lease(
+                    artifact_store,
+                    run_id=run_id,
+                    lease=parse_lease,
                 )
                 artifact_store.put_json(manifest_key, plan.model_dump(mode="json"))
 
@@ -171,14 +245,51 @@ async def handle_parse_message(
                     job_id=run_id,
                     dispatch_id=msg.dispatch_id,
                     manifest_key=manifest_key,
+                    parse_outbox_key=_parse_outbox_key(run_id),
                     attachment_callback=msg.attachment_callback,
                     ingestion_mode=msg.ingestion_mode,
                     fm_binding=msg.fm_binding,
                     dm_binding=msg.dm_binding,
                 )
-                await work_queue.publish(
+                parse_lease = _refresh_parse_lease(
+                    artifact_store,
+                    run_id=run_id,
+                    lease=parse_lease,
+                )
+                artifact_store.put_json(
+                    _parse_outbox_key(run_id),
+                    {
+                        "status": "publish_pending",
+                        "job_id": run_id,
+                        "manifest_key": manifest_key,
+                        "payload": ingest_msg.model_dump(mode="json"),
+                        "updated_at": utc_now_iso(),
+                    },
+                )
+                parse_lease = _refresh_parse_lease(
+                    artifact_store,
+                    run_id=run_id,
+                    lease=parse_lease,
+                )
+                message_id = await work_queue.publish(
                     topic="ingest",
                     payload=ingest_msg.model_dump(mode="json"),
+                )
+                parse_lease = _refresh_parse_lease(
+                    artifact_store,
+                    run_id=run_id,
+                    lease=parse_lease,
+                )
+                artifact_store.put_json(
+                    _parse_outbox_key(run_id),
+                    {
+                        "status": "published",
+                        "job_id": run_id,
+                        "manifest_key": manifest_key,
+                        "payload": ingest_msg.model_dump(mode="json"),
+                        "published_message_id": message_id,
+                        "updated_at": utc_now_iso(),
+                    },
                 )
                 logger.info(
                     "[parse] Published IngestRequested for %s (mode=%s, tables=%d, content=%s)",
@@ -204,6 +315,70 @@ async def handle_parse_message(
         cost_ledger.close()
 
 
+def _parse_outbox_key(run_id: str) -> str:
+    return f"jobs/{run_id}/outbox/parse.json"
+
+
+def _refresh_parse_lease(
+    artifact_store,
+    *,
+    run_id: str,
+    lease: LeaseRecord,
+) -> LeaseRecord:
+    return artifact_store.refresh_lease(
+        f"jobs/{run_id}/leases/parse.json",
+        owner_id=lease.owner_id,
+        attempt_id=lease.attempt_id,
+        generation=lease.generation,
+        ttl_seconds=900,
+    )
+
+
+async def _replay_parse_outbox_if_needed(
+    artifact_store,
+    work_queue,
+    run_id: str,
+) -> bool:
+    try:
+        outbox = artifact_store.get_json(_parse_outbox_key(run_id))
+    except Exception as exc:
+        if _is_not_found_error(exc):
+            return False
+        raise
+    if not isinstance(outbox, dict):
+        raise ValueError(f"Parse outbox for job={run_id} is not a JSON object")
+    status = str(outbox.get("status") or "")
+    if status == "published":
+        logger.info("[parse] Job=%s already published ingest message; no-op", run_id)
+        return True
+    payload = outbox.get("payload")
+    if status == "publish_pending" and isinstance(payload, dict):
+        message_id = await work_queue.publish(topic="ingest", payload=payload)
+        outbox["status"] = "published"
+        outbox["published_message_id"] = message_id
+        outbox["updated_at"] = utc_now_iso()
+        artifact_store.put_json(_parse_outbox_key(run_id), outbox)
+        logger.info("[parse] Reconciled publish_pending outbox for job=%s", run_id)
+        return True
+    return False
+
+
+def _safe_manifest_stem(logical_path: str) -> str:
+    stem = Path(logical_path).stem or "source"
+    digest = hashlib.sha256(str(logical_path).encode("utf-8")).hexdigest()[:12]
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in stem)
+    return f"{safe}-{digest}"
+
+
+def _logical_name_from_uri(file_uri: str) -> str:
+    if file_uri.startswith("gs://"):
+        from urllib.parse import urlparse
+
+        parsed = urlparse(file_uri)
+        return Path(parsed.path.lstrip("/")).name or "source"
+    return Path(file_uri).name or "source"
+
+
 def _merge_table_config(plan, table_config: dict):
     """Merge per-table config from ParseRequested into IngestPlan.tables_meta.
 
@@ -213,6 +388,7 @@ def _merge_table_config(plan, table_config: dict):
     """
     from unity.common.pipeline.types import TableMeta
 
+    unmatched = set(table_config)
     updated: list[TableMeta] = []
     for meta in plan.tables_meta:
         key = meta.sheet_name or meta.label or meta.table_id
@@ -220,6 +396,7 @@ def _merge_table_config(plan, table_config: dict):
         if not cfg:
             updated.append(meta)
             continue
+        unmatched.discard(key)
         updated.append(
             meta.model_copy(
                 update={
@@ -233,6 +410,11 @@ def _merge_table_config(plan, table_config: dict):
                     "post_ingest": cfg.get("post_ingest") or meta.post_ingest,
                 },
             ),
+        )
+    if unmatched:
+        raise ValueError(
+            "Table config contains entries that did not match parsed tables: "
+            + ", ".join(sorted(str(k) for k in unmatched)),
         )
     return plan.model_copy(update={"tables_meta": updated})
 
@@ -250,7 +432,9 @@ def _download_source(
         parsed = urlparse(file_uri)
         bucket_name = parsed.netloc
         blob_name = parsed.path.lstrip("/")
-        filename = Path(blob_name).name
+        source_hash = hashlib.sha256(blob_name.encode("utf-8")).hexdigest()[:12]
+        source_name = Path(blob_name).name or "source"
+        filename = f"{source_hash}-{source_name}"
 
         import os
         import time as _time
