@@ -2,35 +2,47 @@
 
 The Connect flow is OAuth-based.  Customers create their own Employment
 Hero developer-portal app, paste its `client_id` and `client_secret`
-into Console Secrets, then click Connect once.  unity-deploy refreshes
-access tokens behind the scenes from then on.
+into the per-assistant Integrations modal, then click **Save and
+Connect** once.  unity-deploy refreshes access tokens behind the scenes
+from then on.
 
-## Customer-side prerequisite — create an EH developer-portal app
+## End-to-end customer flow
 
-1. Visit https://developer.employmenthero.com and create a new app.
-2. Set the redirect URI to **`<your-console-domain>/oauth/employmenthero/callback`**
-   (your Unify console URL — operator provides this).
-3. Note the Client ID and Client Secret.  These are per-customer; never
-   shared with other Unify deployments.
+1. In Console → assistant → **Integrations**, click **Add new** and
+   choose **Employment Hero**.  The Connect modal opens.
+2. **Step 1 in the modal** shows the exact redirect URI to register in
+   Employment Hero, with a **Copy** button.  The URL is computed from
+   the console origin the customer is on (e.g.
+   `https://console.acme.com/oauth/employmenthero/callback`), so it
+   always matches the running deployment — no operator hand-off needed.
+3. The customer opens https://developer.employmenthero.com in a new
+   tab, creates (or edits) their app, pastes the URL into the app's
+   **Redirect URIs** field, and saves the app.  They note the **Client
+   ID** and **Client Secret**.
+4. Back in the modal, **Step 2** asks for the Client ID and Client
+   Secret — they paste both and click **Save and Connect**.
+5. They're redirected to Employment Hero for consent, then back to the
+   integrations tab with the card showing **Connected**.
 
-## Console-side setup (per assistant)
+unity-deploy refreshes access tokens automatically from this point.
+The customer clicks **Reconnect** on the same card if/when the refresh
+token expires (~60 days for most EH accounts).
 
-1. In Console → Settings → Secrets, add:
-   * `EMPLOYMENTHERO_OAUTH_CLIENT_ID` — Client ID from step 3 above (not sensitive).
-   * `EMPLOYMENTHERO_OAUTH_CLIENT_SECRET` — Client Secret from step 3 above (sensitive).
-2. In Console → Integrations → Employment Hero, click **Connect**.
-3. Grant consent on Employment Hero.
-4. Done.  unity-deploy refreshes tokens automatically; the user reconnects
-   via the same button if/when the refresh token expires (~60 days for
-   most EH accounts).
+### Notes for operators
+
+* The redirect URI is **never** baked into a deployment env var.  It's
+  always derived client-side from `window.location.origin`, so the
+  customer copies whatever URL the modal shows them.
+* The Client ID and Client Secret are stored as per-assistant secrets
+  (`EMPLOYMENTHERO_OAUTH_CLIENT_ID`, `EMPLOYMENTHERO_OAUTH_CLIENT_SECRET`)
+  — they're per-customer and never shared with other Unify deployments.
 
 After Connect, the OAuth callback writes these secrets automatically:
 
 | Secret | Set by | Purpose |
 |---|---|---|
 | `EMPLOYMENTHERO_REFRESH_TOKEN` | Console callback | Long-lived token used by runtime to mint access tokens |
-| `EMPLOYMENTHERO_ORGANISATION_ID` | Console callback | Active EH organisation, captured from `/me` |
-| `EMPLOYMENTHERO_HUB_DOMAIN` | Console callback | Subdomain (e.g. `acme.employmenthero.com`) for UI deep-links |
+| `EMPLOYMENTHERO_ORGANISATION_ID` | Console callback (auto-pin) | Active EH organisation.  Auto-pinned when `/api/v1/organisations` returns exactly one org with a non-null `name`.  When multiple named orgs are accessible, the callback pins the lexicographically-first id and the success toast tells the operator to override here via Settings → Secrets if the auto-pick is wrong.  When zero named orgs are found, no pin is written and the runtime falls back to the first accessible org with a hint. |
 
 ## Optional secrets
 
@@ -92,8 +104,9 @@ edits required.
 |---|---|---|
 | `Employment Hero is not connected for this assistant.` | One or more of `OAUTH_CLIENT_ID` / `OAUTH_CLIENT_SECRET` / `REFRESH_TOKEN` is unset | Open Integrations modal; the listed `missing_secrets` show what's needed.  Either paste the OAuth credentials and click Connect, or click Reconnect if previously connected. |
 | `Employment Hero refresh failed — reconnect required.` | Refresh token invalid (expired, revoked, or rotated) | User clicks Reconnect in Console → Integrations |
+| EH consent screen rejects the redirect (`invalid_redirect_uri`, `redirect_uri_mismatch`, or "Application not configured") | The redirect URI registered in the customer's EH developer-portal app doesn't exactly match the URL Console sends | Re-open the Connect modal — Step 1 shows the canonical redirect URI for this console.  Copy it and paste into the EH app's Redirect URIs field exactly (no trailing slash, no port mismatch).  Save the EH app, then retry Connect. |
 | `403` on specific capabilities | Customer's EH developer-portal app lacks that scope, or their EH role doesn't permit it | Edit the app's scope catalogue in EH developer portal, then click Reconnect.  See `employmenthero_tier_gating.md`. |
-| `Multiple organisations may be available` hint | Token has access to >1 organisation and `ORGANISATION_ID` not set | Captured automatically by Connect; if missing, set manually via Settings → Secrets after calling `list_organisations(mock=False)`. |
+| `Multiple organisations may be available` hint | Token has access to >1 organisation and the auto-pin couldn't pick one cleanly (zero or 2+ named orgs), or `ORGANISATION_ID` was cleared. | Console Connect auto-pins when a single named org is found; for the multi-named case the success toast surfaces a hint pointing the operator at Settings → Secrets.  Run `list_organisations(mock=False)` to enumerate, then set `EMPLOYMENTHERO_ORGANISATION_ID` to the desired id. |
 | `429` rate-limit | Sync too aggressive | Increase `EMPLOYMENTHERO_RATE_LIMIT_BACKOFF_FACTOR` or reduce per-object cadence in `EMPLOYMENTHERO_SYNC_OBJECT_INTERVALS`. |
 
 ## Region notes

@@ -54,6 +54,13 @@ class ResolvedAssistantDeployment:
     blacklist: list[dict[str, Any]]
     secrets: list[Secret]
     integrations: list[str] = field(default_factory=list)
+    integration_registry: list[dict[str, Any]] = field(default_factory=list)
+    """One row per enabled integration, populated by ``expand_integrations``.
+
+    Seeded into the ``Integrations/Manifests`` DataManager context by
+    ``_sync_integration_registry`` and consumed at runtime by
+    ``unity.integration_status`` to compute which integrations have working
+    credentials.  See ``integrations/loader.py:_build_registry_row``."""
     mcp_configs: list[Any] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
     console_config: dict[str, Any] | None = None

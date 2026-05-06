@@ -17,6 +17,7 @@ from unity_deploy.assistant_deployments.integrations.loader import (
 )
 from unity.guidance_manager.types.guidance import Guidance
 from unity_deploy.assistant_deployments.integrations.types import (
+    Capability,
     IntegrationManifest,
     MCPServerConfig,
     SecretSchema,
@@ -159,6 +160,114 @@ class TestLoadIntegration:
         loaded = load_integration(manifest, root)
         assert loaded.mcp_config is None
 
+    def test_registry_row_minimal(self, github_integration):
+        manifest, root = github_integration
+        loaded = load_integration(manifest, root)
+        assert loaded.registry_row is not None
+        assert loaded.registry_row["slug"] == "github"
+        assert loaded.registry_row["label"] == "GitHub"
+        assert loaded.registry_row["category"] == "developer-tools"
+        assert loaded.registry_row["tier"] == "api"
+        # GITHUB_TOKEN is required=False in the fixture.
+        import json
+
+        assert json.loads(loaded.registry_row["required_secrets_json"]) == []
+        assert json.loads(loaded.registry_row["optional_secrets_json"]) == [
+            "GITHUB_TOKEN",
+        ]
+        # No capabilities → no functions/guidance in the row.
+        assert json.loads(loaded.registry_row["function_names_json"]) == []
+        assert json.loads(loaded.registry_row["guidance_titles_json"]) == []
+        assert json.loads(loaded.registry_row["capability_ids_json"]) == []
+
+
+class TestRegistryRowFromCapabilities:
+    """Registry row projects capability function/guidance maps for runtime detection."""
+
+    def _make_pkg(self, tmp_path: Path) -> tuple[IntegrationManifest, Path]:
+        root = tmp_path / "demo"
+        root.mkdir()
+        (root / "__init__.py").write_text("")
+        (root / "functions").mkdir()
+        (root / "functions" / "__init__.py").write_text("")
+        (root / "guidance").mkdir()
+        (root / "guidance" / "demo_overview.md").write_text("# Overview")
+        (root / "guidance" / "demo_workflows.md").write_text("# Workflows")
+
+        manifest = IntegrationManifest(
+            name="Demo",
+            slug="demo",
+            sector="crm",
+            tier="api",
+            description="A demo integration",
+            secrets=[
+                SecretSchema(name="DEMO_API_KEY", description="API key", required=True),
+                SecretSchema(
+                    name="DEMO_OPTIONAL", description="Optional", required=False
+                ),
+            ],
+            capabilities=[
+                Capability(
+                    id="contacts",
+                    name="Contacts",
+                    description="Lookup",
+                    functions=["get_contact", "list_contacts"],
+                    guidance=["demo_overview"],
+                ),
+                Capability(
+                    id="workflows",
+                    name="Workflows",
+                    description="Run",
+                    functions=["run_workflow"],
+                    guidance=["demo_workflows"],
+                ),
+            ],
+        )
+        (root / "manifest.yaml").write_text(yaml.dump(manifest.model_dump(mode="json")))
+        return manifest, root
+
+    def test_required_and_optional_secrets_split(self, tmp_path):
+        manifest, root = self._make_pkg(tmp_path)
+        loaded = load_integration(manifest, root)
+        import json
+
+        row = loaded.registry_row
+        assert json.loads(row["required_secrets_json"]) == ["DEMO_API_KEY"]
+        assert json.loads(row["optional_secrets_json"]) == ["DEMO_OPTIONAL"]
+
+    def test_function_names_unioned_across_capabilities(self, tmp_path):
+        manifest, root = self._make_pkg(tmp_path)
+        loaded = load_integration(manifest, root)
+        import json
+
+        # Sorted in registry to make hash-based seed sync deterministic.
+        assert json.loads(loaded.registry_row["function_names_json"]) == [
+            "get_contact",
+            "list_contacts",
+            "run_workflow",
+        ]
+
+    def test_guidance_titles_match_loader_title_transform(self, tmp_path):
+        """Registry titles must match what ``_load_guidance`` writes into
+        GuidanceManager — otherwise the runtime can't resolve them at lookup."""
+        manifest, root = self._make_pkg(tmp_path)
+        loaded = load_integration(manifest, root)
+        import json
+
+        seeded_titles = sorted(g.title for g in loaded.guidance_entries)
+        registry_titles = json.loads(loaded.registry_row["guidance_titles_json"])
+        assert registry_titles == seeded_titles
+
+    def test_capability_ids_preserved_in_order(self, tmp_path):
+        manifest, root = self._make_pkg(tmp_path)
+        loaded = load_integration(manifest, root)
+        import json
+
+        assert json.loads(loaded.registry_row["capability_ids_json"]) == [
+            "contacts",
+            "workflows",
+        ]
+
 
 class TestLoadIntegrations:
     def test_loads_multiple_by_slug(
@@ -185,6 +294,24 @@ class TestLoadIntegrations:
         result = load_integrations(["nonexistent"], [tmp_path])
         assert result.function_dirs == []
         assert result.guidance == []
+
+    def test_aggregates_registry_rows_in_slug_order(
+        self,
+        github_integration,
+        mcp_integration,
+    ):
+        _, github_root = github_integration
+        _, mcp_root = mcp_integration
+
+        result = load_integrations(
+            ["github", "test_mcp"],
+            [github_root.parent],
+        )
+        slugs = [row["slug"] for row in result.registry_rows]
+        # Both manifests pass minimal validation (no capabilities); we still
+        # emit a row apiece so the runtime can list them in setup-completeness
+        # output even when zero capabilities exist.
+        assert slugs == ["github", "test_mcp"]
 
     def test_first_search_path_wins(self, tmp_path):
         path1 = tmp_path / "path1" / "test_pkg"

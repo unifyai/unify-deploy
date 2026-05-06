@@ -34,6 +34,12 @@ from unity.secret_manager.types import Secret
 logger = logging.getLogger(__name__)
 
 
+def _stem_to_title(stem: str) -> str:
+    """Mirror ``_load_guidance``'s title transformation so the runtime
+    registry's ``guidance_titles`` resolve back to seeded ``Guidance.title``s."""
+    return stem.replace("_", " ").replace("-", " ").title()
+
+
 @dataclass
 class LoadedIntegration:
     """A single integration package loaded from disk."""
@@ -47,6 +53,14 @@ class LoadedIntegration:
     scenario_specs: list[ScenarioSpec] = field(default_factory=list)
     url_mapping: dict[str, str] | None = None
     mcp_config: MCPServerConfig | None = None
+    registry_row: dict | None = None
+    """Runtime registry row for ``Integrations/Manifests``.
+
+    Populated when the manifest has at least one capability or any secrets.
+    Consumed downstream by ``_sync_integration_registry`` (deploy time) and
+    ``unity.integration_status`` (runtime).  All list/dict values are
+    JSON-stringified to keep the DataManager schema scalar-only.
+    """
 
 
 @dataclass
@@ -60,6 +74,8 @@ class AggregatedIntegrations:
     scenarios: list[ScenarioSpec] = field(default_factory=list)
     url_mappings: dict[str, str] = field(default_factory=dict)
     mcp_configs: list[MCPServerConfig] = field(default_factory=list)
+    registry_rows: list[dict] = field(default_factory=list)
+    """One row per loaded integration, ready for the runtime registry sync."""
 
 
 def load_integration(manifest: IntegrationManifest, root: Path) -> LoadedIntegration:
@@ -111,7 +127,59 @@ def load_integration(manifest: IntegrationManifest, root: Path) -> LoadedIntegra
     if manifest.mcp is not None:
         result.mcp_config = manifest.mcp
 
+    result.registry_row = _build_registry_row(manifest)
+
     return result
+
+
+def _build_registry_row(manifest: IntegrationManifest) -> dict:
+    """Project a manifest into a flat row for the ``Integrations/Manifests`` context.
+
+    The row pairs three lookups the runtime needs:
+
+    * ``required_secrets`` / ``optional_secrets`` — drives enablement detection
+      against the assistant's secret keyset.
+    * ``function_names`` — resolved to ``function_id``s by FunctionManager at
+      runtime to scope FunctionManager queries.
+    * ``guidance_titles`` — resolved to ``guidance_id``s by GuidanceManager at
+      runtime to scope guidance retrieval (``filter_scope``).
+
+    All list/dict values are JSON-stringified — DataManager prefers scalar
+    columns, and the registry is a flat data context.
+    """
+    import json
+
+    required = sorted({s.name for s in manifest.secrets if s.required})
+    optional = sorted({s.name for s in manifest.secrets if not s.required})
+
+    function_names: set[str] = set()
+    guidance_titles: set[str] = set()
+    capability_ids: list[str] = []
+    for cap in manifest.capabilities:
+        capability_ids.append(cap.id)
+        function_names.update(cap.functions)
+        guidance_titles.update(_stem_to_title(stem) for stem in cap.guidance)
+
+    return {
+        "slug": manifest.slug,
+        "label": manifest.name,
+        "category": manifest.sector,
+        "version": manifest.version,
+        "tier": manifest.tier,
+        "quality": (
+            manifest.quality.value
+            if hasattr(manifest.quality, "value")
+            else str(manifest.quality)
+        ),
+        "required_secrets_json": json.dumps(required),
+        "optional_secrets_json": json.dumps(optional),
+        "capability_ids_json": json.dumps(capability_ids),
+        "function_names_json": json.dumps(sorted(function_names)),
+        "guidance_titles_json": json.dumps(sorted(guidance_titles)),
+        "tags_json": json.dumps(list(manifest.tags)),
+        "homepage": manifest.homepage or "",
+        "description": manifest.description,
+    }
 
 
 def load_integrations(
@@ -170,6 +238,8 @@ def load_integrations(
             result.url_mappings.update(loaded.url_mapping)
         if loaded.mcp_config is not None:
             result.mcp_configs.append(loaded.mcp_config)
+        if loaded.registry_row is not None:
+            result.registry_rows.append(loaded.registry_row)
 
     return result
 

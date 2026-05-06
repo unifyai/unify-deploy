@@ -56,7 +56,10 @@ async def get_employmenthero_account_info(mock: bool = True) -> dict:
 
 @custom_function()
 async def list_employmenthero_organisations(mock: bool = True) -> dict:
-    """List organisations the active token can access."""
+    """List organisations the active token can access.
+
+    Real EH response envelope is ``{"data": {"items": [...], ...}}``.
+    """
     if mock:
         return {
             "organisations": [
@@ -72,7 +75,7 @@ async def list_employmenthero_organisations(mock: bool = True) -> dict:
     body = await eh_get("/api/v1/organisations")
     if "error" in body:
         return body
-    items = body.get("data") or body.get("items") or []
+    items = (body.get("data") or {}).get("items") or []
     return {"organisations": items, "count": len(items)}
 
 
@@ -109,7 +112,7 @@ async def get_employmenthero_active_organisation(mock: bool = True) -> dict:
     body = await eh_get("/api/v1/organisations")
     if "error" in body:
         return body
-    items = body.get("data") or body.get("items") or []
+    items = (body.get("data") or {}).get("items") or []
     if not items:
         return {
             "error": (
@@ -122,8 +125,11 @@ async def get_employmenthero_active_organisation(mock: bool = True) -> dict:
     first = items[0]
     first["_pinned_via_secret"] = False
     first["_hint"] = (
-        f"Multiple organisations may be available.  Ask the user to set "
-        f"EMPLOYMENTHERO_ORGANISATION_ID={first.get('id')} via Console -> "
-        f"Secrets to pin this one as the active organisation."
+        f"Falling back to the first accessible organisation because "
+        f"EMPLOYMENTHERO_ORGANISATION_ID is not set.  The Console Connect "
+        f"flow auto-pins this when a single named organisation is found; "
+        f"if the token has multiple named organisations, the operator can "
+        f"override the pin via Console -> Settings -> Secrets "
+        f"(EMPLOYMENTHERO_ORGANISATION_ID={first.get('id')})."
     )
     return first
