@@ -58,6 +58,8 @@ class PubSubWorkQueue:
             "parse": self._full_subscription(settings.parse_subscription),
             "ingest": self._full_subscription(settings.ingest_subscription),
         }
+        self._receipt_subscriptions: dict[str, str] = {}
+        self._receipt_envelopes: dict[str, dict[str, Any]] = {}
 
     def _env_suffix(self) -> str:
         """Return the environment suffix used in shared resource names.
@@ -72,6 +74,15 @@ class PubSubWorkQueue:
 
     def _full_subscription(self, base: str) -> str:
         return f"projects/{self._settings.project_id}/subscriptions/{base}{self._env_suffix()}"
+
+    def _subscription_for_receipt(self, receipt_id: str) -> str:
+        sub_path = self._receipt_subscriptions.get(receipt_id)
+        if sub_path:
+            return sub_path
+        raise RuntimeError(
+            "Cannot operate on Pub/Sub receipt without source subscription "
+            f"binding: receipt={receipt_id!r}",
+        )
 
     # -- WorkQueue protocol --------------------------------------------------
 
@@ -114,12 +125,16 @@ class PubSubWorkQueue:
             )
 
             for msg in response.received_messages:
+                raw_payload = msg.message.data.decode("utf-8", errors="replace")
                 try:
-                    payload = json.loads(msg.message.data.decode("utf-8"))
+                    payload = json.loads(raw_payload)
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     payload = {}
 
+                pubsub_message_id = str(getattr(msg.message, "message_id", "") or "")
+                delivery_attempt = getattr(msg, "delivery_attempt", None)
                 wq_msg = WorkQueueMessage(
+                    message_id=pubsub_message_id or str(msg.ack_id),
                     topic=sub_key,
                     payload=payload,
                     published_at=(
@@ -127,28 +142,40 @@ class PubSubWorkQueue:
                         if msg.message.publish_time
                         else utc_now_iso()
                     ),
+                    pubsub_message_id=pubsub_message_id,
+                    source_subscription=sub_path,
+                    delivery_attempt=delivery_attempt,
                 )
                 item = ReceivedWorkItem(
                     **wq_msg.model_dump(),
                     receipt_id=msg.ack_id,
+                    raw_payload=raw_payload,
                 )
+                self._receipt_subscriptions[msg.ack_id] = sub_path
+                self._receipt_envelopes[msg.ack_id] = {
+                    "topic": sub_key,
+                    "source_subscription": sub_path,
+                    "pubsub_message_id": pubsub_message_id,
+                    "published_at": wq_msg.published_at,
+                    "delivery_attempt": delivery_attempt,
+                    "payload": payload,
+                    "raw_payload": raw_payload,
+                }
                 items.append(item)
 
         return items
 
     async def ack(self, receipt_id: str) -> None:
-        for sub_path in self._sub_map.values():
-            try:
-                await asyncio.to_thread(
-                    self._subscriber.acknowledge,
-                    request={
-                        "subscription": sub_path,
-                        "ack_ids": [receipt_id],
-                    },
-                )
-                return
-            except Exception:
-                continue
+        sub_path = self._subscription_for_receipt(receipt_id)
+        await asyncio.to_thread(
+            self._subscriber.acknowledge,
+            request={
+                "subscription": sub_path,
+                "ack_ids": [receipt_id],
+            },
+        )
+        self._receipt_subscriptions.pop(receipt_id, None)
+        self._receipt_envelopes.pop(receipt_id, None)
 
     async def retry(
         self,
@@ -158,30 +185,36 @@ class PubSubWorkQueue:
         delay_seconds: float = 0.0,
     ) -> None:
         new_deadline = max(int(delay_seconds), 0)
-        for sub_path in self._sub_map.values():
-            try:
-                await asyncio.to_thread(
-                    self._subscriber.modify_ack_deadline,
-                    request={
-                        "subscription": sub_path,
-                        "ack_ids": [receipt_id],
-                        "ack_deadline_seconds": new_deadline,
-                    },
-                )
-                logger.info(
-                    "Retry scheduled (deadline=%ds, error=%s)",
-                    new_deadline,
-                    error,
-                )
-                return
-            except Exception:
-                continue
+        sub_path = self._subscription_for_receipt(receipt_id)
+        await asyncio.to_thread(
+            self._subscriber.modify_ack_deadline,
+            request={
+                "subscription": sub_path,
+                "ack_ids": [receipt_id],
+                "ack_deadline_seconds": new_deadline,
+            },
+        )
+        logger.info(
+            "Retry scheduled (subscription=%s deadline=%ds, error=%s)",
+            sub_path,
+            new_deadline,
+            error,
+        )
+        self._receipt_subscriptions.pop(receipt_id, None)
+        self._receipt_envelopes.pop(receipt_id, None)
 
     async def dead_letter(self, receipt_id: str, *, error: str) -> None:
+        envelope = self._receipt_envelopes.get(receipt_id, {})
         dead_letter_payload: dict[str, Any] = {
             "original_receipt_id": receipt_id,
             "error": error,
             "dead_lettered_at": utc_now_iso(),
+            "original_topic": envelope.get("topic"),
+            "source_subscription": envelope.get("source_subscription"),
+            "pubsub_message_id": envelope.get("pubsub_message_id"),
+            "published_at": envelope.get("published_at"),
+            "delivery_attempt": envelope.get("delivery_attempt"),
+            "payload": envelope.get("payload"),
         }
         await self.publish(topic="dead_letter", payload=dead_letter_payload)
         await self.ack(receipt_id)
@@ -196,27 +229,21 @@ class PubSubWorkQueue:
         lease extension (positive new deadline) and early nack
         (``new_deadline=0``); here we always use it in extension mode.
 
-        Errors are swallowed and logged: missing the occasional
-        extension is survivable (the next period will retry), and a
-        hard failure would just mean the message eventually gets
-        redelivered — which is exactly the right behaviour.
+        Errors are surfaced so queue lease failures are observable.
         """
         new_deadline = max(int(seconds), 1)
-        for sub_path in self._sub_map.values():
-            try:
-                await asyncio.to_thread(
-                    self._subscriber.modify_ack_deadline,
-                    request={
-                        "subscription": sub_path,
-                        "ack_ids": [receipt_id],
-                        "ack_deadline_seconds": new_deadline,
-                    },
-                )
-                return
-            except Exception:
-                continue
-        logger.warning(
-            "extend_lease: no subscription accepted receipt %s (deadline=%ds)",
+        sub_path = self._subscription_for_receipt(receipt_id)
+        await asyncio.to_thread(
+            self._subscriber.modify_ack_deadline,
+            request={
+                "subscription": sub_path,
+                "ack_ids": [receipt_id],
+                "ack_deadline_seconds": new_deadline,
+            },
+        )
+        logger.debug(
+            "extend_lease: subscription=%s receipt=%s deadline=%ds",
+            sub_path,
             receipt_id,
             new_deadline,
         )
@@ -224,20 +251,17 @@ class PubSubWorkQueue:
     def extend_lease_sync(self, receipt_id: str, seconds: int) -> None:
         """Synchronous ``modify_ack_deadline`` path for thread lease control."""
         new_deadline = max(int(seconds), 0)
-        for sub_path in self._sub_map.values():
-            try:
-                self._subscriber.modify_ack_deadline(
-                    request={
-                        "subscription": sub_path,
-                        "ack_ids": [receipt_id],
-                        "ack_deadline_seconds": new_deadline,
-                    },
-                )
-                return
-            except Exception:
-                continue
-        logger.warning(
-            "extend_lease_sync: no subscription accepted receipt %s (deadline=%ds)",
+        sub_path = self._subscription_for_receipt(receipt_id)
+        self._subscriber.modify_ack_deadline(
+            request={
+                "subscription": sub_path,
+                "ack_ids": [receipt_id],
+                "ack_deadline_seconds": new_deadline,
+            },
+        )
+        logger.debug(
+            "extend_lease_sync: subscription=%s receipt=%s deadline=%ds",
+            sub_path,
             receipt_id,
             new_deadline,
         )
