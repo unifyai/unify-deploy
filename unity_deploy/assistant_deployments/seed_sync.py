@@ -346,22 +346,29 @@ def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
 def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
     if not records:
         return False
+
+    # Manifest-declared integration secrets emit ``Secret(value="")``: the
+    # name is registered for the runtime allowlist (see
+    # ``_sync_integration_registry``) but the actual value is owned by the
+    # user — pasted via Console or written by the OAuth callback into the
+    # Secrets context directly.  Empty-value rows must NOT flow through
+    # this seed sync, because:
+    #   1. The update path would overwrite the user's pasted value with
+    #      "" whenever the existing-value read returns a stripped value.
+    #   2. The delete branch (when a name later disappears from source)
+    #      would wipe user state.
+    # Filter them out: this sync only touches secrets whose values are
+    # provided at deploy time (e.g. file_secrets from ``load_secrets``).
+    source_records = [r for r in records if (r.value or "").strip()]
+    if not source_records:
+        return False
     from unity.manager_registry import ManagerRegistry
 
     sm = ManagerRegistry.get_secret_manager()
     list_secret_keys = _manager_api(sm, "list_secret_keys")
     create_secret = _manager_api(sm, "create_secret")
     update_secret = _manager_api(sm, "update_secret")
-    delete_secret = _manager_api(sm, "delete_secret")
-    source_dicts = [r.model_dump() for r in records]
-
-    # Cache the existing secret values so the update closure can preserve
-    # user-set values when a seed record carries an empty placeholder.
-    # Manifest-declared secrets in integration packages emit
-    # ``Secret(value="")`` (the loader has no value to inject), and without
-    # this guard each sync would clobber a user's frontend-set token with
-    # empty string on every assistant wakeup.
-    _existing_value_cache: dict[str, str] = {}
+    source_dicts = [r.model_dump() for r in source_records]
 
     def natural_key(r: dict) -> str:
         return str(r.get("name", ""))
@@ -374,14 +381,10 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
                 context=sm._ctx,
                 filter=f"name == '{name}'",
                 limit=1,
-                from_fields=["secret_id", "name", "value", "description"],
+                from_fields=["secret_id", "name", "description"],
             )
             if logs:
-                entries = logs[0].entries
-                result.append(entries)
-                _existing_value_cache[str(entries.get("name", ""))] = (
-                    entries.get("value") or ""
-                )
+                result.append(logs[0].entries)
         return result
 
     def create(rec: dict) -> Any:
@@ -392,38 +395,15 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
         )
 
     def update(_secret_id: int, rec: dict) -> Any:
-        seed_value = (rec.get("value") or "").strip()
-        if not seed_value:
-            existing_value = _existing_value_cache.get(rec["name"], "").strip()
-            if existing_value:
-                logger.info(
-                    "%s Preserving user-set value for secret %r "
-                    "(seed record has empty value).",
-                    _ICON,
-                    rec["name"],
-                )
-                # Still allow description to update without touching value.
-                return update_secret(
-                    name=rec["name"],
-                    value=existing_value,
-                    description=rec.get("description"),
-                )
         return update_secret(
             name=rec["name"],
-            value=rec.get("value"),
+            value=rec["value"],
             description=rec.get("description"),
         )
 
-    def delete(_secret_id: int) -> Any:
-        logs = unify.get_logs(
-            context=sm._ctx,
-            filter=f"secret_id == {_secret_id}",
-            limit=1,
-            from_fields=["name"],
-        )
-        if logs:
-            return delete_secret(name=logs[0].entries["name"])
-
+    # delete_fn intentionally None: removing an integration package from a
+    # deployment must not silently delete user-pasted credentials.  The
+    # user removes those via the Console UI when they want to disconnect.
     return sync_seed_data(
         manager_key="secrets",
         source_records=source_dicts,
@@ -431,7 +411,7 @@ def _sync_secrets(records: list[Secret], meta: SeedMetaStore) -> bool:
         get_existing_fn=get_existing,
         create_fn=create,
         update_fn=update,
-        delete_fn=delete,
+        delete_fn=None,
         id_field="secret_id",
         meta_store=meta,
     )
