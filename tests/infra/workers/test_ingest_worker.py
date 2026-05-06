@@ -247,6 +247,87 @@ def test_duplicate_live_ingest_lease_retries_before_dm_write(monkeypatch) -> Non
     assert exc.value.delay_seconds == 7
 
 
+@pytest.mark.asyncio
+async def test_dm_mode_reports_early_ingest_artifacts_exception(monkeypatch) -> None:
+    """Early DM ingest failures should not be masked by local bookkeeping bugs."""
+
+    class _DataManager:
+        def ingest(self, *args, **kwargs):
+            return None
+
+    import unity.data_manager as data_manager_module
+
+    monkeypatch.setattr(data_manager_module, "DataManager", _DataManager)
+
+    def fail_before_results(**_kwargs):
+        raise RuntimeError("boom before artifact results")
+
+    monkeypatch.setattr(ingest_worker, "ingest_artifacts", fail_before_results)
+
+    class _ArtifactStore:
+        def read_checkpoint(self, *_args, **_kwargs):
+            return None
+
+    class _Infra:
+        artifact_store = _ArtifactStore()
+        storage_client = None
+
+    class _RunLedger:
+        def __init__(self):
+            self.entries = []
+
+        def write(self, entry):
+            self.entries.append(entry)
+
+    plan = IngestPlan(
+        run_id="job-1",
+        file_path="demo.csv",
+        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
+        tables_meta=[
+            TableMeta(
+                table_id="table_1",
+                label="table:1",
+                columns=["a"],
+                row_count=1,
+            ),
+        ],
+        table_inputs={
+            "table_1": InlineRowsHandle(
+                rows=[{"a": 1}],
+                columns=["a"],
+                row_count=1,
+            ),
+        },
+    )
+    ledger = _RunLedger()
+
+    rows, error = await ingest_worker._run_dm_mode_inner(
+        plan=plan,
+        msg=type(
+            "_Msg",
+            (),
+            {
+                "job_id": "job-1",
+                "dispatch_id": "dispatch-1",
+                "batch_size": 100,
+            },
+        )(),
+        infra=_Infra(),
+        run_ledger=ledger,
+        dm_binding=DmBinding(
+            user_id="user-1",
+            assistant_id="assistant-1",
+            target_context="ctx",
+        ),
+        default_target="ctx",
+        activate_unify_context=lambda **_kwargs: None,
+    )
+
+    assert rows == 0
+    assert error == "boom before artifact results"
+    assert ledger.entries[-1].status == "error"
+
+
 def _make_plan(
     *,
     content_rows_handle=None,
