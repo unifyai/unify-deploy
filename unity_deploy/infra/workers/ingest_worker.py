@@ -1501,6 +1501,7 @@ async def _run_dm_mode_inner(
 
     total_rows = 0
     error: str | None = None
+    retryable_lease_error: str | None = None
     start = time.perf_counter()
     try:
         with instrumentation:

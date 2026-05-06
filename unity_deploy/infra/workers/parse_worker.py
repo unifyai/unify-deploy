@@ -382,7 +382,7 @@ def _logical_name_from_uri(file_uri: str) -> str:
 def _merge_table_config(plan, table_config: dict):
     """Merge per-table config from ParseRequested into IngestPlan.tables_meta.
 
-    Matches config entries to TableMeta by sheet_name or label. Returns
+    Matches config entries to TableMeta by sheet_name, label, or table_id. Returns
     a new plan with updated tables_meta carrying the config fields that
     the ingest worker needs (description, embed_columns, etc.).
     """
@@ -390,13 +390,21 @@ def _merge_table_config(plan, table_config: dict):
 
     unmatched = set(table_config)
     updated: list[TableMeta] = []
+    single_table_fallback = len(plan.tables_meta) == 1 and len(table_config) == 1
     for meta in plan.tables_meta:
-        key = meta.sheet_name or meta.label or meta.table_id
-        cfg = table_config.get(key, {})
+        keys = [
+            key
+            for key in (meta.sheet_name, meta.label, meta.table_id)
+            if key is not None
+        ]
+        matched_key = next((key for key in keys if key in table_config), None)
+        if matched_key is None and single_table_fallback:
+            matched_key = next(iter(table_config))
+        cfg = table_config.get(matched_key, {}) if matched_key is not None else {}
         if not cfg:
             updated.append(meta)
             continue
-        unmatched.discard(key)
+        unmatched.discard(matched_key)
         updated.append(
             meta.model_copy(
                 update={
