@@ -32,6 +32,7 @@ import logging
 import os
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable
@@ -56,14 +57,30 @@ from unity.common.pipeline.types import (
     TableInputHandle,
     XlsxSheetHandle,
 )
-from unity.common.pipeline.work_queue import ReceivedWorkItem
+from unity.common.pipeline.work_queue import ReceivedWorkItem, RetryWorkItem
 
 from .assistant_key_resolver import resolve_api_key
+from unity_deploy.infra.gcp.artifact_store import (
+    LeaseNotAcquired,
+    LeaseRecord,
+    StaleLeaseError,
+)
 
 if TYPE_CHECKING:
     from .worker_utils import WorkerInfra
 
 logger = logging.getLogger(__name__)
+
+_TERMINAL_JOB_STATUSES = {"success", "error", "cancelled"}
+_PRIVATE_INGEST_KEY = "_unity_ingest_key"
+
+
+@dataclass
+class _ActiveIngestLease:
+    key: str
+    owner_id: str
+    attempt_id: str
+    generation: int | None
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +446,8 @@ def _make_checkpoint_callback(
     job_id: str,
     artifact_id: str,
     *,
+    attempt_id: str = "",
+    lease: _ActiveIngestLease | None = None,
     initial_rows: int = 0,
     initial_chunks: int = 0,
     total_rows: int | None = None,
@@ -472,10 +491,20 @@ def _make_checkpoint_callback(
             chunks_committed=state["chunks"],
             rows_committed=state["rows"],
             last_updated=utc_now_iso(),
+            attempt_id=attempt_id,
+            lease_generation=lease.generation if lease is not None else None,
         )
         try:
             checkpoint_started = time.perf_counter()
-            artifact_store.write_checkpoint(job_id, artifact_id, checkpoint)
+            if lease is not None:
+                _refresh_ingest_lease(artifact_store, lease)
+            artifact_store.write_checkpoint(
+                job_id,
+                artifact_id,
+                checkpoint,
+                attempt_id=attempt_id,
+                lease_generation=lease.generation if lease is not None else None,
+            )
             checkpoint_write_ms = (time.perf_counter() - checkpoint_started) * 1000
         except Exception:
             checkpoint_write_ms = -1.0
@@ -485,6 +514,7 @@ def _make_checkpoint_callback(
                 artifact_id,
                 exc_info=True,
             )
+            raise
 
         should_log = (
             state["chunks"] == initial_chunks + 1
@@ -629,6 +659,99 @@ def _park_inflight_message(
             item.message_id,
             run_id,
         )
+        raise
+
+
+def _is_terminal_job(job_store: Any, job_id: str) -> tuple[bool, str]:
+    try:
+        job = job_store.read_job(job_id)
+    except Exception:
+        return False, ""
+    status = str(getattr(job, "status", "") or "")
+    return status in _TERMINAL_JOB_STATUSES, status
+
+
+def _lease_key(job_id: str, table_id: str) -> str:
+    safe_table = str(table_id or "table").replace("/", "_")
+    return f"jobs/{job_id}/leases/ingest-{safe_table}.json"
+
+
+def _new_owner_id(stage: str) -> str:
+    pod = os.environ.get("HOSTNAME") or "unknown-pod"
+    return f"{stage}:{pod}:{uuid.uuid4().hex[:12]}"
+
+
+def _acquire_ingest_lease(
+    artifact_store: Any,
+    *,
+    job_id: str,
+    table_id: str,
+    attempt_id: str,
+) -> _ActiveIngestLease:
+    owner_id = _new_owner_id("ingest")
+    key = _lease_key(job_id, table_id)
+    try:
+        record: LeaseRecord = artifact_store.acquire_lease(
+            key,
+            owner_id=owner_id,
+            attempt_id=attempt_id,
+            stage="ingest",
+            ttl_seconds=int(os.environ.get("UNITY_INGEST_ATTEMPT_LEASE_TTL", "900")),
+        )
+    except LeaseNotAcquired as exc:
+        lease = exc.lease
+        logger.warning(
+            "[ingest] Duplicate live attempt for job=%s table=%s owner=%s "
+            "expires_at=%s; retrying later",
+            job_id,
+            table_id,
+            lease.owner_id if lease else "?",
+            lease.expires_at if lease else "?",
+        )
+        raise RetryWorkItem(
+            str(exc),
+            delay_seconds=int(
+                os.environ.get("UNITY_INGEST_DUPLICATE_RETRY_DELAY", "60"),
+            ),
+        ) from exc
+    logger.info(
+        "[ingest] Acquired attempt lease job=%s table=%s owner=%s attempt=%s "
+        "generation=%s",
+        job_id,
+        table_id,
+        record.owner_id,
+        record.attempt_id,
+        record.generation,
+    )
+    return _ActiveIngestLease(
+        key=key,
+        owner_id=owner_id,
+        attempt_id=attempt_id,
+        generation=record.generation,
+    )
+
+
+def _refresh_ingest_lease(artifact_store: Any, lease: _ActiveIngestLease) -> None:
+    try:
+        renewed = artifact_store.refresh_lease(
+            lease.key,
+            owner_id=lease.owner_id,
+            attempt_id=lease.attempt_id,
+            generation=lease.generation,
+            ttl_seconds=int(os.environ.get("UNITY_INGEST_ATTEMPT_LEASE_TTL", "900")),
+        )
+    except StaleLeaseError:
+        raise
+    lease.generation = renewed.generation
+
+
+def _is_retryable_lease_error(error: str | None) -> bool:
+    text = str(error or "")
+    return text.startswith("Lease ") and (
+        " is owned by " in text
+        or " owner changed " in text
+        or " generation changed " in text
+    )
 
 
 async def handle_ingest_message(
@@ -663,6 +786,22 @@ async def handle_ingest_message(
     job_store = infra.job_store
     run_ledger = infra.run_ledger_factory(run_id)
     cost_ledger = infra.cost_ledger_factory(run_id)
+
+    is_terminal, terminal_status = _is_terminal_job(job_store, run_id)
+    if is_terminal:
+        logger.info(
+            "[ingest] Acking duplicate terminal job=%s status=%s without work",
+            run_id,
+            terminal_status,
+        )
+        if ack_receipt is not None:
+            await ack_receipt()
+            run_ledger.close()
+            cost_ledger.close()
+            return True
+        run_ledger.close()
+        cost_ledger.close()
+        return False
 
     logger.info(
         "[ingest] Starting job=%s, manifest=%s, mode=%s",
@@ -961,6 +1100,7 @@ async def _run_fm_mode_inner(
 
     total_rows = 0
     error: str | None = None
+    retryable_lease_error: str | None = None
     start = time.perf_counter()
     try:
         with instrumentation:
@@ -1177,17 +1317,30 @@ async def _run_dm_mode_inner(
 
     artifact_store = infra.artifact_store
     gcs_client = infra.storage_client
+    attempt_id = uuid.uuid4().hex
 
     work_items: list[ArtifactWorkItem] = []
+    missing_inputs: list[str] = []
     for meta in plan.tables_meta:
         table_id = str(meta.table_id or "")
         handle = (plan.table_inputs or {}).get(table_id)
         if handle is None:
+            missing_inputs.append(table_id or str(meta.label or "unknown"))
             continue
         columns = list(meta.columns or []) or list(
             getattr(handle, "columns", []) or [],
         )
-        row_count = int(meta.row_count or getattr(handle, "row_count", 0) or 0)
+        declared_row_count = (
+            meta.row_count
+            if meta.row_count is not None
+            else getattr(handle, "row_count", None)
+        )
+        if declared_row_count is None:
+            raise RuntimeError(
+                f"Ingest manifest table={table_id} has no declared row_count; "
+                "strict row-count validation requires parser counts.",
+            )
+        row_count = int(declared_row_count)
         target_context = meta.context or default_target
 
         fields = (
@@ -1198,6 +1351,9 @@ async def _run_dm_mode_inner(
             if meta.column_descriptions
             else None
         )
+        fields = dict(fields or {})
+        fields.setdefault(_PRIVATE_INGEST_KEY, "str")
+        unique_keys = {_PRIVATE_INGEST_KEY: "str"}
 
         post_ingest_config = None
         if meta.post_ingest:
@@ -1216,7 +1372,6 @@ async def _run_dm_mode_inner(
                 skip_rows,
                 initial_chunks,
             )
-
         work_items.append(
             ArtifactWorkItem(
                 kind="table",
@@ -1229,6 +1384,7 @@ async def _run_dm_mode_inner(
                     "batch_size": meta.chunk_size or msg.batch_size,
                     "description": meta.description,
                     "fields": fields,
+                    "unique_keys": unique_keys,
                     "embed_columns": meta.embed_columns,
                     "embed_strategy": meta.embed_strategy,
                     "post_ingest": post_ingest_config,
@@ -1236,6 +1392,7 @@ async def _run_dm_mode_inner(
                     "initial_chunks": initial_chunks,
                     "table_id": table_id,
                     "storage_client": gcs_client,
+                    "attempt_id": attempt_id,
                 },
                 columns=columns,
                 row_count=row_count,
@@ -1254,13 +1411,37 @@ async def _run_dm_mode_inner(
                 },
             ),
         )
+    if missing_inputs:
+        raise RuntimeError(
+            f"Ingest manifest missing table input handles for {missing_inputs}; "
+            "refusing partial ingest.",
+        )
+    if not work_items and plan.tables_meta:
+        raise RuntimeError("Ingest manifest did not produce any table work items.")
 
     def _dm_ingest_fn(item: ArtifactWorkItem) -> dict:
         pl = item.payload
+        lease = _acquire_ingest_lease(
+            artifact_store,
+            job_id=msg.job_id,
+            table_id=pl.get("table_id", ""),
+            attempt_id=pl.get("attempt_id", ""),
+        )
+        pl["lease"] = lease
+
+        def _before_insert_chunk(**_kwargs) -> None:
+            if is_cancelled and is_cancelled():
+                raise PipelineCancelled(
+                    f"Job {msg.job_id} cancelled before next DM chunk",
+                )
+            _refresh_ingest_lease(artifact_store, lease)
+
         on_complete = _make_checkpoint_callback(
             artifact_store,
             msg.job_id,
             pl.get("table_id", ""),
+            attempt_id=pl.get("attempt_id", ""),
+            lease=lease,
             initial_rows=pl.get("skip_rows", 0),
             initial_chunks=pl.get("initial_chunks", 0),
             total_rows=item.row_count,
@@ -1286,12 +1467,20 @@ async def _run_dm_mode_inner(
             chunk_size=pl["batch_size"],
             description=pl.get("description"),
             fields=pl.get("fields"),
+            unique_keys=pl.get("unique_keys"),
             embed_columns=pl.get("embed_columns"),
             embed_strategy=pl.get("embed_strategy", "off"),
             post_ingest=pl.get("post_ingest"),
             on_task_complete=on_complete,
             storage_client=pl.get("storage_client"),
             skip_rows=pl.get("skip_rows", 0),
+            expected_total_rows=item.row_count if item.row_count is not None else None,
+            private_ingest_key_column=_PRIVATE_INGEST_KEY,
+            private_ingest_key_prefix=(
+                f"{msg.dispatch_id or 'dispatch'}:{msg.job_id}:"
+                f"{pl.get('table_id', '')}"
+            ),
+            before_insert_chunk=_before_insert_chunk,
         )
         elapsed = time.perf_counter() - ingest_started
         rows_inserted = int(getattr(result, "rows_inserted", 0) or 0)
@@ -1320,7 +1509,7 @@ async def _run_dm_mode_inner(
                 ingest_fn=_dm_ingest_fn,
                 instrumentation=instrumentation,
                 source_path=plan.file_path,
-                max_workers=getattr(config.execution, "max_embed_workers", 8),
+                max_workers=1,
                 retry_config=config.retry,
                 is_cancelled=is_cancelled,
             )
@@ -1336,11 +1525,21 @@ async def _run_dm_mode_inner(
                 )
             elif error is None:
                 error = ar.error or "ingest failed"
+            if retryable_lease_error is None and _is_retryable_lease_error(ar.error):
+                retryable_lease_error = ar.error
     except PipelineCancelled:
         raise
     except Exception as exc:
         error = str(exc) or "ingest_artifacts raised"
         logger.exception("[ingest][dm] Failed for %s", plan.file_path)
+
+    if retryable_lease_error is not None:
+        raise RetryWorkItem(
+            retryable_lease_error,
+            delay_seconds=int(
+                os.environ.get("UNITY_INGEST_DUPLICATE_RETRY_DELAY", "60"),
+            ),
+        )
 
     run_ledger.write(
         PipelineStageManifest(

@@ -41,6 +41,8 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
+from unity.common.pipeline._utils import utc_now_iso
+
 logger = logging.getLogger(__name__)
 
 
@@ -778,6 +780,9 @@ async def cmd_resume(args: argparse.Namespace) -> None:
                 f"messages (if any) cannot be located in GCS.",
             )
             sys.exit(1)
+        if job.status in ("success", "error", "cancelled"):
+            print(f"Job {args.job_id} is terminal ({job.status}); nothing to resume.")
+            return
         dispatch_ids = [job.dispatch_id]
         job_filter = {args.job_id}
         job_store.resume_job(args.job_id)
@@ -804,9 +809,50 @@ async def cmd_resume(args: argparse.Namespace) -> None:
             if job_filter and item_job_id not in job_filter:
                 skipped_not_matching += 1
                 continue
+            try:
+                parked_job = job_store.read_job(item_job_id)
+                if parked_job.status in ("success", "error", "cancelled"):
+                    print(
+                        f"Skipping terminal parked job {item_job_id} "
+                        f"({parked_job.status}); deleting parked blob.",
+                    )
+                    delete_parked(artifact_store, key)
+                    continue
+            except Exception:
+                logger.debug("Could not read parked job %s before resume", item_job_id)
+            tombstone_key = f"{key}.resume.json"
+            try:
+                tombstone = artifact_store.get_json(tombstone_key)
+                if (
+                    isinstance(tombstone, dict)
+                    and tombstone.get("status") == "published"
+                ):
+                    delete_parked(artifact_store, key)
+                    continue
+            except Exception:
+                pass
             topic = str(document.get("topic") or "ingest")
             try:
-                await work_queue.publish(topic=topic, payload=payload)
+                artifact_store.put_json(
+                    tombstone_key,
+                    {
+                        "status": "publishing",
+                        "parked_key": key,
+                        "job_id": item_job_id,
+                        "updated_at": utc_now_iso(),
+                    },
+                )
+                message_id = await work_queue.publish(topic=topic, payload=payload)
+                artifact_store.put_json(
+                    tombstone_key,
+                    {
+                        "status": "published",
+                        "parked_key": key,
+                        "job_id": item_job_id,
+                        "published_message_id": message_id,
+                        "updated_at": utc_now_iso(),
+                    },
+                )
             except Exception:
                 logger.exception("Failed to republish parked message %s", key)
                 continue

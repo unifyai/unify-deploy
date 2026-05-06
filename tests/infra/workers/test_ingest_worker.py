@@ -28,6 +28,7 @@ from unity.common.pipeline.types import (
     TableMeta,
 )
 from unity_deploy.infra.workers import ingest_worker
+from unity_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
 
 
 @pytest.mark.asyncio
@@ -210,6 +211,40 @@ def test_guard_scratch_usage_treats_missing_scratch_dir_as_empty(
         run_id="run-clean",
         phase="after_durable_ingest",
     )
+
+
+def test_duplicate_live_ingest_lease_retries_before_dm_write(monkeypatch) -> None:
+    """A duplicate delivery must be rejected before any DataManager work starts."""
+
+    class Store:
+        def acquire_lease(self, *args, **kwargs):
+            raise LeaseNotAcquired(
+                "live owner",
+                lease=LeaseRecord(
+                    key="jobs/job-1/leases/ingest-table_1.json",
+                    owner_id="pod-a",
+                    attempt_id="attempt-a",
+                    stage="ingest",
+                    acquired_at="2026-05-06T00:00:00+00:00",
+                    heartbeat_at="2026-05-06T00:00:00+00:00",
+                    expires_at="2026-05-06T00:15:00+00:00",
+                    generation=3,
+                ),
+            )
+
+    monkeypatch.setenv("UNITY_INGEST_DUPLICATE_RETRY_DELAY", "7")
+
+    from unity.common.pipeline.work_queue import RetryWorkItem
+
+    with pytest.raises(RetryWorkItem) as exc:
+        ingest_worker._acquire_ingest_lease(
+            Store(),
+            job_id="job-1",
+            table_id="table_1",
+            attempt_id="attempt-b",
+        )
+
+    assert exc.value.delay_seconds == 7
 
 
 def _make_plan(

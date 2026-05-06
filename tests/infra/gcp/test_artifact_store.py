@@ -145,3 +145,36 @@ class TestJobScopedArtifactKeys:
                 artifact_format="jsonl",
                 job_id="",
             )
+
+
+class TestCheckpointSafety:
+    def test_read_checkpoint_only_treats_404_as_missing(self):
+        store = _make_store()
+        store.get_json = MagicMock(side_effect=ValueError("corrupt json"))  # type: ignore[method-assign]
+
+        with pytest.raises(ValueError, match="corrupt json"):
+            store.read_checkpoint("job-1", "table-1")
+
+    def test_write_checkpoint_rejects_non_monotonic_rows(self):
+        from unity.common.pipeline.types import IngestCheckpoint
+
+        store = _make_store()
+        blob = MagicMock()
+        blob.generation = 7
+        blob.download_as_text.return_value = (
+            '{"job_id":"job-1","artifact_id":"table-1",'
+            '"chunks_committed":2,"rows_committed":100,"last_updated":"now"}'
+        )
+        store.bucket.blob.return_value = blob
+
+        with pytest.raises(ValueError, match="non-monotonic checkpoint"):
+            store.write_checkpoint(
+                "job-1",
+                "table-1",
+                IngestCheckpoint(
+                    job_id="job-1",
+                    artifact_id="table-1",
+                    chunks_committed=3,
+                    rows_committed=90,
+                ),
+            )
