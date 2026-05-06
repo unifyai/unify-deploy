@@ -284,25 +284,29 @@ def create_unity_job(
         ttl_seconds_after_finished: Seconds after job completion before cleanup (None to disable)
     """
     try:
-        unity_config_env = [
-            {
-                "name": key,
-                "valueFrom": {
-                    "configMapKeyRef": {
-                        "name": "unity-config",
-                        "key": key,
+        optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}
+        unity_config_env = []
+        for key in (
+            "GCP_PROJECT_ID",
+            "PROJECT_ID",
+            "VERTEXAI_LOCATION",
+            "VERTEXAI_PROJECT",
+            "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE",
+        ):
+            config_ref = {
+                "name": "unity-config",
+                "key": key,
+            }
+            if key in optional_unity_config_keys:
+                config_ref["optional"] = True
+            unity_config_env.append(
+                {
+                    "name": key,
+                    "valueFrom": {
+                        "configMapKeyRef": config_ref,
                     },
                 },
-            }
-            for key in (
-                "GCP_PROJECT_ID",
-                "PROJECT_ID",
-                "VERTEXAI_LOCATION",
-                "VERTEXAI_PROJECT",
-                "UNITY_STARTUP_TIMING",
-                "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE",
             )
-        ]
         unity_secret_env = [
             {
                 "name": key,
@@ -353,6 +357,10 @@ def create_unity_job(
             {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
             {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
             {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
+            {
+                "name": "UNITY_STARTUP_TIMING",
+                "value": "1" if deploy_env == "staging" else "0",
+            },
             # Pipeline worker dispatch: route attachment ingestion through the
             # GKE parse/ingest workers via Pub/Sub (topic names are derived
             # from GCP_PROJECT_ID + DEPLOY_ENV, matching the existing
