@@ -72,24 +72,6 @@ secrets:
     required: false
     sensitive: false
 
-  # ----- Optional overrides -------------------------------------------
-  - name: EMPLOYMENTHERO_BASE_URL
-    description: >
-      API base URL override.  Defaults to https://api.employmenthero.com
-      which serves UK and AU accounts via region-routed load balancing.
-      Set to https://api.employmenthero.co.uk if a UK customer hits
-      region-mismatch errors.
-    required: false
-    sensitive: false
-
-  - name: EMPLOYMENTHERO_OAUTH_TOKEN_URL
-    description: >
-      OAuth token endpoint override.  Defaults to
-      https://oauth.employmenthero.com/oauth2/token.  Set only for
-      regional EH instances that route OAuth differently.
-    required: false
-    sensitive: false
-
 capabilities:
   # ----- Account ----------------------------------------------------------
   - id: account
