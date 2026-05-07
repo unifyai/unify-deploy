@@ -17,6 +17,7 @@ def _make_queue() -> tuple[PubSubWorkQueue, MagicMock]:
     settings.dead_letter_topic = "dlq-topic"
     settings.parse_subscription = "parse-sub"
     settings.ingest_subscription = "ingest-sub"
+    settings.dead_letter_subscription = "dlq-sub"
     subscriber = MagicMock()
     queue = PubSubWorkQueue(
         publisher=MagicMock(),
@@ -63,3 +64,38 @@ async def test_unknown_receipt_operations_fail_loudly() -> None:
 
     with pytest.raises(RuntimeError, match="source subscription"):
         await queue.ack("missing")
+
+
+@pytest.mark.asyncio
+async def test_receive_supports_dead_letter_subscription_and_attributes() -> None:
+    queue, subscriber = _make_queue()
+    message = SimpleNamespace(
+        data=b'{"kind":"ingest_requested","job_id":"job-1"}',
+        message_id="dlq-pubsub-1",
+        publish_time=None,
+        attributes={"CloudPubSubDeadLetterSourceDeliveryCount": "5"},
+    )
+    received = SimpleNamespace(
+        ack_id="dlq-ack-1",
+        message=message,
+        delivery_attempt=1,
+    )
+    subscriber.pull.return_value = SimpleNamespace(received_messages=[received])
+
+    items = await queue.receive(max_messages=1, topics=["dead_letter"])
+
+    assert items[0].source_subscription == "projects/proj/subscriptions/dlq-sub"
+    assert (
+        items[0].payload["_pubsub_attributes"][
+            "CloudPubSubDeadLetterSourceDeliveryCount"
+        ]
+        == "5"
+    )
+
+    await queue.ack("dlq-ack-1")
+    subscriber.acknowledge.assert_called_once_with(
+        request={
+            "subscription": "projects/proj/subscriptions/dlq-sub",
+            "ack_ids": ["dlq-ack-1"],
+        },
+    )

@@ -63,6 +63,7 @@ class PubSubQueueSettings(BaseSettings):
     dead_letter_topic: str = "unity-dead-letter"
     parse_subscription: str = "unity-parse-sub"
     ingest_subscription: str = "unity-ingest-sub"
+    dead_letter_subscription: str = "unity-dead-letter-sub"
     sa_key_json: str = ""
     ack_deadline_seconds: int = 600
     max_messages: int = 1

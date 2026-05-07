@@ -37,6 +37,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -114,12 +115,35 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show per-job status for a dispatch",
     )
     p_status.add_argument("--dispatch-id", required=True)
+    p_status.add_argument("--env", default="", help="Pipeline environment override")
+    p_status.add_argument("--project", default="", help="Pub/Sub project override")
+    p_status.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON",
+    )
+    p_status.add_argument("--summary-only", action="store_true")
+    p_status.add_argument("--show-events", action="store_true")
+    p_status.add_argument("--show-checkpoints", action="store_true")
+    p_status.add_argument("--show-dlq", action="store_true")
+    p_status.add_argument("--show-retry-plan", action="store_true")
     p_status.add_argument("--debug", action="store_true")
 
     # -- monitor -----------------------------------------------------------
 
     p_monitor = sub.add_parser("monitor", help="Monitor a single running job")
     p_monitor.add_argument("--job-id", required=True)
+    p_monitor.add_argument("--env", default="", help="Pipeline environment override")
+    p_monitor.add_argument("--project", default="", help="Pub/Sub project override")
+    p_monitor.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON",
+    )
+    p_monitor.add_argument("--show-events", action="store_true")
+    p_monitor.add_argument("--show-checkpoints", action="store_true")
+    p_monitor.add_argument("--show-dlq", action="store_true")
+    p_monitor.add_argument("--show-retry-plan", action="store_true")
     p_monitor.add_argument(
         "--follow",
         action="store_true",
@@ -202,12 +226,71 @@ def _build_parser() -> argparse.ArgumentParser:
     p_inspect.add_argument("--job-id", required=True)
     p_inspect.add_argument("--debug", action="store_true")
 
+    # -- reconcile DLQ ------------------------------------------------------
+
+    p_reconcile = sub.add_parser(
+        "reconcile-dlq",
+        help="Persist environment DLQ messages to GCS and mark affected jobs",
+    )
+    p_reconcile.add_argument("--env", default="", help="Pipeline environment override")
+    p_reconcile.add_argument("--project", default="", help="Pub/Sub project override")
+    p_reconcile.add_argument("--dispatch-id", default="")
+    p_reconcile.add_argument("--job-id", default="")
+    p_reconcile.add_argument("--limit", type=int, default=100)
+    p_reconcile.add_argument(
+        "--ack",
+        action="store_true",
+        help="Ack DLQ messages after durable GCS writes. Omit for dry-run.",
+    )
+    p_reconcile.add_argument("--json", action="store_true")
+    p_reconcile.add_argument("--debug", action="store_true")
+
+    # -- retry --------------------------------------------------------------
+
+    p_retry = sub.add_parser(
+        "retry",
+        help="Safely republish failed, stale, or DLQ jobs from persisted state",
+    )
+    retry_target = p_retry.add_mutually_exclusive_group(required=True)
+    retry_target.add_argument("--dispatch-id", default=None)
+    retry_target.add_argument("--job-id", default=None)
+    p_retry.add_argument("--env", default="", help="Pipeline environment override")
+    p_retry.add_argument("--project", default="", help="Pub/Sub project override")
+    p_retry.add_argument(
+        "--only",
+        action="append",
+        choices=["dlq", "stale-running", "error", "retryable"],
+        default=[],
+    )
+    p_retry.add_argument("--exclude-running-active", action="store_true", default=True)
+    p_retry.add_argument("--max-jobs", type=int, default=0)
+    p_retry.add_argument("--max-attempts", type=int, default=3)
+    p_retry.add_argument("--force", action="store_true")
+    p_retry.add_argument("--force-reingest", action="store_true")
+    p_retry.add_argument("--dry-run", action="store_true")
+    p_retry.add_argument(
+        "--execute",
+        action="store_true",
+        help="Publish retry messages",
+    )
+    p_retry.add_argument("--json", action="store_true")
+    p_retry.add_argument("--debug", action="store_true")
+
     return parser
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _apply_runtime_overrides(args: argparse.Namespace) -> None:
+    env = getattr(args, "env", "") or ""
+    project = getattr(args, "project", "") or ""
+    if env:
+        os.environ["UNITY_GCP_PIPELINE_ENVIRONMENT"] = env
+    if project:
+        os.environ["UNITY_PUBSUB_PROJECT_ID"] = project
 
 
 def _init_infra(debug: bool = False):
@@ -226,6 +309,170 @@ def _get_job_store(infra):
     job_store = infra.job_store
     assert isinstance(job_store, GcsDeploymentJobStore)
     return job_store
+
+
+def _get_artifact_store(infra):
+    from unity_deploy.infra.gcp.artifact_store import GcsArtifactStore
+
+    artifact_store = infra.artifact_store
+    assert isinstance(artifact_store, GcsArtifactStore)
+    return artifact_store
+
+
+def _queue_resources(settings) -> dict[str, str]:
+    project = settings.pubsub.project_id
+    suffix = settings.env_suffix()
+    parse_topic = f"{settings.pubsub.parse_topic}{suffix}"
+    ingest_topic = f"{settings.pubsub.ingest_topic}{suffix}"
+    dlq_topic = f"{settings.pubsub.dead_letter_topic}{suffix}"
+    parse_sub = f"{settings.pubsub.parse_subscription}{suffix}"
+    ingest_sub = f"{settings.pubsub.ingest_subscription}{suffix}"
+    dlq_sub = f"{settings.pubsub.dead_letter_subscription}{suffix}"
+    return {
+        "environment": settings.environment,
+        "project_id": project,
+        "artifact_bucket": settings.artifact_store.bucket,
+        "artifact_prefix": settings.artifact_store.prefix,
+        "parse_topic": f"projects/{project}/topics/{parse_topic}",
+        "ingest_topic": f"projects/{project}/topics/{ingest_topic}",
+        "dead_letter_topic": f"projects/{project}/topics/{dlq_topic}",
+        "parse_subscription": f"projects/{project}/subscriptions/{parse_sub}",
+        "ingest_subscription": f"projects/{project}/subscriptions/{ingest_sub}",
+        "dead_letter_subscription": (f"projects/{project}/subscriptions/{dlq_sub}"),
+    }
+
+
+def _load_job_snapshot(infra, job_id: str):
+    from unity_deploy.infra.gcp.pipeline_observability import (
+        JobObservabilitySnapshot,
+        derive_status,
+        latest_heartbeat_at,
+        list_job_checkpoints,
+        list_job_dlq_records,
+        list_job_events,
+        read_active_leases,
+    )
+
+    artifact_store = _get_artifact_store(infra)
+    try:
+        job = infra.job_store.read_job(job_id)
+        durable_status = job.status
+    except Exception:
+        job = None
+        durable_status = "unknown"
+
+    checkpoints = list_job_checkpoints(artifact_store, job_id)
+    dlq_records = list_job_dlq_records(artifact_store, job_id)
+    events = list_job_events(artifact_store, job_id)
+    heartbeat_at = latest_heartbeat_at(artifact_store, job_id)
+    leases = read_active_leases(artifact_store, job_id)
+    derived_status, retry_classification, retry_eligible = derive_status(
+        durable_status=durable_status,
+        dlq_records=dlq_records,
+        checkpoints=checkpoints,
+        heartbeat_at=heartbeat_at,
+        leases=leases,
+    )
+    latest_checkpoint = None
+    if checkpoints:
+        latest_checkpoint = max(
+            checkpoints.values(),
+            key=lambda cp: cp.last_updated or "",
+        )
+    latest_event_at = events[-1].recorded_at if events else ""
+    latest_dlq = dlq_records[-1] if dlq_records else None
+    from unity_deploy.infra.gcp.pipeline_observability import is_fresh_lease
+
+    fresh_lease = next((lease for lease in leases if is_fresh_lease(lease)), None)
+    metadata = job.metadata if job is not None else {}
+    source_file = str(metadata.get("source_file") or metadata.get("file_path") or "")
+    target_context = str(metadata.get("target_context") or "")
+    if latest_dlq and latest_dlq.payload:
+        source_file = source_file or str(
+            latest_dlq.payload.get("file_path")
+            or next(iter(latest_dlq.payload.get("file_paths", [])), ""),
+        )
+        dm_binding = latest_dlq.payload.get("dm_binding") or {}
+        if isinstance(dm_binding, dict):
+            target_context = target_context or str(
+                dm_binding.get("target_context") or "",
+            )
+    if derived_status in {"dlq", "partial-dlq"}:
+        next_action = f"pipeline_control retry --job-id {job_id} --only dlq --dry-run"
+        queue_location = "dlq"
+    elif derived_status == "running-stale":
+        next_action = (
+            f"pipeline_control retry --job-id {job_id} --only stale-running --dry-run"
+        )
+        queue_location = "none"
+    elif durable_status == "queued":
+        next_action = "wait for parse/ingest backlog or inspect queue metrics"
+        queue_location = "parse/ingest"
+    else:
+        next_action = ""
+        queue_location = "none"
+    return JobObservabilitySnapshot(
+        job_id=job_id,
+        dispatch_id=job.dispatch_id if job is not None else "",
+        durable_status=durable_status,
+        derived_status=derived_status,
+        source_file=source_file,
+        target_context=target_context,
+        last_event_at=latest_event_at,
+        latest_heartbeat_at=heartbeat_at,
+        latest_checkpoint_rows=(
+            latest_checkpoint.rows_committed if latest_checkpoint else 0
+        ),
+        latest_checkpoint_chunks=(
+            latest_checkpoint.chunks_committed if latest_checkpoint else 0
+        ),
+        latest_checkpoint_table=(
+            latest_checkpoint.artifact_id if latest_checkpoint else ""
+        ),
+        active_lease_owner=fresh_lease.owner_id if fresh_lease else "",
+        active_lease_expires_at=fresh_lease.expires_at if fresh_lease else "",
+        queue_location=queue_location,
+        delivery_attempt=latest_dlq.delivery_attempt if latest_dlq else None,
+        retry_classification=retry_classification,
+        retry_eligible=retry_eligible,
+        next_action=next_action,
+        dlq_records=dlq_records,
+        checkpoints=checkpoints,
+        events=events,
+    )
+
+
+def _mark_job_dlq(infra, record, dlq_keys: list[str]) -> None:
+    from unity.common.pipeline._utils import utc_now_iso
+
+    job_store = _get_job_store(infra)
+    try:
+        job = job_store.read_job(record.job_id)
+    except Exception:
+        return
+    if job.status not in {"success", "cancelled"}:
+        job.status = "error"
+        job.finished_at = job.finished_at or utc_now_iso()
+        job.error = (
+            f"Message moved to DLQ: topic={record.retry_topic} "
+            f"attempts={record.delivery_attempt}"
+        )
+    job.metadata = {
+        **(job.metadata or {}),
+        "queue_state": "partial-dlq" if record.checkpoint_snapshot else "dlq",
+        "derived_status": "partial-dlq" if record.checkpoint_snapshot else "dlq",
+        "dlq_record_keys": dlq_keys,
+        "dlq_message_id": record.dlq_message_id,
+        "dlq_subscription": record.dlq_subscription,
+        "dlq_recorded_at": record.recorded_at,
+        "retry_classification": record.retry_classification,
+        "previous_status": record.previous_job_status,
+    }
+    job_store.upsert_job(job)
+
+
+async def _publish_retry(infra, *, topic: str, payload: dict) -> str:
+    return await infra.work_queue.publish(topic=topic, payload=payload)
 
 
 def _resolve_embed_columns(config, file_path: str, sheet_name: str):
@@ -449,15 +696,35 @@ async def cmd_list(args: argparse.Namespace) -> None:
 
 
 async def cmd_status(args: argparse.Namespace) -> None:
-    """Show per-job status for a dispatch."""
+    """Show truthful per-job status for a dispatch."""
+    _apply_runtime_overrides(args)
     infra = _init_infra(debug=args.debug)
     job_store = _get_job_store(infra)
-    settings = infra.settings
 
     try:
         manifest = job_store.read_dispatch(args.dispatch_id)
     except Exception:
         print(f"Dispatch {args.dispatch_id} not found")
+        return
+
+    resources = _queue_resources(infra.settings)
+    snapshots = [_load_job_snapshot(infra, jid) for jid in manifest.job_ids]
+    counts: dict[str, int] = {}
+    for snap in snapshots:
+        counts[snap.derived_status] = counts.get(snap.derived_status, 0) + 1
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "dispatch": manifest.model_dump(mode="json"),
+                    "resources": resources,
+                    "counts": counts,
+                    "jobs": [snap.model_dump(mode="json") for snap in snapshots],
+                },
+                indent=2,
+            ),
+        )
         return
 
     created = manifest.created_at[:19].replace("T", " ") if manifest.created_at else "?"
@@ -467,69 +734,88 @@ async def cmd_status(args: argparse.Namespace) -> None:
     print(f"Created:  {created}")
     print(f"Config:   {manifest.config_path or '(ad-hoc)'}")
     print(f"Files:    {manifest.total_files}")
+    print("\nEnvironment / Resources:")
+    for key, value in resources.items():
+        print(f"  {key}: {value or '(unset)'}")
     print()
 
-    hdr = f"  {'JOB_ID':<34} {'STATUS':<12} {'STARTED':<20} {'FINISHED':<20}"
+    hdr = (
+        f"  {'JOB_ID':<34} {'JOB_STATUS':<11} {'DERIVED':<15} "
+        f"{'QUEUE':<10} {'ROWS':>10} {'CHUNKS':>7} {'DLQ_ATT':>7} ACTION"
+    )
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
 
-    status_counts: dict[str, int] = {}
-    for jid in manifest.job_ids:
-        try:
-            job = job_store.read_job(jid)
-            st = job.status
-            started = (job.started_at or "")[:19].replace("T", " ")
-            finished = (job.finished_at or "")[:19].replace("T", " ")
-        except Exception:
-            st = "unknown"
-            started = ""
-            finished = ""
-        status_counts[st] = status_counts.get(st, 0) + 1
-        print(f"  {jid:<34} {st:<12} {started:<20} {finished:<20}")
+    for snap in snapshots:
+        action = snap.next_action if args.show_retry_plan else ""
+        print(
+            f"  {snap.job_id:<34} {snap.durable_status:<11} "
+            f"{snap.derived_status:<15} {snap.queue_location:<10} "
+            f"{snap.latest_checkpoint_rows:>10} {snap.latest_checkpoint_chunks:>7} "
+            f"{str(snap.delivery_attempt or ''):>7} {action}",
+        )
 
     print()
-    parts = []
-    for s in (
-        "success",
-        "running",
-        "queued",
-        "paused",
-        "error",
-        "cancelled",
-        "unknown",
-    ):
-        cnt = status_counts.get(s, 0)
-        if cnt:
-            parts.append(f"{cnt} {s}")
-    print(f"  Summary: {', '.join(parts)}")
+    ordered_counts = ", ".join(
+        f"{count} {status}" for status, count in sorted(counts.items())
+    )
+    print(f"  Summary: {ordered_counts or 'no jobs'}")
 
-    # Show run ledger entries for each job
-    bucket = infra.storage_client.bucket(settings.artifact_store.bucket)
-    prefix_str = settings.artifact_store.prefix.strip("/")
-    for jid in manifest.job_ids:
-        job_root = f"{prefix_str}/jobs/{jid}" if prefix_str else f"jobs/{jid}"
-        ledger_key = f"{job_root}/run_ledger.jsonl"
-        try:
-            blob = bucket.blob(ledger_key)
-            if not blob.exists():
-                continue
-            content = blob.download_as_text(encoding="utf-8")
-            lines = [ln for ln in content.strip().split("\n") if ln.strip()]
-            if lines:
-                print(f"\n  Ledger for {jid[:12]}...:")
-                for line in lines[-5:]:
-                    entry = json.loads(line)
-                    stage = entry.get("stage_name", "?")
-                    status = entry.get("status", "?")
-                    dur = entry.get("duration_ms", 0)
-                    fp = Path(entry.get("file_path", "?")).name
-                    print(f"    [{status}] {stage}: {fp} ({dur:.0f}ms)")
-        except Exception:
-            pass
+    retryable = [snap for snap in snapshots if snap.retry_eligible]
+    non_retryable_dlq = [
+        snap for snap in snapshots if snap.dlq_records and not snap.retry_eligible
+    ]
+    if retryable:
+        print("\nRetryable / Operator-Retryable Jobs:")
+        for snap in retryable:
+            print(
+                f"  {snap.job_id}: {snap.derived_status} "
+                f"class={snap.retry_classification} cmd={snap.next_action}",
+            )
+    if non_retryable_dlq:
+        print("\nNon-Retryable DLQ Jobs:")
+        for snap in non_retryable_dlq:
+            latest = snap.dlq_records[-1]
+            print(
+                f"  {snap.job_id}: class={latest.retry_classification} "
+                f"error={latest.error or '(native DLQ; inspect record)'}",
+            )
+    if args.summary_only:
+        return
+
+    if args.show_dlq:
+        print("\nDLQ Records:")
+        for snap in snapshots:
+            for record in snap.dlq_records[-3:]:
+                print(
+                    f"  {snap.job_id}: msg={record.dlq_message_id} "
+                    f"topic={record.retry_topic} attempts={record.delivery_attempt} "
+                    f"class={record.retry_classification} at={record.recorded_at}",
+                )
+    if args.show_checkpoints:
+        print("\nCheckpoint Progress:")
+        for snap in snapshots:
+            for artifact_id, checkpoint in snap.checkpoints.items():
+                print(
+                    f"  {snap.job_id}/{artifact_id}: "
+                    f"rows={checkpoint.rows_committed} "
+                    f"chunks={checkpoint.chunks_committed} "
+                    f"updated={checkpoint.last_updated}",
+                )
+    if args.show_events:
+        print("\nLatest Events:")
+        for snap in snapshots:
+            for event in snap.events[-5:]:
+                print(
+                    f"  {snap.job_id}: {event.recorded_at} "
+                    f"{event.event_type} stage={event.stage} action={event.next_action} "
+                    f"err={event.error_message}",
+                )
 
 
 async def cmd_monitor(args: argparse.Namespace) -> None:
     """Read progress and run ledger from GCS for a single job."""
+    _apply_runtime_overrides(args)
     infra = _init_infra(debug=args.debug)
     settings = infra.settings
 
@@ -540,9 +826,31 @@ async def cmd_monitor(args: argparse.Namespace) -> None:
             print(f"Job {args.job_id} not found")
             return
 
+        snap = _load_job_snapshot(infra, args.job_id)
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "resources": _queue_resources(settings),
+                        "job": job.model_dump(mode="json"),
+                        "snapshot": snap.model_dump(mode="json"),
+                    },
+                    indent=2,
+                ),
+            )
+            if not args.follow or job.status in ("success", "error", "cancelled"):
+                break
+            await asyncio.sleep(args.interval)
+            continue
+
         print(f"\n{'='*60}")
         print(f"Job: {job.job_id}")
-        print(f"Status: {job.status}")
+        print(f"Durable Status: {job.status}")
+        print(f"Derived Status: {snap.derived_status}")
+        print(f"Queue Location: {snap.queue_location}")
+        print(f"Retry Eligibility: {snap.retry_eligible} ({snap.retry_classification})")
+        if snap.next_action:
+            print(f"Recommended Action: {snap.next_action}")
         if job.dispatch_id:
             print(f"Dispatch: {job.dispatch_id}")
         if job.started_at:
@@ -555,6 +863,24 @@ async def cmd_monitor(args: argparse.Namespace) -> None:
             print(f"Error: {job.error}")
         if job.metadata:
             print(f"Metadata: {json.dumps(job.metadata, indent=2)}")
+        if snap.latest_heartbeat_at:
+            print(f"Latest heartbeat: {snap.latest_heartbeat_at}")
+        if snap.active_lease_owner:
+            print(
+                f"Active lease: owner={snap.active_lease_owner} "
+                f"expires={snap.active_lease_expires_at}",
+            )
+        if snap.latest_checkpoint_table:
+            print(
+                f"Latest checkpoint: table={snap.latest_checkpoint_table} "
+                f"rows={snap.latest_checkpoint_rows} "
+                f"chunks={snap.latest_checkpoint_chunks}",
+            )
+        if snap.derived_status in {"dlq", "partial-dlq"}:
+            print(
+                "WARNING: job is not actively running; a persisted DLQ record "
+                "exists for its queue message.",
+            )
 
         prefix = settings.artifact_store.prefix.strip("/")
         job_root = f"{prefix}/jobs/{args.job_id}" if prefix else f"jobs/{args.job_id}"
@@ -576,11 +902,337 @@ async def cmd_monitor(args: argparse.Namespace) -> None:
         except Exception:
             pass
 
+        if args.show_dlq or snap.dlq_records:
+            print(f"\nDLQ records ({len(snap.dlq_records)}):")
+            for record in snap.dlq_records[-10:]:
+                print(
+                    f"  msg={record.dlq_message_id} topic={record.retry_topic} "
+                    f"attempts={record.delivery_attempt} "
+                    f"class={record.retry_classification} at={record.recorded_at}",
+                )
+                if record.error:
+                    print(f"    error={record.error}")
+        if args.show_checkpoints:
+            print(f"\nCheckpoints ({len(snap.checkpoints)}):")
+            for artifact_id, checkpoint in snap.checkpoints.items():
+                print(
+                    f"  {artifact_id}: rows={checkpoint.rows_committed} "
+                    f"chunks={checkpoint.chunks_committed} "
+                    f"updated={checkpoint.last_updated}",
+                )
+        if args.show_events:
+            print(f"\nEvents ({len(snap.events)}):")
+            for event in snap.events[-20:]:
+                print(
+                    f"  {event.recorded_at} {event.event_type} stage={event.stage} "
+                    f"action={event.next_action} err={event.error_message}",
+                )
+
         if not args.follow or job.status in ("success", "error", "cancelled"):
             break
 
         print(f"\nPolling in {args.interval}s...")
         await asyncio.sleep(args.interval)
+
+
+async def cmd_reconcile_dlq(args: argparse.Namespace) -> None:
+    """Persist DLQ messages to GCS and update job status metadata."""
+    from unity_deploy.infra.gcp.pipeline_observability import (
+        PipelineJobEvent,
+        checkpoint_snapshot,
+        dlq_record_from_received_item,
+        list_job_checkpoints,
+        write_dlq_record,
+        write_job_event,
+    )
+
+    _apply_runtime_overrides(args)
+    infra = _init_infra(debug=args.debug)
+    artifact_store = _get_artifact_store(infra)
+    resources = _queue_resources(infra.settings)
+    items = await infra.work_queue.receive(
+        max_messages=max(1, args.limit),
+        topics=["dead_letter"],
+    )
+    results = []
+    for item in items:
+        payload = item.payload or {}
+        inner = (
+            payload.get("payload")
+            if isinstance(payload.get("payload"), dict)
+            else payload
+        )
+        job_id = str(inner.get("job_id") or "")
+        dispatch_id = str(inner.get("dispatch_id") or "")
+        if args.job_id and job_id != args.job_id:
+            await infra.work_queue.retry(
+                item.receipt_id,
+                error="dlq-reconcile filter mismatch",
+                delay_seconds=0,
+            )
+            continue
+        if args.dispatch_id and dispatch_id != args.dispatch_id:
+            await infra.work_queue.retry(
+                item.receipt_id,
+                error="dlq-reconcile filter mismatch",
+                delay_seconds=0,
+            )
+            continue
+        try:
+            previous_status = ""
+            try:
+                previous_status = infra.job_store.read_job(job_id).status
+            except Exception:
+                pass
+            checkpoints = list_job_checkpoints(artifact_store, job_id) if job_id else {}
+            record = dlq_record_from_received_item(
+                item,
+                environment=infra.settings.environment,
+                project_id=infra.settings.pubsub.project_id,
+                dlq_subscription=resources["dead_letter_subscription"],
+                checkpoint_snapshot=checkpoint_snapshot(checkpoints),
+                previous_job_status=previous_status,
+            )
+            if not record.job_id:
+                record.job_id = job_id or "unknown"
+            if not record.dispatch_id:
+                record.dispatch_id = dispatch_id
+            dlq_keys = [] if not args.ack else write_dlq_record(artifact_store, record)
+            event = PipelineJobEvent(
+                event_type="native_dlq_reconciled",
+                environment=infra.settings.environment,
+                project_id=infra.settings.pubsub.project_id,
+                job_id=record.job_id,
+                dispatch_id=record.dispatch_id,
+                stage=record.retry_topic,
+                pubsub_message_id=record.dlq_message_id,
+                delivery_attempt=record.delivery_attempt,
+                source_subscription=record.source_subscription,
+                retry_classification=record.retry_classification,
+                next_action="acked_dlq" if args.ack else "dry_run",
+                metadata={"dlq_record_keys": dlq_keys},
+            )
+            if args.ack:
+                write_job_event(artifact_store, event)
+                _mark_job_dlq(infra, record, dlq_keys)
+                await infra.work_queue.ack(item.receipt_id)
+            else:
+                await infra.work_queue.retry(
+                    item.receipt_id,
+                    error="dlq-reconcile dry-run",
+                    delay_seconds=0,
+                )
+            results.append(
+                {
+                    "job_id": record.job_id,
+                    "dispatch_id": record.dispatch_id,
+                    "topic": record.retry_topic,
+                    "delivery_attempt": record.delivery_attempt,
+                    "classification": record.retry_classification,
+                    "acked": bool(args.ack),
+                    "keys": dlq_keys,
+                },
+            )
+        except Exception as exc:
+            await infra.work_queue.retry(
+                item.receipt_id,
+                error=f"dlq-reconcile failed before durable write: {exc}",
+                delay_seconds=0,
+            )
+            raise
+
+    if args.json:
+        print(json.dumps({"resources": resources, "results": results}, indent=2))
+        return
+    print("DLQ reconciliation resources:")
+    for key, value in resources.items():
+        print(f"  {key}: {value or '(unset)'}")
+    mode = "ACKING after durable write" if args.ack else "DRY-RUN only; no DLQ acks"
+    print(f"\nMode: {mode}")
+    print(f"Pulled {len(items)} DLQ message(s), matched {len(results)}.")
+    for row in results:
+        print(
+            f"  job={row['job_id']} dispatch={row['dispatch_id']} "
+            f"topic={row['topic']} attempts={row['delivery_attempt']} "
+            f"class={row['classification']} acked={row['acked']}",
+        )
+
+
+async def cmd_retry(args: argparse.Namespace) -> None:
+    """Safely retry DLQ/stale/error jobs from persisted payloads."""
+    from unity_deploy.infra.gcp.pipeline_observability import (
+        PipelineJobEvent,
+        write_job_event,
+    )
+
+    _apply_runtime_overrides(args)
+    infra = _init_infra(debug=args.debug)
+    job_store = _get_job_store(infra)
+    artifact_store = _get_artifact_store(infra)
+    resources = _queue_resources(infra.settings)
+    execute = bool(args.execute and not args.dry_run)
+    target_jobs: list[str] = []
+    if args.job_id:
+        target_jobs = [args.job_id]
+    else:
+        manifest = job_store.read_dispatch(args.dispatch_id)
+        target_jobs = list(manifest.job_ids)
+
+    only = set(args.only or [])
+    if not only:
+        only = {"dlq", "stale-running", "error", "retryable"}
+
+    plan: list[dict] = []
+    skipped: list[dict] = []
+    for job_id in target_jobs:
+        snap = _load_job_snapshot(infra, job_id)
+        reasons: list[str] = []
+        if snap.durable_status == "success" and not args.force_reingest:
+            skipped.append({"job_id": job_id, "reason": "success"})
+            continue
+        if snap.derived_status == "running-active" and not args.force:
+            skipped.append({"job_id": job_id, "reason": "fresh lease or heartbeat"})
+            continue
+        if snap.dlq_records and "dlq" in only:
+            reasons.append("dlq")
+        if snap.derived_status == "running-stale" and "stale-running" in only:
+            reasons.append("stale-running")
+        if snap.durable_status == "error" and "error" in only:
+            reasons.append("error")
+        if snap.retry_eligible and "retryable" in only:
+            reasons.append("retryable")
+        if not reasons:
+            skipped.append(
+                {"job_id": job_id, "reason": f"filtered ({snap.derived_status})"},
+            )
+            continue
+        if snap.retry_classification == "non_retryable" and not args.force:
+            skipped.append({"job_id": job_id, "reason": "non-retryable classification"})
+            continue
+        retry_attempt = 1
+        try:
+            job = job_store.read_job(job_id)
+            retry_attempt = int((job.metadata or {}).get("retry_attempt", 0)) + 1
+            if retry_attempt > args.max_attempts and not args.force:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "reason": f"retry budget exhausted ({retry_attempt})",
+                    },
+                )
+                continue
+        except Exception:
+            job = None
+        if not snap.dlq_records:
+            skipped.append({"job_id": job_id, "reason": "no persisted DLQ payload"})
+            continue
+        record = snap.dlq_records[-1]
+        if record.retry_topic not in {"parse", "ingest"}:
+            skipped.append({"job_id": job_id, "reason": "unknown retry topic"})
+            continue
+        plan.append(
+            {
+                "job_id": job_id,
+                "dispatch_id": snap.dispatch_id,
+                "topic": record.retry_topic,
+                "payload": record.payload,
+                "dlq_message_id": record.dlq_message_id,
+                "checkpoint_rows": snap.latest_checkpoint_rows,
+                "checkpoint_chunks": snap.latest_checkpoint_chunks,
+                "retry_attempt": retry_attempt,
+                "reasons": sorted(set(reasons)),
+            },
+        )
+        if args.max_jobs and len(plan) >= args.max_jobs:
+            break
+
+    published: list[dict] = []
+    if execute:
+        for item in plan:
+            event = PipelineJobEvent(
+                event_type="retry_publish_requested",
+                environment=infra.settings.environment,
+                project_id=infra.settings.pubsub.project_id,
+                job_id=item["job_id"],
+                dispatch_id=item["dispatch_id"],
+                stage=item["topic"],
+                next_action="publish_retry",
+                metadata={
+                    "dlq_message_id": item["dlq_message_id"],
+                    "retry_attempt": item["retry_attempt"],
+                    "reasons": item["reasons"],
+                },
+            )
+            write_job_event(artifact_store, event)
+            try:
+                message_id = await _publish_retry(
+                    infra,
+                    topic=item["topic"],
+                    payload=item["payload"],
+                )
+                if job_store:
+                    job = job_store.read_job(item["job_id"])
+                    previous_status = job.status
+                    job.status = "queued"
+                    job.finished_at = None
+                    job.error = None
+                    job.metadata = {
+                        **(job.metadata or {}),
+                        "retry_attempt": item["retry_attempt"],
+                        "retry_reason": ",".join(item["reasons"]),
+                        "retry_source": "pipeline_control retry",
+                        "previous_status": previous_status,
+                        "last_retry_message_id": message_id,
+                    }
+                    job_store.upsert_job(job)
+                write_job_event(
+                    artifact_store,
+                    event.model_copy(
+                        update={
+                            "event_type": "retry_published",
+                            "pubsub_message_id": message_id,
+                            "next_action": "queued",
+                        },
+                    ),
+                )
+                published.append({"job_id": item["job_id"], "message_id": message_id})
+            except Exception as exc:
+                write_job_event(
+                    artifact_store,
+                    event.model_copy(
+                        update={
+                            "event_type": "retry_publish_failed",
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                            "next_action": "kept_prior_state",
+                        },
+                    ),
+                )
+                raise
+
+    result = {
+        "resources": resources,
+        "dry_run": not execute,
+        "plan": plan,
+        "skipped": skipped,
+        "published": published,
+    }
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+        return
+    print("Retry resources:")
+    for key, value in resources.items():
+        print(f"  {key}: {value or '(unset)'}")
+    print(f"\nMode: {'EXECUTE' if execute else 'DRY-RUN'}")
+    print(f"Would retry {len(plan)} job(s); skipped {len(skipped)}.")
+    for item in plan:
+        print(
+            f"  RETRY job={item['job_id']} topic={item['topic']} "
+            f"checkpoint_rows={item['checkpoint_rows']} "
+            f"attempt={item['retry_attempt']} reasons={','.join(item['reasons'])}",
+        )
+    for item in skipped[:20]:
+        print(f"  SKIP job={item['job_id']} reason={item['reason']}")
 
 
 async def cmd_cancel(args: argparse.Namespace) -> None:
@@ -998,6 +1650,8 @@ def main() -> None:
         "cancel": cmd_cancel,
         "pause": cmd_pause,
         "resume": cmd_resume,
+        "reconcile-dlq": cmd_reconcile_dlq,
+        "retry": cmd_retry,
         "delete": cmd_delete,
         "inspect": cmd_inspect,
     }
