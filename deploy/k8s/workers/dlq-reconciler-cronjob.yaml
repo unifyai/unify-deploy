@@ -28,7 +28,7 @@ spec:
           restartPolicy: Never
           containers:
           - name: dlq-reconciler
-            image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest
+            image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
             command:
             - python
             - -m
@@ -47,7 +47,7 @@ spec:
             - name: UNITY_PUBSUB_PROJECT_ID
               value: "gcp-project-runtime"
             - name: ORCHESTRA_URL
-              value: "https://api-staging.unify.ai/v0"
+              value: "https://internal.example.com/v0"
 ---
 apiVersion: batch/v1
 kind: CronJob
