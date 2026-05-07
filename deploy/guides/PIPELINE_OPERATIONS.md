@@ -271,7 +271,9 @@ environments.
 
 `deploy/k8s/workers/dlq-reconciler-cronjob.yaml` drains each environment's
 DLQ subscription into durable GCS DLQ records every 10 minutes, then updates
-job metadata/status and acks only after durable writes.
+job metadata/status and acks only after durable writes. It does not
+automatically retry jobs; retry remains an explicit operator action until
+the bounded auto-retry policy is implemented.
 
 Verify:
 
@@ -283,6 +285,59 @@ kubectl get cronjob unity-failed-pod-gc -n production
 kubectl get cronjob unity-pipeline-dlq-reconciler -n staging
 kubectl get cronjob unity-pipeline-dlq-reconciler -n production
 ```
+
+## DLQ Recovery Runbook
+
+The DLQ reconciler makes queue fate visible by writing durable records under
+`jobs/<job_id>/dlq/` and `dispatches/<dispatch_id>/dlq/`. It runs every 10
+minutes per environment and acks DLQ messages only after those records are
+written. It does not requeue work automatically.
+
+Always resolve the environment explicitly before retrying so the CLI reads
+the matching artifact bucket and Pub/Sub topics:
+
+```bash
+UNITY_GCP_PIPELINE_ENVIRONMENT=production \
+UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
+UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
+uv run python -m unity_deploy.infra.cli.pipeline_control status \
+  --env production \
+  --dispatch-id <dispatch-id> \
+  --show-dlq \
+  --show-checkpoints \
+  --show-retry-plan
+```
+
+Dry-run the retry plan first. This should list only DLQ/stale/error jobs to
+retry and skip successful or actively running jobs:
+
+```bash
+UNITY_GCP_PIPELINE_ENVIRONMENT=production \
+UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
+UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
+uv run python -m unity_deploy.infra.cli.pipeline_control retry \
+  --env production \
+  --dispatch-id <dispatch-id> \
+  --only dlq \
+  --dry-run
+```
+
+After confirming the skipped/retry sets are correct, publish retry messages:
+
+```bash
+UNITY_GCP_PIPELINE_ENVIRONMENT=production \
+UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
+UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
+uv run python -m unity_deploy.infra.cli.pipeline_control retry \
+  --env production \
+  --dispatch-id <dispatch-id> \
+  --only dlq \
+  --execute
+```
+
+For staging, use `UNITY_GCP_PIPELINE_ENVIRONMENT=staging`,
+`UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts-staging`, and
+`--env staging`.
 
 ## HPA And External Metrics
 

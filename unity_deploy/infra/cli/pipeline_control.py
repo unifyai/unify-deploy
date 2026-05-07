@@ -13,6 +13,8 @@ Commands:
                 original publish order
     delete   -- Purge all GCS artifacts for a dispatch
     inspect  -- Read parse manifests and display table schemas/samples
+    reconcile-dlq -- Persist Pub/Sub DLQ messages to GCS and mark jobs visible
+    retry    -- Safely re-publish persisted DLQ/stale/error jobs
 
 Usage:
     python -m unity_deploy.infra.cli.pipeline_control submit \\
@@ -29,6 +31,11 @@ Usage:
     python -m unity_deploy.infra.cli.pipeline_control delete --dispatch-id <id> --confirm
     python -m unity_deploy.infra.cli.pipeline_control monitor --job-id <id>
     python -m unity_deploy.infra.cli.pipeline_control inspect --job-id <id>
+    python -m unity_deploy.infra.cli.pipeline_control reconcile-dlq --env staging --ack
+    python -m unity_deploy.infra.cli.pipeline_control retry --env production \\
+        --dispatch-id <id> --only dlq --dry-run
+    python -m unity_deploy.infra.cli.pipeline_control retry --env production \\
+        --dispatch-id <id> --only dlq --execute
 """
 
 from __future__ import annotations
@@ -763,7 +770,9 @@ async def cmd_status(args: argparse.Namespace) -> None:
 
     retryable = [snap for snap in snapshots if snap.retry_eligible]
     non_retryable_dlq = [
-        snap for snap in snapshots if snap.dlq_records and not snap.retry_eligible
+        snap
+        for snap in snapshots
+        if snap.dlq_records and snap.retry_classification == "non_retryable"
     ]
     if retryable:
         print("\nRetryable / Operator-Retryable Jobs:")
@@ -941,6 +950,7 @@ async def cmd_reconcile_dlq(args: argparse.Namespace) -> None:
         PipelineJobEvent,
         checkpoint_snapshot,
         dlq_record_from_received_item,
+        extract_queue_identity,
         list_job_checkpoints,
         write_dlq_record,
         write_job_event,
@@ -957,13 +967,9 @@ async def cmd_reconcile_dlq(args: argparse.Namespace) -> None:
     results = []
     for item in items:
         payload = item.payload or {}
-        inner = (
-            payload.get("payload")
-            if isinstance(payload.get("payload"), dict)
-            else payload
-        )
-        job_id = str(inner.get("job_id") or "")
-        dispatch_id = str(inner.get("dispatch_id") or "")
+        identity = extract_queue_identity(payload)
+        job_id = identity.job_id
+        dispatch_id = identity.dispatch_id
         if args.job_id and job_id != args.job_id:
             await infra.work_queue.retry(
                 item.receipt_id,
@@ -980,8 +986,12 @@ async def cmd_reconcile_dlq(args: argparse.Namespace) -> None:
             continue
         try:
             previous_status = ""
+            job = None
             try:
-                previous_status = infra.job_store.read_job(job_id).status
+                job = infra.job_store.read_job(job_id) if job_id else None
+                previous_status = job.status if job is not None else ""
+                if not dispatch_id and job is not None:
+                    dispatch_id = str(job.dispatch_id or "")
             except Exception:
                 pass
             checkpoints = list_job_checkpoints(artifact_store, job_id) if job_id else {}

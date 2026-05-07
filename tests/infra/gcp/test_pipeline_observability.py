@@ -7,6 +7,7 @@ from unity_deploy.infra.gcp.pipeline_observability import (
     classify_error,
     derive_status,
     dlq_record_from_received_item,
+    extract_queue_identity,
 )
 
 
@@ -79,6 +80,37 @@ def test_app_dead_letter_record_uses_wrapped_payload_and_error() -> None:
     assert record.error == "connection timeout"
 
 
+def test_legacy_app_dead_letter_extracts_job_from_error_string() -> None:
+    item = ReceivedWorkItem(
+        message_id="dlq-msg-legacy",
+        topic="dead_letter",
+        payload={
+            "original_receipt_id": "ack-old",
+            "error": (
+                "ingest worker /tmp usage exceeded guard threshold "
+                "(job=3dfd0781edfb4a0f8686ee03b8c2754e, phase=after_staging)"
+            ),
+            "dead_lettered_at": "2026-05-05T20:45:47.759547+00:00",
+        },
+        receipt_id="ack-legacy",
+        pubsub_message_id="dlq-msg-legacy",
+        source_subscription="projects/proj/subscriptions/unity-dead-letter-sub-staging",
+    )
+
+    identity = extract_queue_identity(item.payload)
+    record = dlq_record_from_received_item(
+        item,
+        environment="staging",
+        project_id="proj",
+        dlq_subscription="projects/proj/subscriptions/unity-dead-letter-sub-staging",
+    )
+
+    assert identity.job_id == "3dfd0781edfb4a0f8686ee03b8c2754e"
+    assert identity.topic == "unknown"
+    assert record.job_id == "3dfd0781edfb4a0f8686ee03b8c2754e"
+    assert record.payload["error"].startswith("ingest worker /tmp usage exceeded")
+
+
 def test_running_with_dlq_and_checkpoint_derives_partial_dlq() -> None:
     derived, classification, retryable = derive_status(
         durable_status="running",
@@ -102,6 +134,41 @@ def test_running_with_dlq_and_checkpoint_derives_partial_dlq() -> None:
         checkpoints={
             "table-1": IngestCheckpoint(
                 job_id="job-3",
+                artifact_id="table-1",
+                rows_committed=100,
+                chunks_committed=2,
+            ),
+        },
+    )
+
+    assert derived == "partial-dlq"
+    assert classification == "operator_retryable"
+    assert retryable is True
+
+
+def test_error_with_dlq_and_checkpoint_still_derives_partial_dlq() -> None:
+    record = dlq_record_from_received_item(
+        ReceivedWorkItem(
+            message_id="dlq-msg-error",
+            topic="dead_letter",
+            payload={
+                "kind": "ingest_requested",
+                "job_id": "job-error",
+                "dispatch_id": "dispatch-error",
+            },
+            receipt_id="ack-error",
+        ),
+        environment="production",
+        project_id="proj",
+        dlq_subscription="projects/proj/subscriptions/dlq",
+    )
+
+    derived, classification, retryable = derive_status(
+        durable_status="error",
+        dlq_records=[record],
+        checkpoints={
+            "table-1": IngestCheckpoint(
+                job_id="job-error",
                 artifact_id="table-1",
                 rows_committed=100,
                 chunks_committed=2,
