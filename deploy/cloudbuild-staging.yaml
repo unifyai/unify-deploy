@@ -143,9 +143,9 @@ steps:
       fi
 
       echo "Waiting for $$deployment to create a new ReplicaSet..."
-      deadline=$$(($$SECONDS + 300))
+      rs_deadline=$$(($$SECONDS + 300))
       new_rs=""
-      while [ "$$SECONDS" -lt "$$deadline" ]; do
+      while [ "$$SECONDS" -lt "$$rs_deadline" ]; do
         candidate="$$(latest_replicaset "$$deployment" "$$namespace" || true)"
         if [ -n "$$candidate" ] && [ "$$candidate" != "$$previous_rs" ]; then
           new_rs="$$candidate"
@@ -161,12 +161,23 @@ steps:
       fi
 
       echo "Waiting for new ReplicaSet $$new_rs to have $$desired available replica(s)..."
-      while [ "$$SECONDS" -lt "$$deadline" ]; do
+      availability_deadline=$$(($$SECONDS + 900))
+      next_log=$$SECONDS
+      while [ "$$SECONDS" -lt "$$availability_deadline" ]; do
         available="$$(kubectl get rs "$$new_rs" -n "$$namespace" -o jsonpath='{.status.availableReplicas}')"
         available="$${available:-0}"
         if [ "$$available" -ge "$$desired" ]; then
           echo "$$deployment new ReplicaSet $$new_rs is available ($$available/$$desired)."
           return 0
+        fi
+        if [ "$$SECONDS" -ge "$$next_log" ]; then
+          ready="$$(kubectl get rs "$$new_rs" -n "$$namespace" -o jsonpath='{.status.readyReplicas}')"
+          ready="$${ready:-0}"
+          current="$$(kubectl get rs "$$new_rs" -n "$$namespace" -o jsonpath='{.status.replicas}')"
+          current="$${current:-0}"
+          echo "$$deployment/$$new_rs progress: current=$$current ready=$$ready available=$$available desired=$$desired"
+          kubectl get pods -n "$$namespace" -l "app=$$deployment" -o wide || true
+          next_log=$$(($$SECONDS + 30))
         fi
         sleep 5
       done
@@ -174,6 +185,8 @@ steps:
       echo "Timed out waiting for new ReplicaSet $$new_rs to become available" >&2
       kubectl describe deployment "$$deployment" -n "$$namespace" || true
       kubectl describe rs "$$new_rs" -n "$$namespace" || true
+      pod_hash="$${new_rs#$$deployment-}"
+      kubectl describe pods -n "$$namespace" -l "app=$$deployment,pod-template-hash=$$pod_hash" || true
       return 1
     }
 

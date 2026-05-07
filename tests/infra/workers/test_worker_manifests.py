@@ -64,3 +64,15 @@ def test_cloud_build_deployment_reconcile_is_control_plane_only() -> None:
         text = (ROOT / relative_path).read_text()
         assert "--planes control-plane \\" in text
         assert "--planes control-plane,runtime" not in text
+
+
+def test_cloud_build_worker_rollout_has_independent_availability_timeout() -> None:
+    for relative_path in [
+        "deploy/cloudbuild-staging.yaml",
+        "deploy/cloudbuild.yaml",
+    ]:
+        text = (ROOT / relative_path).read_text()
+        assert "rs_deadline=$$(($$SECONDS + 300))" in text
+        assert "availability_deadline=$$(($$SECONDS + 900))" in text
+        assert "progress: current=$$current ready=$$ready available=$$available" in text
+        assert 'kubectl describe pods -n "$$namespace"' in text
