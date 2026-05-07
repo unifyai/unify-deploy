@@ -31,6 +31,7 @@ async def main() -> None:
 
     from unity.common.pipeline.work_queue import RetryWorkItem
 
+    from .pipeline_events import record_worker_event
     from .parse_worker import handle_parse_message
     from .worker_utils import (
         LeaseExtender,
@@ -113,11 +114,34 @@ async def main() -> None:
                     )
                     lease_extender.start()
                     lease_outcome = "error"
+                    record_worker_event(
+                        infra,
+                        item,
+                        event_type="message_received",
+                        stage="parse",
+                        next_action="handle_parse_message",
+                    )
                     try:
                         await handle_parse_message(item, infra=infra)
+                        record_worker_event(
+                            infra,
+                            item,
+                            event_type="message_ack_requested",
+                            stage="parse",
+                            next_action="ack",
+                        )
                         await infra.work_queue.ack(item.receipt_id)
                         lease_outcome = "ack"
                     except RetryWorkItem as exc:
+                        record_worker_event(
+                            infra,
+                            item,
+                            event_type="message_retry_requested",
+                            stage="parse",
+                            error=str(exc),
+                            next_action="nack",
+                            metadata={"delay_seconds": exc.delay_seconds},
+                        )
                         await infra.work_queue.retry(
                             item.receipt_id,
                             error=str(exc),
@@ -126,6 +150,14 @@ async def main() -> None:
                         lease_outcome = "error"
                     except Exception as exc:
                         logger.exception("Parse message failed")
+                        record_worker_event(
+                            infra,
+                            item,
+                            event_type="app_dead_letter_requested",
+                            stage="parse",
+                            error=str(exc),
+                            next_action="dead_letter",
+                        )
                         await infra.work_queue.dead_letter(
                             item.receipt_id,
                             error=str(exc),

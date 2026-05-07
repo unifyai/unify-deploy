@@ -65,6 +65,10 @@ from unity_deploy.infra.gcp.artifact_store import (
     LeaseRecord,
     StaleLeaseError,
 )
+from unity_deploy.infra.gcp.pipeline_observability import (
+    PipelineJobEvent,
+    write_job_event,
+)
 
 if TYPE_CHECKING:
     from .worker_utils import WorkerInfra
@@ -505,6 +509,32 @@ def _make_checkpoint_callback(
                 attempt_id=attempt_id,
                 lease_generation=lease.generation if lease is not None else None,
             )
+            try:
+                write_job_event(
+                    artifact_store,
+                    PipelineJobEvent(
+                        event_type="checkpoint_progress",
+                        job_id=job_id,
+                        stage="ingest",
+                        table_id=artifact_id,
+                        attempt_id=attempt_id,
+                        rows_committed=checkpoint.rows_committed,
+                        chunks_committed=checkpoint.chunks_committed,
+                        next_action="continue",
+                        metadata={
+                            "file_path": file_path,
+                            "total_rows": total_rows,
+                            "chunk_size": chunk_size,
+                        },
+                    ),
+                )
+            except Exception:
+                logger.debug(
+                    "[ingest] Failed to write checkpoint event job=%s artifact=%s",
+                    job_id,
+                    artifact_id,
+                    exc_info=True,
+                )
             checkpoint_write_ms = (time.perf_counter() - checkpoint_started) * 1000
         except Exception:
             checkpoint_write_ms = -1.0
