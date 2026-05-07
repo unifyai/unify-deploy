@@ -13,10 +13,19 @@ when:
 
 ## Authentication
 
-HTTP Basic with an API token pair.  Customer generates an API Token at
-Matterport Settings -> Account -> API Access and pastes **Token ID** +
-**Token Secret** into Console -> Integrations -> Matterport.  No OAuth
-callback.  See `matterport_setup.md`.
+**HTTP Basic with an API token pair — not OAuth.**  The Token ID +
+Token Secret *are* the credentials; send them directly via HTTP Basic
+on every call.  Do **not** POST to `/api/oauth/token`, do **not**
+exchange them for a Bearer access token, do **not** treat them as
+OAuth `client_id` / `client_secret`.  Matterport's OAuth endpoint will
+return `401 invalid_client` for these tokens because they aren't OAuth
+client credentials — that error means you took the wrong path, not
+that the credentials are bad.
+
+Customer generates an API Token at Matterport Settings -> Account ->
+API Access and pastes **Token ID** + **Token Secret** into Console ->
+Integrations -> Matterport.  No OAuth callback.  See
+`matterport_setup.md`.
 
 ## Embed vs analytics
 
