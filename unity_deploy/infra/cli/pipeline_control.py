@@ -1092,9 +1092,21 @@ async def cmd_retry(args: argparse.Namespace) -> None:
     if not only:
         only = {"dlq", "stale-running", "error", "retryable"}
 
+    if not args.json:
+        print("Retry resources:", flush=True)
+        for key, value in resources.items():
+            print(f"  {key}: {value or '(unset)'}", flush=True)
+        print(
+            f"\nPlanning retry for {len(target_jobs)} job(s) "
+            f"[filters={','.join(sorted(only))}]...",
+            flush=True,
+        )
+
     plan: list[dict] = []
     skipped: list[dict] = []
-    for job_id in target_jobs:
+    for idx, job_id in enumerate(target_jobs, start=1):
+        if not args.json:
+            print(f"  [{idx}/{len(target_jobs)}] inspecting {job_id}", flush=True)
         snap = _load_job_snapshot(infra, job_id)
         reasons: list[str] = []
         if snap.durable_status == "success" and not args.force_reingest:
@@ -1123,6 +1135,21 @@ async def cmd_retry(args: argparse.Namespace) -> None:
         try:
             job = job_store.read_job(job_id)
             retry_attempt = int((job.metadata or {}).get("retry_attempt", 0)) + 1
+            if (
+                job.status == "queued"
+                and (job.metadata or {}).get("last_retry_message_id")
+                and not args.force
+            ):
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "reason": (
+                            "already queued by retry message "
+                            f"{job.metadata.get('last_retry_message_id')}"
+                        ),
+                    },
+                )
+                continue
             if retry_attempt > args.max_attempts and not args.force:
                 skipped.append(
                     {
@@ -1157,6 +1184,24 @@ async def cmd_retry(args: argparse.Namespace) -> None:
             break
 
     published: list[dict] = []
+    if not args.json:
+        print(f"\nMode: {'EXECUTE' if execute else 'DRY-RUN'}", flush=True)
+        print(f"Would retry {len(plan)} job(s); skipped {len(skipped)}.", flush=True)
+        for item in plan:
+            print(
+                f"  RETRY job={item['job_id']} topic={item['topic']} "
+                f"checkpoint_rows={item['checkpoint_rows']} "
+                f"attempt={item['retry_attempt']} reasons={','.join(item['reasons'])}",
+                flush=True,
+            )
+        for item in skipped[:20]:
+            print(
+                f"  SKIP job={item['job_id']} reason={item['reason']}",
+                flush=True,
+            )
+        if execute and plan:
+            print(f"\nPublishing {len(plan)} retry message(s)...", flush=True)
+
     if execute:
         for item in plan:
             event = PipelineJobEvent(
@@ -1199,9 +1244,11 @@ async def cmd_retry(args: argparse.Namespace) -> None:
                     artifact_store,
                     event.model_copy(
                         update={
+                            "event_id": uuid4().hex,
                             "event_type": "retry_published",
                             "pubsub_message_id": message_id,
                             "next_action": "queued",
+                            "recorded_at": utc_now_iso(),
                         },
                     ),
                 )
@@ -1211,10 +1258,12 @@ async def cmd_retry(args: argparse.Namespace) -> None:
                     artifact_store,
                     event.model_copy(
                         update={
+                            "event_id": uuid4().hex,
                             "event_type": "retry_publish_failed",
                             "error_type": type(exc).__name__,
                             "error_message": str(exc),
                             "next_action": "kept_prior_state",
+                            "recorded_at": utc_now_iso(),
                         },
                     ),
                 )
@@ -1230,19 +1279,13 @@ async def cmd_retry(args: argparse.Namespace) -> None:
     if args.json:
         print(json.dumps(result, indent=2, default=str))
         return
-    print("Retry resources:")
-    for key, value in resources.items():
-        print(f"  {key}: {value or '(unset)'}")
-    print(f"\nMode: {'EXECUTE' if execute else 'DRY-RUN'}")
-    print(f"Would retry {len(plan)} job(s); skipped {len(skipped)}.")
-    for item in plan:
-        print(
-            f"  RETRY job={item['job_id']} topic={item['topic']} "
-            f"checkpoint_rows={item['checkpoint_rows']} "
-            f"attempt={item['retry_attempt']} reasons={','.join(item['reasons'])}",
-        )
-    for item in skipped[:20]:
-        print(f"  SKIP job={item['job_id']} reason={item['reason']}")
+    if execute:
+        print(f"\nPublished {len(published)} retry message(s).", flush=True)
+        for item in published:
+            print(
+                f"  PUBLISHED job={item['job_id']} message_id={item['message_id']}",
+                flush=True,
+            )
 
 
 async def cmd_cancel(args: argparse.Namespace) -> None:
