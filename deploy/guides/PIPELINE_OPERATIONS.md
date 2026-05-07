@@ -214,8 +214,9 @@ kubectl get deployment unity-ingest-worker -n production \
 
 Every push to the staging or production branch runs the corresponding
 Cloud Build file. The worker refresh step applies worker Deployments,
-HPAs, PDBs, weekly rollout CronJob, and failed-pod GC CronJob, then
-restarts parse and ingest workers to pick up the new image.
+HPAs, PDBs, weekly rollout CronJobs, DLQ reconciler CronJobs, and
+failed-pod GC CronJobs, then restarts parse and ingest workers to pick
+up the new image.
 
 Manual reconciliation:
 
@@ -229,6 +230,7 @@ gsutil lifecycle set deploy/k8s/workers/gcs-lifecycle-rules.json \
 # Maintenance CronJobs/RBAC, both environments.
 kubectl apply -f deploy/k8s/workers/failed-pod-gc-cronjob.yaml
 kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml
+kubectl apply -f deploy/k8s/workers/dlq-reconciler-cronjob.yaml
 
 # Staging workers.
 kubectl apply -f deploy/k8s/workers/parse-worker-deployment_staging.yaml
@@ -261,18 +263,25 @@ million-row ingest is in flight unless you are accepting resume/replay work.
 
 `deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml` restarts parse and
 ingest workers in both `staging` and `production` every Sunday at 03:00 UTC.
-It lives in `default` and has namespace-scoped Roles in each target env.
+It defines one CronJob per environment namespace.
 
 `deploy/k8s/workers/failed-pod-gc-cronjob.yaml` removes stale `Failed` and
 `Unknown` pods labeled `component=pipeline-worker` every 10 minutes in both
 environments.
 
+`deploy/k8s/workers/dlq-reconciler-cronjob.yaml` drains each environment's
+DLQ subscription into durable GCS DLQ records every 10 minutes, then updates
+job metadata/status and acks only after durable writes.
+
 Verify:
 
 ```bash
-kubectl get cronjob unity-workers-weekly-rollout -n default
+kubectl get cronjob unity-workers-weekly-rollout -n staging
+kubectl get cronjob unity-workers-weekly-rollout -n production
 kubectl get cronjob unity-failed-pod-gc -n staging
 kubectl get cronjob unity-failed-pod-gc -n production
+kubectl get cronjob unity-pipeline-dlq-reconciler -n staging
+kubectl get cronjob unity-pipeline-dlq-reconciler -n production
 ```
 
 ## HPA And External Metrics
