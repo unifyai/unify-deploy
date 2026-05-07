@@ -14,10 +14,22 @@ the Integrations modal, clicks **Save and Connect** once.
    Create New App -> Integration**:
    - paste the redirect URI into **Redirect URI(s)**;
    - tick the scopes the assistant should hold:
-     - `spark:people_read`, `spark:rooms_read`, `spark:memberships_read`
-     - `meeting:schedules_read`, `meeting:participants_read`,
-       `meeting:recordings_read`, `meeting:transcripts_read`
+     - `spark:all` — covers messaging, rooms, people, memberships,
+       attachments, teams, devices
+     - `meeting:schedules_read`, `meeting:schedules_write`
+     - `meeting:participants_read`, `meeting:participants_write`
+     - `meeting:recordings_read`, `meeting:recordings_write`
+     - `meeting:transcripts_read`
+     - `meeting:controls_read`, `meeting:controls_write`
+     - `meeting:preferences_read`, `meeting:preferences_write`
    - save and note the Client ID + Client Secret.
+
+   The set above must be a *superset* of what the Console requests on
+   the authorize URL — narrowing the app's declaration causes
+   `invalid_scope` at consent time.  Admin-level scopes
+   (`spark-admin:*`, `meeting:admin_*`) are deliberately not in the
+   default; add them only if the customer needs org-wide reads and is
+   connecting as an admin.
 4. Step 2 of the modal: paste both, click **Save and Connect**.
 5. Customer redirected to Webex for consent, then back to the
    integrations tab as **Connected**.
