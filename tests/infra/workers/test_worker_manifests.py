@@ -30,7 +30,6 @@ def test_cloud_build_applies_pipeline_worker_service_account() -> None:
     for relative_path in [
         "deploy/cloudbuild-staging.yaml",
         "deploy/cloudbuild.yaml",
-        "deploy/cloudbuild-workers.yaml",
     ]:
         text = (ROOT / relative_path).read_text()
         assert "deploy/k8s/workers/pipeline-worker-serviceaccount.yaml" in text

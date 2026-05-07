@@ -1,0 +1,130 @@
+name: Matterport
+slug: matterport
+version: "0.1.0"
+sector: real-estate
+tier: api
+quality: bronze
+description: >
+  Matterport 3D virtual-tour analytics connector. Provides on-demand
+  reads against the Matterport Model API GraphQL endpoint plus a light
+  DataManager mirror (models, view stats, model<->unit links) sufficient
+  for cross-joining tour engagement to HubSpot leads and to RealPage
+  units. Authenticated via an account API token pair (Token ID + Token
+  Secret) supplied through the assistant Secret Manager. On-demand
+  functions default to mock=True for safe testing; sync functions require
+  live credentials. 403 responses return a graceful error envelope rather
+  than raising, so capability gating is uniform.
+homepage: https://matterport.com/developers
+
+secrets:
+  # ----- Customer-provided API credentials ------------------------------
+  # Pasted via Console -> Integrations -> Matterport (paste-and-go; no
+  # OAuth callback needed).  Generate at Matterport account Settings ->
+  # Account -> API Access.  Sandbox is free but only returns demo models;
+  # production access requires the Developer Tools add-on on the
+  # customer's Matterport plan.
+
+  - name: MATTERPORT_TOKEN_ID
+    description: >
+      Matterport API Token ID (the public half of the credential pair).
+      Generate at Matterport account Settings -> Account -> API Access.
+      Used as the username half of HTTP Basic auth on every GraphQL call.
+    required: true
+    sensitive: true
+
+  - name: MATTERPORT_TOKEN_SECRET
+    description: >
+      Matterport API Token Secret (the private half), generated alongside
+      MATTERPORT_TOKEN_ID.  Used as the password half of HTTP Basic auth.
+    required: true
+    sensitive: true
+
+  # ----- Optional overrides --------------------------------------------
+  - name: MATTERPORT_ORG_ID
+    description: >
+      Optional organisation slug pinning calls to a single Matterport
+      organisation when the credentials grant access to multiple orgs.
+    required: false
+    sensitive: false
+
+  - name: MATTERPORT_BASE_URL
+    description: >
+      API base URL override.  Defaults to https://api.matterport.com.
+    required: false
+    sensitive: false
+
+capabilities:
+  # ----- Account ---------------------------------------------------------
+  - id: account
+    name: Account
+    description: Verify credentials; identify active organisation.
+    functions: [get_matterport_account_info, list_matterport_organisations]
+    guidance: [matterport_overview, matterport_setup]
+
+  # ----- Models (the central object) ------------------------------------
+  - id: models
+    name: 3D Models
+    description: List, get, and search 3D tour models.
+    functions: [
+      list_matterport_models, get_matterport_model,
+      search_matterport_models_by_address,
+      sync_matterport_models,
+    ]
+    guidance: [matterport_models, matterport_unit_linking, matterport_local_vs_live]
+
+  # ----- Mosaics & Tags -------------------------------------------------
+  - id: mosaics_and_tags
+    name: Mosaics and Mattertags
+    description: Mosaic listing and Mattertag inventory per model.
+    functions: [list_matterport_mosaics, list_matterport_tags]
+    guidance: [matterport_models]
+
+  # ----- View stats -----------------------------------------------------
+  - id: view_stats
+    name: View Statistics
+    description: Per-model view counts, unique visitors, time on tour.
+    functions: [
+      get_matterport_view_stats, list_matterport_view_events,
+      sync_matterport_view_stats,
+    ]
+    guidance: [matterport_view_stats, matterport_lead_correlation]
+
+  # ----- Embed (browser-tier capability) -------------------------------
+  - id: embed
+    name: Showcase Embed
+    description: Generate a Showcase URL for embedding a tour in a portal.
+    tier: browser
+    functions: [generate_matterport_embed_url]
+    guidance: [matterport_embed_vs_analytics]
+
+  # ----- Cross-integration linking -------------------------------------
+  - id: linking
+    name: Cross-integration Linking
+    description: Link Matterport models to RealPage units and to HubSpot leads.
+    functions: [
+      link_matterport_model_to_unit, lookup_matterport_model_for_unit,
+      correlate_matterport_views_to_hubspot_leads,
+    ]
+    guidance: [matterport_unit_linking, matterport_lead_correlation]
+
+  # ----- Sync orchestration --------------------------------------------
+  - id: incremental_sync
+    name: Incremental sync
+    description: Single-tick orchestration across enabled object types.
+    functions: [
+      run_matterport_sync_tick, get_matterport_sync_state,
+      probe_matterport_tier,
+    ]
+    guidance: [matterport_sync_runbook, matterport_tier_gating]
+
+  # ----- Local DataManager query ---------------------------------------
+  - id: local_query
+    name: Local DataManager query
+    description: Query the synced Matterport copy in DataManager (preferred over live for analytics).
+    functions: [
+      query_local_matterport_models, query_local_matterport_view_stats,
+    ]
+    guidance: [matterport_local_vs_live, matterport_overview]
+
+requirements: [httpx]
+tags: [matterport, real-estate, virtual-tours, 3d, analytics, listings, sync, datamanager]

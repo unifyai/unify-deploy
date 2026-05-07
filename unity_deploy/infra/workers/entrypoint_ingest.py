@@ -46,6 +46,7 @@ async def main() -> None:
     from unity.common.pipeline.work_queue import RetryWorkItem
 
     from .ingest_worker import handle_ingest_message
+    from .pipeline_events import record_worker_event
     from .worker_utils import (
         LeaseExtender,
         build_worker_infra,
@@ -140,16 +141,49 @@ async def main() -> None:
                     )
                     lease_extender.start()
                     lease_outcome = "error"
+                    record_worker_event(
+                        infra,
+                        item,
+                        event_type="message_received",
+                        stage="ingest",
+                        next_action="handle_ingest_message",
+                    )
                     try:
                         acked = await handle_ingest_message(
                             item,
                             infra=infra,
-                            ack_receipt=lambda: infra.work_queue.ack(item.receipt_id),
+                            ack_receipt=lambda: (
+                                record_worker_event(
+                                    infra,
+                                    item,
+                                    event_type="message_ack_requested",
+                                    stage="ingest",
+                                    next_action="ack",
+                                    metadata={"source": "handler"},
+                                )
+                                or infra.work_queue.ack(item.receipt_id)
+                            ),
                         )
                         if not acked:
+                            record_worker_event(
+                                infra,
+                                item,
+                                event_type="message_ack_requested",
+                                stage="ingest",
+                                next_action="ack",
+                            )
                             await infra.work_queue.ack(item.receipt_id)
                         lease_outcome = "ack"
                     except RetryWorkItem as exc:
+                        record_worker_event(
+                            infra,
+                            item,
+                            event_type="message_retry_requested",
+                            stage="ingest",
+                            error=str(exc),
+                            next_action="nack",
+                            metadata={"delay_seconds": exc.delay_seconds},
+                        )
                         await infra.work_queue.retry(
                             item.receipt_id,
                             error=str(exc),
@@ -158,6 +192,14 @@ async def main() -> None:
                         lease_outcome = "error"
                     except Exception as exc:
                         logger.exception("Ingest message failed")
+                        record_worker_event(
+                            infra,
+                            item,
+                            event_type="app_dead_letter_requested",
+                            stage="ingest",
+                            error=str(exc),
+                            next_action="dead_letter",
+                        )
                         await infra.work_queue.dead_letter(
                             item.receipt_id,
                             error=str(exc),

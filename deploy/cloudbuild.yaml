@@ -180,6 +180,7 @@ steps:
     kubectl apply -f deploy/k8s/workers/pipeline-worker-serviceaccount.yaml
     kubectl apply -f deploy/k8s/workers/parse-worker-deployment.yaml
     kubectl apply -f deploy/k8s/workers/ingest-worker-deployment.yaml
+    kubectl apply -f deploy/k8s/workers/dlq-reconciler-cronjob.yaml
     kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml
     kubectl apply -f deploy/k8s/workers/failed-pod-gc-cronjob.yaml
 

@@ -57,6 +57,7 @@ class PubSubWorkQueue:
         self._sub_map: dict[str, str] = {
             "parse": self._full_subscription(settings.parse_subscription),
             "ingest": self._full_subscription(settings.ingest_subscription),
+            "dead_letter": self._full_subscription(settings.dead_letter_subscription),
         }
         self._receipt_subscriptions: dict[str, str] = {}
         self._receipt_envelopes: dict[str, dict[str, Any]] = {}
@@ -132,6 +133,10 @@ class PubSubWorkQueue:
                     payload = {}
 
                 pubsub_message_id = str(getattr(msg.message, "message_id", "") or "")
+                attributes = dict(getattr(msg.message, "attributes", {}) or {})
+                if attributes:
+                    payload = dict(payload)
+                    payload.setdefault("_pubsub_attributes", attributes)
                 delivery_attempt = getattr(msg, "delivery_attempt", None)
                 wq_msg = WorkQueueMessage(
                     message_id=pubsub_message_id or str(msg.ack_id),
@@ -158,6 +163,7 @@ class PubSubWorkQueue:
                     "pubsub_message_id": pubsub_message_id,
                     "published_at": wq_msg.published_at,
                     "delivery_attempt": delivery_attempt,
+                    "attributes": attributes,
                     "payload": payload,
                     "raw_payload": raw_payload,
                 }

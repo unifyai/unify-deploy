@@ -1,0 +1,100 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unity-pipeline-dlq-reconciler
+  namespace: staging
+  labels:
+    app: unity-pipeline-dlq-reconciler
+    component: pipeline-maintenance
+    environment: staging
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: unity-pipeline-dlq-reconciler
+            component: pipeline-maintenance
+            environment: staging
+        spec:
+          serviceAccountName: unity-pipeline-worker
+          restartPolicy: Never
+          containers:
+          - name: dlq-reconciler
+            image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest
+            command:
+            - python
+            - -m
+            - unity_deploy.infra.cli.pipeline_control
+            - reconcile-dlq
+            - --env
+            - staging
+            - --limit
+            - "100"
+            - --ack
+            env:
+            - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+              value: "staging"
+            - name: UNITY_GCS_ARTIFACT_BUCKET
+              value: "unity-pipeline-artifacts-staging"
+            - name: UNITY_PUBSUB_PROJECT_ID
+              value: "gcp-project-runtime"
+            - name: ORCHESTRA_URL
+              value: "https://api-staging.unify.ai/v0"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unity-pipeline-dlq-reconciler
+  namespace: production
+  labels:
+    app: unity-pipeline-dlq-reconciler
+    component: pipeline-maintenance
+    environment: production
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: unity-pipeline-dlq-reconciler
+            component: pipeline-maintenance
+            environment: production
+        spec:
+          serviceAccountName: unity-pipeline-worker
+          restartPolicy: Never
+          containers:
+          - name: dlq-reconciler
+            image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest
+            command:
+            - python
+            - -m
+            - unity_deploy.infra.cli.pipeline_control
+            - reconcile-dlq
+            - --env
+            - production
+            - --limit
+            - "100"
+            - --ack
+            env:
+            - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+              value: "production"
+            - name: UNITY_GCS_ARTIFACT_BUCKET
+              value: "unity-pipeline-artifacts"
+            - name: UNITY_PUBSUB_PROJECT_ID
+              value: "gcp-project-runtime"
+            - name: ORCHESTRA_URL
+              value: "https://api.unify.ai/v0"

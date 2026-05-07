@@ -1,0 +1,145 @@
+name: Webex
+slug: webex
+version: "0.1.0"
+sector: communications
+tier: api
+quality: bronze
+description: >
+  Generic, reusable Cisco Webex connector covering meetings, recordings,
+  post-meeting transcripts, rooms, and people via the Webex public REST
+  API.  Provides on-demand reads, snapshot functions for incremental
+  DataManager sync, and a sync orchestrator.  Authenticated via OAuth
+  2.0 (authorization code flow) against a Webex Integration the
+  customer registers in the Webex developer portal.  On-demand
+  functions default to mock=True for safe testing; sync functions
+  require a live token.  403 responses are returned as graceful error
+  envelopes, not raised, so capability gating is uniform.
+homepage: https://developer.webex.com
+
+secrets:
+  # ----- Customer-provided OAuth app credentials ---------------------
+  # Pasted by the customer via Console -> Settings -> Secrets BEFORE
+  # clicking Connect.  Source: a Webex Integration the customer
+  # registers at https://developer.webex.com -> My Webex Apps -> Create
+  # New App -> Integration.  The redirect URI registered on that app
+  # must match the Console callback URL documented in
+  # guidance/webex_setup.md.
+
+  - name: WEBEX_OAUTH_CLIENT_ID
+    description: >
+      Client ID from the customer's Webex Integration app.  Required
+      for the OAuth Connect flow.  Add this BEFORE clicking Connect in
+      the Integrations modal.  Not sensitive — client_id is a public
+      identifier per the OAuth spec.
+    required: true
+    sensitive: false
+
+  - name: WEBEX_OAUTH_CLIENT_SECRET
+    description: >
+      Client Secret from the customer's Webex Integration app.
+      Required for the OAuth Connect flow.  Add alongside
+      WEBEX_OAUTH_CLIENT_ID.
+    required: true
+    sensitive: true
+
+  # ----- OAuth-managed secrets (set by the Console Connect flow) ----
+  # Written automatically by the Console OAuth callback after the user
+  # grants consent on Webex.  Do not edit manually.
+
+  - name: WEBEX_REFRESH_TOKEN
+    description: >
+      Long-lived OAuth refresh token, written automatically by the
+      Console Connect flow after the user grants consent on Webex.
+      The package uses this with the customer's CLIENT_ID and
+      CLIENT_SECRET to mint short-lived access tokens at runtime via
+      ``POST /v1/access_token``.  Refresh-token TTL is 90 days; usage
+      extends the window.  When it expires, the user clicks Reconnect.
+      Do not edit manually.
+    required: false
+    sensitive: true
+
+  # ----- Optional overrides ------------------------------------------
+
+  - name: WEBEX_BASE_URL
+    description: >
+      API host override.  Defaults to ``https://webexapis.com``.  Rarely
+      needed.
+    required: false
+    sensitive: false
+
+  - name: WEBEX_MIRROR_TRANSCRIPTS
+    description: >
+      Set to ``true`` to mirror post-meeting transcript bodies into
+      DataManager (``Webex/Transcripts``).  Off by default — transcripts
+      can be sensitive and high-volume.  When off, transcript metadata
+      is mirrored but body text is fetched live on demand only.
+    required: false
+    sensitive: false
+
+capabilities:
+  # ----- Account ------------------------------------------------------
+  - id: webex_account
+    name: Account
+    description: Verify token; identify the connected Webex user.
+    functions: [get_webex_me]
+    guidance: [webex_overview, webex_setup]
+
+  # ----- People & rooms ----------------------------------------------
+  - id: webex_people_directory
+    name: People & rooms
+    description: Org directory + spaces + memberships.
+    functions: [
+      get_webex_person, list_webex_people,
+      list_webex_rooms, get_webex_room, list_webex_room_memberships,
+      sync_webex_people, sync_webex_rooms,
+    ]
+    guidance: [webex_overview]
+
+  # ----- Meetings -----------------------------------------------------
+  - id: webex_meetings
+    name: Meetings
+    description: Scheduled and past meetings + invitee lists.
+    functions: [
+      list_webex_meetings, get_webex_meeting, list_webex_meeting_invitees,
+      sync_webex_meetings,
+    ]
+    guidance: [webex_overview, webex_meetings_and_transcripts]
+
+  # ----- Recordings ---------------------------------------------------
+  - id: webex_recordings
+    name: Recordings
+    description: Recording metadata + download URLs.  Bytes not synced.
+    functions: [list_webex_recordings, get_webex_recording, sync_webex_recordings]
+    guidance: [webex_overview, webex_meetings_and_transcripts]
+
+  # ----- Transcripts --------------------------------------------------
+  - id: webex_transcripts
+    name: Transcripts
+    description: Post-meeting transcript metadata; bodies opt-in via WEBEX_MIRROR_TRANSCRIPTS.
+    functions: [
+      list_webex_meeting_transcripts, get_webex_meeting_transcript,
+      sync_webex_transcripts,
+    ]
+    guidance: [webex_meetings_and_transcripts]
+
+  # ----- Sync orchestration ------------------------------------------
+  - id: webex_incremental_sync
+    name: Incremental sync
+    description: Single-tick orchestration across enabled object types.
+    functions: [run_webex_sync_tick, get_webex_sync_state, probe_webex_tier]
+    guidance: [webex_sync]
+
+  # ----- Local query --------------------------------------------------
+  - id: webex_local_query
+    name: Local DataManager query
+    description: Query the synced Webex copy in DataManager (preferred for analytics).
+    functions: [
+      query_local_webex_meetings, query_local_webex_recordings,
+      query_local_webex_transcripts, query_local_webex_rooms,
+      query_local_webex_people,
+      query_local_webex_meetings_with_hubspot_contacts,
+    ]
+    guidance: [webex_overview, webex_meetings_and_transcripts]
+
+requirements: [httpx]
+tags: [webex, communications, meetings, recordings, transcripts, sync, datamanager]

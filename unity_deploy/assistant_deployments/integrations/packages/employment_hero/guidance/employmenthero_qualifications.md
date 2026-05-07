@@ -1,51 +1,44 @@
-# Qualifications and Certifications — UK Compliance
+# Qualifications and Certifications
 
-This is the **marquee capability** for property-management clients like
-ClientZeta.  The UK letting/management sector has a dense set of
-date-bound certifications:
+Many industries — construction, healthcare, property management,
+financial services, logistics — track date-bound certifications against
+employees.  EH's qualifications module holds these as records keyed by
+`(employee_id, qualification_id)` with `expires_at` and
+`certificate_number` fields.
 
-| Certification | Renewal | Body |
-|---|---|---|
-| Gas Safe Registration | Annual | Gas Safe Register |
-| NICEIC Approved Contractor | Annual | NICEIC |
-| ARLA Propertymark | Annual | Propertymark |
-| RICS chartered status | Annual + CPD | RICS |
-| NEBOSH General Certificate | 3 years | NEBOSH |
-| IOSH Managing Safely | 3 years | IOSH |
-| Asbestos Awareness | Annual | UKATA / IATP |
-| Legionella (L8) Awareness | 2 years | RSPH |
-| Right to Work check | Per-employee, refresh on visa expiry | Home Office |
-
-## The marquee query
+## The expiry-rollup query
 
 ```python
 result = await query_local_expiring_qualifications(
     days_ahead=90,
-    location_id="loc-battersea",  # optional — scope to a portfolio
+    location_id=None,  # optional — scope to one site/portfolio
 )
-# Returns property-level rollup of operatives whose certs expire in the
-# next 90 days, ready for the assistant to surface as a property
-# manager's morning brief.
+# Returns location-level rollup of employees whose certs expire in the
+# given window, ready to surface as a manager's morning brief.
 ```
 
-The assistant should suggest this query whenever the user asks any of:
-
-- "Whose Gas Safe expires soon?"
-- "Compliance posture for [property/portfolio]?"
-- "Who needs to renew certs this month/quarter?"
-- "Any operatives I shouldn't dispatch to gas jobs right now?"
-
-The `query_local_expiring_qualifications` function joins
+This function joins
 `EmploymentHero/Qualifications/EmployeeRecords` with the Catalogue,
 Employees, and Locations tables — that join requires the workforce +
 qualifications syncs to have run.
 
+The assistant should suggest this query whenever the user asks any of:
+
+- "Whose [cert] expires soon?"
+- "Compliance posture for [site / location]?"
+- "Who needs to renew certs this month/quarter?"
+- "Any operatives I shouldn't dispatch right now?"
+
+Which qualifications matter (and their renewal cadence) depends on the
+customer's vertical and jurisdiction — populate
+`EmploymentHero/Qualifications/Catalogue` from the customer's EH instance
+and reference it in scenario or client-package guidance.
+
 ## Live vs. local
 
-- For "right now what's expiring" — `query_local_expiring_qualifications`
-  is fine (cadence is 12 hours by default, so worst case the data is
-  half a day stale).
-- For "I just uploaded a new cert, does it look right?" — use live
+- "What's expiring this quarter" — `query_local_expiring_qualifications`
+  is fine (default cadence is 12 hours).
+- "I just uploaded a new cert, does it look right?" — live
   `list_employee_qualifications(employee_id=...)`.
 
 ## Tracking remediation
@@ -55,3 +48,10 @@ assigned to renew it?" — the `learning` capability covers that.  Join
 `EmploymentHero/Qualifications/EmployeeRecords` with
 `EmploymentHero/Learning/Assignments` on `employee_id` to see whether
 the operative already has a renewal course assigned.
+
+## Read-only personal credentials
+
+`get_visa_details`, `list_emergency_contacts`, `list_dependants`, and
+`get_probation_status` live alongside qualifications in EH.  These are
+read-only in v1; updates happen in EH directly.  See
+`employmenthero_sensitive_data.md` for handling.

@@ -80,17 +80,3 @@ async def probe_tier() -> dict:
         "features": features,
         "probed_at": _dt.datetime.now(tz=_dt.timezone.utc).isoformat(),
     }
-
-
-def gated_error(feature: str, *, hub_required: str = "") -> dict:
-    """Construct a graceful error envelope for a tier-gated function."""
-    return {
-        "error": (
-            f"This HubSpot capability ('{feature}') is not enabled for the "
-            f"connected portal."
-            + (f"  Requires {hub_required}." if hub_required else "")
-        ),
-        "feature": feature,
-        "hub_required": hub_required,
-        "upgrade_link": "https://www.hubspot.com/products",
-    }

@@ -15,7 +15,7 @@ from __future__ import annotations
 # Per-object cadence defaults (seconds).  Overridden by
 # EMPLOYMENTHERO_SYNC_OBJECT_INTERVALS.
 #
-# Tuned to ClientZeta's likely use:
+# Reasonable defaults:
 #   - Workforce graph drifts slowly -> daily.
 #   - Leave / timesheets / expenses are workday-active -> hourly-ish.
 #   - Pay / qualifications / performance -> daily.

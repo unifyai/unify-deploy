@@ -19,16 +19,15 @@
 # old pods that may still be draining (up to 10 min, matching the
 # GKE Autopilot terminationGracePeriodSeconds cap). Capacity never dips.
 #
-# The CronJob lives in the `default` namespace (neutral ground) and
-# restarts workers in both `staging` and `production` namespaces.
-# RBAC is granted via one Role + RoleBinding per target namespace
-# (Roles are namespace-scoped, so we need one pair per namespace).
+# One CronJob is defined per environment namespace. Keeping maintenance
+# resources in `staging` and `production` avoids hidden/default namespace
+# control-plane state and makes environment ownership explicit.
 
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: unity-workers-rollout
-  namespace: default
+  namespace: staging
   labels:
     app: unity-workers-rollout
     component: pipeline-maintenance
@@ -62,42 +61,7 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: unity-workers-rollout
-  namespace: default
-roleRef:
-  kind: Role
-  name: unity-workers-rollout
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: unity-workers-rollout
-  namespace: production
-  labels:
-    app: unity-workers-rollout
-    component: pipeline-maintenance
-rules:
-- apiGroups: ["apps"]
-  resources: ["deployments"]
-  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
-  verbs: ["get", "patch"]
-- apiGroups: ["apps"]
-  resources: ["deployments/status"]
-  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
-  verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: unity-workers-rollout
-  namespace: production
-  labels:
-    app: unity-workers-rollout
-    component: pipeline-maintenance
-subjects:
-- kind: ServiceAccount
-  name: unity-workers-rollout
-  namespace: default
+  namespace: staging
 roleRef:
   kind: Role
   name: unity-workers-rollout
@@ -107,10 +71,11 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: unity-workers-weekly-rollout
-  namespace: default
+  namespace: staging
   labels:
     app: unity-workers-rollout
     component: pipeline-maintenance
+    environment: staging
 spec:
   schedule: "0 3 * * 0"
   concurrencyPolicy: Forbid
@@ -126,6 +91,7 @@ spec:
           labels:
             app: unity-workers-rollout
             component: pipeline-maintenance
+            environment: staging
         spec:
           serviceAccountName: unity-workers-rollout
           restartPolicy: OnFailure
@@ -137,12 +103,103 @@ spec:
             - -c
             - |
               set -eu
-              echo "[$(date -u +%FT%TZ)] Triggering rollout restart for parse+ingest workers"
+              echo "[$(date -u +%FT%TZ)] Triggering staging rollout restart for parse+ingest workers"
               kubectl rollout restart deployment/unity-parse-worker -n staging
               kubectl rollout restart deployment/unity-ingest-worker -n staging
+              echo "[$(date -u +%FT%TZ)] Staging rollout commands issued; workers drain in <=10m"
+            resources:
+              requests:
+                cpu: "50m"
+                memory: "64Mi"
+              limits:
+                cpu: "200m"
+                memory: "128Mi"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unity-workers-rollout
+  namespace: production
+  labels:
+    app: unity-workers-rollout
+    component: pipeline-maintenance
+    environment: production
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: unity-workers-rollout
+  namespace: production
+  labels:
+    app: unity-workers-rollout
+    component: pipeline-maintenance
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
+  verbs: ["get", "patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments/status"]
+  resourceNames: ["unity-parse-worker", "unity-ingest-worker"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: unity-workers-rollout
+  namespace: production
+  labels:
+    app: unity-workers-rollout
+    component: pipeline-maintenance
+subjects:
+- kind: ServiceAccount
+  name: unity-workers-rollout
+  namespace: production
+roleRef:
+  kind: Role
+  name: unity-workers-rollout
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unity-workers-weekly-rollout
+  namespace: production
+  labels:
+    app: unity-workers-rollout
+    component: pipeline-maintenance
+    environment: production
+spec:
+  schedule: "0 3 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app: unity-workers-rollout
+            component: pipeline-maintenance
+            environment: production
+        spec:
+          serviceAccountName: unity-workers-rollout
+          restartPolicy: OnFailure
+          containers:
+          - name: kubectl
+            image: bitnami/kubectl:1.30
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              echo "[$(date -u +%FT%TZ)] Triggering production rollout restart for parse+ingest workers"
               kubectl rollout restart deployment/unity-parse-worker -n production
               kubectl rollout restart deployment/unity-ingest-worker -n production
-              echo "[$(date -u +%FT%TZ)] Rollout commands issued; workers drain in <=10m"
+              echo "[$(date -u +%FT%TZ)] Production rollout commands issued; workers drain in <=10m"
             resources:
               requests:
                 cpu: "50m"

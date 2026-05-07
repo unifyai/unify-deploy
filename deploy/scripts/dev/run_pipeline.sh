@@ -20,6 +20,7 @@ set -euo pipefail
 #
 #   # Monitor only (no dispatch — attach to workers already processing)
 #   deploy/scripts/dev/run_pipeline.sh --monitor --env staging
+#   deploy/scripts/dev/run_pipeline.sh --monitor --env staging --dispatch-id <id>
 #
 # Creates a timestamped log directory under logs/pipeline/ with:
 #   dispatch.log        — dispatch_pipeline.py output (dispatch mode only)
@@ -37,6 +38,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd -P)"
 # ---- Parse our own flags before forwarding the rest ----
 MONITOR_ONLY=0
 PIPELINE_ENV_ARG=""
+DISPATCH_ID="${DISPATCH_ID:-}"
 DISPATCH_ARGS=()
 while (( $# > 0 )); do
   case "$1" in
@@ -54,6 +56,18 @@ while (( $# > 0 )); do
       ;;
     --env=*)
       PIPELINE_ENV_ARG="${1#--env=}"
+      shift
+      ;;
+    --dispatch-id)
+      DISPATCH_ID="${2:-}"
+      if [[ -z "$DISPATCH_ID" ]]; then
+        echo "ERROR: --dispatch-id requires a dispatch id." >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --dispatch-id=*)
+      DISPATCH_ID="${1#--dispatch-id=}"
       shift
       ;;
     *)
@@ -83,6 +97,19 @@ cleanup() {
     echo "Environment: ${PIPELINE_ENV:-unknown}"
     echo "Monitor only: $MONITOR_ONLY"
     echo "Log directory: $LOG_DIR"
+    if [[ -n "${DISPATCH_ID:-}" ]]; then
+      echo "Dispatch ID: $DISPATCH_ID"
+      echo ""
+      echo "Final dispatch status JSON:"
+      (
+        cd "$REPO_ROOT"
+        uv run python -m unity_deploy.infra.cli.pipeline_control status \
+          --env "$PIPELINE_ENV" \
+          --dispatch-id "$DISPATCH_ID" \
+          --json > "$LOG_DIR/summary.json"
+      ) 2>/dev/null || true
+      [ -f "$LOG_DIR/summary.json" ] && echo "  $LOG_DIR/summary.json"
+    fi
     echo ""
     echo "Files:"
     ls -lh "$LOG_DIR"/ 2>/dev/null || true
@@ -181,6 +208,19 @@ if (( ! MONITOR_ONLY )); then
     exit 1
   fi
   echo "  -> $LOG_DIR/dispatch.log"
+  DISPATCH_ID="$(python3 - "$LOG_DIR/dispatch.log" <<'PY'
+import re
+import sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+matches = re.findall(r"Dispatch ([0-9a-f]{32})", text)
+print(matches[-1] if matches else "")
+PY
+)"
+  if [[ -n "$DISPATCH_ID" ]]; then
+    echo "  Dispatch ID: $DISPATCH_ID"
+  else
+    echo "  WARNING: could not infer dispatch id from dispatch.log"
+  fi
   echo ""
 else
   echo "[1/5] Skipping dispatch (--monitor mode)"
@@ -294,6 +334,40 @@ done 2>&1 | tee '$LOG_DIR/dlq.log'
 "
 echo "  dlq.log            (every 60s)"
 
+if [[ -n "$DISPATCH_ID" ]]; then
+  tmux_cmd new-session -d -s "dispatch-status" bash -c "
+while true; do
+  cd '$REPO_ROOT'
+  echo \"--- \$(date +%H:%M:%S) dispatch=$DISPATCH_ID ---\"
+  uv run python -m unity_deploy.infra.cli.pipeline_control status \
+    --env '$PIPELINE_ENV' \
+    --dispatch-id '$DISPATCH_ID' \
+    --show-checkpoints \
+    --show-dlq \
+    --show-retry-plan 2>&1
+  echo
+  uv run python -m unity_deploy.infra.cli.pipeline_control status \
+    --env '$PIPELINE_ENV' \
+    --dispatch-id '$DISPATCH_ID' \
+    --json > '$LOG_DIR/summary.json' 2>/dev/null || true
+  python3 - '$LOG_DIR/summary.json' <<'PY' 2>/dev/null | tee -a '$LOG_DIR/job-progress.log' '$LOG_DIR/dlq-matches.log' '$LOG_DIR/retryable-failures.log' >/dev/null || true
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path, encoding='utf-8'))
+jobs = data.get('jobs', [])
+print('--- status snapshot ---')
+for job in jobs:
+    print(f\"{job.get('job_id')} derived={job.get('derived_status')} rows={job.get('latest_checkpoint_rows')} chunks={job.get('latest_checkpoint_chunks')} queue={job.get('queue_location')} retry={job.get('retry_eligible')}\")
+PY
+  sleep 60
+done 2>&1 | tee '$LOG_DIR/dispatch-status.log'
+"
+  echo "  dispatch-status.log (every 60s, includes checkpoints/DLQ/retry plan)"
+  echo "  job-progress.log    (derived status snapshots)"
+  echo "  dlq-matches.log     (dispatch-correlated DLQ snapshots)"
+  echo "  retryable-failures.log"
+fi
+
 # ---- 5. Summary ----
 echo ""
 echo "========================================================================"
@@ -306,6 +380,13 @@ echo "  $LOG_DIR/hpa.log"
 echo "  $LOG_DIR/pods.log"
 echo "  $LOG_DIR/pubsub-backlog.log"
 echo "  $LOG_DIR/dlq.log"
+if [[ -n "$DISPATCH_ID" ]]; then
+  echo "  $LOG_DIR/dispatch-status.log"
+  echo "  $LOG_DIR/job-progress.log"
+  echo "  $LOG_DIR/dlq-matches.log"
+  echo "  $LOG_DIR/retryable-failures.log"
+  echo "  $LOG_DIR/summary.json"
+fi
 echo ""
 echo "Tail any log:    tail -f $LOG_DIR/ingest-worker.log"
 echo "Stop all:        tmux -L $TMUX_SOCKET kill-server"
