@@ -29,6 +29,12 @@ set -euo pipefail
 #   hpa.log             — periodic HPA snapshots (every 10s)
 #   pods.log            — periodic pod-count snapshots (every 10s)
 #   pubsub-backlog.log  — periodic Pub/Sub backlog depth (every 15s)
+#   dlq.log             — periodic DLQ backlog depth (every 60s)
+#   dispatch-status.log — dispatch/job derived status, checkpoints, DLQ, retry plan
+#   job-progress.log    — dispatch-correlated derived status snapshots
+#   dlq-matches.log     — dispatch-correlated DLQ snapshots
+#   retryable-failures.log — retryability snapshots for failed/DLQ jobs
+#   summary.json        — machine-readable final dispatch status when dispatch id is known
 #   summary.txt         — final run summary
 # ---------------------------------------------------------------------------
 
