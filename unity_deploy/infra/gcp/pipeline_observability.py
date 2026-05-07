@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
@@ -31,6 +32,17 @@ RetryClassification = Literal[
 ]
 
 
+class PipelineQueueIdentity(BaseModel):
+    """Stable identity extracted from any current or legacy queue payload."""
+
+    job_id: str = ""
+    dispatch_id: str = ""
+    kind: str = ""
+    topic: QueueStage = "unknown"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    source: str = ""
+
+
 def safe_fragment(value: str) -> str:
     text = str(value or "").strip() or "unknown"
     return "".join(
@@ -43,37 +55,68 @@ def event_sort_key(timestamp: str, event_id: str = "") -> str:
     return safe_fragment(raw.replace(":", "").replace("+", "Z"))
 
 
-def payload_job_id(payload: dict[str, Any]) -> str:
-    inner = (
-        payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+def extract_queue_identity(payload: dict[str, Any]) -> PipelineQueueIdentity:
+    """Extract job/dispatch/stage identity from queue or DLQ payloads.
+
+    Supported shapes:
+    - native/current ``ParseRequested`` and ``IngestRequested`` payloads
+    - app-level DLQ wrappers containing ``payload`` and ``original_topic``
+    - persisted DLQ records containing top-level ``job_id`` / ``dispatch_id``
+    - legacy app-level DLQ wrappers that only preserved ``error=... job=<id>``
+    """
+    outer = dict(payload or {})
+    inner = outer.get("payload") if isinstance(outer.get("payload"), dict) else outer
+    inner = dict(inner or {})
+    job_id = str(outer.get("job_id") or inner.get("job_id") or "")
+    dispatch_id = str(outer.get("dispatch_id") or inner.get("dispatch_id") or "")
+    kind = str(inner.get("kind") or outer.get("kind") or "")
+    original_topic = str(
+        outer.get("original_topic") or inner.get("original_topic") or "",
     )
-    return str(inner.get("job_id") or "")
+    if kind == "parse_requested":
+        topic: QueueStage = "parse"
+    elif kind == "ingest_requested":
+        topic = "ingest"
+    elif original_topic in {"parse", "ingest"}:
+        topic = original_topic  # type: ignore[assignment]
+    else:
+        topic = "unknown"
+    if not job_id:
+        error = str(outer.get("error") or inner.get("error") or "")
+        match = re.search(r"\bjob=([A-Za-z0-9_-]+)", error)
+        if match:
+            job_id = match.group(1)
+    source = "direct"
+    if isinstance(outer.get("payload"), dict):
+        source = "app_dlq_wrapper"
+    if not kind and job_id and source == "direct":
+        source = "durable_or_legacy"
+    recovered_payload = dict(inner)
+    recovered_payload.pop("_pubsub_attributes", None)
+    return PipelineQueueIdentity(
+        job_id=job_id,
+        dispatch_id=dispatch_id,
+        kind=kind,
+        topic=topic,
+        payload=recovered_payload,
+        source=source,
+    )
+
+
+def payload_job_id(payload: dict[str, Any]) -> str:
+    return extract_queue_identity(payload).job_id
 
 
 def payload_dispatch_id(payload: dict[str, Any]) -> str:
-    inner = (
-        payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
-    )
-    return str(inner.get("dispatch_id") or "")
+    return extract_queue_identity(payload).dispatch_id
 
 
 def payload_kind(payload: dict[str, Any]) -> str:
-    inner = (
-        payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
-    )
-    return str(inner.get("kind") or "")
+    return extract_queue_identity(payload).kind
 
 
 def topic_for_payload(payload: dict[str, Any]) -> QueueStage:
-    kind = payload_kind(payload)
-    if kind == "parse_requested":
-        return "parse"
-    if kind == "ingest_requested":
-        return "ingest"
-    original_topic = str(payload.get("original_topic") or "")
-    if original_topic in {"parse", "ingest"}:
-        return original_topic  # type: ignore[return-value]
-    return "unknown"
+    return extract_queue_identity(payload).topic
 
 
 def classify_error(error: str | None) -> RetryClassification:
@@ -260,17 +303,14 @@ def dlq_record_from_received_item(
     except (TypeError, ValueError):
         delivery_attempt = None
     error = payload.get("error")
-    retry_topic = topic_for_payload(payload)
-    recovered_payload = (
-        wrapped_payload if isinstance(wrapped_payload, dict) else payload
-    )
-    recovered_payload = dict(recovered_payload)
-    recovered_payload.pop("_pubsub_attributes", None)
+    identity = extract_queue_identity(payload)
+    retry_topic = identity.topic
+    recovered_payload = identity.payload
     return PipelineDlqRecord(
         environment=environment,
         project_id=project_id,
-        job_id=payload_job_id(payload),
-        dispatch_id=payload_dispatch_id(payload),
+        job_id=identity.job_id,
+        dispatch_id=identity.dispatch_id,
         original_topic=retry_topic,
         retry_topic=retry_topic,
         dlq_subscription=dlq_subscription,
@@ -436,7 +476,7 @@ def derive_status(
     heartbeat_at: str = "",
     leases: list[LeaseRecord] | None = None,
 ) -> tuple[str, str, bool]:
-    if durable_status in {"success", "error", "cancelled", "paused"}:
+    if durable_status in {"success", "cancelled", "paused"}:
         return (
             durable_status,
             "terminal" if durable_status == "success" else durable_status,
@@ -447,6 +487,8 @@ def derive_status(
         if checkpoints:
             return "partial-dlq", classification, classification != "non_retryable"
         return "dlq", classification, classification != "non_retryable"
+    if durable_status == "error":
+        return "error", "needs_operator", False
     if durable_status == "running":
         fresh_lease = any(is_fresh_lease(lease) for lease in leases or [])
         fresh_heartbeat = is_fresh_timestamp(heartbeat_at, max_age_seconds=600)
