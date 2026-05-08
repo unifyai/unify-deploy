@@ -57,7 +57,10 @@ async def run_employmenthero_sync_tick(
             "_sync_employee_personal",
             "sync_employmenthero_employee_personal",
         ),
-        "employee_notes": ("_sync_employee_notes", "sync_employmenthero_employee_notes"),
+        "employee_notes": (
+            "_sync_employee_notes",
+            "sync_employmenthero_employee_notes",
+        ),
         "leave": ("_sync_leave", "sync_employmenthero_leave"),
         "timesheets": ("_sync_timesheets", "sync_employmenthero_timesheets"),
         "expenses": ("_sync_expenses", "sync_employmenthero_expenses"),
@@ -65,7 +68,10 @@ async def run_employmenthero_sync_tick(
         "documents": ("_sync_documents", "sync_employmenthero_documents"),
         "custom_fields": ("_sync_custom_fields", "sync_employmenthero_custom_fields"),
         "onboarding": ("_sync_onboarding", "sync_employmenthero_onboarding"),
-        "qualifications": ("_sync_qualifications", "sync_employmenthero_qualifications"),
+        "qualifications": (
+            "_sync_qualifications",
+            "sync_employmenthero_qualifications",
+        ),
         "performance": ("_sync_performance", "sync_employmenthero_performance"),
         "recognition": ("_sync_recognition", "sync_employmenthero_recognition"),
         "surveys": ("_sync_surveys", "sync_employmenthero_surveys"),
