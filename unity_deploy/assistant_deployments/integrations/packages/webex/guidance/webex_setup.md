@@ -48,7 +48,8 @@ After Connect, the OAuth callback writes `WEBEX_REFRESH_TOKEN`.
 
 ## Verifying after Connect
 
-1. `get_webex_me(mock=False)` — confirms the connection works.
+1. `webex_request("GET", "/v1/people/me")` — confirms the connection
+   works and reveals the connected user + `orgId`.
 2. `probe_webex_tier(force=True, mock=False)` — sweeps each Webex
    resource to record which scopes the app covers.  Cached in
    `Webex/Meta/Capabilities` for 24h.
