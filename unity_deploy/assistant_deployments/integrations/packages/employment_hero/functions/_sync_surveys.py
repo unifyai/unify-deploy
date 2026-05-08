@@ -1,133 +1,13 @@
-"""Employment Hero surveys.
+"""Employment Hero surveys sync — internal-only.
 
-Anonymity is respected per the EH ``is_anonymous`` flag on each survey
-definition.  When the survey is anonymous (or
-``EMPLOYMENTHERO_SURVEYS_FORCE_ANONYMOUS=true``), the snapshot stores
-aggregates only — never per-respondent rows.  Free-text answers are
-always redacted to length+hash.
+Underscore-prefixed so FunctionManager skips discovery.  Called by
+the top-level ``sync.run_employmenthero_sync_tick`` orchestrator via
+importlib; not exposed as a registered tool.
 """
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
 
-
-@custom_function()
-async def list_employmenthero_surveys(mock: bool = True) -> dict:
-    if mock:
-        return {
-            "surveys": [
-                {
-                    "id": "sv-1",
-                    "name": "Q1 2026 Engagement Pulse",
-                    "is_anonymous": True,
-                    "status": "closed",
-                    "opens_at": "2026-03-15",
-                    "closes_at": "2026-03-29",
-                    "respondent_count": 87,
-                },
-            ]
-        }
-    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get,
-        org_path,
-        _org_id_or_error,
-    )
-
-    _, err = _org_id_or_error()
-    if err is not None:
-        return err
-    body = await eh_get(org_path("/surveys"))
-    if "error" in body:
-        return body
-    return {"surveys": body.get("data") or body.get("items") or []}
-
-
-@custom_function()
-async def get_employmenthero_survey(survey_id: str, mock: bool = True) -> dict:
-    if mock:
-        return {
-            "id": str(survey_id),
-            "name": "Q1 2026 Engagement Pulse",
-            "is_anonymous": True,
-            "status": "closed",
-            "questions": [
-                {
-                    "id": "q-1",
-                    "type": "scale_1_to_5",
-                    "text": "How satisfied are you with team communication?",
-                },
-            ],
-        }
-    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get,
-        org_path,
-        _org_id_or_error,
-    )
-
-    _, err = _org_id_or_error()
-    if err is not None:
-        return err
-    body = await eh_get(org_path(f"/surveys/{survey_id}"))
-    if "error" in body:
-        return body
-    return body.get("data") or body
-
-
-@custom_function()
-async def list_employmenthero_survey_responses(
-    survey_id: str, mock: bool = True
-) -> dict:
-    """List responses for a survey.  Returns aggregates only when the
-    survey is flagged ``is_anonymous`` upstream."""
-    if mock:
-        return {
-            "survey_id": survey_id,
-            "is_anonymous": True,
-            "aggregates": {"q-1": {"mean": 4.1, "median": 4, "count": 87}},
-        }
-    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get,
-        org_path,
-        _org_id_or_error,
-    )
-
-    _, err = _org_id_or_error()
-    if err is not None:
-        return err
-    survey = await eh_get(org_path(f"/surveys/{survey_id}"))
-    if "error" in survey:
-        return survey
-    is_anon = (survey.get("data") or survey).get("is_anonymous", True)
-    body = await eh_get(org_path(f"/surveys/{survey_id}/responses"))
-    if "error" in body:
-        return body
-    responses = body.get("data") or body.get("items") or []
-    if is_anon:
-        # Aggregate per question.
-        aggs: dict = {}
-        for r in responses:
-            for ans in r.get("answers") or []:
-                qid = ans.get("question_id")
-                val = ans.get("value")
-                bucket = aggs.setdefault(
-                    qid,
-                    {"count": 0, "values": []},
-                )
-                bucket["count"] += 1
-                if isinstance(val, (int, float)):
-                    bucket["values"].append(val)
-        for qid, bucket in aggs.items():
-            vals = bucket.pop("values", [])
-            if vals:
-                bucket["mean"] = sum(vals) / len(vals)
-                bucket["min"] = min(vals)
-                bucket["max"] = max(vals)
-        return {"survey_id": survey_id, "is_anonymous": True, "aggregates": aggs}
-    return {"survey_id": survey_id, "is_anonymous": False, "responses": responses}
-
-
-@custom_function()
 async def sync_employmenthero_surveys(
     mock: bool = False, since: str | None = None
 ) -> dict:

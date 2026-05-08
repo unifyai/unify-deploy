@@ -1,122 +1,13 @@
-"""Employment Hero employee personal details — emergency contacts, dependants,
-visa, probation.  HIGH-TIER: snapshot strips PII; live reads return full data
-but the assistant must follow the redaction rules in
-``guidance/sensitive_data.md``.
+"""Employment Hero employee_personal sync — internal-only.
+
+Underscore-prefixed so FunctionManager skips discovery.  Called by
+the top-level ``sync.run_employmenthero_sync_tick`` orchestrator via
+importlib; not exposed as a registered tool.
 """
 
 from __future__ import annotations
 
-from unity.function_manager.custom import custom_function
 
-
-@custom_function()
-async def list_employmenthero_emergency_contacts(
-    employee_id: str, mock: bool = True
-) -> dict:
-    if mock:
-        return {
-            "contacts": [
-                {
-                    "id": "ec-1",
-                    "employee_id": employee_id,
-                    "name": "Jane Example",
-                    "relationship": "spouse",
-                    "phone": "+44 7700 900200",
-                },
-            ]
-        }
-    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get,
-        org_path,
-        _org_id_or_error,
-    )
-
-    _, err = _org_id_or_error()
-    if err is not None:
-        return err
-    body = await eh_get(org_path(f"/employees/{employee_id}/emergency_contacts"))
-    if "error" in body:
-        return body
-    return {"contacts": body.get("data") or body.get("items") or []}
-
-
-@custom_function()
-async def list_employmenthero_dependants(employee_id: str, mock: bool = True) -> dict:
-    if mock:
-        return {
-            "dependants": [
-                {
-                    "id": "dep-1",
-                    "employee_id": employee_id,
-                    "relationship": "child",
-                    "date_of_birth": "2018-05-12",
-                },
-            ]
-        }
-    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get,
-        org_path,
-        _org_id_or_error,
-    )
-
-    _, err = _org_id_or_error()
-    if err is not None:
-        return err
-    body = await eh_get(org_path(f"/employees/{employee_id}/dependants"))
-    if "error" in body:
-        return body
-    return {"dependants": body.get("data") or body.get("items") or []}
-
-
-@custom_function()
-async def get_employmenthero_visa_details(employee_id: str, mock: bool = True) -> dict:
-    if mock:
-        return {
-            "employee_id": employee_id,
-            "has_visa": False,
-            "right_to_work_status": "british_citizen",
-        }
-    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get,
-        org_path,
-        _org_id_or_error,
-    )
-
-    _, err = _org_id_or_error()
-    if err is not None:
-        return err
-    body = await eh_get(org_path(f"/employees/{employee_id}/visa_details"))
-    if "error" in body:
-        return body
-    return body.get("data") or body
-
-
-@custom_function()
-async def get_employmenthero_probation_status(
-    employee_id: str, mock: bool = True
-) -> dict:
-    if mock:
-        return {
-            "employee_id": employee_id,
-            "is_on_probation": False,
-            "probation_end_date": "2024-03-01",
-        }
-    from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
-        eh_get,
-        org_path,
-        _org_id_or_error,
-    )
-
-    _, err = _org_id_or_error()
-    if err is not None:
-        return err
-    body = await eh_get(org_path(f"/employees/{employee_id}/probation"))
-    if "error" in body:
-        return body
-    return body.get("data") or body
-
-
-@custom_function()
 async def sync_employmenthero_employee_personal(
     mock: bool = False,
     since: str | None = None,

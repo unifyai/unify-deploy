@@ -48,27 +48,30 @@ async def run_employmenthero_sync_tick(
 
     # Object key -> (module stem, function name).  Inlined per
     # FunctionManager isolation rule — no module-level globals.
+    # Underscore-prefixed module stems point at internal sync helpers
+    # (FunctionManager skips them at discovery; this orchestrator
+    # imports them via importlib).
     object_to_sync_fn: dict[str, tuple[str, str]] = {
-        "workforce": ("workforce", "sync_employmenthero_workforce"),
+        "workforce": ("_sync_workforce", "sync_employmenthero_workforce"),
         "employee_personal": (
-            "employee_personal",
+            "_sync_employee_personal",
             "sync_employmenthero_employee_personal",
         ),
-        "employee_notes": ("employee_notes", "sync_employmenthero_employee_notes"),
-        "leave": ("leave", "sync_employmenthero_leave"),
-        "timesheets": ("timesheets", "sync_employmenthero_timesheets"),
-        "expenses": ("expenses", "sync_employmenthero_expenses"),
-        "policies": ("policies", "sync_employmenthero_policies"),
-        "documents": ("documents", "sync_employmenthero_documents"),
-        "custom_fields": ("custom_fields", "sync_employmenthero_custom_fields"),
-        "onboarding": ("onboarding", "sync_employmenthero_onboarding"),
-        "qualifications": ("qualifications", "sync_employmenthero_qualifications"),
-        "performance": ("performance", "sync_employmenthero_performance"),
-        "recognition": ("recognition", "sync_employmenthero_recognition"),
-        "surveys": ("surveys", "sync_employmenthero_surveys"),
-        "learning": ("learning", "sync_employmenthero_learning"),
-        "recruitment": ("recruitment", "sync_employmenthero_recruitment"),
-        "pay": ("pay", "sync_employmenthero_pay"),
+        "employee_notes": ("_sync_employee_notes", "sync_employmenthero_employee_notes"),
+        "leave": ("_sync_leave", "sync_employmenthero_leave"),
+        "timesheets": ("_sync_timesheets", "sync_employmenthero_timesheets"),
+        "expenses": ("_sync_expenses", "sync_employmenthero_expenses"),
+        "policies": ("_sync_policies", "sync_employmenthero_policies"),
+        "documents": ("_sync_documents", "sync_employmenthero_documents"),
+        "custom_fields": ("_sync_custom_fields", "sync_employmenthero_custom_fields"),
+        "onboarding": ("_sync_onboarding", "sync_employmenthero_onboarding"),
+        "qualifications": ("_sync_qualifications", "sync_employmenthero_qualifications"),
+        "performance": ("_sync_performance", "sync_employmenthero_performance"),
+        "recognition": ("_sync_recognition", "sync_employmenthero_recognition"),
+        "surveys": ("_sync_surveys", "sync_employmenthero_surveys"),
+        "learning": ("_sync_learning", "sync_employmenthero_learning"),
+        "recruitment": ("_sync_recruitment", "sync_employmenthero_recruitment"),
+        "pay": ("_sync_pay", "sync_employmenthero_pay"),
     }
 
     cfg = get_employmenthero_config()
@@ -77,10 +80,10 @@ async def run_employmenthero_sync_tick(
 
     if mock:
         # Minimal aggregated mock envelope - exercises the contract.
-        from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions.workforce import (
+        from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._sync_workforce import (
             sync_employmenthero_workforce,
         )
-        from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions.qualifications import (
+        from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._sync_qualifications import (
             sync_employmenthero_qualifications,
         )
 

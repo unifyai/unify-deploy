@@ -218,6 +218,98 @@ def _invalidate_cached_token(token: str) -> None:
         _TOKEN_CACHE.pop(k, None)
 
 
+async def eh_request(
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    body: dict | None = None,
+    timeout: float | None = None,
+) -> dict:
+    """Generic request against the Employment Hero API.
+
+    ``method`` is the HTTP verb (``GET``, ``POST``, ``PATCH``, ``PUT``,
+    ``DELETE``); ``path`` is the URL path (e.g. ``/api/v1/me`` or
+    ``/api/v1/organisations/{org_id}/employees``).  ``params`` go on the
+    query string, ``body`` is JSON-encoded for verbs that take one.
+
+    On rate-limit (429) sleeps the value of ``Retry-After`` (or
+    ``backoff_factor**attempt`` seconds) and retries up to
+    ``EMPLOYMENTHERO_RATE_LIMIT_MAX_RETRIES``.  On 401 (mid-flight token
+    expiry) busts the cache and retries once.  Returns the parsed JSON
+    body on success or ``{"error": ..., "status_code": ...}`` on
+    persistent failure.
+
+    First-page only: this helper does not auto-paginate.  Bulk pulls go
+    through ``run_employmenthero_sync_tick``; live reads return one page
+    and the caller can re-issue with ``page_index``/``page_size`` if
+    they need more.
+    """
+    import os
+    import httpx
+
+    token, err = await _resolve_access_token()
+    if err is not None:
+        return err
+
+    method_upper = method.upper()
+    timeout = timeout or float(
+        os.environ.get("EMPLOYMENTHERO_REQUEST_TIMEOUT_SECONDS", "30"),
+    )
+    max_retries = int(
+        os.environ.get("EMPLOYMENTHERO_RATE_LIMIT_MAX_RETRIES", "3"),
+    )
+    backoff_factor = float(
+        os.environ.get("EMPLOYMENTHERO_RATE_LIMIT_BACKOFF_FACTOR", "1.5"),
+    )
+
+    url = f"{_base_url()}{path}"
+    last_err: dict | None = None
+    refreshed_once = False
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(max_retries + 1):
+            resp = await client.request(
+                method_upper,
+                url,
+                params=params,
+                json=body,
+                headers=_headers(token),
+            )
+            if 200 <= resp.status_code < 300:
+                if not resp.content:
+                    return {"status": "ok"}
+                try:
+                    return resp.json()
+                except ValueError:
+                    return {"status": "ok", "body": _safe_text(resp)}
+            if resp.status_code == 401 and not refreshed_once:
+                refreshed_once = True
+                _invalidate_cached_token(token)
+                token, err = await _resolve_access_token()
+                if err is not None:
+                    return err
+                continue
+            if resp.status_code == 429 and attempt < max_retries:
+                retry_after = float(
+                    resp.headers.get("Retry-After", backoff_factor**attempt),
+                )
+                await asyncio.sleep(retry_after)
+                continue
+            if resp.status_code == 403:
+                last_err = _403_envelope(method_upper, path)
+                break
+            last_err = {
+                "error": (
+                    f"Employment Hero {method_upper} {path} returned "
+                    f"{resp.status_code}"
+                ),
+                "status_code": resp.status_code,
+                "body": _safe_text(resp),
+            }
+            break
+    return last_err or {"error": "request failed without status"}
+
+
 async def eh_get(
     path: str,
     *,

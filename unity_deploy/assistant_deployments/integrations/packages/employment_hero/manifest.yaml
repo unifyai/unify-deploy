@@ -1,24 +1,27 @@
 name: Employment Hero
 slug: employment_hero
-version: "0.1.0"
+version: "0.2.0"
 sector: human-resources
 tier: api
 quality: bronze
 description: >
-  Generic, reusable Employment Hero HRIS connector covering the public API:
-  workforce graph (employees, employments, positions, teams, locations);
-  leave (categories, balances, requests); time tracking; expenses; HR
-  policies and acknowledgements; documents (metadata); custom fields;
-  onboarding; qualifications/certifications with expiry tracking;
-  performance management (reviews, goals, 1:1s, feedback); recognition;
-  surveys; learning; recruitment; pay runs and employment terms.
-  Provides on-demand reads + writes, snapshot functions for incremental
-  DataManager sync, and a sync orchestrator. Critical-tier endpoints
-  (payslips, banking, tax, medical) are live-only with masked returns.
-  Authenticated via a bearer token supplied through the assistant Secret
-  Manager.  On-demand functions default to mock=True for safe testing;
-  sync functions require a live token.  403 responses are returned as a
-  graceful error envelope, not raised, so capability-gating is uniform.
+  Generic, reusable Employment Hero HRIS connector covering the public
+  API: workforce graph (employees, employments, positions, teams,
+  locations); leave; time tracking; expenses; HR policies and
+  acknowledgements; documents (metadata); custom fields; onboarding;
+  qualifications/certifications with expiry tracking; performance
+  management (reviews, goals, 1:1s, feedback); recognition; surveys;
+  learning; recruitment; pay runs and employment terms.  Live reads
+  and writes go through a single ``employmenthero_request`` tool that
+  exposes the underlying authenticated HTTP client to the actor.  Bulk
+  pulls go through ``run_employmenthero_sync_tick`` which mirrors
+  objects into DataManager.  Authenticated via OAuth 2.0
+  (authorization code flow) against an Employment Hero developer-portal
+  app the customer registers.  No code-level write gating — the actor
+  applies the rules in ``employmenthero_high_stakes_writes`` and
+  ``employmenthero_sensitive_data`` before issuing destructive verbs
+  or surfacing PII.  403 responses are returned as a graceful error
+  envelope, not raised, so capability gating is uniform.
 homepage: https://employmenthero.com
 
 secrets:
@@ -27,7 +30,7 @@ secrets:
   # Connect.  Source: an Employment Hero developer-portal app the
   # customer creates at https://developer.employmenthero.com.  The redirect
   # URI registered on that app must match the Console callback URL
-  # documented in guidance/setup.md.
+  # documented in guidance/employmenthero_setup.md.
 
   - name: EMPLOYMENTHERO_OAUTH_CLIENT_ID
     description: >
@@ -73,229 +76,83 @@ secrets:
     sensitive: false
 
 capabilities:
-  # ----- Account ----------------------------------------------------------
-  - id: account
+  # ----- Live API access -------------------------------------------------
+  # Single generic tool — the actor constructs the URL/method/params
+  # using EH's API docs and the structured 4xx error envelopes the
+  # helper returns when something's malformed.  Writes are NOT gated
+  # in code; the actor applies the rules in
+  # ``employmenthero_high_stakes_writes`` before issuing destructive
+  # verbs.  Sensitive reads (banking, tax, medical, payslips) require
+  # confirmation per ``employmenthero_sensitive_data``.
+  - id: employmenthero_live
+    name: Live API access
+    description: >
+      One tool covering the entire Employment Hero REST surface
+      (workforce, leave, timesheets, expenses, policies, documents,
+      custom fields, onboarding, qualifications, performance,
+      recognition, surveys, learning, recruitment, pay, banking, tax,
+      medical, payslips).  First-page only — bulk pulls go through the
+      sync orchestrator.
+    functions: [employmenthero_request]
+    guidance: [
+      employmenthero_overview, employmenthero_setup,
+      employmenthero_high_stakes_writes, employmenthero_sensitive_data,
+      employmenthero_tier_gating,
+    ]
+
+  # ----- Account / org pinning ------------------------------------------
+  # Kept as typed helpers because every other call needs the active
+  # org id, and the pin-aware fallback in
+  # ``get_employmenthero_active_organisation`` saves the actor a few
+  # turns of figuring it out.
+  - id: employmenthero_account
     name: Account
-    description: Verify token; identify active organisation.
-    functions: [get_employmenthero_account_info, list_employmenthero_organisations, get_employmenthero_active_organisation]
+    description: Verify token; identify and pin the active organisation.
+    functions: [
+      get_employmenthero_account_info,
+      list_employmenthero_organisations,
+      get_employmenthero_active_organisation,
+    ]
     guidance: [employmenthero_overview, employmenthero_setup]
 
-  # ----- Workforce graph --------------------------------------------------
-  - id: workforce
-    name: Workforce graph
-    description: Employees, employments, positions, managers, teams, locations.
-    functions: [
-      get_employmenthero_employee, list_employmenthero_employees, search_employmenthero_employees,
-      list_employmenthero_employments, list_employmenthero_positions, list_employmenthero_managers,
-      list_employmenthero_teams, get_employmenthero_team, list_employmenthero_team_members,
-      list_employmenthero_locations, get_employmenthero_location,
-      sync_employmenthero_workforce,
-    ]
-    guidance: [employmenthero_employees, employmenthero_teams_and_locations, employmenthero_local_vs_live]
-
-  - id: employee_personal
-    name: Employee personal details
-    description: Emergency contacts, dependants, visa, probation. PII-redacted on snapshot.
-    functions: [
-      list_employmenthero_emergency_contacts, list_employmenthero_dependants,
-      get_employmenthero_visa_details, get_employmenthero_probation_status,
-      sync_employmenthero_employee_personal,
-    ]
-    guidance: [employmenthero_employees, employmenthero_sensitive_data]
-
-  - id: employee_notes
-    name: Employee notes
-    description: Confidential HR notes against employee records.
-    functions: [
-      list_employmenthero_employee_notes, get_employmenthero_employee_note, create_employmenthero_employee_note,
-      sync_employmenthero_employee_notes,
-    ]
-    guidance: [employmenthero_employees, employmenthero_sensitive_data, employmenthero_high_stakes_writes]
-
-  # ----- Leave ------------------------------------------------------------
-  - id: leave_management
-    name: Leave management
-    description: Leave categories, balances, requests (read + submit).
-    functions: [
-      list_employmenthero_leave_categories, get_employmenthero_leave_category,
-      list_employmenthero_leave_balances, get_employmenthero_leave_balance,
-      list_employmenthero_leave_requests, get_employmenthero_leave_request, submit_employmenthero_leave_request,
-      sync_employmenthero_leave,
-    ]
-    guidance: [employmenthero_leave, employmenthero_high_stakes_writes]
-
-  # ----- Time + money -----------------------------------------------------
-  - id: time_tracking
-    name: Time tracking
-    description: Timesheet read, submit, update.
-    functions: [
-      list_employmenthero_timesheets, get_employmenthero_timesheet_entry,
-      submit_employmenthero_timesheet_entry, update_employmenthero_timesheet_entry,
-      sync_employmenthero_timesheets,
-    ]
-    guidance: [employmenthero_timesheets, employmenthero_high_stakes_writes]
-
-  - id: expense_management
-    name: Expense management
-    description: Expense claims (read + submit), categories.
-    functions: [
-      list_employmenthero_expense_categories, list_employmenthero_expense_claims, get_employmenthero_expense_claim,
-      submit_employmenthero_expense_claim, sync_employmenthero_expenses,
-    ]
-    guidance: [employmenthero_expenses]
-
-  # ----- Compliance + ops -------------------------------------------------
-  - id: policies
-    name: Policies
-    description: HR policies + per-employee acknowledgements (read + acknowledge).
-    functions: [
-      list_employmenthero_policies, get_employmenthero_policy,
-      list_employmenthero_policy_acknowledgements, acknowledge_employmenthero_policy,
-      sync_employmenthero_policies,
-    ]
-    guidance: [employmenthero_policies]
-
-  - id: documents
-    name: Documents (metadata)
-    description: Document metadata + templates.  File contents are not synced.
-    functions: [
-      list_employmenthero_documents, list_employmenthero_employee_documents, get_employmenthero_document_metadata,
-      list_employmenthero_document_templates,
-      sync_employmenthero_documents,
-    ]
-    guidance: [employmenthero_documents, employmenthero_sensitive_data]
-
-  - id: custom_fields
-    name: Custom fields
-    description: Org-defined field schema + per-employee values (long format).
-    functions: [
-      list_employmenthero_custom_field_definitions, list_employmenthero_custom_field_values,
-      get_employmenthero_employee_custom_field_values,
-      sync_employmenthero_custom_fields,
-    ]
-    guidance: [employmenthero_custom_fields]
-
-  - id: onboarding
-    name: Onboarding
-    description: Onboarding processes, task definitions, per-employee status.
-    functions: [
-      list_employmenthero_onboardings, get_employmenthero_onboarding,
-      list_employmenthero_onboarding_tasks, list_employmenthero_employee_onboarding_status,
-      sync_employmenthero_onboarding,
-    ]
-    guidance: [employmenthero_onboarding]
-
-  - id: qualifications
-    name: Qualifications and certifications
-    description: Qualification catalogue + per-employee certs + expiry tracking.
-    functions: [
-      list_employmenthero_qualifications, get_employmenthero_qualification,
-      list_employmenthero_employee_qualifications,
-      sync_employmenthero_qualifications,
-    ]
-    guidance: [employmenthero_qualifications, employmenthero_local_vs_live]
-
-  # ----- Performance ------------------------------------------------------
-  - id: performance_management
-    name: Performance management
-    description: Reviews, goals, 1:1s, feedback. Free-text redacted on snapshot.
-    functions: [
-      list_employmenthero_reviews, get_employmenthero_review,
-      list_employmenthero_goals, get_employmenthero_goal, create_employmenthero_goal, update_employmenthero_goal_progress,
-      list_employmenthero_one_on_ones, get_employmenthero_one_on_one, create_employmenthero_one_on_one, update_employmenthero_one_on_one_notes,
-      list_employmenthero_feedback, give_employmenthero_feedback, list_employmenthero_peer_feedback,
-      sync_employmenthero_performance,
-    ]
-    guidance: [employmenthero_performance_and_goals, employmenthero_sensitive_data, employmenthero_high_stakes_writes]
-
-  # ----- Recognition / surveys / learning / recruitment -------------------
-  - id: recognition
-    name: Recognition
-    description: Cheers, hi-fives, awards (read + give).
-    functions: [
-      list_employmenthero_cheers, give_employmenthero_cheer,
-      list_employmenthero_hi_fives, give_employmenthero_hi_five,
-      list_employmenthero_recognition_awards,
-      sync_employmenthero_recognition,
-    ]
-    guidance: [employmenthero_recognition_and_surveys]
-
-  - id: surveys
-    name: Surveys
-    description: Definitions and responses; anonymity respected per EH is_anonymous flag.
-    functions: [list_employmenthero_surveys, get_employmenthero_survey, list_employmenthero_survey_responses, sync_employmenthero_surveys]
-    guidance: [employmenthero_recognition_and_surveys, employmenthero_sensitive_data]
-
-  - id: learning
-    name: Learning
-    description: Courses, assignments, completions.
-    functions: [
-      list_employmenthero_courses, get_employmenthero_course,
-      list_employmenthero_course_assignments, list_employmenthero_course_completions,
-      sync_employmenthero_learning,
-    ]
-    guidance: [employmenthero_learning]
-
-  - id: recruitment
-    name: Recruitment
-    description: Jobs, applicants, offers, interview stages.  PII-redacted on snapshot; retention-windowed.
-    functions: [
-      list_employmenthero_jobs, get_employmenthero_job,
-      list_employmenthero_applicants, get_employmenthero_applicant,
-      list_employmenthero_offers, list_employmenthero_interview_stages,
-      sync_employmenthero_recruitment,
-    ]
-    guidance: [employmenthero_recruitment, employmenthero_sensitive_data]
-
-  # ----- Pay / banking / tax / medical (critical tier) --------------------
-  - id: pay_runs
-    name: Pay runs
-    description: Pay run summaries, categories, employment terms (rate-banded snapshot).
-    functions: [
-      list_employmenthero_pay_runs, get_employmenthero_pay_run,
-      list_employmenthero_pay_categories,
-      get_employmenthero_employment_terms, list_employmenthero_employment_terms,
-      sync_employmenthero_pay,
-    ]
-    guidance: [employmenthero_pay_and_banking, employmenthero_sensitive_data, employmenthero_tier_gating]
-
-  - id: payslips
-    name: Payslips
-    description: Individual payslips. Live-only — never synced.
-    functions: [list_employmenthero_employee_payslips, get_employmenthero_payslip]
-    guidance: [employmenthero_pay_and_banking, employmenthero_sensitive_data, employmenthero_tier_gating]
-
-  - id: banking_and_tax
-    name: Banking and tax
-    description: Banking details, super funds, tax declarations. Live-only with masking.
-    functions: [get_employmenthero_banking_details, list_employmenthero_super_funds, get_employmenthero_tax_declaration]
-    guidance: [employmenthero_pay_and_banking, employmenthero_sensitive_data, employmenthero_tier_gating]
-
-  - id: medical
-    name: Medical disclosures
-    description: Medical disclosures. Live-only; counts/dates only.
-    functions: [list_employmenthero_medical_disclosures_count, get_employmenthero_medical_disclosure]
-    guidance: [employmenthero_sensitive_data, employmenthero_tier_gating]
-
-  # ----- Sync orchestration + local query ---------------------------------
-  - id: incremental_sync
+  # ----- Sync orchestration ---------------------------------------------
+  - id: employmenthero_incremental_sync
     name: Incremental sync
-    description: Single-tick orchestration across enabled object types.
-    functions: [run_employmenthero_sync_tick, get_employmenthero_sync_state, probe_employmenthero_tier]
+    description: >
+      Single-tick orchestration across workforce, leave, timesheets,
+      expenses, policies, documents, custom fields, onboarding,
+      qualifications, performance, recognition, surveys, learning,
+      recruitment, and pay (rate-banded).  Runs the internal
+      ``sync_employmenthero_*`` snapshot writers and aggregates their
+      output into the canonical DataManager envelope.
+    functions: [
+      run_employmenthero_sync_tick, get_employmenthero_sync_state,
+      probe_employmenthero_tier,
+    ]
     guidance: [employmenthero_sync_runbook, employmenthero_local_vs_live]
 
-  - id: local_query
+  # ----- Local DataManager query ---------------------------------------
+  - id: employmenthero_local_query
     name: Local DataManager query
-    description: Query the synced EH copy in DataManager (preferred over live for analytics).
+    description: >
+      Query the synced EH copy in DataManager (preferred over live for
+      analytics).  Sensitive surfaces (banking, tax, medical, payslips)
+      are intentionally not synced — those are live-only via
+      ``employmenthero_request`` with explicit user confirmation.
     functions: [
-      query_local_employmenthero_employees, query_local_employmenthero_teams, query_local_employmenthero_locations,
-      query_local_employmenthero_leave_requests, query_local_employmenthero_leave_balances,
-      query_local_employmenthero_timesheets, query_local_employmenthero_expenses,
-      query_local_employmenthero_qualifications, query_local_employmenthero_expiring_qualifications,
-      query_local_employmenthero_onboarding_status, query_local_employmenthero_documents,
+      query_local_employmenthero_employees, query_local_employmenthero_teams,
+      query_local_employmenthero_locations,
+      query_local_employmenthero_leave_requests,
+      query_local_employmenthero_leave_balances,
+      query_local_employmenthero_timesheets,
+      query_local_employmenthero_expenses,
+      query_local_employmenthero_qualifications,
+      query_local_employmenthero_expiring_qualifications,
+      query_local_employmenthero_onboarding_status,
+      query_local_employmenthero_documents,
       query_local_employmenthero_goals, query_local_employmenthero_reviews,
     ]
-    guidance: [employmenthero_local_vs_live, employmenthero_qualifications, employmenthero_overview]
+    guidance: [employmenthero_local_vs_live, employmenthero_overview]
 
 requirements: [httpx]
 tags: [employment-hero, hris, hr, payroll-adjacent, compliance, qualifications, leave, timesheets, sync, datamanager]
