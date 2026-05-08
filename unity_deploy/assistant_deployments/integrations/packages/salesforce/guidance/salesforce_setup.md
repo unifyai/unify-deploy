@@ -23,7 +23,7 @@ authorize step.
    - **Selected OAuth Scopes**: add at minimum
      - `Manage user data via APIs (api)`
      - `Perform requests at any time (refresh_token, offline_access)`
-   - Tick **Require Secret for Web Server Flow**.
+   - Under the security policy checkboxes, tick **Require Secret for Web Server Flow** and **Require Secret for Refresh Token Flow** only — leave the rest (including any PKCE / proof-key requirement) unticked.
    - Save and wait ~5 minutes for the new app to propagate (Salesforce
      warns about this on the save screen).
    - Open the new app -> **Manage Consumer Details** to reveal the
