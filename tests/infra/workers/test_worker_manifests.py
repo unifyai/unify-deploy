@@ -35,6 +35,27 @@ def test_cloud_build_applies_pipeline_worker_service_account() -> None:
         assert "deploy/k8s/workers/pipeline-worker-serviceaccount.yaml" in text
 
 
+def test_dlq_reconciler_jobs_have_ttl_cleanup() -> None:
+    text = (ROOT / "deploy/k8s/workers/dlq-reconciler-cronjob.yaml").read_text()
+
+    assert text.count("ttlSecondsAfterFinished: 1800") == 2
+
+
+def test_cloud_build_smoke_tests_dlq_reconciler_cli_and_pins_cron_image() -> None:
+    for relative_path, environment in [
+        ("deploy/cloudbuild-staging.yaml", "staging"),
+        ("deploy/cloudbuild.yaml", "production"),
+    ]:
+        text = (ROOT / relative_path).read_text()
+        assert "id: 'smoke-pipeline-cli'" in text
+        assert "pipeline_control reconcile-dlq --help" in text
+        assert (
+            "deploy/k8s/workers/dlq-reconciler-cronjob.yaml "
+            f"-l environment={environment}"
+        ) in text
+        assert "kubectl set image cronjob/unity-pipeline-dlq-reconciler" in text
+
+
 def test_job_watcher_uses_explicit_secret_allowlist() -> None:
     for relative_path in [
         "base/scripts/job-watcher/deployment_staging.yaml",

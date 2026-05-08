@@ -15,6 +15,19 @@ steps:
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:latest .
 
+  # Fail the deployment before pushing if the worker image does not include
+  # the maintenance CLI commands referenced by the Kubernetes CronJobs.
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'smoke-pipeline-cli'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker run --rm \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
+      python -m unity_deploy.infra.cli.pipeline_control reconcile-dlq --help >/dev/null
+  waitFor: ['build-image']
+
   # Push Docker Image (SHA and latest tags in parallel)
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-sha-tag'
@@ -23,7 +36,7 @@ steps:
   - '-c'
   - |
     docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}
-  waitFor: ['build-image']
+  waitFor: ['smoke-pipeline-cli']
 
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-latest-tag'
@@ -32,7 +45,7 @@ steps:
   - '-c'
   - |
     docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:latest
-  waitFor: ['build-image']
+  waitFor: ['smoke-pipeline-cli']
 
   # Upload SHA to Cloud Storage
 - name: 'gcr.io/cloud-builders/gsutil'
@@ -193,7 +206,10 @@ steps:
     kubectl apply -f deploy/k8s/workers/pipeline-worker-serviceaccount.yaml
     kubectl apply -f deploy/k8s/workers/parse-worker-deployment.yaml
     kubectl apply -f deploy/k8s/workers/ingest-worker-deployment.yaml
-    kubectl apply -f deploy/k8s/workers/dlq-reconciler-cronjob.yaml
+    kubectl apply -f deploy/k8s/workers/dlq-reconciler-cronjob.yaml -l environment=production
+    kubectl set image cronjob/unity-pipeline-dlq-reconciler \
+      dlq-reconciler="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+      -n production
     kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml
     kubectl apply -f deploy/k8s/workers/failed-pod-gc-cronjob.yaml
 
