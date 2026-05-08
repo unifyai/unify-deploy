@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from unity.common.pipeline.types import IngestCheckpoint
 from unity.common.pipeline.work_queue import ReceivedWorkItem
 
+from unity_deploy.infra.gcp.artifact_store import LeaseRecord
 from unity_deploy.infra.gcp.pipeline_observability import (
     classify_error,
     derive_status,
@@ -144,6 +147,52 @@ def test_running_with_dlq_and_checkpoint_derives_partial_dlq() -> None:
     assert derived == "partial-dlq"
     assert classification == "operator_retryable"
     assert retryable is True
+
+
+def test_fresh_lease_takes_precedence_over_stale_dlq_record() -> None:
+    record = dlq_record_from_received_item(
+        ReceivedWorkItem(
+            message_id="dlq-msg-active",
+            topic="dead_letter",
+            payload={
+                "kind": "ingest_requested",
+                "job_id": "job-active",
+                "dispatch_id": "dispatch-active",
+            },
+            receipt_id="ack-active",
+        ),
+        environment="production",
+        project_id="proj",
+        dlq_subscription="projects/proj/subscriptions/dlq",
+    )
+    active_lease = LeaseRecord(
+        key="jobs/job-active/leases/ingest-table_1.json",
+        owner_id="ingest:pod-a:attempt",
+        attempt_id="attempt-a",
+        stage="ingest",
+        acquired_at=datetime.now(timezone.utc).isoformat(),
+        heartbeat_at=datetime.now(timezone.utc).isoformat(),
+        expires_at=(datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        generation=1,
+    )
+
+    derived, classification, retryable = derive_status(
+        durable_status="queued",
+        dlq_records=[record],
+        checkpoints={
+            "table-1": IngestCheckpoint(
+                job_id="job-active",
+                artifact_id="table-1",
+                rows_committed=100,
+                chunks_committed=2,
+            ),
+        },
+        leases=[active_lease],
+    )
+
+    assert derived == "running-active"
+    assert classification == "active"
+    assert retryable is False
 
 
 def test_error_with_dlq_and_checkpoint_still_derives_partial_dlq() -> None:

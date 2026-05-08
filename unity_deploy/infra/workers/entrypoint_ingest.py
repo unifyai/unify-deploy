@@ -48,6 +48,7 @@ async def main() -> None:
     from .ingest_worker import handle_ingest_message
     from .pipeline_events import record_worker_event
     from .worker_utils import (
+        DuplicateLiveAttempt,
         LeaseExtender,
         build_worker_infra,
         initialize_worker_environment,
@@ -173,6 +174,22 @@ async def main() -> None:
                                 next_action="ack",
                             )
                             await infra.work_queue.ack(item.receipt_id)
+                        lease_outcome = "ack"
+                    except DuplicateLiveAttempt as exc:
+                        lease = exc.lease
+                        record_worker_event(
+                            infra,
+                            item,
+                            event_type="duplicate_live_attempt_acked",
+                            stage="ingest",
+                            error=str(exc),
+                            next_action="ack_duplicate",
+                            metadata={
+                                "active_owner": getattr(lease, "owner_id", ""),
+                                "active_expires_at": getattr(lease, "expires_at", ""),
+                            },
+                        )
+                        await infra.work_queue.ack(item.receipt_id)
                         lease_outcome = "ack"
                     except RetryWorkItem as exc:
                         record_worker_event(
