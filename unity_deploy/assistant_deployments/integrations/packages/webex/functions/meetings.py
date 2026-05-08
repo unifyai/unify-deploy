@@ -70,7 +70,8 @@ async def list_webex_meetings(
         lookback = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(
             days=cfg["meeting_lookback_days"]
         )
-        params["from"] = lookback.isoformat()
+        # Webex rejects ``+00:00``; needs the ``Z`` UTC suffix.
+        params["from"] = lookback.strftime("%Y-%m-%dT%H:%M:%SZ")
     if to_iso:
         params["to"] = to_iso
     if state:
@@ -227,7 +228,8 @@ async def sync_webex_meetings(
         lookback = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(
             days=cfg["meeting_lookback_days"]
         )
-        params["from"] = lookback.isoformat()
+        # Webex rejects ``+00:00``; needs the ``Z`` UTC suffix.
+        params["from"] = lookback.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     body = await webex_get("/v1/meetings", params=params)
     if "error" in body:

@@ -65,8 +65,13 @@ async def list_webex_people(
 ) -> dict:
     """List Webex people in the org.
 
-    Webex's ``/v1/people`` requires either ``email`` or ``displayName``
-    as a filter for non-admin tokens; admin scopes can list without.
+    Webex's ``/v1/people`` always requires a filter — ``email``,
+    ``displayName``, ``id``, or ``orgId``.  When the caller supplies
+    neither ``email`` nor ``display_name``, this falls back to looking
+    up the connected user's ``orgId`` via ``/v1/people/me`` and listing
+    by org (the admin-style enumeration path).  Without admin scope the
+    org-wide listing returns 403, which we surface via the standard
+    envelope.
     """
     if mock:
         rows = [
@@ -96,8 +101,24 @@ async def list_webex_people(
     params: dict = {"max": min(limit, 100)}
     if email:
         params["email"] = email
-    if display_name:
+    elif display_name:
         params["displayName"] = display_name
+    else:
+        me = await webex_get("/v1/people/me")
+        if "error" in me:
+            return me
+        org_id = me.get("orgId")
+        if not org_id:
+            return {
+                "error": "Webex /v1/people requires a filter; /people/me did not return orgId.",
+                "status_code": 400,
+                "hint": (
+                    "Pass ``email`` or ``display_name``, or reconnect Webex with a token that "
+                    "exposes ``orgId`` on /people/me."
+                ),
+            }
+        params["orgId"] = org_id
+
     body = await webex_get("/v1/people", params=params)
     if "error" in body:
         return body
@@ -166,7 +187,24 @@ async def sync_webex_people(
         webex_get,
     )
 
-    body = await webex_get("/v1/people", params={"max": 100})
+    # Webex's ``/v1/people`` always requires a filter.  Look up the
+    # connected user's ``orgId`` and enumerate by org — this is the
+    # admin-style listing path; without admin scope Webex returns 403,
+    # which the client wraps in the standard envelope.
+    me = await webex_get("/v1/people/me")
+    if "error" in me:
+        me.update({"schema_version": schema_version, "tables": {}})
+        return me
+    org_id = me.get("orgId")
+    if not org_id:
+        return {
+            "schema_version": schema_version,
+            "tables": {},
+            "error": "Webex /people/me did not return orgId — cannot enumerate people directory.",
+            "status_code": None,
+        }
+
+    body = await webex_get("/v1/people", params={"orgId": org_id, "max": 100})
     if "error" in body:
         body.update({"schema_version": schema_version, "tables": {}})
         return body
