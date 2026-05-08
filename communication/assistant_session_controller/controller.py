@@ -595,6 +595,7 @@ def _spawn_fresh_job_for_binding(
     session_name: str,
     binding: dict,
     image: str,
+    runtime_service_env: dict[str, str] | None = None,
 ):
     """Create a Unity Job pinned to ``image`` and pre-claimed for this binding.
 
@@ -643,6 +644,7 @@ def _spawn_fresh_job_for_binding(
         priority_class_name="unity-idle",
         extra_labels=extra_labels,
         extra_annotations=extra_annotations,
+        extra_env=runtime_service_env,
     )
     if job is None:
         emit_observability_event(
@@ -685,6 +687,7 @@ def _claim_idle_job_for_binding(
     session_name: str,
     binding: dict,
     image_override: str | None = None,
+    runtime_service_env: dict[str, str] | None = None,
 ):
     """Claim exactly one Job to satisfy this binding's container slot.
 
@@ -720,6 +723,7 @@ def _claim_idle_job_for_binding(
             session_name=session_name,
             binding=binding,
             image=image_override,
+            runtime_service_env=runtime_service_env,
         )
 
     sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
@@ -845,6 +849,7 @@ def _claim_and_bind_pending_job(
     bootstrap_retries: int,
     vm_retries: int,
     image_override: str | None = None,
+    runtime_service_env: dict[str, str] | None = None,
 ) -> JobClaimTransitionResult:
     """Advance a PendingJob binding to PendingContainer under a single-flight lease.
 
@@ -899,6 +904,7 @@ def _claim_and_bind_pending_job(
                 session_name,
                 binding,
                 image_override=image_override,
+                runtime_service_env=runtime_service_env,
             )
             if job is None:
                 return _JOB_CLAIM_RESULT_CAPACITY
@@ -2400,6 +2406,7 @@ def _update_status_for_session(body: dict) -> None:  # type: ignore[override]
             bootstrap_retries=bootstrap_retries,
             vm_retries=vm_retries,
             image_override=session.image_override,
+            runtime_service_env=session.runtime_service_env,
         )
         if claim_result == _JOB_CLAIM_RESULT_BUSY:
             return

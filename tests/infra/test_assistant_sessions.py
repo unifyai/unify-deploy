@@ -24,6 +24,7 @@ from communication.infra.assistant_sessions import (
     build_binding_vm_assignment,
     build_condition,
     build_binding_signal,
+    build_runtime_service_urls,
     build_suspend_intent,
     binding_vm_assignment,
     binding_vm_ref,
@@ -41,6 +42,7 @@ from communication.infra.assistant_sessions import (
     record_assistant_session_signal,
     released_binding,
     session_image_override,
+    session_runtime_service_env,
     session_signal,
     session_released_bindings,
     session_suspend_intent,
@@ -116,6 +118,44 @@ def test_build_assistant_session_spec_carries_image_override():
         image_override="registry/unity-staging:preview-myslug-deadbeef",
     )
     assert spec["imageOverride"] == ("registry/unity-staging:preview-myslug-deadbeef")
+
+
+def test_build_assistant_session_spec_carries_runtime_service_urls():
+    service_urls = build_runtime_service_urls(
+        orchestra_url="https://internal.example.com/v0",
+        comms_url="https://coordinator---unity-comms-app-staging.run.app",
+        adapters_url="https://coordinator---unity-adapters-staging.run.app",
+    )
+    spec = build_assistant_session_spec(
+        assistant_id="42",
+        user_id="7",
+        medium="unify_message",
+        desktop_mode="ubuntu",
+        startup_secret_ref="session-bootstrap-42",
+        activation_id="act-1",
+        service_urls=service_urls,
+    )
+
+    assert spec["serviceUrls"] == service_urls
+    assert session_runtime_service_env({"spec": spec}) == {
+        "ORCHESTRA_URL": "https://internal.example.com/v0",
+        "UNITY_COMMS_URL": "https://coordinator---unity-comms-app-staging.run.app",
+        "UNITY_ADAPTERS_URL": "https://coordinator---unity-adapters-staging.run.app",
+    }
+
+
+def test_session_runtime_service_env_rejects_partial_service_urls():
+    session = {
+        "spec": {
+            "serviceUrls": {
+                "orchestra": "https://internal.example.com/v0",
+                "adapters": "https://coordinator---unity-adapters-staging.run.app",
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="serviceUrls must include"):
+        session_runtime_service_env(session)
 
 
 def test_session_image_override_normalizes_missing_or_blank_values():
@@ -848,9 +888,22 @@ def test_crd_status_schema_covers_all_persisted_status_fields():
         / "crd.yaml"
     )
     crd = yaml.safe_load(crd_path.read_text())
+    spec_properties = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"][
+        "properties"
+    ]["spec"]["properties"]
     status_properties = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"][
         "properties"
     ]["status"]["properties"]
+
+    service_url_properties = spec_properties["serviceUrls"]["properties"]
+    assert set(spec_properties["serviceUrls"]["required"]) == {
+        "orchestra",
+        "comms",
+        "adapters",
+    }
+    assert {"orchestra", "comms", "adapters"}.issubset(
+        service_url_properties.keys(),
+    )
 
     expected_fields = {
         "phase",

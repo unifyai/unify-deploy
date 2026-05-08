@@ -420,12 +420,18 @@ def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
     create_unity_job_mock = MagicMock(return_value=fresh_job)
     monkeypatch.setattr(controller, "create_unity_job", create_unity_job_mock)
     image_uri = "registry/unity-staging:preview-myslug-deadbeef"
+    runtime_service_env = {
+        "ORCHESTRA_URL": "https://internal.example.com/v0",
+        "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
+        "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
+    }
 
     job = controller._claim_idle_job_for_binding(
         "1207",
         "assistant-session-1207",
         binding,
         image_override=image_uri,
+        runtime_service_env=runtime_service_env,
     )
 
     assert job is fresh_job
@@ -443,6 +449,7 @@ def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
     )
     assert extra_annotations[controller.BINDING_ID_ANNOTATION] == "binding-1"
     assert extra_annotations[controller.CONTAINER_READY_ANNOTATION] == "false"
+    assert call.kwargs["extra_env"] == runtime_service_env
     batch_api.list_namespaced_job.assert_called_once()
     batch_api.patch_namespaced_job.assert_not_called()
 
@@ -470,11 +477,16 @@ def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkey
     create_unity_job_mock.assert_not_called()
 
 
-def test_claim_and_bind_pending_job_threads_image_override_through(monkeypatch):
-    """The reconciler propagates spec.imageOverride to the spawn helper."""
+def test_claim_and_bind_pending_job_threads_preview_runtime_spec_through(monkeypatch):
+    """The reconciler propagates preview runtime spec to the spawn helper."""
 
     body = _base_session()
     body["spec"]["imageOverride"] = "registry/unity-staging:preview-myslug-deadbeef"
+    body["spec"]["serviceUrls"] = {
+        "orchestra": "https://internal.example.com/v0",
+        "comms": "https://myslug---unity-comms-app-staging.run.app",
+        "adapters": "https://myslug---unity-adapters-staging.run.app",
+    }
     body["status"]["phase"] = "PendingJob"
     body["status"]["binding"] = _binding("binding-1")
     fresh_job = _job(name="unity-preview-1207-abc123-staging")
@@ -507,6 +519,11 @@ def test_claim_and_bind_pending_job_threads_image_override_through(monkeypatch):
     assert captured["image_override"] == (
         "registry/unity-staging:preview-myslug-deadbeef"
     )
+    assert captured["runtime_service_env"] == {
+        "ORCHESTRA_URL": "https://internal.example.com/v0",
+        "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
+        "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
+    }
 
 
 def test_claim_idle_job_claims_jobs_in_name_order(monkeypatch):

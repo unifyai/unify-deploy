@@ -257,6 +257,26 @@ def patch_job_labels(
             return False
 
 
+def _merge_env_overrides(
+    env_vars: list[dict],
+    extra_env: dict[str, str] | None,
+) -> list[dict]:
+    """Apply explicit env values without leaving duplicate variable names."""
+
+    if not extra_env:
+        return env_vars
+    remaining = {str(key): str(value) for key, value in extra_env.items() if str(key)}
+    merged: list[dict] = []
+    for env_var in env_vars:
+        name = str(env_var.get("name", "") or "")
+        if name in remaining:
+            merged.append({"name": name, "value": remaining.pop(name)})
+        else:
+            merged.append(env_var)
+    merged.extend({"name": name, "value": value} for name, value in remaining.items())
+    return merged
+
+
 def create_unity_job(
     batch_api,
     job_name: str,
@@ -379,11 +399,7 @@ def create_unity_job(
         env_vars.extend(unity_secret_env)
         if deploy_env == "staging":
             env_vars += [{"name": "STAGING", "value": "true"}]
-        if extra_env:
-            env_vars.extend(
-                {"name": str(key), "value": str(value)}
-                for key, value in extra_env.items()
-            )
+        env_vars = _merge_env_overrides(env_vars, extra_env)
 
         metadata_labels = {
             "app": app_label,

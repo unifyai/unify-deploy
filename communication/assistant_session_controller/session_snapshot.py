@@ -10,6 +10,7 @@ from communication.infra.assistant_sessions import (
     session_desktop_mode,
     session_desktop_required,
     session_image_override,
+    session_runtime_service_env,
 )
 
 
@@ -35,6 +36,7 @@ class SessionSnapshot:
     desktop_probe_failures: int
     last_error: str
     image_override: str | None
+    runtime_service_env: dict[str, str]
 
     @classmethod
     def from_body(cls, body: dict[str, Any]) -> "SessionSnapshot":
@@ -63,4 +65,5 @@ class SessionSnapshot:
             ),
             last_error=str(status.get("lastError", "") or ""),
             image_override=session_image_override(body),
+            runtime_service_env=session_runtime_service_env(body),
         )

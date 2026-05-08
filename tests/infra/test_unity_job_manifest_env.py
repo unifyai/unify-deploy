@@ -1,4 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
+
+from communication.infra.helpers import create_unity_job
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,3 +32,58 @@ def test_create_unity_job_uses_explicit_env_allowlist() -> None:
         in create_job_source
     )
     assert 'config_ref["optional"] = True' in create_job_source
+
+
+def test_create_unity_job_applies_explicit_service_url_env_once() -> None:
+    class FakeBatchApi:
+        def __init__(self):
+            self.created_body = None
+
+        def create_namespaced_job(self, namespace, body):
+            self.created_body = body
+            return SimpleNamespace(
+                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
+            )
+
+    batch_api = FakeBatchApi()
+
+    create_unity_job(
+        batch_api,
+        job_name="unity-preview-1207-staging",
+        namespace="staging",
+        deploy_env="staging",
+        extra_env={
+            "ORCHESTRA_URL": "https://internal.example.com/v0",
+            "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
+            "UNITY_ADAPTERS_URL": ("https://myslug---unity-adapters-staging.run.app"),
+        },
+    )
+
+    env_vars = batch_api.created_body["spec"]["template"]["spec"]["containers"][0][
+        "env"
+    ]
+    env_by_name = {env_var["name"]: env_var for env_var in env_vars}
+    env_names = [env_var["name"] for env_var in env_vars]
+
+    assert env_names.count("ORCHESTRA_URL") == 1
+    assert env_names.count("UNITY_COMMS_URL") == 1
+    assert env_names.count("UNITY_ADAPTERS_URL") == 1
+    assert env_by_name["ORCHESTRA_URL"]["value"] == (
+        "https://internal.example.com/v0"
+    )
+    assert env_by_name["UNITY_COMMS_URL"]["value"] == (
+        "https://myslug---unity-comms-app-staging.run.app"
+    )
+    assert env_by_name["UNITY_ADAPTERS_URL"]["value"] == (
+        "https://myslug---unity-adapters-staging.run.app"
+    )
+
+
+def test_comms_preview_deploy_sets_all_runtime_service_urls() -> None:
+    text = (ROOT / "cloudbuild/unity-comms-app-preview.yaml").read_text()
+
+    assert 'ORCHESTRA_URL="https://$${SLUG}.${_PEER_ORCHESTRA_HOST}/v0"' in text
+    assert 'COMMS_URL="https://$${SLUG}---${_PEER_COMMS_HOST}"' in text
+    assert 'ADAPTERS_URL="https://$${SLUG}---${_PEER_ADAPTERS_HOST}"' in text
+    assert "UNITY_COMMS_URL=$${COMMS_URL}" in text
+    assert "UNITY_ADAPTERS_URL=$${ADAPTERS_URL}" in text
