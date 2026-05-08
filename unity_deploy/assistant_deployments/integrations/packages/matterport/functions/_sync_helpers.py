@@ -65,6 +65,32 @@ def seconds_since(iso_ts: str | None) -> int | None:
     return int(delta.total_seconds())
 
 
+# GraphQL fragment listing the fields fetched for every ``Model`` query.
+# Lives here (not at the top of ``models.py``) because each
+# ``@custom_function()`` body runs under FunctionManager isolation that
+# strips module-level names — so the f-strings referencing this fragment
+# must import it from inside the body, the same pattern ``normalize_model``
+# below already uses.
+MODEL_FIELDS_FRAGMENT = """
+  id
+  name
+  internalLabel
+  visibility
+  shareUrl
+  status
+  modifiedAt
+  sqft
+  address {
+    addressLine1
+    addressLine2
+    city
+    state
+    postalCode
+    country
+  }
+"""
+
+
 def normalize_model(raw: dict) -> dict:
     """Flatten a Matterport ``Model`` GraphQL node to a DataManager row.
 

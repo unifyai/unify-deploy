@@ -1,27 +1,15 @@
-"""Matterport 3D models — list / get / search / sync."""
+"""Matterport 3D models — list / get / search / sync.
+
+The GraphQL field fragment used by every Model query lives in
+``_sync_helpers.MODEL_FIELDS_FRAGMENT`` rather than at module scope here:
+each ``@custom_function()`` runs under FunctionManager isolation that
+hides module-level names, so the fragment must be imported from inside
+each function body alongside ``normalize_model``.
+"""
 
 from __future__ import annotations
 
 from unity.function_manager.custom import custom_function
-
-_MODEL_FIELDS = """
-  id
-  name
-  internalLabel
-  visibility
-  shareUrl
-  status
-  modifiedAt
-  sqft
-  address {
-    addressLine1
-    addressLine2
-    city
-    state
-    postalCode
-    country
-  }
-"""
 
 
 @custom_function()
@@ -61,13 +49,14 @@ async def list_matterport_models(
         matterport_graphql,
     )
     from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._sync_helpers import (
+        MODEL_FIELDS_FRAGMENT,
         normalize_model,
     )
 
     query = f"""
     query Models($pageSize: Int, $cursor: String) {{
       models(pageSize: $pageSize, cursor: $cursor) {{
-        results {{ {_MODEL_FIELDS} }}
+        results {{ {MODEL_FIELDS_FRAGMENT} }}
         cursor
       }}
     }}
@@ -110,12 +99,13 @@ async def get_matterport_model(model_id: str, mock: bool = True) -> dict:
         matterport_graphql,
     )
     from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._sync_helpers import (
+        MODEL_FIELDS_FRAGMENT,
         normalize_model,
     )
 
     query = f"""
     query Model($id: ID!) {{
-      model(id: $id) {{ {_MODEL_FIELDS} }}
+      model(id: $id) {{ {MODEL_FIELDS_FRAGMENT} }}
     }}
     """
     body = await matterport_graphql(query, variables={"id": model_id})
@@ -157,13 +147,14 @@ async def search_matterport_models_by_address(
         matterport_graphql,
     )
     from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._sync_helpers import (
+        MODEL_FIELDS_FRAGMENT,
         normalize_model,
     )
 
     query = f"""
     query SearchModels($query: String, $pageSize: Int) {{
       models(filter: {{ address: $query }}, pageSize: $pageSize) {{
-        results {{ {_MODEL_FIELDS} }}
+        results {{ {MODEL_FIELDS_FRAGMENT} }}
       }}
     }}
     """
@@ -240,6 +231,7 @@ async def sync_matterport_models(
         get_matterport_config,
     )
     from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._sync_helpers import (
+        MODEL_FIELDS_FRAGMENT,
         normalize_model,
     )
 
@@ -254,7 +246,7 @@ async def sync_matterport_models(
     query = f"""
     query SyncModels($pageSize: Int, $cursor: String, $since: String) {{
       models(pageSize: $pageSize, cursor: $cursor, modifiedSince: $since) {{
-        results {{ {_MODEL_FIELDS} }}
+        results {{ {MODEL_FIELDS_FRAGMENT} }}
         cursor
       }}
     }}
