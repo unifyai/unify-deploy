@@ -171,3 +171,81 @@ def test_byod_missing_env_returns_none(monkeypatch):
     }
 
     assert _resolve_ms_refresh_credentials(assistant) is None
+
+
+class _Resp:
+    def __init__(self, status_code: int, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+
+
+def test_store_refreshed_oauth_secrets_uses_post_fallback(monkeypatch):
+    """Refresh persistence treats PUT 404 + POST 201 as a successful upsert."""
+    from common.settings import SETTINGS
+
+    monkeypatch.setattr(SETTINGS, "orchestra_url", "https://orchestra.test")
+
+    calls: list[tuple[str, str, dict]] = []
+
+    def fake_put(url, json, headers):
+        calls.append(("PUT", url, json))
+        return _Resp(404, "missing")
+
+    def fake_post(url, json, headers):
+        calls.append(("POST", url, json))
+        return _Resp(201, "created")
+
+    from adapters import main
+
+    monkeypatch.setattr(main.requests, "put", fake_put)
+    monkeypatch.setattr(main.requests, "post", fake_post)
+
+    ok, error = main._store_refreshed_oauth_secrets(
+        provider="fake",
+        assistant_id="123",
+        assistant_email="user@example.com",
+        api_key="assistant-key",
+        secrets_to_store={"FAKE_ACCESS_TOKEN": "token"},
+    )
+
+    assert ok is True
+    assert error is None
+    assert calls == [
+        (
+            "PUT",
+            "https://orchestra.test/assistant/123/secret/FAKE_ACCESS_TOKEN",
+            {"secret_value": "token"},
+        ),
+        (
+            "POST",
+            "https://orchestra.test/assistant/123/secret",
+            {"secret_name": "FAKE_ACCESS_TOKEN", "secret_value": "token"},
+        ),
+    ]
+
+
+def test_store_refreshed_oauth_secrets_fails_on_persistence_error(monkeypatch):
+    """A refresh job must not be counted refreshed when credential storage fails."""
+    from common.settings import SETTINGS
+
+    monkeypatch.setattr(SETTINGS, "orchestra_url", "https://orchestra.test")
+
+    from adapters import main
+
+    monkeypatch.setattr(
+        main.requests,
+        "put",
+        lambda *args, **kwargs: _Resp(500, "nope"),
+    )
+
+    ok, error = main._store_refreshed_oauth_secrets(
+        provider="fake",
+        assistant_id="123",
+        assistant_email="user@example.com",
+        api_key="assistant-key",
+        secrets_to_store={"FAKE_ACCESS_TOKEN": "token"},
+    )
+
+    assert ok is False
+    assert "FAKE_ACCESS_TOKEN" in (error or "")
+    assert "token" not in (error or "")
