@@ -56,9 +56,10 @@ can pick the most recent.
 If asked "show me the 3D tour for record X" and no link exists:
 
 1. Try `query_local_matterport_models(unit_id="X")` — returns nothing.
-2. Try `search_matterport_models_by_address(<record's address>)` — if a
-   high-score match comes back, surface it: "Looks like model Y.  Link
-   them?" and on confirmation call
-   `link_matterport_model_to_unit(...)`.
+2. Fall back to a fuzzy address lookup via `matterport_graphql_query` —
+   query `models(filter: { address: $query })` (verify the field name
+   against the live schema first; Matterport's filter args change) and
+   surface any high-score match: "Looks like model Y.  Link them?" and
+   on confirmation call `link_matterport_model_to_unit(...)`.
 3. If no good match, tell the user to either set the Matterport
    internal label to `unit:X` or paste the model id directly.
