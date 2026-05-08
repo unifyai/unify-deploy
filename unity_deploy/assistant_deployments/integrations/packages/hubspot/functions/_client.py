@@ -31,6 +31,88 @@ def _headers(token: str) -> dict:
     }
 
 
+async def hubspot_request(
+    method: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    body: dict | None = None,
+    timeout: float | None = None,
+) -> dict:
+    """Generic request against the HubSpot API.
+
+    ``method`` is the HTTP verb (``GET``, ``POST``, ``PATCH``, ``PUT``,
+    ``DELETE``); ``path`` is the URL path (e.g. ``/crm/v3/objects/contacts``).
+    ``params`` go on the query string, ``body`` is JSON-encoded for verbs
+    that take one.
+
+    Returns the parsed JSON body on success.  On rate-limit (429), sleeps
+    the value of ``Retry-After`` (or ``backoff_factor**attempt`` seconds)
+    and retries up to ``HUBSPOT_RATE_LIMIT_MAX_RETRIES``.  Returns
+    ``{"error": ..., "status_code": ...}`` on persistent failure.
+
+    First-page only: this helper does not auto-paginate.  Bulk pulls go
+    through ``run_hubspot_sync_tick``; live reads return one page and the
+    caller can re-issue with ``after``/``paging`` from the response if
+    they need more.
+    """
+    import os
+    import httpx
+
+    token = _token_or_none()
+    if token is None:
+        return {
+            "error": "HUBSPOT_PRIVATE_APP_TOKEN is not configured.",
+            "status_code": None,
+            "hint": (
+                "Add the Private App token via Console -> Integrations -> "
+                "HubSpot before calling the API."
+            ),
+        }
+
+    method_upper = method.upper()
+    timeout = timeout or float(os.environ.get("HUBSPOT_REQUEST_TIMEOUT_SECONDS", "30"))
+    max_retries = int(os.environ.get("HUBSPOT_RATE_LIMIT_MAX_RETRIES", "3"))
+    backoff_factor = float(os.environ.get("HUBSPOT_RATE_LIMIT_BACKOFF_FACTOR", "1.5"))
+
+    url = f"{_API_BASE}{path}"
+    last_err: dict | None = None
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt in range(max_retries + 1):
+            resp = await client.request(
+                method_upper,
+                url,
+                params=params,
+                json=body,
+                headers=_headers(token),
+            )
+            if 200 <= resp.status_code < 300:
+                if not resp.content:
+                    return {"status": "ok"}
+                try:
+                    return resp.json()
+                except ValueError:
+                    return {"status": "ok", "body": _safe_text(resp)}
+            if resp.status_code == 429 and attempt < max_retries:
+                retry_after = float(
+                    resp.headers.get("Retry-After", backoff_factor**attempt),
+                )
+                await asyncio.sleep(retry_after)
+                continue
+            last_err = {
+                "error": f"HubSpot {method_upper} {path} returned {resp.status_code}",
+                "status_code": resp.status_code,
+                "body": _safe_text(resp),
+            }
+            if resp.status_code == 403:
+                last_err["hint"] = (
+                    "403 typically indicates a missing scope on the Private App "
+                    "or a HubSpot tier that does not include this surface."
+                )
+            break
+    return last_err or {"error": "request failed without status"}
+
+
 async def hubspot_get(
     path: str,
     *,

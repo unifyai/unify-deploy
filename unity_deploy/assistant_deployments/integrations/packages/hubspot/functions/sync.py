@@ -44,13 +44,13 @@ async def run_hubspot_sync_tick(full: bool = False, mock: bool = True) -> dict:
 
     if mock:
         # Minimal aggregated mock envelope - exercises the contract.
-        from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions.contacts import (
+        from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions._sync_contacts import (
             sync_hubspot_contacts,
         )
-        from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions.companies import (
+        from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions._sync_companies import (
             sync_hubspot_companies,
         )
-        from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions.deals import (
+        from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions._sync_deals import (
             sync_hubspot_deals,
         )
 
