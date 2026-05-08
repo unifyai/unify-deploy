@@ -349,7 +349,7 @@ def _queue_resources(settings) -> dict[str, str]:
     }
 
 
-def _load_job_snapshot(infra, job_id: str):
+def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
     from unity_deploy.infra.gcp.pipeline_observability import (
         JobObservabilitySnapshot,
         derive_status,
@@ -370,7 +370,7 @@ def _load_job_snapshot(infra, job_id: str):
 
     checkpoints = list_job_checkpoints(artifact_store, job_id)
     dlq_records = list_job_dlq_records(artifact_store, job_id)
-    events = list_job_events(artifact_store, job_id)
+    events = list_job_events(artifact_store, job_id) if include_events else []
     heartbeat_at = latest_heartbeat_at(artifact_store, job_id)
     leases = read_active_leases(artifact_store, job_id)
     derived_status, retry_classification, retry_eligible = derive_status(
@@ -715,7 +715,28 @@ async def cmd_status(args: argparse.Namespace) -> None:
         return
 
     resources = _queue_resources(infra.settings)
-    snapshots = [_load_job_snapshot(infra, jid) for jid in manifest.job_ids]
+    created = manifest.created_at[:19].replace("T", " ") if manifest.created_at else "?"
+    if not args.json:
+        print(f"\nDispatch: {manifest.dispatch_id}", flush=True)
+        print(f"Source:   {manifest.source}", flush=True)
+        print(f"Mode:     {manifest.mode}", flush=True)
+        print(f"Created:  {created}", flush=True)
+        print(f"Config:   {manifest.config_path or '(ad-hoc)'}", flush=True)
+        print(f"Files:    {manifest.total_files}", flush=True)
+        print("\nEnvironment / Resources:", flush=True)
+        for key, value in resources.items():
+            print(f"  {key}: {value or '(unset)'}", flush=True)
+        print(
+            f"\nScanning {len(manifest.job_ids)} job(s) for status...",
+            flush=True,
+        )
+    snapshots = []
+    for idx, jid in enumerate(manifest.job_ids, start=1):
+        if not args.json:
+            print(f"  [{idx}/{len(manifest.job_ids)}] inspecting {jid}", flush=True)
+        snapshots.append(
+            _load_job_snapshot(infra, jid, include_events=args.show_events),
+        )
     counts: dict[str, int] = {}
     for snap in snapshots:
         counts[snap.derived_status] = counts.get(snap.derived_status, 0) + 1
@@ -734,16 +755,6 @@ async def cmd_status(args: argparse.Namespace) -> None:
         )
         return
 
-    created = manifest.created_at[:19].replace("T", " ") if manifest.created_at else "?"
-    print(f"\nDispatch: {manifest.dispatch_id}")
-    print(f"Source:   {manifest.source}")
-    print(f"Mode:     {manifest.mode}")
-    print(f"Created:  {created}")
-    print(f"Config:   {manifest.config_path or '(ad-hoc)'}")
-    print(f"Files:    {manifest.total_files}")
-    print("\nEnvironment / Resources:")
-    for key, value in resources.items():
-        print(f"  {key}: {value or '(unset)'}")
     print()
 
     hdr = (
@@ -835,7 +846,12 @@ async def cmd_monitor(args: argparse.Namespace) -> None:
             print(f"Job {args.job_id} not found")
             return
 
-        snap = _load_job_snapshot(infra, args.job_id)
+        if not args.json:
+            print(f"\nLoading snapshot for job {args.job_id}...", flush=True)
+            print("Monitor resources:", flush=True)
+            for key, value in _queue_resources(settings).items():
+                print(f"  {key}: {value or '(unset)'}", flush=True)
+        snap = _load_job_snapshot(infra, args.job_id, include_events=args.show_events)
         if args.json:
             print(
                 json.dumps(
@@ -1092,6 +1108,21 @@ async def cmd_retry(args: argparse.Namespace) -> None:
     if not only:
         only = {"dlq", "stale-running", "error", "retryable"}
 
+    if not args.job_id and only == {"dlq"}:
+        from unity_deploy.infra.gcp.pipeline_observability import (
+            list_dispatch_dlq_records,
+        )
+
+        dlq_job_ids: list[str] = []
+        seen_dlq_jobs: set[str] = set()
+        manifest_jobs = set(target_jobs)
+        for record in list_dispatch_dlq_records(artifact_store, args.dispatch_id):
+            if record.job_id in manifest_jobs and record.job_id not in seen_dlq_jobs:
+                seen_dlq_jobs.add(record.job_id)
+                dlq_job_ids.append(record.job_id)
+        if dlq_job_ids:
+            target_jobs = dlq_job_ids
+
     if not args.json:
         print("Retry resources:", flush=True)
         for key, value in resources.items():
@@ -1107,7 +1138,7 @@ async def cmd_retry(args: argparse.Namespace) -> None:
     for idx, job_id in enumerate(target_jobs, start=1):
         if not args.json:
             print(f"  [{idx}/{len(target_jobs)}] inspecting {job_id}", flush=True)
-        snap = _load_job_snapshot(infra, job_id)
+        snap = _load_job_snapshot(infra, job_id, include_events=False)
         reasons: list[str] = []
         if snap.durable_status == "success" and not args.force_reingest:
             skipped.append({"job_id": job_id, "reason": "success"})
