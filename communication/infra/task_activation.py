@@ -27,6 +27,7 @@ from .models import (
     OfflineTaskDispatchRequest,
     ScheduledTaskActivationDeleteRequest,
     ScheduledTaskActivationUpsertRequest,
+    TaskActivationDiagnosticRequest,
 )
 from .runtime_clients import (
     get_cloud_tasks_client as _get_cloud_tasks_client,
@@ -44,6 +45,7 @@ OFFLINE_UNITY_JOB_STATUS = "offline"
 ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
 ORCHESTRA_TASK_ACTIVATION_CURRENT_PATH = "/admin/task-activation/current"
 ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
+ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
 _TASK_ID_SAFE_RE = re.compile(r"[^a-z0-9-]+")
 _task_queues_ensured: set[str] = set()
@@ -116,6 +118,37 @@ def _ensure_task_queue(queue_name: str) -> str:
 
     _task_queues_ensured.add(queue_name)
     return queue_path
+
+
+def _task_queue_diagnostics() -> list[dict[str, Any]]:
+    """Return existence diagnostics for required task activation queues."""
+
+    client = _get_cloud_tasks_client()
+    diagnostics: list[dict[str, Any]] = []
+    for queue_name in dict.fromkeys(
+        [
+            SETTINGS.task_due_queue_name,
+            SETTINGS.task_offline_queue_name,
+            SETTINGS.task_activation_repair_queue_name,
+        ],
+    ):
+        queue_path = _task_queue_path(queue_name)
+        try:
+            client.get_queue(name=queue_path)
+            status = "ok"
+            error = None
+        except GcpNotFound as exc:
+            status = "missing"
+            error = str(exc)
+        diagnostics.append(
+            {
+                "queue_name": queue_name,
+                "queue_path": queue_path,
+                "status": status,
+                "error": error,
+            },
+        )
+    return diagnostics
 
 
 def _scheduled_activation_http_body(
@@ -330,6 +363,26 @@ def _lookup_current_task_activation(
     )
     activation = body.get("activation")
     return activation if isinstance(activation, dict) else None
+
+
+def _lookup_latest_task_run(
+    *,
+    assistant_id: str,
+    task_id: int,
+    source_task_log_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Fetch the latest task run row for one assistant/task pair."""
+
+    payload: dict[str, Any] = {
+        "project_name": ORCHESTRA_TASK_MACHINE_PROJECT,
+        "assistant_id": assistant_id,
+        "task_id": task_id,
+    }
+    if source_task_log_id is not None:
+        payload["source_task_log_id"] = source_task_log_id
+    body = _orchestra_admin_post(ORCHESTRA_TASK_RUN_LATEST_PATH, payload)
+    run = body.get("run")
+    return run if isinstance(run, dict) else None
 
 
 def _create_or_adopt_task_run(payload: dict[str, Any]) -> dict[str, Any]:
@@ -692,6 +745,72 @@ async def _materialize_scheduled_task_activation(
     }
 
 
+def _activation_materialization_diagnostic(
+    *,
+    assistant_id: str,
+    task_id: int,
+    source_task_log_id: int | None = None,
+) -> dict[str, Any]:
+    """Return activation, queue, target, Cloud Task, and latest-run diagnostics."""
+
+    activation = _lookup_current_task_activation(
+        assistant_id=assistant_id,
+        task_id=task_id,
+    )
+    latest_run = _lookup_latest_task_run(
+        assistant_id=assistant_id,
+        task_id=task_id,
+        source_task_log_id=source_task_log_id,
+    )
+    materialization: dict[str, Any] | None = None
+    if activation is not None and activation.get("activation_kind") == "scheduled":
+        scheduled_for_raw = activation.get("next_due_at")
+        if scheduled_for_raw:
+            scheduled_for = datetime.fromisoformat(
+                str(scheduled_for_raw).replace("Z", "+00:00"),
+            ).astimezone(timezone.utc)
+            execution_mode = str(activation.get("execution_mode") or "live")
+            activation_revision = str(activation.get("activation_revision") or "")
+            queue_name, target_url, schedule_at = _scheduled_activation_target(
+                ScheduledTaskActivationUpsertRequest(
+                    assistant_id=assistant_id,
+                    task_id=task_id,
+                    source_task_log_id=int(
+                        activation.get("source_task_log_id") or source_task_log_id or 0,
+                    ),
+                    activation_revision=activation_revision,
+                    scheduled_for=scheduled_for,
+                    execution_mode=(
+                        "offline" if execution_mode == "offline" else "live"
+                    ),
+                ),
+            )
+            materialization = {
+                "queue_name": queue_name,
+                "queue_path": _task_queue_path(queue_name),
+                "target_url": target_url,
+                "scheduled_for": scheduled_for.isoformat(),
+                "scheduled_checkpoint_for": schedule_at.isoformat(),
+                "task_name": _scheduled_activation_task_name(
+                    assistant_id=assistant_id,
+                    task_id=task_id,
+                    activation_revision=activation_revision,
+                    scheduled_for=scheduled_for,
+                    execution_mode=execution_mode,
+                    queue_name=queue_name,
+                ),
+            }
+    return {
+        "success": True,
+        "assistant_id": assistant_id,
+        "task_id": task_id,
+        "activation": activation,
+        "materialization": materialization,
+        "queues": _task_queue_diagnostics(),
+        "latest_run": latest_run,
+    }
+
+
 @router.post("/task-activation/upsert")
 async def upsert_scheduled_task_activation(
     request: ScheduledTaskActivationUpsertRequest,
@@ -699,6 +818,53 @@ async def upsert_scheduled_task_activation(
     """Materialize one scheduled activation into Cloud Tasks."""
 
     return await _materialize_scheduled_task_activation(request)
+
+
+@router.get("/task-activation/validate")
+async def validate_task_activation_infra():
+    """Report required Cloud Tasks queues and configured activation targets."""
+
+    try:
+        queues = await asyncio.to_thread(_task_queue_diagnostics)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to validate task activation queues: {exc}",
+        ) from exc
+    return {
+        "success": True,
+        "gcp_project_id": SETTINGS.gcp_project_id,
+        "location": SETTINGS.task_due_queue_location,
+        "queues": queues,
+        "targets": {
+            "live_due": f"{SETTINGS.adapters_url}{TASK_DUE_ENDPOINT_PATH}",
+            "offline_dispatch": f"{SETTINGS.comms_url}{OFFLINE_TASK_DISPATCH_PATH}",
+            "repair": f"{SETTINGS.comms_url}{TASK_ACTIVATION_REPAIR_PATH}",
+        },
+    }
+
+
+@router.post("/task-activation/diagnose")
+async def diagnose_task_activation(request: TaskActivationDiagnosticRequest):
+    """Report activation materialization and latest run state for one task."""
+
+    try:
+        return await asyncio.to_thread(
+            _activation_materialization_diagnostic,
+            assistant_id=request.assistant_id,
+            task_id=request.task_id,
+            source_task_log_id=request.source_task_log_id,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Task activation diagnosis failed while talking to Orchestra: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to diagnose task activation: {exc}",
+        ) from exc
 
 
 @router.post("/task-activation/repair")

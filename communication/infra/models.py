@@ -105,6 +105,14 @@ class OfflineTaskDispatchRequest(BaseModel):
     task_description: Optional[str] = None
 
 
+class TaskActivationDiagnosticRequest(BaseModel):
+    """Inspect task activation materialization for one assistant task."""
+
+    assistant_id: str
+    task_id: int
+    source_task_log_id: Optional[int] = None
+
+
 class PoolDiskDeleteRequest(BaseModel):
     assistant_id: str
 
