@@ -352,6 +352,49 @@ def _find_org_space_by_name(
     return None
 
 
+def _create_org_space(
+    api_key: str,
+    *,
+    organization_id: str,
+    name: str,
+    description: str,
+) -> dict[str, Any]:
+    response = requests.post(
+        f"{ORCHESTRA_URL}/spaces",
+        json={
+            "name": name,
+            "description": description,
+            "organization_id": int(organization_id),
+        },
+        headers=_auth_headers(api_key),
+        timeout=30,
+    )
+    assert (
+        response.status_code == 201
+    ), f"Space create failed: {response.status_code} {response.text}"
+    payload = response.json()
+    assert isinstance(payload, dict), f"Expected created space payload, got: {payload}"
+    return payload
+
+
+def _add_space_member(
+    api_key: str,
+    *,
+    space_id: str,
+    assistant_id: str,
+) -> None:
+    response = requests.post(
+        f"{ORCHESTRA_URL}/spaces/{space_id}/members",
+        json={"assistant_id": int(assistant_id)},
+        headers=_auth_headers(api_key),
+        timeout=30,
+    )
+    assert response.status_code in {
+        200,
+        201,
+    }, f"Add member failed: {response.status_code} {response.text}"
+
+
 def _list_space_members(api_key: str, space_id: str) -> list[dict[str, Any]]:
     response = requests.get(
         f"{ORCHESTRA_URL}/spaces/{space_id}/members",
@@ -693,7 +736,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         assert bootstrap_payload["is_coordinator"] is True
         assert str(bootstrap_payload["org_id"]) == organization_id
 
-        default_spaces = [
+        implicit_org_named_spaces = [
             space
             for space in _list_assistant_spaces(organization_api_key, coordinator_id)
             if (
@@ -702,8 +745,8 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
                 and _read_field(space, "name") == organization["name"]
             )
         ]
-        assert default_spaces, (
-            "Coordinator should be a member of the org-default shared space. "
+        assert not implicit_org_named_spaces, (
+            "Coordinator should not auto-join an implicit org-wide space. "
             f"coordinator_id={coordinator_id} org_id={organization_id}"
         )
 
@@ -817,7 +860,8 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         )
         coordinator_id = None
         delete_org_response = _delete_organization(
-            organization_id, organization_api_key
+            organization_id,
+            organization_api_key,
         )
         assert delete_org_response.status_code == 204, (
             "Disposable organization cleanup failed. "
@@ -919,22 +963,27 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
         assert bootstrap_payload["is_coordinator"] is True
         assert str(bootstrap_payload["org_id"]) == organization_id
 
-        default_spaces = [
-            space
-            for space in _list_assistant_spaces(organization_api_key, coordinator_id)
-            if (
-                str(_read_field(space, "organization_id", "organizationId"))
-                == organization_id
-                and _read_field(space, "name") == organization["name"]
-            )
-        ]
-        assert default_spaces, (
-            "Coordinator should be a member of the org-default shared space. "
-            f"coordinator_id={coordinator_id} org_id={organization_id}"
+        setup_space_name = f"Coordinator Act Space {uuid.uuid4().hex[:8]}"
+        setup_space = _create_org_space(
+            organization_api_key,
+            organization_id=organization_id,
+            name=setup_space_name,
+            description=(
+                "Explicit workspace for Coordinator act integration validation."
+            ),
         )
-        default_space = default_spaces[0]
-        space_id = str(_read_field(default_space, "space_id", "spaceId") or "")
-        assert space_id, f"Default space omitted id: {default_space}"
+        space_id = str(_read_field(setup_space, "space_id", "spaceId") or "")
+        assert space_id, f"Created setup space omitted id: {setup_space}"
+        _add_space_member(
+            organization_api_key,
+            space_id=space_id,
+            assistant_id=coordinator_id,
+        )
+        assert _space_has_member(
+            organization_api_key,
+            space_id,
+            coordinator_id,
+        )
 
         token = f"coord-act-space-{uuid.uuid4().hex[:12]}"
         guidance_log = _send_and_poll_for_side_effect(
@@ -976,7 +1025,8 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
         )
         coordinator_id = None
         delete_org_response = _delete_organization(
-            organization_id, organization_api_key
+            organization_id,
+            organization_api_key,
         )
         assert delete_org_response.status_code == 204, (
             "Disposable organization cleanup failed. "
