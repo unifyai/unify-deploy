@@ -67,8 +67,10 @@ from unity_deploy.infra.gcp.artifact_store import (
 )
 from unity_deploy.infra.gcp.pipeline_observability import (
     PipelineJobEvent,
+    make_receipt_hash,
     write_job_event,
 )
+from .worker_utils import DuplicateLiveAttempt
 
 if TYPE_CHECKING:
     from .worker_utils import WorkerInfra
@@ -701,6 +703,66 @@ def _is_terminal_job(job_store: Any, job_id: str) -> tuple[bool, str]:
     return status in _TERMINAL_JOB_STATUSES, status
 
 
+def _mark_ingest_running(
+    *,
+    job_store: Any,
+    artifact_store: Any,
+    settings: Any,
+    item: ReceivedWorkItem,
+    msg: IngestRequested,
+) -> None:
+    """Best-effort job/event update once an ingest message is actually owned."""
+    try:
+        job = job_store.read_job(msg.job_id)
+        previous_status = str(getattr(job, "status", "") or "")
+        if previous_status not in {"success", "cancelled", "paused"}:
+            job.status = "running"
+            if previous_status != "running" or not job.started_at:
+                job.started_at = utc_now_iso()
+            job.finished_at = None
+            job.error = None
+            if msg.dispatch_id and not job.dispatch_id:
+                job.dispatch_id = msg.dispatch_id
+            job.metadata = {
+                **(job.metadata or {}),
+                "active_stage": "ingest",
+                "active_message_id": (
+                    (job.metadata or {}).get("active_message_id")
+                    if previous_status == "running"
+                    else item.pubsub_message_id or item.message_id
+                ),
+                "previous_status": (
+                    previous_status
+                    if previous_status and previous_status != "running"
+                    else (job.metadata or {}).get("previous_status", "")
+                ),
+            }
+            job_store.upsert_job(job)
+    except Exception:
+        logger.debug("Could not mark ingest job running for %s", msg.job_id)
+
+    try:
+        write_job_event(
+            artifact_store,
+            PipelineJobEvent(
+                event_type="ingest_attempt_started",
+                environment=getattr(settings, "environment", ""),
+                project_id=getattr(settings.pubsub, "project_id", ""),
+                job_id=msg.job_id,
+                dispatch_id=msg.dispatch_id or "",
+                stage="ingest",
+                pubsub_message_id=item.pubsub_message_id or item.message_id,
+                delivery_attempt=item.delivery_attempt,
+                receipt_hash=make_receipt_hash(item.receipt_id),
+                source_subscription=item.source_subscription,
+                worker_pod=os.environ.get("HOSTNAME", ""),
+                next_action="process_manifest",
+            ),
+        )
+    except Exception:
+        logger.debug("Could not write ingest_attempt_started event for %s", msg.job_id)
+
+
 def _lease_key(job_id: str, table_id: str) -> str:
     safe_table = str(table_id or "table").replace("/", "_")
     return f"jobs/{job_id}/leases/ingest-{safe_table}.json"
@@ -730,19 +792,18 @@ def _acquire_ingest_lease(
         )
     except LeaseNotAcquired as exc:
         lease = exc.lease
-        logger.warning(
+        logger.info(
             "[ingest] Duplicate live attempt for job=%s table=%s owner=%s "
-            "expires_at=%s; retrying later",
+            "expires_at=%s; acking duplicate message",
             job_id,
             table_id,
             lease.owner_id if lease else "?",
             lease.expires_at if lease else "?",
         )
-        raise RetryWorkItem(
+        raise DuplicateLiveAttempt(
             str(exc),
-            delay_seconds=int(
-                os.environ.get("UNITY_INGEST_DUPLICATE_RETRY_DELAY", "60"),
-            ),
+            stage="ingest",
+            lease=lease,
         ) from exc
     logger.info(
         "[ingest] Acquired attempt lease job=%s table=%s owner=%s attempt=%s "
@@ -854,6 +915,13 @@ async def handle_ingest_message(
     # outer ``finally`` below.
     watch = _spawn_control_watcher(artifact_store, run_id)
     try:
+        _mark_ingest_running(
+            job_store=job_store,
+            artifact_store=artifact_store,
+            settings=infra.settings,
+            item=item,
+            msg=msg,
+        )
         manifest_payload: dict = artifact_store.get_json(msg.manifest_key)
         plan = IngestPlan.model_validate(manifest_payload)
         # Stage any remote (gs://) artifact handles to a per-message scratch
@@ -946,6 +1014,56 @@ async def handle_ingest_message(
                 error=overall_error,
             )
 
+    except DuplicateLiveAttempt as exc:
+        lease = exc.lease
+        run_ledger.write(
+            PipelineStageManifest(
+                run_id=run_id,
+                file_path=file_path,
+                stage_name="ingest",
+                status="success",
+                duration_ms=(time.perf_counter() - ingest_start) * 1000,
+                meta={
+                    "duplicate_live_attempt": True,
+                    "active_owner": getattr(lease, "owner_id", ""),
+                    "active_expires_at": getattr(lease, "expires_at", ""),
+                },
+            ),
+        )
+        try:
+            write_job_event(
+                artifact_store,
+                PipelineJobEvent(
+                    event_type="duplicate_live_attempt_acked",
+                    environment=getattr(infra.settings, "environment", ""),
+                    project_id=getattr(infra.settings.pubsub, "project_id", ""),
+                    job_id=run_id,
+                    dispatch_id=msg.dispatch_id or "",
+                    stage="ingest",
+                    pubsub_message_id=item.pubsub_message_id or item.message_id,
+                    delivery_attempt=item.delivery_attempt,
+                    receipt_hash=make_receipt_hash(item.receipt_id),
+                    source_subscription=item.source_subscription,
+                    worker_pod=os.environ.get("HOSTNAME", ""),
+                    error_message=str(exc),
+                    next_action="ack_duplicate",
+                    metadata={
+                        "active_owner": getattr(lease, "owner_id", ""),
+                        "active_expires_at": getattr(lease, "expires_at", ""),
+                    },
+                ),
+            )
+        except Exception:
+            logger.debug(
+                "[ingest] Failed to write duplicate ack event job=%s",
+                run_id,
+                exc_info=True,
+            )
+        if ack_receipt is not None:
+            await ack_receipt()
+            acked = True
+        logger.info("[ingest] Acked duplicate live attempt for job=%s", run_id)
+        return acked
     except PipelineCancelled:
         if watch.paused():
             # Pause path: park the in-flight payload, leave the job's
@@ -1004,6 +1122,8 @@ async def handle_ingest_message(
                 success=False,
                 error="cancelled",
             )
+    except RetryWorkItem:
+        raise
     except Exception as exc:
         logger.exception("[ingest] Failed job=%s", run_id)
         if msg.attachment_callback is not None:
@@ -1560,16 +1680,16 @@ async def _run_dm_mode_inner(
                 retryable_lease_error = ar.error
     except PipelineCancelled:
         raise
+    except DuplicateLiveAttempt:
+        raise
     except Exception as exc:
         error = str(exc) or "ingest_artifacts raised"
         logger.exception("[ingest][dm] Failed for %s", plan.file_path)
 
     if retryable_lease_error is not None:
-        raise RetryWorkItem(
+        raise DuplicateLiveAttempt(
             retryable_lease_error,
-            delay_seconds=int(
-                os.environ.get("UNITY_INGEST_DUPLICATE_RETRY_DELAY", "60"),
-            ),
+            stage="ingest",
         )
 
     run_ledger.write(

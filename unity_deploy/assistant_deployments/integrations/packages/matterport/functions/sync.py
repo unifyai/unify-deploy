@@ -35,9 +35,12 @@ async def run_matterport_sync_tick(
         seconds_since,
     )
 
+    # Underscore-prefixed module stems point at internal sync helpers
+    # (FunctionManager skips them at discovery; this orchestrator
+    # imports them via importlib).
     object_to_sync_fn: dict[str, tuple[str, str]] = {
-        "models": ("models", "sync_matterport_models"),
-        "view_stats": ("view_stats", "sync_matterport_view_stats"),
+        "models": ("_sync_models", "sync_matterport_models"),
+        "view_stats": ("_sync_view_stats", "sync_matterport_view_stats"),
     }
 
     cfg = get_matterport_config()
@@ -45,10 +48,10 @@ async def run_matterport_sync_tick(
     schema_version = "matterport.listing.sync.v1"
 
     if mock:
-        from unity_deploy.assistant_deployments.integrations.packages.matterport.functions.models import (
+        from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._sync_models import (
             sync_matterport_models,
         )
-        from unity_deploy.assistant_deployments.integrations.packages.matterport.functions.view_stats import (
+        from unity_deploy.assistant_deployments.integrations.packages.matterport.functions._sync_view_stats import (
             sync_matterport_view_stats,
         )
 

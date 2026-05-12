@@ -135,17 +135,28 @@ def load_integration(manifest: IntegrationManifest, root: Path) -> LoadedIntegra
 def _build_registry_row(manifest: IntegrationManifest) -> dict:
     """Project a manifest into a flat row for the ``Integrations/Manifests`` context.
 
-    The row pairs three lookups the runtime needs:
+    The row carries three lookup fields:
 
-    * ``required_secrets`` / ``optional_secrets`` — drives enablement detection
-      against the assistant's secret keyset.
-    * ``function_names`` — resolved to ``function_id``s by FunctionManager at
-      runtime to scope FunctionManager queries.
-    * ``guidance_titles`` — resolved to ``guidance_id``s by GuidanceManager at
-      runtime to scope guidance retrieval (``filter_scope``).
+    * ``required_secrets`` / ``optional_secrets`` — declares which secret
+      names the integration uses.
+    * ``function_names`` — names of the package's ``@custom_function``
+      callables, resolvable to ``function_id``s by FunctionManager.
+    * ``guidance_titles`` — titles of the package's guidance entries,
+      resolvable to ``guidance_id``s by GuidanceManager.
 
     All list/dict values are JSON-stringified — DataManager prefers scalar
     columns, and the registry is a flat data context.
+
+    .. note::
+
+       Post-May-2026 cleanup: the runtime side
+       (:mod:`unity.integration_status`) reads disk discovery directly,
+       not these persisted rows.  This row exists for telemetry — a
+       per-deployment record of which integrations were declared — and
+       for any future read paths that explicitly want the deployment's
+       declared set vs the runtime's available set.  See
+       ``_sync_integration_registry`` in ``seed_sync.py`` for the docstring
+       describing this trade-off in full.
     """
     import json
 

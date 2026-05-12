@@ -81,7 +81,8 @@ graceful 403 envelopes the assistant relays to the user.
 The HubSpot lead-correlation join requires the customer to instrument
 their HubSpot landing pages with a `utm_email` query parameter on the
 Showcase URL — for example `?utm_email={{ contact.email }}`. Without it
-the join is a no-op. See `guidance/matterport_lead_correlation.md`.
+the join is a no-op. See the docstring on
+`correlate_matterport_views_to_hubspot_leads` in `functions/linking.py`.
 
 The RealPage unit-linking join works in three modes: an internal-label
 convention on the Matterport model (preferred), manual link via chat,

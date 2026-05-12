@@ -72,6 +72,21 @@ class WorkerInfra:
     storage_client: storage.Client
 
 
+class DuplicateLiveAttempt(RuntimeError):
+    """Raised when a redelivered/duplicate message finds a fresh worker lease."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str,
+        lease: Any | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.lease = lease
+
+
 # ---------------------------------------------------------------------------
 # Shutdown flag
 # ---------------------------------------------------------------------------

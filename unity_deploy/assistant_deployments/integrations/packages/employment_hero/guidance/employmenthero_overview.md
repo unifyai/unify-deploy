@@ -16,20 +16,50 @@ to `EMPLOYMENTHERO_ORGANISATION_ID` when a single named org is found;
 otherwise the operator picks via Settings -> Secrets.  See
 `employmenthero_setup.md`.
 
-## Three write tiers
+## How to use
 
-1. **Standard write** — confirms with user, then mutates.  Examples:
-   `submit_leave_request`, `submit_timesheet_entry`, `acknowledge_policy`.
-   Requires `confirm=True` plus
-   `EMPLOYMENTHERO_ALLOW_HIGH_STAKES_WRITES=true`.
-2. **High-tier read** — free-text fields are redacted at snapshot time;
-   live API returns full content.  Examples: performance reviews, 1:1
-   notes, feedback, employee notes.  Follow refusal patterns in
-   `employmenthero_sensitive_data.md`.
-3. **Critical-tier read** — never synced; live-only with masked returns.
-   Examples: payslips, banking, tax declarations, medical disclosures.
-   Requires `confirm_user_authorised=True` and explicit user
-   confirmation.
+- **Live reads + writes** — call `employmenthero_request(method, path,
+  params, body)` for any EH REST endpoint.  First-page only; bulk pulls
+  go through the sync orchestrator.  4xx envelopes carry hints (e.g.
+  tier-gated 403, missing scope) — read them.
+- **Org-pinning** — most paths take an `{org_id}` segment.  Use
+  `get_employmenthero_active_organisation` to resolve it; the helper
+  prefers the pinned `EMPLOYMENTHERO_ORGANISATION_ID` and falls back
+  to the first accessible org with a hint.
+- **Bulk / snapshot** — `run_employmenthero_sync_tick(...)` mirrors
+  workforce, leave, timesheets, expenses, policies, documents, custom
+  fields, onboarding, qualifications, performance, recognition,
+  surveys, learning, recruitment, and pay (rate-banded) into
+  DataManager.
+- **Local analytics** — once synced, prefer `query_local_employmenthero_*`
+  helpers over re-hitting the API.
+
+## Write safety — no code gate
+
+`employmenthero_request` supports POST/PATCH/PUT/DELETE.  There is **no
+code-level gate** — the actor applies the rules in
+`employmenthero_high_stakes_writes.md` before issuing a destructive
+verb.  In short: surface what's about to change, get explicit user
+confirmation, then write.  Particularly sensitive surfaces:
+
+- **Banking, super funds, tax declarations** — never written without
+  explicit confirmation.
+- **Pay runs, pay categories, employment terms** — financial impact;
+  changes propagate to actual pay.
+- **Employee personal data, medical disclosures, documents** —
+  sensitive PII, often jurisdiction-regulated (UK / AU / NZ / SG).
+- **Leave balances, timesheets** — entitlement and payroll impact.
+- **Onboarding state, termination flows** — employment status.
+
+## Sensitive reads — minimum disclosure
+
+Reads can also leak PII into chat history.  Banking details, tax
+declarations, payslip line-items, and medical disclosures should not
+be returned verbatim into the actor's response unless the user has
+explicitly authorised it.  For "is this person above pay band X?"
+style questions, prefer the rate-banded snapshot in
+`query_local_employmenthero_*` over a live exact-figure fetch.  See
+`employmenthero_sensitive_data.md`.
 
 ## Sync
 

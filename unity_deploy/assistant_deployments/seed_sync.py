@@ -576,8 +576,21 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
     ``integrations.loader._build_registry_row``.  Row identity is the ``slug``;
     re-deploying with the same set of integrations is idempotent.  Removing an
     integration from a deployment causes the corresponding row to be deleted so
-    the runtime detection in ``unity.integration_status`` doesn't keep
-    advertising a stale enablement target.
+    historical telemetry of which integrations a deployment declared stays
+    accurate.
+
+    .. note::
+
+       As of the May-2026 cleanup, the **runtime no longer reads this
+       registry**.  :mod:`unity.integration_status` consults disk
+       discovery directly (see ``unity.integration_status.discovery``) so
+       the runtime sees the same set of packages on registered and
+       non-registered assistants alike.  This sync is now telemetry-only:
+       it preserves a per-deployment record of which integrations were
+       declared at deploy time, useful for ops dashboards and
+       deployment-reconcile, but no runtime behaviour depends on it.
+       Removing this sync entirely is an option once telemetry consumers
+       are confirmed gone.
     """
     if not rows:
         return False

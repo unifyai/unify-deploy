@@ -349,7 +349,7 @@ def _queue_resources(settings) -> dict[str, str]:
     }
 
 
-def _load_job_snapshot(infra, job_id: str):
+def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
     from unity_deploy.infra.gcp.pipeline_observability import (
         JobObservabilitySnapshot,
         derive_status,
@@ -370,7 +370,7 @@ def _load_job_snapshot(infra, job_id: str):
 
     checkpoints = list_job_checkpoints(artifact_store, job_id)
     dlq_records = list_job_dlq_records(artifact_store, job_id)
-    events = list_job_events(artifact_store, job_id)
+    events = list_job_events(artifact_store, job_id) if include_events else []
     heartbeat_at = latest_heartbeat_at(artifact_store, job_id)
     leases = read_active_leases(artifact_store, job_id)
     derived_status, retry_classification, retry_eligible = derive_status(
@@ -715,7 +715,28 @@ async def cmd_status(args: argparse.Namespace) -> None:
         return
 
     resources = _queue_resources(infra.settings)
-    snapshots = [_load_job_snapshot(infra, jid) for jid in manifest.job_ids]
+    created = manifest.created_at[:19].replace("T", " ") if manifest.created_at else "?"
+    if not args.json:
+        print(f"\nDispatch: {manifest.dispatch_id}", flush=True)
+        print(f"Source:   {manifest.source}", flush=True)
+        print(f"Mode:     {manifest.mode}", flush=True)
+        print(f"Created:  {created}", flush=True)
+        print(f"Config:   {manifest.config_path or '(ad-hoc)'}", flush=True)
+        print(f"Files:    {manifest.total_files}", flush=True)
+        print("\nEnvironment / Resources:", flush=True)
+        for key, value in resources.items():
+            print(f"  {key}: {value or '(unset)'}", flush=True)
+        print(
+            f"\nScanning {len(manifest.job_ids)} job(s) for status...",
+            flush=True,
+        )
+    snapshots = []
+    for idx, jid in enumerate(manifest.job_ids, start=1):
+        if not args.json:
+            print(f"  [{idx}/{len(manifest.job_ids)}] inspecting {jid}", flush=True)
+        snapshots.append(
+            _load_job_snapshot(infra, jid, include_events=args.show_events),
+        )
     counts: dict[str, int] = {}
     for snap in snapshots:
         counts[snap.derived_status] = counts.get(snap.derived_status, 0) + 1
@@ -734,16 +755,6 @@ async def cmd_status(args: argparse.Namespace) -> None:
         )
         return
 
-    created = manifest.created_at[:19].replace("T", " ") if manifest.created_at else "?"
-    print(f"\nDispatch: {manifest.dispatch_id}")
-    print(f"Source:   {manifest.source}")
-    print(f"Mode:     {manifest.mode}")
-    print(f"Created:  {created}")
-    print(f"Config:   {manifest.config_path or '(ad-hoc)'}")
-    print(f"Files:    {manifest.total_files}")
-    print("\nEnvironment / Resources:")
-    for key, value in resources.items():
-        print(f"  {key}: {value or '(unset)'}")
     print()
 
     hdr = (
@@ -835,7 +846,12 @@ async def cmd_monitor(args: argparse.Namespace) -> None:
             print(f"Job {args.job_id} not found")
             return
 
-        snap = _load_job_snapshot(infra, args.job_id)
+        if not args.json:
+            print(f"\nLoading snapshot for job {args.job_id}...", flush=True)
+            print("Monitor resources:", flush=True)
+            for key, value in _queue_resources(settings).items():
+                print(f"  {key}: {value or '(unset)'}", flush=True)
+        snap = _load_job_snapshot(infra, args.job_id, include_events=args.show_events)
         if args.json:
             print(
                 json.dumps(
@@ -1092,10 +1108,37 @@ async def cmd_retry(args: argparse.Namespace) -> None:
     if not only:
         only = {"dlq", "stale-running", "error", "retryable"}
 
+    if not args.job_id and only == {"dlq"}:
+        from unity_deploy.infra.gcp.pipeline_observability import (
+            list_dispatch_dlq_records,
+        )
+
+        dlq_job_ids: list[str] = []
+        seen_dlq_jobs: set[str] = set()
+        manifest_jobs = set(target_jobs)
+        for record in list_dispatch_dlq_records(artifact_store, args.dispatch_id):
+            if record.job_id in manifest_jobs and record.job_id not in seen_dlq_jobs:
+                seen_dlq_jobs.add(record.job_id)
+                dlq_job_ids.append(record.job_id)
+        if dlq_job_ids:
+            target_jobs = dlq_job_ids
+
+    if not args.json:
+        print("Retry resources:", flush=True)
+        for key, value in resources.items():
+            print(f"  {key}: {value or '(unset)'}", flush=True)
+        print(
+            f"\nPlanning retry for {len(target_jobs)} job(s) "
+            f"[filters={','.join(sorted(only))}]...",
+            flush=True,
+        )
+
     plan: list[dict] = []
     skipped: list[dict] = []
-    for job_id in target_jobs:
-        snap = _load_job_snapshot(infra, job_id)
+    for idx, job_id in enumerate(target_jobs, start=1):
+        if not args.json:
+            print(f"  [{idx}/{len(target_jobs)}] inspecting {job_id}", flush=True)
+        snap = _load_job_snapshot(infra, job_id, include_events=False)
         reasons: list[str] = []
         if snap.durable_status == "success" and not args.force_reingest:
             skipped.append({"job_id": job_id, "reason": "success"})
@@ -1123,6 +1166,21 @@ async def cmd_retry(args: argparse.Namespace) -> None:
         try:
             job = job_store.read_job(job_id)
             retry_attempt = int((job.metadata or {}).get("retry_attempt", 0)) + 1
+            if (
+                job.status == "queued"
+                and (job.metadata or {}).get("last_retry_message_id")
+                and not args.force
+            ):
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "reason": (
+                            "already queued by retry message "
+                            f"{job.metadata.get('last_retry_message_id')}"
+                        ),
+                    },
+                )
+                continue
             if retry_attempt > args.max_attempts and not args.force:
                 skipped.append(
                     {
@@ -1157,6 +1215,24 @@ async def cmd_retry(args: argparse.Namespace) -> None:
             break
 
     published: list[dict] = []
+    if not args.json:
+        print(f"\nMode: {'EXECUTE' if execute else 'DRY-RUN'}", flush=True)
+        print(f"Would retry {len(plan)} job(s); skipped {len(skipped)}.", flush=True)
+        for item in plan:
+            print(
+                f"  RETRY job={item['job_id']} topic={item['topic']} "
+                f"checkpoint_rows={item['checkpoint_rows']} "
+                f"attempt={item['retry_attempt']} reasons={','.join(item['reasons'])}",
+                flush=True,
+            )
+        for item in skipped[:20]:
+            print(
+                f"  SKIP job={item['job_id']} reason={item['reason']}",
+                flush=True,
+            )
+        if execute and plan:
+            print(f"\nPublishing {len(plan)} retry message(s)...", flush=True)
+
     if execute:
         for item in plan:
             event = PipelineJobEvent(
@@ -1199,9 +1275,11 @@ async def cmd_retry(args: argparse.Namespace) -> None:
                     artifact_store,
                     event.model_copy(
                         update={
+                            "event_id": uuid4().hex,
                             "event_type": "retry_published",
                             "pubsub_message_id": message_id,
                             "next_action": "queued",
+                            "recorded_at": utc_now_iso(),
                         },
                     ),
                 )
@@ -1211,10 +1289,12 @@ async def cmd_retry(args: argparse.Namespace) -> None:
                     artifact_store,
                     event.model_copy(
                         update={
+                            "event_id": uuid4().hex,
                             "event_type": "retry_publish_failed",
                             "error_type": type(exc).__name__,
                             "error_message": str(exc),
                             "next_action": "kept_prior_state",
+                            "recorded_at": utc_now_iso(),
                         },
                     ),
                 )
@@ -1230,19 +1310,13 @@ async def cmd_retry(args: argparse.Namespace) -> None:
     if args.json:
         print(json.dumps(result, indent=2, default=str))
         return
-    print("Retry resources:")
-    for key, value in resources.items():
-        print(f"  {key}: {value or '(unset)'}")
-    print(f"\nMode: {'EXECUTE' if execute else 'DRY-RUN'}")
-    print(f"Would retry {len(plan)} job(s); skipped {len(skipped)}.")
-    for item in plan:
-        print(
-            f"  RETRY job={item['job_id']} topic={item['topic']} "
-            f"checkpoint_rows={item['checkpoint_rows']} "
-            f"attempt={item['retry_attempt']} reasons={','.join(item['reasons'])}",
-        )
-    for item in skipped[:20]:
-        print(f"  SKIP job={item['job_id']} reason={item['reason']}")
+    if execute:
+        print(f"\nPublished {len(published)} retry message(s).", flush=True)
+        for item in published:
+            print(
+                f"  PUBLISHED job={item['job_id']} message_id={item['message_id']}",
+                flush=True,
+            )
 
 
 async def cmd_cancel(args: argparse.Namespace) -> None:

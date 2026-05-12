@@ -48,12 +48,15 @@ async def run_webex_sync_tick(
 
     # Object key -> (module stem, function name).  Inlined per
     # FunctionManager isolation rule — no module-level globals.
+    # Underscore-prefixed module stems point at internal sync helpers
+    # (FunctionManager skips them at discovery; this orchestrator
+    # imports them via importlib).
     object_to_sync_fn: dict[str, tuple[str, str]] = {
-        "people": ("people", "sync_webex_people"),
-        "rooms": ("rooms", "sync_webex_rooms"),
-        "meetings": ("meetings", "sync_webex_meetings"),
-        "recordings": ("recordings", "sync_webex_recordings"),
-        "transcripts": ("transcripts", "sync_webex_transcripts"),
+        "people": ("_sync_people", "sync_webex_people"),
+        "rooms": ("_sync_rooms", "sync_webex_rooms"),
+        "meetings": ("_sync_meetings", "sync_webex_meetings"),
+        "recordings": ("_sync_recordings", "sync_webex_recordings"),
+        "transcripts": ("_sync_transcripts", "sync_webex_transcripts"),
     }
 
     cfg = get_webex_config()
@@ -61,10 +64,10 @@ async def run_webex_sync_tick(
     schema_version = "webex.comms.sync.v1"
 
     if mock:
-        from unity_deploy.assistant_deployments.integrations.packages.webex.functions.meetings import (
+        from unity_deploy.assistant_deployments.integrations.packages.webex.functions._sync_meetings import (
             sync_webex_meetings,
         )
-        from unity_deploy.assistant_deployments.integrations.packages.webex.functions.recordings import (
+        from unity_deploy.assistant_deployments.integrations.packages.webex.functions._sync_recordings import (
             sync_webex_recordings,
         )
 

@@ -9,7 +9,11 @@ both halves into Console.  No OAuth callback.
    shown once).
 3. Paste both into the modal and Save.
 
-Calls authenticate via HTTP Basic.
+Calls authenticate via HTTP Basic.  **The Token ID and Token Secret are
+API tokens, not OAuth client credentials** — send them as HTTP Basic on
+every call, never exchange them at `/api/oauth/token` for a Bearer
+token.  A `401 invalid_client` from the OAuth endpoint means the wrong
+endpoint was hit, not that the tokens are bad.
 
 ## Production vs sandbox
 
@@ -39,3 +43,4 @@ for 24h.
 | `Matterport is not connected for this assistant.` | One of `MATTERPORT_TOKEN_ID` / `MATTERPORT_TOKEN_SECRET` unset | Paste both halves in Console |
 | `403` on view-stats or sync | Sandbox token (demo-only) or no Developer Tools add-on | Upgrade Matterport plan |
 | `401` unexpectedly | Token ID and Secret swapped, or Secret regenerated | Re-paste both values |
+| `401 invalid_client` from `/api/oauth/token` | Tried OAuth token-exchange flow with API tokens | These are HTTP Basic credentials — call the GraphQL endpoint directly, no exchange step |

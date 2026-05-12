@@ -16,12 +16,13 @@ from unity.common.pipeline._utils import utc_now_iso
 from unity.common.pipeline.artifact_store import ArtifactStore
 from unity.common.pipeline.run_ledger import PipelineStageManifest
 from unity.common.pipeline.types import IngestRequested, ParseRequested
-from unity.common.pipeline.work_queue import ReceivedWorkItem, RetryWorkItem
+from unity.common.pipeline.work_queue import ReceivedWorkItem
 from unity_deploy.infra.gcp.artifact_store import (
     LeaseNotAcquired,
     LeaseRecord,
     _is_not_found_error,
 )
+from .worker_utils import DuplicateLiveAttempt
 
 if TYPE_CHECKING:
     from unity.file_manager.file_parsers.types.contracts import FileParseResult
@@ -109,9 +110,16 @@ async def handle_parse_message(
             ttl_seconds=900,
         )
     except LeaseNotAcquired as exc:
+        logger.info(
+            "[parse] Duplicate live attempt for job=%s owner=%s expires_at=%s; "
+            "acking duplicate message",
+            run_id,
+            exc.lease.owner_id if exc.lease else "?",
+            exc.lease.expires_at if exc.lease else "?",
+        )
         run_ledger.close()
         cost_ledger.close()
-        raise RetryWorkItem(str(exc), delay_seconds=60) from exc
+        raise DuplicateLiveAttempt(str(exc), stage="parse", lease=exc.lease) from exc
 
     logger.info("[parse] Starting job=%s, files=%d", run_id, len(msg.file_paths))
     parse_start = time.perf_counter()

@@ -482,6 +482,10 @@ def derive_status(
             "terminal" if durable_status == "success" else durable_status,
             False,
         )
+    fresh_lease = any(is_fresh_lease(lease) for lease in leases or [])
+    fresh_heartbeat = is_fresh_timestamp(heartbeat_at, max_age_seconds=600)
+    if fresh_heartbeat or fresh_lease:
+        return "running-active", "active", False
     if dlq_records:
         classification = dlq_records[-1].retry_classification
         if checkpoints:
@@ -490,10 +494,6 @@ def derive_status(
     if durable_status == "error":
         return "error", "needs_operator", False
     if durable_status == "running":
-        fresh_lease = any(is_fresh_lease(lease) for lease in leases or [])
-        fresh_heartbeat = is_fresh_timestamp(heartbeat_at, max_age_seconds=600)
-        if fresh_heartbeat or fresh_lease:
-            return "running-active", "active", False
         return "running-stale", "operator_retryable", True
     return durable_status or "unknown", "unknown", False
 

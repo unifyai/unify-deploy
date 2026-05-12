@@ -217,19 +217,32 @@ def _invalidate_cached_token(token: str) -> None:
         _TOKEN_CACHE.pop(k, None)
 
 
-async def webex_get(
+async def webex_request(
+    method: str,
     path: str,
     *,
     params: dict | None = None,
+    body: dict | None = None,
     timeout: float | None = None,
 ) -> dict:
-    """GET against the Webex API.
+    """Generic request against the Webex API.
+
+    ``method`` is the HTTP verb (``GET``, ``POST``, ``PUT``, ``DELETE``);
+    ``path`` is the URL path (e.g. ``/v1/meetings``).  ``params`` go on
+    the query string, ``body`` is JSON-encoded and sent as the request
+    body for non-GET verbs.
 
     On rate-limit (429) sleeps the value of the ``Retry-After`` header
     (or ``backoff_factor**attempt`` seconds) and retries up to
     ``WEBEX_RATE_LIMIT_MAX_RETRIES``.  On 401 (mid-flight token expiry)
-    busts the cache and retries once.  Returns
-    ``{"error": ..., "status_code": ...}`` on persistent failure.
+    busts the cache and retries once.  Returns the parsed JSON body on
+    success or ``{"error": ..., "status_code": ...}`` on persistent
+    failure.
+
+    First-page only: this helper does not auto-paginate.  Bulk pulls go
+    through ``sync_webex_*`` orchestration; live reads return the first
+    page and the caller can re-issue with cursor params if they need
+    more.
     """
     import os
     import httpx
@@ -238,6 +251,7 @@ async def webex_get(
     if err is not None:
         return err
 
+    method_upper = method.upper()
     timeout = timeout or float(
         os.environ.get("WEBEX_REQUEST_TIMEOUT_SECONDS", "30"),
     )
@@ -253,8 +267,14 @@ async def webex_get(
     refreshed_once = False
     async with httpx.AsyncClient(timeout=timeout) as client:
         for attempt in range(max_retries + 1):
-            resp = await client.get(url, params=params, headers=_headers(token))
-            if resp.status_code == 200:
+            resp = await client.request(
+                method_upper,
+                url,
+                params=params,
+                json=body,
+                headers=_headers(token),
+            )
+            if 200 <= resp.status_code < 300:
                 return resp.json() if resp.content else {}
             if resp.status_code == 401 and not refreshed_once:
                 refreshed_once = True
@@ -270,15 +290,27 @@ async def webex_get(
                 await asyncio.sleep(retry_after)
                 continue
             if resp.status_code == 403:
-                last_err = _403_envelope("GET", path)
+                last_err = _403_envelope(method_upper, path)
                 break
             last_err = {
-                "error": f"Webex GET {path} returned {resp.status_code}",
+                "error": f"Webex {method_upper} {path} returned {resp.status_code}",
                 "status_code": resp.status_code,
                 "body": _safe_text(resp),
             }
             break
     return last_err or {"error": "request failed without status"}
+
+
+async def webex_get(
+    path: str,
+    *,
+    params: dict | None = None,
+    timeout: float | None = None,
+) -> dict:
+    """Backward-compat shim — internal callers (sync helpers) still use
+    ``webex_get``.  New code should call :func:`webex_request` directly.
+    """
+    return await webex_request("GET", path, params=params, timeout=timeout)
 
 
 def _safe_text(resp) -> str:

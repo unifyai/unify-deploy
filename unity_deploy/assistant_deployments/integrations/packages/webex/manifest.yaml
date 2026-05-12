@@ -1,19 +1,19 @@
 name: Webex
 slug: webex
-version: "0.1.0"
+version: "0.2.0"
 sector: communications
 tier: api
 quality: bronze
 description: >
   Generic, reusable Cisco Webex connector covering meetings, recordings,
   post-meeting transcripts, rooms, and people via the Webex public REST
-  API.  Provides on-demand reads, snapshot functions for incremental
-  DataManager sync, and a sync orchestrator.  Authenticated via OAuth
-  2.0 (authorization code flow) against a Webex Integration the
-  customer registers in the Webex developer portal.  On-demand
-  functions default to mock=True for safe testing; sync functions
-  require a live token.  403 responses are returned as graceful error
-  envelopes, not raised, so capability gating is uniform.
+  API.  Live reads go through a single ``webex_request`` tool that
+  exposes the underlying authenticated HTTP client to the actor; bulk
+  pulls and snapshots go through ``run_webex_sync_tick``.  Authenticated
+  via OAuth 2.0 (authorization code flow) against a Webex Integration
+  the customer registers in the Webex developer portal.  403 responses
+  are returned as graceful error envelopes, not raised, so capability
+  gating is uniform.
 homepage: https://developer.webex.com
 
 secrets:
@@ -77,57 +77,28 @@ secrets:
     sensitive: false
 
 capabilities:
-  # ----- Account ------------------------------------------------------
-  - id: webex_account
-    name: Account
-    description: Verify token; identify the connected Webex user.
-    functions: [get_webex_me]
+  # ----- Live API access ---------------------------------------------
+  # Single generic tool — the actor constructs the URL/method/params
+  # using the Webex API docs (and the structured 4xx error envelopes
+  # the helper returns when something's malformed).
+  - id: webex_live
+    name: Live API access
+    description: >
+      One tool covering the entire Webex REST surface (meetings,
+      recordings, transcripts, people, rooms, memberships, etc.).
+      First-page only — bulk pulls go through the sync orchestrator.
+    functions: [webex_request]
     guidance: [webex_overview, webex_setup]
-
-  # ----- People & rooms ----------------------------------------------
-  - id: webex_people_directory
-    name: People & rooms
-    description: Org directory + spaces + memberships.
-    functions: [
-      get_webex_person, list_webex_people,
-      list_webex_rooms, get_webex_room, list_webex_room_memberships,
-      sync_webex_people, sync_webex_rooms,
-    ]
-    guidance: [webex_overview]
-
-  # ----- Meetings -----------------------------------------------------
-  - id: webex_meetings
-    name: Meetings
-    description: Scheduled and past meetings + invitee lists.
-    functions: [
-      list_webex_meetings, get_webex_meeting, list_webex_meeting_invitees,
-      sync_webex_meetings,
-    ]
-    guidance: [webex_overview, webex_meetings_and_transcripts]
-
-  # ----- Recordings ---------------------------------------------------
-  - id: webex_recordings
-    name: Recordings
-    description: Recording metadata + download URLs.  Bytes not synced.
-    functions: [list_webex_recordings, get_webex_recording, sync_webex_recordings]
-    guidance: [webex_overview, webex_meetings_and_transcripts]
-
-  # ----- Transcripts --------------------------------------------------
-  - id: webex_transcripts
-    name: Transcripts
-    description: Post-meeting transcript metadata; bodies opt-in via WEBEX_MIRROR_TRANSCRIPTS.
-    functions: [
-      list_webex_meeting_transcripts, get_webex_meeting_transcript,
-      sync_webex_transcripts,
-    ]
-    guidance: [webex_meetings_and_transcripts]
 
   # ----- Sync orchestration ------------------------------------------
   - id: webex_incremental_sync
     name: Incremental sync
-    description: Single-tick orchestration across enabled object types.
+    description: >
+      Single-tick orchestration across enabled object types.  Runs the
+      internal ``sync_webex_*`` snapshot writers and aggregates their
+      output into the canonical DataManager envelope.
     functions: [run_webex_sync_tick, get_webex_sync_state, probe_webex_tier]
-    guidance: [webex_sync]
+    guidance: [webex_overview]
 
   # ----- Local query --------------------------------------------------
   - id: webex_local_query
@@ -139,7 +110,7 @@ capabilities:
       query_local_webex_people,
       query_local_webex_meetings_with_hubspot_contacts,
     ]
-    guidance: [webex_overview, webex_meetings_and_transcripts]
+    guidance: [webex_overview]
 
 requirements: [httpx]
 tags: [webex, communications, meetings, recordings, transcripts, sync, datamanager]
