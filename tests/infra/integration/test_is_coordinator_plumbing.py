@@ -24,6 +24,8 @@ from .conftest import (
 
 pytestmark = [pytest.mark.integration]
 
+_TEMP_SUBSCRIPTION_TTL_SECONDS = 86_400
+
 
 def _pubsub_suffix() -> str:
     return os.getenv(
@@ -124,7 +126,7 @@ def _temporary_inbound_subscription(pubsub_subscriber, assistant_id: str):
             "name": subscription_path,
             "topic": topic_path,
             "filter": 'attributes.thread = "inbound"',
-            "expiration_policy": {"ttl": {"seconds": 3600}},
+            "expiration_policy": {"ttl": {"seconds": _TEMP_SUBSCRIPTION_TTL_SECONDS}},
             "message_retention_duration": {"seconds": 600},
         },
     )
