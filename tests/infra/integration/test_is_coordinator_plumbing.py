@@ -17,8 +17,6 @@ from .conftest import (
     NAMESPACE,
     ORCHESTRA_URL,
     _admin_record_to_data,
-    _create_test_assistant,
-    _delete_test_assistant,
     get_assistant_session,
     poll_until,
     stop_assistant_runtime,
@@ -59,6 +57,35 @@ def _configured_coordinator_assistant() -> dict:
         record.get("is_coordinator") is True
     ), f"TEST_COORDINATOR_ASSISTANT_ID={assistant_id} is not a Coordinator"
     return _admin_record_to_data(record)
+
+
+def _configured_personal_coordinator_assistant() -> dict:
+    assistant_id = os.getenv("TEST_PERSONAL_COORDINATOR_ASSISTANT_ID", "")
+    if not assistant_id:
+        pytest.skip(
+            "Set TEST_PERSONAL_COORDINATOR_ASSISTANT_ID to run personal Coordinator plumbing tests",
+        )
+    record = _fetch_admin_assistant(assistant_id)
+    assert (
+        record.get("is_coordinator") is True
+    ), f"TEST_PERSONAL_COORDINATOR_ASSISTANT_ID={assistant_id} is not a Coordinator"
+    assert not record.get(
+        "organization_id",
+    ), f"TEST_PERSONAL_COORDINATOR_ASSISTANT_ID={assistant_id} is not personal-scoped"
+    return _admin_record_to_data(record)
+
+
+def _configured_non_coordinator_assistant_id() -> str:
+    assistant_id = os.getenv("TEST_NON_COORDINATOR_ASSISTANT_ID", "")
+    if not assistant_id:
+        pytest.skip(
+            "Set TEST_NON_COORDINATOR_ASSISTANT_ID to run non-Coordinator plumbing tests",
+        )
+    record = _fetch_admin_assistant(assistant_id)
+    assert (
+        record.get("is_coordinator") is False
+    ), f"TEST_NON_COORDINATOR_ASSISTANT_ID={assistant_id} is a Coordinator"
+    return str(assistant_id)
 
 
 def _post_assistant_update(adapters, assistant_id: str) -> None:
@@ -161,20 +188,20 @@ def test_non_coordinator_assistant_carries_false_to_bootstrap_secret(
 ):
     """A regular assistant wake should write an explicit non-Coordinator bool."""
 
-    assistant = _create_test_assistant(
-        int(time.time_ns() % 10_000_000),
-        desktop_mode="none",
-        is_local=False,
-    )
+    assistant_id = _configured_non_coordinator_assistant_id()
     try:
-        _post_assistant_update(adapters, assistant["assistant_id"])
+        _post_assistant_update(adapters, assistant_id)
         bootstrap_payload = _read_startup_payload(
             comms,
             core_api,
-            assistant["assistant_id"],
+            assistant_id,
         )
     finally:
-        _delete_test_assistant(assistant["assistant_id"], batch_api=batch_api)
+        stop_assistant_runtime(
+            assistant_id,
+            batch_api=batch_api,
+            context="is-coordinator-bootstrap-non-coordinator",
+        )
 
     assert bootstrap_payload["is_coordinator"] is False
 
@@ -210,3 +237,47 @@ def test_assistant_update_webhook_publishes_is_coordinator_in_event(
     event = message["event"]
     assert event["assistant_id"] == assistant["assistant_id"]
     assert event["is_coordinator"] is True
+
+
+def test_personal_coordinator_carries_null_org_id_to_bootstrap_and_update_event(
+    adapters,
+    comms,
+    core_api,
+    pubsub_subscriber,
+    batch_api,
+):
+    """Personal Coordinators should preserve null org scope across runtime payloads."""
+
+    assistant = _configured_personal_coordinator_assistant()
+    subscription_path = _temporary_inbound_subscription(
+        pubsub_subscriber,
+        assistant["assistant_id"],
+    )
+    try:
+        _post_assistant_update(adapters, assistant["assistant_id"])
+        bootstrap_payload = _read_startup_payload(
+            comms,
+            core_api,
+            assistant["assistant_id"],
+        )
+        message = _pull_assistant_update_event(pubsub_subscriber, subscription_path)
+    finally:
+        stop_assistant_runtime(
+            assistant["assistant_id"],
+            batch_api=batch_api,
+            context="is-coordinator-personal-scope",
+        )
+        try:
+            pubsub_subscriber.delete_subscription(
+                request={"subscription": subscription_path},
+            )
+        except NotFound:
+            pass
+
+    assert bootstrap_payload["is_coordinator"] is True
+    assert bootstrap_payload["org_id"] is None
+
+    event = message["event"]
+    assert event["assistant_id"] == assistant["assistant_id"]
+    assert event["is_coordinator"] is True
+    assert event["org_id"] is None

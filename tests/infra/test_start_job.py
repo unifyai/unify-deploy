@@ -293,6 +293,19 @@ def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pendin
     assert refreshed_spec["requestedAt"]
 
 
+def test_start_job_personal_coordinator_sets_null_org_id_in_bootstrap_payload(client):
+    """Personal Coordinators should keep org_id null in bootstrap payloads."""
+
+    response, payload = _post_start_job_and_capture_bootstrap_payload(
+        client,
+        _start_job_payload(is_coordinator="true", org_id=""),
+    )
+
+    assert response.status_code == 200
+    assert payload["is_coordinator"] is True
+    assert payload["org_id"] is None
+
+
 def test_start_job_stamps_preview_runtime_urls_on_image_override(client):
     core_api = MagicMock()
     custom_api = MagicMock()

@@ -30,7 +30,13 @@ class _Publisher:
         return _PublishFuture()
 
 
-def _context(space_ids=None, space_summaries=None) -> dict:
+def _context(
+    space_ids=None,
+    space_summaries=None,
+    *,
+    is_coordinator=False,
+    org_id=None,
+) -> dict:
     return {
         "assistant": {
             "assistant_id": "assistant-123",
@@ -44,6 +50,8 @@ def _context(space_ids=None, space_summaries=None) -> dict:
             "assistant_first_name": "Test",
             "assistant_surname": "Assistant",
             "assistant_timezone": "UTC",
+            "is_coordinator": is_coordinator,
+            "org_id": org_id,
             "space_ids": space_ids or [],
             "space_summaries": space_summaries or [],
         },
@@ -132,6 +140,31 @@ def test_general_update_invokes_ensure_job(mock_build_context, mock_get_pubsub_c
     assert published["event"]["space_ids"] == [5, 6]
     assert published["event"]["space_summaries"] == summaries
     assert published["event"]["update_kind"] == "general"
+
+
+@patch.object(SETTINGS, "orchestra_admin_key", "test-key")
+@patch("adapters.main.get_pubsub_client")
+@patch("adapters.main.build_webhook_context")
+def test_general_update_publishes_personal_coordinator_shape(
+    mock_build_context,
+    mock_get_pubsub_client,
+):
+    """Personal Coordinators should publish explicit coordinator and null-org fields."""
+
+    publisher = _Publisher()
+    mock_get_pubsub_client.return_value = publisher
+    mock_build_context.return_value = _context(is_coordinator=True, org_id=None)
+
+    response = _client().post(
+        "/assistant/update",
+        data={"assistant_id": "assistant-123"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    published = json.loads(publisher.published["data"].decode("utf-8"))
+    assert published["event"]["is_coordinator"] is True
+    assert published["event"]["org_id"] is None
 
 
 @patch.object(SETTINGS, "orchestra_admin_key", "test-key")
