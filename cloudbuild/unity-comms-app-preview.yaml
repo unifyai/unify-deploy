@@ -213,6 +213,7 @@ steps:
     REVISION="$${SERVICE_NAME}-$${REVISION_SUFFIX}"
     echo "$$REVISION" > /workspace/preview-revision.txt
     ORCHESTRA_URL="https://$${SLUG}.${_PEER_ORCHESTRA_HOST}/v0"
+    COMMS_URL="https://$${SLUG}---${_PEER_COMMS_HOST}"
     ADAPTERS_URL="https://$${SLUG}---${_PEER_ADAPTERS_HOST}"
     CANONICAL_IMAGE=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest
     if ! run_cloud_run_with_retry gcloud run deploy ${_SERVICE_NAME} \
@@ -222,7 +223,7 @@ steps:
       --revision-suffix=$$REVISION_SUFFIX \
       --no-traffic \
       --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID},preview=true \
-      --update-env-vars=DEPLOY_ENV=staging,BRANCH_TAG=$${SLUG},ORCHESTRA_URL=$${ORCHESTRA_URL},UNITY_ADAPTERS_URL=$${ADAPTERS_URL} \
+      --update-env-vars=DEPLOY_ENV=staging,BRANCH_TAG=$${SLUG},ORCHESTRA_URL=$${ORCHESTRA_URL},UNITY_COMMS_URL=$${COMMS_URL},UNITY_ADAPTERS_URL=$${ADAPTERS_URL} \
       --quiet; then
       echo "preview deploy failed; restoring canonical service template"
       run_cloud_run_with_retry gcloud run services update ${_SERVICE_NAME} \
@@ -230,7 +231,7 @@ steps:
         --image="$$CANONICAL_IMAGE" \
         --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=${BUILD_ID},preview-restore=true \
         --remove-env-vars=BRANCH_TAG \
-        --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
+        --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_COMMS_URL=https://${_PEER_COMMS_HOST},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
         --quiet
       exit 1
     fi

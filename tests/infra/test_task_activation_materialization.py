@@ -42,10 +42,11 @@ class _FakeCloudTasksClient:
         self.created_tasks = []
         self.deleted_task_names = []
         self.queue_exists = True
+        self.missing_queue_names: set[str] = set()
         self.existing_task_names: set[str] = set()
 
     def get_queue(self, *, name):
-        if not self.queue_exists:
+        if not self.queue_exists or name.rsplit("/", 1)[-1] in self.missing_queue_names:
             raise GcpNotFound("queue missing")
         return {"name": name}
 
@@ -451,3 +452,78 @@ def test_upsert_recreates_existing_activation_to_repair_drift(
     body = response.json()
     assert body["status"] == "recreated"
     assert task_name in fake_client.deleted_task_names
+
+
+def test_validate_task_activation_infra_reports_required_queues(client):
+    """Validation should report the live, offline, and repair queue status."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    fake_client.missing_queue_names.add(
+        task_activation.SETTINGS.task_offline_queue_name,
+    )
+
+    with patch(
+        "communication.infra.task_activation._get_cloud_tasks_client",
+        return_value=fake_client,
+    ):
+        response = client.get("/infra/task-activation/validate")
+
+    assert response.status_code == 200
+    body = response.json()
+    statuses = {item["queue_name"]: item["status"] for item in body["queues"]}
+    assert statuses[task_activation.SETTINGS.task_due_queue_name] == "ok"
+    assert statuses[task_activation.SETTINGS.task_offline_queue_name] == "missing"
+    assert statuses[task_activation.SETTINGS.task_activation_repair_queue_name] == "ok"
+
+
+def test_diagnose_task_activation_reports_materialization_and_latest_run(
+    client,
+):
+    """Diagnosis should combine activation, Cloud Task target, queues, and latest run."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    activation = {
+        "activation_kind": "scheduled",
+        "execution_mode": "live",
+        "activation_revision": "rev-123",
+        "source_task_log_id": 555,
+        "next_due_at": "2026-04-10T09:00:00+00:00",
+    }
+    latest_run = {"run_key": "live:scheduled:assistant-123:101:rev:once"}
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=activation,
+        ),
+        patch(
+            "communication.infra.task_activation._lookup_latest_task_run",
+            return_value=latest_run,
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+    ):
+        response = client.post(
+            "/infra/task-activation/diagnose",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["activation"] == activation
+    assert body["latest_run"] == latest_run
+    assert body["materialization"]["queue_name"] == (
+        task_activation.SETTINGS.task_due_queue_name
+    )
+    assert body["materialization"]["target_url"].endswith("/scheduled/tasks/due")
+    assert "task-live-assistant-123-101" in body["materialization"]["task_name"]

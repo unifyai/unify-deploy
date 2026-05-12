@@ -86,6 +86,24 @@ spec:
                   Comms App revisions so feature-branch traffic runs the
                   matching feature-branch Unity image instead of inheriting
                   shared-staging idle containers.
+              serviceUrls:
+                type: object
+                description: |
+                  Peer service URLs that the Unity runtime should receive as
+                  environment variables.  Preview Comms App revisions stamp
+                  slugged peer URLs here so the singleton staging controller can
+                  materialize the requested runtime environment.
+                required:
+                - orchestra
+                - comms
+                - adapters
+                properties:
+                  orchestra:
+                    type: string
+                  comms:
+                    type: string
+                  adapters:
+                    type: string
           status:
             type: object
             properties:

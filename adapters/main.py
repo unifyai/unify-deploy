@@ -48,6 +48,64 @@ def _redact_email(email: str) -> str:
     return "***"
 
 
+def _store_refreshed_oauth_secrets(
+    *,
+    provider: str,
+    assistant_id: str | int | None,
+    assistant_email: str,
+    api_key: str | None,
+    secrets_to_store: dict[str, str],
+) -> tuple[bool, str | None]:
+    """Persist refreshed OAuth secrets; success means every non-empty value landed.
+
+    Orchestra exposes assistant-secret CRUD under the assistant API-key router:
+    ``PUT /assistant/{id}/secret/{name}`` updates an existing secret and
+    ``POST /assistant/{id}/secret`` creates a missing one.  Refresh jobs usually
+    update existing access-token rows, but new expiry/source keys can be absent
+    on legacy assistants, so the helper updates first and falls back to create
+    only on ``404``.  Unity does not receive these values directly; it later
+    pulls them from Orchestra through SecretManager's debounced sync gate.
+    """
+
+    if not assistant_id or not api_key:
+        return (
+            False,
+            f"Missing assistant_id or api_key while storing {provider} credentials",
+        )
+
+    base_endpoint = f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret"
+    for secret_name, secret_value in secrets_to_store.items():
+        if not secret_value:
+            continue
+        endpoint = f"{base_endpoint}/{secret_name}"
+        response = requests.put(
+            endpoint,
+            json={"secret_value": secret_value},
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        if response.status_code == 404:
+            response = requests.post(
+                base_endpoint,
+                json={"secret_name": secret_name, "secret_value": secret_value},
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if response.status_code not in (200, 201):
+            logger.error(
+                "Failed to persist refreshed OAuth secret "
+                "provider=%s secret=%s assistant=%s status=%s body=%s",
+                provider,
+                secret_name,
+                _redact_email(assistant_email),
+                response.status_code,
+                response.text,
+            )
+            return (
+                False,
+                f"Failed to store {provider} secret {secret_name}: {response.text}",
+            )
+    return True, None
+
+
 from common.metrics import setup_metrics
 
 from common.livekit import (
@@ -59,7 +117,6 @@ from common.livekit import (
 )
 
 from common.oauth import OAuthStateError, verify_oauth_state
-from common.pubsub import publish_assistant_event
 from common.settings import SETTINGS
 
 # Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
@@ -94,7 +151,6 @@ from .helpers import (
 from common.google_oauth import (
     exchange_google_code_for_tokens,
     get_google_user_info,
-    refresh_google_tokens,
     store_google_tokens,
 )
 from common.microsoft_oauth import (
@@ -2496,7 +2552,8 @@ async def teams_notification_processor(request: Request):
             # asking for ``teams``.  ``joinedTeams`` carries the same
             # team id semantically.
             team_id = parse_teams_resource_id(
-                resource, "joinedTeams"
+                resource,
+                "joinedTeams",
             ) or parse_teams_resource_id(resource, "teams")
             channel_id = parse_teams_resource_id(resource, "channels")
             chat_id = None
@@ -2901,7 +2958,7 @@ async def teams_notification_processor(request: Request):
                     "chat_type": chat_type,
                     "chat_topic": chat_topic,
                     "action": "new_message",
-                }
+                },
             )
 
         # Publish to Pub/Sub
@@ -4293,7 +4350,9 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
 
             api_key = assistant.get("api_key")
 
-            # Store updated tokens
+            # Persist the refreshed token set to Orchestra.  Unity assistants
+            # will pick these values up on the next assistant-secret sync
+            # boundary (execute_code, explicit OAuth helper, secret ask, etc.).
             secrets_to_store = {
                 "MICROSOFT_ACCESS_TOKEN": new_tokens["access_token"],
                 "MICROSOFT_TOKEN_EXPIRES_AT": expires_at,
@@ -4310,20 +4369,16 @@ def scheduled_microsoft_tokens(payload: ScheduledPayload):
             if not secrets.get("MICROSOFT_TOKEN_SOURCE"):
                 secrets_to_store["MICROSOFT_TOKEN_SOURCE"] = source
 
-            for secret_name, secret_value in secrets_to_store.items():
-                response = requests.put(
-                    f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret/{secret_name}",
-                    json={"secret_value": secret_value},
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-                if response.status_code != 200:
-                    results["failed"].append(
-                        {
-                            "email": email,
-                            "error": f"Failed to store secret: {response.text}",
-                        },
-                    )
-                    continue
+            stored, store_error = _store_refreshed_oauth_secrets(
+                provider="microsoft",
+                assistant_id=assistant_id,
+                assistant_email=email,
+                api_key=api_key,
+                secrets_to_store=secrets_to_store,
+            )
+            if not stored:
+                results["failed"].append({"email": email, "error": store_error})
+                continue
 
             results["refreshed"].append(email)
             logger.info(
@@ -4423,6 +4478,9 @@ def scheduled_google_tokens(payload: ScheduledPayload):
 
             api_key = assistant.get("api_key")
 
+            # Persist refreshed Google credentials to Orchestra.  The Unity
+            # runtime intentionally pulls from Orchestra later instead of this
+            # cron job pushing directly into running assistant processes.
             secrets_to_store = {
                 "GOOGLE_ACCESS_TOKEN": new_tokens["access_token"],
                 "GOOGLE_TOKEN_EXPIRES_AT": expires_at,
@@ -4430,20 +4488,16 @@ def scheduled_google_tokens(payload: ScheduledPayload):
             if new_tokens.get("refresh_token"):
                 secrets_to_store["GOOGLE_REFRESH_TOKEN"] = new_tokens["refresh_token"]
 
-            for secret_name, secret_value in secrets_to_store.items():
-                response = requests.put(
-                    f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/secret/{secret_name}",
-                    json={"secret_value": secret_value},
-                    headers={"Authorization": f"Bearer {api_key}"},
-                )
-                if response.status_code != 200:
-                    results["failed"].append(
-                        {
-                            "email": email,
-                            "error": f"Failed to store {secret_name}: {response.text}",
-                        },
-                    )
-                    continue
+            stored, store_error = _store_refreshed_oauth_secrets(
+                provider="google",
+                assistant_id=assistant_id,
+                assistant_email=email,
+                api_key=api_key,
+                secrets_to_store=secrets_to_store,
+            )
+            if not stored:
+                results["failed"].append({"email": email, "error": store_error})
+                continue
 
             results["refreshed"].append(email)
             logger.info(f"Refreshed Google token for {_redact_email(email)}")
@@ -4451,7 +4505,7 @@ def scheduled_google_tokens(payload: ScheduledPayload):
         except Exception as e:
             results["failed"].append({"email": email, "error": str(e)})
             logger.error(
-                f"Error refreshing Google token for {_redact_email(email)}: {e}"
+                f"Error refreshing Google token for {_redact_email(email)}: {e}",
             )
 
     logger.info(

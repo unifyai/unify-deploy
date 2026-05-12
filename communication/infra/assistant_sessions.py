@@ -48,6 +48,12 @@ _STATUS_UNSET = object()
 _MAX_CAS_RETRIES = 3
 _ASSISTANT_SESSION_SPEC_CONVERGENCE_IGNORED_FIELDS = frozenset({"requestedAt"})
 _RELEASED_BINDINGS_HISTORY_LIMIT = 20
+SERVICE_URLS_SPEC_FIELD = "serviceUrls"
+_SERVICE_URL_ENV_BY_SPEC_KEY = {
+    "orchestra": "ORCHESTRA_URL",
+    "comms": "UNITY_COMMS_URL",
+    "adapters": "UNITY_ADAPTERS_URL",
+}
 
 
 class AssistantSessionTerminatingError(RuntimeError):
@@ -134,6 +140,48 @@ def assistant_session_stop_requested(session: dict[str, Any] | None) -> bool:
         )
         == SUSPEND_INTENT_STOP
     )
+
+
+def build_runtime_service_urls(
+    *,
+    orchestra_url: str | None = None,
+    comms_url: str | None = None,
+    adapters_url: str | None = None,
+) -> dict[str, str]:
+    """Return the peer-service URLs a Unity runtime should use."""
+
+    urls = {
+        "orchestra": SETTINGS.orchestra_url if orchestra_url is None else orchestra_url,
+        "comms": SETTINGS.comms_url if comms_url is None else comms_url,
+        "adapters": SETTINGS.adapters_url if adapters_url is None else adapters_url,
+    }
+    return {
+        name: value
+        for name, raw_value in urls.items()
+        if (value := str(raw_value or "").strip())
+    }
+
+
+def session_runtime_service_env(session: dict[str, Any] | None) -> dict[str, str]:
+    """Return Unity Job env overrides recorded on an AssistantSession."""
+
+    spec = (session or {}).get("spec") or {}
+    service_urls = spec.get(SERVICE_URLS_SPEC_FIELD)
+    if not isinstance(service_urls, dict):
+        return {}
+    values = {
+        spec_key: str(service_urls.get(spec_key, "") or "").strip()
+        for spec_key in _SERVICE_URL_ENV_BY_SPEC_KEY
+    }
+    missing = [spec_key for spec_key, value in values.items() if not value]
+    if missing:
+        raise ValueError(
+            "AssistantSession serviceUrls must include "
+            f"{', '.join(sorted(_SERVICE_URL_ENV_BY_SPEC_KEY))}",
+        )
+    for spec_key, env_key in _SERVICE_URL_ENV_BY_SPEC_KEY.items():
+        values[env_key] = values.pop(spec_key)
+    return values
 
 
 def session_desktop_required(session: dict[str, Any] | None) -> bool:
@@ -1104,6 +1152,7 @@ def build_assistant_session_spec(
     activation_id: str,
     desired_state: str = DESIRED_STATE_RUNNING,
     image_override: str | None = None,
+    service_urls: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     desktop_required = desktop_mode in ("windows", "ubuntu")
     spec: dict[str, Any] = {
@@ -1122,6 +1171,10 @@ def build_assistant_session_spec(
     }
     if image_override:
         spec["imageOverride"] = image_override
+    if service_urls is not None:
+        spec[SERVICE_URLS_SPEC_FIELD] = dict(service_urls)
+    elif image_override:
+        spec[SERVICE_URLS_SPEC_FIELD] = build_runtime_service_urls()
     return spec
 
 
