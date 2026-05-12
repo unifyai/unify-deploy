@@ -8,6 +8,7 @@ import uuid
 import pytest
 import requests
 from google.api_core.exceptions import DeadlineExceeded, NotFound
+from kubernetes.client.exceptions import ApiException
 
 from communication.infra.assistant_sessions import read_bootstrap_secret
 
@@ -102,15 +103,34 @@ def _post_assistant_update(adapters, assistant_id: str) -> None:
 
 
 def _read_startup_payload(comms, core_api, assistant_id: str) -> dict:
-    session = poll_until(
-        lambda: get_assistant_session(comms, assistant_id),
+    def _read_running_session_payload():
+        session = get_assistant_session(comms, assistant_id)
+        if session is None:
+            return None
+        spec = session.get("spec") or {}
+        if str(spec.get("desiredState", "") or "") != "Running":
+            return None
+        secret_name = str(spec.get("startupSecretRef") or "")
+        if not secret_name:
+            return None
+        try:
+            payload = read_bootstrap_secret(core_api, NAMESPACE, secret_name)
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return session, payload
+
+    _session, payload = poll_until(
+        _read_running_session_payload,
         timeout=180,
         interval=5,
-        description=f"AssistantSession for {assistant_id}",
+        description=(
+            f"AssistantSession for {assistant_id} to reach Running with readable startup secret"
+        ),
+        failure_snapshot=lambda: get_assistant_session(comms, assistant_id),
     )
-    secret_name = str((session.get("spec") or {}).get("startupSecretRef") or "")
-    assert secret_name, f"Expected startupSecretRef on session: {session}"
-    return read_bootstrap_secret(core_api, NAMESPACE, secret_name)
+    return payload
 
 
 def _temporary_inbound_subscription(pubsub_subscriber, assistant_id: str):
