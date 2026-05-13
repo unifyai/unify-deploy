@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,7 +69,7 @@ class SourceFileSpec(BaseModel):
     """A source file and its per-table specifications."""
 
     file_path: str
-    tables: List[SourceTableSpec]
+    tables: List[SourceTableSpec] = Field(default_factory=list)
 
 
 class PipelineExecutionConfig(BaseModel):
@@ -215,3 +215,62 @@ class PipelineConfig(BaseModel):
         return PostIngestConfig(
             derived_columns=list(global_rules) + list(table_rules),
         )
+
+
+def resolve_embed_columns(
+    config: PipelineConfig,
+    file_path: str,
+    sheet_name: str,
+) -> Optional[List[str]]:
+    """Look up embed source columns for a given file + sheet from config."""
+    for spec in config.embed.file_specs:
+        if spec.file_path in file_path or spec.file_path == "*":
+            for table_spec in spec.tables:
+                if table_spec.table == sheet_name:
+                    return list(table_spec.source_columns)
+    return None
+
+
+def resolve_column_descriptions(
+    config: PipelineConfig,
+    sheet_name: str,
+) -> dict[str, str]:
+    """Look up column descriptions from business_contexts config."""
+    if not config.ingest.business_contexts:
+        return {}
+    for file_context in config.ingest.business_contexts.file_contexts:
+        for table_context in file_context.table_contexts:
+            if table_context.table == sheet_name and table_context.column_descriptions:
+                return dict(table_context.column_descriptions)
+    return {}
+
+
+def build_table_config_for_source_file(
+    config: PipelineConfig,
+    source_file: SourceFileSpec,
+) -> dict[str, dict[str, Any]]:
+    """Build ParseRequested.table_config metadata for a source file."""
+    embed_strategy = config.embed.strategy or "off"
+    table_config: dict[str, dict[str, Any]] = {}
+    for table in source_file.tables:
+        embed_columns = resolve_embed_columns(
+            config,
+            source_file.file_path,
+            table.sheet,
+        )
+        column_descriptions = resolve_column_descriptions(config, table.sheet)
+        post_ingest = config.effective_post_ingest(table)
+
+        entry: dict[str, Any] = {
+            "context": table.context,
+            "description": table.description or None,
+            "embed_columns": embed_columns,
+            "embed_strategy": embed_strategy if embed_columns else "off",
+            "chunk_size": table.chunk_size,
+        }
+        if column_descriptions:
+            entry["column_descriptions"] = column_descriptions
+        if post_ingest is not None:
+            entry["post_ingest"] = post_ingest.model_dump(mode="json")
+        table_config[table.sheet] = entry
+    return table_config

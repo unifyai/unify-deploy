@@ -21,6 +21,7 @@ from unity_deploy.assistant_deployments.types.pipeline_config import (
     PipelineExecutionConfig,
     SourceFileSpec,
     SourceTableSpec,
+    build_table_config_for_source_file,
 )
 from unity.data_manager.types.ingest import (
     AutoDerivedColumn,
@@ -289,6 +290,94 @@ class TestEffectivePostIngest:
         assert len(eff.derived_columns) == 2
         assert isinstance(eff.derived_columns[0], AutoDerivedColumn)
         assert isinstance(eff.derived_columns[1], ExplicitDerivedColumn)
+
+
+# =============================================================================
+# dispatch table_config builder
+# =============================================================================
+
+
+class TestBuildTableConfigForSourceFile:
+
+    def test_includes_dispatch_metadata(self):
+        cfg = PipelineConfig.model_validate(
+            {
+                "source_files": [
+                    {
+                        "file_path": "orders.csv",
+                        "tables": [
+                            {
+                                "sheet": "Orders",
+                                "context": "Data/Orders",
+                                "description": "Order rows",
+                                "chunk_size": 250,
+                                "post_ingest": {
+                                    "derived_columns": [
+                                        {
+                                            "kind": "explicit",
+                                            "source_field": "created_at",
+                                            "target_name": "created_date",
+                                            "equation": "date({lg:{field}})",
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                ],
+                "embed": {
+                    "strategy": "along",
+                    "file_specs": [
+                        {
+                            "file_path": "orders.csv",
+                            "context": "per_file_table",
+                            "tables": [
+                                {
+                                    "table": "Orders",
+                                    "source_columns": ["name"],
+                                    "target_columns": ["name_embed"],
+                                },
+                            ],
+                        },
+                    ],
+                },
+                "ingest": {
+                    "business_contexts": {
+                        "file_contexts": [
+                            {
+                                "file_path": "orders.csv",
+                                "table_contexts": [
+                                    {
+                                        "table": "Orders",
+                                        "column_descriptions": {
+                                            "name": "Customer or supplier name",
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                },
+            },
+        )
+
+        table_config = build_table_config_for_source_file(
+            cfg,
+            cfg.source_files[0],
+        )
+
+        assert table_config["Orders"]["context"] == "Data/Orders"
+        assert table_config["Orders"]["description"] == "Order rows"
+        assert table_config["Orders"]["chunk_size"] == 250
+        assert table_config["Orders"]["embed_columns"] == ["name"]
+        assert table_config["Orders"]["embed_strategy"] == "along"
+        assert table_config["Orders"]["column_descriptions"] == {
+            "name": "Customer or supplier name",
+        }
+        assert (
+            table_config["Orders"]["post_ingest"]["derived_columns"][0]["target_name"]
+            == "created_date"
+        )
 
 
 # =============================================================================

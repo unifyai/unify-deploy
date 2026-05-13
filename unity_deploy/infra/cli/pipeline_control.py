@@ -482,50 +482,6 @@ async def _publish_retry(infra, *, topic: str, payload: dict) -> str:
     return await infra.work_queue.publish(topic=topic, payload=payload)
 
 
-def _resolve_embed_columns(config, file_path: str, sheet_name: str):
-    """Look up embed source columns for a file + sheet from config."""
-    for spec in config.embed.file_specs:
-        if spec.file_path in file_path or spec.file_path == "*":
-            for table_spec in spec.tables:
-                if table_spec.table == sheet_name:
-                    return list(table_spec.source_columns)
-    return None
-
-
-def _resolve_column_descriptions(config, sheet_name: str) -> dict:
-    """Look up column descriptions from business_contexts config."""
-    if not config.ingest.business_contexts:
-        return {}
-    for fc in config.ingest.business_contexts.file_contexts:
-        for tc in fc.table_contexts:
-            if tc.table == sheet_name and tc.column_descriptions:
-                return dict(tc.column_descriptions)
-    return {}
-
-
-def _build_table_config_for_sf(config, sf) -> dict:
-    """Build per-table config dict from PipelineConfig for a SourceFileSpec."""
-    embed_strategy = config.embed.strategy or "off"
-    result = {}
-    for spec in sf.tables:
-        embed_cols = _resolve_embed_columns(config, sf.file_path, spec.sheet)
-        col_descs = _resolve_column_descriptions(config, spec.sheet)
-        post_ingest = config.effective_post_ingest(spec)
-
-        entry: dict = {
-            "description": spec.description or None,
-            "embed_columns": embed_cols,
-            "embed_strategy": embed_strategy if embed_cols else "off",
-            "chunk_size": spec.chunk_size,
-        }
-        if col_descs:
-            entry["column_descriptions"] = col_descs
-        if post_ingest is not None:
-            entry["post_ingest"] = post_ingest.model_dump(mode="json")
-        result[spec.sheet] = entry
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -543,6 +499,9 @@ async def cmd_submit(args: argparse.Namespace) -> None:
 
     from unity_deploy.assistant_deployments.scripts.ingest_utils import (
         load_pipeline_config,
+    )
+    from unity_deploy.assistant_deployments.types.pipeline_config import (
+        build_table_config_for_source_file,
     )
 
     infra = _init_infra(debug=args.debug)
@@ -599,7 +558,9 @@ async def cmd_submit(args: argparse.Namespace) -> None:
                 create_table_prefix=args.create_table_prefix,
             )
 
-        table_config = _build_table_config_for_sf(config, sf) if sf.tables else None
+        table_config = (
+            build_table_config_for_source_file(config, sf) if sf.tables else None
+        )
 
         try:
             result = publish_parse_request(
@@ -652,7 +613,7 @@ async def cmd_submit(args: argparse.Namespace) -> None:
         f"\n=== Dispatch {dispatch_id} complete "
         f"({len(job_ids)} dispatched, {errors} errors) ===",
     )
-    print(f"  List:    pipeline_control list")
+    print("  List:    pipeline_control list")
     print(f"  Status:  pipeline_control status --dispatch-id {dispatch_id}")
     print(f"  Cancel:  pipeline_control cancel --dispatch-id {dispatch_id}")
 
