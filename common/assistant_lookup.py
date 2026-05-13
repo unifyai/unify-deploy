@@ -14,7 +14,17 @@ from common.settings import SETTINGS
 logger = logging.getLogger(__name__)
 
 NO_DESKTOP_MODE = "none"
+COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 ASSISTANT_LOOKUP_TIMEOUT_SECONDS = 30
+
+
+def _resolve_desktop_mode(assistant: dict[str, Any]) -> str:
+    desktop_mode = assistant.get("desktop_mode")
+    if desktop_mode:
+        return str(desktop_mode)
+    if assistant.get("is_coordinator", False):
+        return COORDINATOR_DEFAULT_DESKTOP_MODE
+    return NO_DESKTOP_MODE
 
 
 def _local_assistant_data() -> dict[str, Any]:
@@ -41,7 +51,7 @@ def _local_assistant_data() -> dict[str, Any]:
         "user_whatsapp_number": "",
         "assistant_whatsapp_number": "",
         "assistant_discord_bot_id": "",
-        "desktop_mode": "ubuntu",
+        "desktop_mode": COORDINATOR_DEFAULT_DESKTOP_MODE,
         "user_desktop_mode": None,
         "user_desktop_filesys_sync": False,
         "user_desktop_url": None,
@@ -50,6 +60,7 @@ def _local_assistant_data() -> dict[str, Any]:
         "space_summaries": [],
         "self_contact_id": 0,
         "boss_contact_id": 1,
+        "is_coordinator": False,
     }
 
 
@@ -80,7 +91,7 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "voice_provider": assistant["voice_provider"],
         "voice_id": assistant["voice_id"],
         "secrets": assistant.get("secrets", {}),
-        "desktop_mode": assistant.get("desktop_mode") or NO_DESKTOP_MODE,
+        "desktop_mode": _resolve_desktop_mode(assistant),
         "user_desktop_mode": assistant.get("user_desktop_mode"),
         "user_desktop_filesys_sync": assistant.get("user_desktop_filesys_sync", False),
         "user_desktop_url": assistant.get("user_desktop_url"),
@@ -91,6 +102,7 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "space_summaries": assistant.get("space_summaries", []),
         "self_contact_id": assistant.get("self_contact_id", 0),
         "boss_contact_id": assistant.get("boss_contact_id", 1),
+        "is_coordinator": assistant.get("is_coordinator", False),
         "org_id": assistant.get("organization_id"),
     }
 

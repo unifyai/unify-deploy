@@ -324,6 +324,8 @@ def _orchestra_assistant_record(**overrides):
         "is_local": False,
         "is_coordinator": True,
         "team_ids": [],
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
         "organization_id": None,
     }
     record.update(overrides)
@@ -340,7 +342,7 @@ def test_get_assistant_local_payload_defaults_to_non_coordinator():
 
 @patch("adapters.helpers.requests.get")
 def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
-    """The assistant allowlist should keep Orchestra's Coordinator role bool."""
+    """Coordinator lookups preserve role and repair missing desktop mode."""
 
     mock_get.return_value = MagicMock(
         json=MagicMock(
@@ -348,6 +350,7 @@ def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
                 "info": [
                     _orchestra_assistant_record(
                         is_coordinator=True,
+                        desktop_mode=None,
                     ),
                 ],
             },
@@ -357,6 +360,7 @@ def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
     assistant_data = get_assistant(assistant_id="12345")
 
     assert assistant_data["is_coordinator"] is True
+    assert assistant_data["desktop_mode"] == "ubuntu"
 
 
 @patch("adapters.helpers.requests.post")
@@ -464,6 +468,7 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     mock_response.status_code = 200
     mock_post.return_value = mock_response
     assistant_data = _create_mock_assistant_data(demo_id=7)
+    assistant_data["desktop_mode"] = None
     assistant_data["is_coordinator"] = True
     wake_reasons = [{"type": "task_due", "task_id": 101}]
 
@@ -480,6 +485,7 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     assert json.loads(call_kwargs["data"]["wake_reasons"]) == wake_reasons
     assert call_kwargs["data"]["medium"] == "api_message"
     assert call_kwargs["data"]["is_coordinator"] == "true"
+    assert call_kwargs["data"]["desktop_mode"] == "ubuntu"
 
 
 @patch("adapters.helpers.requests.post")

@@ -11,6 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 NO_DESKTOP_MODE = "none"
+COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 # Adapters intentionally cap start-intent waits at the comms edge so webhook
 # handlers can return quickly. This is a best-effort handoff, not a durable
 # acceptance boundary.
@@ -60,6 +61,15 @@ def _required_contact_id(assistant_data: dict, field_name: str) -> int:
             f"Assistant {assistant_id} is missing required {field_name}",
         )
     return int(value)
+
+def _resolve_desktop_mode(assistant_data: dict) -> str:
+    """Resolve runtime desktop mode with Coordinator-aware fallback semantics."""
+    desktop_mode = assistant_data.get("desktop_mode")
+    if desktop_mode:
+        return desktop_mode
+    if assistant_data.get("is_coordinator", False):
+        return COORDINATOR_DEFAULT_DESKTOP_MODE
+    return NO_DESKTOP_MODE
 
 
 def get_pubsub_client():
@@ -839,7 +849,7 @@ def _build_start_job_request_data(
 
     api_key = assistant["api_key"]
     assistant_id = assistant["assistant_id"]
-    desktop_mode = assistant.get("desktop_mode") or NO_DESKTOP_MODE
+    desktop_mode = _resolve_desktop_mode(assistant)
     user_desktop_mode = assistant.get("user_desktop_mode", None)
     user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
     user_desktop_url = assistant.get("user_desktop_url", None)
