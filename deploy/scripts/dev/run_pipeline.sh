@@ -18,6 +18,10 @@ set -euo pipefail
 #     --user-id UUID --assistant-id 1823 \
 #     [--limit 5] [extra dispatch_pipeline.py flags...]
 #
+#   # Mixed DM/FM ingestion is intentionally two isolated dispatches: run once
+#   # with --mode dm and a DM config, then again with --mode fm and an FM config.
+#   # This preserves separate dispatch ids, logs, summaries, and storage semantics.
+#
 #   # Monitor only (no dispatch — attach to workers already processing)
 #   deploy/scripts/dev/run_pipeline.sh --monitor --env staging
 #   deploy/scripts/dev/run_pipeline.sh --monitor --env staging --dispatch-id <id>

@@ -22,11 +22,22 @@ import logging
 import os
 import sys
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from unity_deploy.assistant_deployments.types.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
 
-def _dispatch_fm(*, file_paths: list[str], project_name: str) -> int:
+def _dispatch_fm(
+    *,
+    config: PipelineConfig,
+    project_name: str,
+    user_id: str,
+    assistant_id: str,
+    alias: str,
+) -> int:
     """Publish one ParseRequested per source file with FM-mode binding.
 
     Uploads each source file to GCS via
@@ -34,14 +45,16 @@ def _dispatch_fm(*, file_paths: list[str], project_name: str) -> int:
     enforces the ``one file per ParseRequested`` invariant that Tier-2
     parallelism depends on. All files are routed with
     ``ingestion_mode="fm"`` and an :class:`FmBinding` whose identity is
-    derived from the ``USER_ID`` / ``ASSISTANT_ID`` environment
-    variables (matching what the ingest worker's
-    :func:`activate_unify_context` expects). The alias is hard-wired to
-    ``"Local"`` since the worker reconstructs a
-    :class:`LocalFileSystemAdapter` for its FileManager regardless.
+    passed explicitly by the operator, matching the DM dispatch path's
+    identity validation. Tabular files carry ``table_config`` metadata
+    into the shared parse worker, while document-only files remain valid
+    FM dispatches with no table config.
     """
     from unity.common.pipeline import DispatchTarget, publish_parse_request
     from unity.common.pipeline.types import FmBinding
+    from unity_deploy.assistant_deployments.types.pipeline_config import (
+        build_table_config_for_source_file,
+    )
     from unity_deploy.infra.gcp.settings import GcpPipelineSettings
 
     settings = GcpPipelineSettings()
@@ -59,9 +72,6 @@ def _dispatch_fm(*, file_paths: list[str], project_name: str) -> int:
         )
         return 2
 
-    user_id = os.environ.get("USER_ID", "default")
-    assistant_id = os.environ.get("ASSISTANT_ID", "0")
-
     target = DispatchTarget(
         project_id=project_id,
         bucket_name=bucket_name,
@@ -75,23 +85,33 @@ def _dispatch_fm(*, file_paths: list[str], project_name: str) -> int:
         user_id,
         assistant_id,
     )
-    logger.info("Dispatching %d source file(s)...", len(file_paths))
+    logger.info("Dispatching %d source file(s)...", len(config.source_files))
 
     errors = 0
-    for fp in file_paths:
+    for sf in config.source_files:
+        fp = sf.file_path
         fm_binding = FmBinding(
             user_id=user_id,
             assistant_id=assistant_id,
-            fm_alias="Local",
+            fm_alias=alias,
             logical_path=fp,
         )
+        table_config = (
+            build_table_config_for_source_file(config, sf) if sf.tables else None
+        )
+        source_kwargs: dict = {}
+        if fp.startswith("gs://"):
+            source_kwargs["source_gs_uri"] = fp
+        else:
+            source_kwargs["source_local_path"] = fp
         try:
             result = publish_parse_request(
                 target=target,
                 logical_path=fp,
                 ingestion_mode="fm",
                 fm_binding=fm_binding,
-                source_local_path=fp,
+                table_config=table_config,
+                **source_kwargs,
             )
             logger.info(
                 "  dispatched %s -> job=%s gs_uri=%s message_id=%s",
@@ -106,7 +126,7 @@ def _dispatch_fm(*, file_paths: list[str], project_name: str) -> int:
 
     logger.info(
         "=== FM Dispatch Complete (files=%d, errors=%d) ===",
-        len(file_paths),
+        len(config.source_files),
         errors,
     )
     return 1 if errors else 0
@@ -157,6 +177,15 @@ def main() -> int:
         help="Skip embedding (ingest rows only, no vectorization)",
     )
     parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help=(
+            "Override FM content/table row batch sizes. This is FM-safe "
+            "batching control; table filtering remains a DM-only script flag."
+        ),
+    )
+    parser.add_argument(
         "--verbosity",
         choices=["low", "medium", "high"],
         default=None,
@@ -205,10 +234,30 @@ def main() -> int:
             "Publish ParseRequested messages to the GCP pipeline (one per "
             "source file) and exit, instead of parsing/ingesting in-process. "
             "Each file is sent with ingestion_mode=fm + FmBinding "
-            "(user_id/assistant_id from USER_ID/ASSISTANT_ID env vars, "
-            "alias=Local). Use this to drive the GKE parse/ingest workers "
-            "for bulk operator ingests in staging/production."
+            "using a real user/assistant identity. Use this to drive the GKE "
+            "parse/ingest workers for bulk operator ingests in staging/production."
         ),
+    )
+    parser.add_argument(
+        "--user-id",
+        default=None,
+        help=(
+            "FmBinding.user_id used for --dispatch. Falls back to the USER_ID "
+            "environment variable when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--assistant-id",
+        default=None,
+        help=(
+            "FmBinding.assistant_id used for --dispatch. Falls back to the "
+            "ASSISTANT_ID environment variable when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--alias",
+        default="Local",
+        help="FmBinding.fm_alias used for --dispatch (default: Local).",
     )
     args = parser.parse_args()
 
@@ -257,7 +306,29 @@ def main() -> int:
     logger.info("Source files: %s", file_paths)
 
     if args.dispatch:
-        return _dispatch_fm(file_paths=file_paths, project_name=args.project)
+        user_id = args.user_id or os.environ.get("USER_ID")
+        assistant_id = args.assistant_id or os.environ.get("ASSISTANT_ID")
+        if not user_id:
+            logger.error(
+                "--dispatch requires --user-id (or USER_ID in the env). "
+                "A real user identity is required for provenance / routing.",
+            )
+            return 2
+        if not assistant_id:
+            logger.error(
+                "--dispatch requires --assistant-id (or ASSISTANT_ID in the env). "
+                "Current FM dispatch is assistant-scoped, so the ingest worker "
+                "resolves the Unify api key per message via "
+                "GET /v0/admin/assistant?agent_id=....",
+            )
+            return 2
+        return _dispatch_fm(
+            config=config,
+            project_name=args.project,
+            user_id=user_id,
+            assistant_id=assistant_id,
+            alias=args.alias,
+        )
 
     activate_project(args.project, overwrite=args.overwrite)
 
@@ -265,6 +336,12 @@ def main() -> int:
 
     if args.no_embed:
         cfg.embed.strategy = "off"
+    if args.chunk_size is not None:
+        if args.chunk_size <= 0:
+            logger.error("--chunk-size must be a positive integer")
+            return 2
+        cfg.ingest.table_rows_batch_size = args.chunk_size
+        cfg.ingest.content_rows_batch_size = args.chunk_size
     if args.parallel:
         cfg.execution.parallel_files = True
     cfg.diagnostics.enable_progress = True
@@ -274,9 +351,12 @@ def main() -> int:
         cfg.diagnostics.progress_file = args.progress_file
 
     logger.info(
-        "FM config: parallel=%s, embed_strategy=%s, progress=%s",
+        "FM config: parallel=%s, embed_strategy=%s, table_batch=%s, "
+        "content_batch=%s, progress=%s",
         cfg.execution.parallel_files,
         cfg.embed.strategy,
+        cfg.ingest.table_rows_batch_size,
+        cfg.ingest.content_rows_batch_size,
         cfg.diagnostics.enable_progress,
     )
 
