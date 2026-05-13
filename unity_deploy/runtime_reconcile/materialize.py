@@ -94,6 +94,67 @@ def compute_runtime_state_fingerprint(
     return _hash_payload(payload)
 
 
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    """Preserve path order while removing duplicates."""
+
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        resolved = str(Path(path).resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        result.append(Path(path))
+    return result
+
+
+def _enabled_integration_source_dirs() -> tuple[list[Path], list[Path]] | None:
+    """Return enabled integration function/venv dirs, or None if unknown.
+
+    ``FunctionManager.sync_custom`` treats its input as the authoritative set of
+    source-defined custom functions. Runtime reconciliation therefore needs to
+    include enabled integration packages in the same set before deleting stale
+    deployment functions. If integration discovery cannot be read, return
+    ``None`` so callers can avoid destructive empty syncs based on incomplete
+    information.
+    """
+
+    try:
+        from unity.integration_status import get_enabled_integrations
+    except Exception:
+        logger.warning(
+            "Runtime reconcile could not import integration status; "
+            "custom function cleanup will use deployment dirs only",
+            exc_info=True,
+        )
+        return None
+
+    try:
+        enabled = get_enabled_integrations()
+    except Exception:
+        logger.warning(
+            "Runtime reconcile could not read enabled integrations; "
+            "skipping destructive empty custom function cleanup",
+            exc_info=True,
+        )
+        return None
+
+    function_dirs: list[Path] = []
+    venv_dirs: list[Path] = []
+    for package in enabled.values():
+        function_dir = package.get("function_dir")
+        if function_dir is not None:
+            function_dirs.append(Path(function_dir))
+
+        root_dir = package.get("root_dir")
+        if root_dir is not None:
+            venv_dir = Path(root_dir) / "venvs"
+            if venv_dir.is_dir():
+                venv_dirs.append(venv_dir)
+
+    return _dedupe_paths(function_dirs), _dedupe_paths(venv_dirs)
+
+
 def materialize_runtime_state(
     resolved: ResolvedAssistantDeployment,
     identity: RuntimeIdentity,
@@ -149,11 +210,33 @@ def materialize_runtime_state(
         "secrets": "ready",
         "functions": "syncing",
     }
+    integration_source_dirs = _enabled_integration_source_dirs()
+    integration_function_dirs: list[Path] = []
+    integration_venv_dirs: list[Path] = []
+    can_sync_custom = integration_source_dirs is not None
+    if can_sync_custom:
+        integration_function_dirs, integration_venv_dirs = integration_source_dirs
+
+    function_dirs = (
+        _dedupe_paths([*resolved.function_dirs, *integration_function_dirs])
+        if can_sync_custom
+        else []
+    )
+    venv_dirs = (
+        _dedupe_paths([*resolved.venv_dirs, *integration_venv_dirs])
+        if can_sync_custom
+        else []
+    )
+
     logger.info(
-        "Runtime reconcile phase starting: assistant=%s phase=syncing_custom_functions function_dirs=%d venv_dirs=%d",
+        "Runtime reconcile phase starting: assistant=%s phase=syncing_custom_functions "
+        "deployment_function_dirs=%d integration_function_dirs=%d "
+        "deployment_venv_dirs=%d integration_venv_dirs=%d",
         identity.assistant_id,
         len(resolved.function_dirs),
+        len(integration_function_dirs),
         len(resolved.venv_dirs),
+        len(integration_venv_dirs),
     )
     if status is not None:
         status.update(
@@ -166,10 +249,10 @@ def materialize_runtime_state(
 
     custom_changed = False
     custom_start = perf_counter()
-    if resolved.function_dirs or resolved.venv_dirs:
+    if can_sync_custom:
         collect_start = perf_counter()
-        source_fns = collect_functions_from_directories(resolved.function_dirs)
-        source_venvs = collect_venvs_from_directories(resolved.venv_dirs)
+        source_fns = collect_functions_from_directories(function_dirs)
+        source_venvs = collect_venvs_from_directories(venv_dirs)
         log_startup_timing(
             logger,
             "⏱️ [StartupTiming] runtime_reconcile.collect_custom_sources assistant=%s duration=%.2fs functions=%d venvs=%d",
@@ -178,27 +261,32 @@ def materialize_runtime_state(
             len(source_fns),
             len(source_venvs),
         )
-        if source_fns or source_venvs:
-            fm_start = perf_counter()
-            fm = ManagerRegistry.get_function_manager()
-            log_startup_timing(
-                logger,
-                "⏱️ [StartupTiming] runtime_reconcile.get_function_manager assistant=%s duration=%.2fs",
-                identity.assistant_id,
-                perf_counter() - fm_start,
-            )
-            sync_start = perf_counter()
-            custom_changed = fm.sync_custom(
-                source_functions=source_fns,
-                source_venvs=source_venvs,
-            )
-            log_startup_timing(
-                logger,
-                "⏱️ [StartupTiming] runtime_reconcile.sync_custom assistant=%s duration=%.2fs changed=%s",
-                identity.assistant_id,
-                perf_counter() - sync_start,
-                custom_changed,
-            )
+        fm_start = perf_counter()
+        fm = ManagerRegistry.get_function_manager()
+        log_startup_timing(
+            logger,
+            "⏱️ [StartupTiming] runtime_reconcile.get_function_manager assistant=%s duration=%.2fs",
+            identity.assistant_id,
+            perf_counter() - fm_start,
+        )
+        sync_start = perf_counter()
+        custom_changed = fm.sync_custom(
+            source_functions=source_fns,
+            source_venvs=source_venvs,
+        )
+        log_startup_timing(
+            logger,
+            "⏱️ [StartupTiming] runtime_reconcile.sync_custom assistant=%s duration=%.2fs changed=%s",
+            identity.assistant_id,
+            perf_counter() - sync_start,
+            custom_changed,
+        )
+    else:
+        logger.warning(
+            "Runtime reconcile skipped custom function sync for assistant=%s "
+            "because enabled integration sources were unavailable",
+            identity.assistant_id,
+        )
     logger.info(
         "Runtime reconcile phase completed: assistant=%s phase=syncing_custom_functions duration=%.2fs custom_changed=%s",
         identity.assistant_id,
