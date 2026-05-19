@@ -17,13 +17,13 @@ NO_DESKTOP_MODE = "none"
 START_INTENT_DISPATCH_TIMEOUT_SECONDS = 0.1
 
 from common.metrics import (
-    ORCHESTRA_GET_ASSISTANT_DURATION,
     BUILD_WEBHOOK_CONTEXT_DURATION,
     JOB_DEMAND_TOTAL,
     STALE_JOBS_LAST_SWEEP,
     UNITY_JOBS_RUNNING,
     UNITY_JOBS_IDLE,
 )
+from common.assistant_lookup import get_assistant
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -76,152 +76,6 @@ def parse_teams_resource_id(resource: str, key: str) -> str | None:
         except ValueError:
             pass
     return None
-
-
-def get_assistant(
-    email_address: str = None,
-    phone_number: str = None,
-    assistant_id: str = None,
-) -> dict[str, str]:
-    """
-    Get the assistant id from the email address or phone number.
-
-    Args:
-        email_address: The email address of the assistant.
-        phone_number: The phone number of the assistant.
-
-    Returns:
-        The assistant id.
-    """
-    params = dict()
-    if email_address:
-        params["email"] = email_address
-    if phone_number:
-        params["phone"] = phone_number
-    if assistant_id:
-        params["agent_id"] = assistant_id
-    email_check = email_address or ""
-    phone_check = phone_number or ""
-
-    local_assistant_data = {
-        "assistant_id": "local-assistant",
-        "deploy_env": None,
-        "user_id": "local-user",
-        "voice_provider": "cartesia",
-        "voice_id": None,
-        "api_key": "",
-        "user_first_name": "",
-        "user_surname": "",
-        "assistant_first_name": "Local",
-        "assistant_surname": "Assistant",
-        "assistant_age": "20",
-        "assistant_nationality": "United States",
-        "assistant_about": "Local Assistant",
-        "assistant_job_title": "",
-        "assistant_timezone": "UTC",
-        "assistant_email": "unity.agent@unify.ai",
-        "user_email": "unity.agent@unify.ai",
-        "user_number": "",
-        "assistant_number": "",
-        "user_whatsapp_number": "",
-        "assistant_whatsapp_number": "",
-        "assistant_discord_bot_id": "",
-        "desktop_mode": "ubuntu",
-        "user_desktop_mode": None,
-        "user_desktop_filesys_sync": False,
-        "user_desktop_url": None,
-        "is_local": True,
-    }
-    if "+15550100002" in phone_check or assistant_id == "local-assistant":
-        return local_assistant_data
-    if (
-        "+0123456789" in phone_check
-        or "local-test-assistant@unify.ai" in email_check
-        or assistant_id == "local-test-assistant"
-    ):
-        return {
-            **local_assistant_data,
-            "assistant_id": "local-test-assistant",
-            "user_first_name": "Test",
-            "user_surname": "User",
-            "user_number": "+9876543210",
-            "user_email": "test@unify.ai",
-            "assistant_first_name": "Test",
-            "assistant_surname": "Assistant",
-            "assistant_number": "+0123456789",
-            "assistant_email": "local-test-assistant@unify.ai",
-            "user_whatsapp_number": "+9876543210",
-        }
-
-    _lookup_type = "id" if assistant_id else ("email" if email_address else "phone")
-    _t0 = time.perf_counter()
-    _status = "error"
-    try:
-        response = requests.get(
-            f"{SETTINGS.orchestra_url}/admin/assistant",
-            params=params,
-            headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-        ).json()
-        _status = "error" if "detail" in response else "success"
-    except Exception:
-        raise
-    finally:
-        ORCHESTRA_GET_ASSISTANT_DURATION.labels(
-            lookup_type=_lookup_type,
-            status=_status,
-        ).observe(time.perf_counter() - _t0)
-
-    logger.info(f"get_assistant params: {params}")
-    logger.info(f"get_assistant response: {response}")
-
-    if "detail" in response:
-        return {**local_assistant_data, "assistant_id": None}
-    assistants = response["info"]
-    if len(assistants) == 0:
-        return {**local_assistant_data, "assistant_id": None}
-
-    return {
-        "assistant_id": assistants[0]["agent_id"],
-        "deploy_env": assistants[0].get("deploy_env"),
-        "user_id": assistants[0]["user_id"],
-        "api_key": assistants[0]["api_key"],
-        "user_first_name": assistants[0]["user_first_name"],
-        "user_surname": assistants[0]["user_last_name"],
-        "assistant_first_name": assistants[0]["first_name"],
-        "assistant_surname": assistants[0]["surname"],
-        "assistant_age": str(assistants[0].get("age", "")),
-        "assistant_nationality": assistants[0]["nationality"],
-        "assistant_about": assistants[0]["about"],
-        # Free-text job title / specialization (e.g. "Growth marketing"). Empty
-        # string when unset, so downstream code can treat it as "no specialty"
-        # without nullable-handling everywhere.
-        "assistant_job_title": assistants[0].get("job_title") or "",
-        "assistant_timezone": assistants[0].get("timezone", "UTC"),
-        "assistant_number": assistants[0]["phone"] or "",
-        "assistant_whatsapp_number": assistants[0].get("assistant_whatsapp_number")
-        or "",
-        "assistant_discord_bot_id": assistants[0].get("assistant_discord_bot_id", ""),
-        "assistant_email": assistants[0]["email"] or "",
-        "assistant_email_provider": assistants[0].get("email_provider")
-        or "google_workspace",
-        "user_number": assistants[0]["user_phone"] or "",
-        "user_whatsapp_number": assistants[0].get("user_whatsapp_number") or "",
-        "user_email": assistants[0]["user_email"] or "",
-        "voice_provider": assistants[0]["voice_provider"],
-        "voice_id": assistants[0]["voice_id"],
-        "secrets": assistants[0].get("secrets", {}),
-        "desktop_mode": assistants[0].get("desktop_mode") or NO_DESKTOP_MODE,
-        "user_desktop_mode": assistants[0].get("user_desktop_mode", None),
-        "user_desktop_filesys_sync": assistants[0].get(
-            "user_desktop_filesys_sync",
-            False,
-        ),
-        "user_desktop_url": assistants[0].get("user_desktop_url", None),
-        "demo_id": assistants[0].get("demo_id", None),
-        "is_local": assistants[0].get("is_local", False),
-        "team_ids": assistants[0].get("team_ids", []),
-        "org_id": assistants[0].get("organization_id", None),
-    }
 
 
 def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]:

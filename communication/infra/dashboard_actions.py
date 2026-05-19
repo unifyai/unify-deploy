@@ -18,6 +18,7 @@ import requests
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from common.assistant_lookup import get_assistant
 from common.settings import SETTINGS
 
 from .helpers import create_unity_job
@@ -224,8 +225,6 @@ def _launch_dashboard_action_job(
 @router.post("/dashboard-action/dispatch")
 async def dispatch_dashboard_action(request: DashboardActionDispatchRequest):
     """Validate and launch one headless dashboard action execution."""
-
-    from adapters.helpers import get_assistant
 
     try:
         action_metadata = await asyncio.to_thread(
