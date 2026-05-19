@@ -284,7 +284,7 @@ steps:
         --image="$$CANONICAL_IMAGE" \
         --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=${BUILD_ID},preview-restore=true \
         --remove-env-vars=BRANCH_TAG \
-        --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
+        --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_COMMS_URL=https://${_PEER_COMMS_HOST},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
         --quiet
       exit 1
     fi
@@ -336,7 +336,7 @@ steps:
       --image="$$CANONICAL_IMAGE" \
       --labels=managed-by=gcp-cloud-build-deploy-cloud-run,gcb-build-id=${BUILD_ID},preview-restore=true \
       --remove-env-vars=BRANCH_TAG \
-      --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
+      --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},UNITY_COMMS_URL=https://${_PEER_COMMS_HOST},UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST} \
       --quiet
     echo "canonical service template restored to image $$CANONICAL_IMAGE"
   waitFor: ['assign-preview-tag']
