@@ -164,7 +164,7 @@ This is the default state of any newly created container on GKE:
 
 - **No assistant identity**: `agent_id` is `None` to indicate it's not yet assigned
 - **Subscribes to startup topics**: Listens to `unity-startup` or `unity-startup-staging`
-- **Keep-alive pings**: Sends pings to itself every 30 seconds to avoid the inactivity timeout (6 minutes) of the conversation manager
+- **Keep-alive pings**: Sends pings to itself every 30 seconds to avoid the inactivity timeout (7 minutes) of the conversation manager
 - **Ready for engagement**: Waiting for a startup message to become live
 
 The container detects it's in idle state by checking `SESSION_DETAILS.assistant.agent_id is None`.
@@ -182,7 +182,7 @@ When an inbound event occurs, the flow is:
    - Cancels the subscription to the startup topic
    - Subscribes to the specific topic of that assistant
    - Marks that job as live using `debug_logger.py`
-7. **Container is now live**: Listens for any inbound on that assistant's topic until terminated on inactivity (currently 6 minutes)
+7. **Container is now live**: Listens for any inbound on that assistant's topic until terminated on inactivity (currently 7 minutes)
 
 ### Message Ordering: Startup vs Inbound
 
@@ -232,7 +232,7 @@ If the assistant was already live, only the inbound message is sent, and the exi
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐     6 min inactivity    ┌─────────────────┐
+┌─────────────────┐     7 min inactivity    ┌─────────────────┐
 │                 │ ──────────────────────► │                 │
 │   Live State    │                         │   Shutdown      │
 │ (Processing)    │                         │  (Job retained) │
@@ -317,9 +317,9 @@ In the worst case (e.g., GKE node provisioning required), this delay can be 30-6
 ## 🔋 Inactivity & Idle Container Management
 
 ### Inactivity Timeout
-- Containers shut down after **6 minutes** of inactivity
+- Containers shut down after **7 minutes** of inactivity
 - The `check_inactivity()` method in `conversation_manager.py` monitors activity
-- Idle containers ping every **30 seconds** to stay alive (half the timeout)
+- Idle containers ping every **30 seconds** to stay alive
 
 ### What Happens During Shutdown?
 
@@ -682,7 +682,7 @@ orchestra/
 
 | Setting | Value | Purpose |
 |---------|-------|---------|
-| Inactivity timeout | 6 minutes (360s) | Shuts down inactive containers |
+| Inactivity timeout | 7 minutes (420s) | Shuts down inactive containers |
 | Ping interval | 30 seconds | Keeps idle containers alive |
 | Idle job creation | Hourly + on every inbound + on deploy | Fill mode (reactive) or refresh mode (cron/deploy) |
 | Idle job cleanup | 10 min after creation | Trims pool back to target |
