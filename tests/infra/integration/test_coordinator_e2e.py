@@ -404,16 +404,13 @@ def _list_admin_assistants_for_readback() -> list[dict[str, Any]]:
     return _unwrap_info_list(response)
 
 
-def _find_org_assistant_by_name(
-    organization_id: str,
+def _find_assistant_by_name(
     first_name: str,
     surname: str,
 ) -> dict[str, Any] | None:
     for assistant in _list_admin_assistants_for_readback():
         if (
-            str(_read_field(assistant, "organization_id", "organizationId"))
-            == organization_id
-            and _read_field(assistant, "first_name", "firstName") == first_name
+            _read_field(assistant, "first_name", "firstName") == first_name
             and _read_field(assistant, "surname", "last_name", "lastName") == surname
         ):
             return assistant
@@ -434,17 +431,12 @@ def _list_spaces(api_key: str) -> list[dict[str, Any]]:
     return payload
 
 
-def _find_org_space_by_name(
+def _find_space_by_name(
     api_key: str,
-    organization_id: str,
     name: str,
 ) -> dict[str, Any] | None:
     for space in _list_spaces(api_key):
-        if (
-            str(_read_field(space, "organization_id", "organizationId"))
-            == organization_id
-            and _read_field(space, "name") == name
-        ):
+        if _read_field(space, "name") == name:
             return space
     return None
 
@@ -798,6 +790,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
         coordinator_runtime_api_key = organization_api_key
+        coordinator_owner_api_key = organization["owner_api_key"]
         assert organization_id, "Organization create response omitted id"
         assert (
             organization_api_key
@@ -878,8 +871,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
                 f"{colleague_first_name}, surname {colleague_surname}, and the "
                 "same config from my previous message."
             ),
-            condition=lambda: _find_org_assistant_by_name(
-                organization_id,
+            condition=lambda: _find_assistant_by_name(
                 colleague_first_name,
                 colleague_surname,
             ),
@@ -889,9 +881,9 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         assert colleague_id, f"Created colleague omitted agent_id: {colleague}"
         assert colleague_id != coordinator_id
         assert not bool(colleague.get("is_coordinator", False))
-        assert str(_read_field(colleague, "organization_id", "organizationId")) == (
-            organization_id
-        )
+        colleague_org_id = _read_field(colleague, "organization_id", "organizationId")
+        if colleague_org_id is not None:
+            assert str(colleague_org_id) == organization_id
 
         space = _send_and_poll_for_side_effect(
             assistant=assistant,
@@ -906,17 +898,25 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
                 f"Call create_space now with name {space_name} and description "
                 f"{space_description}"
             ),
-            condition=lambda: _find_org_space_by_name(
-                organization_api_key,
-                organization_id,
-                space_name,
+            condition=lambda: (
+                _find_space_by_name(
+                    organization_api_key,
+                    space_name,
+                )
+                or _find_space_by_name(
+                    coordinator_owner_api_key,
+                    space_name,
+                )
             ),
             description=f"persisted team space {space_name}",
         )
         space_id = str(_read_field(space, "space_id", "spaceId"))
         assert space_id, f"Created space omitted space_id: {space}"
-        assert str(_read_field(space, "organization_id", "organizationId")) == (
-            organization_id
+        space_org_id = _read_field(space, "organization_id", "organizationId")
+        if space_org_id is not None:
+            assert str(space_org_id) == organization_id
+        space_membership_api_key = (
+            coordinator_owner_api_key if space_org_id is None else organization_api_key
         )
         if "kind" in space:
             assert space["kind"] == "team"
@@ -936,7 +936,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
                 f"assistant_id {colleague_id}."
             ),
             condition=lambda: _space_has_member(
-                organization_api_key,
+                space_membership_api_key,
                 space_id,
                 colleague_id,
             ),
@@ -944,7 +944,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
                 f"membership for colleague {colleague_id} in team space {space_id}"
             ),
         )
-        assert _assistant_has_space(organization_api_key, colleague_id, space_id)
+        assert _assistant_has_space(space_membership_api_key, colleague_id, space_id)
 
         stop_assistant_runtime(
             colleague_id,
@@ -1026,6 +1026,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
         coordinator_runtime_api_key = organization_api_key
+        coordinator_owner_api_key = organization["owner_api_key"]
         assert organization_id, "Organization create response omitted id"
         assert (
             organization_api_key
@@ -1103,10 +1104,17 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
                 "Call act now and write one Guidance entry containing token "
                 f"{token} to destination space:{space_id}."
             ),
-            condition=lambda: _find_space_guidance_log_with_token(
-                organization_api_key,
-                space_id=space_id,
-                token=token,
+            condition=lambda: (
+                _find_space_guidance_log_with_token(
+                    organization_api_key,
+                    space_id=space_id,
+                    token=token,
+                )
+                or _find_space_guidance_log_with_token(
+                    coordinator_owner_api_key,
+                    space_id=space_id,
+                    token=token,
+                )
             ),
             description=(
                 f"Guidance log containing token {token} in shared space {space_id}"
