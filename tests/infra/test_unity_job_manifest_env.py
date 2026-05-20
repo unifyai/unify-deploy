@@ -148,3 +148,19 @@ def test_comms_preview_restore_resets_all_runtime_service_urls() -> None:
     )
 
     assert text.count(canonical_runtime_env) == 3
+
+
+def test_comms_staging_deploy_resets_runtime_service_urls() -> None:
+    text = (ROOT / "cloudbuild/unity-comms-app-staging.yaml").read_text()
+
+    canonical_runtime_env = (
+        "--update-env-vars=DEPLOY_ENV=staging,"
+        "ORCHESTRA_URL=${_ORCHESTRA_URL},"
+        "UNITY_COMMS_URL=https://${_COMMS_HOST},"
+        "UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST}"
+    )
+
+    assert canonical_runtime_env in text
+    assert "_ORCHESTRA_URL: 'https://internal.example.com/v0'" in text
+    assert "_COMMS_HOST: 'service.a.run.app'" in text
+    assert "_ADAPTERS_HOST: 'service.a.run.app'" in text

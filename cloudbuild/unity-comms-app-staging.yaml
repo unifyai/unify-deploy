@@ -202,7 +202,7 @@ steps:
       --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
       --region=${_REGION} \
       --min-instances=1 \
-      --update-env-vars=DEPLOY_ENV=staging \
+      --update-env-vars=DEPLOY_ENV=staging,ORCHESTRA_URL=${_ORCHESTRA_URL},UNITY_COMMS_URL=https://${_COMMS_HOST},UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST} \
       --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=${SHORT_SHA},gcb-build-id=${BUILD_ID} \
       --quiet
   waitFor: ['repair-traffic-state']
@@ -274,6 +274,9 @@ substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'unity-comms-app-repo'
   _SERVICE_NAME: 'unity-comms-app-staging'
+  _ORCHESTRA_URL: 'https://internal.example.com/v0'
+  _COMMS_HOST: 'service.a.run.app'
+  _ADAPTERS_HOST: 'service.a.run.app'
 
 # Available secrets
 availableSecrets:
