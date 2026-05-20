@@ -401,6 +401,10 @@ def create_unity_job(
             env_vars += [{"name": "STAGING", "value": "true"}]
         env_vars = _merge_env_overrides(env_vars, extra_env)
 
+        image_pull_policy = (
+            "Always" if image.rsplit(":", 1)[-1] == "latest" else "IfNotPresent"
+        )
+
         metadata_labels = {
             "app": app_label,
             "created-by": "create_job_script",
@@ -447,7 +451,7 @@ def create_unity_job(
                             {
                                 "name": "unity-assistant",
                                 "image": image,
-                                "imagePullPolicy": "IfNotPresent",  # Use cached images for faster startup
+                                "imagePullPolicy": image_pull_policy,
                                 "ports": [
                                     {"containerPort": 8000},
                                     {"containerPort": 6379},

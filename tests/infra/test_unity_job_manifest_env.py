@@ -79,6 +79,54 @@ def test_create_unity_job_applies_explicit_service_url_env_once() -> None:
     )
 
 
+def test_create_unity_job_always_pulls_latest_image() -> None:
+    class FakeBatchApi:
+        def __init__(self):
+            self.created_body = None
+
+        def create_namespaced_job(self, namespace, body):
+            self.created_body = body
+            return SimpleNamespace(
+                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
+            )
+
+    batch_api = FakeBatchApi()
+
+    create_unity_job(
+        batch_api,
+        job_name="unity-offline-latest-staging",
+        namespace="staging",
+        image="registry/unity-staging:latest",
+    )
+
+    container = batch_api.created_body["spec"]["template"]["spec"]["containers"][0]
+    assert container["imagePullPolicy"] == "Always"
+
+
+def test_create_unity_job_uses_cache_for_immutable_image_tags() -> None:
+    class FakeBatchApi:
+        def __init__(self):
+            self.created_body = None
+
+        def create_namespaced_job(self, namespace, body):
+            self.created_body = body
+            return SimpleNamespace(
+                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
+            )
+
+    batch_api = FakeBatchApi()
+
+    create_unity_job(
+        batch_api,
+        job_name="unity-offline-sha-staging",
+        namespace="staging",
+        image="registry/unity-staging:4f25e7cbd9a4",
+    )
+
+    container = batch_api.created_body["spec"]["template"]["spec"]["containers"][0]
+    assert container["imagePullPolicy"] == "IfNotPresent"
+
+
 def test_comms_preview_deploy_sets_all_runtime_service_urls() -> None:
     text = (ROOT / "cloudbuild/unity-comms-app-preview.yaml").read_text()
 
