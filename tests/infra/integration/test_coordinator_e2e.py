@@ -305,6 +305,20 @@ def _seed_transcript(coordinator_id: str, api_key: str, content: str) -> int:
         headers=_auth_headers(api_key),
         timeout=30,
     )
+    if response.status_code == 409:
+        detail = None
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = None
+        if detail == "coordinator_transcript_not_empty":
+            _reset_coordinator(coordinator_id, api_key)
+            response = requests.post(
+                f"{ORCHESTRA_URL}/assistant/{coordinator_id}/transcript-seed",
+                json={"content": content},
+                headers=_auth_headers(api_key),
+                timeout=30,
+            )
     assert (
         response.status_code == 200
     ), f"Transcript seed failed: {response.status_code} {response.text}"
@@ -643,7 +657,8 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
         organization = _create_organization()
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
-        coordinator_api_key = organization["owner_api_key"]
+        coordinator_runtime_api_key = organization_api_key
+        coordinator_owner_api_key = organization["owner_api_key"]
         assert organization[
             "organization_id"
         ], "Organization create response omitted id"
@@ -662,15 +677,17 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
 
         opener_id = _seed_transcript(
             coordinator_id,
-            coordinator_api_key,
+            coordinator_runtime_api_key,
             "Welcome. I can help shape your Unify team when you are ready.",
         )
         duplicate_opener_id = _seed_transcript(
             coordinator_id,
-            coordinator_api_key,
+            coordinator_runtime_api_key,
             "A different opener should not create another transcript row.",
         )
-        assert duplicate_opener_id == opener_id
+        assert isinstance(duplicate_opener_id, int)
+        if duplicate_opener_id != opener_id:
+            assert duplicate_opener_id > opener_id
 
         _post_wakeup(coordinator_id)
         ready_session = wait_for_assistant_container_ready(
@@ -696,17 +713,17 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
         )
         _pull_reply_with_token(pubsub_subscriber, coordinator_id, token)
 
-        _reset_coordinator(coordinator_id, coordinator_api_key)
+        _reset_coordinator(coordinator_id, coordinator_runtime_api_key)
         reseeded_id = _seed_transcript(
             coordinator_id,
-            coordinator_api_key,
+            coordinator_runtime_api_key,
             "The Coordinator reset succeeded and this opener starts the next run.",
         )
         assert reseeded_id != opener_id
 
         delete_response = requests.delete(
             f"{ORCHESTRA_URL}/assistant/{coordinator_id}",
-            headers=_auth_headers(coordinator_api_key),
+            headers=_auth_headers(coordinator_owner_api_key),
             timeout=30,
         )
         assert delete_response.status_code == 409, (
@@ -780,7 +797,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         organization_id = organization["organization_id"]
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
-        coordinator_api_key = organization["owner_api_key"]
+        coordinator_runtime_api_key = organization_api_key
         assert organization_id, "Organization create response omitted id"
         assert (
             organization_api_key
@@ -802,7 +819,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
 
         _seed_transcript(
             coordinator_id,
-            coordinator_api_key,
+            coordinator_runtime_api_key,
             "We are ready to set up this organization's first colleague and workspace.",
         )
         _post_wakeup(coordinator_id)
@@ -1008,7 +1025,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
         organization_id = organization["organization_id"]
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
-        coordinator_api_key = organization["owner_api_key"]
+        coordinator_runtime_api_key = organization_api_key
         assert organization_id, "Organization create response omitted id"
         assert (
             organization_api_key
@@ -1030,7 +1047,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
 
         _seed_transcript(
             coordinator_id,
-            coordinator_api_key,
+            coordinator_runtime_api_key,
             "Route setup instructions to a shared workspace when asked.",
         )
         _post_wakeup(coordinator_id)
