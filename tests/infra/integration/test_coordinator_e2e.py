@@ -113,6 +113,79 @@ def _unwrap_info_list(response: requests.Response) -> list[dict[str, Any]]:
     return info
 
 
+def _fetch_user_basic_info(api_key: str) -> dict[str, Any]:
+    response = requests.get(
+        f"{ORCHESTRA_URL}/user/basic-info",
+        headers=_auth_headers(api_key),
+        timeout=30,
+    )
+    assert (
+        response.status_code == 200
+    ), f"user/basic-info lookup failed: {response.status_code} {response.text}"
+    return _unwrap_info(response)
+
+
+def _fetch_user_api_key(user_id: str) -> str:
+    response = requests.get(
+        f"{ORCHESTRA_URL}/admin/user/by-user-id",
+        params={"user_id": user_id},
+        headers=_auth_headers(ADMIN_KEY),
+        timeout=30,
+    )
+    assert (
+        response.status_code == 200
+    ), f"admin user lookup failed: {response.status_code} {response.text}"
+    api_key = response.json().get("api_key", "")
+    assert api_key, f"admin user lookup missing api_key for user_id={user_id}"
+    return str(api_key)
+
+
+def _wait_for_personal_coordinator_assistant_id(
+    user_id: str,
+    timeout: int = 120,
+) -> str:
+    def _snapshot():
+        response = requests.get(
+            f"{ORCHESTRA_URL}/admin/assistant/user/{user_id}",
+            headers=_auth_headers(ADMIN_KEY),
+            timeout=30,
+        )
+        return {
+            "status_code": response.status_code,
+            "body": response.json() if response.content else response.text,
+        }
+
+    def _lookup():
+        response = requests.get(
+            f"{ORCHESTRA_URL}/admin/assistant/user/{user_id}",
+            headers=_auth_headers(ADMIN_KEY),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            return None
+        info = response.json().get("info", [])
+        assistant_rows = info if isinstance(info, list) else [info]
+        for row in assistant_rows:
+            if row.get("is_coordinator") is not True:
+                continue
+            if _read_field(row, "organization_id", "organizationId") is not None:
+                continue
+            if _read_field(row, "self_contact_id", "selfContactId") is None:
+                continue
+            if _read_field(row, "boss_contact_id", "bossContactId") is None:
+                continue
+            return str(_read_field(row, "agent_id", "agentId"))
+        return None
+
+    return poll_until(
+        _lookup,
+        timeout=timeout,
+        interval=5,
+        description=f"personal Coordinator assistant for owner user {user_id}",
+        failure_snapshot=_snapshot,
+    )
+
+
 def _create_organization() -> dict[str, Any]:
     organization_name = f"coord-e2e-{time.time_ns()}-{uuid.uuid4().hex[:8]}"
     response = requests.post(
@@ -126,11 +199,21 @@ def _create_organization() -> dict[str, Any]:
     ), f"Organization create failed: {response.status_code} {response.text}"
     info = _unwrap_info(response)
     organization_id = _read_field(info, "id", "organization_id", "organizationId")
-    coordinator_id = _read_field(info, "coordinator_id", "coordinatorId")
     organization_api_key = _read_field(info, "api_key", "apiKey")
+    assert organization_api_key, f"Organization create omitted api_key: {info}"
+    owner_info = _fetch_user_basic_info(str(organization_api_key or ""))
+    owner_user_id = _read_field(owner_info, "id", "user_id", "userId")
+    assert owner_user_id, (
+        "Organization owner lookup omitted user id: "
+        f"org_info={info} basic_info={owner_info}"
+    )
+    owner_api_key = _fetch_user_api_key(str(owner_user_id))
+    coordinator_id = _wait_for_personal_coordinator_assistant_id(str(owner_user_id))
     return {
         "name": organization_name,
         "organization_id": str(organization_id or ""),
+        "owner_user_id": str(owner_user_id),
+        "owner_api_key": owner_api_key,
         "coordinator_id": str(coordinator_id or ""),
         "api_key": str(organization_api_key or ""),
     }
@@ -560,6 +643,7 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
         organization = _create_organization()
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
+        coordinator_api_key = organization["owner_api_key"]
         assert organization[
             "organization_id"
         ], "Organization create response omitted id"
@@ -573,17 +657,17 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
 
         admin_record = _fetch_admin_assistant(coordinator_id)
         assert admin_record["is_coordinator"] is True
-        assert str(admin_record["organization_id"]) == organization["organization_id"]
+        assert _read_field(admin_record, "organization_id", "organizationId") is None
         assistant = _admin_record_to_data(admin_record)
 
         opener_id = _seed_transcript(
             coordinator_id,
-            organization_api_key,
+            coordinator_api_key,
             "Welcome. I can help shape your Unify team when you are ready.",
         )
         duplicate_opener_id = _seed_transcript(
             coordinator_id,
-            organization_api_key,
+            coordinator_api_key,
             "A different opener should not create another transcript row.",
         )
         assert duplicate_opener_id == opener_id
@@ -602,7 +686,7 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
         assert secret_name, f"Ready session omitted startupSecretRef: {ready_session}"
         bootstrap_payload = read_bootstrap_secret(core_api, NAMESPACE, secret_name)
         assert bootstrap_payload["is_coordinator"] is True
-        assert str(bootstrap_payload["org_id"]) == organization["organization_id"]
+        assert bootstrap_payload["org_id"] is None
 
         token = f"coord-e2e-{uuid.uuid4().hex[:12]}"
         pull_outbound_messages(pubsub_subscriber, coordinator_id, timeout=1)
@@ -612,17 +696,17 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
         )
         _pull_reply_with_token(pubsub_subscriber, coordinator_id, token)
 
-        _reset_coordinator(coordinator_id, organization_api_key)
+        _reset_coordinator(coordinator_id, coordinator_api_key)
         reseeded_id = _seed_transcript(
             coordinator_id,
-            organization_api_key,
+            coordinator_api_key,
             "The Coordinator reset succeeded and this opener starts the next run.",
         )
         assert reseeded_id != opener_id
 
         delete_response = requests.delete(
             f"{ORCHESTRA_URL}/assistant/{coordinator_id}",
-            headers=_auth_headers(organization_api_key),
+            headers=_auth_headers(coordinator_api_key),
             timeout=30,
         )
         assert delete_response.status_code == 409, (
@@ -696,6 +780,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         organization_id = organization["organization_id"]
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
+        coordinator_api_key = organization["owner_api_key"]
         assert organization_id, "Organization create response omitted id"
         assert (
             organization_api_key
@@ -712,12 +797,12 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
 
         admin_record = _fetch_admin_assistant(coordinator_id)
         assert admin_record["is_coordinator"] is True
-        assert str(admin_record["organization_id"]) == organization_id
+        assert _read_field(admin_record, "organization_id", "organizationId") is None
         assistant = _admin_record_to_data(admin_record)
 
         _seed_transcript(
             coordinator_id,
-            organization_api_key,
+            coordinator_api_key,
             "We are ready to set up this organization's first colleague and workspace.",
         )
         _post_wakeup(coordinator_id)
@@ -734,7 +819,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         assert secret_name, f"Ready session omitted startupSecretRef: {ready_session}"
         bootstrap_payload = read_bootstrap_secret(core_api, NAMESPACE, secret_name)
         assert bootstrap_payload["is_coordinator"] is True
-        assert str(bootstrap_payload["org_id"]) == organization_id
+        assert bootstrap_payload["org_id"] is None
 
         implicit_org_named_spaces = [
             space
@@ -923,6 +1008,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
         organization_id = organization["organization_id"]
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
+        coordinator_api_key = organization["owner_api_key"]
         assert organization_id, "Organization create response omitted id"
         assert (
             organization_api_key
@@ -939,12 +1025,12 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
 
         admin_record = _fetch_admin_assistant(coordinator_id)
         assert admin_record["is_coordinator"] is True
-        assert str(admin_record["organization_id"]) == organization_id
+        assert _read_field(admin_record, "organization_id", "organizationId") is None
         assistant = _admin_record_to_data(admin_record)
 
         _seed_transcript(
             coordinator_id,
-            organization_api_key,
+            coordinator_api_key,
             "Route setup instructions to a shared workspace when asked.",
         )
         _post_wakeup(coordinator_id)
@@ -961,7 +1047,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
         assert secret_name, f"Ready session omitted startupSecretRef: {ready_session}"
         bootstrap_payload = read_bootstrap_secret(core_api, NAMESPACE, secret_name)
         assert bootstrap_payload["is_coordinator"] is True
-        assert str(bootstrap_payload["org_id"]) == organization_id
+        assert bootstrap_payload["org_id"] is None
 
         setup_space_name = f"Coordinator Act Space {uuid.uuid4().hex[:8]}"
         setup_space = _create_org_space(
