@@ -36,6 +36,8 @@ REQUIRED_ROUTE_ENV = (
 )
 COORDINATOR_SIDE_EFFECT_TIMEOUT_SECONDS = 180
 COORDINATOR_SIDE_EFFECT_NUDGE_TIMEOUT_SECONDS = 180
+COORDINATOR_RUNTIME_READY_ATTEMPTS = 3
+COORDINATOR_RUNTIME_READY_REPLY_TIMEOUT_SECONDS = 90
 ASSISTANTS_PROJECT_NAME = "Assistants"
 
 
@@ -371,6 +373,8 @@ def _pull_reply_with_token(
     pubsub_subscriber,
     coordinator_id: str,
     token: str,
+    *,
+    timeout_seconds: int = 180,
 ) -> dict[str, Any]:
     def _matching_reply() -> dict[str, Any] | None:
         messages = pull_outbound_messages(pubsub_subscriber, coordinator_id, timeout=10)
@@ -381,10 +385,38 @@ def _pull_reply_with_token(
 
     return poll_until(
         _matching_reply,
-        timeout=180,
+        timeout=timeout_seconds,
         interval=5,
         description=f"Coordinator outbound reply containing {token}",
     )
+
+
+def _ensure_coordinator_tools_ready(
+    assistant: dict[str, Any],
+    pubsub_subscriber,
+    coordinator_id: str,
+) -> None:
+    """Ensure the live runtime can answer prompts before side-effect requests."""
+
+    token = f"coord-ready-{uuid.uuid4().hex[:12]}"
+    prompt = (
+        "Please reply with this exact preview readiness token when your coordinator "
+        f"tools are ready: {token}"
+    )
+    for attempt in range(1, COORDINATOR_RUNTIME_READY_ATTEMPTS + 1):
+        pull_outbound_messages(pubsub_subscriber, coordinator_id, timeout=1)
+        _send_runtime_message(assistant, prompt)
+        try:
+            _pull_reply_with_token(
+                pubsub_subscriber,
+                coordinator_id,
+                token,
+                timeout_seconds=COORDINATOR_RUNTIME_READY_REPLY_TIMEOUT_SECONDS,
+            )
+            return
+        except TimeoutError:
+            if attempt == COORDINATOR_RUNTIME_READY_ATTEMPTS:
+                raise
 
 
 def _list_admin_assistants_for_readback() -> list[dict[str, Any]]:
@@ -607,6 +639,8 @@ def _send_and_poll_for_side_effect(
         latest_messages.extend(
             pull_outbound_messages(pubsub_subscriber, coordinator_id, timeout=1),
         )
+        if len(latest_messages) > 20:
+            del latest_messages[:-20]
         return None
 
     def _poll(timeout_seconds: int, description_text: str) -> Any:
@@ -697,13 +731,11 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
         assert bootstrap_payload["is_coordinator"] is True
         assert bootstrap_payload["org_id"] is None
 
-        token = f"coord-e2e-{uuid.uuid4().hex[:12]}"
-        pull_outbound_messages(pubsub_subscriber, coordinator_id, timeout=1)
-        _send_runtime_message(
+        _ensure_coordinator_tools_ready(
             assistant,
-            f"Please reply with this exact preview check token: {token}",
+            pubsub_subscriber,
+            coordinator_id,
         )
-        _pull_reply_with_token(pubsub_subscriber, coordinator_id, token)
 
         _reset_coordinator(coordinator_id, coordinator_runtime_api_key)
         reseeded_id = _seed_transcript(
@@ -829,6 +861,11 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         bootstrap_payload = read_bootstrap_secret(core_api, NAMESPACE, secret_name)
         assert bootstrap_payload["is_coordinator"] is True
         assert bootstrap_payload["org_id"] is None
+        _ensure_coordinator_tools_ready(
+            assistant,
+            pubsub_subscriber,
+            coordinator_id,
+        )
 
         implicit_org_named_spaces = [
             space
@@ -1062,6 +1099,11 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
         bootstrap_payload = read_bootstrap_secret(core_api, NAMESPACE, secret_name)
         assert bootstrap_payload["is_coordinator"] is True
         assert bootstrap_payload["org_id"] is None
+        _ensure_coordinator_tools_ready(
+            assistant,
+            pubsub_subscriber,
+            coordinator_id,
+        )
 
         setup_space_name = f"Coordinator Act Space {uuid.uuid4().hex[:8]}"
         setup_space = _create_org_space(
