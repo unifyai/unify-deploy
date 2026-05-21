@@ -858,17 +858,19 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
             pubsub_subscriber=pubsub_subscriber,
             coordinator_id=coordinator_id,
             prompt=(
-                "Call your create_assistant tool now to create a colleague assistant "
-                f"in this organization with first_name {colleague_first_name} and "
-                f"surname {colleague_surname}. Use config values age 30, nationality "
-                "United States, timezone America/New_York, job_title Preview E2E "
-                "Colleague, and about 'Created by the Coordinator preview scenario "
-                "test.' No extra confirmation is needed."
+                "Call your list_accessible_organizations tool, resolve the target "
+                f"org id as {organization_id}, and then call create_assistant with "
+                f"organization_id {organization_id}. Use first_name "
+                f"{colleague_first_name} and surname {colleague_surname}. Use config "
+                "values age 30, nationality United States, timezone "
+                "America/New_York, job_title Preview E2E Colleague, and about "
+                "'Created by the Coordinator preview scenario test.' No extra "
+                "confirmation is needed."
             ),
             nudge_prompt=(
-                "Call create_assistant now with the exact first_name "
-                f"{colleague_first_name}, surname {colleague_surname}, and the "
-                "same config from my previous message."
+                f"Call create_assistant now with organization_id {organization_id}, "
+                f"first_name {colleague_first_name}, surname {colleague_surname}, "
+                "and the same config from my previous message."
             ),
             condition=lambda: _find_assistant_by_name(
                 colleague_first_name,
