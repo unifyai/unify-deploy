@@ -790,7 +790,6 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         coordinator_id = organization["coordinator_id"]
         organization_api_key = organization["api_key"]
         coordinator_runtime_api_key = organization_api_key
-        coordinator_owner_api_key = organization["owner_api_key"]
         assert organization_id, "Organization create response omitted id"
         assert (
             organization_api_key
@@ -890,34 +889,29 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
             pubsub_subscriber=pubsub_subscriber,
             coordinator_id=coordinator_id,
             prompt=(
-                "Call your create_space tool now to create a team workspace for this "
-                f"organization with name {space_name}. Use this description exactly: "
-                f"{space_description} No extra confirmation is needed."
+                "Call your list_accessible_organizations tool, resolve the target org "
+                f"id as {organization_id}, and then call create_space with that "
+                f"organization_id. Use name {space_name} and description "
+                f"{space_description}. No extra confirmation is needed."
             ),
             nudge_prompt=(
-                f"Call create_space now with name {space_name} and description "
-                f"{space_description}"
+                f"Call create_space now with organization_id {organization_id}, "
+                f"name {space_name}, and description {space_description}."
             ),
-            condition=lambda: (
-                _find_space_by_name(
-                    organization_api_key,
-                    space_name,
-                )
-                or _find_space_by_name(
-                    coordinator_owner_api_key,
-                    space_name,
-                )
+            condition=lambda: _find_space_by_name(
+                organization_api_key,
+                space_name,
             ),
             description=f"persisted team space {space_name}",
         )
         space_id = str(_read_field(space, "space_id", "spaceId"))
         assert space_id, f"Created space omitted space_id: {space}"
         space_org_id = _read_field(space, "organization_id", "organizationId")
-        if space_org_id is not None:
-            assert str(space_org_id) == organization_id
-        space_membership_api_key = (
-            coordinator_owner_api_key if space_org_id is None else organization_api_key
-        )
+        assert (
+            space_org_id is not None
+        ), f"Created space omitted organization_id: {space}"
+        assert str(space_org_id) == organization_id
+        space_membership_api_key = organization_api_key
         if "kind" in space:
             assert space["kind"] == "team"
 
@@ -929,11 +923,11 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
                 "Call your add_space_member tool now to add colleague "
                 f"{colleague_full_name} with assistant_id {colleague_id} to the "
                 f"team workspace {space_name} with space_id {space_id}. No extra "
-                "confirmation is needed."
+                f"confirmation is needed. Include organization_id {organization_id}."
             ),
             nudge_prompt=(
                 f"Call add_space_member now with space_id {space_id} and "
-                f"assistant_id {colleague_id}."
+                f"assistant_id {colleague_id} and organization_id {organization_id}."
             ),
             condition=lambda: _space_has_member(
                 space_membership_api_key,
