@@ -33,12 +33,20 @@ class _GKEApiClient(k8s_client.ApiClient):
         self._auth_request = google.auth.transport.requests.Request()
         self._refresh_lock = threading.Lock()
 
+    def _set_authorization_header(self) -> None:
+        """Ensure the Kubernetes client sends a concrete Bearer token."""
+
+        token = str(self._gke_creds.token or "").strip()
+        if not token:
+            raise RuntimeError("Missing GKE access token for Kubernetes API call")
+        self.configuration.api_key_prefix["authorization"] = "Bearer"
+        self.configuration.api_key["authorization"] = token
+
     def call_api(self, *args, **kwargs):
-        if not self._gke_creds.valid:
-            with self._refresh_lock:
-                if not self._gke_creds.valid:
-                    self._gke_creds.refresh(self._auth_request)
-                    self.configuration.api_key["authorization"] = self._gke_creds.token
+        with self._refresh_lock:
+            if not self._gke_creds.valid or not self._gke_creds.token:
+                self._gke_creds.refresh(self._auth_request)
+            self._set_authorization_header()
         return super().call_api(*args, **kwargs)
 
 
