@@ -37,11 +37,13 @@ No user-consent dance, no callback URL, no refresh token — when the
 credentials.  See `guidance/salto_ks_setup.md` for the end-to-end
 customer flow including service-account creation.
 
-Region selected via `SALTO_KS_REGION` (`eu` default; `us` / `ap` for
-non-EU customers).  Environment via `SALTO_KS_ENVIRONMENT` (`prod`
-default; `acc` for sandbox).  Salto Space (on-prem) has no cloud API
-and is out of scope — confirm the customer is on Salto KS before
-scoping.
+Endpoints default to EU production (`identity.eu.my-clay.com` +
+`user-api.eu.my-clay.com`).  Sandbox (acceptance), non-EU regional
+clouds, and any BU-issued non-standard host are reached by setting
+`SALTO_KS_IDENTITY_HOST` (and usually `SALTO_KS_BASE_URL`) as
+custom secrets — see `guidance/salto_ks_setup.md`.  Salto Space
+(on-prem) has no cloud API and is out of scope — confirm the customer
+is on Salto KS before scoping.
 
 ## Conventions
 

@@ -64,21 +64,16 @@ Two paths, both end up in SecretManager:
   one-by-one to the assistant.
 - **Via Console -> Settings -> Integrations -> Salto KS**: opens a
   dialog with four labeled fields (Client ID, Client Secret, Service
-  Account Email, Service Account Password) plus optional Region and
-  Environment.
+  Account Email, Service Account Password).
 
-### Step 5: Configure region and environment (if not EU production)
+The runtime defaults to EU production hosts
+(``identity.eu.my-clay.com`` + ``user-api.eu.my-clay.com``).  For
+sandbox (acceptance), non-EU regions, or any BU-issued non-standard
+host, set ``SALTO_KS_IDENTITY_HOST`` (and usually
+``SALTO_KS_BASE_URL``) via Console -> Settings -> Secrets ->
+Custom — see the Optional secrets table below.
 
-Set ``SALTO_KS_REGION`` to ``eu`` (default), ``us``, or ``ap``.  Set
-``SALTO_KS_ENVIRONMENT`` to ``prod`` (default) or ``acc``.  These
-combine to select the identity host:
-
-- prod + eu → ``https://identity.eu.my-clay.com``
-- acc + eu → ``https://identity-acc.eu.my-clay.com``
-- (us / ap follow the same pattern but are unverified — confirm with
-  the BU)
-
-### Step 6: Verify the connection
+### Step 5: Verify the connection
 
 ```
 get_salto_account_info(mock=False)
@@ -86,7 +81,7 @@ get_salto_account_info(mock=False)
 
 On success, returns the installation metadata.  On failure, returns
 a structured envelope describing the issue (missing secrets, wrong
-credentials, scope problem, environment mismatch, region mismatch).
+credentials, scope problem, wrong identity host).
 
 ## Required secrets
 
@@ -101,13 +96,11 @@ credentials, scope problem, environment mismatch, region mismatch).
 
 | Secret | Purpose |
 |---|---|
-| `SALTO_KS_REGION` | Regional cloud — `eu` (default) / `us` / `ap` |
-| `SALTO_KS_ENVIRONMENT` | `prod` (default) or `acc` |
 | `SALTO_KS_DEFAULT_SITE_ID` | Default site to scope list calls to |
 | `SALTO_KS_OAUTH_SCOPES` | Override scope string (default `user_api.full_access`) |
-| `SALTO_KS_BASE_URL` | API host override.  Default is a best guess (`user-api.<region>.my-clay.com`); verify with BU |
-| `SALTO_KS_IDENTITY_HOST` | OpenID identity host override (origin only) |
-| `SALTO_KS_OAUTH_TOKEN_URL` | Full token-endpoint URL override |
+| `SALTO_KS_IDENTITY_HOST` | Identity-server host override (origin only).  Default `https://identity.eu.my-clay.com` (EU production).  Set for sandbox (`https://identity-acc.eu.my-clay.com`), non-EU regional clouds, or any BU-issued non-standard host |
+| `SALTO_KS_BASE_URL` | API host override.  Default `https://user-api.eu.my-clay.com` is a best guess — verify with BU and set explicitly for non-EU regions or sandbox |
+| `SALTO_KS_OAUTH_TOKEN_URL` | Full token-endpoint URL override (host + path).  Takes precedence over `SALTO_KS_IDENTITY_HOST` |
 | `SALTO_KS_REQUEST_TIMEOUT_SECONDS` / `_RATE_LIMIT_MAX_RETRIES` / `_RATE_LIMIT_BACKOFF_FACTOR` | HTTP behaviour (`30` / `3` / `1.5`) |
 
 ## Common errors
@@ -115,7 +108,7 @@ credentials, scope problem, environment mismatch, region mismatch).
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `Salto KS is not connected for this assistant.` | One or more of the four required secrets missing | Customer pastes the missing values |
-| `Salto KS token endpoint rejected the credentials.` (400/401) | Wrong client creds, wrong service-account creds, environment mismatch (acc vs prod), or region mismatch | Re-check each pair against the BU email and the KS dashboard; verify `SALTO_KS_ENVIRONMENT` and `SALTO_KS_REGION` |
+| `Salto KS token endpoint rejected the credentials.` (400/401) | Wrong client creds, wrong service-account creds, or the customer's credentials live on a non-EU-production identity server | Re-check each pair against the BU email and the KS dashboard; if the BU issued credentials for sandbox / non-EU, set `SALTO_KS_IDENTITY_HOST` (and usually `SALTO_KS_BASE_URL`) |
 | 403 on a specific resource | Service-account user's KS role doesn't permit it | Customer's KS admin grants the service-account user the required role |
 | `429` rate-limit | Too many calls per second | Increase `SALTO_KS_RATE_LIMIT_BACKOFF_FACTOR` |
 | Connection-refused or DNS errors on API calls | Wrong API base URL (default is a guess) | Confirm the API host with the regional BU and set `SALTO_KS_BASE_URL` |

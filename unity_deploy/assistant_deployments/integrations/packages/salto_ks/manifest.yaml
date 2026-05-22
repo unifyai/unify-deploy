@@ -75,28 +75,7 @@ secrets:
     required: true
     sensitive: true
 
-  # ----- Region + environment routing ---------------------------------
-
-  - name: SALTO_KS_REGION
-    description: >
-      Salto regional cloud — ``eu`` (default), ``us``, or ``ap``.
-      Selects ``identity[-acc].<region>.my-clay.com`` as the OpenID
-      identity server host.  Only EU is documented in Salto's public
-      docs as of 2026-05; US/AP defaults are best-guesses extrapolated
-      from the EU pattern — verify with the regional BU and override
-      via ``SALTO_KS_IDENTITY_HOST`` / ``SALTO_KS_BASE_URL`` if the
-      pattern doesn't hold.
-    required: false
-    sensitive: false
-
-  - name: SALTO_KS_ENVIRONMENT
-    description: >
-      ``prod`` (default) or ``acc``.  Salto runs separate identity
-      servers for production and acceptance; credentials issued for
-      one environment do not work on the other.  Use ``acc`` only
-      when the BU has issued sandbox credentials.
-    required: false
-    sensitive: false
+  # ----- Default site -------------------------------------------------
 
   - name: SALTO_KS_DEFAULT_SITE_ID
     description: >
@@ -107,25 +86,32 @@ secrets:
     sensitive: false
 
   # ----- Endpoint overrides (optional, rarely needed) -----------------
+  # All three default to the documented EU production hosts.  Set
+  # ``SALTO_KS_IDENTITY_HOST`` (and usually ``SALTO_KS_BASE_URL``) for
+  # sandbox (acceptance), non-EU regions, or any BU-issued
+  # non-standard host.  ``SALTO_KS_OAUTH_TOKEN_URL`` is a full-URL
+  # escape hatch for the token endpoint only.
 
   - name: SALTO_KS_BASE_URL
     description: >
       Salto Connect API host override.  Defaults to
-      ``https://user-api[-acc].<region>.my-clay.com`` — extrapolated
-      from the documented identity host pattern and the
-      ``user_api.full_access`` scope name.  The actual API host is
-      not documented in Salto's public docs as of 2026-05; verify
-      with the regional BU and override here if the guess is wrong.
+      ``https://user-api.eu.my-clay.com`` (best guess — the API host
+      is not documented in Salto's public docs as of 2026-05;
+      extrapolated from the identity host pattern and the
+      ``user_api.full_access`` scope name).  Verify with the regional
+      BU and override here for non-EU regions, sandbox, or if the
+      guess is wrong.
     required: false
     sensitive: false
 
   - name: SALTO_KS_IDENTITY_HOST
     description: >
       OpenID identity-server host override (origin only, no path).
-      Defaults to ``https://identity[-acc].<region>.my-clay.com``
-      from the SALTO_KS_REGION + SALTO_KS_ENVIRONMENT pair.
-      ``/connect/token`` is appended automatically.  Override here
-      if the BU has issued credentials against a non-standard host.
+      Defaults to ``https://identity.eu.my-clay.com`` (the documented
+      EU production identity server).  ``/connect/token`` is appended
+      automatically.  Override here for sandbox
+      (``https://identity-acc.eu.my-clay.com``), non-EU regional
+      clouds, or any non-standard host the BU has issued.
     required: false
     sensitive: false
 

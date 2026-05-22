@@ -40,9 +40,9 @@ async def salto_request(
     path : str
         URL path beginning with a slash, e.g. ``"/v1.1/installations"``,
         ``"/v1.1/users"``, ``"/v1.1/sites"``, ``"/v1.1/locks/{id}"``,
-        ``"/v1.1/locks/{id}/state"``.  The Salto regional base URL is
-        added automatically (``SALTO_KS_REGION`` selects between
-        ``eu``/``us``/``apac``).
+        ``"/v1.1/locks/{id}/state"``.  The Salto base URL is added
+        automatically (defaults to EU production; override with
+        ``SALTO_KS_BASE_URL`` for non-EU regions or sandbox).
     params : dict, optional
         Query-string parameters.  Salto list endpoints typically accept
         ``limit`` and ``cursor`` for pagination.

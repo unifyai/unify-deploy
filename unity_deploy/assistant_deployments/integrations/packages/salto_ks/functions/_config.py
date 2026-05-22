@@ -54,10 +54,12 @@ def get_salto_ks_config() -> dict:
     sync tick without a redeploy.
     """
     cfg = {
-        # ----- Region + environment routing ------------------------------
-        "region": _env("SALTO_KS_REGION", "eu").strip().lower(),
-        "environment": _env("SALTO_KS_ENVIRONMENT", "prod").strip().lower(),
-        # ----- Endpoint overrides (rarely needed) ------------------------
+        # ----- Endpoint overrides ---------------------------------------
+        # All three default to EU production hosts via ``_client.py``.
+        # Set ``SALTO_KS_IDENTITY_HOST`` (and usually
+        # ``SALTO_KS_BASE_URL``) for sandbox, non-EU regions, or any
+        # BU-issued non-standard host.  ``SALTO_KS_OAUTH_TOKEN_URL``
+        # is a full-URL escape hatch for the token endpoint only.
         "base_url_override": _env("SALTO_KS_BASE_URL", ""),
         "identity_host_override": _env("SALTO_KS_IDENTITY_HOST", ""),
         "oauth_token_url_override": _env("SALTO_KS_OAUTH_TOKEN_URL", ""),

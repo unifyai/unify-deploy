@@ -6,8 +6,8 @@ FunctionManager's discovery sweep:
 * ``_client`` — auth (OAuth client_credentials with in-process
   access-token caching), retry, ``salto_request`` + verb-specific
   HTTP helpers.
-* ``_config`` — runtime config dict resolved from env (region,
-  customer id, default site, etc.).
+* ``_config`` — runtime config dict resolved from env (endpoint
+  overrides, default site, sync cadence, etc.).
 * ``_capabilities`` — token capability probe.
 
 Discoverable (registered) modules:

@@ -81,44 +81,44 @@ _DEFAULT_SCOPES = "user_api.full_access"
 
 
 # ---------------------------------------------------------------------------
-# Region / environment routing
+# Endpoint defaults
 # ---------------------------------------------------------------------------
 #
-# Salto operates two identity environments (acceptance + production)
-# and (per docs as of 2026-05) one EU region.  US/AP regional hosts
-# follow the same ``identity[-acc].<region>.my-clay.com`` pattern in
-# this code as a best guess; verify with the regional BU during
-# onboarding and override via SALTO_KS_OAUTH_TOKEN_URL or
-# SALTO_KS_BASE_URL if the pattern doesn't hold.
+# Salto's public docs (https://developer.saltosystems.com/ks/connect-api/openid-concepts/)
+# document only the EU production identity host.  We default to that
+# and treat every other deployment shape — sandbox (acceptance), non-EU
+# regional clouds, BU-issued non-standard hosts — as override territory
+# reachable via the three ``SALTO_KS_*`` env vars resolved below.
+# Future regional support can re-introduce a smarter selector once
+# the URL pattern is confirmed; today the override hatches keep the
+# happy path narrow and the comments honest.
 #
-# Documented EU hosts (https://developer.saltosystems.com/ks/connect-api/openid-concepts/):
-#   * Acceptance: https://identity-acc.eu.my-clay.com
-#   * Production: https://identity.eu.my-clay.com
+# Documented:
+#   * Identity (production EU): https://identity.eu.my-clay.com
+#   * Identity (acceptance EU): https://identity-acc.eu.my-clay.com   (override only)
+# Best-guess:
+#   * API base (production EU): https://user-api.eu.my-clay.com
+#     Extrapolated from the identity-host pattern and the
+#     ``user_api.full_access`` scope name; verify with the BU during
+#     onboarding and override via SALTO_KS_BASE_URL if the guess is wrong.
 
-
-def _region() -> str:
-    import os
-
-    return (os.environ.get("SALTO_KS_REGION") or "eu").strip().lower()
-
-
-def _environment() -> str:
-    """``acc`` or ``prod`` — defaults to ``prod``."""
-    import os
-
-    raw = (os.environ.get("SALTO_KS_ENVIRONMENT") or "prod").strip().lower()
-    return "acc" if raw in ("acc", "acceptance", "sandbox") else "prod"
+_DEFAULT_IDENTITY_HOST = "https://identity.eu.my-clay.com"
+_DEFAULT_BASE_URL = "https://user-api.eu.my-clay.com"
 
 
 def _identity_host() -> str:
-    """Return the Salto identity-server origin (no trailing slash)."""
+    """Return the Salto identity-server origin (no trailing slash).
+
+    Defaults to the EU production host.  Override via
+    ``SALTO_KS_IDENTITY_HOST`` for sandbox / non-EU regions / any
+    BU-issued non-standard host.
+    """
     import os
 
     override = os.environ.get("SALTO_KS_IDENTITY_HOST")
     if override:
         return override.rstrip("/")
-    prefix = "identity-acc" if _environment() == "acc" else "identity"
-    return f"https://{prefix}.{_region()}.my-clay.com"
+    return _DEFAULT_IDENTITY_HOST
 
 
 def _oauth_token_url() -> str:
@@ -133,20 +133,21 @@ def _oauth_token_url() -> str:
 def _base_url() -> str:
     """Return the Salto Connect API base URL (no trailing slash).
 
-    The actual API host is **not** documented in Salto's public docs as
-    of 2026-05.  This default — ``https://user-api[-acc].<region>.my-clay.com``
-    — extrapolates from the documented identity host pattern and the
-    scope name ``user_api.full_access``.  Verify with the regional BU
-    during onboarding; override via ``SALTO_KS_BASE_URL`` if the guess
-    is wrong.
+    Defaults to the best-guess EU production host
+    (``https://user-api.eu.my-clay.com``).  The actual API host is
+    **not** documented in Salto's public docs as of 2026-05 — this
+    default extrapolates from the identity-host pattern and the
+    ``user_api.full_access`` scope name.  Verify with the regional BU
+    during onboarding and override via ``SALTO_KS_BASE_URL`` for
+    non-EU regions, sandbox, or any host the BU has issued that
+    doesn't match the guess.
     """
     import os
 
     override = os.environ.get("SALTO_KS_BASE_URL")
     if override:
         return override.rstrip("/")
-    prefix = "user-api-acc" if _environment() == "acc" else "user-api"
-    return f"https://{prefix}.{_region()}.my-clay.com"
+    return _DEFAULT_BASE_URL
 
 
 def _scopes() -> str:
@@ -211,14 +212,15 @@ def _credentials_rejected_envelope(status_code: int, body: str) -> dict:
         "body": body,
         "hint": (
             "ROPC failures usually mean one of: (a) wrong CLIENT_ID / "
-            "CLIENT_SECRET — re-paste from the regional BU email; "
+            "CLIENT_SECRET — re-paste from the BU email; "
             "(b) wrong SALTO_KS_USERNAME / SALTO_KS_PASSWORD — confirm "
             "the service-account user exists in the customer's KS "
             "dashboard and the password hasn't been rotated; "
-            "(c) environment mismatch (SALTO_KS_ENVIRONMENT=acc vs "
-            "prod — credentials issued for one don't work on the other); "
-            "(d) wrong region (SALTO_KS_REGION=eu/us/ap — the OAuth "
-            "client is bound to a single region's identity server)."
+            "(c) wrong identity host — the runtime defaults to EU "
+            "production (``identity.eu.my-clay.com``).  Sandbox, "
+            "non-EU regions, and any BU-issued non-standard host "
+            "need SALTO_KS_IDENTITY_HOST (and usually "
+            "SALTO_KS_BASE_URL) set via the Console Custom secret flow."
         ),
     }
 
