@@ -450,8 +450,10 @@ def test_personal_coordinator_carries_null_org_id_to_bootstrap_and_update_event(
 
     assert bootstrap_payload["is_coordinator"] is True
     assert bootstrap_payload["org_id"] is None
+    assert bootstrap_payload["workspace_org_id"] is None
 
     event = message["event"]
     assert event["assistant_id"] == assistant_id
     assert event["is_coordinator"] is True
     assert event["org_id"] is None
+    assert event["workspace_org_id"] is None

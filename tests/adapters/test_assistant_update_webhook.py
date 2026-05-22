@@ -36,6 +36,7 @@ def _assistant(
     *,
     is_coordinator: bool = False,
     org_id=None,
+    workspace_org_id=None,
 ) -> dict:
     return {
         "assistant_id": "assistant-123",
@@ -51,6 +52,7 @@ def _assistant(
         "assistant_timezone": "UTC",
         "is_coordinator": is_coordinator,
         "org_id": org_id,
+        "workspace_org_id": workspace_org_id,
         "is_local": False,
         "space_ids": space_ids or [],
         "space_summaries": space_summaries or [],
@@ -171,6 +173,27 @@ def test_general_update_publishes_personal_coordinator_shape():
     published = _published_payload(publisher)
     assert published["event"]["is_coordinator"] is True
     assert published["event"]["org_id"] is None
+    assert published["event"]["workspace_org_id"] is None
+
+
+def test_general_update_publishes_workspace_org_id():
+    """Assistant update events should include explicit workspace attribution."""
+
+    publisher = _Publisher()
+    response, _ = _post_assistant_update(
+        data={"assistant_id": "assistant-123"},
+        assistant_data=_assistant(
+            is_coordinator=True,
+            org_id=7,
+            workspace_org_id=9,
+        ),
+        publisher=publisher,
+    )
+
+    assert response.status_code == 200
+    published = _published_payload(publisher)
+    assert published["event"]["org_id"] == 7
+    assert published["event"]["workspace_org_id"] == 9
 
 
 def test_invalid_update_kind_returns_400():

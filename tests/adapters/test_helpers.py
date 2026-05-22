@@ -243,7 +243,13 @@ def test_check_valid_contact_uses_resolved_boss_contact_id(mock_get_contacts):
 # --- start_unity_job demo mode tests ---
 
 
-def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
+def _create_mock_assistant_data(
+    demo_id=None,
+    desktop_mode="none",
+    *,
+    org_id=None,
+    workspace_org_id=None,
+):
     """Create mock assistant data for testing.
 
     Args:
@@ -287,6 +293,8 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         ],
         "self_contact_id": 42,
         "boss_contact_id": 43,
+        "org_id": org_id,
+        "workspace_org_id": workspace_org_id,
     }
 
 
@@ -338,6 +346,7 @@ def test_get_assistant_local_payload_defaults_to_non_coordinator():
     assistant_data = get_assistant(assistant_id="local-assistant")
 
     assert assistant_data["is_coordinator"] is False
+    assert assistant_data["workspace_org_id"] is None
 
 
 @patch("adapters.helpers.requests.get")
@@ -361,6 +370,51 @@ def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
 
     assert assistant_data["is_coordinator"] is True
     assert assistant_data["desktop_mode"] == "ubuntu"
+
+
+@patch("adapters.helpers.requests.get")
+def test_get_assistant_preserves_explicit_workspace_org_id(mock_get):
+    """Assistant lookups should keep explicit workspace attribution from Orchestra."""
+
+    mock_get.return_value = MagicMock(
+        json=MagicMock(
+            return_value={
+                "info": [
+                    _orchestra_assistant_record(
+                        organization_id=7,
+                        workspace_org_id=9,
+                    ),
+                ],
+            },
+        ),
+    )
+
+    assistant_data = get_assistant(assistant_id="12345")
+
+    assert assistant_data["org_id"] == 7
+    assert assistant_data["workspace_org_id"] == 9
+
+
+@patch("adapters.helpers.requests.get")
+def test_get_assistant_falls_back_workspace_org_id_to_organization_id(mock_get):
+    """Assistant lookups should derive workspace scope from org when absent."""
+
+    mock_get.return_value = MagicMock(
+        json=MagicMock(
+            return_value={
+                "info": [
+                    _orchestra_assistant_record(
+                        organization_id=11,
+                    ),
+                ],
+            },
+        ),
+    )
+
+    assistant_data = get_assistant(assistant_id="12345")
+
+    assert assistant_data["org_id"] == 11
+    assert assistant_data["workspace_org_id"] == 11
 
 
 @patch("adapters.helpers.requests.post")
@@ -516,6 +570,43 @@ def test_dispatch_unity_start_intent_encodes_space_ids_for_form(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_dispatch_unity_start_intent_includes_workspace_org_id(mock_post):
+    """Explicit workspace org scope should be preserved in start-intent forms."""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+    assistant_data = _create_mock_assistant_data(org_id=7, workspace_org_id=9)
+
+    response = dispatch_unity_start_intent(assistant_data, "api_message")
+
+    assert response is mock_response
+    data = mock_post.call_args.kwargs["data"]
+    assert data["org_id"] == "7"
+    assert data["workspace_org_id"] == "9"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_dispatch_unity_start_intent_falls_back_workspace_org_id_to_org_id(mock_post):
+    """Start-intent forms should default workspace scope to assistant org."""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+    assistant_data = _create_mock_assistant_data(org_id=7)
+    assistant_data.pop("workspace_org_id", None)
+
+    response = dispatch_unity_start_intent(assistant_data, "api_message")
+
+    assert response is mock_response
+    data = mock_post.call_args.kwargs["data"]
+    assert data["org_id"] == "7"
+    assert data["workspace_org_id"] == "7"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
 def test_dispatch_unity_start_intent_returns_none_without_api_key(mock_post):
     """Assistants without API keys should not dispatch start intent requests."""
 
@@ -598,6 +689,8 @@ def test_get_assistant_preserves_space_ids(mock_get):
     assert assistant["team_ids"] == [7]
     assert assistant["self_contact_id"] == 42
     assert assistant["boss_contact_id"] == 43
+    assert assistant["org_id"] == 42
+    assert assistant["workspace_org_id"] == 42
 
 
 @patch("adapters.helpers._fetch_infra_jobs")
