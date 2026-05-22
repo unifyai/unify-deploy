@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -20,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from google.api_core.exceptions import AlreadyExists, NotFound as GcpNotFound
 from google.protobuf import duration_pb2, timestamp_pb2
 
+from common.assistant_lookup import get_assistant
 from common.settings import SETTINGS
 
 from .helpers import create_unity_job
@@ -35,6 +37,7 @@ from .runtime_clients import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 TASK_DUE_ENDPOINT_PATH = "/scheduled/tasks/due"
 TASK_ACTIVATION_REPAIR_PATH = "/infra/task-activation/repair"
@@ -49,6 +52,54 @@ ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
 _TASK_ID_SAFE_RE = re.compile(r"[^a-z0-9-]+")
 _task_queues_ensured: set[str] = set()
+
+
+def _emit_task_activation_event(event: str, **fields: Any) -> None:
+    logger.info(
+        "OBS_EVENT %s",
+        json.dumps(
+            {"event": event, **fields},
+            sort_keys=True,
+            default=str,
+        ),
+    )
+
+
+def _offline_dispatch_event_fields(
+    request: OfflineTaskDispatchRequest,
+    *,
+    stage: str,
+    run_key: str | None = None,
+    job_name: str | None = None,
+    status: str | None = None,
+    run_state: str | None = None,
+    stale_reason: str | None = None,
+    error: BaseException | None = None,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "stage": stage,
+        "assistant_id": request.assistant_id,
+        "task_id": request.task_id,
+        "source_task_log_id": request.source_task_log_id,
+        "source_type": request.source_type,
+        "execution_mode": request.execution_mode,
+        "activation_revision": request.activation_revision,
+        "scheduled_for": _request_scheduled_for_iso(request),
+    }
+    if run_key is not None:
+        fields["run_key"] = run_key
+    if job_name is not None:
+        fields["job_name"] = job_name
+    if status is not None:
+        fields["status"] = status
+    if run_state is not None:
+        fields["run_state"] = run_state
+    if stale_reason is not None:
+        fields["stale_reason"] = stale_reason
+    if error is not None:
+        fields["error_type"] = type(error).__name__
+        fields["error"] = str(error)
+    return fields
 
 
 def _task_due_queue_parent() -> str:
@@ -163,6 +214,7 @@ def _scheduled_activation_http_body(
         "activation_revision": request.activation_revision,
         "scheduled_for": request.scheduled_for.astimezone(timezone.utc).isoformat(),
         "execution_mode": request.execution_mode,
+        "entrypoint": request.entrypoint,
         "source_type": request.source_type,
         "task_label": request.task_label or "",
         "task_summary": request.task_summary or "",
@@ -465,8 +517,15 @@ def _validate_current_offline_activation(
         return "activation_revision_mismatch"
     if int(activation.get("source_task_log_id") or 0) != request.source_task_log_id:
         return "source_task_log_id_mismatch"
-    if int(activation.get("entrypoint") or 0) <= 0:
-        return "missing_entrypoint"
+    activation_entrypoint = activation.get("entrypoint")
+    if int(activation_entrypoint or 0) <= 0 and request.entrypoint:
+        return "entrypoint_mismatch"
+    if (
+        activation_entrypoint
+        and request.entrypoint
+        and int(activation_entrypoint) != int(request.entrypoint)
+    ):
+        return "entrypoint_mismatch"
     if request.source_type == "scheduled" and _normalize_datetime_string(
         activation.get("next_due_at"),
     ) != _normalize_datetime_string(_request_scheduled_for_iso(request)):
@@ -533,8 +592,9 @@ def _build_offline_runner_env(
         or str(activation.get("task_name") or "").strip()
         or f"Execute task {request.task_id}"
     )
+    entrypoint = activation.get("entrypoint") or request.entrypoint
     return {
-        "UNITY_OFFLINE_TASK_MODE": "function",
+        "UNITY_OFFLINE_TASK_MODE": "actor",
         "EVENTBUS_PUBLISHING_ENABLED": "false",
         "EVENTBUS_PUBSUB_STREAMING": "false",
         "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
@@ -542,7 +602,7 @@ def _build_offline_runner_env(
         "UNITY_OFFLINE_TASK_ID": str(request.task_id),
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
         "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": request.activation_revision,
-        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(activation["entrypoint"])),
+        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
         "UNITY_OFFLINE_TASK_REQUEST": task_request,
         "UNITY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
         "UNITY_OFFLINE_TASK_DESCRIPTION": str(activation.get("task_description") or ""),
@@ -594,9 +654,7 @@ def _build_offline_runner_env(
 
 
 def _get_assistant_data(assistant_id: str) -> dict[str, Any]:
-    """Fetch one assistant payload through the adapters helper."""
-
-    from adapters.helpers import get_assistant
+    """Fetch one assistant payload for a headless task runtime."""
 
     assistant_data = get_assistant(assistant_id=assistant_id)
     return assistant_data if isinstance(assistant_data, dict) else {}
@@ -688,6 +746,7 @@ def _build_offline_run_create_payload(
         "source_task_log_id": request.source_task_log_id,
         "source_type": request.source_type,
         "execution_mode": "offline",
+        "entrypoint": activation.get("entrypoint") or request.entrypoint,
         "activation_revision": request.activation_revision,
         "scheduled_for": _request_scheduled_for_iso(request),
         "source_medium": request.source_medium or None,
@@ -931,14 +990,36 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
 
     _validate_offline_dispatch_request(request)
 
+    stage = "accepted"
+    run_key: str | None = None
+    job_name: str | None = None
+    _emit_task_activation_event(
+        "task_activation.offline_dispatch.accepted",
+        **_offline_dispatch_event_fields(request, stage=stage),
+    )
     try:
+        stage = "activation_lookup"
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.stage",
+            **_offline_dispatch_event_fields(request, stage=stage),
+        )
         activation = await asyncio.to_thread(
             _lookup_current_task_activation,
             assistant_id=request.assistant_id,
             task_id=request.task_id,
         )
+        stage = "activation_validate"
         stale_reason = _validate_current_offline_activation(request, activation)
         if stale_reason is not None:
+            _emit_task_activation_event(
+                "task_activation.offline_dispatch.skipped",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    stale_reason=stale_reason,
+                    status="skipped",
+                ),
+            )
             return {
                 "success": True,
                 "status": "skipped",
@@ -946,6 +1027,11 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
             }
 
         run_key = _build_offline_run_key(request)
+        stage = "run_create_or_adopt"
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.stage",
+            **_offline_dispatch_event_fields(request, stage=stage, run_key=run_key),
+        )
         run_response = await asyncio.to_thread(
             _create_or_adopt_task_run,
             _build_offline_run_create_payload(request, run_key, activation),
@@ -954,6 +1040,16 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
         created = bool(run_response.get("created"))
         run_state = str(run.get("state") or "pending")
         if not created and run_state in {"completed", "failed"}:
+            _emit_task_activation_event(
+                "task_activation.offline_dispatch.adopted",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    run_key=run_key,
+                    run_state=run_state,
+                    status="adopted_terminal_run",
+                ),
+            )
             return {
                 "success": True,
                 "status": "adopted_terminal_run",
@@ -961,21 +1057,53 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
                 "run_state": run_state,
             }
         if not created and run.get("job_name"):
+            job_name = str(run.get("job_name"))
+            _emit_task_activation_event(
+                "task_activation.offline_dispatch.adopted",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    run_key=run_key,
+                    job_name=job_name,
+                    run_state=run_state,
+                    status="adopted_inflight_run",
+                ),
+            )
             return {
                 "success": True,
                 "status": "adopted_inflight_run",
                 "run_key": run_key,
-                "job_name": run.get("job_name"),
+                "job_name": job_name,
                 "run_state": run_state,
             }
 
+        stage = "k8s_client"
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.stage",
+            **_offline_dispatch_event_fields(request, stage=stage, run_key=run_key),
+        )
         batch_api, _, _, _ = await _get_k8s_clients()
+        stage = "job_launch"
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.stage",
+            **_offline_dispatch_event_fields(request, stage=stage, run_key=run_key),
+        )
         job_name, job_created = await asyncio.to_thread(
             _launch_offline_task_job,
             batch_api=batch_api,
             request=request,
             activation=activation or {},
             run_key=run_key,
+        )
+        stage = "run_mark_running"
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.stage",
+            **_offline_dispatch_event_fields(
+                request,
+                stage=stage,
+                run_key=run_key,
+                job_name=job_name,
+            ),
         )
         await asyncio.to_thread(
             _update_task_run,
@@ -984,6 +1112,16 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
             updates=_running_task_run_updates(job_name),
         )
         if not job_created:
+            _emit_task_activation_event(
+                "task_activation.offline_dispatch.adopted",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    run_key=run_key,
+                    job_name=job_name,
+                    status="job_already_exists",
+                ),
+            )
             return {
                 "success": True,
                 "status": "job_already_exists",
@@ -991,16 +1129,48 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
                 "job_name": job_name,
             }
     except requests.RequestException as exc:
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.failed",
+            **_offline_dispatch_event_fields(
+                request,
+                stage=stage,
+                run_key=run_key,
+                job_name=job_name,
+                error=exc,
+            ),
+        )
+        logger.exception("Offline dispatch failed while talking to Orchestra")
         raise HTTPException(
             status_code=502,
             detail=f"Offline dispatch failed while talking to Orchestra: {exc}",
         ) from exc
     except Exception as exc:
+        _emit_task_activation_event(
+            "task_activation.offline_dispatch.failed",
+            **_offline_dispatch_event_fields(
+                request,
+                stage=stage,
+                run_key=run_key,
+                job_name=job_name,
+                error=exc,
+            ),
+        )
+        logger.exception("Failed to dispatch offline task")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to dispatch offline task: {exc}",
         ) from exc
 
+    _emit_task_activation_event(
+        "task_activation.offline_dispatch.launched",
+        **_offline_dispatch_event_fields(
+            request,
+            stage=stage,
+            run_key=run_key,
+            job_name=job_name,
+            status="launched",
+        ),
+    )
     return {
         "success": True,
         "status": "launched",

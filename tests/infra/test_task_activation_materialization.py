@@ -1,9 +1,11 @@
 """Unit tests for scheduled task activation materialization endpoints."""
 
+import json
+import logging
+import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
-import sys
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -343,6 +345,52 @@ def test_upsert_offline_scheduled_task_activation_targets_offline_queue(
         == "https://comms.test/infra/task-activation/offline-dispatch"
     )
     assert b'"execution_mode": "offline"' in task.http_request.body
+    assert b'"entrypoint": null' in task.http_request.body
+
+
+def test_upsert_offline_symbolic_activation_carries_entrypoint(
+    client,
+    fake_tasks_module,
+):
+    """Symbolic offline activations should carry the function entrypoint."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    task_activation._task_queues_ensured = set()
+
+    with (
+        patch(
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
+            "test-admin-key",
+        ),
+        patch(
+            "communication.infra.task_activation.SETTINGS.comms_url",
+            "https://comms.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+        patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
+    ):
+        response = client.post(
+            "/infra/task-activation/upsert",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+                "activation_revision": "rev-123",
+                "scheduled_for": "2026-04-10T09:00:00+00:00",
+                "execution_mode": "offline",
+                "entrypoint": 777,
+            },
+        )
+
+    assert response.status_code == 200
+    _, task = fake_client.created_tasks[0]
+    assert b'"execution_mode": "offline"' in task.http_request.body
+    assert b'"entrypoint": 777' in task.http_request.body
 
 
 def test_upsert_far_future_activation_targets_repair_queue(
@@ -527,3 +575,153 @@ def test_diagnose_task_activation_reports_materialization_and_latest_run(
     )
     assert body["materialization"]["target_url"].endswith("/scheduled/tasks/due")
     assert "task-live-assistant-123-101" in body["materialization"]["task_name"]
+
+
+def test_shared_get_assistant_fetches_orchestra_admin_directly(monkeypatch):
+    """Assistant lookup should be usable without importing the adapters package."""
+
+    from common import assistant_lookup
+
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "info": [
+                    {
+                        "agent_id": "assistant-123",
+                        "deploy_env": "staging",
+                        "user_id": "user-123",
+                        "api_key": "assistant-api-key",
+                        "user_first_name": "Test",
+                        "user_last_name": "User",
+                        "first_name": "Test",
+                        "surname": "Assistant",
+                        "age": 30,
+                        "nationality": "GB",
+                        "about": "Assistant profile",
+                        "job_title": "Researcher",
+                        "timezone": "Europe/London",
+                        "phone": None,
+                        "assistant_whatsapp_number": None,
+                        "email": "assistant@example.com",
+                        "email_provider": "google_workspace",
+                        "user_phone": None,
+                        "user_whatsapp_number": None,
+                        "user_email": "user@example.com",
+                        "voice_provider": "cartesia",
+                        "voice_id": "voice-123",
+                        "secrets": {},
+                        "desktop_mode": None,
+                        "team_ids": [1, 2],
+                        "organization_id": 42,
+                    },
+                ],
+            }
+
+    def get(url, *, params, headers, timeout=None):
+        calls.append(
+            {
+                "url": url,
+                "params": params,
+                "headers": headers,
+                "timeout": timeout,
+            },
+        )
+        return Response()
+
+    monkeypatch.setattr(assistant_lookup.SETTINGS, "orchestra_url", "https://api.test")
+    monkeypatch.setattr(assistant_lookup.SETTINGS, "orchestra_admin_key", "admin-key")
+    monkeypatch.setattr(assistant_lookup.requests, "get", get)
+
+    assistant_data = assistant_lookup.get_assistant(assistant_id="assistant-123")
+
+    assert calls == [
+        {
+            "url": "https://api.test/admin/assistant",
+            "params": {"agent_id": "assistant-123"},
+            "headers": {"Authorization": "Bearer admin-key"},
+            "timeout": assistant_lookup.ASSISTANT_LOOKUP_TIMEOUT_SECONDS,
+        },
+    ]
+    assert assistant_data["assistant_id"] == "assistant-123"
+    assert assistant_data["api_key"] == "assistant-api-key"
+    assert assistant_data["desktop_mode"] == "none"
+    assert assistant_data["team_ids"] == [1, 2]
+
+
+def test_offline_dispatch_uses_shared_assistant_lookup(monkeypatch):
+    """Offline dispatch should resolve assistant data through the shared helper."""
+
+    from communication.infra import task_activation
+
+    calls = []
+
+    def get_assistant(*, assistant_id):
+        calls.append(assistant_id)
+        return {"assistant_id": assistant_id}
+
+    monkeypatch.setattr(task_activation, "get_assistant", get_assistant)
+
+    assert task_activation._get_assistant_data("assistant-123") == {
+        "assistant_id": "assistant-123",
+    }
+    assert calls == ["assistant-123"]
+
+
+def test_offline_dispatch_failure_logs_failing_stage(client, caplog):
+    """Offline dispatch failures should identify the failed external operation."""
+
+    import requests
+
+    activation = {
+        "activation_kind": "scheduled",
+        "execution_mode": "offline",
+        "activation_revision": "rev-123",
+        "source_task_log_id": 555,
+        "next_due_at": "2026-04-10T09:00:00+00:00",
+        "entrypoint": 6,
+    }
+    caplog.set_level(logging.INFO, logger="communication.infra.task_activation")
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=activation,
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            side_effect=requests.Timeout("orchestra timed out"),
+        ),
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+                "activation_revision": "rev-123",
+                "execution_mode": "offline",
+                "source_type": "scheduled",
+                "scheduled_for": "2026-04-10T09:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 502
+    events = [
+        json.loads(record.message.removeprefix("OBS_EVENT "))
+        for record in caplog.records
+        if record.message.startswith("OBS_EVENT ")
+    ]
+    failed_event = next(
+        event
+        for event in events
+        if event["event"] == "task_activation.offline_dispatch.failed"
+    )
+    assert failed_event["stage"] == "run_create_or_adopt"
+    assert failed_event["error_type"] == "Timeout"
+    assert failed_event["assistant_id"] == "assistant-123"
+    assert failed_event["task_id"] == 101

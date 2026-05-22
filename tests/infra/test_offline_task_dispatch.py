@@ -109,10 +109,76 @@ def test_offline_dispatch_launches_job_for_current_activation():
     create_payload = mock_create_run.call_args.args[0]
     assert create_payload["task_name"] == "Daily summary"
     assert create_payload["task_description"] == "Send the daily summary email."
+    assert create_payload["entrypoint"] == 777
     update_kwargs = mock_update_run.call_args.kwargs
     assert update_kwargs["assistant_id"] == "assistant-123"
     assert update_kwargs["updates"]["state"] == "running"
     assert update_kwargs["updates"]["job_name"] == "unity-offline-abc"
+
+
+def test_offline_dispatch_allows_agentic_activation_without_entrypoint():
+    """Offline delivery should not imply symbolic function execution."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(**_payload())
+    activation = _activation(entrypoint=None)
+
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        is None
+    )
+
+
+def test_offline_dispatch_rejects_stale_request_entrypoint():
+    """A request cannot claim a function when the current activation is agentic."""
+
+    from communication.infra import task_activation
+
+    request = task_activation.OfflineTaskDispatchRequest(
+        **_payload(entrypoint=777),
+    )
+    activation = _activation(entrypoint=None)
+
+    assert (
+        task_activation._validate_current_offline_activation(request, activation)
+        == "entrypoint_mismatch"
+    )
+
+
+def test_offline_runner_env_carries_agentic_execution_without_function_id():
+    """The Unity job payload should preserve agentic offline execution."""
+
+    from communication.infra import task_activation
+
+    env = task_activation._build_offline_runner_env(
+        request=task_activation.OfflineTaskDispatchRequest(**_payload()),
+        activation=_activation(entrypoint=None),
+        assistant_data={"assistant_id": "assistant-123", "api_key": "key"},
+        run_key="offline:scheduled:assistant-123:101:rev:once",
+        job_name="unity-offline-abc",
+    )
+
+    assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
+    assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == ""
+    assert env["UNITY_OFFLINE_TASK_REQUEST"] == "Send the daily summary email."
+
+
+def test_offline_runner_env_carries_symbolic_function_id():
+    """The Unity job payload should preserve symbolic offline execution."""
+
+    from communication.infra import task_activation
+
+    env = task_activation._build_offline_runner_env(
+        request=task_activation.OfflineTaskDispatchRequest(**_payload()),
+        activation=_activation(entrypoint=777),
+        assistant_data={"assistant_id": "assistant-123", "api_key": "key"},
+        run_key="offline:scheduled:assistant-123:101:rev:once",
+        job_name="unity-offline-abc",
+    )
+
+    assert env["UNITY_OFFLINE_TASK_MODE"] == "actor"
+    assert env["UNITY_OFFLINE_TASK_FUNCTION_ID"] == "777"
 
 
 def test_offline_run_key_uses_canonical_trigger_provenance_shape():

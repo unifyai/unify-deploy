@@ -79,6 +79,54 @@ def test_create_unity_job_applies_explicit_service_url_env_once() -> None:
     )
 
 
+def test_create_unity_job_always_pulls_latest_image() -> None:
+    class FakeBatchApi:
+        def __init__(self):
+            self.created_body = None
+
+        def create_namespaced_job(self, namespace, body):
+            self.created_body = body
+            return SimpleNamespace(
+                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
+            )
+
+    batch_api = FakeBatchApi()
+
+    create_unity_job(
+        batch_api,
+        job_name="unity-offline-latest-staging",
+        namespace="staging",
+        image="registry/unity-staging:latest",
+    )
+
+    container = batch_api.created_body["spec"]["template"]["spec"]["containers"][0]
+    assert container["imagePullPolicy"] == "Always"
+
+
+def test_create_unity_job_uses_cache_for_immutable_image_tags() -> None:
+    class FakeBatchApi:
+        def __init__(self):
+            self.created_body = None
+
+        def create_namespaced_job(self, namespace, body):
+            self.created_body = body
+            return SimpleNamespace(
+                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
+            )
+
+    batch_api = FakeBatchApi()
+
+    create_unity_job(
+        batch_api,
+        job_name="unity-offline-sha-staging",
+        namespace="staging",
+        image="registry/unity-staging:4f25e7cbd9a4",
+    )
+
+    container = batch_api.created_body["spec"]["template"]["spec"]["containers"][0]
+    assert container["imagePullPolicy"] == "IfNotPresent"
+
+
 def test_comms_preview_deploy_sets_all_runtime_service_urls() -> None:
     text = (ROOT / "cloudbuild/unity-comms-app-preview.yaml").read_text()
 
@@ -87,3 +135,32 @@ def test_comms_preview_deploy_sets_all_runtime_service_urls() -> None:
     assert 'ADAPTERS_URL="https://$${SLUG}---${_PEER_ADAPTERS_HOST}"' in text
     assert "UNITY_COMMS_URL=$${COMMS_URL}" in text
     assert "UNITY_ADAPTERS_URL=$${ADAPTERS_URL}" in text
+
+
+def test_comms_preview_restore_resets_all_runtime_service_urls() -> None:
+    text = (ROOT / "cloudbuild/unity-comms-app-preview.yaml").read_text()
+
+    canonical_runtime_env = (
+        "--update-env-vars=DEPLOY_ENV=staging,"
+        "ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},"
+        "UNITY_COMMS_URL=https://${_PEER_COMMS_HOST},"
+        "UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST}"
+    )
+
+    assert text.count(canonical_runtime_env) == 3
+
+
+def test_comms_staging_deploy_resets_runtime_service_urls() -> None:
+    text = (ROOT / "cloudbuild/unity-comms-app-staging.yaml").read_text()
+
+    canonical_runtime_env = (
+        "--update-env-vars=DEPLOY_ENV=staging,"
+        "ORCHESTRA_URL=${_ORCHESTRA_URL},"
+        "UNITY_COMMS_URL=https://${_COMMS_HOST},"
+        "UNITY_ADAPTERS_URL=https://${_ADAPTERS_HOST}"
+    )
+
+    assert canonical_runtime_env in text
+    assert "_ORCHESTRA_URL: 'https://internal.example.com/v0'" in text
+    assert "_COMMS_HOST: 'service.a.run.app'" in text
+    assert "_ADAPTERS_HOST: 'service.a.run.app'" in text

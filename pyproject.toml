@@ -45,7 +45,9 @@ dependencies = [
     "livekit-api>=0.4.0",
 
     # Infrastructure
-    "kubernetes>=28.1.0",
+    # kubernetes>=36 resolves authentication headers differently for this
+    # custom ApiClient path and causes anonymous requests against GKE.
+    "kubernetes>=35.0.0,<36.0.0",
 
     # SSH key generation for VM file sync
     "cryptography>=42.0.0",
