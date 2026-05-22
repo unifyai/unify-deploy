@@ -214,6 +214,7 @@ def _scheduled_activation_http_body(
         "activation_revision": request.activation_revision,
         "scheduled_for": request.scheduled_for.astimezone(timezone.utc).isoformat(),
         "execution_mode": request.execution_mode,
+        "entrypoint": request.entrypoint,
         "source_type": request.source_type,
         "task_label": request.task_label or "",
         "task_summary": request.task_summary or "",
@@ -516,8 +517,15 @@ def _validate_current_offline_activation(
         return "activation_revision_mismatch"
     if int(activation.get("source_task_log_id") or 0) != request.source_task_log_id:
         return "source_task_log_id_mismatch"
-    if int(activation.get("entrypoint") or 0) <= 0:
-        return "missing_entrypoint"
+    activation_entrypoint = activation.get("entrypoint")
+    if int(activation_entrypoint or 0) <= 0 and request.entrypoint:
+        return "entrypoint_mismatch"
+    if (
+        activation_entrypoint
+        and request.entrypoint
+        and int(activation_entrypoint) != int(request.entrypoint)
+    ):
+        return "entrypoint_mismatch"
     if request.source_type == "scheduled" and _normalize_datetime_string(
         activation.get("next_due_at"),
     ) != _normalize_datetime_string(_request_scheduled_for_iso(request)):
@@ -584,8 +592,9 @@ def _build_offline_runner_env(
         or str(activation.get("task_name") or "").strip()
         or f"Execute task {request.task_id}"
     )
+    entrypoint = activation.get("entrypoint") or request.entrypoint
     return {
-        "UNITY_OFFLINE_TASK_MODE": "function",
+        "UNITY_OFFLINE_TASK_MODE": "actor",
         "EVENTBUS_PUBLISHING_ENABLED": "false",
         "EVENTBUS_PUBSUB_STREAMING": "false",
         "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
@@ -593,7 +602,7 @@ def _build_offline_runner_env(
         "UNITY_OFFLINE_TASK_ID": str(request.task_id),
         "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
         "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": request.activation_revision,
-        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(activation["entrypoint"])),
+        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
         "UNITY_OFFLINE_TASK_REQUEST": task_request,
         "UNITY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
         "UNITY_OFFLINE_TASK_DESCRIPTION": str(activation.get("task_description") or ""),
@@ -737,6 +746,7 @@ def _build_offline_run_create_payload(
         "source_task_log_id": request.source_task_log_id,
         "source_type": request.source_type,
         "execution_mode": "offline",
+        "entrypoint": activation.get("entrypoint") or request.entrypoint,
         "activation_revision": request.activation_revision,
         "scheduled_for": _request_scheduled_for_iso(request),
         "source_medium": request.source_medium or None,

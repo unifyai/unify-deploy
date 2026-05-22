@@ -345,6 +345,52 @@ def test_upsert_offline_scheduled_task_activation_targets_offline_queue(
         == "https://comms.test/infra/task-activation/offline-dispatch"
     )
     assert b'"execution_mode": "offline"' in task.http_request.body
+    assert b'"entrypoint": null' in task.http_request.body
+
+
+def test_upsert_offline_symbolic_activation_carries_entrypoint(
+    client,
+    fake_tasks_module,
+):
+    """Symbolic offline activations should carry the function entrypoint."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    task_activation._task_queues_ensured = set()
+
+    with (
+        patch(
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
+            "test-admin-key",
+        ),
+        patch(
+            "communication.infra.task_activation.SETTINGS.comms_url",
+            "https://comms.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+        patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
+    ):
+        response = client.post(
+            "/infra/task-activation/upsert",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+                "activation_revision": "rev-123",
+                "scheduled_for": "2026-04-10T09:00:00+00:00",
+                "execution_mode": "offline",
+                "entrypoint": 777,
+            },
+        )
+
+    assert response.status_code == 200
+    _, task = fake_client.created_tasks[0]
+    assert b'"execution_mode": "offline"' in task.http_request.body
+    assert b'"entrypoint": 777' in task.http_request.body
 
 
 def test_upsert_far_future_activation_targets_repair_queue(
