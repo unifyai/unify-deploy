@@ -854,6 +854,9 @@ def _build_start_job_request_data(
     user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
     user_desktop_url = assistant.get("user_desktop_url", None)
     demo_id = assistant.get("demo_id", None)
+    workspace_org_id = assistant.get("workspace_org_id")
+    if workspace_org_id is None:
+        workspace_org_id = assistant.get("org_id")
     data = {
         "api_key": api_key,
         "medium": medium,
@@ -912,6 +915,9 @@ def _build_start_job_request_data(
             str(assistant.get("org_id", ""))
             if assistant.get("org_id") is not None
             else ""
+        ),
+        "workspace_org_id": (
+            str(workspace_org_id) if workspace_org_id is not None else ""
         ),
         "deploy_env": assistant.get("deploy_env", ""),
     }
