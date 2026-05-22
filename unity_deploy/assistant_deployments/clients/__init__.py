@@ -430,6 +430,7 @@ def resolve(
 from . import client_alpha  # noqa: F401, E402  (specific assistant ids)
 from . import clientepsilon_homes  # noqa: F401, E402  (specific assistant ids)
 from . import clientzeta  # noqa: F401, E402  (specific assistant ids)
+from . import client_beta  # noqa: F401, E402  (specific assistant/org ids)
 from . import unify_company  # noqa: F401, E402  (scope="default" catch-all)
 
 # TODO: Yasser has left the team.  Re-enable when a new ClientGamma deployment
