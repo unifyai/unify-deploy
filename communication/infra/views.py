@@ -481,7 +481,6 @@ def _build_startup_payload(
     self_contact_id: int,
     boss_contact_id: int,
     org_id: str,
-    workspace_org_id: str,
     assistant_job_title: str = "",
     wake_reasons: list[dict[str, Any]] | None = None,
 ) -> dict:
@@ -491,8 +490,6 @@ def _build_startup_payload(
     must always pass the latest assistant config. The bootstrap Secret becomes
     the controller's source of truth for both fresh and reused activations.
     """
-    assistant_org_id = int(org_id) if org_id else None
-    workspace_organization_id = int(workspace_org_id) if workspace_org_id else None
     payload = {
         "api_key": api_key,
         "medium": medium,
@@ -529,12 +526,7 @@ def _build_startup_payload(
         "space_summaries": _decode_space_summaries_form(space_summaries),
         "self_contact_id": self_contact_id,
         "boss_contact_id": boss_contact_id,
-        "org_id": assistant_org_id,
-        "workspace_org_id": (
-            workspace_organization_id
-            if workspace_organization_id is not None
-            else assistant_org_id
-        ),
+        "org_id": int(org_id) if org_id else None,
     }
     if wake_reasons:
         payload["wake_reasons"] = wake_reasons
@@ -962,7 +954,6 @@ async def start_job(
     self_contact_id: int = Form(...),
     boss_contact_id: int = Form(...),
     org_id: str = Form(""),
-    workspace_org_id: str = Form(""),
     wake_reasons: str = Form(""),
 ):
     """
@@ -1007,7 +998,6 @@ async def start_job(
         self_contact_id: Resolved assistant-self contact ID
         boss_contact_id: Resolved boss contact ID
         org_id: Organization ID if this is an organizational assistant (optional, defaults to empty)
-        workspace_org_id: Organization ID for the active workspace context (optional, defaults to org_id)
     """
     session_name = assistant_session_name(assistant_id)
     activation_id = None
@@ -1069,7 +1059,6 @@ async def start_job(
             self_contact_id=self_contact_id,
             boss_contact_id=boss_contact_id,
             org_id=org_id,
-            workspace_org_id=workspace_org_id,
             wake_reasons=requested_wake_reasons,
         )
         (

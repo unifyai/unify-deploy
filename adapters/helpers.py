@@ -900,6 +900,7 @@ def _build_start_job_request_data(
         "user_desktop_url": user_desktop_url or "",
         # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
         "demo_id": str(demo_id) if demo_id else "",
+        "is_coordinator": ("true" if is_coordinator else "false"),
         "team_ids": json.dumps(assistant.get("team_ids", [])),
         "space_ids": encode_int_list_for_form(
             assistant.get("space_ids") or [],

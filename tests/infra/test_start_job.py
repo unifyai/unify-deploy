@@ -69,7 +69,6 @@ def _start_job_payload(**overrides) -> dict[str, str]:
         "self_contact_id": "101",
         "boss_contact_id": "202",
         "org_id": "",
-        "workspace_org_id": "",
     }
     payload.update(overrides)
     return payload
@@ -305,33 +304,6 @@ def test_start_job_personal_coordinator_sets_null_org_id_in_bootstrap_payload(cl
     assert response.status_code == 200
     assert payload["is_coordinator"] is True
     assert payload["org_id"] is None
-    assert payload["workspace_org_id"] is None
-
-
-def test_start_job_preserves_explicit_workspace_org_id_in_bootstrap_payload(client):
-    """Bootstrap payload should preserve assistant and workspace org scopes."""
-
-    response, payload = _post_start_job_and_capture_bootstrap_payload(
-        client,
-        _start_job_payload(org_id="7", workspace_org_id="9"),
-    )
-
-    assert response.status_code == 200
-    assert payload["org_id"] == 7
-    assert payload["workspace_org_id"] == 9
-
-
-def test_start_job_falls_back_workspace_org_id_to_org_id_in_bootstrap_payload(client):
-    """Missing workspace scope should default to the assistant org scope."""
-
-    response, payload = _post_start_job_and_capture_bootstrap_payload(
-        client,
-        _start_job_payload(org_id="7", workspace_org_id=""),
-    )
-
-    assert response.status_code == 200
-    assert payload["org_id"] == 7
-    assert payload["workspace_org_id"] == 7
 
 
 def test_start_job_stamps_preview_runtime_urls_on_image_override(client):
