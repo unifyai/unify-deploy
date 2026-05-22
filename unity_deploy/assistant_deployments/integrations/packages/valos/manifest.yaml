@@ -1,0 +1,43 @@
+name: Valos
+slug: valos
+version: "0.2.0"
+sector: real-estate
+tier: api
+quality: bronze
+description: >
+  Integration with Valos.ai, an AI-driven property valuation platform
+  used by RICS-registered valuers to generate valuation reports from
+  trusted property data sources.  Live API access goes through a single
+  ``valos_request`` tool that exposes the underlying authenticated HTTP
+  client to the actor.  PLACEHOLDER auth scheme — bearer API key
+  pending official Valos developer documentation.
+homepage: https://valos.ai
+
+secrets:
+- name: VALOS_API_KEY
+  description: >
+    Bearer API key for the Valos API (placeholder — confirm credential
+    type against the official Valos developer documentation before
+    going to production).
+  required: false
+  sensitive: true
+- name: VALOS_API_BASE_URL
+  description: >
+    Override for the Valos API base URL. Defaults to https://api.valos.ai
+    in _client.py; useful for sandbox/staging environments.
+  required: false
+  sensitive: false
+
+capabilities:
+- id: valos_live
+  name: Live API access
+  description: >
+    One tool covering the entire Valos REST surface (property search,
+    valuation lookups, etc.).  Endpoint paths are not yet documented
+    publicly — confirm the contract with the Valos developer team
+    before relying on specific paths.
+  functions: [valos_request]
+
+requirements: [httpx]
+
+tags: [valos, property, valuation, real-estate, rics]
