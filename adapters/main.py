@@ -1971,6 +1971,18 @@ async def unity_system_event_webhook(request: Request):
         logger.info("message is required")
         return Response(status_code=400)
 
+    # Optional structured payload that callers can attach alongside
+    # the human-readable ``message``. Forwarded verbatim onto the
+    # Pub/Sub event so Unity-side dispatch can pluck out subtype /
+    # details (e.g. coordinator onboarding narration) without
+    # re-parsing the message string. Must be a dict if present —
+    # anything else gets dropped to keep the published event shape
+    # stable.
+    extra_event_fields_raw = payload.get("extra_event_fields")
+    extra_event_fields = (
+        extra_event_fields_raw if isinstance(extra_event_fields_raw, dict) else None
+    )
+
     logger.info(
         f"Received unity_system_event for event_type={event_type}",
     )
@@ -1998,6 +2010,7 @@ async def unity_system_event_webhook(request: Request):
             event_type=event_type,
             message=message,
             contacts=contacts,
+            extra_event_fields=extra_event_fields,
         )
         logger.info("unity_system_event message published to Pub/Sub successfully")
     except Exception as e:
