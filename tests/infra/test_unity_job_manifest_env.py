@@ -127,6 +127,76 @@ def test_create_unity_job_uses_cache_for_immutable_image_tags() -> None:
     assert container["imagePullPolicy"] == "IfNotPresent"
 
 
+def test_create_unity_job_sets_ingress_transport_pubsub_on_staging() -> None:
+    """Staging Jobs must opt in to unity.gateway.PubSubIngressTransport.
+
+    Pins the staging-soak configuration described in
+    ``unity/gateway/PHASES.md`` (Phase A.bis). Activating this env var
+    routes inbound Pub/Sub envelopes through the newly-extracted
+    transport, exposing any subtle regressions before the production
+    cutover ever ships.
+    """
+
+    class FakeBatchApi:
+        def __init__(self) -> None:
+            self.created_body = None
+
+        def create_namespaced_job(self, namespace, body):
+            self.created_body = body
+            return SimpleNamespace(
+                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
+            )
+
+    batch_api = FakeBatchApi()
+    create_unity_job(
+        batch_api,
+        job_name="unity-ingress-transport-staging",
+        namespace="staging",
+        deploy_env="staging",
+    )
+
+    env_vars = batch_api.created_body["spec"]["template"]["spec"]["containers"][0][
+        "env"
+    ]
+    env_by_name = {env_var["name"]: env_var for env_var in env_vars}
+    assert "UNITY_CONVERSATION_INGRESS_TRANSPORT" in env_by_name
+    assert env_by_name["UNITY_CONVERSATION_INGRESS_TRANSPORT"]["value"] == "pubsub"
+
+
+def test_create_unity_job_does_not_set_ingress_transport_on_production() -> None:
+    """Production Jobs must NOT yet activate the new transport.
+
+    Hosted production keeps the legacy inline subscribe_to_topic path
+    until the staging soak (and Phase B / Phase C work) confirm the new
+    transport is safe. This test guards against accidentally moving the
+    env var out of the staging-only block before that point.
+    """
+
+    class FakeBatchApi:
+        def __init__(self) -> None:
+            self.created_body = None
+
+        def create_namespaced_job(self, namespace, body):
+            self.created_body = body
+            return SimpleNamespace(
+                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
+            )
+
+    batch_api = FakeBatchApi()
+    create_unity_job(
+        batch_api,
+        job_name="unity-ingress-transport-prod",
+        namespace="production",
+        deploy_env="production",
+    )
+
+    env_vars = batch_api.created_body["spec"]["template"]["spec"]["containers"][0][
+        "env"
+    ]
+    env_by_name = {env_var["name"]: env_var for env_var in env_vars}
+    assert "UNITY_CONVERSATION_INGRESS_TRANSPORT" not in env_by_name
+
+
 def test_comms_preview_deploy_sets_all_runtime_service_urls() -> None:
     text = (ROOT / "cloudbuild/unity-comms-app-preview.yaml").read_text()
 

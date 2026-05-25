@@ -407,6 +407,16 @@ def create_unity_job(
         env_vars.extend(unity_secret_env)
         if deploy_env == "staging":
             env_vars += [{"name": "STAGING", "value": "true"}]
+            # Activate the new unity.gateway.PubSubIngressTransport on
+            # staging Jobs so the extracted transport (commits 2aad1b895
+            # through dfd8275f6 in unifyai/unity) gets exercised against
+            # real Pub/Sub traffic before any production cutover.
+            # Production Jobs (this branch is staging-only) continue using
+            # the legacy inline subscribe_to_topic path until that path is
+            # explicitly retired. See unity/gateway/PHASES.md (Phase A.bis).
+            env_vars += [
+                {"name": "UNITY_CONVERSATION_INGRESS_TRANSPORT", "value": "pubsub"},
+            ]
         env_vars = _merge_env_overrides(env_vars, extra_env)
 
         image_pull_policy = (
