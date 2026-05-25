@@ -121,6 +121,7 @@ def _job(
     *,
     container_ready: bool = True,
     terminal_phase: str | None = None,
+    image: str | None = None,
 ):
     job = MagicMock()
     job.metadata.name = name
@@ -142,7 +143,36 @@ def _job(
         job.status.conditions = [types.SimpleNamespace(type="Failed", status="True")]
     elif terminal_phase == "Succeeded":
         job.status.conditions = [types.SimpleNamespace(type="Complete", status="True")]
+    container = types.SimpleNamespace(image=image or "")
+    job.spec = types.SimpleNamespace(
+        template=types.SimpleNamespace(
+            spec=types.SimpleNamespace(containers=[container]),
+        ),
+    )
     return job
+
+
+def _simple_job(
+    *,
+    image: str = "",
+    terminal: bool = False,
+):
+    """Build a binding-owned Job fixture without MagicMock."""
+
+    labels = {}
+    if terminal:
+        labels["unity-status"] = "done"
+    return types.SimpleNamespace(
+        metadata=types.SimpleNamespace(labels=labels),
+        spec=types.SimpleNamespace(
+            template=types.SimpleNamespace(
+                spec=types.SimpleNamespace(
+                    containers=[types.SimpleNamespace(image=image)],
+                ),
+            ),
+        ),
+        status=types.SimpleNamespace(conditions=[], active=0 if terminal else 1),
+    )
 
 
 def _pod(
@@ -455,10 +485,15 @@ def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
 
 
 def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkeypatch):
-    """If the binding already owns a Job, don't spawn a duplicate preview Job."""
+    """If the binding already owns a Job on the override image, reuse it."""
 
     binding = _binding("binding-1")
-    existing_job = _job(name="unity-preview-existing", container_ready=False)
+    image_uri = "registry/unity-staging:preview-myslug-deadbeef"
+    existing_job = _job(
+        name="unity-preview-existing",
+        container_ready=False,
+        image=image_uri,
+    )
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value = MagicMock(items=[existing_job])
 
@@ -470,11 +505,64 @@ def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkey
         "1207",
         "assistant-session-1207",
         binding,
-        image_override="registry/unity-staging:preview-myslug-deadbeef",
+        image_override=image_uri,
     )
 
     assert job is existing_job
     create_unity_job_mock.assert_not_called()
+
+
+def test_binding_owned_job_image_reads_container_image():
+    job = _simple_job(image="registry/unity-staging:preview-slug-deadbeef")
+
+    assert (
+        controller._binding_owned_job_image(job)
+        == "registry/unity-staging:preview-slug-deadbeef"
+    )
+
+
+def test_binding_owned_job_image_returns_none_without_containers():
+    job = types.SimpleNamespace(
+        spec=types.SimpleNamespace(
+            template=types.SimpleNamespace(spec=types.SimpleNamespace(containers=[])),
+        ),
+    )
+
+    assert controller._binding_owned_job_image(job) is None
+
+
+@pytest.mark.parametrize(
+    ("image", "override", "terminal", "expected"),
+    [
+        (
+            "registry/unity-staging:preview-a",
+            "registry/unity-staging:preview-a",
+            False,
+            True,
+        ),
+        (
+            "registry/unity-staging:preview-a",
+            "registry/unity-staging:preview-b",
+            False,
+            False,
+        ),
+        (
+            "registry/unity-staging:preview-a",
+            "registry/unity-staging:preview-b",
+            True,
+            False,
+        ),
+        ("", "registry/unity-staging:preview-b", False, False),
+        ("registry/unity-staging:preview-a", None, False, True),
+    ],
+)
+def test_preview_override_job_is_current(image, override, terminal, expected):
+    job = _simple_job(image=image, terminal=terminal)
+
+    assert (
+        controller._preview_override_job_is_current(job, image_override=override)
+        is expected
+    )
 
 
 def test_claim_and_bind_pending_job_threads_preview_runtime_spec_through(monkeypatch):
