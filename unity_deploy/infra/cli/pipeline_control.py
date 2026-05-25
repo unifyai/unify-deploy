@@ -36,6 +36,8 @@ Usage:
         --dispatch-id <id> --only dlq --dry-run
     python -m unity_deploy.infra.cli.pipeline_control retry --env production \\
         --dispatch-id <id> --only dlq --execute
+    python -m unity_deploy.infra.cli.pipeline_control recover-stale --env production \\
+        --dispatch-id <id> --dry-run
 """
 
 from __future__ import annotations
@@ -46,7 +48,9 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from unity.common.pipeline._utils import utc_now_iso
@@ -283,6 +287,70 @@ def _build_parser() -> argparse.ArgumentParser:
     p_retry.add_argument("--json", action="store_true")
     p_retry.add_argument("--debug", action="store_true")
 
+    # -- recover stale -------------------------------------------------------
+
+    p_recover = sub.add_parser(
+        "recover-stale",
+        help=(
+            "Recover running-stale jobs from persisted parse outbox payloads "
+            "and GCS checkpoints"
+        ),
+    )
+    recover_target = p_recover.add_mutually_exclusive_group(required=True)
+    recover_target.add_argument("--dispatch-id", default=None)
+    recover_target.add_argument("--job-id", default=None)
+    p_recover.add_argument("--env", default="", help="Pipeline environment override")
+    p_recover.add_argument("--project", default="", help="Pub/Sub project override")
+    p_recover.add_argument("--max-jobs", type=int, default=0)
+    p_recover.add_argument("--max-attempts", type=int, default=3)
+    p_recover.add_argument("--force", action="store_true")
+    p_recover.add_argument("--dry-run", action="store_true")
+    p_recover.add_argument(
+        "--execute",
+        action="store_true",
+        help="Finalize complete stale jobs and publish recovery messages",
+    )
+    p_recover.add_argument("--json", action="store_true")
+    p_recover.add_argument("--debug", action="store_true")
+
+    # -- reconcile stale -----------------------------------------------------
+
+    p_reconcile_stale = sub.add_parser(
+        "reconcile-stale",
+        help="Scan recent dispatches and recover bounded running-stale jobs",
+    )
+    p_reconcile_stale.add_argument("--env", default="")
+    p_reconcile_stale.add_argument("--project", default="")
+    p_reconcile_stale.add_argument("--dispatch-id", default="")
+    p_reconcile_stale.add_argument("--job-id", default="")
+    p_reconcile_stale.add_argument("--dispatch-limit", type=int, default=20)
+    p_reconcile_stale.add_argument("--max-jobs", type=int, default=10)
+    p_reconcile_stale.add_argument("--max-attempts", type=int, default=3)
+    p_reconcile_stale.add_argument("--force", action="store_true")
+    p_reconcile_stale.add_argument("--dry-run", action="store_true")
+    p_reconcile_stale.add_argument(
+        "--execute",
+        action="store_true",
+        help="Execute bounded stale recovery. Omit for dry-run.",
+    )
+    p_reconcile_stale.add_argument("--json", action="store_true")
+    p_reconcile_stale.add_argument("--debug", action="store_true")
+
+    # -- worker refresh check -----------------------------------------------
+
+    p_refresh_check = sub.add_parser(
+        "worker-refresh-check",
+        help="Return whether it is safe to restart pipeline worker pods",
+    )
+    p_refresh_check.add_argument("--env", default="")
+    p_refresh_check.add_argument("--project", default="")
+    p_refresh_check.add_argument("--dispatch-limit", type=int, default=20)
+    p_refresh_check.add_argument("--force", action="store_true")
+    p_refresh_check.add_argument("--allow-active", action="store_true")
+    p_refresh_check.add_argument("--allow-queued", action="store_true")
+    p_refresh_check.add_argument("--json", action="store_true")
+    p_refresh_check.add_argument("--debug", action="store_true")
+
     return parser
 
 
@@ -349,6 +417,18 @@ def _queue_resources(settings) -> dict[str, str]:
     }
 
 
+def _timestamp_age_seconds(value: str) -> int | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+
+
 def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
     from unity_deploy.infra.gcp.pipeline_observability import (
         JobObservabilitySnapshot,
@@ -408,9 +488,7 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
         next_action = f"pipeline_control retry --job-id {job_id} --only dlq --dry-run"
         queue_location = "dlq"
     elif derived_status == "running-stale":
-        next_action = (
-            f"pipeline_control retry --job-id {job_id} --only stale-running --dry-run"
-        )
+        next_action = f"pipeline_control recover-stale --job-id {job_id} --dry-run"
         queue_location = "none"
     elif durable_status == "queued":
         next_action = "wait for parse/ingest backlog or inspect queue metrics"
@@ -418,6 +496,39 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
     else:
         next_action = ""
         queue_location = "none"
+
+    if fresh_lease:
+        status_reason = (
+            f"fresh lease owner={fresh_lease.owner_id} "
+            f"expires={fresh_lease.expires_at}"
+        )
+    elif heartbeat_at:
+        status_reason = f"last heartbeat age={_timestamp_age_seconds(heartbeat_at)}s"
+    elif dlq_records:
+        status_reason = f"latest DLQ classification={retry_classification}"
+    elif derived_status == "running-stale":
+        status_reason = "durable status is running with no fresh heartbeat or lease"
+    else:
+        status_reason = derived_status
+
+    retry_payload_source = "dlq" if latest_dlq and latest_dlq.payload else ""
+    checkpoint_complete: bool | None = None
+    recovery_action = ""
+    if derived_status == "running-stale":
+        payload, outbox_source = _read_parse_outbox_payload(artifact_store, job_id)
+        if payload is not None:
+            retry_payload_source = outbox_source
+            _, checkpoint_complete = _table_checkpoint_plan(
+                artifact_store=artifact_store,
+                payload=payload,
+                checkpoints=checkpoints,
+            )
+            recovery_action = (
+                "finalize_success" if checkpoint_complete else "republish_ingest"
+            )
+        else:
+            retry_payload_source = outbox_source
+            recovery_action = "needs_operator"
     return JobObservabilitySnapshot(
         job_id=job_id,
         dispatch_id=job.dispatch_id if job is not None else "",
@@ -443,6 +554,11 @@ def _load_job_snapshot(infra, job_id: str, *, include_events: bool = True):
         retry_classification=retry_classification,
         retry_eligible=retry_eligible,
         next_action=next_action,
+        status_reason=status_reason,
+        latest_heartbeat_age_seconds=_timestamp_age_seconds(heartbeat_at),
+        checkpoint_complete=checkpoint_complete,
+        retry_payload_source=retry_payload_source,
+        recovery_action=recovery_action,
         dlq_records=dlq_records,
         checkpoints=checkpoints,
         events=events,
@@ -480,6 +596,339 @@ def _mark_job_dlq(infra, record, dlq_keys: list[str]) -> None:
 
 async def _publish_retry(infra, *, topic: str, payload: dict) -> str:
     return await infra.work_queue.publish(topic=topic, payload=payload)
+
+
+def _parse_outbox_key(job_id: str) -> str:
+    return f"jobs/{job_id}/outbox/parse.json"
+
+
+def _read_parse_outbox_payload(
+    artifact_store: Any,
+    job_id: str,
+) -> tuple[dict | None, str]:
+    """Return the persisted IngestRequested payload from parse outbox, if present."""
+    try:
+        outbox = artifact_store.get_json(_parse_outbox_key(job_id))
+    except Exception:
+        return None, "missing"
+    payload = outbox.get("payload") if isinstance(outbox, dict) else None
+    if isinstance(payload, dict):
+        return payload, "parse_outbox"
+    return None, "malformed"
+
+
+def _table_checkpoint_plan(
+    *,
+    artifact_store: Any,
+    payload: dict | None,
+    checkpoints: dict,
+) -> tuple[list[dict], bool]:
+    """Compare ingest-manifest tables with durable checkpoints."""
+    if not payload:
+        return [], False
+    manifest_key = str(payload.get("manifest_key") or "")
+    if not manifest_key:
+        return [], False
+    try:
+        from unity.common.pipeline import IngestPlan
+
+        manifest_payload = artifact_store.get_json(manifest_key)
+        plan = IngestPlan.model_validate(manifest_payload)
+    except Exception:
+        logger.debug("Could not load ingest manifest for stale recovery", exc_info=True)
+        return [], False
+
+    rows: list[dict] = []
+    complete = bool(plan.tables_meta)
+    for meta in plan.tables_meta:
+        table_id = str(meta.table_id or meta.label or "")
+        if not table_id:
+            complete = False
+            continue
+        handle = (plan.table_inputs or {}).get(table_id)
+        expected_rows = (
+            meta.row_count
+            if meta.row_count is not None
+            else getattr(handle, "row_count", None)
+        )
+        checkpoint = checkpoints.get(table_id)
+        rows_committed = int(getattr(checkpoint, "rows_committed", 0) or 0)
+        chunks_committed = int(getattr(checkpoint, "chunks_committed", 0) or 0)
+        table_complete = expected_rows is not None and rows_committed >= int(
+            expected_rows,
+        )
+        complete = complete and table_complete
+        rows.append(
+            {
+                "table_id": table_id,
+                "expected_rows": expected_rows,
+                "rows_committed": rows_committed,
+                "chunks_committed": chunks_committed,
+                "complete": table_complete,
+            },
+        )
+    return rows, complete
+
+
+def _plan_stale_recovery(
+    infra,
+    job_ids: list[str],
+    *,
+    max_jobs: int,
+    max_attempts: int,
+    force: bool,
+) -> tuple[list[dict], list[dict]]:
+    """Build a bounded stale recovery plan without mutating state."""
+    artifact_store = _get_artifact_store(infra)
+    job_store = _get_job_store(infra)
+    plan: list[dict] = []
+    skipped: list[dict] = []
+    for job_id in job_ids:
+        snap = _load_job_snapshot(infra, job_id, include_events=False)
+        if snap.durable_status in {"success", "cancelled", "paused"} and not force:
+            skipped.append({"job_id": job_id, "reason": snap.durable_status})
+            continue
+        if snap.derived_status == "running-active" and not force:
+            skipped.append({"job_id": job_id, "reason": "fresh lease or heartbeat"})
+            continue
+        if snap.derived_status != "running-stale" and not force:
+            skipped.append(
+                {
+                    "job_id": job_id,
+                    "reason": f"not running-stale ({snap.derived_status})",
+                },
+            )
+            continue
+        if snap.retry_classification == "non_retryable" and not force:
+            skipped.append({"job_id": job_id, "reason": "non-retryable classification"})
+            continue
+        try:
+            job = job_store.read_job(job_id)
+            recovery_attempt = (
+                int((job.metadata or {}).get("stale_recovery_attempt", 0)) + 1
+            )
+            if (
+                job.status == "queued"
+                and (job.metadata or {}).get("last_stale_recovery_message_id")
+                and not force
+            ):
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "reason": (
+                            "already queued by stale recovery message "
+                            f"{job.metadata.get('last_stale_recovery_message_id')}"
+                        ),
+                    },
+                )
+                continue
+            if recovery_attempt > max_attempts and not force:
+                skipped.append(
+                    {
+                        "job_id": job_id,
+                        "reason": f"recovery budget exhausted ({recovery_attempt})",
+                    },
+                )
+                continue
+        except Exception:
+            job = None
+            recovery_attempt = 1
+
+        payload, payload_source = _read_parse_outbox_payload(artifact_store, job_id)
+        tables, checkpoints_complete = _table_checkpoint_plan(
+            artifact_store=artifact_store,
+            payload=payload,
+            checkpoints=snap.checkpoints,
+        )
+        total_rows = sum(int(row["rows_committed"] or 0) for row in tables)
+        if checkpoints_complete:
+            action = "finalize_success"
+        elif payload is not None:
+            action = "republish_ingest"
+        else:
+            action = "needs_operator"
+        plan.append(
+            {
+                "job_id": job_id,
+                "dispatch_id": snap.dispatch_id,
+                "durable_status": snap.durable_status,
+                "derived_status": snap.derived_status,
+                "payload_source": payload_source,
+                "action": action,
+                "checkpoint_complete": checkpoints_complete,
+                "checkpoints": tables,
+                "resume_rows": total_rows,
+                "resume_chunks": sum(
+                    int(row["chunks_committed"] or 0) for row in tables
+                ),
+                "payload": payload,
+                "recovery_attempt": recovery_attempt,
+            },
+        )
+        if max_jobs and len(plan) >= max_jobs:
+            break
+    return plan, skipped
+
+
+def _select_stale_recovery_jobs(infra, args: argparse.Namespace) -> list[str]:
+    job_id = getattr(args, "job_id", "") or ""
+    if job_id:
+        return [job_id]
+    dispatch_id = getattr(args, "dispatch_id", "") or ""
+    job_store = _get_job_store(infra)
+    if dispatch_id:
+        return list(job_store.read_dispatch(dispatch_id).job_ids)
+    job_ids: list[str] = []
+    seen: set[str] = set()
+    for manifest in job_store.list_dispatches(
+        limit=int(getattr(args, "dispatch_limit", 20)),
+    ):
+        for candidate in manifest.job_ids:
+            if candidate not in seen:
+                seen.add(candidate)
+                job_ids.append(candidate)
+    return job_ids
+
+
+async def _execute_stale_recovery(
+    infra,
+    plan: list[dict],
+) -> list[dict]:
+    """Apply a stale recovery plan: finalize complete jobs or requeue payloads."""
+    from unity_deploy.infra.gcp.pipeline_observability import (
+        PipelineJobEvent,
+        write_job_event,
+    )
+
+    artifact_store = _get_artifact_store(infra)
+    job_store = _get_job_store(infra)
+    applied: list[dict] = []
+    for item in plan:
+        job_id = item["job_id"]
+        action = item["action"]
+        base_event = PipelineJobEvent(
+            event_type="stale_recovery_requested",
+            environment=infra.settings.environment,
+            project_id=infra.settings.pubsub.project_id,
+            job_id=job_id,
+            dispatch_id=item["dispatch_id"],
+            stage="ingest",
+            next_action=action,
+            metadata={
+                "payload_source": item["payload_source"],
+                "recovery_attempt": item["recovery_attempt"],
+                "resume_rows": item["resume_rows"],
+                "resume_chunks": item["resume_chunks"],
+                "checkpoint_complete": item["checkpoint_complete"],
+            },
+        )
+        write_job_event(artifact_store, base_event)
+        try:
+            job = job_store.read_job(job_id)
+            previous_status = job.status
+            if action == "finalize_success":
+                job.status = "success"
+                job.finished_at = job.finished_at or utc_now_iso()
+                job.error = None
+                job.metadata = {
+                    **(job.metadata or {}),
+                    "stale_recovery_attempt": item["recovery_attempt"],
+                    "stale_recovery_action": "finalize_success",
+                    "stale_recovery_source": "pipeline_control recover-stale",
+                    "previous_status": previous_status,
+                    "total_rows_inserted": item["resume_rows"],
+                }
+                job_store.upsert_job(job)
+                write_job_event(
+                    artifact_store,
+                    base_event.model_copy(
+                        update={
+                            "event_id": uuid4().hex,
+                            "event_type": "stale_recovery_finalized_success",
+                            "next_action": "terminal_success",
+                            "recorded_at": utc_now_iso(),
+                        },
+                    ),
+                )
+                applied.append({"job_id": job_id, "action": action})
+                continue
+            if action == "republish_ingest":
+                message_id = await _publish_retry(
+                    infra,
+                    topic="ingest",
+                    payload=item["payload"],
+                )
+                job.status = "queued"
+                job.finished_at = None
+                job.error = None
+                job.metadata = {
+                    **(job.metadata or {}),
+                    "stale_recovery_attempt": item["recovery_attempt"],
+                    "stale_recovery_action": "republish_ingest",
+                    "stale_recovery_source": "parse_outbox",
+                    "previous_status": previous_status,
+                    "last_stale_recovery_message_id": message_id,
+                    "resume_rows": item["resume_rows"],
+                    "resume_chunks": item["resume_chunks"],
+                }
+                job_store.upsert_job(job)
+                write_job_event(
+                    artifact_store,
+                    base_event.model_copy(
+                        update={
+                            "event_id": uuid4().hex,
+                            "event_type": "stale_recovery_republished",
+                            "pubsub_message_id": message_id,
+                            "next_action": "queued",
+                            "recorded_at": utc_now_iso(),
+                        },
+                    ),
+                )
+                applied.append(
+                    {"job_id": job_id, "action": action, "message_id": message_id},
+                )
+                continue
+            job.error = (
+                "running-stale recovery needs operator: missing parse outbox payload"
+            )
+            job.status = "error"
+            job.finished_at = job.finished_at or utc_now_iso()
+            job.metadata = {
+                **(job.metadata or {}),
+                "stale_recovery_attempt": item["recovery_attempt"],
+                "stale_recovery_action": "needs_operator",
+                "stale_recovery_source": item["payload_source"],
+                "previous_status": previous_status,
+            }
+            job_store.upsert_job(job)
+            write_job_event(
+                artifact_store,
+                base_event.model_copy(
+                    update={
+                        "event_id": uuid4().hex,
+                        "event_type": "stale_recovery_needs_operator",
+                        "next_action": "operator_review",
+                        "recorded_at": utc_now_iso(),
+                    },
+                ),
+            )
+            applied.append({"job_id": job_id, "action": action})
+        except Exception as exc:
+            write_job_event(
+                artifact_store,
+                base_event.model_copy(
+                    update={
+                        "event_id": uuid4().hex,
+                        "event_type": "stale_recovery_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "next_action": "kept_prior_state",
+                        "recorded_at": utc_now_iso(),
+                    },
+                ),
+            )
+            raise
+    return applied
 
 
 # ---------------------------------------------------------------------------
@@ -733,6 +1182,14 @@ async def cmd_status(args: argparse.Namespace) -> None:
             f"{snap.latest_checkpoint_rows:>10} {snap.latest_checkpoint_chunks:>7} "
             f"{str(snap.delivery_attempt or ''):>7} {action}",
         )
+        if args.show_retry_plan and (
+            snap.status_reason or snap.retry_payload_source or snap.recovery_action
+        ):
+            print(
+                f"    reason={snap.status_reason or '-'} "
+                f"payload_source={snap.retry_payload_source or '-'} "
+                f"recovery_action={snap.recovery_action or '-'}",
+            )
 
     print()
     ordered_counts = ", ".join(
@@ -837,6 +1294,15 @@ async def cmd_monitor(args: argparse.Namespace) -> None:
         print(f"Retry Eligibility: {snap.retry_eligible} ({snap.retry_classification})")
         if snap.next_action:
             print(f"Recommended Action: {snap.next_action}")
+        if snap.status_reason:
+            print(f"Status Reason: {snap.status_reason}")
+        if snap.retry_payload_source or snap.recovery_action:
+            print(
+                "Recovery: "
+                f"payload_source={snap.retry_payload_source or '-'} "
+                f"checkpoint_complete={snap.checkpoint_complete} "
+                f"action={snap.recovery_action or '-'}",
+            )
         if job.dispatch_id:
             print(f"Dispatch: {job.dispatch_id}")
         if job.started_at:
@@ -1280,6 +1746,144 @@ async def cmd_retry(args: argparse.Namespace) -> None:
             )
 
 
+async def cmd_recover_stale(args: argparse.Namespace) -> None:
+    """Recover explicit running-stale jobs from parse outbox/checkpoints."""
+    _apply_runtime_overrides(args)
+    infra = _init_infra(debug=args.debug)
+    resources = _queue_resources(infra.settings)
+    execute = bool(args.execute and not args.dry_run)
+    target_jobs = _select_stale_recovery_jobs(infra, args)
+    plan, skipped = _plan_stale_recovery(
+        infra,
+        target_jobs,
+        max_jobs=args.max_jobs,
+        max_attempts=args.max_attempts,
+        force=args.force,
+    )
+    applied: list[dict] = []
+    if execute and plan:
+        applied = await _execute_stale_recovery(infra, plan)
+
+    result = {
+        "resources": resources,
+        "dry_run": not execute,
+        "plan": plan,
+        "skipped": skipped,
+        "applied": applied,
+    }
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+        return
+
+    print("Stale recovery resources:", flush=True)
+    for key, value in resources.items():
+        print(f"  {key}: {value or '(unset)'}", flush=True)
+    print(f"\nMode: {'EXECUTE' if execute else 'DRY-RUN'}", flush=True)
+    print(f"Planned {len(plan)} job(s); skipped {len(skipped)}.", flush=True)
+    for item in plan:
+        print(
+            f"  {item['action'].upper()} job={item['job_id']} "
+            f"payload_source={item['payload_source']} "
+            f"checkpoint_complete={item['checkpoint_complete']} "
+            f"resume_rows={item['resume_rows']} "
+            f"resume_chunks={item['resume_chunks']} "
+            f"attempt={item['recovery_attempt']}",
+            flush=True,
+        )
+        for row in item["checkpoints"]:
+            print(
+                f"    table={row['table_id']} rows={row['rows_committed']}/"
+                f"{row['expected_rows']} chunks={row['chunks_committed']} "
+                f"complete={row['complete']}",
+                flush=True,
+            )
+    for item in skipped[:20]:
+        print(f"  SKIP job={item['job_id']} reason={item['reason']}", flush=True)
+    if execute:
+        print(f"\nApplied {len(applied)} stale recovery action(s).", flush=True)
+        for item in applied:
+            suffix = f" message_id={item['message_id']}" if "message_id" in item else ""
+            print(
+                f"  APPLIED job={item['job_id']} action={item['action']}{suffix}",
+                flush=True,
+            )
+
+
+async def cmd_reconcile_stale(args: argparse.Namespace) -> None:
+    """Cron-friendly bounded stale-running reconciler."""
+    await cmd_recover_stale(args)
+
+
+async def cmd_worker_refresh_check(args: argparse.Namespace) -> None:
+    """Fail closed when worker restart would interrupt active ingestion."""
+    _apply_runtime_overrides(args)
+    infra = _init_infra(debug=args.debug)
+    job_store = _get_job_store(infra)
+    counts: dict[str, int] = {}
+    jobs: list[dict] = []
+    for manifest in job_store.list_dispatches(limit=args.dispatch_limit):
+        for job_id in manifest.job_ids:
+            snap = _load_job_snapshot(infra, job_id, include_events=False)
+            counts[snap.derived_status] = counts.get(snap.derived_status, 0) + 1
+            if (
+                snap.derived_status
+                in {
+                    "running-active",
+                    "running-stale",
+                    "dlq",
+                    "partial-dlq",
+                }
+                or snap.durable_status == "queued"
+            ):
+                jobs.append(
+                    {
+                        "job_id": job_id,
+                        "dispatch_id": manifest.dispatch_id,
+                        "durable_status": snap.durable_status,
+                        "derived_status": snap.derived_status,
+                        "next_action": snap.next_action,
+                    },
+                )
+    blockers = []
+    for job in jobs:
+        if job["derived_status"] == "running-active" and args.allow_active:
+            continue
+        if job["durable_status"] == "queued" and args.allow_queued:
+            continue
+        if (
+            job["derived_status"] == "running-active"
+            or job["durable_status"] == "queued"
+            or job["derived_status"] in {"running-stale", "dlq", "partial-dlq"}
+        ):
+            blockers.append(job)
+    safe = not blockers or bool(args.force)
+    result = {
+        "safe_to_refresh": safe,
+        "forced": bool(args.force),
+        "allow_active": bool(args.allow_active),
+        "allow_queued": bool(args.allow_queued),
+        "counts": counts,
+        "blockers": blockers[:50],
+    }
+    if args.json:
+        print(json.dumps(result, indent=2, default=str))
+    else:
+        print(
+            f"safe_to_refresh={str(safe).lower()} forced={str(args.force).lower()}",
+            flush=True,
+        )
+        print(f"counts={json.dumps(counts, sort_keys=True)}", flush=True)
+        for job in blockers[:20]:
+            print(
+                f"  BLOCK job={job['job_id']} dispatch={job['dispatch_id']} "
+                f"status={job['derived_status']} durable={job['durable_status']} "
+                f"next={job['next_action']}",
+                flush=True,
+            )
+    if not safe:
+        sys.exit(2)
+
+
 async def cmd_cancel(args: argparse.Namespace) -> None:
     """Cancel a dispatch (all non-terminal jobs) or a single job."""
     infra = _init_infra(debug=args.debug)
@@ -1697,6 +2301,9 @@ def main() -> None:
         "resume": cmd_resume,
         "reconcile-dlq": cmd_reconcile_dlq,
         "retry": cmd_retry,
+        "recover-stale": cmd_recover_stale,
+        "reconcile-stale": cmd_reconcile_stale,
+        "worker-refresh-check": cmd_worker_refresh_check,
         "delete": cmd_delete,
         "inspect": cmd_inspect,
     }
