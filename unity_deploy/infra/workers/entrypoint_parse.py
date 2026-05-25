@@ -181,8 +181,6 @@ async def main() -> None:
                         )
                         lease_outcome = "ack"
                     finally:
-                        if is_shutdown_requested() and lease_outcome == "error":
-                            lease_outcome = "nack"
                         lease_extender.stop(outcome=lease_outcome)
                         if heartbeat_ledger is not None:
                             try:

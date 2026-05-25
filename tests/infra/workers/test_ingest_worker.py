@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from unity.common.pipeline import IngestRequested
 from unity.common.pipeline.types import (
     DmBinding,
     FileParseResult,
@@ -29,6 +31,7 @@ from unity.common.pipeline.types import (
 )
 from unity_deploy.infra.workers import ingest_worker
 from unity_deploy.infra.gcp.artifact_store import LeaseNotAcquired, LeaseRecord
+from unity_deploy.infra.workers import worker_utils
 from unity_deploy.infra.workers.worker_utils import DuplicateLiveAttempt
 
 
@@ -214,8 +217,8 @@ def test_guard_scratch_usage_treats_missing_scratch_dir_as_empty(
     )
 
 
-def test_duplicate_live_ingest_lease_acks_before_dm_write(monkeypatch) -> None:
-    """A duplicate delivery must be acked before any DataManager work starts."""
+def test_duplicate_live_ingest_lease_raises_before_dm_write(monkeypatch) -> None:
+    """A duplicate delivery must not start DataManager work while a lease is fresh."""
 
     class Store:
         def acquire_lease(self, *args, **kwargs):
@@ -243,6 +246,135 @@ def test_duplicate_live_ingest_lease_acks_before_dm_write(monkeypatch) -> None:
 
     assert exc.value.stage == "ingest"
     assert exc.value.lease.owner_id == "pod-a"
+
+
+@pytest.mark.asyncio
+async def test_handle_ingest_message_finalizes_success_before_ack(monkeypatch) -> None:
+    events: list[str] = []
+    plan = IngestPlan(
+        run_id="job-1",
+        file_path="demo.csv",
+        parse_summary=FileParseResult(logical_path="demo.csv", status="success"),
+        tables_meta=[
+            TableMeta(table_id="table_1", label="table_1", columns=["a"], row_count=1),
+        ],
+        table_inputs={
+            "table_1": InlineRowsHandle(
+                rows=[{"a": 1}],
+                columns=["a"],
+                row_count=1,
+            ),
+        },
+    )
+
+    class _ArtifactStore:
+        def get_json(self, key):
+            assert key == "jobs/job-1/manifests/demo.json"
+            return plan.model_dump(mode="json")
+
+    class _JobStore:
+        def __init__(self):
+            self.job = SimpleNamespace(
+                job_id="job-1",
+                dispatch_id="dispatch-1",
+                status="running",
+                finished_at=None,
+                error=None,
+                metadata={},
+            )
+
+        def read_job(self, job_id):
+            assert job_id == "job-1"
+            return self.job
+
+        def upsert_job(self, job):
+            events.append(f"upsert:{job.status}")
+            self.job = job
+
+    class _Queue:
+        async def is_cancelled(self, _job_id):
+            return False
+
+    class _Ledger:
+        def write(self, _entry):
+            pass
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    class _Watch:
+        is_cancelled = None
+
+        def paused(self):
+            return False
+
+        async def stop(self):
+            pass
+
+    infra = SimpleNamespace(
+        artifact_store=_ArtifactStore(),
+        work_queue=_Queue(),
+        job_store=_JobStore(),
+        run_ledger_factory=lambda _run_id: _Ledger(),
+        cost_ledger_factory=lambda _run_id: _Ledger(),
+        settings=SimpleNamespace(
+            environment="test",
+            pubsub=SimpleNamespace(project_id="proj"),
+        ),
+    )
+    monkeypatch.setattr(worker_utils, "_shutdown_event", None)
+    monkeypatch.setattr(ingest_worker, "_spawn_control_watcher", lambda *_a: _Watch())
+    monkeypatch.setattr(ingest_worker, "_mark_ingest_running", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        ingest_worker,
+        "_stage_remote_handles",
+        lambda plan, **_kwargs: plan,
+    )
+    monkeypatch.setattr(ingest_worker, "_guard_scratch_usage", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        ingest_worker,
+        "_delete_staged_scratch_files",
+        lambda *_a, **_k: None,
+    )
+
+    async def _fake_run_dm_mode(**_kwargs):
+        return 1, None
+
+    monkeypatch.setattr(ingest_worker, "_run_dm_mode", _fake_run_dm_mode)
+
+    item = SimpleNamespace(
+        payload=IngestRequested(
+            job_id="job-1",
+            dispatch_id="dispatch-1",
+            manifest_key="jobs/job-1/manifests/demo.json",
+            ingestion_mode="dm",
+            dm_binding=DmBinding(
+                user_id="user-1",
+                assistant_id="assistant-1",
+                target_context="ctx",
+            ),
+        ).model_dump(mode="json"),
+        message_id="msg-1",
+        pubsub_message_id="msg-1",
+        delivery_attempt=1,
+        receipt_id="receipt-1",
+        source_subscription="sub",
+    )
+
+    async def _ack():
+        events.append("ack")
+
+    acked = await ingest_worker.handle_ingest_message(
+        item,
+        infra=infra,
+        ack_receipt=_ack,
+    )
+
+    assert acked is True
+    assert events == ["upsert:success", "ack"]
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import signal
 import threading
 import time
 
@@ -10,6 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from unity.common.pipeline import PipelineHeartbeatManifest
+from unity_deploy.infra.workers import worker_utils
 from unity_deploy.infra.workers.worker_utils import LeaseController, LeaseExtender
 
 
@@ -145,6 +147,28 @@ def test_lease_controller_stop_nack_modifies_deadline_zero_once() -> None:
 
     assert queue.calls == [("rcpt-N", 0)]
     assert controller.state == "NACKED"
+
+
+@pytest.mark.asyncio
+async def test_signal_handler_sets_shutdown_without_nacking(monkeypatch) -> None:
+    handlers = {}
+
+    class _Loop:
+        def add_signal_handler(self, sig, callback, *args):
+            handlers[sig] = (callback, args)
+
+    monkeypatch.setattr(worker_utils.asyncio, "get_running_loop", lambda: _Loop())
+
+    def fail_nack(*_args, **_kwargs):
+        raise AssertionError("SIGTERM must not nack active receipts")
+
+    monkeypatch.setattr(worker_utils, "nack_active_leases", fail_nack)
+
+    worker_utils.install_signal_handlers()
+    callback, args = handlers[signal.SIGTERM]
+    callback(*args)
+
+    assert worker_utils.is_shutdown_requested() is True
 
 
 def test_lease_controller_start_is_idempotent_vs_stop() -> None:
