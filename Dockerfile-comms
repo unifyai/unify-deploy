@@ -22,23 +22,30 @@ RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") &
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unillm.git /tmp/unillm && \
     pip install --no-cache-dir /tmp/unillm
 
-# Pre-install URL-sourced spacy model so the subsequent unity install
-# finds it already-satisfied. The model wheel is not on PyPI; unity's
-# pyproject declares it via [tool.uv.sources] which only uv reads, so
-# the pip-based install in this image needs the wheel already in
-# site-packages for unity's dependency check to succeed.
-RUN pip install --no-cache-dir \
-    https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
-
-# Clone and install unity (Phase C.2). Provides the unity.gateway
-# channels and the unity.gateway.app.create_app() factory that
-# communication/main.py composes on top of in Phase C.3. unify and
-# unillm are already installed above so unity's pyproject deps for
-# them are already-satisfied. The image carries unity as a dormant
-# dependency until C.3 wires it in.
+# Clone unity and install just the gateway-runtime deps. Phase C.2:
+# provides the unity.gateway channels + unity.gateway.app.create_app()
+# factory that communication/main.py composes on top of in Phase C.3.
+#
+# Two-step install:
+#   1. `--no-deps` install of the unity package itself, so we don't
+#      pull in the heavy assistant-runtime deps (pyaudio needs
+#      portaudio + gcc, browser-use needs playwright + chrome,
+#      spacy needs URL-sourced wheels, livekit-agents pulls dozens
+#      of voice extras, etc.).
+#   2. `-r requirements-gateway.txt` -- the slim dep set that
+#      `python -m unity.gateway` actually needs at runtime. Lives
+#      inside the unity repo so the dep list and the gateway code
+#      that needs it are versioned together.
+#
+# `pip check` complaints about uninstalled assistant-runtime deps
+# (textual-dev, websockify, etc.) are expected: they're declared in
+# unity's base deps but not needed by the gateway. Suppress them by
+# not running pip check; they're harmless because nothing the
+# gateway imports actually requires them.
 RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
-    pip install --no-cache-dir /tmp/unity
+    pip install --no-cache-dir --no-deps /tmp/unity && \
+    pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt
 
 # Copy package metadata and source before install so the runtime package in
 # site-packages matches the application code and bundled script assets.
