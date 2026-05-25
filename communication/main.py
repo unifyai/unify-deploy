@@ -1,84 +1,71 @@
-import asyncio
+"""Comms-app FastAPI entrypoint.
+
+Thin shell that composes communication's private SaaS routers and
+startup hooks on top of the unity.gateway aggregator. All 10
+external-channel routers (social, phone, gmail, outlook, email,
+whatsapp, teams, sharepoint, unillm, discord) are mounted by
+``unity.gateway.app.create_app()`` from ``unity.gateway.channels.*``;
+this module only adds:
+
+* The /infra/* routers (K8s Job control + SSH tunnel + VM-self
+  endpoints) -- communication-private SaaS pieces that don't belong
+  in the open-source aggregator.
+* Startup hooks that warm up the Kubernetes API client and the
+  shared Pub/Sub publisher pool before traffic starts arriving.
+* Prometheus metrics instrumentation via the existing
+  ``common.metrics.setup_metrics`` (unchanged).
+
+The Discord bot-pool sync + health-check loop is handled by
+unity.gateway's built-in lifespan -- the equivalent of the legacy
+``communication.discord.bot_manager`` calls that used to live in
+this file's old lifespan.
+
+Auth wiring:
+
+* /infra/* admin routes: communication's own ``auth_admin_key``
+  dependency (str-shaped settings, ``secrets.compare_digest`` vs
+  ``SETTINGS.orchestra_admin_key``).
+* /infra/* tunnel and vm-self routers: per-route deps (e.g.
+  ``authenticate_vm_identity``), declared inside the route handlers
+  themselves -- no router-level dep needed.
+* All 10 channel routers: unity's ``admin_auth_dependency`` (the
+  SecretStr-shaped equivalent reading ``SETTINGS.ORCHESTRA_ADMIN_KEY``
+  from the same env var). Both auth functions resolve to the same
+  underlying admin key value at runtime.
+"""
+
 import logging
-from contextlib import asynccontextmanager
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import Depends
 
-from fastapi import FastAPI, Depends
-from communication.phone.views import (
-    auth_router as phone_auth_router,
-    unauth_router as phone_unauth_router,
-)
-from communication.whatsapp.views import (
-    auth_router as whatsapp_auth_router,
-    unauth_router as whatsapp_unauth_router,
-)
-from communication.email.views import router as email_router
-from communication.gmail.views import router as gmail_router
-from communication.outlook.views import router as outlook_router
-from communication.teams.views import router as teams_router
+from common.metrics import setup_metrics
+from communication.dependencies import auth_admin_key
+from communication.infra.helpers import setup_kubernetes_client
 from communication.infra.views import (
+    _get_pubsub_clients,
     router as infra_router,
     tunnel_router,
     vm_self_router,
-    _get_pubsub_clients,
 )
-from communication.infra.helpers import setup_kubernetes_client
-from communication.social.views import router as social_router
-from communication.discord.views import router as discord_router
-from communication.sharepoint.views import router as sharepoint_router
-from communication.unillm import router as unillm_router
-from .dependencies import auth_admin_key
-from common.metrics import setup_metrics
-import logging
-import uvicorn
-from dotenv import load_dotenv
+from unity.gateway.app import ExtraRouter, create_app
 
 load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, setup_kubernetes_client)
-    loop.run_in_executor(None, _get_pubsub_clients)
-
-    from communication.discord.bot_manager import (
-        sync_from_orchestra,
-        start_health_check_loop,
-    )
-
-    await sync_from_orchestra()
-
-    health_task = asyncio.create_task(start_health_check_loop())
-    yield
-    health_task.cancel()
-
-
 admin_auth = [Depends(auth_admin_key)]
-app = FastAPI(lifespan=lifespan)
+
+app = create_app(
+    extra_routers=[
+        ExtraRouter(infra_router, prefix="/infra", dependencies=admin_auth),
+        ExtraRouter(tunnel_router, prefix="/infra"),
+        ExtraRouter(vm_self_router, prefix="/infra"),
+    ],
+    extra_setup_hooks=[setup_kubernetes_client, _get_pubsub_clients],
+)
 setup_metrics(app, service_name="comms")
-app.include_router(phone_auth_router, prefix="/phone", dependencies=admin_auth)
-app.include_router(phone_unauth_router, prefix="/phone")
-app.include_router(whatsapp_auth_router, prefix="/whatsapp", dependencies=admin_auth)
-app.include_router(whatsapp_unauth_router, prefix="/whatsapp")
-app.include_router(email_router, prefix="/email", dependencies=admin_auth)
-app.include_router(gmail_router, prefix="/gmail", dependencies=admin_auth)
-app.include_router(outlook_router, prefix="/outlook", dependencies=admin_auth)
-app.include_router(teams_router, prefix="/teams", dependencies=admin_auth)
-app.include_router(infra_router, prefix="/infra", dependencies=admin_auth)
-app.include_router(tunnel_router, prefix="/infra")
-app.include_router(vm_self_router, prefix="/infra")
-app.include_router(social_router, prefix="/social", dependencies=admin_auth)
-app.include_router(discord_router, prefix="/discord", dependencies=admin_auth)
-app.include_router(sharepoint_router, prefix="/sharepoint", dependencies=admin_auth)
-app.include_router(unillm_router, prefix="/unillm")
-
-
-@app.get("/")
-async def read_root():
-    return {"message": "success!"}
 
 
 if __name__ == "__main__":
