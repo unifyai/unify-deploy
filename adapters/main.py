@@ -11,7 +11,7 @@ import requests
 import httpx
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from typing import Optional
+from typing import Any, Optional
 from fastapi import (
     Body,
     Depends,
@@ -1233,6 +1233,17 @@ class InactivityFollowupPayload(BaseModel):
     assistant_id: str
 
 
+class CoordinatorDelegatePayload(BaseModel):
+    """Payload sent when a Coordinator assigns work to a colleague runtime."""
+
+    assistant_id: str
+    requested_by_assistant_id: str
+    instruction: str
+    intent: str = "general"
+    dedupe_key: Optional[str] = None
+    related_context: Optional[dict[str, Any]] = None
+
+
 # =============================================================================
 # Slack Events API Webhook
 # =============================================================================
@@ -1896,12 +1907,37 @@ def _build_inactivity_followup_reason() -> dict:
     return {"type": "inactivity_followup"}
 
 
+def _build_coordinator_delegate_reason(payload: CoordinatorDelegatePayload) -> dict:
+    """Return the canonical wake reason for Coordinator-assigned colleague work."""
+
+    reason: dict[str, Any] = {
+        "type": "coordinator_delegate",
+        "requested_by_assistant_id": payload.requested_by_assistant_id,
+        "intent": payload.intent,
+        "instruction": payload.instruction,
+    }
+    if payload.dedupe_key is not None:
+        reason["dedupe_key"] = payload.dedupe_key
+    if payload.related_context is not None:
+        reason["related_context"] = payload.related_context
+    return reason
+
+
 def _inactivity_followup_message(assistant_id: str) -> str:
     """Return the human-readable summary attached to an inactivity follow-up event."""
 
     return (
         f"Re-engagement follow-up requested for assistant {assistant_id} "
         f"after a stretch of silence across all contacts."
+    )
+
+
+def _coordinator_delegate_message(payload: CoordinatorDelegatePayload) -> str:
+    """Return the human-readable summary attached to a Coordinator delegate event."""
+
+    return (
+        f"Coordinator {payload.requested_by_assistant_id} assigned "
+        f"{payload.intent} work to assistant {payload.assistant_id}."
     )
 
 
@@ -2118,6 +2154,114 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
             )
             return Response(
                 content=f"Failed to publish task_due system event: {exc}",
+                status_code=500,
+            )
+        return {
+            "success": True,
+            "status": "published_to_active_session",
+            "assistant_id": assistant_id,
+            "activation_id": start_result.get("activation_id"),
+        }
+
+    return {
+        "success": True,
+        "status": "attached_to_startup",
+        "assistant_id": assistant_id,
+        "activation_id": start_result.get("activation_id"),
+    }
+
+
+@app.post("/assistant/coordinator-delegate", dependencies=[Depends(require_admin_key)])
+async def assistant_coordinator_delegate_webhook(payload: CoordinatorDelegatePayload):
+    """Wake or notify a colleague when a Coordinator assigns async work."""
+
+    assistant_data = await asyncio.to_thread(
+        get_assistant,
+        assistant_id=payload.assistant_id,
+    )
+    if not assistant_data or not assistant_data.get("assistant_id"):
+        logger.info(
+            "Skipping coordinator_delegate delivery because assistant %s no longer exists",
+            payload.assistant_id,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "assistant_not_found",
+        }
+
+    assistant_id = assistant_data["assistant_id"]
+    wake_reason = _build_coordinator_delegate_reason(payload)
+    message = _coordinator_delegate_message(payload)
+
+    try:
+        if uses_local_unity_runtime(assistant_data):
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="coordinator_delegate",
+                message=message,
+                extra_event_fields=wake_reason,
+            )
+            return {
+                "success": True,
+                "status": "published_local",
+                "assistant_id": assistant_id,
+            }
+
+        response = await asyncio.to_thread(
+            dispatch_unity_start_intent,
+            assistant_data,
+            "api_message",
+            wake_reasons=[wake_reason],
+            timeout_seconds=30,
+        )
+    except requests.RequestException as exc:
+        logger.error(
+            "Failed dispatching coordinator_delegate wake for assistant %s: %s",
+            assistant_id,
+            exc,
+        )
+        return Response(
+            content=f"Failed to dispatch coordinator_delegate wake: {exc}",
+            status_code=500,
+        )
+
+    if response is None:
+        return Response(
+            content="Assistant is missing an API key for coordinator_delegate delivery",
+            status_code=500,
+        )
+    if response.status_code != 200:
+        return Response(content=response.text, status_code=response.status_code)
+
+    try:
+        start_result = response.json()
+    except ValueError as exc:
+        logger.error(
+            "Invalid /infra/job/start response for coordinator_delegate: %s",
+            exc,
+        )
+        return Response(
+            content="Invalid /infra/job/start response",
+            status_code=500,
+        )
+
+    if start_result.get("active_session_already_running"):
+        try:
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="coordinator_delegate",
+                message=message,
+                extra_event_fields=wake_reason,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed publishing coordinator_delegate system event for assistant %s: %s",
+                assistant_id,
+                exc,
+            )
+            return Response(
+                content=f"Failed to publish coordinator_delegate system event: {exc}",
                 status_code=500,
             )
         return {
