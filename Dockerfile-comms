@@ -22,6 +22,24 @@ RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") &
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unillm.git /tmp/unillm && \
     pip install --no-cache-dir /tmp/unillm
 
+# Pre-install URL-sourced spacy model so the subsequent unity install
+# finds it already-satisfied. The model wheel is not on PyPI; unity's
+# pyproject declares it via [tool.uv.sources] which only uv reads, so
+# the pip-based install in this image needs the wheel already in
+# site-packages for unity's dependency check to succeed.
+RUN pip install --no-cache-dir \
+    https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
+# Clone and install unity (Phase C.2). Provides the unity.gateway
+# channels and the unity.gateway.app.create_app() factory that
+# communication/main.py composes on top of in Phase C.3. unify and
+# unillm are already installed above so unity's pyproject deps for
+# them are already-satisfied. The image carries unity as a dormant
+# dependency until C.3 wires it in.
+RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
+    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
+    pip install --no-cache-dir /tmp/unity
+
 # Copy package metadata and source before install so the runtime package in
 # site-packages matches the application code and bundled script assets.
 COPY pyproject.toml README.md ./
