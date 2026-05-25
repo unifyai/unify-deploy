@@ -201,6 +201,38 @@ def _job_terminal_phase(job) -> str | None:
     return None
 
 
+def _binding_owned_job_image(job) -> str | None:
+    """Return the Unity container image pinned on a binding-owned Job."""
+
+    try:
+        containers = job.spec.template.spec.containers or []
+    except AttributeError:
+        return None
+    if not containers:
+        return None
+    image = str(getattr(containers[0], "image", "") or "").strip()
+    return image or None
+
+
+def _preview_override_job_is_current(
+    job,
+    *,
+    image_override: str | None,
+) -> bool:
+    """Return whether a binding-owned Job still satisfies ``image_override``.
+
+    When no override is configured, any live binding job is treated as current.
+    Terminal jobs are never current because the binding needs a replacement.
+    """
+
+    if not image_override:
+        return True
+    if _job_terminal_phase(job) is not None:
+        return False
+    job_image = _binding_owned_job_image(job)
+    return bool(job_image) and job_image == image_override
+
+
 def _current_pod_ref(job_name: str) -> dict | None:
     assert _core_api is not None
     pods = _core_api.list_namespaced_pod(
@@ -705,17 +737,56 @@ def _claim_idle_job_for_binding(
 
     existing_job = _job_for_binding(session_name, binding)
     if existing_job is not None:
-        emit_observability_event(
-            "controller.pending_job_stage",
-            assistant_id=assistant_id,
-            session_name=session_name,
-            binding_id=current_binding_id,
-            job_name=existing_job.metadata.name,
-            stage="reuse_existing_job",
-            stage_state="completed",
-            source="controller.reconcile",
-        )
-        return existing_job
+        if _preview_override_job_is_current(
+            existing_job,
+            image_override=image_override,
+        ):
+            emit_observability_event(
+                "controller.pending_job_stage",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding_id=current_binding_id,
+                job_name=existing_job.metadata.name,
+                stage="reuse_existing_job",
+                stage_state="completed",
+                source="controller.reconcile",
+                image_override=image_override,
+            )
+            return existing_job
+
+        if _job_terminal_phase(existing_job) is None:
+            stale_job_name = str(existing_job.metadata.name or "")
+            emit_observability_event(
+                "controller.pending_job_stage",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding_id=current_binding_id,
+                job_name=stale_job_name,
+                stage="replace_stale_override_job",
+                stage_state="started",
+                source="controller.reconcile",
+                image_override=image_override,
+                stale_job_image=_binding_owned_job_image(existing_job),
+            )
+            _suspend_bound_job(
+                existing_job,
+                assistant_id=assistant_id,
+                binding_id=current_binding_id,
+                source="controller.reconcile",
+                intent=SUSPEND_INTENT_REPLACE,
+                source_reason="image_override_mismatch",
+            )
+            emit_observability_event(
+                "controller.pending_job_stage",
+                assistant_id=assistant_id,
+                session_name=session_name,
+                binding_id=current_binding_id,
+                job_name=stale_job_name,
+                stage="replace_stale_override_job",
+                stage_state="completed",
+                source="controller.reconcile",
+                image_override=image_override,
+            )
 
     if image_override:
         return _spawn_fresh_job_for_binding(
@@ -896,19 +967,26 @@ def _claim_and_bind_pending_job(
         holder_id=holder_id,
     )
     try:
-        job = _job_for_binding(session_name, binding)
-        newly_claimed = False
-        if job is None:
-            job = _claim_idle_job_for_binding(
-                assistant_id,
-                session_name,
-                binding,
+        job_before = _job_for_binding(session_name, binding)
+        job_before_name = (
+            str(job_before.metadata.name or "")
+            if job_before is not None
+            and _preview_override_job_is_current(
+                job_before,
                 image_override=image_override,
-                runtime_service_env=runtime_service_env,
             )
-            if job is None:
-                return _JOB_CLAIM_RESULT_CAPACITY
-            newly_claimed = True
+            else ""
+        )
+        job = _claim_idle_job_for_binding(
+            assistant_id,
+            session_name,
+            binding,
+            image_override=image_override,
+            runtime_service_env=runtime_service_env,
+        )
+        if job is None:
+            return _JOB_CLAIM_RESULT_CAPACITY
+        newly_claimed = str(job.metadata.name or "") != job_before_name
 
         claim_origin = "claimed_idle" if newly_claimed else "existing_binding_job"
         pod_ref = _current_pod_ref(job.metadata.name)
