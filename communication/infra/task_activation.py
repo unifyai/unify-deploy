@@ -24,6 +24,15 @@ from google.protobuf import duration_pb2, timestamp_pb2
 from common.assistant_lookup import get_assistant
 from common.settings import SETTINGS
 
+# Single source of truth for the offline-runner subprocess contract.
+# Imported from Unity so the hosted K8s job and the local in-process
+# subprocess produce identical env-var dicts and run-keys for the same
+# attempt. See unity.task_scheduler.offline_runner_contract for details.
+from unity.task_scheduler.offline_runner_contract import (
+    build_offline_run_key as _build_offline_run_key_shared,
+    build_offline_runner_env as _build_offline_runner_env_shared,
+)
+
 from .helpers import create_unity_job
 from .models import (
     OfflineTaskDispatchRequest,
@@ -542,28 +551,25 @@ def _request_scheduled_for_iso(request: OfflineTaskDispatchRequest) -> str | Non
 
 
 def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
-    """Build a stable idempotency key for one offline execution attempt."""
+    """Build a stable idempotency key for one offline execution attempt.
 
-    revision_digest = hashlib.sha256(
-        request.activation_revision.encode("utf-8"),
-    ).hexdigest()[:12]
-    tail_parts = []
-    if request.scheduled_for is not None:
-        tail_parts.append(
-            request.scheduled_for.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
-        )
-    if request.source_contact_id is not None:
-        tail_parts.append(f"contact-{request.source_contact_id}")
-    if request.source_medium:
-        tail_parts.append(_normalize_task_id_component(request.source_medium)[:24])
-    if request.source_ref:
-        tail_parts.append(
-            hashlib.sha256(request.source_ref.encode("utf-8")).hexdigest()[:12],
-        )
-    tail = "-".join(tail_parts) or "once"
-    return (
-        f"offline:{request.source_type}:{request.assistant_id}:"
-        f"{request.task_id}:{revision_digest}:{tail}"
+    Thin adapter over the shared
+    :func:`unity.task_scheduler.offline_runner_contract.build_offline_run_key`
+    so the hosted K8s path and the local in-process path produce
+    identical keys for the same attempt. If those keys ever diverged
+    Orchestra's create-or-adopt path would fail to deduplicate
+    concurrent attempts across topologies.
+    """
+
+    return _build_offline_run_key_shared(
+        assistant_id=request.assistant_id,
+        task_id=request.task_id,
+        activation_revision=request.activation_revision,
+        source_type=request.source_type,
+        scheduled_for=request.scheduled_for,
+        source_contact_id=request.source_contact_id,
+        source_medium=request.source_medium,
+        source_ref=request.source_ref,
     )
 
 
@@ -584,73 +590,98 @@ def _build_offline_runner_env(
     run_key: str,
     job_name: str,
 ) -> dict[str, str]:
-    """Build environment variables for the headless Unity offline runner."""
+    """Build environment variables for the headless Unity offline runner.
 
-    team_ids = assistant_data.get("team_ids") or []
-    task_request = (
-        str(activation.get("task_description") or "").strip()
-        or str(activation.get("task_name") or "").strip()
-        or f"Execute task {request.task_id}"
-    )
+    Composes two layers:
+
+    1. The task-specific UNITY_OFFLINE_TASK_* + ASSISTANT_ID vars from
+       Unity's shared
+       :func:`unity.task_scheduler.offline_runner_contract.build_offline_runner_env`
+       — same source of truth the local in-process dispatcher uses. If
+       this drifts, the hosted K8s job and the local subprocess would
+       see different field shapes for the same task; the shared module
+       prevents that by construction.
+
+    2. Hosted-only assistant-identity vars (UNIFY_KEY, ASSISTANT_*, USER_*,
+       VOICE_*, TEAM_IDS, ORG_ID). Local subprocesses inherit these from
+       the parent conversation-manager's os.environ, so they live in
+       Unity already; K8s jobs start in a fresh container and must
+       receive them here.
+    """
+
     entrypoint = activation.get("entrypoint") or request.entrypoint
-    return {
-        "UNITY_OFFLINE_TASK_MODE": "actor",
-        "EVENTBUS_PUBLISHING_ENABLED": "false",
-        "EVENTBUS_PUBSUB_STREAMING": "false",
-        "UNITY_OFFLINE_TASK_RUN_KEY": run_key,
-        "UNITY_OFFLINE_TASK_JOB_NAME": job_name,
-        "UNITY_OFFLINE_TASK_ID": str(request.task_id),
-        "UNITY_OFFLINE_TASK_SOURCE_TASK_LOG_ID": str(request.source_task_log_id),
-        "UNITY_OFFLINE_TASK_ACTIVATION_REVISION": request.activation_revision,
-        "UNITY_OFFLINE_TASK_FUNCTION_ID": str(int(entrypoint)) if entrypoint else "",
-        "UNITY_OFFLINE_TASK_REQUEST": task_request,
-        "UNITY_OFFLINE_TASK_NAME": str(activation.get("task_name") or ""),
-        "UNITY_OFFLINE_TASK_DESCRIPTION": str(activation.get("task_description") or ""),
-        "UNITY_OFFLINE_TASK_SOURCE_TYPE": request.source_type,
-        "UNITY_OFFLINE_TASK_SCHEDULED_FOR": _request_scheduled_for_iso(request) or "",
-        "UNITY_OFFLINE_TASK_SOURCE_REF": request.source_ref or "",
-        "UNITY_OFFLINE_TASK_SOURCE_MEDIUM": (
+    # Layer 1 — shared task-specific env (single source of truth in Unity).
+    env = _build_offline_runner_env_shared(
+        assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
+        task_id=request.task_id,
+        source_task_log_id=request.source_task_log_id,
+        activation_revision=request.activation_revision,
+        source_type=request.source_type,
+        run_key=run_key,
+        task_name=str(activation.get("task_name") or ""),
+        task_description=str(activation.get("task_description") or ""),
+        scheduled_for=request.scheduled_for,
+        source_ref=request.source_ref,
+        source_medium=(
             request.source_medium or str(activation.get("trigger_medium") or "")
         ),
-        "UNITY_OFFLINE_TASK_SOURCE_CONTACT_ID": (
-            str(request.source_contact_id)
-            if request.source_contact_id is not None
-            else ""
-        ),
-        "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
-        "ASSISTANT_ID": str(assistant_data.get("assistant_id") or request.assistant_id),
-        "ASSISTANT_FIRST_NAME": str(assistant_data.get("assistant_first_name") or ""),
-        "ASSISTANT_SURNAME": str(assistant_data.get("assistant_surname") or ""),
-        "ASSISTANT_AGE": str(assistant_data.get("assistant_age") or ""),
-        "ASSISTANT_NATIONALITY": str(assistant_data.get("assistant_nationality") or ""),
-        "ASSISTANT_TIMEZONE": str(assistant_data.get("assistant_timezone") or "UTC"),
-        "ASSISTANT_ABOUT": str(assistant_data.get("assistant_about") or ""),
-        "ASSISTANT_JOB_TITLE": str(assistant_data.get("assistant_job_title") or ""),
-        "ASSISTANT_NUMBER": str(assistant_data.get("assistant_number") or ""),
-        "ASSISTANT_EMAIL": str(assistant_data.get("assistant_email") or ""),
-        "ASSISTANT_WHATSAPP_NUMBER": str(
-            assistant_data.get("assistant_whatsapp_number") or "",
-        ),
-        "ASSISTANT_DESKTOP_MODE": "none",
-        "ASSISTANT_USER_DESKTOP_MODE": "",
-        "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
-        "ASSISTANT_USER_DESKTOP_URL": "",
-        "USER_ID": str(assistant_data.get("user_id") or ""),
-        "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
-        "USER_SURNAME": str(assistant_data.get("user_surname") or ""),
-        "USER_NUMBER": str(assistant_data.get("user_number") or ""),
-        "USER_EMAIL": str(assistant_data.get("user_email") or ""),
-        "USER_WHATSAPP_NUMBER": str(assistant_data.get("user_whatsapp_number") or ""),
-        "VOICE_PROVIDER": str(assistant_data.get("voice_provider") or "cartesia"),
-        "VOICE_ID": str(assistant_data.get("voice_id") or ""),
-        "VOICE_MODE": "tts",
-        "TEAM_IDS": ",".join(str(team_id) for team_id in team_ids),
-        "ORG_ID": (
-            str(assistant_data.get("org_id"))
-            if assistant_data.get("org_id") is not None
-            else ""
-        ),
-    }
+        source_contact_id=request.source_contact_id,
+        entrypoint=entrypoint,
+        job_name=job_name,
+    )
+    # Layer 2 — hosted-only assistant / user / voice identity, plus org and
+    # transport vars the K8s job needs in env because there is no parent
+    # process to inherit from. Local subprocesses skip this layer.
+    team_ids = assistant_data.get("team_ids") or []
+    env.update(
+        {
+            "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
+            "ASSISTANT_FIRST_NAME": str(
+                assistant_data.get("assistant_first_name") or "",
+            ),
+            "ASSISTANT_SURNAME": str(assistant_data.get("assistant_surname") or ""),
+            "ASSISTANT_AGE": str(assistant_data.get("assistant_age") or ""),
+            "ASSISTANT_NATIONALITY": str(
+                assistant_data.get("assistant_nationality") or "",
+            ),
+            "ASSISTANT_TIMEZONE": str(
+                assistant_data.get("assistant_timezone") or "UTC",
+            ),
+            "ASSISTANT_ABOUT": str(assistant_data.get("assistant_about") or ""),
+            "ASSISTANT_JOB_TITLE": str(
+                assistant_data.get("assistant_job_title") or "",
+            ),
+            "ASSISTANT_NUMBER": str(assistant_data.get("assistant_number") or ""),
+            "ASSISTANT_EMAIL": str(assistant_data.get("assistant_email") or ""),
+            "ASSISTANT_WHATSAPP_NUMBER": str(
+                assistant_data.get("assistant_whatsapp_number") or "",
+            ),
+            "ASSISTANT_DESKTOP_MODE": "none",
+            "ASSISTANT_USER_DESKTOP_MODE": "",
+            "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
+            "ASSISTANT_USER_DESKTOP_URL": "",
+            "USER_ID": str(assistant_data.get("user_id") or ""),
+            "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
+            "USER_SURNAME": str(assistant_data.get("user_surname") or ""),
+            "USER_NUMBER": str(assistant_data.get("user_number") or ""),
+            "USER_EMAIL": str(assistant_data.get("user_email") or ""),
+            "USER_WHATSAPP_NUMBER": str(
+                assistant_data.get("user_whatsapp_number") or "",
+            ),
+            "VOICE_PROVIDER": str(
+                assistant_data.get("voice_provider") or "cartesia",
+            ),
+            "VOICE_ID": str(assistant_data.get("voice_id") or ""),
+            "VOICE_MODE": "tts",
+            "TEAM_IDS": ",".join(str(team_id) for team_id in team_ids),
+            "ORG_ID": (
+                str(assistant_data.get("org_id"))
+                if assistant_data.get("org_id") is not None
+                else ""
+            ),
+        },
+    )
+    return env
 
 
 def _get_assistant_data(assistant_id: str) -> dict[str, Any]:
