@@ -26,6 +26,15 @@ steps:
     docker run --rm \
       ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
       python -m unity_deploy.infra.cli.pipeline_control reconcile-dlq --help >/dev/null
+    docker run --rm \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
+      python -m unity_deploy.infra.cli.pipeline_control reconcile-stale --help >/dev/null
+    docker run --rm \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
+      python -m unity_deploy.infra.cli.pipeline_control recover-stale --help >/dev/null
+    docker run --rm \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
+      python -m unity_deploy.infra.cli.pipeline_control worker-refresh-check --help >/dev/null
   waitFor: ['build-image']
 
   # Push Docker Image (SHA and latest tags in parallel)
@@ -147,12 +156,6 @@ steps:
       deployment="$$1"
       namespace="$$2"
       previous_rs="$$3"
-      desired="$$(kubectl get deployment "$$deployment" -n "$$namespace" -o jsonpath='{.spec.replicas}')"
-      desired="$${desired:-1}"
-      if [ "$$desired" = "0" ]; then
-        echo "$$deployment has 0 desired replicas; skipping readiness wait."
-        return 0
-      fi
 
       echo "Waiting for $$deployment to create a new ReplicaSet..."
       rs_deadline=$$(($$SECONDS + 300))
@@ -172,10 +175,19 @@ steps:
         return 1
       fi
 
-      echo "Waiting for new ReplicaSet $$new_rs to have $$desired available replica(s)..."
+      echo "Waiting for Kubernetes rollout status for $$deployment..."
+      kubectl rollout status deployment/"$$deployment" -n "$$namespace" --timeout=900s
+
+      echo "Waiting for new ReplicaSet $$new_rs to match current HPA desired replicas..."
       availability_deadline=$$(($$SECONDS + 900))
       next_log=$$SECONDS
       while [ "$$SECONDS" -lt "$$availability_deadline" ]; do
+        desired="$$(kubectl get deployment "$$deployment" -n "$$namespace" -o jsonpath='{.spec.replicas}')"
+        desired="$${desired:-1}"
+        if [ "$$desired" = "0" ]; then
+          echo "$$deployment has 0 desired replicas; skipping readiness wait."
+          return 0
+        fi
         available="$$(kubectl get rs "$$new_rs" -n "$$namespace" -o jsonpath='{.status.availableReplicas}')"
         available="$${available:-0}"
         if [ "$$available" -ge "$$desired" ]; then
@@ -196,10 +208,40 @@ steps:
 
       echo "Timed out waiting for new ReplicaSet $$new_rs to become available" >&2
       kubectl describe deployment "$$deployment" -n "$$namespace" || true
+      kubectl get hpa -n "$$namespace" || true
+      kubectl describe hpa -n "$$namespace" || true
+      kubectl get rs -n "$$namespace" || true
       kubectl describe rs "$$new_rs" -n "$$namespace" || true
       pod_hash="$${new_rs#$$deployment-}"
       kubectl describe pods -n "$$namespace" -l "app=$$deployment,pod-template-hash=$$pod_hash" || true
       return 1
+    }
+
+    worker_refresh_check() {
+      pod="unity-worker-refresh-check-${SHORT_SHA}"
+      extra_args="$$*"
+      kubectl delete pod "$$pod" -n production --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+      echo "Checking pipeline state..."
+      set +e
+      kubectl run "$$pod" \
+        -n production \
+        --rm \
+        -i \
+        --attach=true \
+        --restart=Never \
+        --pod-running-timeout=5m \
+        --serviceaccount=unity-pipeline-worker \
+        --image="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+        --env="UNITY_GCP_PIPELINE_ENVIRONMENT=production" \
+        --env="UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts" \
+        --env="UNITY_PUBSUB_PROJECT_ID=${PROJECT_ID}" \
+        --env="ORCHESTRA_URL=${_ORCHESTRA_URL}" \
+        --command -- python -m unity_deploy.infra.cli.pipeline_control \
+          worker-refresh-check --env production --dispatch-limit 20 --json $$extra_args
+      rc="$$?"
+      set -e
+      kubectl delete pod "$$pod" -n production --ignore-not-found=true --wait=false >/dev/null 2>&1 || true
+      return "$$rc"
     }
 
     echo "Applying production pipeline worker manifests..."
@@ -207,11 +249,24 @@ steps:
     kubectl apply -f deploy/k8s/workers/parse-worker-deployment.yaml
     kubectl apply -f deploy/k8s/workers/ingest-worker-deployment.yaml
     kubectl apply -f deploy/k8s/workers/dlq-reconciler-cronjob.yaml -l environment=production
+    kubectl apply -f deploy/k8s/workers/stale-reconciler-cronjob.yaml -l environment=production
     kubectl set image cronjob/unity-pipeline-dlq-reconciler \
       dlq-reconciler="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
       -n production
+    kubectl set image cronjob/unity-pipeline-stale-reconciler \
+      stale-reconciler="${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+      -n production
     kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml
     kubectl apply -f deploy/k8s/workers/failed-pod-gc-cronjob.yaml
+
+    if ! worker_refresh_check; then
+      if [ "${_FORCE_WORKER_REFRESH}" != "true" ]; then
+        echo "Skipping worker rollout restart because active/queued/stale pipeline work exists."
+        echo "Set _FORCE_WORKER_REFRESH=true only for a controlled maintenance refresh."
+        exit 0
+      fi
+      echo "_FORCE_WORKER_REFRESH=true; continuing despite active pipeline work."
+    fi
 
     previous_parse_rs="$$(latest_replicaset unity-parse-worker production || true)"
     previous_ingest_rs="$$(latest_replicaset unity-ingest-worker production || true)"
@@ -223,6 +278,11 @@ steps:
 
     wait_for_new_replicaset_available unity-parse-worker production "$$previous_parse_rs"
     wait_for_new_replicaset_available unity-ingest-worker production "$$previous_ingest_rs"
+    if ! worker_refresh_check --allow-active --allow-queued; then
+      echo "Post-refresh verification found stale or DLQ pipeline work." >&2
+      echo "Inspect with pipeline_control status/reconcile-stale before considering the refresh healthy." >&2
+      exit 1
+    fi
     echo "Worker refresh complete; old pods may continue draining asynchronously."
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
@@ -237,6 +297,7 @@ substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'unity'
   _CLUSTER: 'unity'
+  _FORCE_WORKER_REFRESH: 'false'
   _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest'
   _ORCHESTRA_URL: 'https://api.unify.ai/v0'
   _UNITY_COMMS_URL: 'https://unity-comms-app-000000000000.us-central1.run.app'

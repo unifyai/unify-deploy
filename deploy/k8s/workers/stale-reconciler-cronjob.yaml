@@ -1,0 +1,108 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unity-pipeline-stale-reconciler
+  namespace: staging
+  labels:
+    app: unity-pipeline-stale-reconciler
+    component: pipeline-maintenance
+    environment: staging
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 1800
+      template:
+        metadata:
+          labels:
+            app: unity-pipeline-stale-reconciler
+            component: pipeline-maintenance
+            environment: staging
+        spec:
+          serviceAccountName: unity-pipeline-worker
+          restartPolicy: Never
+          containers:
+          - name: stale-reconciler
+            image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity-staging:latest
+            command:
+            - python
+            - -m
+            - unity_deploy.infra.cli.pipeline_control
+            - reconcile-stale
+            - --env
+            - staging
+            - --dispatch-limit
+            - "20"
+            - --max-jobs
+            - "5"
+            env:
+            - name: UNITY_STALE_RECONCILER_DRY_RUN
+              value: "true"
+            - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+              value: "staging"
+            - name: UNITY_GCS_ARTIFACT_BUCKET
+              value: "unity-pipeline-artifacts-staging"
+            - name: UNITY_PUBSUB_PROJECT_ID
+              value: "gcp-project-runtime"
+            - name: ORCHESTRA_URL
+              value: "https://internal.example.com/v0"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unity-pipeline-stale-reconciler
+  namespace: production
+  labels:
+    app: unity-pipeline-stale-reconciler
+    component: pipeline-maintenance
+    environment: production
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 1800
+      template:
+        metadata:
+          labels:
+            app: unity-pipeline-stale-reconciler
+            component: pipeline-maintenance
+            environment: production
+        spec:
+          serviceAccountName: unity-pipeline-worker
+          restartPolicy: Never
+          containers:
+          - name: stale-reconciler
+            image: us-central1-docker.pkg.dev/gcp-project-runtime/unity/unity:latest
+            command:
+            - python
+            - -m
+            - unity_deploy.infra.cli.pipeline_control
+            - reconcile-stale
+            - --env
+            - production
+            - --dispatch-limit
+            - "20"
+            - --max-jobs
+            - "5"
+            env:
+            - name: UNITY_STALE_RECONCILER_DRY_RUN
+              value: "true"
+            - name: UNITY_GCP_PIPELINE_ENVIRONMENT
+              value: "production"
+            - name: UNITY_GCS_ARTIFACT_BUCKET
+              value: "unity-pipeline-artifacts"
+            - name: UNITY_PUBSUB_PROJECT_ID
+              value: "gcp-project-runtime"
+            - name: ORCHESTRA_URL
+              value: "https://api.unify.ai/v0"
