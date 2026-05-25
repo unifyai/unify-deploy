@@ -261,6 +261,11 @@ class JobObservabilitySnapshot(BaseModel):
     retry_classification: RetryClassification | str = ""
     retry_eligible: bool = False
     next_action: str = ""
+    status_reason: str = ""
+    latest_heartbeat_age_seconds: int | None = None
+    checkpoint_complete: bool | None = None
+    retry_payload_source: str = ""
+    recovery_action: str = ""
     dlq_records: list[PipelineDlqRecord] = Field(default_factory=list)
     checkpoints: dict[str, IngestCheckpoint] = Field(default_factory=dict)
     events: list[PipelineJobEvent] = Field(default_factory=list)

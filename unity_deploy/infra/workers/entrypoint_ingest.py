@@ -32,12 +32,43 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import os
+import random
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 _current_receipt: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "current_ingest_receipt",
     default=None,
 )
+
+
+def _parse_expiry_seconds(expires_at: str) -> float | None:
+    if not expires_at:
+        return None
+    text = expires_at.replace("Z", "+00:00")
+    try:
+        expires = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return (expires - datetime.now(timezone.utc)).total_seconds()
+
+
+def _duplicate_defer_seconds(expires_at: str) -> int:
+    default_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_SECONDS", "300"))
+    max_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_MAX_SECONDS", "600"))
+    jitter_seconds = int(os.environ.get("UNITY_DUPLICATE_DEFER_JITTER_SECONDS", "30"))
+    until_expiry = _parse_expiry_seconds(expires_at)
+    if until_expiry is None:
+        base = default_seconds
+    else:
+        # Wake shortly after the current GCS owner lease should have expired.
+        base = max(0, int(until_expiry) + 5)
+    if base > 0 and jitter_seconds > 0:
+        base += random.randint(0, jitter_seconds)
+    return max(0, min(base, max_seconds))
 
 
 async def main() -> None:
@@ -177,20 +208,62 @@ async def main() -> None:
                         lease_outcome = "ack"
                     except DuplicateLiveAttempt as exc:
                         lease = exc.lease
+                        max_deferrals = int(
+                            os.environ.get("UNITY_DUPLICATE_DEFER_MAX_ATTEMPTS", "12"),
+                        )
+                        delivery_attempt = int(item.delivery_attempt or 0)
+                        defer_seconds = _duplicate_defer_seconds(
+                            str(getattr(lease, "expires_at", "") or ""),
+                        )
+                        if delivery_attempt >= max_deferrals:
+                            record_worker_event(
+                                infra,
+                                item,
+                                event_type="duplicate_live_attempt_dead_lettered",
+                                stage="ingest",
+                                error=str(exc),
+                                next_action="dead_letter_duplicate",
+                                metadata={
+                                    "active_owner": getattr(lease, "owner_id", ""),
+                                    "active_expires_at": getattr(
+                                        lease,
+                                        "expires_at",
+                                        "",
+                                    ),
+                                    "delivery_attempt": delivery_attempt,
+                                    "max_deferrals": max_deferrals,
+                                },
+                            )
+                            await infra.work_queue.dead_letter(
+                                item.receipt_id,
+                                error=(
+                                    "duplicate live attempt deferral budget exhausted: "
+                                    f"{exc}"
+                                ),
+                            )
+                            lease_outcome = "ack"
+                            continue
                         record_worker_event(
                             infra,
                             item,
-                            event_type="duplicate_live_attempt_acked",
+                            event_type="duplicate_live_attempt_deferred",
                             stage="ingest",
                             error=str(exc),
-                            next_action="ack_duplicate",
+                            next_action="defer_duplicate",
                             metadata={
                                 "active_owner": getattr(lease, "owner_id", ""),
                                 "active_expires_at": getattr(lease, "expires_at", ""),
+                                "delay_seconds": defer_seconds,
+                                "delivery_attempt": delivery_attempt,
+                                "max_deferrals": max_deferrals,
                             },
                         )
-                        await infra.work_queue.ack(item.receipt_id)
-                        lease_outcome = "ack"
+                        await infra.work_queue.retry(
+                            item.receipt_id,
+                            error=str(exc),
+                            delay_seconds=defer_seconds,
+                        )
+                        lease_outcome = "error"
                     except RetryWorkItem as exc:
                         record_worker_event(
                             infra,
@@ -223,8 +296,6 @@ async def main() -> None:
                         )
                         lease_outcome = "ack"
                     finally:
-                        if is_shutdown_requested() and lease_outcome == "error":
-                            lease_outcome = "nack"
                         lease_extender.stop(outcome=lease_outcome)
                         if heartbeat_ledger is not None:
                             try:

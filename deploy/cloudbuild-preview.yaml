@@ -12,35 +12,58 @@
 # does not own the staging warm pool or staging pipeline workers.
 
 steps:
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'build-image'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        set -euo pipefail
-        echo "Base image: ${_BASE_IMAGE}"
-        echo "Unity tag:  ${_UNITY_TAG}"
-        echo "Slug:       ${_SLUG}"
-        DOCKER_BUILDKIT=1 docker build \
-          --build-arg BASE_IMAGE=${_BASE_IMAGE} \
-          -f deploy/Dockerfile \
-          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG} .
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-image'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    echo "Base image: ${_BASE_IMAGE}"
+    echo "Unity tag:  ${_UNITY_TAG}"
+    echo "Slug:       ${_SLUG}"
+    DOCKER_BUILDKIT=1 docker build \
+      --build-arg BASE_IMAGE=${_BASE_IMAGE} \
+      -f deploy/Dockerfile \
+      -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG} .
 
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'push-image'
-    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG}']
-    waitFor: ['build-image']
+  # Preview does not own singleton staging pipeline workers, but it still
+  # builds the overlay image. Keep maintenance CLI smoke coverage aligned
+  # with staging/production before publishing the image.
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'smoke-pipeline-cli'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker run --rm \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG} \
+      python -m unity_deploy.infra.cli.pipeline_control reconcile-dlq --help >/dev/null
+    docker run --rm \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG} \
+      python -m unity_deploy.infra.cli.pipeline_control reconcile-stale --help >/dev/null
+    docker run --rm \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG} \
+      python -m unity_deploy.infra.cli.pipeline_control recover-stale --help >/dev/null
+    docker run --rm \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG} \
+      python -m unity_deploy.infra.cli.pipeline_control worker-refresh-check --help >/dev/null
+  waitFor: ['build-image']
 
-  - name: 'gcr.io/cloud-builders/gsutil'
-    id: 'upload-sha'
-    entrypoint: 'bash'
-    args:
-      - '-c'
-      - |
-        echo ${_UNITY_TAG} | gsutil cp - gs://bucket/image_hash_staging_${_SLUG}.txt
-        echo "Uploaded ${_UNITY_TAG} to gs://bucket/image_hash_staging_${_SLUG}.txt"
-    waitFor: ['push-image']
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-image'
+  args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG}']
+  waitFor: ['smoke-pipeline-cli']
+
+- name: 'gcr.io/cloud-builders/gsutil'
+  id: 'upload-sha'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    echo ${_UNITY_TAG} | gsutil cp - gs://bucket/image_hash_staging_${_SLUG}.txt
+    echo "Uploaded ${_UNITY_TAG} to gs://bucket/image_hash_staging_${_SLUG}.txt"
+  waitFor: ['push-image']
 
 options:
   substitutionOption: ALLOW_LOOSE

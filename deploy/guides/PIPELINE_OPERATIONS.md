@@ -214,9 +214,11 @@ kubectl get deployment unity-ingest-worker -n production \
 
 Every push to the staging or production branch runs the corresponding
 Cloud Build file. The worker refresh step applies worker Deployments,
-HPAs, PDBs, weekly rollout CronJobs, DLQ reconciler CronJobs, and
-failed-pod GC CronJobs, then restarts parse and ingest workers to pick
-up the new image.
+HPAs, PDBs, weekly rollout CronJobs, DLQ/stale reconciler CronJobs, and
+failed-pod GC CronJobs. Production worker restarts are gated by
+`pipeline_control worker-refresh-check`; active, queued, stale, or DLQ
+pipeline work skips the rollout unless `_FORCE_WORKER_REFRESH=true` is
+set for a controlled maintenance refresh.
 
 Manual reconciliation:
 
@@ -231,6 +233,7 @@ gsutil lifecycle set deploy/k8s/workers/gcs-lifecycle-rules.json \
 kubectl apply -f deploy/k8s/workers/failed-pod-gc-cronjob.yaml
 kubectl apply -f deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml
 kubectl apply -f deploy/k8s/workers/dlq-reconciler-cronjob.yaml
+kubectl apply -f deploy/k8s/workers/stale-reconciler-cronjob.yaml
 
 # Staging workers.
 kubectl apply -f deploy/k8s/workers/parse-worker-deployment_staging.yaml
@@ -256,14 +259,20 @@ checkpoint. Parse has no equivalent per-chunk resume state, so it keeps a
 larger grace window.
 
 Rollouts use `maxSurge: 100%` and `maxUnavailable: 0`, so new pods come up
-before old pods drain. Do not intentionally roll worker deployments while a
-million-row ingest is in flight unless you are accepting resume/replay work.
+before old pods drain. SIGTERM now stops new pulls without immediately
+NACKing in-flight receipts; the active handler keeps extending Pub/Sub
+leases and heartbeats while it finishes. Do not intentionally roll worker
+deployments while a million-row ingest is in flight unless you have checked
+`worker-refresh-check` or are using `_FORCE_WORKER_REFRESH=true` as a
+break-glass maintenance path.
 
 ## Scheduled Maintenance
 
-`deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml` restarts parse and
-ingest workers in both `staging` and `production` every Sunday at 03:00 UTC.
-It defines one CronJob per environment namespace.
+`deploy/k8s/workers/workers-weekly-rollout-cronjob.yaml` defines the old
+Sunday 03:00 UTC restart path for both environments, but it is suspended by
+default. Use the Cloud Build `worker-refresh-check` gated refresh or a
+manual maintenance window instead of re-enabling unconditional scheduled
+worker restarts.
 
 `deploy/k8s/workers/failed-pod-gc-cronjob.yaml` removes stale `Failed` and
 `Unknown` pods labeled `component=pipeline-worker` every 10 minutes in both
@@ -284,7 +293,15 @@ kubectl get cronjob unity-failed-pod-gc -n staging
 kubectl get cronjob unity-failed-pod-gc -n production
 kubectl get cronjob unity-pipeline-dlq-reconciler -n staging
 kubectl get cronjob unity-pipeline-dlq-reconciler -n production
+kubectl get cronjob unity-pipeline-stale-reconciler -n staging
+kubectl get cronjob unity-pipeline-stale-reconciler -n production
 ```
+
+`deploy/k8s/workers/stale-reconciler-cronjob.yaml` runs
+`pipeline_control reconcile-stale` every 15 minutes with a low job budget.
+It is installed dry-run first: omit `--execute` until staging confirms the
+plan output, then enable execution with bounded `--max-jobs` and
+`--max-attempts`.
 
 ## DLQ Recovery Runbook
 
@@ -338,6 +355,42 @@ uv run python -m unity_deploy.infra.cli.pipeline_control retry \
 For staging, use `UNITY_GCP_PIPELINE_ENVIRONMENT=staging`,
 `UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts-staging`, and
 `--env staging`.
+
+## Running-Stale Recovery
+
+`running-stale` means the durable job record is still `running`, but there is
+no fresh heartbeat or active GCS attempt lease. These jobs should not be
+retried with the DLQ-only path unless a DLQ record exists. Use stale recovery
+so the CLI can read `jobs/<job_id>/outbox/parse.json` and current checkpoints:
+
+```bash
+UNITY_GCP_PIPELINE_ENVIRONMENT=production \
+UNITY_GCS_ARTIFACT_BUCKET=unity-pipeline-artifacts \
+UNITY_PUBSUB_PROJECT_ID=gcp-project-runtime \
+uv run python -m unity_deploy.infra.cli.pipeline_control recover-stale \
+  --env production \
+  --dispatch-id <dispatch-id> \
+  --dry-run
+```
+
+Dry-run output shows `payload_source`, checkpoint completeness,
+`finalize_success`, `republish_ingest`, or `needs_operator`, plus the
+row/chunk counts that a resumed ingest will skip. Execute only after checking
+that complete jobs will finalize and partial jobs will republish from
+`parse_outbox`:
+
+```bash
+uv run python -m unity_deploy.infra.cli.pipeline_control recover-stale \
+  --env production \
+  --dispatch-id <dispatch-id> \
+  --execute \
+  --max-jobs 5
+```
+
+The automatic reconciler uses the same rules through
+`pipeline_control reconcile-stale`; keep production dry-run until staging has
+proved that duplicate-live deferrals, checkpoint resume, and finalization
+ordering behave as expected.
 
 ## HPA And External Metrics
 

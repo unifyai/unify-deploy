@@ -980,11 +980,6 @@ async def handle_ingest_message(
                 phase="after_durable_ingest",
             )
 
-        if overall_error is None and ack_receipt is not None:
-            await ack_receipt()
-            acked = True
-            logger.info("[ingest] Acked job=%s after durable ingest", run_id)
-
         try:
             job = job_store.read_job(run_id)
             if msg.dispatch_id and not job.dispatch_id:
@@ -992,10 +987,26 @@ async def handle_ingest_message(
             if job.status not in ("cancelled", "paused"):
                 job.status = "success" if overall_error is None else "error"
                 job.finished_at = utc_now_iso()
-                job.metadata["total_rows_inserted"] = total_rows
+                job.error = overall_error
+                job.metadata = {
+                    **(job.metadata or {}),
+                    "total_rows_inserted": total_rows,
+                    "finalized_before_ack": overall_error is None,
+                }
             job_store.upsert_job(job)
         except Exception:
-            logger.debug("Could not update job status for %s", run_id)
+            if overall_error is None:
+                logger.exception(
+                    "[ingest] Success finalization failed before ack for job=%s",
+                    run_id,
+                )
+                raise
+            logger.debug("Could not update error status for %s", run_id, exc_info=True)
+
+        if overall_error is None and ack_receipt is not None:
+            await ack_receipt()
+            acked = True
+            logger.info("[ingest] Acked job=%s after success finalization", run_id)
 
         run_ledger.flush()
         cost_ledger.flush()
@@ -1021,8 +1032,9 @@ async def handle_ingest_message(
                 run_id=run_id,
                 file_path=file_path,
                 stage_name="ingest",
-                status="success",
+                status="error",
                 duration_ms=(time.perf_counter() - ingest_start) * 1000,
+                error=str(exc),
                 meta={
                     "duplicate_live_attempt": True,
                     "active_owner": getattr(lease, "owner_id", ""),
@@ -1034,7 +1046,7 @@ async def handle_ingest_message(
             write_job_event(
                 artifact_store,
                 PipelineJobEvent(
-                    event_type="duplicate_live_attempt_acked",
+                    event_type="duplicate_live_attempt_deferred",
                     environment=getattr(infra.settings, "environment", ""),
                     project_id=getattr(infra.settings.pubsub, "project_id", ""),
                     job_id=run_id,
@@ -1046,7 +1058,7 @@ async def handle_ingest_message(
                     source_subscription=item.source_subscription,
                     worker_pod=os.environ.get("HOSTNAME", ""),
                     error_message=str(exc),
-                    next_action="ack_duplicate",
+                    next_action="defer_duplicate",
                     metadata={
                         "active_owner": getattr(lease, "owner_id", ""),
                         "active_expires_at": getattr(lease, "expires_at", ""),
@@ -1055,15 +1067,12 @@ async def handle_ingest_message(
             )
         except Exception:
             logger.debug(
-                "[ingest] Failed to write duplicate ack event job=%s",
+                "[ingest] Failed to write duplicate deferral event job=%s",
                 run_id,
                 exc_info=True,
             )
-        if ack_receipt is not None:
-            await ack_receipt()
-            acked = True
-        logger.info("[ingest] Acked duplicate live attempt for job=%s", run_id)
-        return acked
+        logger.info("[ingest] Deferring duplicate live attempt for job=%s", run_id)
+        raise
     except PipelineCancelled:
         if watch.paused():
             # Pause path: park the in-flight payload, leave the job's
@@ -1140,8 +1149,8 @@ async def handle_ingest_message(
                 )
         if acked:
             logger.warning(
-                "[ingest] Finalize failed after durable ack for job=%s; "
-                "rows remain committed and Pub/Sub will not redeliver.",
+                "[ingest] Post-ack completion side effect failed for job=%s; "
+                "job was already finalized and Pub/Sub will not redeliver.",
                 run_id,
             )
             return True

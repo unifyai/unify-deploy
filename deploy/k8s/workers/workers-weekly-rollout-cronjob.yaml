@@ -13,11 +13,9 @@
 #   semantics drifted before it bites a real incident.
 #
 # Schedule: Sunday 03:00 UTC (low-traffic window across US/EU).
-# Strategy: `kubectl rollout restart` mutates the pod-template
-# annotation, which triggers the Deployment's configured rolling
-# update. With maxSurge=100%, new pods come up immediately alongside
-# old pods that may still be draining (up to 10 min, matching the
-# GKE Autopilot terminationGracePeriodSeconds cap). Capacity never dips.
+# Safety: suspended by default. Worker restarts must go through the
+# Cloud Build `worker-refresh-check` gate or an operator-controlled
+# maintenance window so active ingestion is not interrupted.
 #
 # One CronJob is defined per environment namespace. Keeping maintenance
 # resources in `staging` and `production` avoids hidden/default namespace
@@ -78,6 +76,7 @@ metadata:
     environment: staging
 spec:
   schedule: "0 3 * * 0"
+  suspend: true
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -104,6 +103,7 @@ spec:
             - |
               set -eu
               echo "[$(date -u +%FT%TZ)] Triggering staging rollout restart for parse+ingest workers"
+              echo "This CronJob is expected to stay suspended unless an operator has verified pipeline worker refresh safety."
               kubectl rollout restart deployment/unity-parse-worker -n staging
               kubectl rollout restart deployment/unity-ingest-worker -n staging
               echo "[$(date -u +%FT%TZ)] Staging rollout commands issued; workers drain in <=10m"
@@ -171,6 +171,7 @@ metadata:
     environment: production
 spec:
   schedule: "0 3 * * 0"
+  suspend: true
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -197,6 +198,7 @@ spec:
             - |
               set -eu
               echo "[$(date -u +%FT%TZ)] Triggering production rollout restart for parse+ingest workers"
+              echo "This CronJob is expected to stay suspended unless an operator has verified pipeline worker refresh safety."
               kubectl rollout restart deployment/unity-parse-worker -n production
               kubectl rollout restart deployment/unity-ingest-worker -n production
               echo "[$(date -u +%FT%TZ)] Production rollout commands issued; workers drain in <=10m"

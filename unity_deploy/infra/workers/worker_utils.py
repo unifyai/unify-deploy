@@ -379,7 +379,6 @@ def install_signal_handlers() -> None:
             signal.Signals(signum).name if isinstance(signum, int) else str(signum)
         )
         logger.info("Received %s — requesting graceful shutdown", sig_name)
-        nack_active_leases(reason=sig_name)
         if _shutdown_event is not None:
             _shutdown_event.set()
 
