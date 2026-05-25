@@ -127,14 +127,15 @@ def test_create_unity_job_uses_cache_for_immutable_image_tags() -> None:
     assert container["imagePullPolicy"] == "IfNotPresent"
 
 
-def test_create_unity_job_sets_ingress_transport_pubsub_on_staging() -> None:
-    """Staging Jobs must opt in to unity.gateway.PubSubIngressTransport.
+def test_create_unity_job_sets_gateway_transports_pubsub_on_staging() -> None:
+    """Staging Jobs must opt in to both unity.gateway transports.
 
     Pins the staging-soak configuration described in
-    ``unity/gateway/PHASES.md`` (Phase A.bis). Activating this env var
-    routes inbound Pub/Sub envelopes through the newly-extracted
-    transport, exposing any subtle regressions before the production
-    cutover ever ships.
+    ``unity/gateway/PHASES.md`` (Phase A.bis). Activating these env
+    vars routes both inbound Pub/Sub envelopes and outbound
+    publisher.publish() calls through the newly-extracted transports,
+    exposing any subtle regressions before the production cutover
+    ever ships.
     """
 
     class FakeBatchApi:
@@ -150,7 +151,7 @@ def test_create_unity_job_sets_ingress_transport_pubsub_on_staging() -> None:
     batch_api = FakeBatchApi()
     create_unity_job(
         batch_api,
-        job_name="unity-ingress-transport-staging",
+        job_name="unity-gateway-transports-staging",
         namespace="staging",
         deploy_env="staging",
     )
@@ -161,15 +162,18 @@ def test_create_unity_job_sets_ingress_transport_pubsub_on_staging() -> None:
     env_by_name = {env_var["name"]: env_var for env_var in env_vars}
     assert "UNITY_CONVERSATION_INGRESS_TRANSPORT" in env_by_name
     assert env_by_name["UNITY_CONVERSATION_INGRESS_TRANSPORT"]["value"] == "pubsub"
+    assert "UNITY_CONVERSATION_OUTBOUND_TRANSPORT" in env_by_name
+    assert env_by_name["UNITY_CONVERSATION_OUTBOUND_TRANSPORT"]["value"] == "pubsub"
 
 
-def test_create_unity_job_does_not_set_ingress_transport_on_production() -> None:
-    """Production Jobs must NOT yet activate the new transport.
+def test_create_unity_job_does_not_set_gateway_transports_on_production() -> None:
+    """Production Jobs must NOT yet activate the new transports.
 
-    Hosted production keeps the legacy inline subscribe_to_topic path
-    until the staging soak (and Phase B / Phase C work) confirm the new
-    transport is safe. This test guards against accidentally moving the
-    env var out of the staging-only block before that point.
+    Hosted production keeps the legacy inline subscribe_to_topic and
+    inline publisher.publish paths until the staging soak (and
+    Phase B / Phase C work) confirm the new transports are safe.
+    This test guards against accidentally moving either env var out
+    of the staging-only block before that point.
     """
 
     class FakeBatchApi:
@@ -185,7 +189,7 @@ def test_create_unity_job_does_not_set_ingress_transport_on_production() -> None
     batch_api = FakeBatchApi()
     create_unity_job(
         batch_api,
-        job_name="unity-ingress-transport-prod",
+        job_name="unity-gateway-transports-prod",
         namespace="production",
         deploy_env="production",
     )
@@ -195,6 +199,7 @@ def test_create_unity_job_does_not_set_ingress_transport_on_production() -> None
     ]
     env_by_name = {env_var["name"]: env_var for env_var in env_vars}
     assert "UNITY_CONVERSATION_INGRESS_TRANSPORT" not in env_by_name
+    assert "UNITY_CONVERSATION_OUTBOUND_TRANSPORT" not in env_by_name
 
 
 def test_comms_preview_deploy_sets_all_runtime_service_urls() -> None:
