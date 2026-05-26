@@ -12,132 +12,22 @@ Usage:
 import argparse
 import base64
 import sys
-from kubernetes import client, config
+
+from kubernetes import client
 from kubernetes.client.rest import ApiException
+
+from _k8s_lib import ensure_kube_config
 
 
 def setup_kubernetes_client():
-    """Initialize Kubernetes client using Google Cloud SDK"""
-    try:
-        # Use Google Cloud SDK to get cluster credentials
-        import subprocess
-        import json
-        import tempfile
-        import os
+    """Initialize Kubernetes clients for the Batch and Core APIs.
 
-        # Get cluster credentials using gcloud
-        project_id = "gcp-project-runtime"
-        region = "us-central1"  # Use region instead of zone
-        cluster_name = "unity"
-
-        print(f"🔗 Connecting to GKE cluster: {cluster_name}")
-
-        # Run gcloud command to get cluster credentials
-        result = subprocess.run(
-            [
-                "gcloud",
-                "container",
-                "clusters",
-                "get-credentials",
-                cluster_name,
-                "--region",
-                region,
-                "--project",
-                project_id,
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if result.returncode != 0:
-            print(f"❌ Failed to get cluster credentials: {result.stderr}")
-            print("💡 Make sure you have:")
-            print("   1. gcloud CLI installed")
-            print("   2. Access to the GKE cluster")
-            print("   3. GOOGLE_APPLICATION_CREDENTIALS set correctly")
-            return None, None
-
-        print("✅ Got cluster credentials")
-
-        # Get the cluster endpoint and token directly
-        cluster_info = subprocess.run(
-            [
-                "gcloud",
-                "container",
-                "clusters",
-                "describe",
-                cluster_name,
-                "--region",
-                region,
-                "--project",
-                project_id,
-                "--format",
-                "json",
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if cluster_info.returncode != 0:
-            print(f"❌ Failed to get cluster info: {cluster_info.stderr}")
-            return None, None
-
-        cluster_data = json.loads(cluster_info.stdout)
-        cluster_endpoint = cluster_data["endpoint"]
-        cluster_ca_cert = cluster_data["masterAuth"]["clusterCaCertificate"]
-
-        # Get access token using service account
-        token_result = subprocess.run(
-            ["gcloud", "auth", "print-access-token"],
-            capture_output=True,
-            text=True,
-        )
-
-        if token_result.returncode != 0:
-            print(f"❌ Failed to get access token: {token_result.stderr}")
-            return None, None
-
-        access_token = token_result.stdout.strip()
-
-        # Create a temporary kubeconfig
-        kubeconfig = {
-            "apiVersion": "v1",
-            "kind": "Config",
-            "clusters": [
-                {
-                    "name": "unity-cluster",
-                    "cluster": {
-                        "server": f"https://{cluster_endpoint}",
-                        "certificate-authority-data": cluster_ca_cert,
-                    },
-                },
-            ],
-            "users": [{"name": "unity-user", "user": {"token": access_token}}],
-            "contexts": [
-                {
-                    "name": "unity-context",
-                    "context": {"cluster": "unity-cluster", "user": "unity-user"},
-                },
-            ],
-            "current-context": "unity-context",
-        }
-
-        # Write to temporary file
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
-            json.dump(kubeconfig, f)
-            temp_config = f.name
-
-        # Load the temporary config
-        config.load_kube_config(config_file=temp_config)
-
-        # Clean up
-        os.unlink(temp_config)
-
-        return client.BatchV1Api(), client.CoreV1Api()
-
-    except Exception as e:
-        print(f"❌ Error setting up Kubernetes client: {e}")
+    Returns the ``(BatchV1Api, CoreV1Api)`` pair the rest of this
+    script expects, or ``(None, None)`` if cluster auth fails.
+    """
+    if not ensure_kube_config():
         return None, None
+    return client.BatchV1Api(), client.CoreV1Api()
 
 
 def create_namespace(api_client, namespace="default"):

@@ -13,50 +13,18 @@ Usage:
 
 import argparse
 import sys
-from kubernetes import client, config
+
+from kubernetes import client
 from kubernetes.client.rest import ApiException
+
+from _k8s_lib import ensure_kube_config
 
 
 def setup_kubernetes_client():
-    """Initialize Kubernetes client using Google Cloud SDK"""
-    try:
-        import subprocess
-
-        # Get cluster credentials using gcloud
-        project_id = "gcp-project-runtime"
-        region = "us-central1"
-        cluster_name = "unity"
-
-        print(f"🔗 Connecting to GKE cluster: {cluster_name}")
-
-        # Run gcloud command to get cluster credentials
-        result = subprocess.run(
-            [
-                "gcloud",
-                "container",
-                "clusters",
-                "get-credentials",
-                cluster_name,
-                "--region",
-                region,
-                "--project",
-                project_id,
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if result.returncode != 0:
-            print(f"❌ Failed to get cluster credentials: {result.stderr}")
-            return None
-
-        print("✅ Got cluster credentials")
-        config.load_kube_config()
-        return client.SchedulingV1Api()
-
-    except Exception as e:
-        print(f"❌ Error setting up Kubernetes client: {e}")
+    """Initialize Kubernetes client for the Scheduling API."""
+    if not ensure_kube_config():
         return None
+    return client.SchedulingV1Api()
 
 
 def create_priority_classes(api_client):

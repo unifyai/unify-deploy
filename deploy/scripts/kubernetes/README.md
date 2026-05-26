@@ -58,11 +58,13 @@ curl -X POST "https://service.a.run.app/infra/job/create" \
 
 | Script | Purpose | When to run |
 |--------|---------|-------------|
+| `_k8s_lib.py` | Shared `ensure_kube_config()` helper + cluster identity constants (`PROJECT_ID`, `REGION`, `CLUSTER_NAME`). Module-private; imported by the sibling scripts. | (not run directly) |
 | `setup_k8s_config.py` | Create ConfigMaps + Secrets + service account + RBAC | Once per cluster (or when rotating secrets) |
 | `setup_priority_classes.py` | Create cluster-wide PriorityClasses (`unity-idle`, etc.) | Once per cluster |
 | `create_keep_alive.py` | Deploy a tiny keep-alive pod that pins a GKE node warm | Once per node pool |
 | `test_metrics_push.py` | Smoke-test custom-metrics push to Cloud Monitoring | Manual debugging |
 
-All four scripts duplicate the same `setup_kubernetes_client()` helper (gcloud
-auth + temp kubeconfig). If you touch any of them, consider extracting a
-shared module -- low-risk dedup, no production impact.
+The three setup scripts all defer kubeconfig setup to
+`_k8s_lib.ensure_kube_config()`; each one's `setup_kubernetes_client()`
+is now a 3-line wrapper that just picks the right `client.XxxApi()` for
+its needs.
