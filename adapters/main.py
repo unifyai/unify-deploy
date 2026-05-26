@@ -127,6 +127,7 @@ SUPPORTED_POOL_VM_TYPES: tuple[str, ...] = ("ubuntu", "windows")
 from .helpers import (
     cleanup_idle_pool,
     get_admin_graph_bearer_token,
+    get_default_contacts,
     get_outlook_graph_client,
     replenish_idle_pool,
     add_user_to_conference,
@@ -137,6 +138,7 @@ from .helpers import (
     dispatch_unity_start_intent,
     expire_all_stale_jobs,
     get_assistant,
+    get_contacts,
     get_outlook_thread_id,
     get_pubsub_client,
     get_thread_id,
@@ -144,9 +146,11 @@ from .helpers import (
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
+    resolve_slack_inbound,
     resolve_whatsapp_route,
     start_unity_job,
     uses_local_unity_runtime,
+    verify_slack_signature,
 )
 from common.google_oauth import (
     exchange_google_code_for_tokens,
@@ -1222,6 +1226,186 @@ class InactivityFollowupPayload(BaseModel):
     """
 
     assistant_id: str
+
+
+# =============================================================================
+# Slack Events API Webhook
+# =============================================================================
+#
+# Slack's Events API is HTTP-webhook driven (no persistent socket like
+# Discord). The flow per inbound message:
+#
+#   1. Verify HMAC against the app signing secret (5-min skew window;
+#      replay-rejecting on stale timestamp).
+#   2. Handle the one-time ``url_verification`` handshake.
+#   3. ACK Slack retries (``X-Slack-Retry-Num`` set) without
+#      reprocessing; Slack retries when our endpoint doesn't ACK
+#      within ~3s, and Pub/Sub already gives downstream dedup.
+#   4. Hand the entire envelope to Orchestra's slack dispatcher,
+#      which consults per-workspace installs, channel bindings,
+#      thread routes, ``<@app> <token>`` addressing, and the
+#      coordinator fallback. Returns a routing tuple.
+#   5. Fetch assistant + contacts, best-effort wake the Unity job,
+#      publish onto the assistant's Pub/Sub topic with
+#      ``thread="slack"``. Unity's CommsManager dispatch picks it
+#      up from there.
+
+
+@app.post("/slack/events")
+async def slack_events_webhook(request: Request):
+    """Slack Events API webhook entry point.
+
+    Authenticated via HMAC against ``SLACK_SIGNING_SECRET``; no
+    bearer auth (Slack cannot carry our admin key).
+    """
+    raw_body = await request.body()
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+    signature = request.headers.get("X-Slack-Signature", "")
+    if not verify_slack_signature(
+        body=raw_body,
+        timestamp=timestamp,
+        signature=signature,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    payload = json.loads(raw_body or b"{}")
+    event_type = payload.get("type")
+
+    # One-time ownership challenge when configuring the Slack app's
+    # Request URL. Slack POSTs ``{"type": "url_verification",
+    # "challenge": "<random>"}`` and expects the challenge echoed back.
+    if event_type == "url_verification":
+        return {"challenge": payload.get("challenge", "")}
+
+    if event_type != "event_callback":
+        return {"ok": True}
+
+    # Slack retries when we don't ACK within ~3s. ACK retries
+    # without reprocessing -- downstream dedup (Pub/Sub + Unity's
+    # CommsManager._seen_slack_ids) handles the steady-state case;
+    # the retry-header short-circuit just keeps us cheap.
+    if request.headers.get("X-Slack-Retry-Num"):
+        logger.info(
+            "slack retry received "
+            f"(reason={request.headers.get('X-Slack-Retry-Reason')}); ack-only",
+        )
+        return {"ok": True}
+
+    inner = payload.get("event") or {}
+    inner_type = inner.get("type") or ""
+    if inner_type not in ("message", "app_mention"):
+        return {"ok": True}
+
+    # Bot echoes: any message Slack flags as authored by a bot
+    # (``bot_id`` set, or ``subtype == "bot_message"``). We never
+    # want the assistant to react to its own posts.
+    if inner.get("bot_id") or inner.get("subtype") == "bot_message":
+        return {"ok": True}
+
+    resolution = await asyncio.to_thread(resolve_slack_inbound, payload)
+    if resolution is None or resolution.get("drop"):
+        return {"ok": True}
+
+    assistant_id = resolution.get("assistant_id")
+    if not assistant_id:
+        return {"ok": True}
+    assistant_id = str(assistant_id)
+    is_channel = bool(resolution.get("is_channel"))
+    bot_user_id = resolution.get("bot_user_id", "") or ""
+    routing_metadata = resolution.get("routing_metadata") or {}
+
+    assistant_data = await asyncio.to_thread(
+        get_assistant,
+        assistant_id=assistant_id,
+    )
+    if not assistant_data:
+        logger.warning(
+            f"slack: orchestra returned no assistant for id {assistant_id}",
+        )
+        return {"ok": True}
+
+    # Contacts: prefer the assistant's own Contacts context (hydrated
+    # with slack_user_id where the contact has been seen before);
+    # fall back to the (assistant, user) default pair so an inbound
+    # from a brand-new sender still has a route.
+    api_key = assistant_data.get("api_key", "") or ""
+    user_id = assistant_data.get("user_id", "") or ""
+    contacts: list[dict] = []
+    if api_key:
+        contacts_resp, contacts_status = await asyncio.to_thread(
+            get_contacts,
+            f"{user_id}/{assistant_id}/Contacts",
+            api_key,
+        )
+        if contacts_status == 200:
+            contact_logs = contacts_resp.get("logs", [])
+            if len(contact_logs) >= 2:
+                contacts = [c["entries"] for c in contact_logs]
+    if not contacts:
+        contacts = get_default_contacts(assistant_data)
+
+    # Best-effort wake of the assistant's Unity job (matches the
+    # other inbound channels' fire-and-forget pattern: comms is
+    # given a fast edge handoff and we never block the webhook
+    # thread on AssistantSession convergence).
+    asyncio.create_task(
+        asyncio.to_thread(start_unity_job, assistant_data, "slack"),
+    )
+
+    # Attachments: Slack ``files`` blocks expose URL + mime so the
+    # assistant can fetch them later via the bot token. We do not
+    # rehost in GCS at this layer (WhatsApp does, because Twilio
+    # auto-deletes media after a window; Slack does not).
+    files = [
+        {
+            "id": f.get("id"),
+            "filename": f.get("name") or f.get("title"),
+            "url": f.get("url_private") or f.get("permalink"),
+            "mimetype": f.get("mimetype"),
+            "size": f.get("size"),
+        }
+        for f in (inner.get("files") or [])
+    ]
+
+    pubsub_client = get_pubsub_client()
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
+    event_payload = {
+        "thread": "slack",
+        "publish_timestamp": time.time(),
+        "event": {
+            "event_id": payload.get("event_id", ""),
+            "message_id": inner.get("client_msg_id", "") or inner.get("ts", ""),
+            "team_id": payload.get("team_id", ""),
+            "channel_id": inner.get("channel", ""),
+            "bot_user_id": bot_user_id,
+            "sender_slack_user_id": inner.get("user", ""),
+            "body": inner.get("text", ""),
+            "event_ts": inner.get("event_ts", ""),
+            "thread_ts": inner.get("thread_ts", ""),
+            "is_channel": is_channel,
+            "attachments": files,
+            "routing_metadata": routing_metadata,
+            "contacts": contacts,
+        },
+    }
+    try:
+        pubsub_client.publish(
+            topic_path,
+            json.dumps(event_payload).encode("utf-8"),
+            thread="inbound",
+        )
+        logger.info(
+            "published Slack %s for assistant %s (event_id=%s)",
+            "channel message" if is_channel else "DM",
+            assistant_id,
+            payload.get("event_id", ""),
+        )
+    except Exception as e:
+        logger.error(f"slack: failed to publish to Pub/Sub: {e}")
+        return Response(content="Error publishing to Pub/Sub", status_code=500)
+
+    return {"ok": True}
 
 
 # =============================================================================

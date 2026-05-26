@@ -97,6 +97,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "phone_number": assistant_data["assistant_number"],
             "whatsapp_number": assistant_data.get("assistant_whatsapp_number", ""),
             "discord_id": assistant_data.get("assistant_discord_bot_id", ""),
+            "slack_user_id": assistant_data.get("assistant_slack_bot_user_id", ""),
             "bio": "",
             "rolling_summary": "",
             "should_respond": False,
@@ -110,6 +111,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "phone_number": assistant_data["user_number"],
             "whatsapp_number": assistant_data.get("user_whatsapp_number", ""),
             "discord_id": assistant_data.get("user_discord_id", ""),
+            "slack_user_id": assistant_data.get("user_slack_user_id", ""),
             "bio": "",
             "rolling_summary": "",
             "should_respond": True,
@@ -152,6 +154,89 @@ def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
 def resolve_discord_route(bot_id: str, sender: str) -> dict | None:
     """Resolve an inbound Discord DM to an assistant via Orchestra."""
     return _resolve_shared_pool_route("discord", bot_id, sender)
+
+
+# ---------------------------------------------------------------------------
+# Slack
+# ---------------------------------------------------------------------------
+
+
+_SLACK_MAX_SKEW_SECONDS = 60 * 5
+
+
+def verify_slack_signature(
+    *,
+    body: bytes,
+    timestamp: str,
+    signature: str,
+) -> bool:
+    """Validate a Slack Events API webhook signature.
+
+    Slack signs every webhook with HMAC-SHA256 over
+    ``v0:<timestamp>:<raw_body>`` keyed by the app's signing secret.
+    Receivers must (a) reject events older than 5 minutes (replay
+    protection) and (b) reject mismatched signatures. The signing
+    secret is app-level (shared across all workspace installs of the
+    Slack app), read from ``SETTINGS.slack_signing_secret``.
+
+    Fails closed on any error: missing headers, stale timestamp,
+    missing signing secret, mismatched digest.
+    """
+    import hashlib as _hashlib
+    import hmac as _hmac
+
+    secret = SETTINGS.slack_signing_secret or ""
+    if not secret or not timestamp or not signature:
+        return False
+    try:
+        ts = int(timestamp)
+    except (TypeError, ValueError):
+        return False
+    if abs(time.time() - ts) > _SLACK_MAX_SKEW_SECONDS:
+        return False
+    basestring = f"v0:{timestamp}:".encode() + body
+    expected = (
+        "v0="
+        + _hmac.new(
+            secret.encode(),
+            basestring,
+            _hashlib.sha256,
+        ).hexdigest()
+    )
+    return _hmac.compare_digest(expected, signature)
+
+
+def resolve_slack_inbound(payload: dict) -> dict | None:
+    """Route a Slack Events API ``event_callback`` via Orchestra.
+
+    Slack routing is structurally richer than the ``(pool_id, sender)``
+    shape of Discord/WhatsApp pools: Orchestra needs the full Events
+    API envelope (``team_id``, ``event.channel``, ``event.thread_ts``,
+    ``event.text``, ``event.user``) to consult per-workspace installs,
+    per-channel bindings, persistent thread/DM routes, and the
+    ``<@app> <token>`` addressing convention.
+
+    Returns one of:
+
+    * ``{"assistant_id": int, "is_channel": bool, "bot_user_id": str,
+       "routing_metadata": dict}`` -- normal route.
+    * ``{"drop": True}`` -- bot echo, retry, or unsupported event type.
+    * ``None`` -- 404 or transport failure.
+    """
+    resp = requests.post(
+        f"{SETTINGS.orchestra_url}/admin/slack/dispatch",
+        json=payload,
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"slack dispatch failed: {resp.status_code} {resp.text}",
+        )
+        return None
+    return resp.json()
 
 
 def _normalize_display_name(name: str) -> str:
@@ -705,6 +790,10 @@ def _build_start_job_request_data(
         ),
         "assistant_discord_bot_id": assistant.get(
             "assistant_discord_bot_id",
+            "",
+        ),
+        "assistant_slack_bot_user_id": assistant.get(
+            "assistant_slack_bot_user_id",
             "",
         ),
         "voice_provider": assistant["voice_provider"],

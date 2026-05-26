@@ -152,6 +152,13 @@ class Settings:
         self.orchestra_admin_key: str = os.environ.get("ORCHESTRA_ADMIN_KEY", "")
         self.shared_unify_key: str = os.environ.get("SHARED_UNIFY_KEY", "")
 
+        # Slack Events API signing secret. App-level (one value shared across
+        # all workspace installs of the Slack app), set in the Slack-app
+        # manifest. Used by the adapter's /slack/events webhook to HMAC-verify
+        # inbound payloads before forwarding them to Orchestra. Per-workspace
+        # bot tokens are stored in Orchestra (slack_installs), not here.
+        self.slack_signing_secret: str = os.environ.get("SLACK_SIGNING_SECRET", "")
+
         # Cleanup / Workspace integration.  ``workspace_admin_subject`` is
         # the Workspace user we impersonate for Admin SDK Directory calls;
         # still used by ``DELETE /gmail/delete`` (Orchestra teardown
