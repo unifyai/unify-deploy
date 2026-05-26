@@ -18,7 +18,11 @@ from typing import Any
 
 import requests
 from fastapi import APIRouter, HTTPException
-from google.api_core.exceptions import AlreadyExists, NotFound as GcpNotFound
+from google.api_core.exceptions import (
+    AlreadyExists,
+    NotFound as GcpNotFound,
+    PermissionDenied as GcpPermissionDenied,
+)
 from google.protobuf import duration_pb2, timestamp_pb2
 
 from common.assistant_lookup import get_assistant
@@ -200,6 +204,9 @@ def _task_queue_diagnostics() -> list[dict[str, Any]]:
         except GcpNotFound as exc:
             status = "missing"
             error = str(exc)
+        except GcpPermissionDenied as exc:
+            status = "permission_denied"
+            error = str(exc)
         diagnostics.append(
             {
                 "queue_name": queue_name,
@@ -209,6 +216,22 @@ def _task_queue_diagnostics() -> list[dict[str, Any]]:
             },
         )
     return diagnostics
+
+
+def _cloud_task_diagnostic(task_name: str) -> dict[str, Any]:
+    """Report whether the expected Cloud Task currently exists."""
+
+    client = _get_cloud_tasks_client()
+    try:
+        client.get_task(name=task_name)
+        return {"cloud_task_status": "present", "cloud_task_error": None}
+    except GcpNotFound as exc:
+        return {"cloud_task_status": "missing", "cloud_task_error": str(exc)}
+    except GcpPermissionDenied as exc:
+        return {
+            "cloud_task_status": "permission_denied",
+            "cloud_task_error": str(exc),
+        }
 
 
 def _scheduled_activation_http_body(
@@ -890,6 +913,9 @@ def _activation_materialization_diagnostic(
                     queue_name=queue_name,
                 ),
             }
+            materialization.update(
+                _cloud_task_diagnostic(materialization["task_name"]),
+            )
     return {
         "success": True,
         "assistant_id": assistant_id,

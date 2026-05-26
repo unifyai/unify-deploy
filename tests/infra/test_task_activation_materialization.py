@@ -9,7 +9,10 @@ from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from google.api_core.exceptions import NotFound as GcpNotFound
+from google.api_core.exceptions import (
+    NotFound as GcpNotFound,
+    PermissionDenied as GcpPermissionDenied,
+)
 import pytest
 
 
@@ -45,11 +48,22 @@ class _FakeCloudTasksClient:
         self.deleted_task_names = []
         self.queue_exists = True
         self.missing_queue_names: set[str] = set()
+        self.permission_denied_queue_names: set[str] = set()
         self.existing_task_names: set[str] = set()
+        self.permission_denied_task_names: set[str] = set()
 
     def get_queue(self, *, name):
+        if name.rsplit("/", 1)[-1] in self.permission_denied_queue_names:
+            raise GcpPermissionDenied("queue permission denied")
         if not self.queue_exists or name.rsplit("/", 1)[-1] in self.missing_queue_names:
             raise GcpNotFound("queue missing")
+        return {"name": name}
+
+    def get_task(self, *, name):
+        if name in self.permission_denied_task_names:
+            raise GcpPermissionDenied("task permission denied")
+        if name not in self.existing_task_names:
+            raise GcpNotFound("task missing")
         return {"name": name}
 
     def create_queue(self, *, parent, queue):
@@ -526,6 +540,28 @@ def test_validate_task_activation_infra_reports_required_queues(client):
     assert statuses[task_activation.SETTINGS.task_activation_repair_queue_name] == "ok"
 
 
+def test_validate_task_activation_infra_reports_queue_permission_denied(client):
+    """Validation should expose Cloud Tasks IAM failures per queue."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    fake_client.permission_denied_queue_names.add(
+        task_activation.SETTINGS.task_due_queue_name,
+    )
+
+    with patch(
+        "communication.infra.task_activation._get_cloud_tasks_client",
+        return_value=fake_client,
+    ):
+        response = client.get("/infra/task-activation/validate")
+
+    assert response.status_code == 200
+    body = response.json()
+    statuses = {item["queue_name"]: item["status"] for item in body["queues"]}
+    assert statuses[task_activation.SETTINGS.task_due_queue_name] == "permission_denied"
+
+
 def test_diagnose_task_activation_reports_materialization_and_latest_run(
     client,
 ):
@@ -575,6 +611,101 @@ def test_diagnose_task_activation_reports_materialization_and_latest_run(
     )
     assert body["materialization"]["target_url"].endswith("/scheduled/tasks/due")
     assert "task-live-assistant-123-101" in body["materialization"]["task_name"]
+    assert body["materialization"]["cloud_task_status"] == "missing"
+
+
+def test_diagnose_task_activation_reports_cloud_task_permission_denied(client):
+    """Diagnosis should identify Cloud Tasks IAM failures for the expected task."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    activation = {
+        "activation_kind": "scheduled",
+        "execution_mode": "live",
+        "activation_revision": "rev-123",
+        "source_task_log_id": 555,
+        "next_due_at": "2026-04-10T09:00:00+00:00",
+    }
+    task_name = task_activation._scheduled_activation_task_name(
+        assistant_id="assistant-123",
+        task_id=101,
+        activation_revision="rev-123",
+        scheduled_for=datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc),
+    )
+    fake_client.permission_denied_task_names.add(task_name)
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=activation,
+        ),
+        patch(
+            "communication.infra.task_activation._lookup_latest_task_run",
+            return_value=None,
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+    ):
+        response = client.post(
+            "/infra/task-activation/diagnose",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+            },
+        )
+
+    assert response.status_code == 200
+    materialization = response.json()["materialization"]
+    assert materialization["task_name"] == task_name
+    assert materialization["cloud_task_status"] == "permission_denied"
+
+
+def test_repair_scheduled_task_activation_materializes_cloud_task(
+    client,
+    fake_tasks_module,
+):
+    """Repair endpoint should share the same materialization path as upsert."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    task_activation._task_queues_ensured = set()
+
+    with (
+        patch(
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
+            "test-admin-key",
+        ),
+        patch(
+            "communication.infra.task_activation.SETTINGS.adapters_url",
+            "https://adapters.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+        patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
+    ):
+        response = client.post(
+            "/infra/task-activation/repair",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+                "activation_revision": "rev-123",
+                "scheduled_for": "2026-04-10T09:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["status"] == "created"
+    assert len(fake_client.created_tasks) == 1
 
 
 def test_shared_get_assistant_fetches_orchestra_admin_directly(monkeypatch):
