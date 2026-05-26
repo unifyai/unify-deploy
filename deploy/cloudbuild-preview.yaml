@@ -22,8 +22,10 @@ steps:
     echo "Base image: ${_BASE_IMAGE}"
     echo "Unity tag:  ${_UNITY_TAG}"
     echo "Slug:       ${_SLUG}"
+    echo "Brain ref:  ${_BRAIN_REF}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
+      --build-arg BRAIN_REF=${_BRAIN_REF} \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_TAG} .
 
@@ -79,5 +81,8 @@ substitutions:
   _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base-staging:latest'
   _UNITY_TAG: 'preview-direct-${SHORT_SHA}'
   _SLUG: 'direct'
+  # Brain commit / branch installed into the preview image.  Defaults
+  # to ``main`` so feature-branch previews match staging.
+  _BRAIN_REF: 'main'
 
 timeout: '900s'

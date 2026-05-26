@@ -10,8 +10,10 @@ steps:
   - |
     echo "Base image: ${_BASE_IMAGE}"
     echo "Unity SHA:  ${_UNITY_SHA}"
+    echo "Brain ref:  ${_BRAIN_REF}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
+      --build-arg BRAIN_REF=${_BRAIN_REF} \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:latest .
@@ -303,6 +305,10 @@ substitutions:
   _UNITY_SHA: '${SHORT_SHA}'
   _ORCHESTRA_URL: 'https://internal.example.com/v0'
   _UNITY_COMMS_URL: 'https://unity-comms-app-staging-000000000000.us-central1.run.app'
+  # Brain commit / branch installed into the image.  Staging defaults
+  # to ``main`` so the latest brain code lands automatically;
+  # production triggers pin a SHA.
+  _BRAIN_REF: 'main'
 
 availableSecrets:
   secretManager:

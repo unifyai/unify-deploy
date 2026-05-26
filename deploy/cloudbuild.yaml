@@ -9,8 +9,10 @@ steps:
   - '-c'
   - |
     echo "Base image: ${_BASE_IMAGE}"
+    echo "Brain ref:  ${_BRAIN_REF}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
+      --build-arg BRAIN_REF=${_BRAIN_REF} \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:latest .
@@ -301,6 +303,9 @@ substitutions:
   _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest'
   _ORCHESTRA_URL: 'https://api.unify.ai/v0'
   _UNITY_COMMS_URL: 'https://unity-comms-app-000000000000.us-central1.run.app'
+  # Brain commit / branch installed into the image.  Pin to a SHA in
+  # production triggers; staging may track the ``main`` branch.
+  _BRAIN_REF: 'main'
 
 availableSecrets:
   secretManager:
