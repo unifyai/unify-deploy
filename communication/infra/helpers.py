@@ -285,13 +285,288 @@ def _merge_env_overrides(
     return merged
 
 
+def build_unity_job_manifest(
+    job_name: str,
+    namespace: str = "default",
+    image: str = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest",
+    deploy_env: str = SETTINGS.deploy_env,
+    ttl_seconds_after_finished: int | None = None,
+    active_deadline_seconds: int | None = None,
+    unity_status: str = "idle",
+    priority_class_name: str | None = None,
+    app_label: str = "unity",
+    extra_labels: dict | None = None,
+    extra_annotations: dict | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> dict:
+    """Build the Kubernetes ``batch/v1`` Job manifest for a Unity assistant.
+
+    Pure data construction: no Kubernetes API calls, no logging, no
+    exception swallowing. The caller decides what to do with the
+    returned dict (submit it, dry-run it, render it as YAML, mutate
+    it, ...). The canonical caller is :func:`create_unity_job` in
+    this module, which builds + submits.
+
+    The split exists so tests can assert manifest shape with direct
+    dict assertions instead of mocking a Kubernetes Batch API client
+    just to capture the body sent to ``create_namespaced_job``.
+
+    Args:
+        job_name: Name of the Job (also stamped into env as
+            ``UNITY_CONVERSATION_JOB_NAME``).
+        namespace: Target Kubernetes namespace.
+        image: Container image. ``:latest`` tags get
+            ``imagePullPolicy: Always``; any other tag (a SHA, a
+            preview slug, etc.) gets ``IfNotPresent``.
+        deploy_env: ``production`` | ``staging``. Drives env vars
+            (``STAGING``, the gateway transports, ``UNITY_STARTUP_TIMING``,
+            the pipeline artifact bucket name).
+        ttl_seconds_after_finished: If set, applied to
+            ``spec.ttlSecondsAfterFinished`` so finished Jobs garbage
+            collect after this many seconds.
+        active_deadline_seconds: If set, applied to
+            ``spec.activeDeadlineSeconds`` so the Job is hard-killed
+            after this duration.
+        unity_status: Initial value of the ``unity-status`` label
+            (``idle`` for pool jobs, ``running`` for controller-spawned
+            jobs with image overrides, etc.).
+        priority_class_name: Pod priority class. Defaults to
+            ``unity-idle``.
+        app_label: Value of the ``app`` label on both Job and pod
+            template. Defaults to ``unity``; offline-task jobs use
+            ``unity-offline``, dashboard-action jobs use
+            ``unity-dashboard-action``.
+        extra_labels: Merged into Job ``metadata.labels`` (does NOT
+            propagate to the pod template).
+        extra_annotations: Merged into both Job
+            ``metadata.annotations`` and the pod template's
+            ``spec.template.metadata.annotations``.
+        extra_env: Env vars added to the container. Vars whose name
+            matches one already in the explicit env list override the
+            earlier definition (see :func:`_merge_env_overrides`).
+    """
+    optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}
+    unity_config_env = []
+    for key in (
+        "GCP_PROJECT_ID",
+        "PROJECT_ID",
+        "VERTEXAI_LOCATION",
+        "VERTEXAI_PROJECT",
+        "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE",
+    ):
+        config_ref = {
+            "name": "unity-config",
+            "key": key,
+        }
+        if key in optional_unity_config_keys:
+            config_ref["optional"] = True
+        unity_config_env.append(
+            {
+                "name": key,
+                "valueFrom": {
+                    "configMapKeyRef": config_ref,
+                },
+            },
+        )
+    unity_secret_env = [
+        {
+            "name": key,
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": "unity-secrets",
+                    "key": key,
+                },
+            },
+        }
+        for key in (
+            "ANTHROPIC_API_KEY",
+            "CARTESIA_API_KEY",
+            "DEEPGRAM_API_KEY",
+            "ELEVEN_API_KEY",
+            "LIVEKIT_API_KEY",
+            "LIVEKIT_API_SECRET",
+            "LIVEKIT_SIP_URI",
+            "LIVEKIT_URL",
+            "OPENAI_API_KEY",
+            "ORCHESTRA_ADMIN_KEY",
+            "SHARED_UNIFY_KEY",
+            "TAVILY_API_KEY",
+            "VERTEXAI_CREDENTIALS",
+            "_UNITY_STARTUP_HOOK_GROUP",
+            "_UNITY_STARTUP_HOOK_PACKAGE",
+        )
+    ]
+
+    env_vars = [
+        {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
+        {"name": "DEPLOY_ENV", "value": deploy_env},
+        {
+            "name": "GOOGLE_APPLICATION_CREDENTIALS",
+            "value": "/secrets/key.json",
+        },
+        {"name": "PYTHONUNBUFFERED", "value": "1"},
+        {
+            "name": "TOKENIZERS_PARALLELISM",
+            "value": "false",
+        },
+        {"name": "OMP_NUM_THREADS", "value": "2"},
+        {"name": "MKL_NUM_THREADS", "value": "2"},
+        {"name": "HF_HOME", "value": "/tmp/huggingface"},
+        {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
+        {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
+        {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
+        {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
+        {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
+        {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
+        {
+            "name": "UNITY_STARTUP_TIMING",
+            "value": "1" if deploy_env == "staging" else "0",
+        },
+        # Pipeline worker dispatch: route attachment ingestion through the
+        # GKE parse/ingest workers via Pub/Sub (topic names are derived
+        # from GCP_PROJECT_ID + DEPLOY_ENV, matching the existing
+        # ``unity-{name}{env_suffix}`` convention).
+        {"name": "UNITY_FILE_PIPELINE_DISPATCH_ENABLED", "value": "false"},
+        {
+            "name": "UNITY_FILE_PIPELINE_ARTIFACT_BUCKET",
+            "value": (
+                "unity-pipeline-artifacts"
+                if deploy_env == "production"
+                else f"unity-pipeline-artifacts-{deploy_env}"
+            ),
+        },
+    ]
+    env_vars.extend(unity_config_env)
+    env_vars.extend(unity_secret_env)
+    if deploy_env == "staging":
+        env_vars += [{"name": "STAGING", "value": "true"}]
+        # Activate the new unity.gateway transports on staging Jobs
+        # so the extracted Ingress + Outbound code paths (Unity
+        # commits 2aad1b895 through fab4c5298) get exercised
+        # against real Pub/Sub traffic before any production
+        # cutover. Production Jobs (this branch is staging-only)
+        # continue using the legacy inline subscribe_to_topic and
+        # inline publisher.publish paths until those paths are
+        # explicitly retired. See unity/gateway/PHASES.md (Phase
+        # A.bis).
+        env_vars += [
+            {"name": "UNITY_CONVERSATION_INGRESS_TRANSPORT", "value": "pubsub"},
+            {"name": "UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "value": "pubsub"},
+        ]
+    env_vars = _merge_env_overrides(env_vars, extra_env)
+
+    image_pull_policy = (
+        "Always" if image.rsplit(":", 1)[-1] == "latest" else "IfNotPresent"
+    )
+
+    metadata_labels = {
+        "app": app_label,
+        "created-by": "create_job_script",
+        "unity-status": unity_status,
+        "unity-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "unity-image-hash": (image.rsplit(":", 1)[-1] if ":" in image else "unknown"),
+    }
+    if extra_labels:
+        metadata_labels.update(extra_labels)
+
+    pod_annotations = {
+        "cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+    }
+    if extra_annotations:
+        pod_annotations.update(extra_annotations)
+
+    metadata_annotations = dict(extra_annotations or {})
+
+    job_manifest = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": job_name,
+            "namespace": namespace,
+            "labels": metadata_labels,
+            "annotations": metadata_annotations,
+        },
+        "spec": {
+            "backoffLimit": 0,
+            "template": {
+                "metadata": {
+                    "labels": {"app": app_label},
+                    "annotations": pod_annotations,
+                },
+                "spec": {
+                    "restartPolicy": "Never",
+                    "serviceAccountName": "comm-sa",
+                    "terminationGracePeriodSeconds": 30,  # Faster termination
+                    "priorityClassName": (priority_class_name or "unity-idle"),
+                    "containers": [
+                        {
+                            "name": "unity-assistant",
+                            "image": image,
+                            "imagePullPolicy": image_pull_policy,
+                            "ports": [
+                                {"containerPort": 8000},
+                                {"containerPort": 6379},
+                            ],
+                            "env": env_vars,
+                            # Right-sized 2026-04 from 2 vCPU / 16 GiB based on
+                            # 30 days of per-pod metrics: p999 CPU = 0.25 cores,
+                            # p999 memory = 2.5 GiB, max-ever memory = 5.6 GiB
+                            # in production. 2 vCPU keeps ~8x headroom over p999
+                            # CPU; 8 GiB keeps ~3x headroom over p999 memory and
+                            # ~40% over the 30d max. Note: previous "2 vCPU /
+                            # 16 GiB" was actually billed as 2.46 vCPU because
+                            # Autopilot's 1:6.5 vCPU:memory ratio bumps CPU up
+                            # at 16 GiB. At 8 GiB the requested 2 vCPU is
+                            # honoured as-is, so this also drops effective CPU.
+                            "resources": {
+                                "requests": {
+                                    "cpu": "2",
+                                    "memory": "8Gi",
+                                    "ephemeral-storage": "10Gi",
+                                },
+                                "limits": {
+                                    "cpu": "2",
+                                    "memory": "8Gi",
+                                    "ephemeral-storage": "10Gi",
+                                },
+                            },
+                            "volumeMounts": [
+                                {
+                                    "name": "sa-key",
+                                    "mountPath": "/secrets",
+                                    "readOnly": True,
+                                },
+                                {
+                                    "name": "tmp-vol",
+                                    "mountPath": "/tmp",
+                                },
+                            ],
+                        },
+                    ],
+                    "volumes": [
+                        {"name": "sa-key", "secret": {"secretName": "comm-sa-key"}},
+                        {"name": "tmp-vol", "emptyDir": {}},
+                    ],
+                },
+            },
+        },
+    }
+
+    if ttl_seconds_after_finished is not None:
+        job_manifest["spec"]["ttlSecondsAfterFinished"] = ttl_seconds_after_finished
+    if active_deadline_seconds is not None:
+        job_manifest["spec"]["activeDeadlineSeconds"] = active_deadline_seconds
+
+    return job_manifest
+
+
 def create_unity_job(
     batch_api,
     job_name: str,
     namespace: str = "default",
     image: str = f"{SETTINGS.image_registry}/{SETTINGS.unity_image_name}:latest",
     deploy_env: str = SETTINGS.deploy_env,
-    ttl_seconds_after_finished: int = None,
+    ttl_seconds_after_finished: int | None = None,
     active_deadline_seconds: int | None = None,
     unity_status: str = "idle",
     priority_class_name: str | None = None,
@@ -300,258 +575,62 @@ def create_unity_job(
     extra_annotations: dict | None = None,
     extra_env: dict[str, str] | None = None,
 ):
-    """
-    Create a Kubernetes Job for a Unity assistant.
+    """Build and submit a Kubernetes Job for a Unity assistant.
 
-    Args:
-        batch_api: Kubernetes Batch API client
-        job_name: Name of the job
-        namespace: Kubernetes namespace
-        image: Docker image to use
-        deploy_env: Deployment environment ("production" or "staging")
-        ttl_seconds_after_finished: Seconds after job completion before cleanup (None to disable)
+    Thin wrapper around :func:`build_unity_job_manifest`: builds the
+    manifest from the same arguments, then calls
+    ``batch_api.create_namespaced_job(...)``.
+
+    Behaviour preserved bit-for-bit from before the build/submit
+    split:
+
+    * Returns the K8s API response object (with ``.metadata.name`` /
+      ``.metadata.uid``) on success.
+    * Returns ``None`` on a 409 Conflict (Job already exists) -- the
+      idle-pool replenish path relies on this to gracefully race with
+      itself.
+    * Returns ``None`` on any other ``ApiException`` (or unrelated
+      exception), with an error printed to stdout. **Production
+      callers depend on this swallow-and-return-None contract** --
+      see the test for /infra/job/create's response handling.
+
+    All keyword arguments are forwarded to
+    :func:`build_unity_job_manifest` -- see that function for full
+    parameter docs.
     """
     try:
-        optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}
-        unity_config_env = []
-        for key in (
-            "GCP_PROJECT_ID",
-            "PROJECT_ID",
-            "VERTEXAI_LOCATION",
-            "VERTEXAI_PROJECT",
-            "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE",
-        ):
-            config_ref = {
-                "name": "unity-config",
-                "key": key,
-            }
-            if key in optional_unity_config_keys:
-                config_ref["optional"] = True
-            unity_config_env.append(
-                {
-                    "name": key,
-                    "valueFrom": {
-                        "configMapKeyRef": config_ref,
-                    },
-                },
-            )
-        unity_secret_env = [
-            {
-                "name": key,
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": "unity-secrets",
-                        "key": key,
-                    },
-                },
-            }
-            for key in (
-                "ANTHROPIC_API_KEY",
-                "CARTESIA_API_KEY",
-                "DEEPGRAM_API_KEY",
-                "ELEVEN_API_KEY",
-                "LIVEKIT_API_KEY",
-                "LIVEKIT_API_SECRET",
-                "LIVEKIT_SIP_URI",
-                "LIVEKIT_URL",
-                "OPENAI_API_KEY",
-                "ORCHESTRA_ADMIN_KEY",
-                "SHARED_UNIFY_KEY",
-                "TAVILY_API_KEY",
-                "VERTEXAI_CREDENTIALS",
-                "_UNITY_STARTUP_HOOK_GROUP",
-                "_UNITY_STARTUP_HOOK_PACKAGE",
-            )
-        ]
-
-        env_vars = [
-            {"name": "UNITY_CONVERSATION_JOB_NAME", "value": job_name},
-            {"name": "DEPLOY_ENV", "value": deploy_env},
-            {
-                "name": "GOOGLE_APPLICATION_CREDENTIALS",
-                "value": "/secrets/key.json",
-            },
-            {"name": "PYTHONUNBUFFERED", "value": "1"},
-            {
-                "name": "TOKENIZERS_PARALLELISM",
-                "value": "false",
-            },
-            {"name": "OMP_NUM_THREADS", "value": "2"},
-            {"name": "MKL_NUM_THREADS", "value": "2"},
-            {"name": "HF_HOME", "value": "/tmp/huggingface"},
-            {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
-            {"name": "EVENTBUS_PUBLISHING_ENABLED", "value": "true"},
-            {"name": "EVENTBUS_PUBSUB_STREAMING", "value": "true"},
-            {"name": "UNITY_COMMS_URL", "value": SETTINGS.comms_url},
-            {"name": "UNITY_ADAPTERS_URL", "value": SETTINGS.adapters_url},
-            {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
-            {
-                "name": "UNITY_STARTUP_TIMING",
-                "value": "1" if deploy_env == "staging" else "0",
-            },
-            # Pipeline worker dispatch: route attachment ingestion through the
-            # GKE parse/ingest workers via Pub/Sub (topic names are derived
-            # from GCP_PROJECT_ID + DEPLOY_ENV, matching the existing
-            # ``unity-{name}{env_suffix}`` convention).
-            {"name": "UNITY_FILE_PIPELINE_DISPATCH_ENABLED", "value": "false"},
-            {
-                "name": "UNITY_FILE_PIPELINE_ARTIFACT_BUCKET",
-                "value": (
-                    "unity-pipeline-artifacts"
-                    if deploy_env == "production"
-                    else f"unity-pipeline-artifacts-{deploy_env}"
-                ),
-            },
-        ]
-        env_vars.extend(unity_config_env)
-        env_vars.extend(unity_secret_env)
-        if deploy_env == "staging":
-            env_vars += [{"name": "STAGING", "value": "true"}]
-            # Activate the new unity.gateway transports on staging Jobs
-            # so the extracted Ingress + Outbound code paths (Unity
-            # commits 2aad1b895 through fab4c5298) get exercised
-            # against real Pub/Sub traffic before any production
-            # cutover. Production Jobs (this branch is staging-only)
-            # continue using the legacy inline subscribe_to_topic and
-            # inline publisher.publish paths until those paths are
-            # explicitly retired. See unity/gateway/PHASES.md (Phase
-            # A.bis).
-            env_vars += [
-                {"name": "UNITY_CONVERSATION_INGRESS_TRANSPORT", "value": "pubsub"},
-                {"name": "UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "value": "pubsub"},
-            ]
-        env_vars = _merge_env_overrides(env_vars, extra_env)
-
-        image_pull_policy = (
-            "Always" if image.rsplit(":", 1)[-1] == "latest" else "IfNotPresent"
+        job_manifest = build_unity_job_manifest(
+            job_name=job_name,
+            namespace=namespace,
+            image=image,
+            deploy_env=deploy_env,
+            ttl_seconds_after_finished=ttl_seconds_after_finished,
+            active_deadline_seconds=active_deadline_seconds,
+            unity_status=unity_status,
+            priority_class_name=priority_class_name,
+            app_label=app_label,
+            extra_labels=extra_labels,
+            extra_annotations=extra_annotations,
+            extra_env=extra_env,
         )
-
-        metadata_labels = {
-            "app": app_label,
-            "created-by": "create_job_script",
-            "unity-status": unity_status,
-            "unity-date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "unity-image-hash": (
-                image.rsplit(":", 1)[-1] if ":" in image else "unknown"
-            ),
-        }
-        if extra_labels:
-            metadata_labels.update(extra_labels)
-
-        pod_annotations = {
-            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
-        }
-        if extra_annotations:
-            pod_annotations.update(extra_annotations)
-
-        metadata_annotations = dict(extra_annotations or {})
-
-        # Define the job manifest
-        job_manifest = {
-            "apiVersion": "batch/v1",
-            "kind": "Job",
-            "metadata": {
-                "name": job_name,
-                "namespace": namespace,
-                "labels": metadata_labels,
-                "annotations": metadata_annotations,
-            },
-            "spec": {
-                "backoffLimit": 0,
-                "template": {
-                    "metadata": {
-                        "labels": {"app": app_label},
-                        "annotations": pod_annotations,
-                    },
-                    "spec": {
-                        "restartPolicy": "Never",
-                        "serviceAccountName": "comm-sa",
-                        "terminationGracePeriodSeconds": 30,  # Faster termination
-                        "priorityClassName": (priority_class_name or "unity-idle"),
-                        "containers": [
-                            {
-                                "name": "unity-assistant",
-                                "image": image,
-                                "imagePullPolicy": image_pull_policy,
-                                "ports": [
-                                    {"containerPort": 8000},
-                                    {"containerPort": 6379},
-                                ],
-                                "env": env_vars,
-                                # Right-sized 2026-04 from 2 vCPU / 16 GiB based on
-                                # 30 days of per-pod metrics: p999 CPU = 0.25 cores,
-                                # p999 memory = 2.5 GiB, max-ever memory = 5.6 GiB
-                                # in production. 2 vCPU keeps ~8x headroom over p999
-                                # CPU; 8 GiB keeps ~3x headroom over p999 memory and
-                                # ~40% over the 30d max. Note: previous "2 vCPU /
-                                # 16 GiB" was actually billed as 2.46 vCPU because
-                                # Autopilot's 1:6.5 vCPU:memory ratio bumps CPU up
-                                # at 16 GiB. At 8 GiB the requested 2 vCPU is
-                                # honoured as-is, so this also drops effective CPU.
-                                "resources": {
-                                    "requests": {
-                                        "cpu": "2",
-                                        "memory": "8Gi",
-                                        "ephemeral-storage": "10Gi",
-                                    },
-                                    "limits": {
-                                        "cpu": "2",
-                                        "memory": "8Gi",
-                                        "ephemeral-storage": "10Gi",
-                                    },
-                                },
-                                "volumeMounts": [
-                                    {
-                                        "name": "sa-key",
-                                        "mountPath": "/secrets",
-                                        "readOnly": True,
-                                    },
-                                    {
-                                        "name": "tmp-vol",
-                                        "mountPath": "/tmp",
-                                    },
-                                ],
-                            },
-                        ],
-                        "volumes": [
-                            {"name": "sa-key", "secret": {"secretName": "comm-sa-key"}},
-                            {"name": "tmp-vol", "emptyDir": {}},
-                        ],
-                    },
-                },
-            },
-        }
-
-        # Add TTL if specified
-        if ttl_seconds_after_finished is not None:
-            job_manifest["spec"]["ttlSecondsAfterFinished"] = ttl_seconds_after_finished
-        if active_deadline_seconds is not None:
-            job_manifest["spec"]["activeDeadlineSeconds"] = active_deadline_seconds
-
-        # Create the job
         try:
             api_response = batch_api.create_namespaced_job(
                 namespace=namespace,
                 body=job_manifest,
             )
-
-            print(f"✅ Job created successfully!")
+            print("✅ Job created successfully!")
             print(f"   Job name: {api_response.metadata.name}")
             print(f"   Job UID: {api_response.metadata.uid}")
             print(f"   Namespace: {namespace}")
             print(f"   Image: {image}")
-
             return api_response
-
-        except ApiException as e:
-            if e.status == 409:  # Conflict - job already exists
+        except ApiException as exc:
+            if exc.status == 409:
                 print(f"⚠️  Job already exists: {job_name}")
                 return None
-            else:
-                raise e
-
-    except Exception as e:
-        print(f"❌ Error creating job: {e}")
+            raise
+    except Exception as exc:
+        print(f"❌ Error creating job: {exc}")
         return None
 
 

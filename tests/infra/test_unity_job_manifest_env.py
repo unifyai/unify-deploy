@@ -1,73 +1,144 @@
+"""Tests for the Unity assistant Job manifest contract.
+
+After the ``build_unity_job_manifest`` / ``create_unity_job`` split,
+manifest-shape assertions go directly against the dict returned by
+the builder (no FakeBatchApi dance). Tests that verify the submit
+side of the wrapper (calls ``create_namespaced_job`` exactly once,
+returns the API response, swallows 409 Conflicts) live in their own
+section at the bottom and use a tiny shared fake.
+"""
+
+from __future__ import annotations
+
 from pathlib import Path
 from types import SimpleNamespace
 
-from communication.infra.helpers import create_unity_job
+from communication.infra.helpers import (
+    build_unity_job_manifest,
+    create_unity_job,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_create_unity_job_uses_explicit_env_allowlist() -> None:
-    text = (ROOT / "communication/infra/helpers.py").read_text()
-
-    create_job_source = text[text.index("def create_unity_job(") :]
-    create_job_source = create_job_source[
-        : create_job_source.index("def get_job_logs(")
-    ]
-    config_env_source = create_job_source[
-        create_job_source.index("unity_config_env = []") : create_job_source.index(
-            "unity_secret_env = [",
-        )
-    ]
-
-    assert '"envFrom"' not in create_job_source
-    assert "GCP_SA_KEY" not in create_job_source
-    assert '"ORCHESTRA_ADMIN_KEY"' in create_job_source
-    assert '"GCP_PROJECT_ID"' in create_job_source
-    assert '"UNITY_STARTUP_TIMING"' in create_job_source
-    assert '"UNITY_STARTUP_TIMING"' not in config_env_source
-    assert '"value": "1" if deploy_env == "staging" else "0"' in create_job_source
-    assert '"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"' in create_job_source
-    assert (
-        'optional_unity_config_keys = {"UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"}'
-        in create_job_source
-    )
-    assert 'config_ref["optional"] = True' in create_job_source
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-def test_create_unity_job_applies_explicit_service_url_env_once() -> None:
-    class FakeBatchApi:
-        def __init__(self):
-            self.created_body = None
+def _container(manifest: dict) -> dict:
+    """The single ``unity-assistant`` container in the pod template."""
+    return manifest["spec"]["template"]["spec"]["containers"][0]
 
-        def create_namespaced_job(self, namespace, body):
-            self.created_body = body
-            return SimpleNamespace(
-                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
-            )
 
-    batch_api = FakeBatchApi()
+def _env_by_name(manifest: dict) -> dict[str, dict]:
+    """Map ``name -> env entry`` for the container's env list."""
+    return {entry["name"]: entry for entry in _container(manifest)["env"]}
 
-    create_unity_job(
-        batch_api,
+
+def _env_names(manifest: dict) -> list[str]:
+    return [entry["name"] for entry in _container(manifest)["env"]]
+
+
+# ---------------------------------------------------------------------------
+# Manifest shape: env-var allowlist + sourcing rules
+# ---------------------------------------------------------------------------
+
+
+def test_no_envFrom_bulk_secret_or_configmap_injection() -> None:
+    """Every env var is sourced explicitly (literal value, configMapKeyRef,
+    or secretKeyRef). No bulk ``envFrom`` -- that was the shape the
+    deleted legacy ``create_job.py`` used and is exactly what we don't
+    want here, because it makes the per-env contract invisible.
+    """
+    manifest = build_unity_job_manifest(job_name="env-allowlist-staging")
+    pod_spec = manifest["spec"]["template"]["spec"]
+    assert "envFrom" not in pod_spec
+    for container in pod_spec["containers"]:
+        assert "envFrom" not in container
+
+
+def test_orchestra_admin_key_sourced_from_unity_secrets() -> None:
+    manifest = build_unity_job_manifest(job_name="orch-admin-key-staging")
+    entry = _env_by_name(manifest)["ORCHESTRA_ADMIN_KEY"]
+    assert entry["valueFrom"]["secretKeyRef"] == {
+        "name": "unity-secrets",
+        "key": "ORCHESTRA_ADMIN_KEY",
+    }
+
+
+def test_gcp_project_id_sourced_from_unity_config() -> None:
+    manifest = build_unity_job_manifest(job_name="gcp-project-staging")
+    entry = _env_by_name(manifest)["GCP_PROJECT_ID"]
+    # Required key -> no "optional" flag.
+    assert entry["valueFrom"]["configMapKeyRef"] == {
+        "name": "unity-config",
+        "key": "GCP_PROJECT_ID",
+    }
+
+
+def test_runtime_reconcile_mode_is_optional_unity_config_key() -> None:
+    """``UNITY_DEPLOY_RUNTIME_RECONCILE_MODE`` is the one ConfigMap
+    key that's allowed to be missing -- the assistant uses a default
+    when it isn't set. Other ConfigMap-sourced keys are required.
+    """
+    manifest = build_unity_job_manifest(job_name="reconcile-mode-staging")
+    entry = _env_by_name(manifest)["UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"]
+    config_ref = entry["valueFrom"]["configMapKeyRef"]
+    assert config_ref["name"] == "unity-config"
+    assert config_ref["key"] == "UNITY_DEPLOY_RUNTIME_RECONCILE_MODE"
+    assert config_ref.get("optional") is True
+
+    # And the other ConfigMap keys are NOT marked optional.
+    for required_key in ("GCP_PROJECT_ID", "PROJECT_ID", "VERTEXAI_PROJECT"):
+        ref = _env_by_name(manifest)[required_key]["valueFrom"]["configMapKeyRef"]
+        assert ref.get("optional") is not True
+
+
+def test_unity_startup_timing_is_literal_not_configmap_sourced() -> None:
+    """Startup timing is decided per-deploy_env at manifest-build
+    time, not via ConfigMap. Pins the explicit branch so a refactor
+    can't accidentally move it back into ``unity-config``.
+    """
+    staging = build_unity_job_manifest(job_name="x", deploy_env="staging")
+    production = build_unity_job_manifest(job_name="x", deploy_env="production")
+
+    staging_entry = _env_by_name(staging)["UNITY_STARTUP_TIMING"]
+    production_entry = _env_by_name(production)["UNITY_STARTUP_TIMING"]
+
+    assert staging_entry == {"name": "UNITY_STARTUP_TIMING", "value": "1"}
+    assert production_entry == {"name": "UNITY_STARTUP_TIMING", "value": "0"}
+
+
+# ---------------------------------------------------------------------------
+# extra_env overrides
+# ---------------------------------------------------------------------------
+
+
+def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
+    """Preview slugs pass per-deploy ORCHESTRA_URL / UNITY_COMMS_URL /
+    UNITY_ADAPTERS_URL via ``extra_env``. The override must replace
+    the default (not duplicate it) so the container sees exactly one
+    value per env name.
+    """
+    manifest = build_unity_job_manifest(
         job_name="unity-preview-1207-staging",
         namespace="staging",
         deploy_env="staging",
         extra_env={
             "ORCHESTRA_URL": "https://internal.example.com/v0",
             "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
-            "UNITY_ADAPTERS_URL": ("https://myslug---unity-adapters-staging.run.app"),
+            "UNITY_ADAPTERS_URL": "https://myslug---unity-adapters-staging.run.app",
         },
     )
 
-    env_vars = batch_api.created_body["spec"]["template"]["spec"]["containers"][0][
-        "env"
-    ]
-    env_by_name = {env_var["name"]: env_var for env_var in env_vars}
-    env_names = [env_var["name"] for env_var in env_vars]
+    env_by_name = _env_by_name(manifest)
+    env_names = _env_names(manifest)
 
     assert env_names.count("ORCHESTRA_URL") == 1
     assert env_names.count("UNITY_COMMS_URL") == 1
     assert env_names.count("UNITY_ADAPTERS_URL") == 1
+
     assert env_by_name["ORCHESTRA_URL"]["value"] == (
         "https://internal.example.com/v0"
     )
@@ -79,56 +150,48 @@ def test_create_unity_job_applies_explicit_service_url_env_once() -> None:
     )
 
 
-def test_create_unity_job_always_pulls_latest_image() -> None:
-    class FakeBatchApi:
-        def __init__(self):
-            self.created_body = None
+# ---------------------------------------------------------------------------
+# Image pull policy
+# ---------------------------------------------------------------------------
 
-        def create_namespaced_job(self, namespace, body):
-            self.created_body = body
-            return SimpleNamespace(
-                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
-            )
 
-    batch_api = FakeBatchApi()
-
-    create_unity_job(
-        batch_api,
+def test_latest_image_tag_always_pulls() -> None:
+    manifest = build_unity_job_manifest(
         job_name="unity-offline-latest-staging",
         namespace="staging",
         image="registry/unity-staging:latest",
     )
-
-    container = batch_api.created_body["spec"]["template"]["spec"]["containers"][0]
-    assert container["imagePullPolicy"] == "Always"
+    assert _container(manifest)["imagePullPolicy"] == "Always"
 
 
-def test_create_unity_job_uses_cache_for_immutable_image_tags() -> None:
-    class FakeBatchApi:
-        def __init__(self):
-            self.created_body = None
-
-        def create_namespaced_job(self, namespace, body):
-            self.created_body = body
-            return SimpleNamespace(
-                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
-            )
-
-    batch_api = FakeBatchApi()
-
-    create_unity_job(
-        batch_api,
+def test_immutable_image_tag_uses_layer_cache() -> None:
+    manifest = build_unity_job_manifest(
         job_name="unity-offline-sha-staging",
         namespace="staging",
         image="registry/unity-staging:4f25e7cbd9a4",
     )
-
-    container = batch_api.created_body["spec"]["template"]["spec"]["containers"][0]
-    assert container["imagePullPolicy"] == "IfNotPresent"
+    assert _container(manifest)["imagePullPolicy"] == "IfNotPresent"
 
 
-def test_create_unity_job_sets_gateway_transports_pubsub_on_staging() -> None:
-    """Staging Jobs must opt in to both unity.gateway transports.
+def test_unity_image_hash_label_matches_image_tag() -> None:
+    """The ``unity-image-hash`` label is what the AssistantSession
+    controller filters on when claiming idle Jobs for the current
+    build. It must equal the image tag exactly.
+    """
+    manifest = build_unity_job_manifest(
+        job_name="image-hash-staging",
+        image="registry/unity-staging:abc123def456",
+    )
+    assert manifest["metadata"]["labels"]["unity-image-hash"] == "abc123def456"
+
+
+# ---------------------------------------------------------------------------
+# Staging-only gateway transport opt-in (Phase A.bis soak)
+# ---------------------------------------------------------------------------
+
+
+def test_staging_deploy_env_activates_both_gateway_transports() -> None:
+    """Staging Jobs must opt in to both ``unity.gateway`` transports.
 
     Pins the staging-soak configuration described in
     ``unity/gateway/PHASES.md`` (Phase A.bis). Activating these env
@@ -137,36 +200,17 @@ def test_create_unity_job_sets_gateway_transports_pubsub_on_staging() -> None:
     exposing any subtle regressions before the production cutover
     ever ships.
     """
-
-    class FakeBatchApi:
-        def __init__(self) -> None:
-            self.created_body = None
-
-        def create_namespaced_job(self, namespace, body):
-            self.created_body = body
-            return SimpleNamespace(
-                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
-            )
-
-    batch_api = FakeBatchApi()
-    create_unity_job(
-        batch_api,
-        job_name="unity-gateway-transports-staging",
+    manifest = build_unity_job_manifest(
+        job_name="gateway-transports-staging",
         namespace="staging",
         deploy_env="staging",
     )
-
-    env_vars = batch_api.created_body["spec"]["template"]["spec"]["containers"][0][
-        "env"
-    ]
-    env_by_name = {env_var["name"]: env_var for env_var in env_vars}
-    assert "UNITY_CONVERSATION_INGRESS_TRANSPORT" in env_by_name
+    env_by_name = _env_by_name(manifest)
     assert env_by_name["UNITY_CONVERSATION_INGRESS_TRANSPORT"]["value"] == "pubsub"
-    assert "UNITY_CONVERSATION_OUTBOUND_TRANSPORT" in env_by_name
     assert env_by_name["UNITY_CONVERSATION_OUTBOUND_TRANSPORT"]["value"] == "pubsub"
 
 
-def test_create_unity_job_does_not_set_gateway_transports_on_production() -> None:
+def test_production_deploy_env_does_not_activate_gateway_transports() -> None:
     """Production Jobs must NOT yet activate the new transports.
 
     Hosted production keeps the legacy inline subscribe_to_topic and
@@ -175,31 +219,239 @@ def test_create_unity_job_does_not_set_gateway_transports_on_production() -> Non
     This test guards against accidentally moving either env var out
     of the staging-only block before that point.
     """
-
-    class FakeBatchApi:
-        def __init__(self) -> None:
-            self.created_body = None
-
-        def create_namespaced_job(self, namespace, body):
-            self.created_body = body
-            return SimpleNamespace(
-                metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
-            )
-
-    batch_api = FakeBatchApi()
-    create_unity_job(
-        batch_api,
-        job_name="unity-gateway-transports-prod",
+    manifest = build_unity_job_manifest(
+        job_name="gateway-transports-prod",
         namespace="production",
         deploy_env="production",
     )
+    env_names = _env_names(manifest)
+    assert "UNITY_CONVERSATION_INGRESS_TRANSPORT" not in env_names
+    assert "UNITY_CONVERSATION_OUTBOUND_TRANSPORT" not in env_names
 
-    env_vars = batch_api.created_body["spec"]["template"]["spec"]["containers"][0][
-        "env"
-    ]
-    env_by_name = {env_var["name"]: env_var for env_var in env_vars}
-    assert "UNITY_CONVERSATION_INGRESS_TRANSPORT" not in env_by_name
-    assert "UNITY_CONVERSATION_OUTBOUND_TRANSPORT" not in env_by_name
+
+def test_staging_deploy_env_sets_staging_flag() -> None:
+    manifest = build_unity_job_manifest(job_name="x", deploy_env="staging")
+    assert _env_by_name(manifest)["STAGING"]["value"] == "true"
+
+
+def test_production_deploy_env_omits_staging_flag() -> None:
+    manifest = build_unity_job_manifest(job_name="x", deploy_env="production")
+    assert "STAGING" not in _env_names(manifest)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline artifact bucket name varies by deploy_env
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_artifact_bucket_production_uses_canonical_name() -> None:
+    manifest = build_unity_job_manifest(job_name="x", deploy_env="production")
+    bucket = _env_by_name(manifest)["UNITY_FILE_PIPELINE_ARTIFACT_BUCKET"]["value"]
+    assert bucket == "unity-pipeline-artifacts"
+
+
+def test_pipeline_artifact_bucket_staging_has_env_suffix() -> None:
+    manifest = build_unity_job_manifest(job_name="x", deploy_env="staging")
+    bucket = _env_by_name(manifest)["UNITY_FILE_PIPELINE_ARTIFACT_BUCKET"]["value"]
+    assert bucket == "unity-pipeline-artifacts-staging"
+
+
+# ---------------------------------------------------------------------------
+# Top-level metadata + labels + spec
+# ---------------------------------------------------------------------------
+
+
+def test_default_priority_class_is_unity_idle() -> None:
+    manifest = build_unity_job_manifest(job_name="x")
+    pod_spec = manifest["spec"]["template"]["spec"]
+    assert pod_spec["priorityClassName"] == "unity-idle"
+
+
+def test_priority_class_override() -> None:
+    manifest = build_unity_job_manifest(
+        job_name="x",
+        priority_class_name="unity-critical",
+    )
+    pod_spec = manifest["spec"]["template"]["spec"]
+    assert pod_spec["priorityClassName"] == "unity-critical"
+
+
+def test_extra_labels_merge_onto_job_metadata() -> None:
+    manifest = build_unity_job_manifest(
+        job_name="x",
+        extra_labels={"assistant-session": "abc-123", "binding-id": "bind-xyz"},
+    )
+    labels = manifest["metadata"]["labels"]
+    assert labels["assistant-session"] == "abc-123"
+    assert labels["binding-id"] == "bind-xyz"
+    # Defaults still present.
+    assert labels["app"] == "unity"
+    assert labels["unity-status"] == "idle"
+
+
+def test_extra_annotations_appear_on_both_job_and_pod_template() -> None:
+    manifest = build_unity_job_manifest(
+        job_name="x",
+        extra_annotations={"unify.ai/session-id": "ses-123"},
+    )
+    job_anns = manifest["metadata"]["annotations"]
+    pod_anns = manifest["spec"]["template"]["metadata"]["annotations"]
+    assert job_anns["unify.ai/session-id"] == "ses-123"
+    assert pod_anns["unify.ai/session-id"] == "ses-123"
+    # Pod gets the safe-to-evict guard regardless.
+    assert pod_anns["cluster-autoscaler.kubernetes.io/safe-to-evict"] == "false"
+
+
+def test_app_label_override_for_offline_and_dashboard_jobs() -> None:
+    """`task_activation` and `dashboard_actions` use distinct
+    ``app`` labels so the controller's idle-pool selector
+    (``app=unity``) doesn't accidentally pick up those one-shot Jobs.
+    """
+    offline = build_unity_job_manifest(job_name="x", app_label="unity-offline")
+    dashboard = build_unity_job_manifest(
+        job_name="x",
+        app_label="unity-dashboard-action",
+    )
+    assert offline["metadata"]["labels"]["app"] == "unity-offline"
+    assert offline["spec"]["template"]["metadata"]["labels"]["app"] == "unity-offline"
+    assert dashboard["metadata"]["labels"]["app"] == "unity-dashboard-action"
+
+
+def test_ttl_and_active_deadline_only_appear_when_set() -> None:
+    bare = build_unity_job_manifest(job_name="x")
+    assert "ttlSecondsAfterFinished" not in bare["spec"]
+    assert "activeDeadlineSeconds" not in bare["spec"]
+
+    bounded = build_unity_job_manifest(
+        job_name="x",
+        ttl_seconds_after_finished=300,
+        active_deadline_seconds=3600,
+    )
+    assert bounded["spec"]["ttlSecondsAfterFinished"] == 300
+    assert bounded["spec"]["activeDeadlineSeconds"] == 3600
+
+
+def test_container_resources_are_right_sized() -> None:
+    """Pins the 2 vCPU / 8 GiB / 10 GiB ephemeral shape applied in
+    the 2026-04 rightsizing. Tests against accidental regression to
+    the previous 2 vCPU / 16 GiB / 100 GiB shape (which was actually
+    billed as 2.46 vCPU on Autopilot's 1:6.5 ratio).
+    """
+    resources = _container(build_unity_job_manifest(job_name="x"))["resources"]
+    expected = {
+        "cpu": "2",
+        "memory": "8Gi",
+        "ephemeral-storage": "10Gi",
+    }
+    assert resources["requests"] == expected
+    assert resources["limits"] == expected
+
+
+def test_job_top_level_shape() -> None:
+    manifest = build_unity_job_manifest(job_name="shape-staging", namespace="staging")
+    assert manifest["apiVersion"] == "batch/v1"
+    assert manifest["kind"] == "Job"
+    assert manifest["metadata"]["name"] == "shape-staging"
+    assert manifest["metadata"]["namespace"] == "staging"
+    assert manifest["spec"]["backoffLimit"] == 0
+    assert manifest["spec"]["template"]["spec"]["restartPolicy"] == "Never"
+    assert manifest["spec"]["template"]["spec"]["serviceAccountName"] == "comm-sa"
+
+
+# ---------------------------------------------------------------------------
+# Submission wrapper: `create_unity_job` calls the K8s API exactly once
+# ---------------------------------------------------------------------------
+
+
+class _FakeBatchApi:
+    """Minimal Batch API double for testing the submission wrapper.
+
+    Records the namespace + body it was called with and lets each
+    test inject the response or exception it wants.
+    """
+
+    def __init__(self, *, response=None, exception=None) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self._response = response
+        self._exception = exception
+
+    def create_namespaced_job(self, namespace, body):
+        self.calls.append((namespace, body))
+        if self._exception is not None:
+            raise self._exception
+        return self._response or SimpleNamespace(
+            metadata=SimpleNamespace(name=body["metadata"]["name"], uid="uid-1"),
+        )
+
+
+def test_create_unity_job_submits_built_manifest_to_kube_api_once() -> None:
+    """The wrapper passes whatever ``build_unity_job_manifest`` produced
+    to ``create_namespaced_job``, with the right namespace, exactly
+    one time.
+    """
+    batch_api = _FakeBatchApi()
+    response = create_unity_job(
+        batch_api,
+        job_name="submit-once-staging",
+        namespace="staging",
+        deploy_env="staging",
+    )
+
+    assert len(batch_api.calls) == 1
+    submitted_namespace, submitted_body = batch_api.calls[0]
+    assert submitted_namespace == "staging"
+    # The submitted body equals what build_unity_job_manifest would
+    # produce for the same args -- pins that the wrapper doesn't
+    # rewrite the manifest between build and submit.
+    expected_body = build_unity_job_manifest(
+        job_name="submit-once-staging",
+        namespace="staging",
+        deploy_env="staging",
+    )
+    assert submitted_body == expected_body
+    assert response.metadata.name == "submit-once-staging"
+
+
+def test_create_unity_job_swallows_409_conflict_and_returns_none() -> None:
+    """The idle-pool replenish path races itself by design. A 409
+    Conflict from the K8s API means another worker already created
+    the Job; we must return None rather than raising so the racing
+    workers don't error out.
+    """
+    from kubernetes.client.rest import ApiException
+
+    batch_api = _FakeBatchApi(exception=ApiException(status=409, reason="Conflict"))
+    result = create_unity_job(
+        batch_api,
+        job_name="conflict-test-staging",
+        namespace="staging",
+    )
+    assert result is None
+    assert len(batch_api.calls) == 1  # We did attempt the submit before 409
+
+
+def test_create_unity_job_returns_none_on_other_api_exceptions() -> None:
+    """Non-409 K8s API failures (5xx, auth, etc.) are surfaced via
+    return-None + printed message rather than raising. Production
+    callers depend on this swallow-and-return-None contract -- if
+    you change it, audit every caller of create_unity_job first.
+    """
+    from kubernetes.client.rest import ApiException
+
+    batch_api = _FakeBatchApi(exception=ApiException(status=500, reason="Server"))
+    result = create_unity_job(
+        batch_api,
+        job_name="server-error-test-staging",
+        namespace="staging",
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Cloudbuild env-var contract (cross-file invariant; no manifest builder
+# involved, but lives alongside manifest tests because the values flow
+# directly into the manifest env vars)
+# ---------------------------------------------------------------------------
 
 
 def test_comms_preview_deploy_sets_all_runtime_service_urls() -> None:
