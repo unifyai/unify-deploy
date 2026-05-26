@@ -562,9 +562,10 @@ Examples:
         print("\n💡 Next steps:")
         print("   1. Verify resources: python setup_k8s_config.py --list")
         print(
-            "   2. Create a test job: python create_job.py --assistant-id test --user-name 'Test' --user-number '+1234567890'",
+            "   2. Refresh the idle Job pool via the canonical production path:\n"
+            "      python scripts/dev/idle_job_refresh.py --env staging",
         )
-        print("   3. Check job logs: kubectl logs -n unity -l job-name=unity-test")
+        print("   3. Check pool state: gcloud run services logs read ...")
         return
 
     # Default: show help
