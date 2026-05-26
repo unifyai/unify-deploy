@@ -1941,6 +1941,24 @@ def _coordinator_delegate_message(payload: CoordinatorDelegatePayload) -> str:
     )
 
 
+_ASYNC_DELEGATION_RECEIPT_MESSAGE = (
+    "The colleague has been woken or notified with the assignment. "
+    "This does not mean the colleague has already created durable artifacts "
+    "or completed the work."
+)
+
+
+def _async_delegation_receipt() -> dict[str, Any]:
+    """Return generic receipt fields for an accepted async colleague delegation."""
+
+    return {
+        "accepted": True,
+        "completion_status": "pending_async",
+        "receipt_type": "async_delegation_receipt",
+        "message": _ASYNC_DELEGATION_RECEIPT_MESSAGE,
+    }
+
+
 def _publish_unity_system_event(
     *,
     assistant_id: str,
@@ -2206,6 +2224,7 @@ async def assistant_coordinator_delegate_webhook(payload: CoordinatorDelegatePay
                 "success": True,
                 "status": "published_local",
                 "assistant_id": assistant_id,
+                **_async_delegation_receipt(),
             }
 
         response = await asyncio.to_thread(
@@ -2269,6 +2288,7 @@ async def assistant_coordinator_delegate_webhook(payload: CoordinatorDelegatePay
             "status": "published_to_active_session",
             "assistant_id": assistant_id,
             "activation_id": start_result.get("activation_id"),
+            **_async_delegation_receipt(),
         }
 
     return {
@@ -2276,6 +2296,7 @@ async def assistant_coordinator_delegate_webhook(payload: CoordinatorDelegatePay
         "status": "attached_to_startup",
         "assistant_id": assistant_id,
         "activation_id": start_result.get("activation_id"),
+        **_async_delegation_receipt(),
     }
 
 

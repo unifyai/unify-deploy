@@ -62,6 +62,19 @@ def _wake_reason() -> dict:
     }
 
 
+def _async_delegation_receipt() -> dict:
+    return {
+        "accepted": True,
+        "completion_status": "pending_async",
+        "receipt_type": "async_delegation_receipt",
+        "message": (
+            "The colleague has been woken or notified with the assignment. "
+            "This does not mean the colleague has already created durable artifacts "
+            "or completed the work."
+        ),
+    }
+
+
 def test_coordinator_delegate_attaches_wake_reason_for_cold_start():
     """Cold-start deliveries should pass the wake reason to start intent dispatch."""
 
@@ -92,8 +105,13 @@ def test_coordinator_delegate_attaches_wake_reason_for_cold_start():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "attached_to_startup"
-    assert body["assistant_id"] == "assistant-123"
+    assert body == {
+        "success": True,
+        "status": "attached_to_startup",
+        "assistant_id": "assistant-123",
+        "activation_id": "activation-1",
+        **_async_delegation_receipt(),
+    }
     mock_publish.assert_not_called()
     assert mock_dispatch.call_args.args[1] == "api_message"
     assert mock_dispatch.call_args.kwargs["wake_reasons"] == [_wake_reason()]
@@ -129,7 +147,13 @@ def test_coordinator_delegate_publishes_event_for_running_session():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "published_to_active_session"
+    assert body == {
+        "success": True,
+        "status": "published_to_active_session",
+        "assistant_id": "assistant-123",
+        "activation_id": "activation-2",
+        **_async_delegation_receipt(),
+    }
     mock_publish.assert_called_once()
     assert mock_publish.call_args.kwargs["event_type"] == "coordinator_delegate"
     assert mock_publish.call_args.kwargs["extra_event_fields"] == _wake_reason()
@@ -155,8 +179,12 @@ def test_coordinator_delegate_local_runtime_publishes_directly():
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "published_local"
-    assert body["assistant_id"] == "assistant-123"
+    assert body == {
+        "success": True,
+        "status": "published_local",
+        "assistant_id": "assistant-123",
+        **_async_delegation_receipt(),
+    }
     mock_dispatch.assert_not_called()
     mock_publish.assert_called_once()
     assert mock_publish.call_args.kwargs["event_type"] == "coordinator_delegate"
