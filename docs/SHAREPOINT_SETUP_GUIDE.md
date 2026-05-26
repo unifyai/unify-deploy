@@ -618,10 +618,14 @@ upload_url = session.upload_url
 
 ## Full Example: SharePoint Views
 
-Here's a complete example of SharePoint endpoints using **delegated permissions** (same pattern as `outlook_views.py`):
+The SharePoint channel lives in the open-source **unity** repository
+(Phase B+C migration). See
+[`unity/gateway/channels/sharepoint/views.py`](https://github.com/unifyai/unity/blob/main/unity/gateway/channels/sharepoint/views.py)
+for the actual implementation. The example below is illustrative
+only; consult the unity source for the canonical code.
 
 ```python
-# communication/sharepoint/views.py
+# unity/gateway/channels/sharepoint/views.py (illustrative)
 
 import logging
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -630,7 +634,7 @@ from typing import Optional
 from msgraph.generated.models.drive_item import DriveItem
 from msgraph.generated.models.folder import Folder
 
-from communication.helpers import get_graph_client  # Uses delegated tokens
+from unity.gateway.common.graph import get_graph_client  # Uses delegated tokens
 
 router = APIRouter()
 

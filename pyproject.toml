@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "communication"
 version = "0.1.0"
-description = "External communication gateway for Unity - handles Gmail, Outlook, Teams, WhatsApp, Discord, and phone integrations"
+description = "Private SaaS infrastructure (K8s Job control, SSH tunnel, VM pool, scheduled tasks) wrapping the unity.gateway open-source communication channels"
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
 dependencies = [

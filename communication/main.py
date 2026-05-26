@@ -1,7 +1,7 @@
 """Comms-app FastAPI entrypoint.
 
 Thin shell that composes communication's private SaaS routers and
-startup hooks on top of the unity.gateway aggregator. All 10
+startup hooks on top of the unity.gateway aggregator. The 10
 external-channel routers (social, phone, gmail, outlook, email,
 whatsapp, teams, sharepoint, unillm, discord) are mounted by
 ``unity.gateway.app.create_app()`` from ``unity.gateway.channels.*``;
@@ -15,10 +15,10 @@ this module only adds:
 * Prometheus metrics instrumentation via the existing
   ``common.metrics.setup_metrics`` (unchanged).
 
-The Discord bot-pool sync + health-check loop is handled by
-unity.gateway's built-in lifespan -- the equivalent of the legacy
-``communication.discord.bot_manager`` calls that used to live in
-this file's old lifespan.
+The Discord bot-pool sync + health-check loop is owned by
+unity.gateway's built-in lifespan
+(``unity.gateway.channels.discord.bot_manager``); no
+communication-side bot_manager exists anymore.
 
 Auth wiring:
 
