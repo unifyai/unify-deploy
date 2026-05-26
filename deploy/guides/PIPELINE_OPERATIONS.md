@@ -299,9 +299,10 @@ kubectl get cronjob unity-pipeline-stale-reconciler -n production
 
 `deploy/k8s/workers/stale-reconciler-cronjob.yaml` runs
 `pipeline_control reconcile-stale` every 15 minutes with a low job budget.
-It is installed dry-run first: omit `--execute` until staging confirms the
-plan output, then enable execution with bounded `--max-jobs` and
-`--max-attempts`.
+It executes bounded recovery automatically: complete stale checkpoints are
+finalized, partial stale jobs are republished from parse outbox, and missing
+payloads are marked for operator review. The CronJob scans recent dispatches
+but only acts on a small `--max-jobs` batch per run.
 
 ## DLQ Recovery Runbook
 
@@ -388,9 +389,9 @@ uv run python -m unity_deploy.infra.cli.pipeline_control recover-stale \
 ```
 
 The automatic reconciler uses the same rules through
-`pipeline_control reconcile-stale`; keep production dry-run until staging has
-proved that duplicate-live deferrals, checkpoint resume, and finalization
-ordering behave as expected.
+`pipeline_control reconcile-stale` and runs with `--execute` in the deployed
+CronJob. Keep manual `recover-stale --dry-run` as the break-glass inspection
+path when you want to review a specific dispatch before acting.
 
 ## HPA And External Metrics
 

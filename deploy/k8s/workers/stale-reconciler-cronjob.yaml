@@ -38,12 +38,13 @@ spec:
             - --env
             - staging
             - --dispatch-limit
-            - "20"
+            - "100"
             - --max-jobs
             - "5"
+            - --execute
             env:
             - name: UNITY_STALE_RECONCILER_DRY_RUN
-              value: "true"
+              value: "false"
             - name: UNITY_GCP_PIPELINE_ENVIRONMENT
               value: "staging"
             - name: UNITY_GCS_ARTIFACT_BUCKET
@@ -92,12 +93,13 @@ spec:
             - --env
             - production
             - --dispatch-limit
-            - "20"
+            - "100"
             - --max-jobs
             - "5"
+            - --execute
             env:
             - name: UNITY_STALE_RECONCILER_DRY_RUN
-              value: "true"
+              value: "false"
             - name: UNITY_GCP_PIPELINE_ENVIRONMENT
               value: "production"
             - name: UNITY_GCS_ARTIFACT_BUCKET
