@@ -6,58 +6,63 @@ path in `unity-deploy`.
 
 ## Current State
 
-- `unity-staging` has already been cut over. The live Cloud Build trigger now
-  runs the private bridge flow instead of building directly from
-  `unity/deploy/cloudbuild-staging.yaml`.
-- `unity-base-staging-private` exists as the private canonical staging base
-  build trigger.
-- `unity-production-private-bridge` and `unity-base-production-private` exist,
-  but they are dormant/manual only. Production has not been cut over yet.
-- The live production `unity` trigger still points at `deploy/cloudbuild.yaml`
-  in the public `unity` repository.
+**Both staging and production are cut over.** Live Cloud Build triggers now
+run the private bridge flow:
 
-## Important Invariant
+| Environment | Bridge trigger | Private base trigger | Overlay trigger |
+|-------------|----------------|---------------------|-----------------|
+| **staging** | `unity-staging` (inline, fires on `unity@staging` push) | `unity-base-staging-private` (reads `unity-deploy/base/cloudbuild-staging.yaml`) | `unity-deploy-staging` |
+| **production** | `unity-production-private-bridge` (inline, fires on `unity@main` push) | `unity-base-production-private` (reads `unity-deploy/base/cloudbuild.yaml`) | `unity-deploy` |
 
-Do not prune hosted deploy assets from `unity/main` until the live production
-`unity` trigger has been switched to the private bridge path and validated.
+The original `unity` trigger (which used to build directly from
+`unity/deploy/cloudbuild.yaml` on the public repo) has been retired -- its
+branch filter was set to `^__disabled_cutover_20260416__$` in April 2026 so
+that it could not fire on any real branch, and was deleted in May 2026.
 
-Merging `staging -> main` without that trigger switch will probably not break
-production immediately, because production can still build from the old public
-path. The risk is more subtle:
+**Preview is intentionally not bridged.** The `unity-preview` trigger still
+fires on `unity` repo `^feature/.+$` push events and runs
+`unity/deploy/cloudbuild-preview.yaml` directly. Preview environments share
+the staging image repo (`unity-base-staging:preview-<slug>-<sha>` tag), reuse
+staging's job-watcher, and skip the customer-overlay control-plane reconcile,
+so they don't need the bridge round-trip. If preview ever grows to need a
+customer overlay or its own base build, mirror the staging/production pattern.
 
-- people may assume production is already using `unity-deploy` as the canonical
-  hosted source of truth when it is not
-- later hosted-only edits in `unity-deploy/main` may not actually control
-  production yet
-- a later cleanup of hosted files from `unity/main` could then break production
-  builds unexpectedly
+## Production Cutover Validation (completed)
 
-## Production Cutover Checklist
+The production cutover was validated on 2026-05-25 via the Phase C.5
+unity@main fast-forward:
 
-When you are ready to promote the hosted split to production:
+| Step | Build ID | Trigger | Outcome |
+|------|----------|---------|---------|
+| 1 | `f9c41dd4-a213-...` | `unity-production-private-bridge` | SUCCESS (fired on unity@main `7885f958c`) |
+| 2 | `974cf979-9ac2-...` | `unity-base-production-private` | SUCCESS (built `unity-base:7885f958c`) |
+| 3 | `56d0d282-bd7d-...` | `unity-deploy` | SUCCESS (overlay built on top) |
 
-1. Merge `unity/staging -> main`.
-2. Merge `unity-deploy/staging -> main`.
-3. Update the live `unity` production trigger to use the private bridge config
-   instead of `deploy/cloudbuild.yaml` from the public repo.
-4. Run one proof cycle on the current `unity/main` SHA.
-5. Confirm the chain:
-   - `unity` trigger runs the private bridge
-   - `unity-base-production-private` runs with the exact `unity` SHA
-   - downstream `unity-deploy` production build succeeds
-   - idle container refresh completes
-6. Only after that, prune hosted-only deploy assets from `unity/main`.
+End-to-end chain (push to running Unity Job image) verified clean.
 
-## Staging Reference
+## Important Invariants
 
-The staging cutover that has already been validated uses this shape:
+- **The `unity-base-{staging,production}-private` triggers must keep cloning
+  `unity` from the source-of-truth branch (`staging` or `main`) and clobbering
+  `unity/deploy/` with `unity-deploy/base/` before building.** This is what
+  makes `unity-deploy/base/` the canonical hosted deploy source.
+- **`unity/deploy/cloudbuild{,-staging}.yaml` are no longer the canonical
+  config for production / staging image builds.** They remain in the open-source
+  `unity` repo as a reference implementation (OSS users self-deploying Unity
+  can use them as a starting point), but the SaaS triggers ignore them.
+- **`unity/deploy/cloudbuild-preview.yaml` is still live** for the
+  `unity-preview` trigger. Don't touch it without coordinating the preview
+  flow.
 
-- live trigger: `unity-staging`
-- private base trigger: `unity-base-staging-private`
-- downstream overlay trigger: `unity-deploy-staging`
+## When to extend the bridge pattern to preview
 
-The production cutover should mirror that same pattern:
+Add a `unity-preview-private-bridge` + `unity-base-preview-private` only if:
 
-- live trigger: `unity`
-- private base trigger: `unity-base-production-private`
-- downstream overlay trigger: `unity-deploy`
+- Preview environments need access to the customer-overlay seeds /
+  integrations from `unity-deploy/unity_deploy/customization/`, or
+- Preview needs to diverge from staging's job-watcher / pipeline workers, or
+- You want preview base builds to read `unity-deploy/base/` rather than
+  `unity/deploy/`.
+
+Today none of these apply -- preview is deliberately a "staging base image
+with a different tag" workflow.
