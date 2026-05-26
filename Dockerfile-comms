@@ -22,6 +22,16 @@ RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") &
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unillm.git /tmp/unillm && \
     pip install --no-cache-dir /tmp/unillm
 
+# Cache-buster for the unity clone+install layer below. The Cloud
+# Build pipeline resolves the current head SHA of unifyai/unity at
+# the matching branch (main or staging) and passes it as a
+# --build-arg. Without referencing this ARG inside the RUN body,
+# Docker's layer cache would reuse a prior `git clone` snapshot of
+# unity even after upstream commits land (the RUN instruction text
+# stays identical), and downstream `from unity.X import Y` calls
+# would silently miss newly-added modules.
+ARG UNITY_SHA=unknown
+
 # Clone unity and install just the gateway-runtime deps. Phase C.2:
 # provides the unity.gateway channels + unity.gateway.app.create_app()
 # factory that communication/main.py composes on top of in Phase C.3.
@@ -42,7 +52,8 @@ RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") &
 # unity's base deps but not needed by the gateway. Suppress them by
 # not running pip check; they're harmless because nothing the
 # gateway imports actually requires them.
-RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
+RUN echo "UNITY_SHA=${UNITY_SHA}" && \
+    DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
     pip install --no-cache-dir --no-deps /tmp/unity && \
     pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt

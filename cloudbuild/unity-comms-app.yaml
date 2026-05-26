@@ -8,17 +8,25 @@ steps:
   - |
     docker pull ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest || true
 
-  # Build Docker Image with BuildKit inline cache
+  # Build Docker Image with BuildKit inline cache. UNITY_SHA is the
+  # head of unifyai/unity@main at build time; passing it through busts
+  # the cached unity-clone layer inside Dockerfile-comms when unity
+  # has new commits (otherwise the cached layer reuses a stale
+  # snapshot and downstream `from unity.X import Y` calls silently
+  # miss newly-added modules).
 - name: 'gcr.io/cloud-builders/docker'
   id: 'build-image'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
+    UNITY_SHA=$$(git ls-remote https://github.com/unifyai/unity.git refs/heads/main | awk '{print $$1}')
+    echo "Cache-busting unity layer with UNITY_SHA=$$UNITY_SHA"
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-comms \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN --build-arg BRANCH_NAME=main \
+      --build-arg UNITY_SHA=$$UNITY_SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
   secretEnv: ['GITHUB_TOKEN']
