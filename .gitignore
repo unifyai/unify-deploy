@@ -9,4 +9,6 @@ build/
 *.csv
 *.xlsx
 logs/*
+deploy/logs/
+.DS_Store
 *Zone.Identifier
