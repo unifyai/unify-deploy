@@ -1,43 +1,102 @@
 name: Valos
 slug: valos
-version: "0.2.0"
+version: "0.3.0"
 sector: real-estate
 tier: api
 quality: bronze
 description: >
-  Integration with Valos.ai, an AI-driven property valuation platform
-  used by RICS-registered valuers to generate valuation reports from
-  trusted property data sources.  Live API access goes through a single
-  ``valos_request`` tool that exposes the underlying authenticated HTTP
-  client to the actor.  PLACEHOLDER auth scheme — bearer API key
-  pending official Valos developer documentation.
-homepage: https://valos.ai
+  UK property valuation data layer for the ClientDelta Healthcare valuation
+  workflow.  Wraps two upstream services that Unify holds accounts for —
+  the Ordnance Survey Data Hub (OS Maps API for raster tiles, OS Names
+  API for geocoding, OS Places API for UPRN lookup) and PropertyData
+  (Land Registry freeholds, INSPIRE polygon geometry, title information)
+  — and exposes them to the actor as typed primitives covering address
+  resolution, freehold title lookup, polygon retrieval, demographic
+  context, and OS-tiled map rendering.  Replaces the placeholder
+  pass-through to api.valos.ai.  Credentials are Unify-owned and live
+  in the deployment environment; the package is scoped to a single
+  client deployment via the ``integrations=[...]`` opt-in on
+  ``BASE_SPEC.derive(...)`` (ClientDelta today).
+homepage: https://osdatahub.os.uk
 
 secrets:
-- name: VALOS_API_KEY
+- name: OS_MAPS_API_KEY
   description: >
-    Bearer API key for the Valos API (placeholder — confirm credential
-    type against the official Valos developer documentation before
-    going to production).
-  required: false
+    OS Data Hub API key with access to OS Maps, OS Names, and OS Places.
+    Provisioned on Unify's account on the Premium plan; never customer-
+    supplied.  Distributing OS rasters in customer-deliverable Word
+    reports is redistribution and may require a separate OS Partner /
+    OS Reseller agreement — confirm commercial terms with Ordnance
+    Survey before producing client-deliverable maps.
+  required: true
   sensitive: true
-- name: VALOS_API_BASE_URL
+- name: PROPERTYDATA_API_KEY
   description: >
-    Override for the Valos API base URL. Defaults to https://api.valos.ai
-    in _client.py; useful for sandbox/staging environments.
-  required: false
-  sensitive: false
+    PropertyData API key with the Land Registry endpoints enabled
+    (``/api/freeholds`` and ``/api/title-information``).  Provisioned on
+    Unify's account; never customer-supplied.  Confirm reseller / multi-
+    tenant terms with PropertyData before opting any second client into
+    this package.
+  required: true
+  sensitive: true
 
 capabilities:
-- id: valos_live
-  name: Live API access
+- id: valos_geocode
+  name: Address geocoding
   description: >
-    One tool covering the entire Valos REST surface (property search,
-    valuation lookups, etc.).  Endpoint paths are not yet documented
-    publicly — confirm the contract with the Valos developer team
-    before relying on specific paths.
-  functions: [valos_request]
+    Resolve a free-text address or postcode to coordinates and a UPRN
+    via OS Places + OS Names.
+  functions: [valos_geocode]
+- id: valos_freeholds
+  name: Freehold title lookup
+  description: >
+    Look up registered freehold titles for a postcode or coordinate
+    pair, returning title numbers, INSPIRE ids, tenure, and whether
+    polygon geometry is available.
+  functions: [valos_lookup_freeholds]
+- id: valos_title_polygon
+  name: Title boundary polygon
+  description: >
+    Resolve a title number or INSPIRE id to a GeoJSON polygon, plot
+    size, and ownership type.  Backed by PropertyData's structured
+    wrapper around HM Land Registry's INSPIRE Index Polygons.
+  functions: [valos_get_title_polygon]
+- id: valos_demographics
+  name: Postcode demographics
+  description: >
+    Census, deprivation, and wealth indicators for a postcode and
+    surrounding radius via the Office for National Statistics open
+    APIs.  Closes the demographics gap to Carterwood for non-care-
+    home-specific context.
+  functions: [valos_postcode_demographics]
+- id: valos_render
+  name: OS map rendering
+  description: >
+    Render OS Maps WMTS tiles to a PNG, optionally with a polygon
+    overlay, north arrow, and scale bar.  ``valos_render_location_plan``
+    composes a Land-Registry-style location plan; ``valos_render_competitor_map``
+    layers numbered pins for nearby competitors.  All renderers persist
+    PNGs at the supplied filesystem path so ``ImageManager`` can resolve
+    them later via filepath.
+  functions:
+  - valos_render_os_map
+  - valos_render_location_plan
+  - valos_render_competitor_map
 
-requirements: [httpx]
+requirements:
+- httpx
+- pillow
+- shapely
+- pyproj
 
-tags: [valos, property, valuation, real-estate, rics]
+tags:
+- valos
+- property
+- valuation
+- real-estate
+- ordnance-survey
+- land-registry
+- propertydata
+- ons
+- rics
+- clientdelta
