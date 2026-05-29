@@ -1357,10 +1357,16 @@ async def slack_events_webhook(request: Request):
     # Best-effort wake of the assistant's Unity job (matches the
     # other inbound channels' fire-and-forget pattern: comms is
     # given a fast edge handoff and we never block the webhook
-    # thread on AssistantSession convergence).
-    asyncio.create_task(
-        asyncio.to_thread(start_unity_job, assistant_data, "slack"),
-    )
+    # thread on AssistantSession convergence). Local-runtime
+    # assistants publish to Pub/Sub but keep their runtime local, so
+    # we must not start a remote job for them (it would compete with
+    # the developer's local subscriber on the same subscription).
+    if uses_local_unity_runtime(assistant_data):
+        logger.info("Skipped remote job start for local Slack assistant")
+    else:
+        asyncio.create_task(
+            asyncio.to_thread(start_unity_job, assistant_data, "slack"),
+        )
 
     # Attachments: Slack ``files`` blocks expose URL + mime so the
     # assistant can fetch them later via the bot token. We do not
