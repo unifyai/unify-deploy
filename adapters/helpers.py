@@ -223,9 +223,28 @@ def resolve_slack_inbound(payload: dict) -> dict | None:
     * ``{"drop": True}`` -- bot echo, retry, or unsupported event type.
     * ``None`` -- 404 or transport failure.
     """
+    # Flatten the Slack envelope into Orchestra's ``DispatchRequest``
+    # shape. ``channel_type`` is present on ``message`` events
+    # ('im'/'channel'/'group'/'mpim') but absent on ``app_mention``
+    # (always in a channel); fall back to the channel-id prefix
+    # ('D' = direct message) so both event types map correctly.
+    event = payload.get("event") or {}
+    channel_id = event.get("channel", "") or ""
+    channel_type = event.get("channel_type") or (
+        "im" if channel_id.startswith("D") else "channel"
+    )
+    dispatch_body = {
+        "slack_team_id": payload.get("team_id", "") or event.get("team", ""),
+        "channel_id": channel_id,
+        "channel_type": channel_type,
+        "sender_slack_user_id": event.get("user", "") or "",
+        "text": event.get("text", "") or "",
+        "event_ts": event.get("event_ts", "") or event.get("ts", ""),
+        "thread_ts": event.get("thread_ts"),
+    }
     resp = requests.post(
         f"{SETTINGS.orchestra_url}/admin/slack/dispatch",
-        json=payload,
+        json=dispatch_body,
         headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
         timeout=10,
     )
@@ -236,7 +255,20 @@ def resolve_slack_inbound(payload: dict) -> dict | None:
             f"slack dispatch failed: {resp.status_code} {resp.text}",
         )
         return None
-    return resp.json()
+
+    # Translate Orchestra's ``DispatchResponse`` into the adapter's
+    # routing dict. ``handled=False`` (no install / bot echo / unbound
+    # channel) becomes a drop. ``is_channel`` isn't carried by Orchestra,
+    # so derive it from the channel type we sent.
+    data = resp.json()
+    if not data.get("handled"):
+        return {"drop": True}
+    return {
+        "assistant_id": data.get("assistant_id"),
+        "is_channel": channel_type != "im",
+        "bot_user_id": data.get("bot_user_id", "") or "",
+        "routing_metadata": data.get("routing_metadata") or {},
+    }
 
 
 def _normalize_display_name(name: str) -> str:
