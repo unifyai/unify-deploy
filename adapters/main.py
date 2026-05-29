@@ -147,6 +147,7 @@ from .helpers import (
     publish_gmail_thread_id,
     publish_outlook_thread_id,
     resolve_slack_inbound,
+    slack_message_already_seen,
     resolve_whatsapp_route,
     start_unity_job,
     uses_local_unity_runtime,
@@ -1300,6 +1301,15 @@ async def slack_events_webhook(request: Request):
     # (``bot_id`` set, or ``subtype == "bot_message"``). We never
     # want the assistant to react to its own posts.
     if inner.get("bot_id") or inner.get("subtype") == "bot_message":
+        return {"ok": True}
+
+    # A channel mention arrives twice (app_mention + message) with the same
+    # client_msg_id; collapse the pair so we dispatch + publish once. Keyed
+    # by team to avoid cross-workspace collisions. Best-effort across Cloud
+    # Run instances; Unity dedups authoritatively downstream.
+    team_id = payload.get("team_id", "")
+    dedup_key = inner.get("client_msg_id") or inner.get("ts") or ""
+    if dedup_key and slack_message_already_seen(f"{team_id}:{dedup_key}"):
         return {"ok": True}
 
     resolution = await asyncio.to_thread(resolve_slack_inbound, payload)

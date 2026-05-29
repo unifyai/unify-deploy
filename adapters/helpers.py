@@ -206,6 +206,34 @@ def verify_slack_signature(
     return _hmac.compare_digest(expected, signature)
 
 
+_SLACK_SEEN: dict[str, float] = {}
+_SLACK_SEEN_TTL = 300.0
+
+
+def slack_message_already_seen(message_key: str) -> bool:
+    """Best-effort in-process dedup for inbound Slack messages.
+
+    A single channel mention is delivered twice by Slack -- once as
+    ``app_mention`` and once as ``message`` -- with *distinct* ``event_id``s
+    but the *same* ``client_msg_id``. Keying on that stable id stops us from
+    double-dispatching to Orchestra and double-publishing to Pub/Sub.
+
+    Best-effort only: Cloud Run runs multiple instances and the pair can land
+    on different ones, so the authoritative dedup is Unity-side (a single
+    subscription consumer per assistant). This just trims the common case.
+    """
+    if not message_key:
+        return False
+    now = time.time()
+    cutoff = now - _SLACK_SEEN_TTL
+    for k in [k for k, t in _SLACK_SEEN.items() if t < cutoff]:
+        del _SLACK_SEEN[k]
+    if message_key in _SLACK_SEEN:
+        return True
+    _SLACK_SEEN[message_key] = now
+    return False
+
+
 def resolve_slack_inbound(payload: dict) -> dict | None:
     """Route a Slack Events API ``event_callback`` via Orchestra.
 
