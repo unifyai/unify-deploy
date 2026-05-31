@@ -253,3 +253,172 @@ async def run_unity_outreach_discord_daily_summary(
         "discord_message_id": result.get("message_id"),
         "outbound_action_id": result.get("outbound_action_id"),
     }
+
+
+# ── Daily X social-post ticks (discover+draft -> review -> post) ────
+
+
+@custom_function()
+async def run_social_post_discover_draft(
+    *,
+    include_hackernews: bool = True,
+    include_x: bool = True,
+    include_arxiv: bool = False,
+    include_personal_feeds: bool = False,
+    max_age_days: float = 14.0,
+    daily_post_limit: int = 1,
+    emit_review_cards: bool = True,
+    review_webhook_env: str = "UNIFY_DISCORD_REVIEW_WEBHOOK",
+) -> dict[str, Any]:
+    """Run the daily X social-post discovery + drafting half-tick.
+
+    Discovers TRACTION-GATED agentic-AI items (HN front page + Show HN
+    front page via Firebase; X recent-search above an engagement floor),
+    keeps only the agentic ones with an honest Unity design parallel,
+    deep-researches the top ``daily_post_limit`` by traction (subject
+    repo/README + a grep of the Unity codebase), drafts a short informal
+    X post with a high-reasoning model, persists JSONs under
+    ``data/intel/social_post/candidates/<date>/x/review/``, and
+    optionally posts Discord review cards.
+
+    NO tweet is posted by this wrapper. Posting happens in the
+    operator-approval loop -> ``run_social_post_post_approved``.
+    """
+
+    from brain.intel.social_post import (
+        SocialPostRepository,
+        discover_and_draft,
+        emit_review_cards as do_emit_cards,
+    )
+    from brain.intel.unity_pitch import build_relevance_brief
+
+    brief = await build_relevance_brief()
+    repo = SocialPostRepository()
+    result = await discover_and_draft(
+        relevance_brief=brief.text,
+        include_hackernews=include_hackernews,
+        include_x=include_x,
+        include_arxiv=include_arxiv,
+        include_personal_feeds=include_personal_feeds,
+        max_age_days=max_age_days,
+        daily_post_limit=daily_post_limit,
+        repo=repo,
+    )
+
+    discord_status = "skipped"
+    if emit_review_cards and result.top_candidates:
+        try:
+            do_emit_cards(
+                candidates=result.top_candidates,
+                repo=repo,
+                webhook_env=review_webhook_env,
+                execute=True,
+            )
+            discord_status = f"emitted {len(result.top_candidates)} cards"
+        except Exception as exc:  # noqa: BLE001
+            # Discord misconfig must not block the run; JSONs are on disk.
+            discord_status = f"failed: {type(exc).__name__}: {exc}"
+
+    return {
+        "status": "ok",
+        "discovered": result.discovered,
+        "after_filter": result.after_filter,
+        "scored": result.scored,
+        "drafted": result.drafted,
+        "top_count": len(result.top_candidates),
+        "top": [
+            {"stable_id": c.stable_id, "text": (c.draft.text if c.draft else "")}
+            for c in result.top_candidates
+        ],
+        "review_cards": discord_status,
+        "source_counts": result.source_counts,
+        "source_errors": result.source_errors,
+        "candidate_paths": [str(p) for p in result.saved_paths],
+    }
+
+
+@custom_function()
+async def run_social_post_now(
+    *,
+    include_hackernews: bool = True,
+    include_x: bool = True,
+    include_arxiv: bool = False,
+    include_personal_feeds: bool = False,
+    max_age_days: float = 14.0,
+    daily_post_limit: int = 3,
+    review_webhook_env: str = "UNIFY_DISCORD_REVIEW_WEBHOOK",
+) -> dict[str, Any]:
+    """Reactive 'post about something on X now' trigger.
+
+    Fired when the operator asks the assistant to post on X now (the
+    ``intel.social_post.x_post_now`` external trigger). Runs the same
+    traction-gated discovery + deep-research + drafting + Discord-review-
+    card flow as the morning tick (surfacing a few candidates to choose
+    from), so the operator can ✅ the post immediately rather than
+    waiting for the 07:30 schedule. Still review-gated: the actual tweet
+    ships via ``run_social_post_post_approved`` once approved.
+    """
+
+    return await run_social_post_discover_draft(
+        include_hackernews=include_hackernews,
+        include_x=include_x,
+        include_arxiv=include_arxiv,
+        include_personal_feeds=include_personal_feeds,
+        max_age_days=max_age_days,
+        daily_post_limit=daily_post_limit,
+        emit_review_cards=True,
+        review_webhook_env=review_webhook_env,
+    )
+
+
+@custom_function()
+async def run_social_post_post_approved(
+    *,
+    x_user: str = "DanielLenton1",
+    daily_post_limit: int = 1,
+    summarise_to_discord: bool = True,
+    digest_webhook_env: str = "UNIFY_DISCORD_DIGEST_WEBHOOK",
+) -> dict[str, Any]:
+    """Publish operator-approved X posts, then post a Discord digest.
+
+    Drains ``data/intel/social_post/candidates/<date>/x/approved/`` and
+    tweets each via ``XClient.create_tweet`` from ``x_user``. v1
+    review-gate policy: an empty ``approved/`` is a no-op.
+    """
+
+    from brain.intel.social_post import (
+        SocialPostRepository,
+        post_approved,
+        summarise_to_discord as do_summary,
+    )
+
+    repo = SocialPostRepository()
+    result = await post_approved(
+        repo=repo,
+        x_user=x_user,
+        daily_post_limit=daily_post_limit,
+        dry_run=False,
+    )
+
+    digest_status = "skipped"
+    if summarise_to_discord:
+        import asyncio
+
+        try:
+            await asyncio.to_thread(
+                do_summary,
+                webhook_env=digest_webhook_env,
+                execute=True,
+            )
+            digest_status = "posted"
+        except Exception as exc:  # noqa: BLE001
+            digest_status = f"failed: {type(exc).__name__}: {exc}"
+
+    return {
+        "status": "ok",
+        "posted": len(result.posted),
+        "failed": len(result.failed),
+        "tweet_urls": [o.tweet_url for o in result.posted if o.tweet_url],
+        "errors": [o.error for o in result.failed if o.error],
+        "discord_digest": digest_status,
+    }

@@ -51,3 +51,79 @@ async def run_youtube_browser_extraction(
         retry_captcha_unsolved=retry_captcha_unsolved,
     ).to_dict()
     return {"status": "ok", **summary}
+
+
+# ── X automation ticks (reply bot + personalised DM outreach) ──────────
+
+
+@custom_function()
+async def run_x_reply_bot_session(
+    *,
+    x_user: str = "DanielLenton1",
+    max_per_session: int = 1,
+    daily_cap: int = 50,
+) -> dict[str, Any]:
+    """One automated X reply session (fired every 30 min by the schedule).
+
+    Discovers fresh on-topic posts, ranks for early-reply value, and posts
+    up to ``max_per_session`` short personalised replies (CodeActActor-
+    drafted, grounded in the unity code) about how unity handles the
+    poster's problem. Fully automated; idempotent + daily-capped. The body
+    is sync (it drives its own actor event loop), so we run it off-thread.
+    """
+
+    import asyncio
+
+    from brain.influencers.x.reply_bot import run_session
+
+    summary = await asyncio.to_thread(
+        run_session,
+        x_user,
+        max_per_session=max_per_session,
+        daily_cap=daily_cap,
+    )
+    return {
+        "status": "ok",
+        "posted": len(summary.get("posted", [])),
+        "eligible": summary.get("eligible", 0),
+        "declined": summary.get("declined", 0),
+        "note": summary.get("note", ""),
+    }
+
+
+@custom_function()
+async def run_x_dm_campaign_session(
+    *,
+    x_user: str = "DanielLenton1",
+    max_per_session: int = 1,
+    daily_cap: int = 40,
+) -> dict[str, Any]:
+    """One personalised DM-outreach session (fired every 30 min).
+
+    Sends up to ``max_per_session`` personalised cold-outreach DMs to the
+    next accounts on the real-influencer shortlist. A CodeActActor
+    researches each target and writes a genuine DM (or skips). Warm-up
+    ramp + daily cap throttle volume; sends are deduped across every
+    campaign send-log so nobody is messaged twice. Built to run for months
+    unattended. Sync body -> run off-thread.
+    """
+
+    import asyncio
+
+    from brain.influencers.x.dm_campaign import run_session
+
+    summary = await asyncio.to_thread(
+        run_session,
+        x_user,
+        max_per_session=max_per_session,
+        daily_cap=daily_cap,
+    )
+    sent = [r for r in summary.get("sent", []) if r.get("status") == "sent"]
+    return {
+        "status": "ok",
+        "sent": len(sent),
+        "attempts": summary.get("attempts", 0),
+        "declined": summary.get("declined", 0),
+        "skipped_closed": summary.get("skipped_closed", 0),
+        "note": summary.get("note", ""),
+    }
