@@ -91,7 +91,9 @@ steps:
       --unity-comms-url "${_UNITY_COMMS_URL}" \
       --planes control-plane \
       --concurrency 8 \
-      --timeout 600s
+      --timeout 600s \
+      --brain-operator-assistant-id "${_BRAIN_OPERATOR_ASSISTANT_ID}" \
+      --brain-operator-tasks-enabled "${_BRAIN_OPERATOR_TASKS_ENABLED}"
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
@@ -311,6 +313,13 @@ substitutions:
   # to ``main`` so the latest brain code lands automatically;
   # production triggers pin a SHA.
   _BRAIN_REF: 'main'
+  # brain_operator activation (read at reconcile time by
+  # brain_operator/deployment.py). Without the assistant id the
+  # deployment activates NO scenarios, so the brain.scheduled cron rows
+  # (X DM campaign, reply bot, CRM ticks, …) are never materialised.
+  # 2098 = the "Brain Operator" assistant in the unify org on staging.
+  _BRAIN_OPERATOR_ASSISTANT_ID: '2098'
+  _BRAIN_OPERATOR_TASKS_ENABLED: 'true'
 
 availableSecrets:
   secretManager:
