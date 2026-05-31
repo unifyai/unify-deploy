@@ -38,7 +38,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from unity.guidance_manager.types.guidance import Guidance
-from unity.secret_manager.types import Secret
 
 from unity_deploy.assistant_deployments.clients.unify_company._brain_operator import (
     brain_operator_assistant_id,
@@ -149,59 +148,26 @@ def get_deployment() -> DeploymentSpec:
                 ),
             ),
         ],
-        secrets=[
-            Secret(
-                name="UNIFY_KEY",
-                value="${UNIFY_KEY}",
-                description=(
-                    "Unify API key the brain modules use to read/write "
-                    "Orchestra contexts (CRM, Tasks, etc.)."
-                ),
-            ),
-            Secret(
-                name="UNIFY_PROJECT",
-                value="${UNIFY_PROJECT:Brain}",
-                description=(
-                    "Orchestra project brain modules target.  Defaults to "
-                    "'Brain'."
-                ),
-            ),
-            Secret(
-                name="UNITY_COMMS_URL",
-                value="${UNITY_COMMS_URL}",
-                description=(
-                    "Base URL of the Unity gateway used by "
-                    "brain.outbound.whatsapp for /whatsapp/send."
-                ),
-            ),
-            Secret(
-                name="FIREFLIES_API_KEY",
-                value="${FIREFLIES_API_KEY}",
-                description="Fireflies API key for transcript export and CRM sync.",
-            ),
-            Secret(
-                name="LEMLIST_API_KEY",
-                value="${LEMLIST_API_KEY}",
-                description="Lemlist API key for evergreen outbound ticks.",
-            ),
-            Secret(
-                name="GOOGLE_SERVICE_ACCOUNT_KEY_FILE",
-                value="${GOOGLE_SERVICE_ACCOUNT_KEY_FILE}",
-                description=(
-                    "Service-account key path for Gmail / Drive delegation "
-                    "used by brain.sync.gmail and brain.email."
-                ),
-            ),
-            Secret(
-                name="BRAIN_WHATSAPP_DEFAULT_RECIPIENT",
-                value="${BRAIN_WHATSAPP_DEFAULT_RECIPIENT}",
-                description=(
-                    "Default operator WhatsApp number used by brain "
-                    "scheduled jobs that emit notifications (e.g. the "
-                    "HackerNews daily digest)."
-                ),
-            ),
-        ],
+        # Secrets are provisioned directly in the assistant's Unity
+        # SecretManager (Orchestra ``Secrets`` context), NOT declared here.
+        #
+        # The previous ``Secret(name=X, value="${X}")`` entries were a
+        # footgun: the ``${X}`` env-substitution syntax is never expanded by
+        # the seed path, so each one stored the *literal* string ``${X}`` and
+        # then clobbered the pod's real value via
+        # ``SecretManager._sync_dotenv`` (which does ``os.environ[k]=v`` for
+        # every stored secret).  In particular ``UNIFY_KEY="${UNIFY_KEY}"``
+        # overwrote the pod's valid key, so every Orchestra call 401'd and the
+        # assistant could neither sync_custom nor seed tasks.
+        #
+        # Correct model: the runtime gets ``UNIFY_KEY`` / ``UNITY_COMMS_URL`` /
+        # ``ORCHESTRA_ADMIN_KEY`` from the pod environment, and brain-specific
+        # credentials (``X_CLIENT_ID``, ``X_CLIENT_SECRET``,
+        # ``X_OAUTH_TOKENS_<USER>``, ``FIREFLIES_API_KEY``, ``LEMLIST_API_KEY``,
+        # ``GOOGLE_SERVICE_ACCOUNT_KEY_FILE``, ``BRAIN_WHATSAPP_DEFAULT_RECIPIENT``)
+        # are written into the SecretManager out-of-band.  ``brain`` defaults
+        # ``UNIFY_PROJECT`` to ``Brain`` via ``os.environ.setdefault``.
+        secrets=[],
         knowledge={
             "BrainOperator/JobOwnership": {
                 "description": (
