@@ -11,8 +11,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from typing import Any, Mapping, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from unity_deploy.assistant_deployments.clients import ClientDeploymentEntry
@@ -149,7 +152,18 @@ def _build_scenario_schedule_operations(
 
 
 def _scenario_task_activation_action(task: Any) -> str:
-    """Return whether a scenario-backed task can be materialized now."""
+    """Return whether a scenario-backed task can be materialized now.
+
+    The control plane runs at deploy time, *before* the assistant wakes.  The
+    authoritative seeder is the runtime plane
+    (:func:`unity_deploy.runtime_reconcile.materialize.materialize_runtime_state`),
+    which runs in the woken assistant's own identity/context and calls
+    ``sync_all_seed_data`` (seeds the scenario's TaskScheduler tasks) plus
+    ``FunctionManager.sync_custom`` (registers the entrypoint functions).  Until
+    that has happened the activation ids do not exist yet, so a brand-new
+    activation is ``"deferred"`` rather than a hard failure: the control plane
+    leaves it to the runtime plane and converges on a later reconcile.
+    """
 
     activation = task.activation
     if (
@@ -157,7 +171,7 @@ def _scenario_task_activation_action(task: Any) -> str:
         or activation.source_task_log_id is None
         or activation.scheduled_for is None
     ):
-        return "unresolved"
+        return "deferred"
     return "upsert"
 
 
@@ -227,7 +241,7 @@ def _scenario_task_activation_payload(
             "requested_at": datetime.now(timezone.utc).isoformat(),
         },
     }
-    if _scenario_task_activation_action(task) == "unresolved":
+    if _scenario_task_activation_action(task) == "deferred":
         missing = []
         if activation.task_id is None:
             missing.append("activation.task_id")
@@ -235,10 +249,12 @@ def _scenario_task_activation_payload(
             missing.append("activation.source_task_log_id")
         if activation.scheduled_for is None:
             missing.append("activation.scheduled_for")
-        base["unresolved_reason"] = (
-            "Scenario schedule is private to unity-deploy, but generic task "
-            "activation materialization needs FunctionManager/TaskScheduler "
-            f"seeded ids first: {', '.join(missing)}"
+        base["deferred_reason"] = (
+            "Scenario schedule is private to unity-deploy and its activation "
+            "ids are not seeded yet; the runtime plane "
+            "(materialize_runtime_state) seeds them in the woken assistant's "
+            "own context. Deferring control-plane materialization until then: "
+            f"missing {', '.join(missing)}"
         )
     return base
 
@@ -249,6 +265,24 @@ def apply_operations(operations: list[ReconcileOperation]) -> list[dict[str, Any
 
     responses: list[dict[str, Any]] = []
     for operation in operations:
+        if operation.action == "deferred":
+            reason = operation.payload.get("deferred_reason", operation.field)
+            logger.info(
+                "Deferring control-plane %s for assistant %s to the runtime "
+                "plane: %s",
+                operation.field,
+                operation.assistant_id,
+                reason,
+            )
+            responses.append(
+                {
+                    "status": "deferred",
+                    "assistant_id": operation.assistant_id,
+                    "field": operation.field,
+                    "reason": reason,
+                },
+            )
+            continue
         if operation.action == "unresolved":
             raise RuntimeError(
                 "Cannot apply unresolved control-plane operation: "

@@ -251,3 +251,61 @@ def test_apply_operations_rejects_unresolved_task_activation():
 
     with pytest.raises(RuntimeError, match="missing task ids"):
         reconcile.apply_operations([operation])
+
+
+def test_scenario_task_activation_action_defers_unseeded_ids():
+    from types import SimpleNamespace
+
+    unseeded = SimpleNamespace(
+        activation=SimpleNamespace(
+            task_id=None,
+            source_task_log_id=None,
+            scheduled_for=None,
+        ),
+    )
+    assert reconcile._scenario_task_activation_action(unseeded) == "deferred"
+
+    seeded = SimpleNamespace(
+        activation=SimpleNamespace(
+            task_id=10,
+            source_task_log_id=20,
+            scheduled_for="2026-01-01T00:00:00Z",
+        ),
+    )
+    assert reconcile._scenario_task_activation_action(seeded) == "upsert"
+
+
+def test_apply_operations_defers_unseeded_task_activation(monkeypatch):
+    # A not-yet-seeded scenario task must NOT crash the deploy: the control
+    # plane defers it to the runtime plane (which seeds it on wake) and the
+    # deploy stays green.  Neither Communication nor Orchestra is contacted.
+    def _boom(*args, **kwargs):
+        raise AssertionError("deferred operations must not be transmitted")
+
+    monkeypatch.setattr(reconcile, "_post_communication_json", _boom)
+    from unity_deploy.utils import orchestra_client
+
+    monkeypatch.setattr(orchestra_client, "patch_json", _boom)
+
+    operation = reconcile.ReconcileOperation(
+        client_name="unify_company",
+        assistant_id="2098",
+        deployment="v0",
+        field="task_activation",
+        action="deferred",
+        path="/infra/task-activation/upsert",
+        payload={"deferred_reason": "activation ids not seeded yet"},
+        service="communication",
+        method="post",
+    )
+
+    responses = reconcile.apply_operations([operation])
+
+    assert responses == [
+        {
+            "status": "deferred",
+            "assistant_id": "2098",
+            "field": "task_activation",
+            "reason": "activation ids not seeded yet",
+        },
+    ]
