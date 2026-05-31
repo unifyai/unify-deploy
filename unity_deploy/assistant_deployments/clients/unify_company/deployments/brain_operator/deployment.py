@@ -35,12 +35,15 @@ new tick).
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from unity.guidance_manager.types.guidance import Guidance
 from unity.secret_manager.types import Secret
 
+from unity_deploy.assistant_deployments.clients.unify_company._brain_operator import (
+    brain_operator_assistant_id,
+    brain_operator_tasks_enabled,
+)
 from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 from unity_deploy.assistant_deployments.deployment_types import DeploymentSpec
 from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivation
@@ -49,31 +52,31 @@ from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivatio
 def _scenario_activations() -> list[ScenarioActivation]:
     """Return the brain_jobs scenario activations for this deployment.
 
-    Reads ``BRAIN_OPERATOR_ASSISTANT_ID`` from the environment.  When
-    unset the activation list is empty and no scenario rows are
-    materialised — the deployment stays loadable in environments
-    where the brain_operator assistant has not been provisioned yet
-    (so the unify_company catch-all still works).
+    The assistant id is resolved from the current environment
+    (:func:`brain_operator_assistant_id`, which keys off
+    ``detect_environment()`` with a ``BRAIN_OPERATOR_ASSISTANT_ID``
+    override).  Resolving this way — rather than from a reconcile-only
+    env var — is what makes the scenario present at assistant *runtime*,
+    so the woken assistant's ``startup_hook`` actually seeds the
+    TaskScheduler rows.  When no id is mapped for the environment the
+    activation list is empty and no rows are materialised (the
+    unify_company catch-all still works).
 
-    Tasks ship disabled-by-default per the unity-deploy convention
-    (a71a840).  Operators flip them to enabled either by setting
-    ``BRAIN_OPERATOR_TASKS_ENABLED=true`` or by manually setting
-    each scenario task row's ``enabled`` flag in Orchestra after
-    seeding.
+    ``tasks_enabled`` ships true on staging so the brain_operator's
+    recurring work fires; the control-plane reconcile defers any
+    not-yet-seeded activation to the runtime plane, so shipping enabled
+    on a brand-new assistant is safe.
     """
 
-    assistant_id = os.environ.get("BRAIN_OPERATOR_ASSISTANT_ID", "").strip()
+    assistant_id = brain_operator_assistant_id()
     if not assistant_id:
         return []
-    enabled = os.environ.get(
-        "BRAIN_OPERATOR_TASKS_ENABLED", "false"
-    ).strip().lower() in ("1", "true", "yes")
     return [
         ScenarioActivation(
             scenario_template="brain_jobs/brain_jobs_v0",
             assistant_id=assistant_id,
             scenario_id_override="unify_company_brain_jobs_v0",
-            tasks_enabled=enabled,
+            tasks_enabled=brain_operator_tasks_enabled(),
         ),
     ]
 
