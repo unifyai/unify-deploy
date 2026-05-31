@@ -97,15 +97,17 @@ async def run_x_dm_campaign_session(
     x_user: str = "DanielLenton1",
     max_per_session: int = 1,
     daily_cap: int = 40,
+    store_backend: str = "datamanager",
 ) -> dict[str, Any]:
     """One personalised DM-outreach session (fired every 30 min).
 
     Sends up to ``max_per_session`` personalised cold-outreach DMs to the
     next accounts on the real-influencer shortlist. A CodeActActor
     researches each target and writes a genuine DM (or skips). Warm-up
-    ramp + daily cap throttle volume; sends are deduped across every
-    campaign send-log so nobody is messaged twice. Built to run for months
-    unattended. Sync body -> run off-thread.
+    ramp + daily cap throttle volume; the target list + send-log/dedup live
+    in the Unity DataManager (``store_backend="datamanager"``), so dedup
+    survives container restarts and the list is live-toppable without a
+    redeploy. Built to run for months unattended. Sync body -> off-thread.
     """
 
     import asyncio
@@ -117,6 +119,7 @@ async def run_x_dm_campaign_session(
         x_user,
         max_per_session=max_per_session,
         daily_cap=daily_cap,
+        store_backend=store_backend,
     )
     sent = [r for r in summary.get("sent", []) if r.get("status") == "sent"]
     return {
