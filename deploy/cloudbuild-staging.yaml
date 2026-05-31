@@ -314,12 +314,17 @@ substitutions:
   # production triggers pin a SHA.
   _BRAIN_REF: 'main'
   # brain_operator activation (read at reconcile time by
-  # brain_operator/deployment.py). Without the assistant id the
-  # deployment activates NO scenarios, so the brain.scheduled cron rows
-  # (X DM campaign, reply bot, CRM ticks, …) are never materialised.
-  # 2098 = the "Brain Operator" assistant in the unify org on staging.
-  _BRAIN_OPERATOR_ASSISTANT_ID: '2098'
-  _BRAIN_OPERATOR_TASKS_ENABLED: 'true'
+  # brain_operator/deployment.py). 2098 = the "Brain Operator" assistant in
+  # the unify org on staging; tasks_enabled=true ships rows enabled.
+  #
+  # TEMPORARILY DISABLED (empty id): activating it makes the control-plane
+  # reconcile try to materialise the brain_jobs scenario, which FAILS because
+  # assistant 2098 has never been seeded (its @custom_function wrappers synced
+  # to FunctionManager + TaskScheduler bootstrapped). That hard-fails the whole
+  # staging build. Re-enable (set id 2098, tasks true) only AFTER the assistant
+  # is seeded once. See brain .cursor/rules/brain-operator-activation.mdc.
+  _BRAIN_OPERATOR_ASSISTANT_ID: ''
+  _BRAIN_OPERATOR_TASKS_ENABLED: 'false'
 
 availableSecrets:
   secretManager:
