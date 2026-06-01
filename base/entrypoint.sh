@@ -150,8 +150,17 @@ if [ -d /opt/hf-cache ] && [ ! -d /tmp/huggingface ]; then
 fi
 
 # Headless offline task jobs bypass the live conversation runtime entirely.
-if [ "${UNITY_OFFLINE_TASK_MODE:-}" = "function" ]; then
-    echo "⬥ Starting offline task runner..."
+# UNITY_OFFLINE_TASK_MODE is set (currently to "actor"; see
+# offline_runner_contract.build_offline_runner_env +
+# tests/task_scheduler/test_offline_runner_contract.test_mode_is_actor) ONLY
+# for offline-task jobs, so any non-empty value means "run the headless offline
+# runner". This previously hard-checked == "function", which silently stopped
+# matching once the contract value became "actor": offline tasks then fell
+# through to the live ConversationManager below, booted, idled on a startup
+# reply, and exited WITHOUT ever executing their scheduled function (the run
+# row was left stale at "running"). Matching on non-empty is rename-proof.
+if [ -n "${UNITY_OFFLINE_TASK_MODE:-}" ]; then
+    echo "⬥ Starting offline task runner (mode=${UNITY_OFFLINE_TASK_MODE})..."
     python3 -m unity.task_scheduler.offline_runner
     exit $?
 fi
