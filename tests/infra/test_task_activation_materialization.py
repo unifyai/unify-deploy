@@ -46,11 +46,13 @@ class _FakeCloudTasksClient:
         self.created_queues = []
         self.created_tasks = []
         self.deleted_task_names = []
+        self.get_task_names = []
         self.queue_exists = True
         self.missing_queue_names: set[str] = set()
         self.permission_denied_queue_names: set[str] = set()
         self.existing_task_names: set[str] = set()
         self.permission_denied_task_names: set[str] = set()
+        self.create_without_persisting_task_names: set[str] = set()
 
     def get_queue(self, *, name):
         if name.rsplit("/", 1)[-1] in self.permission_denied_queue_names:
@@ -60,6 +62,7 @@ class _FakeCloudTasksClient:
         return {"name": name}
 
     def get_task(self, *, name):
+        self.get_task_names.append(name)
         if name in self.permission_denied_task_names:
             raise GcpPermissionDenied("task permission denied")
         if name not in self.existing_task_names:
@@ -76,7 +79,8 @@ class _FakeCloudTasksClient:
             from google.api_core.exceptions import AlreadyExists
 
             raise AlreadyExists("duplicate task")
-        self.existing_task_names.add(task.name)
+        if task.name not in self.create_without_persisting_task_names:
+            self.existing_task_names.add(task.name)
         self.created_tasks.append((parent, task))
         return {"name": task.name}
 
@@ -169,6 +173,53 @@ def test_upsert_scheduled_task_activation_creates_cloud_task(client, fake_tasks_
         task.dispatch_deadline.seconds
         == task_activation.SETTINGS.task_due_dispatch_deadline_seconds
     )
+    assert fake_client.get_task_names == [task.name]
+
+
+def test_upsert_live_symbolic_activation_carries_entrypoint(
+    client,
+    fake_tasks_module,
+):
+    """Symbolic live activations should carry the function entrypoint."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    task_activation._task_queues_ensured = set()
+
+    with (
+        patch(
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
+            "test-admin-key",
+        ),
+        patch(
+            "communication.infra.task_activation.SETTINGS.adapters_url",
+            "https://adapters.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+        patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
+    ):
+        response = client.post(
+            "/infra/task-activation/upsert",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+                "activation_revision": "rev-123",
+                "scheduled_for": "2026-04-10T09:00:00+00:00",
+                "execution_mode": "live",
+                "entrypoint": 777,
+            },
+        )
+
+    assert response.status_code == 200
+    _, task = fake_client.created_tasks[0]
+    assert task.http_request.url == "https://adapters.test/scheduled/tasks/due"
+    assert b'"execution_mode": "live"' in task.http_request.body
+    assert b'"entrypoint": 777' in task.http_request.body
 
 
 def test_upsert_scheduled_task_activation_deletes_previous_materialization(
@@ -464,11 +515,71 @@ def test_upsert_far_future_activation_targets_repair_queue(
     assert task.schedule_time.seconds == int(expected_checkpoint.timestamp())
 
 
-def test_upsert_recreates_existing_activation_to_repair_drift(
+def test_upsert_far_future_duplicate_is_non_destructive(
     client,
     fake_tasks_module,
 ):
-    """AlreadyExists should delete and recreate the Cloud Task instead of silently accepting drift."""
+    """Duplicate far-future repair materialization should preserve the checkpoint."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    now = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
+    scheduled_for = datetime(2026, 6, 10, 9, 0, tzinfo=timezone.utc)
+    task_name = task_activation._scheduled_activation_task_name(
+        assistant_id="assistant-123",
+        task_id=101,
+        activation_revision="rev-123",
+        scheduled_for=scheduled_for,
+        queue_name=task_activation.SETTINGS.task_activation_repair_queue_name,
+    )
+    fake_client.existing_task_names.add(task_name)
+    task_activation._task_queues_ensured = {
+        task_activation.SETTINGS.task_activation_repair_queue_name,
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
+            "test-admin-key",
+        ),
+        patch(
+            "communication.infra.task_activation.SETTINGS.comms_url",
+            "https://comms.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+        patch("communication.infra.task_activation.datetime") as mock_datetime,
+        patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
+    ):
+        mock_datetime.now.return_value = now
+        mock_datetime.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        response = client.post(
+            "/infra/task-activation/upsert",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+                "activation_revision": "rev-123",
+                "scheduled_for": scheduled_for.isoformat(),
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "already_exists"
+    assert fake_client.deleted_task_names == []
+    assert fake_client.created_tasks == []
+    assert fake_client.get_task_names == [task_name]
+
+
+def test_upsert_existing_activation_is_non_destructive(
+    client,
+    fake_tasks_module,
+):
+    """Duplicate materialization should preserve the existing Cloud Task."""
 
     from communication.infra import task_activation
 
@@ -512,8 +623,61 @@ def test_upsert_recreates_existing_activation_to_repair_drift(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "recreated"
-    assert task_name in fake_client.deleted_task_names
+    assert body["status"] == "already_exists"
+    assert fake_client.deleted_task_names == []
+    assert fake_client.created_tasks == []
+    assert fake_client.get_task_names == [task_name]
+    assert task_name in fake_client.existing_task_names
+
+
+def test_upsert_fails_when_materialization_cannot_be_verified(
+    client,
+    fake_tasks_module,
+):
+    """Upsert should fail if the created Cloud Task cannot be read back."""
+
+    from communication.infra import task_activation
+
+    fake_client = _FakeCloudTasksClient()
+    task_name = task_activation._scheduled_activation_task_name(
+        assistant_id="assistant-123",
+        task_id=101,
+        activation_revision="rev-123",
+        scheduled_for=datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc),
+    )
+    fake_client.create_without_persisting_task_names.add(task_name)
+    task_activation._task_queues_ensured = {
+        task_activation.SETTINGS.task_due_queue_name,
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation.SETTINGS.orchestra_admin_key",
+            "test-admin-key",
+        ),
+        patch(
+            "communication.infra.task_activation.SETTINGS.adapters_url",
+            "https://adapters.test",
+        ),
+        patch(
+            "communication.infra.task_activation._get_cloud_tasks_client",
+            return_value=fake_client,
+        ),
+        patch.dict(sys.modules, {"google.cloud.tasks_v2": fake_tasks_module}),
+    ):
+        response = client.post(
+            "/infra/task-activation/upsert",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+                "activation_revision": "rev-123",
+                "scheduled_for": "2026-04-10T09:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 500
+    assert task_name in fake_client.get_task_names
 
 
 def test_validate_task_activation_infra_reports_required_queues(client):

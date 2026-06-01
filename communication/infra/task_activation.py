@@ -334,6 +334,18 @@ def _delete_scheduled_activation_task(
     return deleted
 
 
+def _require_cloud_task_present(task_name: str) -> None:
+    """Fail materialization if the expected Cloud Task cannot be read back."""
+
+    client = _get_cloud_tasks_client()
+    try:
+        client.get_task(name=task_name)
+    except GcpNotFound as exc:
+        raise RuntimeError(
+            f"Cloud Task materialization missing after upsert: {task_name}",
+        ) from exc
+
+
 def _upsert_scheduled_activation_task(
     request: ScheduledTaskActivationUpsertRequest,
 ) -> dict[str, Any]:
@@ -387,12 +399,9 @@ def _upsert_scheduled_activation_task(
         client.create_task(parent=queue_path, task=task)
         action = "created"
     except AlreadyExists:
-        _delete_cloud_task_if_present(task_name)
-        try:
-            client.create_task(parent=queue_path, task=task)
-            action = "recreated"
-        except AlreadyExists:
-            action = "already_exists"
+        action = "already_exists"
+
+    _require_cloud_task_present(task_name)
 
     return {
         "action": action,
