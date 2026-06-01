@@ -62,6 +62,7 @@ async def run_x_reply_bot_session(
     x_user: str = "DanielLenton1",
     max_per_session: int = 1,
     daily_cap: int = 50,
+    store_backend: str = "datamanager",
 ) -> dict[str, Any]:
     """One automated X reply session (fired every 30 min by the schedule).
 
@@ -70,6 +71,11 @@ async def run_x_reply_bot_session(
     drafted, grounded in the unity code) about how unity handles the
     poster's problem. Fully automated; idempotent + daily-capped. The body
     is sync (it drives its own actor event loop), so we run it off-thread.
+
+    Dedup + audit state lives in the Unity DataManager
+    (``store_backend="datamanager"``) because the deployed pod's brain
+    ``data/`` tree is read-only + ephemeral; that makes the daily cap +
+    already-replied dedup durable across restarts.
     """
 
     import asyncio
@@ -81,6 +87,7 @@ async def run_x_reply_bot_session(
         x_user,
         max_per_session=max_per_session,
         daily_cap=daily_cap,
+        store_backend=store_backend,
     )
     return {
         "status": "ok",
