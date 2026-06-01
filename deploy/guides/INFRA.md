@@ -368,6 +368,8 @@ The watcher is built and deployed automatically by Cloud Build alongside the mai
 
 It uses the `comm-sa` service account (same as other cluster services) and pulls environment variables from the existing `unity-config` ConfigMap and `unity-secrets` Secret. Resource footprint is minimal (50m CPU / 64Mi memory request).
 
+> **Service-account roles — telemetry:** `comm-sa` (which all assistant pods run as) must hold **`roles/monitoring.metricWriter`** in `gcp-project-runtime`. The pods run the OpenTelemetry Cloud Monitoring exporter (`opentelemetry.exporter.cloud_monitoring`), which calls `create_metric_descriptor`; that permission lives in `monitoring.metricWriter`. Without it every metric flush logs `403 Permission monitoring.metricDescriptors.create denied` (non-fatal but noisy). `comm-sa` already has `roles/logging.logWriter` for logs; the metric-writer role was missing and was granted 2026-06-01. `comm-sa`'s project IAM is currently hand-managed (no single IaC file), so add new roles with `gcloud projects add-iam-policy-binding` and record them here.
+
 #### Resilience
 
 - kopf manages watch stream reconnection and `resourceVersion` tracking automatically
