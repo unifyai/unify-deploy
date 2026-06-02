@@ -58,8 +58,7 @@ def _scenario_activations() -> list[ScenarioActivation]:
     env var — is what makes the scenario present at assistant *runtime*,
     so the woken assistant's ``startup_hook`` actually seeds the
     TaskScheduler rows.  When no id is mapped for the environment the
-    activation list is empty and no rows are materialised (the
-    unify_company catch-all still works).
+    activation list is empty and no rows are materialised.
 
     ``tasks_enabled`` ships true on staging so the brain_operator's
     recurring work fires; the control-plane reconcile defers any

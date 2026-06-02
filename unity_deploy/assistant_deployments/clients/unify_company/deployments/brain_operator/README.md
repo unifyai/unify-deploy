@@ -14,8 +14,7 @@ For the end-to-end operating pattern see the brain wiki page:
   bundle, and gateway routing.
 - Activated for the assistant id named by the
   `BRAIN_OPERATOR_ASSISTANT_ID` env var.  Without that env var, the
-  `unify_company` mapping falls back to the catch-all `default`
-  deployment and the brain_operator simply doesn't activate.
+  brain_operator simply doesn't activate.
 - Carries no per-customer state.  Customer-facing colleagues are
   separate deployments under separate clients.
 
