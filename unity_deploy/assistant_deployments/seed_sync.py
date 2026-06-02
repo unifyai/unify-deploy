@@ -477,7 +477,7 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
                 "description": "Known companies",
                 "columns": {"company_name": "str", "industry": "str"},
                 "seed_key": "company_name",
-                "rows": [{"company_name": "ClientDelta", "industry": "Real Estate"}],
+                "rows": [{"company_name": "Example Co", "industry": "Real Estate"}],
             },
         }
     """
