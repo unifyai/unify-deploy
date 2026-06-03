@@ -49,6 +49,8 @@ The system consists of three main repositories:
 | `SHARED_UNIFY_KEY` | Debug logger | Shared key for AssistantJobs project access |
 | `GCP_SA_KEY` | All services | Google Cloud service account credentials |
 
+Unity GKE jobs mount API keys from the `unity-secrets` Kubernetes Secret, synced from GCP Secret Manager. See **[UNITY_CLUSTER_SECRETS.md](./UNITY_CLUSTER_SECRETS.md)** for rotation and External Secrets Operator setup.
+
 ## 📦 Deployment Components
 
 ### 1. Orchestra

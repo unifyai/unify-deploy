@@ -56,6 +56,13 @@ def test_cloud_build_smoke_tests_dlq_reconciler_cli_and_pins_cron_image() -> Non
         assert "kubectl set image cronjob/unity-pipeline-dlq-reconciler" in text
 
 
+def test_cloud_build_applies_unity_external_secret_manifests() -> None:
+    staging = (ROOT / "deploy/cloudbuild-staging.yaml").read_text()
+    production = (ROOT / "deploy/cloudbuild.yaml").read_text()
+    assert "unity-secrets-external-secret_staging.yaml" in staging
+    assert "unity-secrets-external-secret_production.yaml" in production
+
+
 def test_job_watcher_uses_explicit_secret_allowlist() -> None:
     for relative_path in [
         "base/scripts/job-watcher/deployment_staging.yaml",

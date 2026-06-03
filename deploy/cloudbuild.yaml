@@ -70,6 +70,21 @@ steps:
     echo ${SHORT_SHA} | gsutil cp - gs://bucket/image_hash.txt
   waitFor: ['push-latest-tag']
 
+  # One-time cluster bootstrap: deploy/scripts/kubernetes/install_external_secrets_operator.sh
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'apply-unity-external-secrets'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -eu
+    gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
+    kubectl apply -f deploy/k8s/secrets/unity-secrets-external-secret_production.yaml
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['push-sha-tag']
+
   # Reconcile deploy-time control-plane state before any deploy step wakes Unity
   # containers. Runtime seed/function sync runs per assistant after wake with
   # that assistant's UNIFY_KEY.
@@ -94,7 +109,7 @@ steps:
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['push-sha-tag', 'upload-sha']
+  waitFor: ['apply-unity-external-secrets', 'upload-sha']
 
   # Refresh idle containers so they pick up the new image
 - name: 'gcr.io/cloud-builders/curl'

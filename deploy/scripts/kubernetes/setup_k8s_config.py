@@ -5,18 +5,91 @@ Script to set up Kubernetes ConfigMaps and Secrets for Unity cluster.
 Creates cluster-wide configuration that all Unity pods will use.
 Only assistant-specific variables (ASSISTANT_ID, USER_FIRST_NAME, etc.) are set per pod.
 
+API keys are read from GCP Secret Manager. Use --update to reconcile existing
+unity-secrets from versions/latest, or install External Secrets Operator
+(deploy/k8s/secrets/) for continuous sync.
+
 Usage:
-    python setup_k8s_config.py --create
+    python setup_k8s_config.py --create --namespace staging
+    python setup_k8s_config.py --update --namespace staging
 """
 
 import argparse
 import base64
 import sys
+from pathlib import Path
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from _k8s_lib import ensure_kube_config
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from unity_cluster_secrets import (
+    COMM_SA_KEY_SECRET_NAME,
+    GCP_SA_KEY_SM_SECRET,
+    GCP_SECRETS_PROJECT_ID,
+    UNITY_SECRET_KEYS_FROM_GCP,
+    is_eso_managed_secret,
+)
+
+
+def fetch_gcp_secret_payload(secret_manager_client, sm_secret_id: str) -> bytes:
+    """Read the latest enabled version of a Secret Manager secret."""
+    secret_path = (
+        f"projects/{GCP_SECRETS_PROJECT_ID}/secrets/{sm_secret_id}/versions/latest"
+    )
+    response = secret_manager_client.access_secret_version(
+        request={"name": secret_path},
+    )
+    return response.payload.data
+
+
+def build_unity_secrets_data(secret_manager_client) -> dict[str, str]:
+    """Return base64-encoded secret data for unity-secrets from GCP."""
+    secrets_data = {}
+    for sm_name, k8s_key in UNITY_SECRET_KEYS_FROM_GCP:
+        raw = fetch_gcp_secret_payload(secret_manager_client, sm_name)
+        secrets_data[k8s_key] = base64.b64encode(raw).decode()
+    return secrets_data
+
+
+def upsert_namespaced_secret(
+    api_client,
+    namespace: str,
+    manifest: dict,
+    *,
+    reconcile: bool,
+) -> bool:
+    """Create a Secret or replace it when reconcile=True."""
+    name = manifest["metadata"]["name"]
+    try:
+        existing = api_client.read_namespaced_secret(name=name, namespace=namespace)
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        api_client.create_namespaced_secret(namespace=namespace, body=manifest)
+        print(f"✅ Created Secret '{name}'")
+        return True
+
+    if not reconcile:
+        print(f"✅ Secret '{name}' already exists (use --update to reconcile from GCP)")
+        return True
+
+    if is_eso_managed_secret(existing.metadata):
+        print(
+            f"❌ Secret '{name}' is managed by External Secrets Operator; "
+            "annotate the ExternalSecret to force-sync or wait for refreshInterval",
+        )
+        return False
+
+    manifest["metadata"]["resource_version"] = existing.metadata.resource_version
+    api_client.replace_namespaced_secret(name=name, namespace=namespace, body=manifest)
+    print(f"✅ Reconciled Secret '{name}' from GCP Secret Manager")
+    return True
 
 
 def setup_kubernetes_client():
@@ -77,80 +150,47 @@ def create_global_configmap(api_client, namespace="default"):
             },
         }
 
-        # Check if ConfigMap exists
+        configmap_name = configmap_manifest["metadata"]["name"]
         try:
             api_client.read_namespaced_config_map(
-                name="unity-global-config",
+                name=configmap_name,
                 namespace=namespace,
             )
-            print("✅ Global ConfigMap already exists")
+            print(f"✅ ConfigMap '{configmap_name}' already exists")
             return True
         except ApiException as e:
             if e.status == 404:
-                # Create the ConfigMap
                 api_client.create_namespaced_config_map(
                     namespace=namespace,
                     body=configmap_manifest,
                 )
-                print("✅ Created global ConfigMap")
+                print(f"✅ Created ConfigMap '{configmap_name}'")
                 return True
-            else:
-                raise e
+            raise
 
     except Exception as e:
         print(f"❌ Error creating global ConfigMap: {e}")
         return False
 
 
-def create_global_secrets(api_client, namespace="default"):
-    """Create global Secrets with API keys from GCP Secret Manager"""
+def create_global_secrets(api_client, namespace="default", *, reconcile: bool = False):
+    """Create or reconcile unity-secrets and comm-sa-key from GCP Secret Manager."""
     try:
         from google.cloud import secretmanager
 
-        # Initialize Secret Manager client
-        client = secretmanager.SecretManagerServiceClient()
-        project_id = "gcp-project-runtime"
-
-        secrets_data = {}
-        required_secrets = [
-            "LIVEKIT_SIP_URI",
-            "LIVEKIT_URL",
-            "LIVEKIT_API_KEY",
-            "LIVEKIT_API_SECRET",
-            "DEEPGRAM_API_KEY",
-            "CARTESIA_API_KEY",
-            "ELEVEN_API_KEY",
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "ANTICAPTCHA_KEY",
-            "UNITY_WEB_TAVILY_API_KEY",
-            "ORCHESTRA_ADMIN_KEY",
-            "VERTEXAI_CREDENTIALS",
-            "SHARED_UNIFY_KEY",
-        ]
+        sm_client = secretmanager.SecretManagerServiceClient()
 
         print("🔐 Fetching secrets from GCP Secret Manager...")
-        for secret_name in required_secrets:
-            try:
-                # Construct the secret name
-                secret_path = (
-                    f"projects/{project_id}/secrets/{secret_name}/versions/latest"
-                )
+        try:
+            secrets_data = build_unity_secrets_data(sm_client)
+        except Exception as exc:
+            print(f"   ❌ Failed to read required secrets: {exc}")
+            return False
 
-                # Access the secret version
-                response = client.access_secret_version(request={"name": secret_path})
-                secret_value = response.payload.data.decode("UTF-8")
+        for _sm_name, k8s_key in UNITY_SECRET_KEYS_FROM_GCP:
+            print(f"   ✅ {k8s_key}")
 
-                secrets_data[secret_name] = base64.b64encode(
-                    secret_value.encode(),
-                ).decode()
-                print(f"   ✅ {secret_name}")
-
-            except Exception as e:
-                print(f"   ❌ {secret_name}: {e}")
-                return False
-
-        secret_manifest = {
+        unity_manifest = {
             "apiVersion": "v1",
             "kind": "Secret",
             "metadata": {
@@ -162,60 +202,34 @@ def create_global_secrets(api_client, namespace="default"):
             "data": secrets_data,
         }
 
-        try:
-            api_client.read_namespaced_secret(name="unity-secrets", namespace=namespace)
-            print("✅ Application secrets already exist")
-        except ApiException as e:
-            if e.status == 404:
-                api_client.create_namespaced_secret(
-                    namespace=namespace,
-                    body=secret_manifest,
-                )
-                print("✅ Created application secrets")
-            else:
-                raise e
-
-        # Now create service account key secret
-        print("🔐 Creating service account key secret...")
-        try:
-            # Fetch service account key from Secret Manager
-            secret_path = f"projects/{project_id}/secrets/gcp-sa-key/versions/latest"
-            response = client.access_secret_version(request={"name": secret_path})
-            key_data = response.payload.data
-
-            sa_key_manifest = {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {
-                    "name": "comm-sa-key",
-                    "namespace": namespace,
-                    "labels": {"app": "unity"},
-                },
-                "type": "Opaque",
-                "data": {"key.json": base64.b64encode(key_data).decode()},
-            }
-
-            try:
-                api_client.read_namespaced_secret(
-                    name="comm-sa-key",
-                    namespace=namespace,
-                )
-                print("✅ Service account key secret already exists")
-            except ApiException as e:
-                if e.status == 404:
-                    api_client.create_namespaced_secret(
-                        namespace=namespace,
-                        body=sa_key_manifest,
-                    )
-                    print("✅ Created service account key secret")
-                else:
-                    raise e
-
-            return True
-
-        except Exception as e:
-            print(f"❌ Error creating service account key secret: {e}")
+        if not upsert_namespaced_secret(
+            api_client,
+            namespace,
+            unity_manifest,
+            reconcile=reconcile,
+        ):
             return False
+
+        print("🔐 Reconciling comm-sa-key from GCP Secret Manager...")
+        key_data = fetch_gcp_secret_payload(sm_client, GCP_SA_KEY_SM_SECRET)
+        sa_key_manifest = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": COMM_SA_KEY_SECRET_NAME,
+                "namespace": namespace,
+                "labels": {"app": "unity"},
+            },
+            "type": "Opaque",
+            "data": {"key.json": base64.b64encode(key_data).decode()},
+        }
+
+        return upsert_namespaced_secret(
+            api_client,
+            namespace,
+            sa_key_manifest,
+            reconcile=reconcile,
+        )
 
     except Exception as e:
         print(f"❌ Error creating secrets: {e}")
@@ -386,7 +400,7 @@ Examples:
     parser.add_argument(
         "--update",
         action="store_true",
-        help="Update existing resources",
+        help="Reconcile unity-secrets and comm-sa-key from GCP Secret Manager only",
     )
 
     parser.add_argument(
@@ -426,37 +440,44 @@ Examples:
             print("❌ Operation cancelled")
         return
 
-    if args.create or args.update:
-        print("🚀 Setting up Unity Kubernetes resources...")
+    reconcile_secrets = args.update
 
-        # Create namespace
-        # if not create_namespace(api_client, args.namespace):
-        #     sys.exit(1)
+    if args.create or reconcile_secrets:
+        if reconcile_secrets and not args.create:
+            print("🔐 Reconciling Unity secrets from GCP Secret Manager...")
+        else:
+            print("🚀 Setting up Unity Kubernetes resources...")
 
-        # Create global ConfigMap
-        if not create_global_configmap(api_client, args.namespace):
+        if args.create:
+            if not create_global_configmap(api_client, args.namespace):
+                sys.exit(1)
+            if not create_service_account(api_client, args.namespace):
+                sys.exit(1)
+
+        if not create_global_secrets(
+            api_client,
+            args.namespace,
+            reconcile=reconcile_secrets,
+        ):
             sys.exit(1)
 
-        # Create global Secrets
-        if not create_global_secrets(api_client, args.namespace):
-            sys.exit(1)
-
-        # Create ServiceAccount
-        if not create_service_account(api_client, args.namespace):
-            sys.exit(1)
-
-        # Service account key secret is now created in create_global_secrets
-
-        # No image pull secret needed - cluster has permissions
-
-        print("✅ All Unity Kubernetes resources created successfully!")
+        print("✅ Unity Kubernetes secrets reconciled successfully!")
+        if args.create:
+            print("✅ Unity Kubernetes bootstrap resources ensured!")
         print("\n💡 Next steps:")
         print("   1. Verify resources: python setup_k8s_config.py --list")
         print(
-            "   2. Refresh the idle Job pool via the canonical production path:\n"
-            "      python scripts/dev/idle_job_refresh.py --env staging",
+            "   2. Secret rotation: deploy/guides/UNITY_CLUSTER_SECRETS.md",
         )
-        print("   3. Check pool state: gcloud run services logs read ...")
+        if reconcile_secrets:
+            print(
+                f"   3. Restart Unity jobs in '{args.namespace}' so pods pick up new env",
+            )
+        else:
+            print(
+                "   3. Refresh idle pool: python scripts/dev/idle_job_refresh.py "
+                f"--env {args.namespace}",
+            )
         return
 
     # Default: show help
