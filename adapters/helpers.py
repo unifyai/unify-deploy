@@ -854,6 +854,7 @@ def _build_start_job_request_data(
     user_desktop_mode = assistant.get("user_desktop_mode", None)
     user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
     user_desktop_url = assistant.get("user_desktop_url", None)
+    is_coordinator = assistant.get("is_coordinator", False)
     demo_id = assistant.get("demo_id", None)
     data = {
         "api_key": api_key,
