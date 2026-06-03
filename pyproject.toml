@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unity-deploy"
-version = "0.1.0"
+version = "0.0.0"
 description = "Enterprise deployment overlay for Unity"
 requires-python = ">=3.12"
 dependencies = [
@@ -33,9 +33,9 @@ dev = [
 ]
 
 [tool.uv.sources]
-unity = { path = "../unity", editable = true }
-unify = { path = "../unify", editable = true }
-unillm = { path = "../unillm", editable = true }
+unity = { git = "https://github.com/unifyai/unity.git", branch = "staging" }
+unify = { git = "https://github.com/unifyai/unify.git", branch = "staging" }
+unillm = { git = "https://github.com/unifyai/unillm.git", branch = "staging" }
 
 [tool.pyright]
 extraPaths = ["../unity", "../unify", "../unillm"]

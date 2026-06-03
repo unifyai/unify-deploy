@@ -44,3 +44,9 @@ repos:
     language: python
     additional_dependencies: [black==26.1.0]
     types: [python]
+
+  - id: check-no-release-versioning
+    name: no first-party release versioning
+    entry: python3 scripts/check_no_release_versioning.py
+    language: system
+    pass_filenames: false
