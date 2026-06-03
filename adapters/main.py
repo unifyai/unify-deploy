@@ -4016,34 +4016,59 @@ async def _register_byod_email_contact(
     email: str,
     provider: str,
     api_key: str,
-) -> None:
+) -> str:
     """Create an AssistantContact row in Orchestra for a BYOD email.
 
     Calls Orchestra's admin endpoint to upsert the contact with
     ``provisioned_by=user`` so the platform knows it doesn't own the
     underlying mailbox.
+
+    Returns a short, console-facing reason code rather than raising so
+    the OAuth callback can surface the outcome to the user instead of
+    silently redirecting with ``success=true`` (the failure would
+    otherwise only land in logs and leave the onboarding step stuck):
+
+      - ``""``                  — contact created successfully.
+      - ``"email_in_use"``      — the mailbox is already connected (to this
+                                  or another assistant); the user must
+                                  disconnect it first or use another account.
+      - ``"registration_failed"`` — any other failure (network/5xx/etc.).
     """
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/contact",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "contact_type": "email",
-                "provisioned_by": "user",
-                "contact_value": email,
-                "email_provider": provider,
-            },
-            timeout=30,
-        )
-        if response.status_code >= 400:
-            logger.error(
-                "Orchestra contact creation returned %s: %s",
-                response.status_code,
-                response.text,
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{SETTINGS.orchestra_url}/assistant/{assistant_id}/contact",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "contact_type": "email",
+                    "provisioned_by": "user",
+                    "contact_value": email,
+                    "email_provider": provider,
+                },
+                timeout=30,
             )
-            raise Exception(
-                f"Orchestra returned {response.status_code}: {response.text}",
-            )
+    except Exception as exc:
+        logger.error("Orchestra contact creation request failed: %s", exc)
+        return "registration_failed"
+
+    if response.status_code < 400:
+        return ""
+
+    logger.error(
+        "Orchestra contact creation returned %s: %s",
+        response.status_code,
+        response.text,
+    )
+    # A 409 (active contact already exists for this assistant) or a
+    # uniqueness violation surfaced as a 500 both mean the mailbox is
+    # already taken. Classify those as ``email_in_use`` so the console can
+    # give an actionable message; everything else is a generic failure.
+    body = (response.text or "").lower()
+    if response.status_code == 409 or any(
+        marker in body for marker in ("unique", "already", "exists", "duplicate")
+    ):
+        return "email_in_use"
+    return "registration_failed"
 
 
 @app.get("/microsoft/auth/callback")
@@ -4208,12 +4233,13 @@ async def microsoft_oauth_callback(request: Request):
     # ------------------------------------------------------------------
     # BYOD: post-OAuth actions driven by state from Orchestra
     # ------------------------------------------------------------------
+    contact_error = ""
     if is_byod:
         actions = state_data.get("actions", {})
 
         if actions.get("register_email_contact"):
             try:
-                await _register_byod_email_contact(
+                contact_error = await _register_byod_email_contact(
                     assistant_id=assistant_id,
                     email=user_email,
                     provider="microsoft_365",
@@ -4221,6 +4247,7 @@ async def microsoft_oauth_callback(request: Request):
                 )
             except Exception as e:
                 logger.error(f"Failed to register BYOD email contact: {e}")
+                contact_error = "registration_failed"
 
         if actions.get("setup_email_watch"):
             try:
@@ -4258,6 +4285,11 @@ async def microsoft_oauth_callback(request: Request):
 
     if redirect_after:
         sep = "&" if "?" in redirect_after else "?"
+        if contact_error:
+            return RedirectResponse(
+                f"{redirect_after}{sep}success=false"
+                f"&contact_error={contact_error}&user_email={user_email}",
+            )
         return RedirectResponse(
             f"{redirect_after}{sep}success=true&user_email={user_email}",
         )
@@ -4437,9 +4469,10 @@ async def google_oauth_callback(request: Request):
 
     actions = state_data.get("actions", {})
 
+    contact_error = ""
     if actions.get("register_email_contact"):
         try:
-            await _register_byod_email_contact(
+            contact_error = await _register_byod_email_contact(
                 assistant_id=assistant_id,
                 email=user_email,
                 provider="google_workspace",
@@ -4447,6 +4480,7 @@ async def google_oauth_callback(request: Request):
             )
         except Exception as e:
             logger.error(f"Failed to register BYOD Gmail contact: {e}")
+            contact_error = "registration_failed"
 
     if actions.get("setup_email_watch"):
         try:
@@ -4470,6 +4504,11 @@ async def google_oauth_callback(request: Request):
 
     if redirect_after:
         sep = "&" if "?" in redirect_after else "?"
+        if contact_error:
+            return RedirectResponse(
+                f"{redirect_after}{sep}success=false"
+                f"&contact_error={contact_error}&user_email={user_email}",
+            )
         return RedirectResponse(
             f"{redirect_after}{sep}success=true&user_email={user_email}",
         )
