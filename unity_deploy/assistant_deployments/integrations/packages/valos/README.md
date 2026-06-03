@@ -14,12 +14,25 @@ holds accounts for:
 Demographics enrichment uses `postcodes.io` and the ONS open APIs — no
 key required.
 
-> **Opt-in only, no Console card.** This package has no entry in the
-> generic Console `INTEGRATION_PROVIDERS` registry. Any client
-> deployment that needs UK property/valuation data opts in via the
-> `integrations=[...]` argument on `BASE_SPEC.derive(...)`. Customers
-> never see, configure, or hold the upstream credentials; both keys
-> are Unify-owned and populated in the deployment env.
+> **Two activation paths.** The package is opt-in either way:
+>
+> 1. **Deploy-time wiring** — add `"valos"` to a deployment's
+>    `integrations=[...]` argument on `BASE_SPEC.derive(...)`. Both
+>    keys are seeded into the assistant's `/Secrets` from the
+>    deployment env, typically using Unify-owned credentials shared
+>    across all assistants in that deployment.
+> 2. **Per-assistant Console paste** — leave the deployment alone and
+>    paste both keys into the assistant's Integrations tab via the
+>    Console card (`INTEGRATION_PROVIDERS["valos"]`). Useful for
+>    one-off testing on a single assistant, or for clients who hold
+>    their own OS Data Hub / PropertyData subscriptions. Requires an
+>    assistant-session restart for the runtime
+>    `register_available_integrations` pass to pick up the new keys
+>    and register the package's tools.
+>
+> Either way, the secret names (`OS_MAPS_API_KEY`,
+> `PROPERTYDATA_API_KEY`) are the only contract between Console and
+> this manifest — keep them in sync if either side renames.
 
 ## Surface
 
@@ -42,15 +55,19 @@ assistant.
 
 ## Authentication
 
-Two required, Unify-owned secrets populated in the deployment env:
+Two required secrets, populated by whichever activation path is in use
+(see the callout above):
 
-- `OS_MAPS_API_KEY` — OS Data Hub Premium plan, covers OS Maps + Names
-  + Places.
+- `OS_MAPS_API_KEY` — OS Data Hub project key (Premium plan to cover OS
+  Places; on Free, geocoding falls through to OS Names). The simple
+  `?key=...` query-param flow is used everywhere; the OS "Project API
+  Secret" (OAuth client-credentials path) is unused by this package.
 - `PROPERTYDATA_API_KEY` — PropertyData subscription with the Land
-  Registry endpoints enabled.
+  Registry endpoints enabled (`/api/freeholds`,
+  `/api/title-information`).
 
-Neither key is customer-supplied. Both are seeded by the deployment env
-pipeline; the customer-facing Console has no card for this package.
+Both keys read from `os.environ` at call time, so the runtime is
+indifferent to which activation path seeded them.
 
 ### Licensing
 

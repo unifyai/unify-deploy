@@ -4,9 +4,13 @@ Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_cu
 skips this file.  Sibling function modules import from here inside their
 function bodies to satisfy FunctionManager's isolation rule.
 
-Authenticated with a single ``OS_MAPS_API_KEY`` (Unify-owned, populated
-in the deployment env).  All three OS surfaces share the key — there is
-no per-product key in the OS Data Hub model.
+Authenticated with a single ``OS_MAPS_API_KEY`` read from
+``os.environ`` at call time — populated either by the deploy-time
+``integrations=[...]`` path (typically a Unify-owned shared key) or by
+the per-assistant Console-paste path.  All three OS surfaces share the
+key — there is no per-product key in the OS Data Hub model.  The OS
+"Project API Secret" (OAuth client-credentials path) is unused; we
+rely on the simple ``?key=...`` query-param flow.
 """
 
 from __future__ import annotations
@@ -48,9 +52,10 @@ async def os_get_json(
             "error": "OS_MAPS_API_KEY is not configured.",
             "status_code": None,
             "hint": (
-                "OS_MAPS_API_KEY must be populated in the deployment env "
-                "by the Unify-managed credential pipeline.  This is not a "
-                "customer-supplied secret."
+                "OS_MAPS_API_KEY must be populated in the assistant's "
+                "/Secrets context — either by the deploy-time "
+                "integrations=[...] seed pipeline (Unify-owned shared key) "
+                "or by per-assistant Console paste (customer-supplied key)."
             ),
         }
 

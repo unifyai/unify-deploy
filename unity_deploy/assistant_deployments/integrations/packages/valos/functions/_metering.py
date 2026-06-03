@@ -4,8 +4,10 @@ Underscore-prefixed so :func:`unity.function_manager.custom_functions.collect_cu
 skips this file.
 
 The package wraps two paid upstream services (OS Data Hub Premium and
-PropertyData) on Unify-owned subscriptions, so a runaway loop in any
-deployment can produce a real bill.  The two upstream clients import
+PropertyData), so a runaway loop in any deployment can produce a real
+bill regardless of whose subscription is in play (Unify-owned shared
+account on the deploy-time path, or per-customer keys on the
+Console-paste path).  The two upstream clients import
 :func:`record_and_check` and call it before issuing each HTTP request;
 when the per-day counter for a provider trips its ceiling,
 :func:`quota_envelope` is returned as the response body and the actual
@@ -95,7 +97,7 @@ def quota_envelope(provider: str, count: int, limit: int) -> dict:
         "error": (
             f"Daily quota for {provider} exceeded ({count} > {limit}).  "
             "The Valos package halts upstream calls when its per-day cap "
-            "is reached to protect the Unify-owned subscription from a "
+            "is reached to protect the upstream subscription from a "
             "runaway loop."
         ),
         "status_code": None,

@@ -51,9 +51,10 @@ async def propertydata_get(
             "error": "PROPERTYDATA_API_KEY is not configured.",
             "status_code": None,
             "hint": (
-                "PROPERTYDATA_API_KEY must be populated in the deployment "
-                "env by the Unify-managed credential pipeline.  This is "
-                "not a customer-supplied secret."
+                "PROPERTYDATA_API_KEY must be populated in the assistant's "
+                "/Secrets context — either by the deploy-time "
+                "integrations=[...] seed pipeline (Unify-owned shared key) "
+                "or by per-assistant Console paste (customer-supplied key)."
             ),
         }
 

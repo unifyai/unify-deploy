@@ -5,38 +5,45 @@ sector: real-estate
 tier: api
 quality: bronze
 description: >
-  UK property valuation data layer.  Wraps two upstream services that
-  Unify holds accounts for — the Ordnance Survey Data Hub (OS Maps API
-  for raster tiles, OS Names API for geocoding, OS Places API for UPRN
-  lookup) and PropertyData (Land Registry freeholds, INSPIRE polygon
-  geometry, title information) — and exposes them to the actor as typed
-  primitives covering address resolution, freehold title lookup,
-  polygon retrieval, demographic context, and OS-tiled map rendering.
-  Replaces the placeholder pass-through to api.valos.ai.  Credentials
-  are Unify-owned and live in the deployment environment; the package
-  is opt-in via the ``integrations=[...]`` argument on
-  ``BASE_SPEC.derive(...)`` from any client deployment that needs UK
-  property/valuation data.
+  UK property valuation data layer.  Wraps the Ordnance Survey Data Hub
+  (OS Maps API for raster tiles, OS Names API for geocoding, OS Places
+  API for UPRN lookup) and PropertyData (Land Registry freeholds,
+  INSPIRE polygon geometry, title information) and exposes them to the
+  actor as typed primitives covering address resolution, freehold title
+  lookup, polygon retrieval, demographic context, and OS-tiled map
+  rendering.  Replaces the placeholder pass-through to api.valos.ai.
+  Opt-in via two equivalent activation paths: deploy-time wiring through
+  the ``integrations=[...]`` argument on ``BASE_SPEC.derive(...)``
+  (typically with Unify-owned shared credentials), or per-assistant
+  Console paste through the ``valos`` entry in
+  ``INTEGRATION_PROVIDERS`` (for one-off testing or BYO-keys clients).
+  Either path lands the same two secrets in the assistant's
+  ``/Secrets`` context.
 homepage: https://osdatahub.os.uk
 
 secrets:
 - name: OS_MAPS_API_KEY
   description: >
-    OS Data Hub API key with access to OS Maps, OS Names, and OS Places.
-    Provisioned on Unify's account on the Premium plan; never customer-
-    supplied.  Distributing OS rasters in customer-deliverable Word
-    reports is redistribution and may require a separate OS Partner /
-    OS Reseller agreement — confirm commercial terms with Ordnance
-    Survey before producing client-deliverable maps.
+    OS Data Hub project API key with access to OS Maps, OS Names, and
+    OS Places.  May be Unify-owned (deploy-time path) or
+    customer-supplied (Console-paste path) — the runtime is indifferent.
+    Premium plan recommended to cover OS Places; on Free, geocoding
+    falls through to OS Names.  The simple ``?key=...`` query-param
+    flow is used; the OS "Project API Secret" (OAuth
+    client-credentials path) is unused.  Distributing OS rasters in
+    customer-deliverable Word reports is redistribution and may require
+    a separate OS Partner / OS Reseller agreement — confirm commercial
+    terms with Ordnance Survey before producing client-deliverable maps.
   required: true
   sensitive: true
 - name: PROPERTYDATA_API_KEY
   description: >
     PropertyData API key with the Land Registry endpoints enabled
-    (``/api/freeholds`` and ``/api/title-information``).  Provisioned on
-    Unify's account; never customer-supplied.  Confirm reseller / multi-
-    tenant terms with PropertyData before opting any second client into
-    this package.
+    (``/api/freeholds`` and ``/api/title-information``).  May be
+    Unify-owned (deploy-time path) or customer-supplied (Console-paste
+    path).  PropertyData ToS includes reseller / multi-tenant clauses;
+    confirm reseller / multi-tenant terms with PropertyData before
+    using a single Unify-owned key across multiple client deployments.
   required: true
   sensitive: true
 
