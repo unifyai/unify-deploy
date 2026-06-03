@@ -11,6 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 NO_DESKTOP_MODE = "none"
+COORDINATOR_DEFAULT_DESKTOP_MODE = "ubuntu"
 # Adapters intentionally cap start-intent waits at the comms edge so webhook
 # handlers can return quickly. This is a best-effort handoff, not a durable
 # acceptance boundary.
@@ -39,9 +40,37 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
     MessageItemRequestBuilder,
 )
 
+from common.int_list_codec import encode_int_list_for_form
+from common.space_summaries_codec import encode_space_summaries_for_form
 from common.settings import SETTINGS
 
+LOCAL_ASSISTANT_SELF_CONTACT_ID = 0
+LOCAL_ASSISTANT_BOSS_CONTACT_ID = 1
+
 _pubsub_client = None
+
+
+def _required_contact_id(assistant_data: dict, field_name: str) -> int:
+    """Return a resolved contact id required by runtime-facing adapter paths."""
+    value = assistant_data.get(field_name)
+    if value is None:
+        assistant_id = assistant_data.get("assistant_id") or assistant_data.get(
+            "agent_id",
+        )
+        raise ValueError(
+            f"Assistant {assistant_id} is missing required {field_name}",
+        )
+    return int(value)
+
+
+def _resolve_desktop_mode(assistant_data: dict) -> str:
+    """Resolve runtime desktop mode with Coordinator-aware fallback semantics."""
+    desktop_mode = assistant_data.get("desktop_mode")
+    if desktop_mode:
+        return desktop_mode
+    if assistant_data.get("is_coordinator", False):
+        return COORDINATOR_DEFAULT_DESKTOP_MODE
+    return NO_DESKTOP_MODE
 
 
 def get_pubsub_client():
@@ -88,9 +117,11 @@ def get_contacts(context: str, api_key: str) -> tuple[list[dict[str, str]], int]
 
 
 def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
+    self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
+    boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     return [
         {
-            "contact_id": 0,
+            "contact_id": self_contact_id,
             "first_name": assistant_data["assistant_first_name"],
             "surname": assistant_data["assistant_surname"],
             "email_address": assistant_data["assistant_email"],
@@ -104,7 +135,7 @@ def get_default_contacts(assistant_data: dict) -> list[dict[str, str]]:
             "response_policy": "",
         },
         {
-            "contact_id": 1,
+            "contact_id": boss_contact_id,
             "first_name": assistant_data["user_first_name"],
             "surname": assistant_data["user_surname"],
             "email_address": assistant_data["user_email"],
@@ -473,7 +504,10 @@ def check_valid_contact(
         return default_contacts, False, None
 
     # check for boss user
-    boss_contact = [contact for contact in contacts if contact["contact_id"] == 1]
+    boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
+    boss_contact = [
+        contact for contact in contacts if contact["contact_id"] == boss_contact_id
+    ]
     logger.info(f"Boss contact: {boss_contact}")
     if len(boss_contact) > 0:
         boss_contact = boss_contact[0]
@@ -816,10 +850,11 @@ def _build_start_job_request_data(
 
     api_key = assistant["api_key"]
     assistant_id = assistant["assistant_id"]
-    desktop_mode = assistant.get("desktop_mode") or NO_DESKTOP_MODE
+    desktop_mode = _resolve_desktop_mode(assistant)
     user_desktop_mode = assistant.get("user_desktop_mode", None)
     user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
     user_desktop_url = assistant.get("user_desktop_url", None)
+    is_coordinator = assistant.get("is_coordinator", False)
     demo_id = assistant.get("demo_id", None)
     data = {
         "api_key": api_key,
@@ -864,7 +899,18 @@ def _build_start_job_request_data(
         "user_desktop_url": user_desktop_url or "",
         # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
         "demo_id": str(demo_id) if demo_id else "",
+        "is_coordinator": ("true" if is_coordinator else "false"),
         "team_ids": json.dumps(assistant.get("team_ids", [])),
+        "space_ids": encode_int_list_for_form(
+            assistant.get("space_ids") or [],
+            field_name="space_ids",
+        ),
+        "space_summaries": encode_space_summaries_for_form(
+            assistant.get("space_summaries") or [],
+            field_name="space_summaries",
+        ),
+        "self_contact_id": str(_required_contact_id(assistant, "self_contact_id")),
+        "boss_contact_id": str(_required_contact_id(assistant, "boss_contact_id")),
         "org_id": (
             str(assistant.get("org_id", ""))
             if assistant.get("org_id") is not None

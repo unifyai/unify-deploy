@@ -314,9 +314,13 @@ def _print_status_snapshot(snapshot: SlugDeploymentStatus) -> None:
         f"\n  unity image hash blob:           {snapshot.unity_image_hash or 'missing'}",
     )
     print()
+    print("Client-facing preview URLs:")
+    for service in SERVICES:
+        print(f"  {service.name:<32} {service.client_url(snapshot.slug)}")
+    print()
     console = service_by_name(CONSOLE_SERVICE_NAME)
     if console is not None:
-        print(f"Console URL:  {console.tagged_url(snapshot.slug)}")
+        print(f"Console URL:  {console.client_url(snapshot.slug)}")
 
 
 def _find_tagged(*, service: Service, slug: str) -> TaggedRevision | None:

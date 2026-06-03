@@ -61,6 +61,7 @@ def _start_job_payload(**overrides) -> dict[str, str]:
         "user_desktop_mode": "",
         "user_desktop_filesys_sync": "false",
         "user_desktop_url": "",
+        "is_coordinator": "false",
         "demo_id": "",
         "team_ids": "[]",
         "space_ids": "[]",
@@ -120,6 +121,49 @@ def _control_plane_ready_patch(
         new_callable=AsyncMock,
         return_value=(ready, reason),
     )
+
+
+def _post_start_job_and_capture_bootstrap_payload(client, form_payload: dict[str, str]):
+    """Post a start-job form and return the generated bootstrap payload."""
+
+    core_api = MagicMock()
+    custom_api = MagicMock()
+    existing_session = _existing_session()
+
+    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
+        return {
+            "metadata": existing_session["metadata"],
+            "spec": spec,
+            "status": existing_session["status"],
+        }
+
+    with (
+        patch(
+            "communication.infra.views._get_k8s_clients",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
+        ),
+        _control_plane_ready_patch(),
+        patch(
+            "communication.infra.views.get_custom_objects_api",
+            return_value=custom_api,
+        ),
+        patch(
+            "communication.infra.views.get_assistant_session",
+            return_value=existing_session,
+        ),
+        patch(
+            "communication.infra.views.create_or_update_bootstrap_secret",
+            return_value=existing_session["spec"]["startupSecretRef"],
+        ) as mock_create_or_update_bootstrap_secret,
+        patch(
+            "communication.infra.views.create_or_update_assistant_session",
+            side_effect=_updated_session,
+        ),
+    ):
+        response = client.post("/infra/job/start", data=form_payload)
+
+    return response, mock_create_or_update_bootstrap_secret.call_args.args[4]
 
 
 class _FakeCoordApi:
@@ -249,6 +293,19 @@ def test_start_job_refreshes_bootstrap_secret_and_session_spec_for_reused_pendin
     assert refreshed_spec["requestedAt"]
 
 
+def test_start_job_personal_coordinator_sets_null_org_id_in_bootstrap_payload(client):
+    """Personal Coordinators should keep org_id null in bootstrap payloads."""
+
+    response, payload = _post_start_job_and_capture_bootstrap_payload(
+        client,
+        _start_job_payload(is_coordinator="true", org_id=""),
+    )
+
+    assert response.status_code == 200
+    assert payload["is_coordinator"] is True
+    assert payload["org_id"] is None
+
+
 def test_start_job_stamps_preview_runtime_urls_on_image_override(client):
     core_api = MagicMock()
     custom_api = MagicMock()
@@ -300,6 +357,32 @@ def test_start_job_stamps_preview_runtime_urls_on_image_override(client):
         "comms": SETTINGS.comms_url,
         "adapters": SETTINGS.adapters_url,
     }
+
+
+def test_start_job_decodes_coordinator_flag_into_bootstrap_payload(client):
+    """The start-job form field should become a native bool in the bootstrap payload."""
+
+    response, payload = _post_start_job_and_capture_bootstrap_payload(
+        client,
+        _start_job_payload(is_coordinator="true"),
+    )
+
+    assert response.status_code == 200
+    assert payload["is_coordinator"] is True
+
+
+def test_start_job_defaults_missing_coordinator_flag_to_false(client):
+    """Missing coordinator form fields should produce an explicit non-Coordinator value."""
+
+    form_payload = _start_job_payload()
+    form_payload.pop("is_coordinator")
+    response, payload = _post_start_job_and_capture_bootstrap_payload(
+        client,
+        form_payload,
+    )
+
+    assert response.status_code == 200
+    assert payload["is_coordinator"] is False
 
 
 def test_start_job_persists_wake_reasons_for_pending_reused_session(client):

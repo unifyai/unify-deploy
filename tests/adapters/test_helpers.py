@@ -12,12 +12,17 @@ import json
 import requests
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
+
+import pytest
+
 from adapters.helpers import (
     START_INTENT_DISPATCH_TIMEOUT_SECONDS,
     build_webhook_context,
     cleanup_idle_pool,
+    check_valid_contact,
     expire_all_stale_jobs,
     get_default_contacts,
+    get_assistant,
     get_unity_jobs_inventory,
     check_contact_details,
     dispatch_unity_start_intent,
@@ -25,6 +30,9 @@ from adapters.helpers import (
     start_unity_job,
 )
 from common.settings import SETTINGS
+
+TEST_SELF_CONTACT_ID = 42
+TEST_BOSS_CONTACT_ID = 43
 
 # --- get_default_contacts tests ---
 
@@ -42,6 +50,8 @@ def test_get_default_contacts_includes_whatsapp_number():
         "user_email": "user@example.com",
         "user_number": "+0987654321",
         "user_whatsapp_number": "+4445556666",
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
     }
     contacts = get_default_contacts(assistant_data)
 
@@ -60,12 +70,52 @@ def test_get_default_contacts_includes_phone_number():
         "user_surname": "User",
         "user_email": "user@example.com",
         "user_number": "+0987654321",
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
     }
     contacts = get_default_contacts(assistant_data)
 
     assert len(contacts) == 2
     assert contacts[0]["phone_number"] == "+1234567890"  # assistant
     assert contacts[1]["phone_number"] == "+0987654321"  # user
+
+
+def test_get_default_contacts_uses_resolved_contact_ids():
+    """Fallback contacts use the assistant's resolved self and boss ids."""
+    assistant_data = {
+        "assistant_first_name": "Test",
+        "assistant_surname": "Assistant",
+        "assistant_email": "test@example.com",
+        "assistant_number": "+1234567890",
+        "user_first_name": "Test",
+        "user_surname": "User",
+        "user_email": "user@example.com",
+        "user_number": "+0987654321",
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
+    }
+
+    contacts = get_default_contacts(assistant_data)
+
+    assert contacts[0]["contact_id"] == TEST_SELF_CONTACT_ID
+    assert contacts[1]["contact_id"] == TEST_BOSS_CONTACT_ID
+
+
+def test_get_default_contacts_requires_resolved_contact_ids():
+    """Fallback contacts fail loudly when assistant identity has not resolved."""
+    with pytest.raises(ValueError, match="self_contact_id"):
+        get_default_contacts(
+            {
+                "assistant_first_name": "Test",
+                "assistant_surname": "Assistant",
+                "assistant_email": "test@example.com",
+                "assistant_number": "+1234567890",
+                "user_first_name": "Test",
+                "user_surname": "User",
+                "user_email": "user@example.com",
+                "user_number": "+0987654321",
+            },
+        )
 
 
 # --- check_contact_details tests ---
@@ -134,6 +184,62 @@ def test_check_contact_details_returns_false_for_unknown_medium():
     assert result is False
 
 
+@patch("adapters.helpers.get_contacts")
+def test_check_valid_contact_uses_resolved_boss_contact_id(mock_get_contacts):
+    """Inbound boss validation follows the resolved boss id, not contact 1."""
+    assistant_data = {
+        "assistant_first_name": "Test",
+        "assistant_surname": "Assistant",
+        "assistant_email": "assistant@example.com",
+        "assistant_number": "+1234567890",
+        "user_first_name": "Boss",
+        "user_surname": "User",
+        "user_email": "boss@example.com",
+        "user_number": "+0987654321",
+        "user_whatsapp_number": "+0987654321",
+        "self_contact_id": 42,
+        "boss_contact_id": 43,
+    }
+    mock_get_contacts.return_value = (
+        {
+            "logs": [
+                {
+                    "entries": {
+                        "contact_id": 42,
+                        "first_name": "Test",
+                        "surname": "Assistant",
+                        "email_address": "assistant@example.com",
+                        "phone_number": "+1234567890",
+                    },
+                },
+                {
+                    "entries": {
+                        "contact_id": 43,
+                        "first_name": "Boss",
+                        "surname": "User",
+                        "email_address": "boss@example.com",
+                        "phone_number": "+0987654321",
+                    },
+                },
+            ],
+        },
+        200,
+    )
+
+    contacts, is_valid, matched_contact = check_valid_contact(
+        email_address="boss@example.com",
+        medium="email",
+        assistant_context="user-123/assistant-123",
+        api_key="test-api-key",
+        user_email="boss@example.com",
+        assistant_data=assistant_data,
+    )
+
+    assert is_valid is True
+    assert matched_contact["contact_id"] == 43
+    assert [contact["contact_id"] for contact in contacts] == [42, 43]
+
+
 # --- start_unity_job demo mode tests ---
 
 
@@ -168,9 +274,93 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "user_desktop_mode": None,
         "user_desktop_filesys_sync": False,
         "user_desktop_url": None,
+        "is_coordinator": False,
         "demo_id": demo_id,
         "is_local": False,
+        "space_ids": [11, 22],
+        "space_summaries": [
+            {
+                "space_id": 11,
+                "name": "Ops",
+                "description": "Operations workspace for customer support.",
+            },
+        ],
+        "self_contact_id": 42,
+        "boss_contact_id": 43,
     }
+
+
+def _orchestra_assistant_record(**overrides):
+    record = {
+        "agent_id": "12345",
+        "deploy_env": None,
+        "user_id": "user-123",
+        "api_key": "test-api-key",
+        "user_first_name": "Test",
+        "user_last_name": "User",
+        "first_name": "Test",
+        "surname": "Assistant",
+        "age": 25,
+        "nationality": "US",
+        "about": "Test assistant",
+        "job_title": "",
+        "timezone": "UTC",
+        "phone": "+0987654321",
+        "assistant_whatsapp_number": "+18501234567",
+        "assistant_discord_bot_id": "",
+        "email": "assistant@example.com",
+        "email_provider": "google_workspace",
+        "user_phone": "+1234567890",
+        "user_whatsapp_number": "+1234567890",
+        "user_email": "test@example.com",
+        "voice_provider": "elevenlabs",
+        "voice_id": "voice-123",
+        "secrets": {},
+        "desktop_mode": "none",
+        "user_desktop_mode": None,
+        "user_desktop_filesys_sync": False,
+        "user_desktop_url": None,
+        "demo_id": None,
+        "is_local": False,
+        "is_coordinator": True,
+        "team_ids": [],
+        "self_contact_id": TEST_SELF_CONTACT_ID,
+        "boss_contact_id": TEST_BOSS_CONTACT_ID,
+        "organization_id": None,
+    }
+    record.update(overrides)
+    return record
+
+
+def test_get_assistant_local_payload_defaults_to_non_coordinator():
+    """Local assistants should carry the same Coordinator flag shape as Orchestra rows."""
+
+    assistant_data = get_assistant(assistant_id="local-assistant")
+
+    assert assistant_data["is_coordinator"] is False
+
+
+@patch("adapters.helpers.requests.get")
+def test_get_assistant_preserves_coordinator_flag_from_orchestra(mock_get):
+    """Coordinator lookups preserve role and repair missing desktop mode."""
+
+    mock_get.return_value = MagicMock(
+        json=MagicMock(
+            return_value={
+                "info": [
+                    _orchestra_assistant_record(
+                        is_coordinator=True,
+                        desktop_mode=None,
+                    ),
+                ],
+            },
+        ),
+    )
+
+    assistant_data = get_assistant(assistant_id="12345")
+
+    assert assistant_data["is_coordinator"] is True
+    assert assistant_data["desktop_mode"] == "ubuntu"
 
 
 @patch("adapters.helpers.requests.post")
@@ -278,6 +468,8 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     mock_response.status_code = 200
     mock_post.return_value = mock_response
     assistant_data = _create_mock_assistant_data(demo_id=7)
+    assistant_data["desktop_mode"] = None
+    assistant_data["is_coordinator"] = True
     wake_reasons = [{"type": "task_due", "task_id": 101}]
 
     response = dispatch_unity_start_intent(
@@ -292,6 +484,34 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
     assert call_kwargs["timeout"] == 12
     assert json.loads(call_kwargs["data"]["wake_reasons"]) == wake_reasons
     assert call_kwargs["data"]["medium"] == "api_message"
+    assert call_kwargs["data"]["is_coordinator"] == "true"
+    assert call_kwargs["data"]["desktop_mode"] == "ubuntu"
+
+
+@patch("adapters.helpers.requests.post")
+@patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
+def test_dispatch_unity_start_intent_encodes_space_ids_for_form(mock_post):
+    """Start-intent form payloads carry memberships as JSON strings."""
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+    assistant_data = _create_mock_assistant_data()
+
+    response = dispatch_unity_start_intent(assistant_data, "api_message")
+
+    assert response is mock_response
+    data = mock_post.call_args.kwargs["data"]
+    assert json.loads(data["space_ids"]) == [11, 22]
+    assert json.loads(data["space_summaries"]) == [
+        {
+            "space_id": 11,
+            "name": "Ops",
+            "description": "Operations workspace for customer support.",
+        },
+    ]
+    assert data["self_contact_id"] == "42"
+    assert data["boss_contact_id"] == "43"
 
 
 @patch("adapters.helpers.requests.post")
@@ -306,6 +526,78 @@ def test_dispatch_unity_start_intent_returns_none_without_api_key(mock_post):
 
     assert response is None
     mock_post.assert_not_called()
+
+
+@patch("adapters.helpers.requests.get")
+def test_get_assistant_preserves_space_ids(mock_get):
+    """Assistant lookups preserve live membership ids from Orchestra."""
+
+    mock_get.return_value = MagicMock(
+        json=MagicMock(
+            return_value={
+                "info": [
+                    {
+                        "agent_id": "assistant-123",
+                        "deploy_env": "staging",
+                        "user_id": "user-123",
+                        "api_key": "test-api-key",
+                        "user_first_name": "Test",
+                        "user_last_name": "User",
+                        "first_name": "Test",
+                        "surname": "Assistant",
+                        "age": 25,
+                        "nationality": "US",
+                        "about": "Test assistant",
+                        "job_title": "",
+                        "timezone": "UTC",
+                        "phone": "+1987654321",
+                        "assistant_whatsapp_number": "+18501234567",
+                        "assistant_discord_bot_id": "",
+                        "email": "assistant@example.com",
+                        "email_provider": "google_workspace",
+                        "user_phone": "+1234567890",
+                        "user_whatsapp_number": "+1234567890",
+                        "user_email": "test@example.com",
+                        "voice_provider": "elevenlabs",
+                        "voice_id": "voice-123",
+                        "secrets": {},
+                        "desktop_mode": "none",
+                        "user_desktop_mode": None,
+                        "user_desktop_filesys_sync": False,
+                        "user_desktop_url": None,
+                        "demo_id": None,
+                        "is_local": False,
+                        "team_ids": [7],
+                        "space_ids": [3, 4],
+                        "space_summaries": [
+                            {
+                                "space_id": 3,
+                                "name": "Support",
+                                "description": "Support workspace for customer issues.",
+                            },
+                        ],
+                        "self_contact_id": 42,
+                        "boss_contact_id": 43,
+                        "organization_id": 42,
+                    },
+                ],
+            },
+        ),
+    )
+
+    assistant = get_assistant(assistant_id="assistant-123")
+
+    assert assistant["space_ids"] == [3, 4]
+    assert assistant["space_summaries"] == [
+        {
+            "space_id": 3,
+            "name": "Support",
+            "description": "Support workspace for customer issues.",
+        },
+    ]
+    assert assistant["team_ids"] == [7]
+    assert assistant["self_contact_id"] == 42
+    assert assistant["boss_contact_id"] == 43
 
 
 @patch("adapters.helpers._fetch_infra_jobs")

@@ -19,6 +19,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from common.assistant_lookup import get_assistant
+from common.int_list_codec import encode_int_list_for_env
+from common.space_summaries_codec import encode_space_summaries_for_env
 from common.settings import SETTINGS
 
 from .helpers import create_unity_job
@@ -27,6 +29,7 @@ from .task_activation import (
     _create_or_adopt_task_run,
     _normalize_task_id_component,
     _orchestra_admin_headers,
+    _required_contact_id,
     _running_task_run_updates,
     _update_task_run,
     TASK_DUE_HTTP_TIMEOUT_SECONDS,
@@ -115,6 +118,10 @@ def _build_dashboard_action_env(
     """Build env vars for the headless Unity offline runner (dashboard action variant)."""
 
     team_ids = assistant_data.get("team_ids") or []
+    space_ids = assistant_data.get("space_ids") or []
+    space_summaries = assistant_data.get("space_summaries") or []
+    self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
+    boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     return {
         "UNITY_OFFLINE_TASK_MODE": "function",
         "UNITY_OFFLINE_TASK_FUNCTION_ID": str(action_metadata["function_id"]),
@@ -150,20 +157,28 @@ def _build_dashboard_action_env(
         "ASSISTANT_WHATSAPP_NUMBER": str(
             assistant_data.get("assistant_whatsapp_number") or "",
         ),
+        "SELF_CONTACT_ID": str(self_contact_id),
         "ASSISTANT_DESKTOP_MODE": "none",
         "ASSISTANT_USER_DESKTOP_MODE": "",
         "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
         "ASSISTANT_USER_DESKTOP_URL": "",
+        "ASSISTANT_IS_COORDINATOR": "False",
         "USER_ID": str(assistant_data.get("user_id") or ""),
         "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
         "USER_SURNAME": str(assistant_data.get("user_surname") or ""),
         "USER_NUMBER": str(assistant_data.get("user_number") or ""),
         "USER_EMAIL": str(assistant_data.get("user_email") or ""),
         "USER_WHATSAPP_NUMBER": str(assistant_data.get("user_whatsapp_number") or ""),
+        "BOSS_CONTACT_ID": str(boss_contact_id),
         "VOICE_PROVIDER": str(assistant_data.get("voice_provider") or "cartesia"),
         "VOICE_ID": str(assistant_data.get("voice_id") or ""),
         "VOICE_MODE": "tts",
         "TEAM_IDS": ",".join(str(tid) for tid in team_ids),
+        "SPACE_IDS": encode_int_list_for_env(space_ids, field_name="space_ids"),
+        "SPACE_SUMMARIES": encode_space_summaries_for_env(
+            space_summaries,
+            field_name="space_summaries",
+        ),
         "ORG_ID": (
             str(assistant_data.get("org_id"))
             if assistant_data.get("org_id") is not None

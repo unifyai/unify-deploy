@@ -11,7 +11,7 @@ import requests
 import httpx
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-from typing import Optional
+from typing import Any, Optional
 from fastapi import (
     Body,
     Depends,
@@ -117,7 +117,10 @@ from common.livekit import (
 )
 
 from common.oauth import OAuthStateError, verify_oauth_state
+from common.int_list_codec import normalize_int_list
+from common.space_summaries_codec import normalize_space_summaries
 from common.settings import SETTINGS
+from common.task_destination import assistant_has_task_destination
 
 # Canonical source: communication.infra.vm_config.SUPPORTED_POOL_VM_TYPES
 # Duplicated here because the adapters container does not include the
@@ -1206,6 +1209,7 @@ class ScheduledTaskDuePayload(BaseModel):
     """Payload delivered by Cloud Tasks when a scheduled task becomes due."""
 
     assistant_id: str
+    destination: Optional[str] = None
     task_id: int
     source_task_log_id: int
     activation_revision: str
@@ -1227,6 +1231,17 @@ class InactivityFollowupPayload(BaseModel):
     """
 
     assistant_id: str
+
+
+class CoordinatorDelegatePayload(BaseModel):
+    """Payload sent when a Coordinator assigns work to a colleague runtime."""
+
+    assistant_id: str
+    requested_by_assistant_id: str
+    instruction: str
+    intent: str = "general"
+    dedupe_key: Optional[str] = None
+    related_context: Optional[dict[str, Any]] = None
 
 
 # =============================================================================
@@ -1745,7 +1760,7 @@ async def api_message_webhook(request: Request):
         event_data = {
             "api_message_id": api_message_id,
             "body": body,
-            "contact_id": 1,
+            "contact_id": int(context["assistant"]["boss_contact_id"]),
             "assistant_id": assistant_id,
         }
         if validated_attachments:
@@ -1859,7 +1874,7 @@ async def unify_meet_webhook(request: Request):
 def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
     """Return the canonical wake reason / system-event payload for due tasks."""
 
-    return {
+    reason = {
         "type": "task_due",
         "task_id": payload.task_id,
         "source_task_log_id": payload.source_task_log_id,
@@ -1872,6 +1887,9 @@ def _build_task_due_reason(payload: ScheduledTaskDuePayload) -> dict:
         "visibility_policy": payload.visibility_policy,
         "recurrence_hint": payload.recurrence_hint,
     }
+    if payload.destination is not None:
+        reason["destination"] = payload.destination
+    return reason
 
 
 def _task_due_message(payload: ScheduledTaskDuePayload) -> str:
@@ -1889,6 +1907,22 @@ def _build_inactivity_followup_reason() -> dict:
     return {"type": "inactivity_followup"}
 
 
+def _build_coordinator_delegate_reason(payload: CoordinatorDelegatePayload) -> dict:
+    """Return the canonical wake reason for Coordinator-assigned colleague work."""
+
+    reason: dict[str, Any] = {
+        "type": "coordinator_delegate",
+        "requested_by_assistant_id": payload.requested_by_assistant_id,
+        "intent": payload.intent,
+        "instruction": payload.instruction,
+    }
+    if payload.dedupe_key is not None:
+        reason["dedupe_key"] = payload.dedupe_key
+    if payload.related_context is not None:
+        reason["related_context"] = payload.related_context
+    return reason
+
+
 def _inactivity_followup_message(assistant_id: str) -> str:
     """Return the human-readable summary attached to an inactivity follow-up event."""
 
@@ -1896,6 +1930,33 @@ def _inactivity_followup_message(assistant_id: str) -> str:
         f"Re-engagement follow-up requested for assistant {assistant_id} "
         f"after a stretch of silence across all contacts."
     )
+
+
+def _coordinator_delegate_message(payload: CoordinatorDelegatePayload) -> str:
+    """Return the human-readable summary attached to a Coordinator delegate event."""
+
+    return (
+        f"Coordinator {payload.requested_by_assistant_id} assigned "
+        f"{payload.intent} work to assistant {payload.assistant_id}."
+    )
+
+
+_ASYNC_DELEGATION_RECEIPT_MESSAGE = (
+    "The colleague has been woken or notified with the assignment. "
+    "This does not mean the colleague has already created durable artifacts "
+    "or completed the work."
+)
+
+
+def _async_delegation_receipt() -> dict[str, Any]:
+    """Return generic receipt fields for an accepted async colleague delegation."""
+
+    return {
+        "accepted": True,
+        "completion_status": "pending_async",
+        "receipt_type": "async_delegation_receipt",
+        "message": _ASYNC_DELEGATION_RECEIPT_MESSAGE,
+    }
 
 
 def _publish_unity_system_event(
@@ -1964,6 +2025,18 @@ async def unity_system_event_webhook(request: Request):
         logger.info("message is required")
         return Response(status_code=400)
 
+    # Optional structured payload that callers can attach alongside
+    # the human-readable ``message``. Forwarded verbatim onto the
+    # Pub/Sub event so Unity-side dispatch can pluck out subtype /
+    # details (e.g. coordinator onboarding narration) without
+    # re-parsing the message string. Must be a dict if present —
+    # anything else gets dropped to keep the published event shape
+    # stable.
+    extra_event_fields_raw = payload.get("extra_event_fields")
+    extra_event_fields = (
+        extra_event_fields_raw if isinstance(extra_event_fields_raw, dict) else None
+    )
+
     logger.info(
         f"Received unity_system_event for event_type={event_type}",
     )
@@ -1991,6 +2064,7 @@ async def unity_system_event_webhook(request: Request):
             event_type=event_type,
             message=message,
             contacts=contacts,
+            extra_event_fields=extra_event_fields,
         )
         logger.info("unity_system_event message published to Pub/Sub successfully")
     except Exception as e:
@@ -2017,6 +2091,17 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
             "success": True,
             "status": "skipped",
             "reason": "assistant_not_found",
+        }
+    if not assistant_has_task_destination(assistant_data, payload.destination):
+        logger.info(
+            "Skipping task_due delivery for assistant %s because destination %s is no longer authorized",
+            payload.assistant_id,
+            payload.destination,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "destination_membership_revoked",
         }
 
     assistant_id = assistant_data["assistant_id"]
@@ -2101,6 +2186,117 @@ async def scheduled_task_due_webhook(payload: ScheduledTaskDuePayload):
         "status": "attached_to_startup",
         "assistant_id": assistant_id,
         "activation_id": start_result.get("activation_id"),
+    }
+
+
+@app.post("/assistant/coordinator-delegate", dependencies=[Depends(require_admin_key)])
+async def assistant_coordinator_delegate_webhook(payload: CoordinatorDelegatePayload):
+    """Wake or notify a colleague when a Coordinator assigns async work."""
+
+    assistant_data = await asyncio.to_thread(
+        get_assistant,
+        assistant_id=payload.assistant_id,
+    )
+    if not assistant_data or not assistant_data.get("assistant_id"):
+        logger.info(
+            "Skipping coordinator_delegate delivery because assistant %s no longer exists",
+            payload.assistant_id,
+        )
+        return {
+            "success": True,
+            "status": "skipped",
+            "reason": "assistant_not_found",
+        }
+
+    assistant_id = assistant_data["assistant_id"]
+    wake_reason = _build_coordinator_delegate_reason(payload)
+    message = _coordinator_delegate_message(payload)
+
+    try:
+        if uses_local_unity_runtime(assistant_data):
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="coordinator_delegate",
+                message=message,
+                extra_event_fields=wake_reason,
+            )
+            return {
+                "success": True,
+                "status": "published_local",
+                "assistant_id": assistant_id,
+                **_async_delegation_receipt(),
+            }
+
+        response = await asyncio.to_thread(
+            dispatch_unity_start_intent,
+            assistant_data,
+            "api_message",
+            wake_reasons=[wake_reason],
+            timeout_seconds=30,
+        )
+    except requests.RequestException as exc:
+        logger.error(
+            "Failed dispatching coordinator_delegate wake for assistant %s: %s",
+            assistant_id,
+            exc,
+        )
+        return Response(
+            content=f"Failed to dispatch coordinator_delegate wake: {exc}",
+            status_code=500,
+        )
+
+    if response is None:
+        return Response(
+            content="Assistant is missing an API key for coordinator_delegate delivery",
+            status_code=500,
+        )
+    if response.status_code != 200:
+        return Response(content=response.text, status_code=response.status_code)
+
+    try:
+        start_result = response.json()
+    except ValueError as exc:
+        logger.error(
+            "Invalid /infra/job/start response for coordinator_delegate: %s",
+            exc,
+        )
+        return Response(
+            content="Invalid /infra/job/start response",
+            status_code=500,
+        )
+
+    if start_result.get("active_session_already_running"):
+        try:
+            _publish_unity_system_event(
+                assistant_id=assistant_id,
+                event_type="coordinator_delegate",
+                message=message,
+                extra_event_fields=wake_reason,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed publishing coordinator_delegate system event for assistant %s: %s",
+                assistant_id,
+                exc,
+            )
+            return Response(
+                content=f"Failed to publish coordinator_delegate system event: {exc}",
+                status_code=500,
+            )
+        return {
+            "success": True,
+            "status": "published_to_active_session",
+            "assistant_id": assistant_id,
+            "activation_id": start_result.get("activation_id"),
+            **_async_delegation_receipt(),
+        }
+
+    return {
+        "success": True,
+        "status": "attached_to_startup",
+        "assistant_id": assistant_id,
+        "activation_id": start_result.get("activation_id"),
+        **_async_delegation_receipt(),
     }
 
 
@@ -2368,6 +2564,19 @@ async def assistant_update_webhook(request: Request):
     try:
         form_data = await request.form()
         assistant_id = form_data.get("assistant_id")
+        update_kind = str(form_data.get("update_kind") or "general")
+        if update_kind not in {"general", "membership"}:
+            raise HTTPException(
+                status_code=400,
+                detail="update_kind must be 'general' or 'membership'",
+            )
+        raw_space_ids = form_data.get("space_ids")
+        raw_space_summaries = form_data.get("space_summaries")
+        if raw_space_ids not in (None, "") or raw_space_summaries not in (None, ""):
+            logger.info(
+                "Ignoring caller-provided assistant update membership payload; "
+                "using source-fetched assistant memberships only.",
+            )
         logger.info(f"Received assistant_id: {assistant_id}")
 
         # Use build_webhook_context to handle job startup if needed
@@ -2378,9 +2587,23 @@ async def assistant_update_webhook(request: Request):
             sender="",
             assistant_id=assistant_id,
             validate_contact=False,
-            ensure_job=True,
+            ensure_job=update_kind != "membership",
         )
         assistant_data = context["assistant"]
+        space_ids = normalize_int_list(
+            assistant_data.get("space_ids") or [],
+            field_name="space_ids",
+        )
+        space_summaries = normalize_space_summaries(
+            assistant_data.get("space_summaries") or [],
+            field_name="space_summaries",
+        )
+        assistant_event = {
+            **assistant_data,
+            "space_ids": space_ids,
+            "space_summaries": space_summaries,
+            "update_kind": update_kind,
+        }
         logger.info(
             "Activation dispatch state (legacy flags): is_job_running=%s, job_started=%s",
             context["is_job_running"],
@@ -2397,7 +2620,7 @@ async def assistant_update_webhook(request: Request):
         message_data = {
             "thread": "assistant_update",
             "publish_timestamp": time.time(),
-            "event": assistant_data,
+            "event": assistant_event,
         }
 
         logger.info(f"Publishing assistant update to Pub/Sub at path: {topic_path}")
@@ -2426,6 +2649,8 @@ async def assistant_update_webhook(request: Request):
             media_type="application/json",
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in assistant_update_webhook: {e}", exc_info=True)
         return Response(
@@ -2951,8 +3176,8 @@ async def teams_notification_processor(request: Request):
         # same mailbox we're monitoring; any outbound message the
         # runtime itself posts would otherwise loop back here.  Guard
         # *before* resolving contacts — resolution may otherwise match
-        # the assistant to its own contact_id=0 default row and mis-
-        # attribute the message as inbound-from-boss.
+        # the assistant to its own contact row and misattribute the
+        # message as inbound-from-boss.
         if sender_email and sender_email.lower() == assistant_email.lower():
             logger.info(
                 f"Skipping self-message from {_redact_email(sender_email)}",
@@ -2987,9 +3212,14 @@ async def teams_notification_processor(request: Request):
             return Response(status_code=200)
 
         # Second-tier self-guard: if the resolver pinned the assistant's
-        # own default contact (``contact_id == 0``), we are looking at
-        # an outbound/loopback message.  Drop it rather than publish.
-        if matched_contact and matched_contact.get("contact_id") == 0:
+        # own contact, we are looking at an outbound/loopback message.
+        # Drop it rather than publish.
+        matched_contact_id = (
+            matched_contact.get("contact_id") if matched_contact else None
+        )
+        if matched_contact_id is not None and int(matched_contact_id) == int(
+            assistant_data["self_contact_id"],
+        ):
             logger.info(
                 f"Skipping message that resolved to assistant's own contact "
                 f"(sender_email={_redact_email(sender_email)})",
@@ -3061,6 +3291,7 @@ async def teams_notification_processor(request: Request):
                 roster=augmented,
                 contacts=contacts,
                 assistant_email=assistant_email,
+                self_contact_id=int(assistant_data["self_contact_id"]),
             )
             logger.info(
                 f"teams roster: {len(participants)} participants "
@@ -3521,6 +3752,7 @@ def _resolve_roster_participants(
     roster: list[dict],
     contacts: list[dict],
     assistant_email: str,
+    self_contact_id: int,
 ) -> list[dict]:
     """Resolve each roster member to ``contact_id`` where possible.
 
@@ -3534,8 +3766,7 @@ def _resolve_roster_participants(
 
     Resolution order per member:
 
-    1. Assistant's own mailbox → ``contact_id = 0`` (the Unity
-       convention for "the assistant itself").
+    1. Assistant's own mailbox → the resolved assistant self contact id.
     2. Exact email match (case-insensitive) against any contact's
        ``email_address``.
     3. Name match via :func:`_match_contact_by_name` — only succeeds
@@ -3574,7 +3805,7 @@ def _resolve_roster_participants(
 
         contact_id: int | None = None
         if email_l and email_l == assistant_email_l:
-            contact_id = 0
+            contact_id = self_contact_id
         elif email_l and email_l in contacts_by_email:
             cid = contacts_by_email[email_l].get("contact_id")
             contact_id = int(cid) if cid is not None else None
@@ -3593,10 +3824,10 @@ def _resolve_roster_participants(
             },
         )
 
-    if not any(p.get("contact_id") == 0 for p in out):
+    if not any(p.get("contact_id") == self_contact_id for p in out):
         out.append(
             {
-                "contact_id": 0,
+                "contact_id": self_contact_id,
                 "email": assistant_email,
                 "display_name": "",
                 "aad_user_id": None,

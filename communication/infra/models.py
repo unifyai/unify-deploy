@@ -62,6 +62,7 @@ class ScheduledTaskActivationUpsertRequest(BaseModel):
     """Idempotent request to materialize one scheduled activation."""
 
     assistant_id: str
+    destination: Optional[str] = None
     task_id: int
     source_task_log_id: int
     activation_revision: str
@@ -82,6 +83,7 @@ class ScheduledTaskActivationDeleteRequest(BaseModel):
     """Delete one previously materialized scheduled activation."""
 
     assistant_id: str
+    destination: Optional[str] = None
     task_id: int
     activation_revision: str
     scheduled_for: datetime
@@ -92,6 +94,7 @@ class OfflineTaskDispatchRequest(BaseModel):
     """Dispatch one validated offline task execution attempt."""
 
     assistant_id: str
+    destination: Optional[str] = None
     task_id: int
     source_task_log_id: int
     activation_revision: str

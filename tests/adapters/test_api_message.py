@@ -11,6 +11,9 @@ os.environ["ORCHESTRA_ADMIN_KEY"] = "test-admin-key"
 os.environ["GCP_PROJECT_ID"] = "test-project"
 os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
 
+TEST_SELF_CONTACT_ID = 42
+TEST_BOSS_CONTACT_ID = 43
+
 
 @pytest.fixture(scope="module")
 def app_module():
@@ -36,8 +39,13 @@ def mock_pubsub():
 @pytest.fixture
 def mock_webhook_context():
     return {
-        "assistant": {"assistant_id": "test-assistant", "user_id": 12345},
-        "contacts": [{"contact_id": 1, "first_name": "Test"}],
+        "assistant": {
+            "assistant_id": "test-assistant",
+            "user_id": 12345,
+            "self_contact_id": TEST_SELF_CONTACT_ID,
+            "boss_contact_id": TEST_BOSS_CONTACT_ID,
+        },
+        "contacts": [{"contact_id": TEST_BOSS_CONTACT_ID, "first_name": "Test"}],
         "is_job_running": True,
     }
 
@@ -57,6 +65,7 @@ def client(app_module, mock_pubsub, mock_webhook_context):
             "build_webhook_context",
             return_value=mock_webhook_context,
         ),
+        patch.object(app_module.SETTINGS, "orchestra_admin_key", "test-admin-key"),
     ):
         test_client = TestClient(app_module.app)
         test_client.headers["Authorization"] = "Bearer test-admin-key"
@@ -82,7 +91,7 @@ class TestApiMessage:
         assert published["thread"] == "api_message"
         assert published["event"]["api_message_id"] == "msg-uuid-123"
         assert published["event"]["body"] == "Hello from API"
-        assert published["event"]["contact_id"] == 1
+        assert published["event"]["contact_id"] == TEST_BOSS_CONTACT_ID
         assert published["event"]["assistant_id"] == "test-assistant"
         assert "publish_timestamp" in published
 
@@ -240,7 +249,12 @@ class TestApiMessage:
         from fastapi.testclient import TestClient
 
         mock_ctx = {
-            "assistant": {"assistant_id": "test-assistant", "user_id": 12345},
+            "assistant": {
+                "assistant_id": "test-assistant",
+                "user_id": 12345,
+                "self_contact_id": TEST_SELF_CONTACT_ID,
+                "boss_contact_id": TEST_BOSS_CONTACT_ID,
+            },
             "contacts": [],
             "is_job_running": False,
         }
@@ -255,6 +269,7 @@ class TestApiMessage:
                 "build_webhook_context",
                 return_value=mock_ctx,
             ) as mock_bwc,
+            patch.object(app_module.SETTINGS, "orchestra_admin_key", "test-admin-key"),
         ):
             tc = TestClient(app_module.app)
             tc.headers["Authorization"] = "Bearer test-admin-key"

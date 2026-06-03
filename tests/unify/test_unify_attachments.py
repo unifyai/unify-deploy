@@ -22,6 +22,9 @@ os.environ["ORCHESTRA_ADMIN_KEY"] = "test-admin-key"
 os.environ["GCP_PROJECT_ID"] = "test-project"
 os.environ["ORCHESTRA_URL"] = "http://localhost:8000"
 
+TEST_SELF_CONTACT_ID = 42
+TEST_BOSS_CONTACT_ID = 43
+
 # =============================================================================
 # TEST FIXTURES
 # =============================================================================
@@ -77,8 +80,13 @@ def mock_pubsub():
 def mock_webhook_context():
     """Mock the build_webhook_context helper."""
     return {
-        "assistant": {"assistant_id": "test-assistant", "user_id": 12345},
-        "contacts": [{"contact_id": 1, "first_name": "Test"}],
+        "assistant": {
+            "assistant_id": "test-assistant",
+            "user_id": 12345,
+            "self_contact_id": TEST_SELF_CONTACT_ID,
+            "boss_contact_id": TEST_BOSS_CONTACT_ID,
+        },
+        "contacts": [{"contact_id": TEST_BOSS_CONTACT_ID, "first_name": "Test"}],
         "is_job_running": True,
     }
 
@@ -222,7 +230,7 @@ class TestMessageWithAttachmentsCurrentBehavior:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "Hello!",
             },
         )
@@ -242,7 +250,7 @@ class TestMessageWithAttachmentsCurrentBehavior:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "See attached",
                 "attachments": [
                     {"id": "abc-123", "filename": "doc.pdf", "url": "https://url"},
@@ -268,7 +276,7 @@ class TestMessageWithAttachmentsCurrentBehavior:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "Multiple files",
                 "attachments": attachments,
             },
@@ -286,7 +294,7 @@ class TestMessageWithAttachmentsCurrentBehavior:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "Test",
                 "attachments": [
                     {"id": "valid", "filename": "good.pdf", "url": "https://url"},
@@ -309,7 +317,7 @@ class TestMessageWithAttachmentsCurrentBehavior:
         """assistant_id is required."""
         response = client.post(
             "/unify/message",
-            json={"contact_id": 1, "body": "Hello"},
+            json={"contact_id": TEST_BOSS_CONTACT_ID, "body": "Hello"},
         )
         assert response.status_code == 400
 
@@ -326,7 +334,11 @@ class TestMessageWithAttachmentsCurrentBehavior:
         client.headers["Authorization"] = "Bearer wrong-key"
         response = client.post(
             "/unify/message",
-            json={"assistant_id": "test", "contact_id": 1, "body": "Hi"},
+            json={
+                "assistant_id": "test",
+                "contact_id": TEST_BOSS_CONTACT_ID,
+                "body": "Hi",
+            },
         )
         assert response.status_code == 403
 
@@ -351,7 +363,7 @@ class TestEndToEndFlow:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "Please review",
                 "attachments": [attachment],
             },
@@ -464,7 +476,7 @@ class TestMessageNewBehavior:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "Many attachments",
                 "attachments": attachments,
             },
@@ -478,7 +490,7 @@ class TestMessageNewBehavior:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "With gs_url",
                 "attachments": [
                     {
@@ -520,7 +532,7 @@ class TestEdgeCases:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "",
                 "attachments": [
                     {"id": "att-1", "filename": "doc.pdf", "url": "https://url"},
@@ -535,7 +547,7 @@ class TestEdgeCases:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "No attachments",
                 "attachments": None,
             },
@@ -553,7 +565,7 @@ class TestEdgeCases:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "No attachments key",
             },
         )
@@ -585,7 +597,7 @@ class TestEdgeCases:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "Hello 你好 مرحبا 👋",
             },
         )
@@ -609,7 +621,7 @@ class TestEdgeCases:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "Ordered",
                 "attachments": attachments,
             },
@@ -697,7 +709,7 @@ class TestStressBehavior:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": "No attachments",
                 "attachments": [],
             },
@@ -717,7 +729,7 @@ class TestStressBehavior:
             "/unify/message",
             json={
                 "assistant_id": "test-assistant",
-                "contact_id": 1,
+                "contact_id": TEST_BOSS_CONTACT_ID,
                 "body": long_body,
                 "attachments": [
                     {"id": "att-1", "filename": "doc.pdf", "url": "https://url"},

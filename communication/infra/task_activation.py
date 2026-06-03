@@ -26,7 +26,10 @@ from google.api_core.exceptions import (
 from google.protobuf import duration_pb2, timestamp_pb2
 
 from common.assistant_lookup import get_assistant
+from common.int_list_codec import encode_int_list_for_env
+from common.space_summaries_codec import encode_space_summaries_for_env
 from common.settings import SETTINGS
+from common.task_destination import assistant_has_task_destination
 
 # Single source of truth for the offline-runner subprocess contract.
 # Imported from Unity so the hosted K8s job and the local in-process
@@ -113,6 +116,19 @@ def _offline_dispatch_event_fields(
         fields["error_type"] = type(error).__name__
         fields["error"] = str(error)
     return fields
+
+
+def _required_contact_id(assistant_data: dict[str, Any], field_name: str) -> int:
+    """Return a resolved contact id required by offline Unity launches."""
+    value = assistant_data.get(field_name)
+    if value is None:
+        assistant_id = assistant_data.get("assistant_id") or assistant_data.get(
+            "agent_id",
+        )
+        raise RuntimeError(
+            f"Assistant {assistant_id} is missing required {field_name}",
+        )
+    return int(value)
 
 
 def _task_due_queue_parent() -> str:
@@ -253,6 +269,8 @@ def _scheduled_activation_http_body(
         "visibility_policy": request.visibility_policy,
         "recurrence_hint": request.recurrence_hint,
     }
+    if request.destination is not None:
+        payload["destination"] = request.destination
     return json.dumps(payload).encode("utf-8")
 
 
@@ -443,16 +461,20 @@ def _lookup_current_task_activation(
     *,
     assistant_id: str,
     task_id: int,
+    destination: str | None = None,
 ) -> dict[str, Any] | None:
     """Fetch the current projected activation row for one assistant/task pair."""
 
+    payload = {
+        "project_name": ORCHESTRA_TASK_MACHINE_PROJECT,
+        "assistant_id": assistant_id,
+        "task_id": task_id,
+    }
+    if destination is not None:
+        payload["destination"] = destination
     body = _orchestra_admin_post(
         ORCHESTRA_TASK_ACTIVATION_CURRENT_PATH,
-        {
-            "project_name": ORCHESTRA_TASK_MACHINE_PROJECT,
-            "assistant_id": assistant_id,
-            "task_id": task_id,
-        },
+        payload,
     )
     activation = body.get("activation")
     return activation if isinstance(activation, dict) else None
@@ -476,6 +498,17 @@ def _lookup_latest_task_run(
     body = _orchestra_admin_post(ORCHESTRA_TASK_RUN_LATEST_PATH, payload)
     run = body.get("run")
     return run if isinstance(run, dict) else None
+
+
+def _get_assistant_data(assistant_id: str) -> dict[str, Any]:
+    """Return assistant metadata from Orchestra for activation authorization."""
+
+    from adapters.helpers import get_assistant
+
+    assistant_data = get_assistant(assistant_id=assistant_id)
+    if not assistant_data or not assistant_data.get("assistant_id"):
+        raise RuntimeError(f"Assistant {assistant_id} no longer exists")
+    return assistant_data
 
 
 def _create_or_adopt_task_run(payload: dict[str, Any]) -> dict[str, Any]:
@@ -556,6 +589,8 @@ def _validate_current_offline_activation(
         return "execution_mode_changed"
     if activation.get("activation_revision") != request.activation_revision:
         return "activation_revision_mismatch"
+    if activation.get("destination") != request.destination:
+        return "destination_mismatch"
     if int(activation.get("source_task_log_id") or 0) != request.source_task_log_id:
         return "source_task_log_id_mismatch"
     activation_entrypoint = activation.get("entrypoint")
@@ -591,9 +626,13 @@ def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
     identical keys for the same attempt. If those keys ever diverged
     Orchestra's create-or-adopt path would fail to deduplicate
     concurrent attempts across topologies.
+
+    Shared-space tasks insert a normalised destination segment between
+    the assistant id and task id so concurrent attempts for different
+    destinations never collide.
     """
 
-    return _build_offline_run_key_shared(
+    run_key = _build_offline_run_key_shared(
         assistant_id=request.assistant_id,
         task_id=request.task_id,
         activation_revision=request.activation_revision,
@@ -603,6 +642,13 @@ def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
         source_medium=request.source_medium,
         source_ref=request.source_ref,
     )
+    if not request.destination:
+        return run_key
+    destination_part = f"{_normalize_task_id_component(request.destination)}:"
+    prefix = f"offline:{request.source_type}:{request.assistant_id}:"
+    if run_key.startswith(prefix):
+        return f"{prefix}{destination_part}{run_key[len(prefix):]}"
+    return run_key
 
 
 def _build_offline_job_name(run_key: str) -> str:
@@ -642,6 +688,11 @@ def _build_offline_runner_env(
     """
 
     entrypoint = activation.get("entrypoint") or request.entrypoint
+    team_ids = assistant_data.get("team_ids") or []
+    space_ids = assistant_data.get("space_ids") or []
+    space_summaries = assistant_data.get("space_summaries") or []
+    self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
+    boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     # Layer 1 — shared task-specific env (single source of truth in Unity).
     env = _build_offline_runner_env_shared(
         assistant_id=(str(assistant_data.get("assistant_id") or request.assistant_id)),
@@ -664,7 +715,6 @@ def _build_offline_runner_env(
     # Layer 2 — hosted-only assistant / user / voice identity, plus org and
     # transport vars the K8s job needs in env because there is no parent
     # process to inherit from. Local subprocesses skip this layer.
-    team_ids = assistant_data.get("team_ids") or []
     env.update(
         {
             "UNIFY_KEY": str(assistant_data.get("api_key") or ""),
@@ -688,6 +738,7 @@ def _build_offline_runner_env(
             "ASSISTANT_WHATSAPP_NUMBER": str(
                 assistant_data.get("assistant_whatsapp_number") or "",
             ),
+            "SELF_CONTACT_ID": str(self_contact_id),
             "ASSISTANT_DESKTOP_MODE": "none",
             "ASSISTANT_USER_DESKTOP_MODE": "",
             "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
@@ -700,12 +751,18 @@ def _build_offline_runner_env(
             "USER_WHATSAPP_NUMBER": str(
                 assistant_data.get("user_whatsapp_number") or "",
             ),
+            "BOSS_CONTACT_ID": str(boss_contact_id),
             "VOICE_PROVIDER": str(
                 assistant_data.get("voice_provider") or "cartesia",
             ),
             "VOICE_ID": str(assistant_data.get("voice_id") or ""),
             "VOICE_MODE": "tts",
             "TEAM_IDS": ",".join(str(team_id) for team_id in team_ids),
+            "SPACE_IDS": encode_int_list_for_env(space_ids, field_name="space_ids"),
+            "SPACE_SUMMARIES": encode_space_summaries_for_env(
+                space_summaries,
+                field_name="space_summaries",
+            ),
             "ORG_ID": (
                 str(assistant_data.get("org_id"))
                 if assistant_data.get("org_id") is not None
@@ -713,6 +770,9 @@ def _build_offline_runner_env(
             ),
         },
     )
+    destination = request.destination or activation.get("destination")
+    if destination is not None:
+        env["TASK_DESTINATION"] = str(destination)
     return env
 
 
@@ -728,13 +788,10 @@ def _launch_offline_task_job(
     batch_api: Any,
     request: OfflineTaskDispatchRequest,
     activation: dict[str, Any],
+    assistant_data: dict[str, Any],
     run_key: str,
 ) -> tuple[str, bool]:
     """Create the Kubernetes Job that runs the headless Unity executor."""
-
-    assistant_data = _get_assistant_data(request.assistant_id)
-    if not assistant_data or not assistant_data.get("assistant_id"):
-        raise RuntimeError(f"Assistant {request.assistant_id} no longer exists")
 
     job_name = _build_offline_job_name(run_key)
     job = create_unity_job(
@@ -806,6 +863,7 @@ def _build_offline_run_create_payload(
         "run_key": run_key,
         "assistant_id": request.assistant_id,
         "task_id": request.task_id,
+        "destination": request.destination,
         "source_task_log_id": request.source_task_log_id,
         "source_type": request.source_type,
         "execution_mode": "offline",
@@ -1073,6 +1131,7 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
             _lookup_current_task_activation,
             assistant_id=request.assistant_id,
             task_id=request.task_id,
+            destination=request.destination,
         )
         stage = "activation_validate"
         stale_reason = _validate_current_offline_activation(request, activation)
@@ -1090,6 +1149,16 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
                 "success": True,
                 "status": "skipped",
                 "reason": stale_reason,
+            }
+        assistant_data = await asyncio.to_thread(
+            _get_assistant_data,
+            request.assistant_id,
+        )
+        if not assistant_has_task_destination(assistant_data, request.destination):
+            return {
+                "success": True,
+                "status": "skipped",
+                "reason": "destination_membership_revoked",
             }
 
         run_key = _build_offline_run_key(request)
@@ -1159,6 +1228,7 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
             batch_api=batch_api,
             request=request,
             activation=activation or {},
+            assistant_data=assistant_data,
             run_key=run_key,
         )
         stage = "run_mark_running"

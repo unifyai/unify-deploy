@@ -184,3 +184,6 @@ cert-manager-dns-key.json
 CLAUDE.md
 investigations/
 guides/
+
+# Synthetic dataset output
+pilot-data/
