@@ -62,6 +62,7 @@ def _required_contact_id(assistant_data: dict, field_name: str) -> int:
         )
     return int(value)
 
+
 def _resolve_desktop_mode(assistant_data: dict) -> str:
     """Resolve runtime desktop mode with Coordinator-aware fallback semantics."""
     desktop_mode = assistant_data.get("desktop_mode")
