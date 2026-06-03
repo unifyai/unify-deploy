@@ -7,7 +7,12 @@ name = "unity-deploy"
 version = "0.1.0"
 description = "Enterprise deployment overlay for Unity"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "httpx",
+    "pillow",
+    "pyproj",
+    "shapely",
+]
 
 [project.entry-points."unity_deploy.init"]
 enterprise = "unity_deploy.hook:startup_hook"
