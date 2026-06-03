@@ -1,0 +1,101 @@
+name: Valos
+slug: valos
+version: "0.3.0"
+sector: real-estate
+tier: api
+quality: bronze
+description: >
+  UK property valuation data layer.  Wraps two upstream services that
+  Unify holds accounts for — the Ordnance Survey Data Hub (OS Maps API
+  for raster tiles, OS Names API for geocoding, OS Places API for UPRN
+  lookup) and PropertyData (Land Registry freeholds, INSPIRE polygon
+  geometry, title information) — and exposes them to the actor as typed
+  primitives covering address resolution, freehold title lookup,
+  polygon retrieval, demographic context, and OS-tiled map rendering.
+  Replaces the placeholder pass-through to api.valos.ai.  Credentials
+  are Unify-owned and live in the deployment environment; the package
+  is opt-in via the ``integrations=[...]`` argument on
+  ``BASE_SPEC.derive(...)`` from any client deployment that needs UK
+  property/valuation data.
+homepage: https://osdatahub.os.uk
+
+secrets:
+- name: OS_MAPS_API_KEY
+  description: >
+    OS Data Hub API key with access to OS Maps, OS Names, and OS Places.
+    Provisioned on Unify's account on the Premium plan; never customer-
+    supplied.  Distributing OS rasters in customer-deliverable Word
+    reports is redistribution and may require a separate OS Partner /
+    OS Reseller agreement — confirm commercial terms with Ordnance
+    Survey before producing client-deliverable maps.
+  required: true
+  sensitive: true
+- name: PROPERTYDATA_API_KEY
+  description: >
+    PropertyData API key with the Land Registry endpoints enabled
+    (``/api/freeholds`` and ``/api/title-information``).  Provisioned on
+    Unify's account; never customer-supplied.  Confirm reseller / multi-
+    tenant terms with PropertyData before opting any second client into
+    this package.
+  required: true
+  sensitive: true
+
+capabilities:
+- id: valos_geocode
+  name: Address geocoding
+  description: >
+    Resolve a free-text address or postcode to coordinates and a UPRN
+    via OS Places + OS Names.
+  functions: [valos_geocode]
+- id: valos_freeholds
+  name: Freehold title lookup
+  description: >
+    Look up registered freehold titles for a postcode or coordinate
+    pair, returning title numbers, INSPIRE ids, tenure, and whether
+    polygon geometry is available.
+  functions: [valos_lookup_freeholds]
+- id: valos_title_polygon
+  name: Title boundary polygon
+  description: >
+    Resolve a title number or INSPIRE id to a GeoJSON polygon, plot
+    size, and ownership type.  Backed by PropertyData's structured
+    wrapper around HM Land Registry's INSPIRE Index Polygons.
+  functions: [valos_get_title_polygon]
+- id: valos_demographics
+  name: Postcode demographics
+  description: >
+    Census, deprivation, and wealth indicators for a postcode and
+    surrounding radius via the Office for National Statistics open
+    APIs.  Closes the demographics gap to Carterwood for non-care-
+    home-specific context.
+  functions: [valos_postcode_demographics]
+- id: valos_render
+  name: OS map rendering
+  description: >
+    Render OS Maps WMTS tiles to a PNG, optionally with a polygon
+    overlay, north arrow, and scale bar.  ``valos_render_location_plan``
+    composes a Land-Registry-style location plan; ``valos_render_competitor_map``
+    layers numbered pins for nearby competitors.  All renderers persist
+    PNGs at the supplied filesystem path so ``ImageManager`` can resolve
+    them later via filepath.
+  functions:
+  - valos_render_os_map
+  - valos_render_location_plan
+  - valos_render_competitor_map
+
+requirements:
+- httpx
+- pillow
+- shapely
+- pyproj
+
+tags:
+- valos
+- property
+- valuation
+- real-estate
+- ordnance-survey
+- land-registry
+- propertydata
+- ons
+- rics
