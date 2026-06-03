@@ -63,6 +63,7 @@ OFFLINE_UNITY_APP_LABEL = "unity-offline"
 OFFLINE_UNITY_JOB_STATUS = "offline"
 ORCHESTRA_TASK_MACHINE_PROJECT = "Assistants"
 ORCHESTRA_TASK_ACTIVATION_CURRENT_PATH = "/admin/task-activation/current"
+ORCHESTRA_TASK_ACTIVATION_REPROJECT_PATH = "/admin/task-activation/reproject"
 ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
 ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
@@ -480,6 +481,23 @@ def _lookup_current_task_activation(
     return activation if isinstance(activation, dict) else None
 
 
+def _reproject_task_activation(
+    *,
+    assistant_id: str,
+    task_id: int,
+) -> dict[str, Any]:
+    """Ask Orchestra to rebuild the current activation projection for one task."""
+
+    return _orchestra_admin_post(
+        ORCHESTRA_TASK_ACTIVATION_REPROJECT_PATH,
+        {
+            "project_name": ORCHESTRA_TASK_MACHINE_PROJECT,
+            "assistant_id": assistant_id,
+            "task_id": task_id,
+        },
+    )
+
+
 def _lookup_latest_task_run(
     *,
     assistant_id: str,
@@ -502,8 +520,6 @@ def _lookup_latest_task_run(
 
 def _get_assistant_data(assistant_id: str) -> dict[str, Any]:
     """Return assistant metadata from Orchestra for activation authorization."""
-
-    from adapters.helpers import get_assistant
 
     assistant_data = get_assistant(assistant_id=assistant_id)
     if not assistant_data or not assistant_data.get("assistant_id"):
@@ -540,14 +556,27 @@ def _update_task_run(
     )
 
 
-def _running_task_run_updates(job_name: str) -> dict[str, str]:
+def _running_task_run_updates(
+    job_name: str,
+    *,
+    retry_count: int | None = None,
+    previous_error: str | None = None,
+) -> dict[str, Any]:
     """Return the canonical Orchestra patch for one in-flight offline run."""
 
-    return {
+    updates: dict[str, Any] = {
         "state": "running",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "job_name": job_name,
+        "completed_at": None,
+        "error": None,
+        "result_summary": None,
     }
+    if retry_count is not None:
+        updates["retry_count"] = retry_count
+    if previous_error:
+        updates["previous_error"] = previous_error
+    return updates
 
 
 def _optional_display_text(value: Any) -> str | None:
@@ -775,14 +804,6 @@ def _build_offline_runner_env(
         env["TASK_DESTINATION"] = str(destination)
     return env
 
-
-def _get_assistant_data(assistant_id: str) -> dict[str, Any]:
-    """Fetch one assistant payload for a headless task runtime."""
-
-    assistant_data = get_assistant(assistant_id=assistant_id)
-    return assistant_data if isinstance(assistant_data, dict) else {}
-
-
 def _launch_offline_task_job(
     *,
     batch_api: Any,
@@ -790,10 +811,11 @@ def _launch_offline_task_job(
     activation: dict[str, Any],
     assistant_data: dict[str, Any],
     run_key: str,
+    job_name_seed: str | None = None,
 ) -> tuple[str, bool]:
     """Create the Kubernetes Job that runs the headless Unity executor."""
 
-    job_name = _build_offline_job_name(run_key)
+    job_name = _build_offline_job_name(job_name_seed or run_key)
     job = create_unity_job(
         batch_api,
         job_name=job_name,
@@ -983,7 +1005,7 @@ def _activation_materialization_diagnostic(
             materialization.update(
                 _cloud_task_diagnostic(materialization["task_name"]),
             )
-    return {
+    diagnostic = {
         "success": True,
         "assistant_id": assistant_id,
         "task_id": task_id,
@@ -992,6 +1014,125 @@ def _activation_materialization_diagnostic(
         "queues": _task_queue_diagnostics(),
         "latest_run": latest_run,
     }
+    diagnostic["health"] = _activation_health(
+        activation=activation,
+        materialization=materialization,
+        latest_run=latest_run,
+    )
+    return diagnostic
+
+
+def _latest_run_matches_activation(
+    *,
+    latest_run: dict[str, Any] | None,
+    activation: dict[str, Any],
+) -> bool:
+    if latest_run is None:
+        return False
+    if int(latest_run.get("source_task_log_id") or 0) != int(
+        activation.get("source_task_log_id") or 0,
+    ):
+        return False
+    if str(latest_run.get("activation_revision") or "") != str(
+        activation.get("activation_revision") or "",
+    ):
+        return False
+    return _normalize_datetime_string(str(latest_run.get("scheduled_for") or "")) == (
+        _normalize_datetime_string(str(activation.get("next_due_at") or ""))
+    )
+
+
+def _activation_health(
+    *,
+    activation: dict[str, Any] | None,
+    materialization: dict[str, Any] | None,
+    latest_run: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Classify whether one current activation is armed, fired, or repairable."""
+
+    if activation is None:
+        return {"status": "activation_missing", "repairable": False}
+    if activation.get("activation_kind") != "scheduled":
+        return {"status": "not_scheduled", "repairable": False}
+    scheduled_for_raw = activation.get("next_due_at")
+    if not scheduled_for_raw:
+        return {"status": "scheduled_time_missing", "repairable": False}
+    scheduled_for = datetime.fromisoformat(
+        str(scheduled_for_raw).replace("Z", "+00:00"),
+    ).astimezone(timezone.utc)
+    cloud_task_status = (
+        materialization.get("cloud_task_status") if materialization else None
+    )
+    is_future = scheduled_for > datetime.now(timezone.utc)
+    if is_future:
+        if cloud_task_status == "present":
+            return {"status": "armed_future", "repairable": False}
+        return {
+            "status": "stale_missing_materialization",
+            "repairable": True,
+            "cloud_task_status": cloud_task_status,
+        }
+    if not _latest_run_matches_activation(
+        latest_run=latest_run,
+        activation=activation,
+    ):
+        return {"status": "fired_no_matching_run", "repairable": True}
+    run_state = str(latest_run.get("state") or "")
+    if run_state in {"pending", "running"}:
+        return {"status": "fired_inflight", "repairable": False}
+    if run_state == "failed":
+        return {"status": "fired_failed_retryable", "repairable": True}
+    if run_state == "completed":
+        return {"status": "completed_not_rearmed", "repairable": True}
+    return {"status": "fired_unknown_run_state", "repairable": True}
+
+
+def _scheduled_activation_upsert_request_from_activation(
+    activation: dict[str, Any],
+) -> ScheduledTaskActivationUpsertRequest:
+    return ScheduledTaskActivationUpsertRequest(
+        assistant_id=str(activation.get("assistant_id") or ""),
+        task_id=int(activation.get("task_id") or 0),
+        source_task_log_id=int(activation.get("source_task_log_id") or 0),
+        activation_revision=str(activation.get("activation_revision") or ""),
+        scheduled_for=datetime.fromisoformat(
+            str(activation.get("next_due_at")).replace("Z", "+00:00"),
+        ),
+        execution_mode=(
+            "offline" if activation.get("execution_mode") == "offline" else "live"
+        ),
+        entrypoint=(
+            int(activation["entrypoint"])
+            if activation.get("entrypoint") is not None
+            else None
+        ),
+        task_label=_optional_display_text(activation.get("task_name")),
+        task_summary=_optional_display_text(activation.get("task_description")),
+        recurrence_hint="recurring" if activation.get("repeat") else "one_off",
+    )
+
+
+def _offline_dispatch_request_from_activation(
+    activation: dict[str, Any],
+) -> OfflineTaskDispatchRequest:
+    return OfflineTaskDispatchRequest(
+        assistant_id=str(activation.get("assistant_id") or ""),
+        task_id=int(activation.get("task_id") or 0),
+        source_task_log_id=int(activation.get("source_task_log_id") or 0),
+        activation_revision=str(activation.get("activation_revision") or ""),
+        execution_mode="offline",
+        entrypoint=(
+            int(activation["entrypoint"])
+            if activation.get("entrypoint") is not None
+            else None
+        ),
+        source_type="scheduled",
+        scheduled_for=datetime.fromisoformat(
+            str(activation.get("next_due_at")).replace("Z", "+00:00"),
+        ),
+        task_name=_optional_display_text(activation.get("task_name")),
+        task_description=_optional_display_text(activation.get("task_description")),
+    )
 
 
 @router.post("/task-activation/upsert")
@@ -1048,6 +1189,84 @@ async def diagnose_task_activation(request: TaskActivationDiagnosticRequest):
             status_code=500,
             detail=f"Failed to diagnose task activation: {exc}",
         ) from exc
+
+
+@router.post("/task-activation/repair-current")
+async def repair_current_task_activation(request: TaskActivationDiagnosticRequest):
+    """Repair the currently armed activation when diagnosis marks it repairable."""
+
+    diagnostic = await diagnose_task_activation(request)
+    health = diagnostic.get("health") or {}
+    activation = diagnostic.get("activation")
+    if not isinstance(activation, dict):
+        return {
+            "success": True,
+            "status": "noop",
+            "reason": "activation_missing",
+            "diagnostic": diagnostic,
+        }
+    health_status = str(health.get("status") or "")
+    if health_status == "stale_missing_materialization":
+        result = await _materialize_scheduled_task_activation(
+            _scheduled_activation_upsert_request_from_activation(activation),
+        )
+        return {
+            "success": True,
+            "status": "rematerialized",
+            "result": result,
+            "diagnostic": diagnostic,
+        }
+    if health_status == "fired_failed_retryable":
+        if activation.get("execution_mode") != "offline":
+            return {
+                "success": True,
+                "status": "noop",
+                "reason": "live_failed_retry_not_supported",
+                "diagnostic": diagnostic,
+            }
+        result = await dispatch_offline_task(
+            _offline_dispatch_request_from_activation(activation),
+        )
+        return {
+            "success": True,
+            "status": "retry_dispatched",
+            "result": result,
+            "diagnostic": diagnostic,
+        }
+    if health_status == "fired_no_matching_run" and (
+        activation.get("execution_mode") == "offline"
+    ):
+        result = await dispatch_offline_task(
+            _offline_dispatch_request_from_activation(activation),
+        )
+        return {
+            "success": True,
+            "status": "retry_dispatched",
+            "result": result,
+            "diagnostic": diagnostic,
+        }
+    if health_status in {
+        "completed_not_rearmed",
+        "fired_no_matching_run",
+        "fired_unknown_run_state",
+    }:
+        result = await asyncio.to_thread(
+            _reproject_task_activation,
+            assistant_id=str(activation.get("assistant_id") or request.assistant_id),
+            task_id=int(activation.get("task_id") or request.task_id),
+        )
+        return {
+            "success": True,
+            "status": "reprojected",
+            "result": result,
+            "diagnostic": diagnostic,
+        }
+    return {
+        "success": True,
+        "status": "noop",
+        "reason": health_status,
+        "diagnostic": diagnostic,
+    }
 
 
 @router.post("/task-activation/repair")
@@ -1174,7 +1393,10 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
         run = run_response.get("run") or {}
         created = bool(run_response.get("created"))
         run_state = str(run.get("state") or "pending")
-        if not created and run_state in {"completed", "failed"}:
+        retry_count: int | None = None
+        previous_error: str | None = None
+        job_name_seed: str | None = None
+        if not created and run_state == "completed":
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.adopted",
                 **_offline_dispatch_event_fields(
@@ -1191,7 +1413,21 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
                 "run_key": run_key,
                 "run_state": run_state,
             }
-        if not created and run.get("job_name"):
+        if not created and run_state == "failed":
+            retry_count = int(run.get("retry_count") or 0) + 1
+            previous_error = str(run.get("error") or "")
+            job_name_seed = f"{run_key}:retry:{retry_count}"
+            _emit_task_activation_event(
+                "task_activation.offline_dispatch.retrying",
+                **_offline_dispatch_event_fields(
+                    request,
+                    stage=stage,
+                    run_key=run_key,
+                    run_state=run_state,
+                    status="retrying_failed_run",
+                ),
+            )
+        if not created and run_state != "failed" and run.get("job_name"):
             job_name = str(run.get("job_name"))
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.adopted",
@@ -1230,6 +1466,7 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
             activation=activation or {},
             assistant_data=assistant_data,
             run_key=run_key,
+            job_name_seed=job_name_seed,
         )
         stage = "run_mark_running"
         _emit_task_activation_event(
@@ -1245,7 +1482,11 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
             _update_task_run,
             assistant_id=request.assistant_id,
             run_key=run_key,
-            updates=_running_task_run_updates(job_name),
+            updates=_running_task_run_updates(
+                job_name,
+                retry_count=retry_count,
+                previous_error=previous_error,
+            ),
         )
         if not job_created:
             _emit_task_activation_event(

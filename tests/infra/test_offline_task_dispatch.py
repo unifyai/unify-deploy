@@ -6,7 +6,7 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 def _payload(**overrides):
@@ -135,6 +135,177 @@ def test_offline_dispatch_launches_job_for_current_activation():
     assert update_kwargs["assistant_id"] == "assistant-123"
     assert update_kwargs["updates"]["state"] == "running"
     assert update_kwargs["updates"]["job_name"] == "unity-offline-abc"
+
+
+def test_offline_dispatch_retries_failed_terminal_run():
+    """Failed runs should be retryable without changing run identity."""
+
+    client = _client()
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(),
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            return_value={
+                "run": {
+                    "state": "failed",
+                    "job_name": "unity-offline-old",
+                    "error": "boom",
+                    "retry_count": 1,
+                },
+                "created": False,
+            },
+        ) as mock_create_run,
+        patch(
+            "communication.infra.task_activation._get_k8s_clients",
+            return_value=("batch-api", None, None, None),
+        ),
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=("unity-offline-retry", True),
+        ) as mock_launch,
+        patch(
+            "communication.infra.task_activation._update_task_run",
+        ) as mock_update_run,
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "launched"
+    assert response.json()["run_key"] == mock_create_run.call_args.args[0]["run_key"]
+    assert mock_launch.call_args.kwargs["job_name_seed"].endswith(":retry:2")
+    update_kwargs = mock_update_run.call_args.kwargs
+    assert update_kwargs["updates"]["state"] == "running"
+    assert update_kwargs["updates"]["job_name"] == "unity-offline-retry"
+    assert update_kwargs["updates"]["retry_count"] == 2
+    assert update_kwargs["updates"]["previous_error"] == "boom"
+    assert update_kwargs["updates"]["error"] is None
+
+
+def test_offline_dispatch_adopts_completed_terminal_run():
+    """Completed runs should remain terminal and should not relaunch."""
+
+    client = _client()
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(),
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            return_value={
+                "run": {"state": "completed", "job_name": "unity-offline-old"},
+                "created": False,
+            },
+        ) as mock_create_run,
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+        ) as mock_launch,
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "status": "adopted_terminal_run",
+        "run_key": mock_create_run.call_args.args[0]["run_key"],
+        "run_state": "completed",
+    }
+    assert not mock_launch.called
+
+
+def test_repair_current_retries_fired_failed_activation():
+    """Repair should dispatch failed fired offline activations."""
+
+    client = _client()
+    activation = _activation(
+        assistant_id="assistant-123",
+        task_id=101,
+        next_due_at="2026-04-10T09:00:00+00:00",
+    )
+    diagnostic = {
+        "success": True,
+        "activation": activation,
+        "materialization": {"cloud_task_status": "missing"},
+        "latest_run": {"state": "failed"},
+        "health": {"status": "fired_failed_retryable", "repairable": True},
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation._activation_materialization_diagnostic",
+            return_value=diagnostic,
+        ),
+        patch(
+            "communication.infra.task_activation.dispatch_offline_task",
+            new=AsyncMock(return_value={"success": True, "status": "launched"}),
+        ) as mock_dispatch,
+    ):
+        response = client.post(
+            "/infra/task-activation/repair-current",
+            json={"assistant_id": "assistant-123", "task_id": 101},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "retry_dispatched"
+    dispatched_request = mock_dispatch.call_args.args[0]
+    assert dispatched_request.execution_mode == "offline"
+    assert dispatched_request.entrypoint == 777
+
+
+def test_repair_current_reprojects_completed_activation():
+    """Completed runs should repair by reprojection, not duplicate dispatch."""
+
+    client = _client()
+    activation = _activation(
+        assistant_id="assistant-123",
+        task_id=101,
+        next_due_at="2026-04-10T09:00:00+00:00",
+    )
+    diagnostic = {
+        "success": True,
+        "activation": activation,
+        "materialization": {"cloud_task_status": "missing"},
+        "latest_run": {"state": "completed"},
+        "health": {"status": "completed_not_rearmed", "repairable": True},
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation._activation_materialization_diagnostic",
+            return_value=diagnostic,
+        ),
+        patch(
+            "communication.infra.task_activation._reproject_task_activation",
+            return_value={"upserted": 1, "deleted": 0},
+        ) as mock_reproject,
+        patch(
+            "communication.infra.task_activation.dispatch_offline_task",
+            new=AsyncMock(return_value={"success": True, "status": "launched"}),
+        ) as mock_dispatch,
+    ):
+        response = client.post(
+            "/infra/task-activation/repair-current",
+            json={"assistant_id": "assistant-123", "task_id": 101},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "reprojected"
+    assert mock_reproject.call_args.kwargs == {
+        "assistant_id": "assistant-123",
+        "task_id": 101,
+    }
+    assert not mock_dispatch.called
 
 
 def test_offline_dispatch_allows_agentic_activation_without_entrypoint():
