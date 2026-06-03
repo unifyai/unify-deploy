@@ -61,7 +61,6 @@ def _local_assistant_data() -> dict[str, Any]:
         "self_contact_id": 0,
         "boss_contact_id": 1,
         "is_coordinator": False,
-        "workspace_org_id": None,
     }
 
 
@@ -105,10 +104,6 @@ def _assistant_payload(assistant: dict[str, Any]) -> dict[str, Any]:
         "boss_contact_id": assistant.get("boss_contact_id", 1),
         "is_coordinator": assistant.get("is_coordinator", False),
         "org_id": assistant.get("organization_id"),
-        "workspace_org_id": assistant.get(
-            "workspace_org_id",
-            assistant.get("organization_id"),
-        ),
     }
 
 
