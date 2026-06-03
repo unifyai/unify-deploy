@@ -3,7 +3,7 @@
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -870,6 +870,55 @@ def test_diagnose_task_activation_reports_cloud_task_permission_denied(client):
     materialization = response.json()["materialization"]
     assert materialization["task_name"] == task_name
     assert materialization["cloud_task_status"] == "permission_denied"
+
+
+def test_activation_health_classifies_future_missing_materialization():
+    """Future activations with no Cloud Task should be repairable."""
+
+    from communication.infra import task_activation
+
+    activation = {
+        "activation_kind": "scheduled",
+        "next_due_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+    }
+
+    health = task_activation._activation_health(
+        activation=activation,
+        materialization={"cloud_task_status": "missing"},
+        latest_run=None,
+    )
+
+    assert health["status"] == "stale_missing_materialization"
+    assert health["repairable"] is True
+
+
+def test_activation_health_classifies_fired_failed_activation():
+    """Past failed activations should be retryable when the run identity matches."""
+
+    from communication.infra import task_activation
+
+    scheduled_for = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    activation = {
+        "activation_kind": "scheduled",
+        "source_task_log_id": 555,
+        "activation_revision": "rev-123",
+        "next_due_at": scheduled_for,
+    }
+    latest_run = {
+        "state": "failed",
+        "source_task_log_id": 555,
+        "activation_revision": "rev-123",
+        "scheduled_for": scheduled_for,
+    }
+
+    health = task_activation._activation_health(
+        activation=activation,
+        materialization={"cloud_task_status": "missing"},
+        latest_run=latest_run,
+    )
+
+    assert health["status"] == "fired_failed_retryable"
+    assert health["repairable"] is True
 
 
 def test_repair_scheduled_task_activation_materializes_cloud_task(
