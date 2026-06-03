@@ -36,11 +36,16 @@ from datetime import datetime, timezone
 PROVIDER_OS_TILES = "os_tiles"
 PROVIDER_OS_NAMES_PLACES = "os_names_places"
 PROVIDER_PROPERTYDATA = "propertydata"
+PROVIDER_NOMINATIM = "nominatim"
 
 _DEFAULT_DAILY_LIMITS: dict[str, int] = {
     PROVIDER_OS_TILES: 5000,
     PROVIDER_OS_NAMES_PLACES: 1000,
     PROVIDER_PROPERTYDATA: 500,
+    # Nominatim is unmetered upstream but caps at ~1 req/s; the daily
+    # ceiling here protects against runaway-loop bursts and signals
+    # politeness to the OSM operations team.
+    PROVIDER_NOMINATIM: 2000,
 }
 
 

@@ -3,8 +3,11 @@
 Four registered tools the actor uses to assemble the structured-data
 half of a Valos-equivalent valuation report:
 
-* ``valos_geocode`` — address/postcode -> coords + UPRN (OS Places, falls
-  back to OS Names when Places returns 403).
+* ``valos_geocode`` — address/postcode -> coords (+ UPRN where the OS
+  plan supports it).  Composes a four-step fallback chain across
+  postcodes.io, OS Places, OS Names, and Nominatim so a Standard-tier
+  OS Data Hub project still resolves both postcodes and free-text
+  addresses without any extra wiring.
 * ``valos_lookup_freeholds`` — postcode/coords -> registered title
   numbers + INSPIRE ids (PropertyData).
 * ``valos_get_title_polygon`` — title number/INSPIRE id -> GeoJSON
@@ -14,7 +17,7 @@ half of a Valos-equivalent valuation report:
 
 The map-rendering primitives live in ``render.py``; private helpers
 are in the underscore-prefixed sibling modules (``_os_client``,
-``_propertydata_client``, ``_lookups_helpers``).
+``_propertydata_client``, ``_geocode_fallbacks``, ``_lookups_helpers``).
 """
 
 from __future__ import annotations
@@ -24,11 +27,29 @@ from unity.function_manager.custom import custom_function
 
 @custom_function()
 async def valos_geocode(query: str, max_results: int = 5) -> dict:
-    """Resolve an address or UK postcode to coordinates and a UPRN.
+    """Resolve an address or UK postcode to coordinates (and UPRN where available).
 
-    Tries OS Places first (address-level, returns UPRN); falls back to
-    OS Names (gazetteer, no UPRN) on 403 — Places requires the OS Data
-    Hub Premium plan.
+    Composes a four-step fallback chain so the primitive works on any
+    OS Data Hub plan tier — including Standard plans that only have
+    OS Maps enabled and no OS Places / OS Names access:
+
+    1. **postcodes.io** — taken when ``query`` is a bare UK postcode.
+       Returns the postcode centroid (no UPRN) but is unauthenticated,
+       free, and instant.  Routes around OS for the most common case.
+    2. **OS Places** — tried for free-text addresses.  Returns
+       building-level matches with UPRN.  Requires OS Data Hub
+       Premium; on Standard the call returns ``401 Invalid ApiKey for
+       given resource`` and the chain falls through.
+    3. **OS Names** — gazetteer fallback after OS Places.  Returns
+       place-name matches without UPRN.  Also Premium-gated; Standard
+       plans fall through.
+    4. **Nominatim (OpenStreetMap)** — final fallback for free-text
+       addresses.  Unauthenticated, building-level resolution where
+       OSM has it; no UPRN.  Capped at 1 req/s by upstream policy.
+
+    Set ``VALOS_GEOCODE_SKIP_OS=true`` in the environment to skip steps
+    2 and 3 — useful when you know the OS key has no Names/Places
+    access and want to save the two metered failed calls per address.
 
     Parameters
     ----------
@@ -44,13 +65,13 @@ async def valos_geocode(query: str, max_results: int = 5) -> dict:
         On success::
 
             {
-                "source": "os_places" | "os_names",
+                "source": "postcodes_io" | "os_places" | "os_names" | "nominatim",
                 "results": [
                     {
                         "match": "95 Wigmore Street, London, W1U 1FF",
                         "lat": 51.5176, "lon": -0.1492,
                         "easting": 528345, "northing": 181276,
-                        "uprn": "100022944320",  # OS Places only
+                        "uprn": "100022944320",  # os_places only
                         "postcode": "W1U 1FF",
                         "local_authority": "Westminster",
                     },
@@ -58,22 +79,70 @@ async def valos_geocode(query: str, max_results: int = 5) -> dict:
                 ],
             }
 
-        On failure: ``{"error", "status_code", ...}``.
+        On failure (every step in the chain failed):
+        ``{"error", "chain": [{"source", "error", ...}, ...]}``.
     """
+    import os
+
+    from unity_deploy.assistant_deployments.integrations.packages.valos.functions._geocode_fallbacks import (
+        nominatim_search,
+        postcodes_io_lookup,
+    )
     from unity_deploy.assistant_deployments.integrations.packages.valos.functions._lookups_helpers import (
+        _normalise_nominatim_response,
         _normalise_os_response,
+        _normalise_postcodes_io_response,
+        is_uk_postcode,
     )
     from unity_deploy.assistant_deployments.integrations.packages.valos.functions._os_client import (
         os_names_find,
         os_places_find,
     )
 
-    places = await os_places_find(query, max_results=max_results)
-    if isinstance(places, dict) and places.get("error") and places.get("status_code") == 403:
-        # Premium-plan gating — fall through to Names.
-        names = await os_names_find(query, max_results=max_results)
-        return _normalise_os_response(names, source="os_names")
-    return _normalise_os_response(places, source="os_places")
+    chain: list[dict] = []
+
+    if is_uk_postcode(query):
+        payload = await postcodes_io_lookup(query)
+        normalised = _normalise_postcodes_io_response(payload)
+        if not normalised.get("error") and normalised.get("results"):
+            return normalised
+        chain.append({"source": "postcodes_io", **payload})
+
+    skip_os = os.environ.get("VALOS_GEOCODE_SKIP_OS", "").lower() in {"1", "true", "yes"}
+
+    if not skip_os:
+        places = await os_places_find(query, max_results=max_results)
+        if (
+            isinstance(places, dict)
+            and not places.get("error")
+        ):
+            return _normalise_os_response(places, source="os_places")
+        chain.append({"source": "os_places", **(places if isinstance(places, dict) else {"raw": places})})
+        # Fall through on product_not_enabled (401 with resource scope, or 403)
+        # and also on transient errors — Nominatim is the safety net.
+        places_should_fallback = (
+            isinstance(places, dict)
+            and (
+                places.get("product_not_enabled")
+                or places.get("status_code") in (401, 403, 404)
+            )
+        )
+        if places_should_fallback:
+            names = await os_names_find(query, max_results=max_results)
+            if isinstance(names, dict) and not names.get("error"):
+                return _normalise_os_response(names, source="os_names")
+            chain.append({"source": "os_names", **(names if isinstance(names, dict) else {"raw": names})})
+
+    nominatim_payload = await nominatim_search(query, max_results=max_results)
+    nominatim_normalised = _normalise_nominatim_response(nominatim_payload)
+    if not nominatim_normalised.get("error") and nominatim_normalised.get("results"):
+        return nominatim_normalised
+    chain.append({"source": "nominatim", **nominatim_payload})
+
+    return {
+        "error": f"All geocoding sources failed for '{query}'",
+        "chain": chain,
+    }
 
 
 @custom_function()

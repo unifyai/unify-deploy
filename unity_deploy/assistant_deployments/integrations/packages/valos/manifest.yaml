@@ -1,39 +1,46 @@
 name: Valos
 slug: valos
-version: "0.3.0"
+version: "0.4.0"
 sector: real-estate
 tier: api
 quality: bronze
 description: >
   UK property valuation data layer.  Wraps the Ordnance Survey Data Hub
-  (OS Maps API for raster tiles, OS Names API for geocoding, OS Places
-  API for UPRN lookup) and PropertyData (Land Registry freeholds,
-  INSPIRE polygon geometry, title information) and exposes them to the
-  actor as typed primitives covering address resolution, freehold title
-  lookup, polygon retrieval, demographic context, and OS-tiled map
-  rendering.  Replaces the placeholder pass-through to api.valos.ai.
-  Opt-in via two equivalent activation paths: deploy-time wiring through
-  the ``integrations=[...]`` argument on ``BASE_SPEC.derive(...)``
-  (typically with Unify-owned shared credentials), or per-assistant
-  Console paste through the ``valos`` entry in
-  ``INTEGRATION_PROVIDERS`` (for one-off testing or BYO-keys clients).
-  Either path lands the same two secrets in the assistant's
-  ``/Secrets`` context.
+  (OS Maps API for raster tiles, plus optional OS Names / OS Places for
+  building-level geocoding on Premium plans) and PropertyData (Land
+  Registry freeholds, INSPIRE polygon geometry, title information) and
+  exposes them to the actor as typed primitives covering address
+  resolution, freehold title lookup, polygon retrieval, demographic
+  context, and OS-tiled map rendering.  ``valos_geocode`` composes a
+  four-step fallback chain (postcodes.io → OS Places → OS Names →
+  Nominatim) so a Standard-tier OS project that only has OS Maps still
+  resolves both postcodes and free-text addresses.  Replaces the
+  placeholder pass-through to api.valos.ai.  Opt-in via two equivalent
+  activation paths: deploy-time wiring through the ``integrations=[...]``
+  argument on ``BASE_SPEC.derive(...)`` (typically with Unify-owned
+  shared credentials), or per-assistant Console paste through the
+  ``valos`` entry in ``INTEGRATION_PROVIDERS`` (for one-off testing or
+  BYO-keys clients).  Either path lands the same two secrets in the
+  assistant's ``/Secrets`` context.
 homepage: https://osdatahub.os.uk
 
 secrets:
 - name: OS_MAPS_API_KEY
   description: >
-    OS Data Hub project API key with access to OS Maps, OS Names, and
-    OS Places.  May be Unify-owned (deploy-time path) or
-    customer-supplied (Console-paste path) — the runtime is indifferent.
-    Premium plan recommended to cover OS Places; on Free, geocoding
-    falls through to OS Names.  The simple ``?key=...`` query-param
-    flow is used; the OS "Project API Secret" (OAuth
-    client-credentials path) is unused.  Distributing OS rasters in
-    customer-deliverable Word reports is redistribution and may require
-    a separate OS Partner / OS Reseller agreement — confirm commercial
-    terms with Ordnance Survey before producing client-deliverable maps.
+    OS Data Hub project API key.  Required scope is just OS Maps
+    (raster tiles for the rendering primitives).  OS Names and OS
+    Places are optional Premium add-ons that, when present, give
+    ``valos_geocode`` building-level matches with UPRN; on Standard
+    plans the geocoder transparently falls back to postcodes.io
+    (postcode queries) and Nominatim (free-text addresses), neither
+    of which need a key.  May be Unify-owned (deploy-time path) or
+    customer-supplied (Console-paste path) — the runtime is
+    indifferent.  The simple ``?key=...`` query-param flow is used;
+    the OS "Project API Secret" (OAuth client-credentials path) is
+    unused.  Distributing OS rasters in customer-deliverable Word
+    reports is redistribution and may require a separate OS Partner /
+    OS Reseller agreement — confirm commercial terms with Ordnance
+    Survey before producing client-deliverable maps.
   required: true
   sensitive: true
 - name: PROPERTYDATA_API_KEY
@@ -51,8 +58,10 @@ capabilities:
 - id: valos_geocode
   name: Address geocoding
   description: >
-    Resolve a free-text address or postcode to coordinates and a UPRN
-    via OS Places + OS Names.
+    Resolve a free-text address or postcode to coordinates (and UPRN
+    where available) via a four-step fallback chain: postcodes.io for
+    postcodes, OS Places + OS Names where the OS plan supports them,
+    Nominatim as the unauthenticated free-text safety net.
   functions: [valos_geocode]
 - id: valos_freeholds
   name: Freehold title lookup

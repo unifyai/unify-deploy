@@ -83,20 +83,52 @@ async def os_get_json(
                 )
                 await asyncio.sleep(retry_after)
                 continue
+            body_text = _safe_text(resp)
             last_err = {
                 "error": f"OS GET {path} returned {resp.status_code}",
                 "status_code": resp.status_code,
-                "body": _safe_text(resp),
+                "body": body_text,
             }
-            if resp.status_code == 401:
+            # OS Data Hub returns 401 in two distinct situations:
+            #
+            #  * Genuinely-invalid key: body says ``"Invalid ApiKey"``.
+            #    Operator action: rotate via OS Data Hub console.
+            #  * Valid key, but the project doesn't have this product
+            #    (Names / Places) enabled: body says ``"Invalid ApiKey
+            #    for given resource"``.  Operator action: enable the
+            #    product (Premium tier) or rely on the postcodes.io /
+            #    Nominatim fallback chain — the public ``valos_geocode``
+            #    primitive transparently routes around it.
+            #
+            # The chain in ``lookups.py`` keys off
+            # ``product_not_enabled`` to decide whether to fall through;
+            # surface it as a structured flag, not just a hint.
+            if (
+                resp.status_code == 401
+                and "for given resource" in body_text.lower()
+            ):
+                last_err["product_not_enabled"] = True
                 last_err["hint"] = (
-                    "401 indicates OS_MAPS_API_KEY is invalid or revoked — "
-                    "rotate via the OS Data Hub console."
+                    "OS_MAPS_API_KEY is valid but the OS Data Hub project does "
+                    "not have this product (likely OS Places or OS Names) "
+                    "enabled.  This is normal for standard plans — Names and "
+                    "Places require Premium.  valos_geocode falls back to "
+                    "postcodes.io / Nominatim automatically; no UPRN in the "
+                    "fallback path."
+                )
+            elif resp.status_code == 401:
+                last_err["hint"] = (
+                    "401 with no resource-scope hint typically means "
+                    "OS_MAPS_API_KEY is invalid or revoked — rotate via the "
+                    "OS Data Hub console."
                 )
             elif resp.status_code == 403:
+                last_err["product_not_enabled"] = True
                 last_err["hint"] = (
-                    "403 typically indicates the OS Data Hub plan does not "
-                    "cover this product (e.g. OS Places requires Premium)."
+                    "403 indicates the OS Data Hub project tier does not "
+                    "cover this product (Names / Places require Premium).  "
+                    "valos_geocode falls back to postcodes.io / Nominatim "
+                    "automatically; no UPRN in the fallback path."
                 )
             break
     return last_err or {"error": "request failed without status"}

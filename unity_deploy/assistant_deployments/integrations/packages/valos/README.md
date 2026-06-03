@@ -1,18 +1,30 @@
 # Valos — UK Property Data
 
 UK property valuation data layer. Replaces the original placeholder
-pass-through to `api.valos.ai` with two upstream services that Unify
-holds accounts for:
+pass-through to `api.valos.ai` with a composition of paid + free
+upstreams:
 
-- **Ordnance Survey Data Hub** — OS Maps API (raster WMTS tiles), OS
-  Names API (gazetteer geocoding), OS Places API (address lookup with
-  UPRN). Single key (`OS_MAPS_API_KEY`).
+- **Ordnance Survey Data Hub** — OS Maps API (raster WMTS tiles,
+  required scope) plus optional OS Names / OS Places (Premium add-ons
+  for building-level geocoding with UPRN). Single key
+  (`OS_MAPS_API_KEY`).
 - **PropertyData** — `/api/freeholds` (postcode → registered titles +
   INSPIRE polygons), `/api/title-information` (full boundary GeoJSON,
   ownership, tenure). Single key (`PROPERTYDATA_API_KEY`).
+- **postcodes.io** — UK postcode → WGS84 + LSOA/MSOA/local authority.
+  Unauthenticated. Used both as the primary path for
+  `valos_geocode` postcode queries and as the LSOA/MSOA bridge for
+  `valos_postcode_demographics`.
+- **Nominatim (OpenStreetMap)** — free-text address → WGS84.
+  Unauthenticated, ≤1 req/s by upstream policy. Used as the
+  free-tier fallback for `valos_geocode` when the OS plan does not
+  cover OS Names / OS Places.
 
-Demographics enrichment uses `postcodes.io` and the ONS open APIs — no
-key required.
+`valos_geocode` composes a four-step fallback chain
+(`postcodes.io → OS Places → OS Names → Nominatim`) so a Standard-tier
+OS Data Hub project that only has OS Maps still resolves both
+postcodes and free-text addresses without any extra wiring.
+Demographics enrichment also uses the ONS open APIs — no key required.
 
 > **Two activation paths.** The package is opt-in either way:
 >
@@ -40,7 +52,7 @@ Five typed primitives the actor can call directly:
 
 | Function | Purpose |
 | --- | --- |
-| `valos_geocode(query, max_results)` | Address/postcode → coordinates + UPRN. OS Places first, falls through to OS Names on 403. |
+| `valos_geocode(query, max_results)` | Address/postcode → coordinates (+ UPRN where the OS plan supports it). Four-step chain: postcodes.io → OS Places → OS Names → Nominatim. |
 | `valos_lookup_freeholds(postcode \| lat+lon)` | Postcode/coords → freehold title numbers + INSPIRE ids + tenure. |
 | `valos_get_title_polygon(title_number \| inspire_id)` | Title id → GeoJSON boundary + plot size + ownership. |
 | `valos_postcode_demographics(postcode, radius_km)` | Postcode → LSOA/MSOA + local authority + (later) census/IMD. |
@@ -58,16 +70,37 @@ assistant.
 Two required secrets, populated by whichever activation path is in use
 (see the callout above):
 
-- `OS_MAPS_API_KEY` — OS Data Hub project key (Premium plan to cover OS
-  Places; on Free, geocoding falls through to OS Names). The simple
-  `?key=...` query-param flow is used everywhere; the OS "Project API
-  Secret" (OAuth client-credentials path) is unused by this package.
+- `OS_MAPS_API_KEY` — OS Data Hub project key. **Required scope is
+  just OS Maps** (raster tiles for the rendering primitives). OS
+  Names and OS Places are optional Premium add-ons; when they're
+  not on the project, `valos_geocode` transparently routes around
+  them (postcodes.io for postcodes, Nominatim for free-text
+  addresses). The simple `?key=...` query-param flow is used
+  everywhere; the OS "Project API Secret" (OAuth client-credentials
+  path) is unused by this package.
 - `PROPERTYDATA_API_KEY` — PropertyData subscription with the Land
   Registry endpoints enabled (`/api/freeholds`,
   `/api/title-information`).
 
 Both keys read from `os.environ` at call time, so the runtime is
 indifferent to which activation path seeded them.
+
+### Geocoder selection
+
+`valos_geocode`'s four-step chain is automatic and self-healing:
+
+1. **postcodes.io** — taken when the input is a bare UK postcode.
+2. **OS Places** — tried for free-text addresses. Returns 401
+   `Invalid ApiKey for given resource` on Standard plans; the chain
+   detects this and falls through.
+3. **OS Names** — gazetteer fallback after OS Places. Same Premium
+   gating; falls through on Standard.
+4. **Nominatim (OpenStreetMap)** — final unauthenticated fallback for
+   free-text addresses.
+
+Set `VALOS_GEOCODE_SKIP_OS=true` to skip steps 2 and 3 entirely —
+useful when you know the OS key has no Names/Places access and want
+to save the two metered failed calls per address-level lookup.
 
 ### Licensing
 
@@ -85,7 +118,7 @@ indifferent to which activation path seeded them.
 
 ## Metering and caps
 
-`_metering.py` keeps per-day, per-process call counters across three
+`_metering.py` keeps per-day, per-process call counters across four
 upstream channels:
 
 | Provider | Default cap (env override) |
@@ -93,6 +126,12 @@ upstream channels:
 | `os_tiles` | 5,000/day (`VALOS_OS_TILES_DAILY_LIMIT`) |
 | `os_names_places` | 1,000/day (`VALOS_OS_NAMES_PLACES_DAILY_LIMIT`) |
 | `propertydata` | 500/day (`VALOS_PROPERTYDATA_DAILY_LIMIT`) |
+| `nominatim` | 2,000/day (`VALOS_NOMINATIM_DAILY_LIMIT`) |
+
+postcodes.io is intentionally unmetered — it's a UK-government
+open-data service with no published rate limit and serves only the
+postcode-centroid path. Nominatim's ceiling is a politeness signal
+to the OSM operations team, not an upstream-billed quota.
 
 When a counter trips its ceiling, the upstream client returns a
 structured "quota exceeded" envelope and skips the HTTP call. The cap
