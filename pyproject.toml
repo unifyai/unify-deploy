@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "communication"
-version = "0.1.0"
+version = "0.0.0"
 description = "Private SaaS infrastructure (K8s Job control, SSH tunnel, VM pool, scheduled tasks) wrapping the unity.gateway open-source communication channels"
 readme = "README.md"
-requires-python = ">=3.11,<4.0"
+requires-python = ">=3.12,<4.0"
 dependencies = [
     # Core web framework
     "fastapi>=0.104.0",
@@ -98,7 +98,7 @@ include = ["communication", "communication.*", "adapters", "adapters.*", "common
 include-package-data = true
 
 [tool.uv.sources]
-unillm = { path = "../unillm", editable = true }
+unillm = { git = "https://github.com/unifyai/unillm.git", branch = "staging" }
 
 [tool.pytest.ini_options]
 env = [
