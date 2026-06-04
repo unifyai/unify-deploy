@@ -340,7 +340,12 @@ substitutions:
   # assistant's own context, and the activation converges from there. See
   # control_plane._scenario_task_activation_action and brain's
   # .cursor/rules/brain-operator-activation.mdc.
-  _BRAIN_OPERATOR_ASSISTANT_ID: '2098'
+  # Temporarily blank — staging assistant id (was 2098) no longer exists
+  # in the staging Orchestra DB and 404'd the reconcile.  Empty => the
+  # reconcile job passes no id, brain_operator_assistant_id() returns None,
+  # and no scenario is activated (safe no-op).  Restore here AND in
+  # _brain_operator.py (_ASSISTANT_IDS["staging"]) together once confirmed.
+  _BRAIN_OPERATOR_ASSISTANT_ID: ''
   _BRAIN_OPERATOR_TASKS_ENABLED: 'true'
 
 availableSecrets:

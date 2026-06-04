@@ -25,11 +25,18 @@ import os
 
 from unity_deploy.assistant_deployments.deployment_types import detect_environment
 
-# Per-environment "Brain Operator" assistant id.  Staging is assistant 2098 in
-# the unify org.  Production stays unset until the prod colleague is
-# provisioned (add it here, mirroring the clientzeta id constants).
+# Per-environment "Brain Operator" assistant id.  Production stays unset
+# until the prod colleague is provisioned (add it here, mirroring the
+# clientzeta id constants).
+#
+# Staging is temporarily unset pending confirmation of the live assistant
+# id — the previous id (2098) no longer exists in the staging Orchestra
+# DB, which 404'd the control-plane reconcile.  With no id mapped,
+# brain_operator_assistant_id() returns None and the deployment ships no
+# scenario activation (the documented safe no-op).  Restore the id here
+# AND in cloudbuild-staging.yaml (_BRAIN_OPERATOR_ASSISTANT_ID) together.
 _ASSISTANT_IDS: dict[str, str] = {
-    "staging": "2098",
+    # "staging": "2098",
 }
 
 
