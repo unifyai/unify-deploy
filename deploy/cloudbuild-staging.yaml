@@ -329,15 +329,15 @@ substitutions:
   # production triggers pin a SHA.
   _BRAIN_REF: 'main'
   # brain_operator activation (read at reconcile time by
-  # brain_operator/deployment.py). 2098 = the "Brain Operator" assistant in
-  # the unify org on staging; tasks_enabled=true ships the brain_jobs scenario
-  # rows enabled.
+  # brain_operator/deployment.py). 2108 = the org-scoped "Brain Operator
+  # Staging" assistant in the Unify org on staging; tasks_enabled=true ships
+  # the brain_jobs scenario rows enabled.
   #
   # The brain_operator assistant target is optional: if this staging id is
   # missing, deploy-time reconcile skips it with a warning. If the assistant
   # exists but has not seeded its scenario rows yet, control-plane task
   # activation defers to the runtime plane and converges after wake.
-  _BRAIN_OPERATOR_ASSISTANT_ID: '2098'
+  _BRAIN_OPERATOR_ASSISTANT_ID: '2108'
   _BRAIN_OPERATOR_TASKS_ENABLED: 'true'
 
 availableSecrets:

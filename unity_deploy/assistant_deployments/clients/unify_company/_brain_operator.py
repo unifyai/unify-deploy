@@ -25,11 +25,13 @@ import os
 
 from unity_deploy.assistant_deployments.deployment_types import detect_environment
 
-# Per-environment "Brain Operator" assistant id.  The assistant-scoped target
-# is registered with missing_ok=True, so a stale id skips deploy-time reconcile
-# without hiding failures for required customer deployments.
+# Per-environment "Brain Operator" assistant id. Staging is the org-scoped
+# "Brain Operator Staging" assistant (agent_id 2108) in the Unify org.
+# The assistant-scoped target is registered with missing_ok=True, so a stale
+# id skips deploy-time reconcile without hiding failures for required customer
+# deployments.
 _ASSISTANT_IDS: dict[str, str] = {
-    "staging": "2098",
+    "staging": "2108",
 }
 
 
