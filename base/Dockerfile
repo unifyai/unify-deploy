@@ -63,12 +63,17 @@ RUN cd packages/magnitude-extract && npx tsup
 RUN cd packages/magnitude-core && npx baml-cli generate && npx pkgroll
 WORKDIR /app
 
-# Remove git credentials after all git operations (security best practice)
-RUN git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
-
-# Copy source and install unity with all dependencies
+# Copy source and install unity with all dependencies.  The git credential
+# rewrite (set above) must stay active through this install: `uv pip install .`
+# builds the unillm git dependency, which carries a private submodule
+# (.cursor/rules/global-rules -> github.com/unifyai/global-cursor-rules).
+# `git submodule update --init` clones that over HTTPS and fails with
+# "could not read Username" if the token rewrite has already been unset.
+# The credentials are scrubbed immediately after the install (still before the
+# final image), preserving the security-best-practice posture.
 COPY . /app
-RUN uv pip install --system --no-cache .
+RUN uv pip install --system --no-cache . && \
+    git config --global --unset url."https://${GITHUB_TOKEN}@github.com/".insteadOf
 
 # Link pre-built magnitude into the workspace (agent-service references ../magnitude)
 RUN ln -sfn /opt/magnitude magnitude
