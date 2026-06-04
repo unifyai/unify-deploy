@@ -12,12 +12,18 @@ WORKDIR /app
 
 RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
+RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
+    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unify.git /tmp/unify && \
+    pip install --no-cache-dir /tmp/unify
+RUN DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
+    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unillm.git /tmp/unillm && \
+    pip install --no-cache-dir /tmp/unillm
+
 RUN echo "UNITY_SHA=${UNITY_SHA}" && \
     DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
     pip install --no-cache-dir --no-deps /tmp/unity && \
-    pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt && \
-    pip install --no-cache-dir "pydantic-settings>=2.0.0"
+    pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt
 
 COPY pyproject.toml README.md ./
 COPY communication/ communication/
