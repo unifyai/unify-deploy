@@ -5,12 +5,21 @@ skips this file.  Sibling function modules import from here inside their
 function bodies to satisfy FunctionManager's isolation rule.
 
 The Care Quality Commission (CQC) Syndication API is the register of
-record for every regulated care home in England.  It needs no API key —
-requests carry a ``partnerCode`` query param to identify the consuming
-organisation and unlock the higher (2000 req/min) rate limit.  Data is
+record for every regulated care home in England.  Access requires a
+free subscription key (register at api-portal.service.cqc.org.uk),
+passed as the ``Ocp-Apim-Subscription-Key`` header — the API sits
+behind Azure API Management, so unauthenticated requests get a 401.
+The key is read from ``CQC_PRIMARY_KEY`` in the environment.  Data is
 published under the Open Government Licence v3.0; deliverables that
 surface it must attribute "Contains public sector information licensed
 under the Open Government Licence v3.0".
+
+CQC's ``localAuthority`` filter keys off the *upper-tier* authority
+(county for two-tier areas, e.g. "Cambridgeshire" — not the district
+"South Cambridgeshire", nor "Cambridge"; the unitary name for unitary
+areas).  We therefore resolve the catchment's authorities from
+postcodes.io's ``admin_county`` (falling back to ``admin_district`` for
+unitaries) so the filter values match CQC's vocabulary.
 
 Why this exists
 ---------------
@@ -37,9 +46,8 @@ from __future__ import annotations
 
 import asyncio
 
-_CQC_BASE = "https://api.cqc.org.uk/public/v1"
-_PARTNER_CODE = "unify-valos"
-_USER_AGENT = "unify-valos/0.5 (https://unify.ai)"
+_CQC_BASE = "https://api.service.cqc.org.uk/public/v1"
+_USER_AGENT = "unify-valos/0.6 (https://unify.ai)"
 
 # Earth mean radius (km) for haversine.
 _EARTH_RADIUS_KM = 6371.0088
@@ -112,6 +120,13 @@ def name_similarity(a: str, b: str) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _subscription_key_or_none() -> str | None:
+    import os
+
+    key = os.environ.get("CQC_PRIMARY_KEY", "")
+    return key or None
+
+
 async def _cqc_get(client, path: str, *, params: dict | None = None) -> dict:
     """GET a CQC Syndication endpoint, returning parsed JSON or an error dict."""
     from unity_deploy.assistant_deployments.integrations.packages.valos.functions._metering import (
@@ -120,21 +135,39 @@ async def _cqc_get(client, path: str, *, params: dict | None = None) -> dict:
         record_and_check,
     )
 
+    key = _subscription_key_or_none()
+    if key is None:
+        return {
+            "error": "CQC_PRIMARY_KEY is not configured.",
+            "status_code": None,
+            "auth_error": True,
+            "hint": (
+                "valos_find_care_homes needs CQC_PRIMARY_KEY (a free CQC "
+                "subscription key from api-portal.service.cqc.org.uk) in the "
+                "assistant's /Secrets context."
+            ),
+        }
+
     exceeded, count, limit = record_and_check(PROVIDER_CQC)
     if exceeded:
         return quota_envelope(PROVIDER_CQC, count, limit)
 
-    merged = dict(params or {})
-    merged["partnerCode"] = _PARTNER_CODE
+    # The migrated API rejects a ``partnerCode`` query param (400) and
+    # authenticates purely via the subscription-key header.
     resp = await client.get(
         f"{_CQC_BASE}{path}",
-        params=merged,
-        headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+        params=dict(params or {}),
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept": "application/json",
+            "Ocp-Apim-Subscription-Key": key,
+        },
     )
     if resp.status_code != 200:
         return {
             "error": f"CQC GET {path} returned {resp.status_code}",
             "status_code": resp.status_code,
+            "auth_error": resp.status_code in (401, 403),
             "body": resp.text[:300] if resp.text else "",
         }
     return resp.json() or {}
@@ -146,12 +179,14 @@ async def cqc_care_homes_in_authority(
     *,
     max_pages: int = 10,
     per_page: int = 1000,
-) -> list[dict]:
+) -> tuple[list[dict], dict | None]:
     """List care-home locations in a local authority.
 
-    Returns ``[{"location_id", "name", "postcode"}, ...]``.  Silently
-    returns an empty list on upstream error so a single bad authority
-    doesn't sink the whole catchment query.
+    Returns ``(homes, error)`` where ``homes`` is
+    ``[{"location_id", "name", "postcode"}, ...]`` and ``error`` is the
+    upstream failure dict if one occurred (so the caller can distinguish
+    "authority genuinely empty" from "auth/transport failure" rather than
+    silently treating a 401 as an empty catchment).
     """
     homes: list[dict] = []
     page = 1
@@ -167,7 +202,7 @@ async def cqc_care_homes_in_authority(
             },
         )
         if not isinstance(payload, dict) or payload.get("error"):
-            break
+            return homes, (payload if isinstance(payload, dict) else None)
         for loc in payload.get("locations") or []:
             homes.append(
                 {
@@ -180,7 +215,7 @@ async def cqc_care_homes_in_authority(
         if page >= total_pages:
             break
         page += 1
-    return homes
+    return homes, None
 
 
 async def cqc_location_detail(client, location_id: str) -> dict:
@@ -238,7 +273,12 @@ async def _authorities_touching_catchment(
         result = (resp.json() or {}).get("result") or []
         if not result:
             continue
-        la = result[0].get("admin_district")
+        # CQC's localAuthority filter is upper-tier: county for two-tier
+        # areas, unitary name otherwise.  postcodes.io exposes the county
+        # as admin_county (empty for unitaries, where admin_district is the
+        # unitary).  Prefer county, fall back to district.
+        res = result[0]
+        la = res.get("admin_county") or res.get("admin_district")
         if la and la not in seen:
             seen.add(la)
             authorities.append(la)
@@ -313,8 +353,27 @@ async def find_care_homes_near(
             }
 
         listed: list[dict] = []
+        last_error: dict | None = None
         for la in authorities:
-            listed.extend(await cqc_care_homes_in_authority(client, la))
+            homes, err = await cqc_care_homes_in_authority(client, la)
+            listed.extend(homes)
+            if err is not None:
+                last_error = err
+
+        # If every authority listing failed and we got nothing, surface the
+        # upstream failure (e.g. missing/invalid CQC key) rather than letting
+        # it masquerade as an empty catchment.
+        if not listed and last_error is not None:
+            return {
+                "error": (
+                    "CQC lookup failed for the catchment authorities "
+                    f"({', '.join(authorities)})."
+                ),
+                "centre": {"lat": lat, "lon": lon},
+                "radius_km": radius_km,
+                "authorities_searched": authorities,
+                "upstream_error": last_error,
+            }
 
         # De-duplicate by location id (authorities can overlap on edges).
         by_id = {h["location_id"]: h for h in listed if h.get("location_id")}

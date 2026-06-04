@@ -1,6 +1,6 @@
 name: Valos
 slug: valos
-version: "0.5.0"
+version: "0.6.0"
 sector: real-estate
 tier: api
 quality: bronze
@@ -10,7 +10,7 @@ description: >
   building-level geocoding on Premium plans), PropertyData (Land
   Registry freeholds, INSPIRE polygon geometry, title information), and
   the CQC Syndication register (authoritative care-home locations,
-  ratings, and bed counts) and exposes them to the actor as typed
+  ratings, and bed counts; free subscription key) and exposes them to the actor as typed
   primitives covering address resolution, freehold title lookup,
   polygon retrieval, demographic context, care-home catchment
   resolution, and OS-tiled map rendering.  ``valos_geocode`` composes a
@@ -24,9 +24,10 @@ description: >
   the ``integrations=[...]`` argument on ``BASE_SPEC.derive(...)``
   (typically with Unify-owned shared credentials), or per-assistant
   Console paste through the ``valos`` entry in ``INTEGRATION_PROVIDERS``
-  (for one-off testing or BYO-keys clients).  Either path lands the same
-  two secrets in the assistant's ``/Secrets`` context; the CQC and
-  postcodes.io paths need no key.
+  (for one-off testing or BYO-keys clients).  Either path lands the OS +
+  PropertyData secrets in the assistant's ``/Secrets`` context;
+  competitor resolution additionally uses a free CQC subscription key
+  (``CQC_PRIMARY_KEY``), while postcodes.io and Nominatim need no key.
 homepage: https://osdatahub.os.uk
 
 secrets:
@@ -57,6 +58,19 @@ secrets:
     confirm reseller / multi-tenant terms with PropertyData before
     using a single Unify-owned key across multiple client deployments.
   required: true
+  sensitive: true
+- name: CQC_PRIMARY_KEY
+  description: >
+    Care Quality Commission (CQC) Syndication API subscription key —
+    free, from api-portal.service.cqc.org.uk.  Used only by
+    ``valos_find_care_homes`` to resolve competitor care homes from the
+    register of record (authoritative coordinates, CQC rating, bed
+    count).  Passed as the ``Ocp-Apim-Subscription-Key`` header.
+    Optional at the package level: OS + PropertyData primitives work
+    without it, but competitor-pin resolution returns a clear auth
+    error until it is set.  CQC data is Open Government Licence v3.0
+    (commercial reuse permitted with attribution).
+  required: false
   sensitive: true
 
 capabilities:
@@ -96,8 +110,9 @@ capabilities:
     List CQC-registered care homes within a radius of a point, with
     authoritative coordinates, rating, and bed count, and optionally
     fuzzy-match a list of competitor names (e.g. a Carterwood
-    competition list) against the radius-bounded set.  No API key — the
-    CQC Syndication register is keyless (Open Government Licence v3.0).
+    competition list) against the radius-bounded set.  Backed by the CQC
+    Syndication register via a free subscription key (``CQC_PRIMARY_KEY``);
+    data is Open Government Licence v3.0.
   functions: [valos_find_care_homes]
 - id: valos_render
   name: OS map rendering

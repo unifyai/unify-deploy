@@ -355,9 +355,12 @@ async def valos_find_care_homes(
     """Find CQC-registered care homes within a radius, with authoritative coordinates.
 
     Backed by the Care Quality Commission (CQC) Syndication API — the
-    register of record for every regulated care home in England.  Needs
-    no API key.  This is the correct way to place competitor pins and
-    fill the CQC-rating column on a care-home valuation report, because
+    register of record for every regulated care home in England.
+    Requires ``CQC_PRIMARY_KEY`` (a free subscription key from
+    api-portal.service.cqc.org.uk); without it this returns a clear
+    auth error rather than an empty result.  This is the correct way to
+    place competitor pins and fill the CQC-rating column on a care-home
+    valuation report, because
     a source like Carterwood lists competitor *names only* (no postcode
     or address), and geocoding a bare care-home name through a general
     geocoder is both incomplete and prone to matching an unrelated
@@ -421,7 +424,8 @@ async def valos_find_care_homes(
     deliverable that surfaces it should carry the attribution string
     returned in the payload.  ``cqc_rating`` / ``beds`` are independent
     of any market-data provider and can be used to cross-check a
-    Carterwood competition list.
+    Carterwood competition list.  The match threshold is tunable via
+    ``VALOS_CQC_MATCH_THRESHOLD`` (default 0.6).
     """
     from unity_deploy.assistant_deployments.integrations.packages.valos.functions._cqc_client import (
         find_care_homes_near,

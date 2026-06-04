@@ -20,13 +20,16 @@ upstreams:
   Unauthenticated, ≤1 req/s by upstream policy. Used as the
   free-tier fallback for `valos_geocode` when the OS plan does not
   cover OS Names / OS Places.
-- **CQC Syndication** — care-home name/location register (coordinates,
-  rating, bed count). Keyless (a `partnerCode` query param unlocks the
-  2000 req/min tier). Backs `valos_find_care_homes`, which resolves
-  competitor care homes authoritatively — market lists such as
-  Carterwood name competitors but carry no address, and a bare name is
-  unsafe to geocode through a general geocoder. Open Government Licence
-  v3.0 (attribution required on deliverables).
+- **CQC Syndication** (`api.service.cqc.org.uk`) — care-home
+  name/location register (coordinates, rating, bed count). Requires a
+  **free subscription key** (`CQC_PRIMARY_KEY`, from
+  api-portal.service.cqc.org.uk), sent as the `Ocp-Apim-Subscription-Key`
+  header — the API is behind Azure API Management and 401s without it.
+  Backs `valos_find_care_homes`, which resolves competitor care homes
+  authoritatively — market lists such as Carterwood name competitors but
+  carry no address, and a bare name is unsafe to geocode through a
+  general geocoder. Open Government Licence v3.0 (attribution required on
+  deliverables).
 
 `valos_geocode` composes a four-step fallback chain
 (`postcodes.io → OS Places → OS Names → Nominatim`) so a Standard-tier
@@ -91,8 +94,13 @@ Two required secrets, populated by whichever activation path is in use
 - `PROPERTYDATA_API_KEY` — PropertyData subscription with the Land
   Registry endpoints enabled (`/api/freeholds`,
   `/api/title-information`).
+- `CQC_PRIMARY_KEY` *(optional)* — free CQC Syndication subscription key
+  (api-portal.service.cqc.org.uk), sent as `Ocp-Apim-Subscription-Key`.
+  Only `valos_find_care_homes` uses it; the OS + PropertyData primitives
+  work without it. When absent, `valos_find_care_homes` returns a clear
+  auth error rather than an empty result.
 
-Both keys read from `os.environ` at call time, so the runtime is
+All keys read from `os.environ` at call time, so the runtime is
 indifferent to which activation path seeded them.
 
 ### Geocoder selection
@@ -125,6 +133,13 @@ impossible. It also returns each home's CQC rating and bed count, which
 populate the rating column and cross-check a market-data bed list.
 Match threshold is tunable via `VALOS_CQC_MATCH_THRESHOLD` (default
 0.6).
+
+CQC's `localAuthority` filter is upper-tier (county for two-tier areas —
+e.g. `Cambridgeshire`, not `South Cambridgeshire` or `Cambridge`; the
+unitary name otherwise). The catchment's authorities are resolved from
+postcodes.io `admin_county` (falling back to `admin_district` for
+unitaries) so the filter values match CQC's vocabulary. Requires
+`CQC_PRIMARY_KEY`.
 
 ### Licensing
 
@@ -162,10 +177,10 @@ postcodes.io is intentionally unmetered — it's a UK-government
 open-data service with no published rate limit and serves the
 postcode-centroid path plus the bulk geocode / reverse-geocode behind
 `valos_find_care_homes`. Nominatim's ceiling is a politeness signal to
-the OSM operations team, not an upstream-billed quota. CQC's ceiling is
-generous because a single catchment resolution fans out across
-authority listings + per-location detail calls; it caps a runaway loop,
-not normal usage.
+the OSM operations team, not an upstream-billed quota. CQC (keyed via
+`CQC_PRIMARY_KEY`, free tier) gets a generous ceiling because a single
+catchment resolution fans out across authority listings + per-location
+detail calls; it caps a runaway loop, not normal usage.
 
 When a counter trips its ceiling, the upstream client returns a
 structured "quota exceeded" envelope and skips the HTTP call. The cap
