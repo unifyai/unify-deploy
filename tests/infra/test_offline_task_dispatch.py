@@ -345,7 +345,7 @@ def test_task_activation_health_summarizes_blocking_conditions():
     assert summary["statuses"] == {"stale_running_run": 1}
     assert summary["blocking_conditions"] == {"stale_running_run": 1}
     assert summary["job_lifecycle_safeguards"]["backoff_limit"] == 0
-    assert summary["job_lifecycle_safeguards"]["active_deadline_seconds"] > 0
+    assert summary["job_lifecycle_safeguards"]["active_deadline_seconds"] >= 1800
     assert summary["job_lifecycle_safeguards"]["ttl_seconds_after_finished"] > 0
 
 

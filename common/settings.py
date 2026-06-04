@@ -145,7 +145,7 @@ class Settings:
             os.environ.get("UNITY_OFFLINE_TASK_JOB_TTL_SECONDS", "600"),
         )
         self.offline_task_job_active_deadline_seconds: int = int(
-            os.environ.get("UNITY_OFFLINE_TASK_JOB_ACTIVE_DEADLINE_SECONDS", "900"),
+            os.environ.get("UNITY_OFFLINE_TASK_JOB_ACTIVE_DEADLINE_SECONDS", "1800"),
         )
 
         # Auth keys
