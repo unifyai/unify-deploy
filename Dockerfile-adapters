@@ -16,7 +16,8 @@ RUN echo "UNITY_SHA=${UNITY_SHA}" && \
     DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
     git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
     pip install --no-cache-dir --no-deps /tmp/unity && \
-    pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt
+    pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt && \
+    pip install --no-cache-dir "pydantic-settings>=2.0.0"
 
 COPY pyproject.toml README.md ./
 COPY communication/ communication/
