@@ -15,9 +15,13 @@ steps:
   args:
   - '-c'
   - |
+    UNITY_SHA=$$(git ls-remote https://github.com/unifyai/unity.git refs/heads/staging | awk '{print $$1}')
+    echo "Cache-busting unity layer with UNITY_SHA=$$UNITY_SHA"
     DOCKER_BUILDKIT=1 docker build -f Dockerfile-adapters \
       --cache-from ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest \
       --build-arg BUILDKIT_INLINE_CACHE=1 \
+      --build-arg BRANCH_NAME=staging \
+      --build-arg UNITY_SHA=$$UNITY_SHA \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE_NAME}:latest .
   waitFor: ['pull-cache']
