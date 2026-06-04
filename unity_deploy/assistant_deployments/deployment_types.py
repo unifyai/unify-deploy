@@ -252,6 +252,14 @@ class DeploymentTarget(BaseModel):
         ...,
         description="Deployment folder name under deployments/, e.g. 'v1'.",
     )
+    missing_ok: bool = Field(
+        default=False,
+        description=(
+            "For assistant-scoped targets, skip deploy-time reconciliation when "
+            "the referenced assistant no longer exists. Required targets keep "
+            "the default false value and fail loudly on missing assistant rows."
+        ),
+    )
 
 
 class DeploymentMapping(BaseModel):

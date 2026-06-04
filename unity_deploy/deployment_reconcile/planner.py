@@ -53,6 +53,7 @@ def _control_plane_revision(operations: Iterable[Any]) -> str:
             "action": op.action,
             "path": op.path,
             "payload": op.payload,
+            "missing_ok": op.missing_ok,
         }
         for op in operations
     ]
@@ -129,6 +130,7 @@ def build_deployment_target_plans(
                     deployment=target.deployment,
                     assistant_id=target_assistant_id,
                     resolved=resolved,
+                    missing_ok=target.missing_ok,
                     control_plane_operations=control_ops,
                     runtime_revision=runtime_revision,
                     control_plane_revision=_control_plane_revision(control_ops),

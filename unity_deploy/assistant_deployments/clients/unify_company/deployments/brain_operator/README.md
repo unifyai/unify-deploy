@@ -62,7 +62,7 @@ and ships a generated scenario YAML).  Activation behaviour:
 
 | Env var | Effect |
 |---|---|
-| `BRAIN_OPERATOR_ASSISTANT_ID` (required) | Stamped into every `tasks[*].target.assistant_id` at materialisation time.  When unset, no scenario is activated. |
+| `BRAIN_OPERATOR_ASSISTANT_ID` (optional) | Stamped into every `tasks[*].target.assistant_id` at materialisation time.  When unset, no scenario is activated.  When set to a missing assistant id, deploy-time reconcile skips the optional target with a warning. |
 | `BRAIN_OPERATOR_TASKS_ENABLED` (optional, default `false`) | When `true`, materialised rows ship enabled.  When `false`, rows ship disabled and the operator flips them after seeding. |
 
 The deploy-reconcile control plane materialises rows on every push (no

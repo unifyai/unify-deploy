@@ -333,19 +333,11 @@ substitutions:
   # the unify org on staging; tasks_enabled=true ships the brain_jobs scenario
   # rows enabled.
   #
-  # Safe to ship enabled on a never-seeded assistant: the control-plane
-  # reconcile now *defers* (logged no-op) any scenario task whose activation
-  # ids are not seeded yet, instead of hard-failing the build. The runtime
-  # plane (materialize_runtime_state) seeds the tasks + functions in the woken
-  # assistant's own context, and the activation converges from there. See
-  # control_plane._scenario_task_activation_action and brain's
-  # .cursor/rules/brain-operator-activation.mdc.
-  # Temporarily blank — staging assistant id (was 2098) no longer exists
-  # in the staging Orchestra DB and 404'd the reconcile.  Empty => the
-  # reconcile job passes no id, brain_operator_assistant_id() returns None,
-  # and no scenario is activated (safe no-op).  Restore here AND in
-  # _brain_operator.py (_ASSISTANT_IDS["staging"]) together once confirmed.
-  _BRAIN_OPERATOR_ASSISTANT_ID: ''
+  # The brain_operator assistant target is optional: if this staging id is
+  # missing, deploy-time reconcile skips it with a warning. If the assistant
+  # exists but has not seeded its scenario rows yet, control-plane task
+  # activation defers to the runtime plane and converges after wake.
+  _BRAIN_OPERATOR_ASSISTANT_ID: '2098'
   _BRAIN_OPERATOR_TASKS_ENABLED: 'true'
 
 availableSecrets:

@@ -55,6 +55,7 @@ def _targets() -> list[DeploymentTarget]:
                 scope="assistant",
                 scope_id=assistant_id,
                 deployment="brain_operator",
+                missing_ok=True,
             ),
         )
     org_id = unify_company_org_id()

@@ -15,6 +15,10 @@ from unity_deploy.deployment_reconcile.types import (
 _RUNTIME_STATE_LOCK = threading.Lock()
 
 
+class AssistantNotFoundError(RuntimeError):
+    """Raised when an assistant-scoped deployment target no longer exists."""
+
+
 def _resolve_runtime_identity(item: DeploymentWorkItem):
     """Resolve explicit assistant identity for runtime repair/prewarm runs."""
 
@@ -85,11 +89,13 @@ def _fetch_assistant_info(assistant_id: str) -> dict[str, Any]:
         headers={"Authorization": f"Bearer {admin_key}"},
         timeout=30.0,
     )
+    if response.status_code == 404:
+        raise AssistantNotFoundError(f"No assistant found for agent_id={assistant_id}")
     response.raise_for_status()
     body = response.json()
     assistants = body.get("info") if isinstance(body, dict) else None
     if not isinstance(assistants, list) or not assistants:
-        raise RuntimeError(f"No assistant found for agent_id={assistant_id}")
+        raise AssistantNotFoundError(f"No assistant found for agent_id={assistant_id}")
     if not isinstance(assistants[0], dict):
         raise RuntimeError(f"Unexpected assistant payload for {assistant_id}")
     return assistants[0]
@@ -108,7 +114,15 @@ def apply_work_item(item: DeploymentWorkItem) -> DeploymentWorkResult:
                     status="skipped-current",
                     message="no control-plane operations",
                 )
-            apply_operations(list(item.target.control_plane_operations))
+            responses = apply_operations(list(item.target.control_plane_operations))
+            if responses and all(
+                response.get("status") == "skipped-missing" for response in responses
+            ):
+                return DeploymentWorkResult(
+                    item=item,
+                    status="skipped-missing",
+                    message="assistant target is missing",
+                )
             return DeploymentWorkResult(
                 item=item,
                 status="applied",
@@ -135,6 +149,18 @@ def apply_work_item(item: DeploymentWorkItem) -> DeploymentWorkResult:
                 f"seed_changed={result.seed_changed} "
                 f"custom_changed={result.custom_changed}"
             ),
+        )
+    except AssistantNotFoundError as exc:
+        if item.target.missing_ok:
+            return DeploymentWorkResult(
+                item=item,
+                status="skipped-missing",
+                message=str(exc),
+            )
+        return DeploymentWorkResult(
+            item=item,
+            status="failed",
+            error=str(exc),
         )
     except Exception as exc:
         return DeploymentWorkResult(

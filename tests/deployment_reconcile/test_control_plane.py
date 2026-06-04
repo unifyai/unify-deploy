@@ -309,3 +309,80 @@ def test_apply_operations_defers_unseeded_task_activation(monkeypatch):
             "reason": "activation ids not seeded yet",
         },
     ]
+
+
+def test_apply_operations_skips_missing_optional_assistant(monkeypatch):
+    from unity_deploy.utils import orchestra_client
+
+    def missing_assistant(*args, **kwargs):
+        raise orchestra_client.OrchestraClientError(404, "not found")
+
+    def communication_not_called(*args, **kwargs):
+        raise AssertionError("missing optional assistant must suppress later writes")
+
+    monkeypatch.setattr(orchestra_client, "patch_json", missing_assistant)
+    monkeypatch.setattr(reconcile, "_post_communication_json", communication_not_called)
+
+    operations = [
+        reconcile.ReconcileOperation(
+            client_name="unify_company",
+            assistant_id="2098",
+            deployment="brain_operator",
+            field="console_config",
+            action="clear",
+            path="/admin/assistant/2098",
+            payload={"console_config": None},
+            missing_ok=True,
+        ),
+        reconcile.ReconcileOperation(
+            client_name="unify_company",
+            assistant_id="2098",
+            deployment="brain_operator",
+            field="task_activation",
+            action="upsert",
+            path="/infra/task-activation/upsert",
+            payload={"task_id": 1},
+            service="communication",
+            method="post",
+            missing_ok=True,
+        ),
+    ]
+
+    responses = reconcile.apply_operations(operations)
+
+    assert responses == [
+        {
+            "status": "skipped-missing",
+            "assistant_id": "2098",
+            "field": "console_config",
+            "reason": "assistant target 2098 not found",
+        },
+        {
+            "status": "skipped-missing",
+            "assistant_id": "2098",
+            "field": "task_activation",
+            "reason": "assistant target is missing",
+        },
+    ]
+
+
+def test_apply_operations_keeps_missing_required_assistant_fatal(monkeypatch):
+    from unity_deploy.utils import orchestra_client
+
+    def missing_assistant(*args, **kwargs):
+        raise orchestra_client.OrchestraClientError(404, "not found")
+
+    monkeypatch.setattr(orchestra_client, "patch_json", missing_assistant)
+
+    operation = reconcile.ReconcileOperation(
+        client_name="client_alpha",
+        assistant_id="1851",
+        deployment="v2",
+        field="console_config",
+        action="upsert",
+        path="/admin/assistant/1851",
+        payload={"console_config": {"version": "1"}},
+    )
+
+    with pytest.raises(orchestra_client.OrchestraClientError):
+        reconcile.apply_operations([operation])
