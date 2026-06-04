@@ -148,6 +148,10 @@ def test_offline_dispatch_retries_failed_terminal_run():
             return_value=_activation(),
         ),
         patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value=_assistant_data(),
+        ),
+        patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
             return_value={
                 "run": {
@@ -188,6 +192,235 @@ def test_offline_dispatch_retries_failed_terminal_run():
     assert update_kwargs["updates"]["error"] is None
 
 
+def test_offline_dispatch_retries_stale_inflight_run():
+    """In-flight run rows with missing jobs should be failed before retry."""
+
+    client = _client()
+
+    with (
+        patch(
+            "communication.infra.task_activation._lookup_current_task_activation",
+            return_value=_activation(),
+        ),
+        patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value=_assistant_data(),
+        ),
+        patch(
+            "communication.infra.task_activation._create_or_adopt_task_run",
+            return_value={
+                "run": {
+                    "state": "running",
+                    "run_key": "offline:scheduled:assistant-123:101:rev-123",
+                    "job_name": "unity-offline-missing",
+                },
+                "created": False,
+            },
+        ) as mock_create_run,
+        patch(
+            "communication.infra.task_activation._get_k8s_clients",
+            return_value=("batch-api", None, None, None),
+        ),
+        patch(
+            "communication.infra.task_activation._classify_offline_job_status",
+            return_value={"status": "missing", "job_name": "unity-offline-missing"},
+        ),
+        patch(
+            "communication.infra.task_activation._launch_offline_task_job",
+            return_value=("unity-offline-retry", True),
+        ) as mock_launch,
+        patch(
+            "communication.infra.task_activation._update_task_run",
+        ) as mock_update_run,
+    ):
+        response = client.post(
+            "/infra/task-activation/offline-dispatch",
+            json=_payload(),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "launched"
+    run_key = mock_create_run.call_args.args[0]["run_key"]
+    assert response.json()["run_key"] == run_key
+    assert mock_launch.call_args.kwargs["job_name_seed"].endswith(":retry:1")
+    assert mock_update_run.call_count == 2
+    failed_update = mock_update_run.call_args_list[0].kwargs["updates"]
+    assert failed_update["state"] == "failed"
+    assert "lost live execution evidence" in failed_update["error"]
+    running_update = mock_update_run.call_args_list[1].kwargs["updates"]
+    assert running_update["state"] == "running"
+    assert running_update["job_name"] == "unity-offline-retry"
+    assert running_update["retry_count"] == 1
+
+
+def test_diagnose_classifies_missing_job_run_as_stale():
+    """Diagnosis should report repairable stale runs when their job is gone."""
+
+    client = _client()
+    diagnostic = {
+        "success": True,
+        "assistant_id": "assistant-123",
+        "task_id": 101,
+        "activation": _activation(
+            next_due_at="2026-04-10T09:00:00+00:00",
+        ),
+        "materialization": {"cloud_task_status": "missing"},
+        "queues": {},
+        "latest_run": {
+            "run_key": "offline:scheduled:assistant-123:101:rev-123",
+            "state": "running",
+            "execution_mode": "offline",
+            "job_name": "unity-offline-missing",
+            "source_task_log_id": 555,
+            "activation_revision": "rev-123",
+            "scheduled_for": "2026-04-10T09:00:00+00:00",
+        },
+        "health": {"status": "fired_inflight", "repairable": False},
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation._activation_materialization_diagnostic",
+            return_value=diagnostic,
+        ),
+        patch(
+            "communication.infra.task_activation._get_k8s_clients",
+            return_value=("batch-api", None, None, None),
+        ),
+        patch(
+            "communication.infra.task_activation._classify_offline_job_status",
+            return_value={"status": "missing", "job_name": "unity-offline-missing"},
+        ),
+    ):
+        response = client.post(
+            "/infra/task-activation/diagnose",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["latest_run_job"]["status"] == "missing"
+    assert body["health"]["status"] == "stale_running_run"
+    assert body["health"]["repairable"] is True
+    assert body["blocking_conditions"][0]["type"] == "stale_running_run"
+
+
+def test_task_activation_health_summarizes_blocking_conditions():
+    """Health endpoint should return alertable lifecycle counters."""
+
+    client = _client()
+    diagnostic = {
+        "success": True,
+        "assistant_id": "assistant-123",
+        "task_id": 101,
+        "activation": _activation(),
+        "materialization": {"cloud_task_status": "missing"},
+        "queues": {},
+        "latest_run": {"state": "running"},
+        "health": {"status": "stale_running_run", "repairable": True},
+        "blocking_conditions": [{"type": "stale_running_run"}],
+    }
+
+    with patch(
+        "communication.infra.task_activation.diagnose_task_activation",
+        new=AsyncMock(return_value=diagnostic),
+    ):
+        response = client.post(
+            "/infra/task-activation/health",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+            },
+        )
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["total"] == 1
+    assert summary["repairable"] == 1
+    assert summary["statuses"] == {"stale_running_run": 1}
+    assert summary["blocking_conditions"] == {"stale_running_run": 1}
+    assert summary["job_lifecycle_safeguards"]["backoff_limit"] == 0
+    assert summary["job_lifecycle_safeguards"]["active_deadline_seconds"] > 0
+    assert summary["job_lifecycle_safeguards"]["ttl_seconds_after_finished"] > 0
+
+
+def test_reconcile_current_repairs_only_repairable_diagnostics():
+    """Reconcile should call repair-current only for deterministic stale states."""
+
+    client = _client()
+    diagnostic = {
+        "success": True,
+        "activation": _activation(),
+        "health": {"status": "stale_running_run", "repairable": True},
+        "blocking_conditions": [{"type": "stale_running_run"}],
+    }
+    repair = {"success": True, "status": "retry_dispatched"}
+
+    with (
+        patch(
+            "communication.infra.task_activation.diagnose_task_activation",
+            new=AsyncMock(return_value=diagnostic),
+        ),
+        patch(
+            "communication.infra.task_activation.repair_current_task_activation",
+            new=AsyncMock(return_value=repair),
+        ) as mock_repair,
+    ):
+        response = client.post(
+            "/infra/task-activation/reconcile-current",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "reconciled"
+    assert response.json()["repair"] == repair
+    assert mock_repair.await_count == 1
+
+
+def test_reconcile_current_noops_non_repairable_diagnostics():
+    """Reconcile should not mutate healthy or ambiguous activation states."""
+
+    client = _client()
+    diagnostic = {
+        "success": True,
+        "activation": _activation(),
+        "health": {"status": "armed_future", "repairable": False},
+    }
+
+    with (
+        patch(
+            "communication.infra.task_activation.diagnose_task_activation",
+            new=AsyncMock(return_value=diagnostic),
+        ),
+        patch(
+            "communication.infra.task_activation.repair_current_task_activation",
+            new=AsyncMock(),
+        ) as mock_repair,
+    ):
+        response = client.post(
+            "/infra/task-activation/reconcile-current",
+            json={
+                "assistant_id": "assistant-123",
+                "task_id": 101,
+                "source_task_log_id": 555,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "noop"
+    assert response.json()["reason"] == "armed_future"
+    assert mock_repair.await_count == 0
+
+
 def test_offline_dispatch_adopts_completed_terminal_run():
     """Completed runs should remain terminal and should not relaunch."""
 
@@ -197,6 +430,10 @@ def test_offline_dispatch_adopts_completed_terminal_run():
         patch(
             "communication.infra.task_activation._lookup_current_task_activation",
             return_value=_activation(),
+        ),
+        patch(
+            "communication.infra.task_activation._get_assistant_data",
+            return_value=_assistant_data(),
         ),
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
@@ -346,7 +583,7 @@ def test_offline_runner_env_carries_agentic_execution_without_function_id():
     env = task_activation._build_offline_runner_env(
         request=task_activation.OfflineTaskDispatchRequest(**_payload()),
         activation=_activation(entrypoint=None),
-        assistant_data={"assistant_id": "assistant-123", "api_key": "key"},
+        assistant_data=_assistant_data(api_key="key"),
         run_key="offline:scheduled:assistant-123:101:rev:once",
         job_name="unity-offline-abc",
     )
@@ -364,7 +601,7 @@ def test_offline_runner_env_carries_symbolic_function_id():
     env = task_activation._build_offline_runner_env(
         request=task_activation.OfflineTaskDispatchRequest(**_payload()),
         activation=_activation(entrypoint=777),
-        assistant_data={"assistant_id": "assistant-123", "api_key": "key"},
+        assistant_data=_assistant_data(api_key="key"),
         run_key="offline:scheduled:assistant-123:101:rev:once",
         job_name="unity-offline-abc",
     )
@@ -460,16 +697,12 @@ def test_offline_runner_env_marks_assistant_as_non_coordinator():
     env = task_activation._build_offline_runner_env(
         request=request,
         activation=_activation(),
-        assistant_data={
-            "assistant_id": "assistant-123",
-            "api_key": "test-api-key",
-            "is_coordinator": True,
-        },
+        assistant_data=_assistant_data(api_key="test-api-key", is_coordinator=True),
         run_key="offline:scheduled:assistant-123:101",
         job_name="unity-offline-abc",
     )
 
-    assert env["ASSISTANT_IS_COORDINATOR"] == "False"
+    assert "ASSISTANT_IS_COORDINATOR" not in env
 
 
 def test_offline_run_key_uses_canonical_trigger_provenance_shape():
