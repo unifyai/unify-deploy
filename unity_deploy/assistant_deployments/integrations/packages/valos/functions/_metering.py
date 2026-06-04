@@ -37,6 +37,7 @@ PROVIDER_OS_TILES = "os_tiles"
 PROVIDER_OS_NAMES_PLACES = "os_names_places"
 PROVIDER_PROPERTYDATA = "propertydata"
 PROVIDER_NOMINATIM = "nominatim"
+PROVIDER_CQC = "cqc"
 
 _DEFAULT_DAILY_LIMITS: dict[str, int] = {
     PROVIDER_OS_TILES: 5000,
@@ -46,6 +47,11 @@ _DEFAULT_DAILY_LIMITS: dict[str, int] = {
     # ceiling here protects against runaway-loop bursts and signals
     # politeness to the OSM operations team.
     PROVIDER_NOMINATIM: 2000,
+    # CQC Syndication is unbilled but allows 2000 req/min with a
+    # partnerCode.  A catchment resolution fans out across authority
+    # listings + per-location detail calls, so the daily ceiling is
+    # generous; it exists only to cap a runaway loop.
+    PROVIDER_CQC: 10000,
 }
 
 

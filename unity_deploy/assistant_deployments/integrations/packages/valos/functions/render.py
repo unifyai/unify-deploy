@@ -1,4 +1,4 @@
-"""OS map rendering primitives — three @custom_function-decorated tools.
+"""OS map rendering primitives — four @custom_function-decorated tools.
 
 * ``valos_render_os_map`` — render a chosen OS layer for a geometry,
   optionally overlaying a boundary polygon.  The base building block.
@@ -6,8 +6,10 @@
   layer + thick boundary outline + north arrow + scale bar.
 * ``valos_render_competitor_map`` — outdoor layer + numbered pins for
   nearby competitors (e.g. care homes from Carterwood data).
+* ``valos_render_catchment_map`` — outdoor layer + a single labelled
+  catchment circle of a chosen radius + a subject marker.
 
-All three return ``{"output_path": "...", "bbox": {...}, "layer": "...",
+All return ``{"output_path": "...", "bbox": {...}, "layer": "...",
 "projection": "...", "tile_count": N}`` on success.  PNGs are written
 to the supplied filesystem path so ``ImageManager`` can resolve them
 later via ``filter_images(filter="filepath == ...")``.
@@ -232,4 +234,90 @@ async def valos_render_competitor_map(
         bbox_in_crs=result["bbox"],
     )
     result["pins_drawn"] = drawn
+    return result
+
+
+@custom_function()
+async def valos_render_catchment_map(
+    centre: list,
+    radius_km: float,
+    output_path: str,
+    projection: str = "EPSG:27700",
+    zoom: int = 7,
+    circle_colour: str = "#1f4eb4",
+    circle_width: int = 3,
+    subject_marker: bool = True,
+) -> dict:
+    """Render an OS map with a single labelled catchment circle.
+
+    Draws exactly one ring at ``radius_km`` around ``centre``.  The same
+    circle geometry both sets the rendered extent and is drawn on the
+    tiles, so the output can never contain a stray second circle — pass
+    one radius and get one ring.
+
+    Parameters
+    ----------
+    centre : list[float]
+        ``[lon, lat]`` of the subject property (WGS84).
+    radius_km : float
+        Catchment radius in kilometres (e.g. 4.83 for a 3-mile catchment).
+    output_path : str
+        Where to write the PNG.
+    projection : str, optional
+        ``"EPSG:27700"`` (default) or ``"EPSG:3857"``.
+    zoom : int, optional
+        Tile-matrix level.  Defaults to 7 (catchment-area scale).
+    circle_colour : str, optional
+        Hex colour for the catchment ring.  Defaults to ``"#1f4eb4"``.
+    circle_width : int, optional
+        Ring thickness in pixels.  Defaults to 3.
+    subject_marker : bool, optional
+        Draw a marker at ``centre``.  Defaults to True.
+
+    Returns
+    -------
+    dict
+        Same shape as :func:`valos_render_os_map`.
+    """
+    from unity_deploy.assistant_deployments.integrations.packages.valos.functions._render_helpers import (
+        _DEFAULT_LAYERS,
+        _add_decorations,
+        _circle_ring_wgs84,
+        _draw_pins_on_image,
+        _render_os_map_impl,
+    )
+
+    lon, lat = centre[0], centre[1]
+    circle = _circle_ring_wgs84(lon, lat, radius_km)
+
+    result = await _render_os_map_impl(
+        geometry=circle,
+        output_path=output_path,
+        layer=_DEFAULT_LAYERS[projection],
+        projection=projection,
+        zoom=zoom,
+        boundary_polygon=circle,
+        boundary_colour=circle_colour,
+        boundary_width=circle_width,
+    )
+    if "error" in result:
+        return result
+
+    if subject_marker:
+        _draw_pins_on_image(
+            output_path,
+            pins=[{"label": "S", "lon": lon, "lat": lat}],
+            projection=projection,
+            zoom=zoom,
+            bbox_in_crs=result["bbox"],
+        )
+
+    _add_decorations(
+        output_path,
+        projection=projection,
+        zoom=zoom,
+        north_arrow=True,
+        scale_bar=True,
+    )
+    result["radius_km"] = radius_km
     return result

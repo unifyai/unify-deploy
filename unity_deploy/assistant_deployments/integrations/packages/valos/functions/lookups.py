@@ -1,6 +1,6 @@
 """Typed data-lookup primitives for the Valos UK property data package.
 
-Four registered tools the actor uses to assemble the structured-data
+Five registered tools the actor uses to assemble the structured-data
 half of a Valos-equivalent valuation report:
 
 * ``valos_geocode`` — address/postcode -> coords (+ UPRN where the OS
@@ -14,10 +14,15 @@ half of a Valos-equivalent valuation report:
   boundary + plot size + ownership type (PropertyData).
 * ``valos_postcode_demographics`` — postcode + radius -> ONS census +
   IMD summary.
+* ``valos_find_care_homes`` — coordinates + radius -> CQC-registered
+  care homes inside the catchment, with authoritative coordinates,
+  rating, and bed count; optionally fuzzy-matches a list of names
+  (e.g. a Carterwood competition list) against the radius-bounded set.
 
 The map-rendering primitives live in ``render.py``; private helpers
 are in the underscore-prefixed sibling modules (``_os_client``,
-``_propertydata_client``, ``_geocode_fallbacks``, ``_lookups_helpers``).
+``_propertydata_client``, ``_geocode_fallbacks``, ``_lookups_helpers``,
+``_cqc_client``).
 """
 
 from __future__ import annotations
@@ -338,3 +343,88 @@ async def valos_postcode_demographics(
         "imd_decile": None,
         "wealth_indicator": None,
     }
+
+
+@custom_function()
+async def valos_find_care_homes(
+    lat: float,
+    lon: float,
+    radius_km: float = 4.83,
+    names: list[str] | None = None,
+) -> dict:
+    """Find CQC-registered care homes within a radius, with authoritative coordinates.
+
+    Backed by the Care Quality Commission (CQC) Syndication API — the
+    register of record for every regulated care home in England.  Needs
+    no API key.  This is the correct way to place competitor pins and
+    fill the CQC-rating column on a care-home valuation report, because
+    a source like Carterwood lists competitor *names only* (no postcode
+    or address), and geocoding a bare care-home name through a general
+    geocoder is both incomplete and prone to matching an unrelated
+    building of the same name elsewhere in the country.
+
+    The candidate set is restricted to care homes whose registered
+    location falls **inside the catchment circle**, so matching a name
+    against it cannot return a wrong-entity hit from outside the area —
+    the radius is the geographic guard.
+
+    Parameters
+    ----------
+    lat, lon : float
+        WGS84 coordinates of the subject property (e.g. the postcode
+        centroid from ``valos_geocode``).
+    radius_km : float, optional
+        Catchment radius in kilometres.  Defaults to 4.83 (3 miles), the
+        conventional care-home catchment.
+    names : list[str], optional
+        Competitor names to fuzzy-match against the catchment set (e.g.
+        the existing-care-home column from a Carterwood export).  When
+        supplied, the result carries a ``matches`` map (input name ->
+        best CQC match with coordinates, rating, beds, and a confidence
+        score) and an ``unmatched`` list.
+
+    Returns
+    -------
+    dict
+        On success::
+
+            {
+                "centre": {"lat": ..., "lon": ...},
+                "radius_km": 4.83,
+                "authorities_searched": ["South Cambridgeshire", ...],
+                "care_home_count": 14,
+                "care_homes": [
+                    {
+                        "name": "Bramley Court",
+                        "postcode": "CB24 ...",
+                        "lat": ..., "lon": ...,
+                        "distance_km": 1.14,
+                        "cqc_location_id": "1-...",
+                        "cqc_rating": "Good",
+                        "beds": 72,
+                    },
+                    ...  # sorted by distance, nearest first
+                ],
+                "attribution": "Contains public sector information ...",
+                # present only when ``names`` was supplied:
+                "matches": {"Bramley Court": {"matched_name", "lat", "lon",
+                            "distance_km", "confidence", "cqc_rating",
+                            "beds", "cqc_location_id"}, ...},
+                "unmatched": ["..."],
+            }
+
+        On failure: ``{"error", ...}``.
+
+    Notes
+    -----
+    CQC data is published under the Open Government Licence v3.0.  Any
+    deliverable that surfaces it should carry the attribution string
+    returned in the payload.  ``cqc_rating`` / ``beds`` are independent
+    of any market-data provider and can be used to cross-check a
+    Carterwood competition list.
+    """
+    from unity_deploy.assistant_deployments.integrations.packages.valos.functions._cqc_client import (
+        find_care_homes_near,
+    )
+
+    return await find_care_homes_near(lat, lon, radius_km, names=names)

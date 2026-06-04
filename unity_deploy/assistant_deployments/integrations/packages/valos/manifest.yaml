@@ -1,27 +1,32 @@
 name: Valos
 slug: valos
-version: "0.4.0"
+version: "0.5.0"
 sector: real-estate
 tier: api
 quality: bronze
 description: >
   UK property valuation data layer.  Wraps the Ordnance Survey Data Hub
   (OS Maps API for raster tiles, plus optional OS Names / OS Places for
-  building-level geocoding on Premium plans) and PropertyData (Land
-  Registry freeholds, INSPIRE polygon geometry, title information) and
-  exposes them to the actor as typed primitives covering address
-  resolution, freehold title lookup, polygon retrieval, demographic
-  context, and OS-tiled map rendering.  ``valos_geocode`` composes a
+  building-level geocoding on Premium plans), PropertyData (Land
+  Registry freeholds, INSPIRE polygon geometry, title information), and
+  the CQC Syndication register (authoritative care-home locations,
+  ratings, and bed counts) and exposes them to the actor as typed
+  primitives covering address resolution, freehold title lookup,
+  polygon retrieval, demographic context, care-home catchment
+  resolution, and OS-tiled map rendering.  ``valos_geocode`` composes a
   four-step fallback chain (postcodes.io → OS Places → OS Names →
   Nominatim) so a Standard-tier OS project that only has OS Maps still
-  resolves both postcodes and free-text addresses.  Replaces the
-  placeholder pass-through to api.valos.ai.  Opt-in via two equivalent
-  activation paths: deploy-time wiring through the ``integrations=[...]``
-  argument on ``BASE_SPEC.derive(...)`` (typically with Unify-owned
-  shared credentials), or per-assistant Console paste through the
-  ``valos`` entry in ``INTEGRATION_PROVIDERS`` (for one-off testing or
-  BYO-keys clients).  Either path lands the same two secrets in the
-  assistant's ``/Secrets`` context.
+  resolves both postcodes and free-text addresses; ``valos_find_care_homes``
+  resolves competitor care homes by CQC registration (name-only market
+  lists carry no address), placing pins authoritatively inside the
+  catchment.  Replaces the placeholder pass-through to api.valos.ai.
+  Opt-in via two equivalent activation paths: deploy-time wiring through
+  the ``integrations=[...]`` argument on ``BASE_SPEC.derive(...)``
+  (typically with Unify-owned shared credentials), or per-assistant
+  Console paste through the ``valos`` entry in ``INTEGRATION_PROVIDERS``
+  (for one-off testing or BYO-keys clients).  Either path lands the same
+  two secrets in the assistant's ``/Secrets`` context; the CQC and
+  postcodes.io paths need no key.
 homepage: https://osdatahub.os.uk
 
 secrets:
@@ -85,6 +90,15 @@ capabilities:
     APIs.  Closes the demographics gap to Carterwood for non-care-
     home-specific context.
   functions: [valos_postcode_demographics]
+- id: valos_care_homes
+  name: Care-home catchment resolution
+  description: >
+    List CQC-registered care homes within a radius of a point, with
+    authoritative coordinates, rating, and bed count, and optionally
+    fuzzy-match a list of competitor names (e.g. a Carterwood
+    competition list) against the radius-bounded set.  No API key — the
+    CQC Syndication register is keyless (Open Government Licence v3.0).
+  functions: [valos_find_care_homes]
 - id: valos_render
   name: OS map rendering
   description: >
@@ -98,6 +112,7 @@ capabilities:
   - valos_render_os_map
   - valos_render_location_plan
   - valos_render_competitor_map
+  - valos_render_catchment_map
 
 requirements:
 - httpx
@@ -114,4 +129,6 @@ tags:
 - land-registry
 - propertydata
 - ons
+- cqc
+- care-home
 - rics

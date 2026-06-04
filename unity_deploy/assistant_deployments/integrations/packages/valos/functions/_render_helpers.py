@@ -101,6 +101,38 @@ def _bbox_from_geometry(geometry: dict) -> dict:
     return {"error": f"Unsupported geometry type '{geometry['type']}'."}
 
 
+def _circle_ring_wgs84(
+    lon: float,
+    lat: float,
+    radius_km: float,
+    *,
+    segments: int = 128,
+) -> dict:
+    """Build a GeoJSON polygon approximating a circle of ``radius_km``.
+
+    Used by the catchment renderer.  The ring doubles as the geometry
+    whose bbox sets the render extent *and* the boundary polygon drawn
+    on the tiles — so exactly one circle is ever produced, sized to the
+    requested radius.  Equirectangular offset is accurate to well under
+    a pixel at care-home catchment scale (a few km).
+    """
+    radius_m = radius_km * 1000.0
+    lat_r = math.radians(lat)
+    metres_per_deg_lon = 111_320.0 * max(0.1, math.cos(lat_r))
+    ring: list[list[float]] = []
+    for i in range(segments + 1):
+        angle = 2 * math.pi * i / segments
+        dx = radius_m * math.cos(angle)
+        dy = radius_m * math.sin(angle)
+        ring.append(
+            [
+                lon + dx / metres_per_deg_lon,
+                lat + dy / 111_320.0,
+            ],
+        )
+    return {"type": "Polygon", "coordinates": [ring]}
+
+
 def _reproject_bbox(bbox: dict, src_crs: str, dst_crs: str) -> dict:
     """Reproject a bbox from src_crs to dst_crs via pyproj."""
     if src_crs == dst_crs:
