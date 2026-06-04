@@ -144,7 +144,8 @@ steps:
       "$${TRAFFIC_ARGS[@]}" \
       --quiet
     }
-    run_cloud_run_with_retry repair_traffic_state
+    run_cloud_run_with_retry repair_traffic_state \
+      || echo "Traffic repair skipped; deploy will create a fresh revision"
   waitFor: ['push-sha-tag', 'push-latest-tag', 'pause-legacy-infra-schedulers']
 
   # Deploy to Cloud Run
