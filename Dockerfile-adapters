@@ -1,18 +1,29 @@
 FROM python:3.12-slim
 
+ARG GITHUB_TOKEN
+ARG BRANCH_NAME=main
+ARG UNITY_SHA=unknown
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy package metadata and source before install so the runtime package in
-# site-packages matches the application code.
+RUN git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+RUN echo "UNITY_SHA=${UNITY_SHA}" && \
+    DEP_BRANCH=$([ "$BRANCH_NAME" = "main" ] && echo "main" || echo "staging") && \
+    git clone -b ${DEP_BRANCH} https://github.com/unifyai/unity.git /tmp/unity && \
+    pip install --no-cache-dir --no-deps /tmp/unity && \
+    pip install --no-cache-dir -r /tmp/unity/requirements-gateway.txt
+
 COPY pyproject.toml README.md ./
-COPY adapters/ adapters/
+COPY communication/ communication/
 COPY common/ common/
 
-# Install dependencies + the local adapters/common packages.
-RUN pip install --no-cache-dir ".[adapters]"
+RUN pip install --no-cache-dir ".[comms]"
 
 EXPOSE 8080
 
-# Run with uvicorn for production
-# Using multiple workers for better concurrency handling
-CMD ["uvicorn", "adapters.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
+CMD ["uvicorn", "communication.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]

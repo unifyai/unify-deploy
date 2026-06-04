@@ -2,7 +2,7 @@
 Unit tests for the /infra/pubsub/topic create and delete endpoints.
 
 These tests verify:
-- All three subscriptions are created with correct filters
+- All four subscriptions are created with correct filters
 - The actions subscription has 30-minute message retention
 - The actions subscription has message ordering enabled
 - The "already exists" path updates existing subscriptions and creates the
@@ -93,6 +93,16 @@ def _setup_pubsub_mocks(mock_publisher_class, mock_subscriber_class, mock_creds)
     return publisher, subscriber, captured_requests
 
 
+def _request_for_subscription(captured_requests: list[dict], subscription: str) -> dict:
+    matches = [
+        request
+        for request in captured_requests
+        if str(request["name"]).split("/")[-1] == subscription
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
 # =========================================================================
 # CREATE — fresh assistant (no subscriptions exist yet)
 # =========================================================================
@@ -147,7 +157,7 @@ class TestCreatePubSubTopic:
 
         client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
 
-        req = captured[0]
+        req = _request_for_subscription(captured, "unity-test-staging-sub")
         assert req["filter"] == 'attributes.thread = "inbound"'
         assert req["name"].endswith("-sub")
         assert not req["name"].endswith("-outbound-sub")
@@ -172,7 +182,7 @@ class TestCreatePubSubTopic:
 
         client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
 
-        req = captured[1]
+        req = _request_for_subscription(captured, "unity-test-staging-outbound-sub")
         assert req["filter"] == 'attributes.thread = "unify_message_outbound"'
         assert req["name"].endswith("-outbound-sub")
 
@@ -196,7 +206,7 @@ class TestCreatePubSubTopic:
 
         client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
 
-        req = captured[2]
+        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
         assert req["filter"] == 'attributes.thread = "action_event"'
         assert req["name"].endswith("-actions-sub")
 
@@ -221,7 +231,7 @@ class TestCreatePubSubTopic:
 
         client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
 
-        req = captured[2]
+        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
         assert req.get("enable_message_ordering") is True
 
     @patch("communication.infra.views.Credentials.from_service_account_info")
@@ -244,7 +254,7 @@ class TestCreatePubSubTopic:
 
         client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
 
-        req = captured[2]
+        req = _request_for_subscription(captured, "unity-test-staging-actions-sub")
         retention = req["message_retention_duration"]
         assert (
             retention.seconds == 1800
@@ -270,7 +280,7 @@ class TestCreatePubSubTopic:
 
         client.post("/infra/pubsub/topic", data={"topic_name": "unity-test-staging"})
 
-        req = captured[3]
+        req = _request_for_subscription(captured, "unity-test-staging-system-error-sub")
         assert req["filter"] == 'attributes.thread = "system_error"'
         assert req["name"].endswith("-system-error-sub")
 

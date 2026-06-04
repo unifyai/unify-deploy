@@ -34,13 +34,17 @@ Auth wiring:
   underlying admin key value at runtime.
 """
 
+import json
 import logging
+from typing import Any
 
+import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends
 
 from common.metrics import setup_metrics
+from common.settings import SETTINGS
 from communication.dependencies import auth_admin_key
 from communication.infra.helpers import setup_kubernetes_client
 from communication.infra.views import (
@@ -50,12 +54,117 @@ from communication.infra.views import (
     vm_self_router,
 )
 from unity.gateway.app import ExtraRouter, create_app
+from unity.gateway.context import GatewayContext, default_public_url_provider
+from unity.gateway.credentials import EnvCredentialStore
+from unity.gateway.envelope_sink import (
+    OutboundTransportEnvelopeSink,
+    default_topic_suffix,
+)
+from unity.gateway.outbound_pubsub import PubSubOutboundTransport
+from unity.gateway.runtime import RuntimeActivation
+from unity.gateway.scheduler import LocalScheduler
+from unity.gateway.storage import LocalDiskStorage
 
 load_dotenv(override=True)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s", force=True)
 
 
 admin_auth = [Depends(auth_admin_key)]
+
+
+class CommunicationInfraRuntimeActivator:
+    """Activate hosted assistant sessions through Communication infra."""
+
+    def __init__(self, *, base_url: str, admin_key: str, timeout: float = 30.0) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._admin_key = admin_key
+        self._timeout = timeout
+
+    async def activate(
+        self,
+        assistant_id: str,
+        *,
+        reason: str,
+        medium: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> RuntimeActivation:
+        assistant = dict((metadata or {}).get("assistant") or {})
+        if not assistant:
+            return RuntimeActivation(
+                activated=False,
+                detail="missing-assistant-metadata",
+            )
+
+        payload = {
+            "api_key": assistant.get("api_key") or SETTINGS.shared_unify_key,
+            "medium": medium or reason,
+            "assistant_id": assistant_id,
+            "user_id": str(assistant.get("user_id") or ""),
+            "user_first_name": assistant.get("user_first_name") or "",
+            "user_surname": assistant.get("user_last_name") or "",
+            "user_email": assistant.get("user_email") or "",
+            "assistant_first_name": assistant.get("first_name") or "",
+            "assistant_surname": assistant.get("surname") or "",
+            "assistant_age": str(assistant.get("age") or ""),
+            "assistant_nationality": assistant.get("nationality") or "",
+            "assistant_about": assistant.get("about") or "",
+            "assistant_job_title": assistant.get("job_title") or "",
+            "assistant_timezone": assistant.get("timezone") or "UTC",
+            "user_number": assistant.get("user_phone") or "",
+            "assistant_number": assistant.get("phone_number") or "",
+            "assistant_email": assistant.get("email") or "",
+            "assistant_email_provider": assistant.get("email_provider")
+            or "google_workspace",
+            "user_whatsapp_number": assistant.get("user_whatsapp_number") or "",
+            "assistant_whatsapp_number": assistant.get("assistant_whatsapp_number")
+            or "",
+            "assistant_discord_bot_id": assistant.get("assistant_discord_bot_id") or "",
+            "voice_provider": assistant.get("voice_provider") or "",
+            "voice_id": assistant.get("voice_id") or "",
+            "desktop_mode": assistant.get("desktop_mode") or "none",
+            "desktop_url": assistant.get("desktop_url") or "",
+            "user_desktop_mode": assistant.get("user_desktop_mode") or "",
+            "user_desktop_filesys_sync": str(
+                assistant.get("user_desktop_filesys_sync") or False,
+            ).lower(),
+            "user_desktop_url": assistant.get("user_desktop_url") or "",
+            "is_coordinator": str(assistant.get("is_coordinator") or False).lower(),
+            "demo_id": assistant.get("demo_id") or "",
+            "team_ids": ",".join(str(v) for v in assistant.get("team_ids") or []),
+            "space_ids": ",".join(str(v) for v in assistant.get("space_ids") or []),
+            "space_summaries": json.dumps(assistant.get("space_summaries") or []),
+            "self_contact_id": assistant.get("self_contact_id") or 0,
+            "boss_contact_id": assistant.get("boss_contact_id") or 0,
+            "org_id": assistant.get("organization_id") or "",
+            "wake_reasons": json.dumps(
+                [{"reason": reason, "medium": medium, "metadata": metadata or {}}],
+            ),
+        }
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.post(
+                f"{self._base_url}/infra/job/start",
+                data=payload,
+                headers={"Authorization": f"Bearer {self._admin_key}"},
+            )
+        response.raise_for_status()
+        return RuntimeActivation(activated=True, detail=response.text)
+
+
+gateway_context = GatewayContext(
+    credentials=EnvCredentialStore(),
+    storage=LocalDiskStorage(),
+    envelope_sink=OutboundTransportEnvelopeSink(
+        PubSubOutboundTransport(project_id=SETTINGS.gcp_project_id),
+        project_env_suffix=default_topic_suffix(),
+    ),
+    runtime_activator=CommunicationInfraRuntimeActivator(
+        base_url=SETTINGS.comms_url,
+        admin_key=SETTINGS.orchestra_admin_key,
+    ),
+    public_url_provider=default_public_url_provider(),
+    scheduler=LocalScheduler(),
+)
 
 app = create_app(
     extra_routers=[
@@ -64,6 +173,7 @@ app = create_app(
         ExtraRouter(vm_self_router, prefix="/infra"),
     ],
     extra_setup_hooks=[setup_kubernetes_client, _get_pubsub_clients],
+    gateway_context=gateway_context,
 )
 setup_metrics(app, service_name="comms")
 
