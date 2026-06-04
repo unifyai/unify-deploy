@@ -24,6 +24,7 @@ from google.api_core.exceptions import (
     PermissionDenied as GcpPermissionDenied,
 )
 from google.protobuf import duration_pb2, timestamp_pb2
+from kubernetes.client.rest import ApiException
 
 from common.assistant_lookup import get_assistant
 from common.int_list_codec import encode_int_list_for_env
@@ -67,6 +68,7 @@ ORCHESTRA_TASK_ACTIVATION_REPROJECT_PATH = "/admin/task-activation/reproject"
 ORCHESTRA_TASK_RUN_CREATE_OR_ADOPT_PATH = "/admin/task-run/create-or-adopt"
 ORCHESTRA_TASK_RUN_LATEST_PATH = "/admin/task-run/latest"
 ORCHESTRA_TASK_RUN_UPDATE_PATH = "/admin/task-run/update"
+OFFLINE_TASK_JOB_BACKOFF_LIMIT = 0
 _TASK_ID_SAFE_RE = re.compile(r"[^a-z0-9-]+")
 _task_queues_ensured: set[str] = set()
 
@@ -579,6 +581,173 @@ def _running_task_run_updates(
     return updates
 
 
+def _failed_task_run_updates(
+    *,
+    error: str,
+    result_summary: str,
+    retry_count: int | None = None,
+    previous_error: str | None = None,
+) -> dict[str, Any]:
+    """Return the canonical terminal patch for a failed offline run."""
+
+    updates: dict[str, Any] = {
+        "state": "failed",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "error": error,
+        "result_summary": result_summary,
+    }
+    if retry_count is not None:
+        updates["retry_count"] = retry_count
+    if previous_error:
+        updates["previous_error"] = previous_error
+    return updates
+
+
+def _job_condition_status(job: Any, condition_type: str) -> bool:
+    """Return whether a Kubernetes Job exposes a true condition."""
+
+    for condition in getattr(getattr(job, "status", None), "conditions", None) or []:
+        if (
+            str(getattr(condition, "type", "") or "") == condition_type
+            and str(getattr(condition, "status", "") or "") == "True"
+        ):
+            return True
+    return False
+
+
+def _job_start_time(job: Any) -> datetime | None:
+    """Return the Kubernetes Job start time as an aware datetime."""
+
+    start_time = getattr(getattr(job, "status", None), "start_time", None)
+    if start_time is None:
+        start_time = getattr(getattr(job, "status", None), "startTime", None)
+    if isinstance(start_time, datetime):
+        return start_time.astimezone(timezone.utc)
+    if isinstance(start_time, str) and start_time:
+        return datetime.fromisoformat(start_time.replace("Z", "+00:00")).astimezone(
+            timezone.utc,
+        )
+    return None
+
+
+def _classify_offline_job_status(
+    batch_api: Any,
+    job_name: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Classify whether a stored offline job reference is still executable."""
+
+    try:
+        job = batch_api.read_namespaced_job(
+            name=job_name,
+            namespace=SETTINGS.default_namespace,
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            return {"status": "missing", "job_name": job_name}
+        return {
+            "status": "unknown",
+            "job_name": job_name,
+            "reason": f"kubernetes_api_error_{exc.status}",
+        }
+
+    status = getattr(job, "status", None)
+    spec = getattr(job, "spec", None)
+    active = int(getattr(status, "active", None) or 0)
+    succeeded = int(getattr(status, "succeeded", None) or 0)
+    failed = int(getattr(status, "failed", None) or 0)
+    started_at = _job_start_time(job)
+    deadline_seconds = (
+        int(getattr(spec, "active_deadline_seconds", None) or 0)
+        or SETTINGS.offline_task_job_active_deadline_seconds
+    )
+    if active > 0:
+        current_time = now or datetime.now(timezone.utc)
+        if started_at is not None and deadline_seconds > 0:
+            age_seconds = (current_time - started_at).total_seconds()
+            if age_seconds > deadline_seconds:
+                return {
+                    "status": "stale",
+                    "job_name": job_name,
+                    "active": active,
+                    "started_at": started_at.isoformat(),
+                    "age_seconds": age_seconds,
+                    "deadline_seconds": deadline_seconds,
+                }
+        return {
+            "status": "active",
+            "job_name": job_name,
+            "active": active,
+            "started_at": started_at.isoformat() if started_at else None,
+            "deadline_seconds": deadline_seconds,
+        }
+    if succeeded > 0 or _job_condition_status(job, "Complete"):
+        return {
+            "status": "completed",
+            "job_name": job_name,
+            "succeeded": succeeded,
+        }
+    if failed > 0 or _job_condition_status(job, "Failed"):
+        return {"status": "failed", "job_name": job_name, "failed": failed}
+    return {"status": "inactive", "job_name": job_name}
+
+
+def _stale_inflight_run_error(
+    *,
+    run_key: str,
+    run_state: str,
+    job_status: dict[str, Any],
+) -> str:
+    """Build a compact reconciliation error for an in-flight run without live work."""
+
+    return (
+        "Offline task run lost live execution evidence: "
+        f"run_key={run_key}, state={run_state}, "
+        f"job_status={job_status.get('status')}, "
+        f"job_name={job_status.get('job_name')}"
+    )
+
+
+def _offline_job_lifecycle_safeguards() -> dict[str, Any]:
+    """Return the Kubernetes safeguards required for offline task jobs."""
+
+    return {
+        "active_deadline_seconds": SETTINGS.offline_task_job_active_deadline_seconds,
+        "ttl_seconds_after_finished": SETTINGS.offline_task_job_ttl_seconds,
+        "backoff_limit": OFFLINE_TASK_JOB_BACKOFF_LIMIT,
+        "durable_terminal_state": "Tasks/Runs and Tasks rows",
+    }
+
+
+def _task_activation_health_summary(
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return compact alertable counts for task activation diagnostics."""
+
+    statuses: dict[str, int] = {}
+    blocking_conditions: dict[str, int] = {}
+    repairable = 0
+    for diagnostic in diagnostics:
+        health = diagnostic.get("health") or {}
+        status = str(health.get("status") or "unknown")
+        statuses[status] = statuses.get(status, 0) + 1
+        if health.get("repairable"):
+            repairable += 1
+        for condition in diagnostic.get("blocking_conditions") or []:
+            condition_type = str(condition.get("type") or "unknown")
+            blocking_conditions[condition_type] = (
+                blocking_conditions.get(condition_type, 0) + 1
+            )
+    return {
+        "total": len(diagnostics),
+        "repairable": repairable,
+        "statuses": statuses,
+        "blocking_conditions": blocking_conditions,
+        "job_lifecycle_safeguards": _offline_job_lifecycle_safeguards(),
+    }
+
+
 def _optional_display_text(value: Any) -> str | None:
     """Normalize optional display text so empty strings do not leak into rows."""
 
@@ -1023,6 +1192,52 @@ def _activation_materialization_diagnostic(
     return diagnostic
 
 
+def _diagnostic_needs_offline_job_status(diagnostic: dict[str, Any]) -> bool:
+    """Return whether diagnosis should verify the stored Kubernetes job reference."""
+
+    latest_run = diagnostic.get("latest_run")
+    if not isinstance(latest_run, dict):
+        return False
+    if str(latest_run.get("execution_mode") or "") != "offline":
+        return False
+    if str(latest_run.get("state") or "") not in {"pending", "running"}:
+        return False
+    return bool(latest_run.get("job_name"))
+
+
+def _attach_offline_job_status_to_diagnostic(
+    *,
+    diagnostic: dict[str, Any],
+    batch_api: Any,
+) -> dict[str, Any]:
+    """Attach Kubernetes job state and recompute health for an offline run."""
+
+    latest_run = diagnostic.get("latest_run")
+    if not isinstance(latest_run, dict):
+        return diagnostic
+    job_name = str(latest_run.get("job_name") or "")
+    if not job_name:
+        return diagnostic
+    latest_run_job = _classify_offline_job_status(batch_api, job_name)
+    diagnostic["latest_run_job"] = latest_run_job
+    diagnostic["health"] = _activation_health(
+        activation=diagnostic.get("activation"),
+        materialization=diagnostic.get("materialization"),
+        latest_run=latest_run,
+        latest_run_job=latest_run_job,
+    )
+    if diagnostic["health"].get("status") == "stale_running_run":
+        diagnostic["blocking_conditions"] = [
+            {
+                "type": "stale_running_run",
+                "run_key": latest_run.get("run_key"),
+                "job_name": job_name,
+                "job_status": latest_run_job.get("status"),
+            },
+        ]
+    return diagnostic
+
+
 def _latest_run_matches_activation(
     *,
     latest_run: dict[str, Any] | None,
@@ -1048,6 +1263,7 @@ def _activation_health(
     activation: dict[str, Any] | None,
     materialization: dict[str, Any] | None,
     latest_run: dict[str, Any] | None,
+    latest_run_job: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Classify whether one current activation is armed, fired, or repairable."""
 
@@ -1080,6 +1296,14 @@ def _activation_health(
         return {"status": "fired_no_matching_run", "repairable": True}
     run_state = str(latest_run.get("state") or "")
     if run_state in {"pending", "running"}:
+        job_status = str((latest_run_job or {}).get("status") or "")
+        if job_status in {"missing", "completed", "failed", "inactive", "stale"}:
+            return {
+                "status": "stale_running_run",
+                "repairable": True,
+                "run_state": run_state,
+                "job_status": job_status,
+            }
         return {"status": "fired_inflight", "repairable": False}
     if run_state == "failed":
         return {"status": "fired_failed_retryable", "repairable": True}
@@ -1161,6 +1385,7 @@ async def validate_task_activation_infra():
         "gcp_project_id": SETTINGS.gcp_project_id,
         "location": SETTINGS.task_due_queue_location,
         "queues": queues,
+        "job_lifecycle_safeguards": _offline_job_lifecycle_safeguards(),
         "targets": {
             "live_due": f"{SETTINGS.adapters_url}{TASK_DUE_ENDPOINT_PATH}",
             "offline_dispatch": f"{SETTINGS.comms_url}{OFFLINE_TASK_DISPATCH_PATH}",
@@ -1174,12 +1399,20 @@ async def diagnose_task_activation(request: TaskActivationDiagnosticRequest):
     """Report activation materialization and latest run state for one task."""
 
     try:
-        return await asyncio.to_thread(
+        diagnostic = await asyncio.to_thread(
             _activation_materialization_diagnostic,
             assistant_id=request.assistant_id,
             task_id=request.task_id,
             source_task_log_id=request.source_task_log_id,
         )
+        if _diagnostic_needs_offline_job_status(diagnostic):
+            batch_api, _, _, _ = await _get_k8s_clients()
+            diagnostic = await asyncio.to_thread(
+                _attach_offline_job_status_to_diagnostic,
+                diagnostic=diagnostic,
+                batch_api=batch_api,
+            )
+        return diagnostic
     except requests.RequestException as exc:
         raise HTTPException(
             status_code=502,
@@ -1190,6 +1423,42 @@ async def diagnose_task_activation(request: TaskActivationDiagnosticRequest):
             status_code=500,
             detail=f"Failed to diagnose task activation: {exc}",
         ) from exc
+
+
+@router.post("/task-activation/reconcile-current")
+async def reconcile_current_task_activation(request: TaskActivationDiagnosticRequest):
+    """Diagnose one current activation and run the deterministic repair if safe."""
+
+    diagnostic = await diagnose_task_activation(request)
+    health = diagnostic.get("health") or {}
+    if not health.get("repairable"):
+        return {
+            "success": True,
+            "status": "noop",
+            "reason": str(health.get("status") or "not_repairable"),
+            "diagnostic": diagnostic,
+            "summary": _task_activation_health_summary([diagnostic]),
+        }
+    repair = await repair_current_task_activation(request)
+    return {
+        "success": True,
+        "status": "reconciled",
+        "diagnostic": diagnostic,
+        "repair": repair,
+        "summary": _task_activation_health_summary([diagnostic]),
+    }
+
+
+@router.post("/task-activation/health")
+async def task_activation_health(request: TaskActivationDiagnosticRequest):
+    """Return alertable health counts for one source-aware activation diagnostic."""
+
+    diagnostic = await diagnose_task_activation(request)
+    return {
+        "success": True,
+        "diagnostics": [diagnostic],
+        "summary": _task_activation_health_summary([diagnostic]),
+    }
 
 
 @router.post("/task-activation/repair-current")
@@ -1217,7 +1486,7 @@ async def repair_current_task_activation(request: TaskActivationDiagnosticReques
             "result": result,
             "diagnostic": diagnostic,
         }
-    if health_status == "fired_failed_retryable":
+    if health_status in {"fired_failed_retryable", "stale_running_run"}:
         if activation.get("execution_mode") != "offline":
             return {
                 "success": True,
@@ -1397,6 +1666,7 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
         retry_count: int | None = None
         previous_error: str | None = None
         job_name_seed: str | None = None
+        batch_api: Any | None = None
         if not created and run_state == "completed":
             _emit_task_activation_event(
                 "task_activation.offline_dispatch.adopted",
@@ -1430,31 +1700,92 @@ async def dispatch_offline_task(request: OfflineTaskDispatchRequest):
             )
         if not created and run_state != "failed" and run.get("job_name"):
             job_name = str(run.get("job_name"))
+            batch_api, _, _, _ = await _get_k8s_clients()
+            job_status = await asyncio.to_thread(
+                _classify_offline_job_status,
+                batch_api,
+                job_name,
+            )
+            if job_status.get("status") in {"unknown"}:
+                _emit_task_activation_event(
+                    "task_activation.offline_dispatch.skipped",
+                    **_offline_dispatch_event_fields(
+                        request,
+                        stage=stage,
+                        run_key=run_key,
+                        job_name=job_name,
+                        run_state=run_state,
+                        status="inflight_job_unknown",
+                    ),
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "status": "inflight_job_unknown",
+                        "run_key": run_key,
+                        "job_name": job_name,
+                        "run_state": run_state,
+                        "job_status": job_status,
+                    },
+                )
+            if job_status.get("status") == "active":
+                _emit_task_activation_event(
+                    "task_activation.offline_dispatch.adopted",
+                    **_offline_dispatch_event_fields(
+                        request,
+                        stage=stage,
+                        run_key=run_key,
+                        job_name=job_name,
+                        run_state=run_state,
+                        status="adopted_inflight_run",
+                    ),
+                )
+                return {
+                    "success": True,
+                    "status": "adopted_inflight_run",
+                    "run_key": run_key,
+                    "job_name": job_name,
+                    "run_state": run_state,
+                    "job_status": job_status,
+                }
+            retry_count = int(run.get("retry_count") or 0) + 1
+            previous_error = str(run.get("error") or "")
+            error = _stale_inflight_run_error(
+                run_key=run_key,
+                run_state=run_state,
+                job_status=job_status,
+            )
+            await asyncio.to_thread(
+                _update_task_run,
+                assistant_id=request.assistant_id,
+                run_key=run_key,
+                updates=_failed_task_run_updates(
+                    error=error,
+                    result_summary=error,
+                    retry_count=retry_count,
+                    previous_error=previous_error,
+                ),
+            )
+            job_name_seed = f"{run_key}:retry:{retry_count}"
             _emit_task_activation_event(
-                "task_activation.offline_dispatch.adopted",
+                "task_activation.offline_dispatch.retrying",
                 **_offline_dispatch_event_fields(
                     request,
                     stage=stage,
                     run_key=run_key,
                     job_name=job_name,
                     run_state=run_state,
-                    status="adopted_inflight_run",
+                    status="retrying_stale_inflight_run",
                 ),
             )
-            return {
-                "success": True,
-                "status": "adopted_inflight_run",
-                "run_key": run_key,
-                "job_name": job_name,
-                "run_state": run_state,
-            }
 
         stage = "k8s_client"
         _emit_task_activation_event(
             "task_activation.offline_dispatch.stage",
             **_offline_dispatch_event_fields(request, stage=stage, run_key=run_key),
         )
-        batch_api, _, _, _ = await _get_k8s_clients()
+        if batch_api is None:
+            batch_api, _, _, _ = await _get_k8s_clients()
         stage = "job_launch"
         _emit_task_activation_event(
             "task_activation.offline_dispatch.stage",
