@@ -114,6 +114,7 @@ capabilities:
     Syndication register via a free subscription key (``CQC_PRIMARY_KEY``);
     data is Open Government Licence v3.0.
   functions: [valos_find_care_homes]
+  guidance: [valos_competitor_resolution]
 - id: valos_render
   name: OS map rendering
   description: >
