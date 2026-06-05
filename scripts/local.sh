@@ -470,6 +470,19 @@ start_adapters_service() {
     env_vars+=("ORCHESTRA_URL=$ORCHESTRA_URL")
   fi
 
+  local oauth_key oauth_val
+  for oauth_key in \
+    GOOGLE_OAUTH_CLIENT_ID \
+    GOOGLE_OAUTH_CLIENT_SECRET \
+    OAUTH_STATE_SIGNING_KEY \
+    MS365_BYOD_CLIENT_ID \
+    MS365_BYOD_CLIENT_SECRET; do
+    oauth_val="${!oauth_key:-}"
+    if [[ -n "$oauth_val" ]]; then
+      env_vars+=("$oauth_key=$oauth_val")
+    fi
+  done
+
   # Start the service
   env "${env_vars[@]}" $python_cmd -m uvicorn adapters.main:app \
     --host 0.0.0.0 \
