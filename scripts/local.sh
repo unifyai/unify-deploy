@@ -201,6 +201,86 @@ get_python() {
   fi
 }
 
+resolve_unity_repo_path() {
+  if [[ -n "${UNITY_REPO_PATH:-}" && -d "$UNITY_REPO_PATH" ]]; then
+    echo "$UNITY_REPO_PATH"
+    return 0
+  fi
+  local candidate
+  candidate="$(cd "$COMMS_REPO_PATH/../unity" 2>/dev/null && pwd -P || echo "")"
+  if [[ -n "$candidate" && -d "$candidate" ]]; then
+    echo "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+can_import_comms_unity_contract() {
+  local python_cmd="$1"
+  "$python_cmd" -c "from unity.task_scheduler.offline_runner_contract import build_offline_run_key" &>/dev/null
+}
+
+pip_install_for_comms() {
+  local python_cmd="$1"
+  shift
+  if command -v uv &>/dev/null; then
+    uv pip install --python "$python_cmd" "$@"
+  else
+    "$python_cmd" -m pip install "$@"
+  fi
+}
+
+ensure_comms_unity_deps() {
+  local python_cmd unity_repo unify_repo unillm_repo
+  python_cmd="$(get_python)"
+
+  if can_import_comms_unity_contract "$python_cmd"; then
+    return 0
+  fi
+
+  if ! unity_repo="$(resolve_unity_repo_path)"; then
+    log_error "Comms App imports unity.task_scheduler.offline_runner_contract but unity is unavailable"
+    log_info "Clone unity as a sibling of communication (../unity) or set UNITY_REPO_PATH"
+    return 1
+  fi
+
+  log_info "Installing slim unity runtime for Comms App (matches Dockerfile-comms)..."
+
+  unify_repo="$(cd "$COMMS_REPO_PATH/../unify" 2>/dev/null && pwd -P || echo "")"
+  unillm_repo="$(cd "$COMMS_REPO_PATH/../unillm" 2>/dev/null && pwd -P || echo "")"
+
+  if [[ -n "$unify_repo" && -d "$unify_repo" ]]; then
+    pip_install_for_comms "$python_cmd" -e "$unify_repo" || {
+      log_error "Failed to install unify from $unify_repo"
+      return 1
+    }
+  fi
+  if [[ -n "$unillm_repo" && -d "$unillm_repo" ]]; then
+    pip_install_for_comms "$python_cmd" -e "$unillm_repo" || {
+      log_error "Failed to install unillm from $unillm_repo"
+      return 1
+    }
+  fi
+
+  pip_install_for_comms "$python_cmd" --no-deps -e "$unity_repo" || {
+    log_error "Failed to install unity package from $unity_repo"
+    return 1
+  }
+  pip_install_for_comms "$python_cmd" -r "$unity_repo/requirements-gateway.txt" || {
+    log_error "Failed to install unity gateway requirements from $unity_repo"
+    return 1
+  }
+
+  if ! can_import_comms_unity_contract "$python_cmd"; then
+    log_error "unity is installed but Comms App still cannot import offline_runner_contract"
+    log_info "Ensure unify and unillm siblings exist under the same parent as communication"
+    return 1
+  fi
+
+  log_success "unity runtime ready for Comms App"
+  return 0
+}
+
 # =============================================================================
 # Pub/Sub Emulator Management
 # =============================================================================
@@ -454,6 +534,10 @@ start_comms_service() {
     return 0
   fi
 
+  if ! ensure_comms_unity_deps; then
+    return 1
+  fi
+
   # Check if port is in use
   if lsof -i ":${COMMS_PORT}" -sTCP:LISTEN &>/dev/null; then
     log_error "Port $COMMS_PORT is already in use"
@@ -475,6 +559,13 @@ start_comms_service() {
   # Add ORCHESTRA_ADMIN_KEY if set
   if [[ -n "${ORCHESTRA_ADMIN_KEY:-}" ]]; then
     env_vars+=("ORCHESTRA_ADMIN_KEY=$ORCHESTRA_ADMIN_KEY")
+  fi
+
+  # Pub/Sub emulator (Console-managed or started by this script)
+  if [[ -n "${PUBSUB_EMULATOR_HOST:-}" ]]; then
+    env_vars+=("PUBSUB_EMULATOR_HOST=$PUBSUB_EMULATOR_HOST")
+  elif is_emulator_running; then
+    env_vars+=("PUBSUB_EMULATOR_HOST=$LOCAL_PUBSUB_HOST")
   fi
 
   # Start the service
@@ -590,7 +681,8 @@ cmd_start() {
   # Optionally start Communication service
   if [[ "$start_comms" == "true" ]]; then
     if ! start_comms_service; then
-      log_warn "Failed to start Communication service (continuing anyway)"
+      log_error "Failed to start Communication service"
+      return 1
     fi
   fi
 
