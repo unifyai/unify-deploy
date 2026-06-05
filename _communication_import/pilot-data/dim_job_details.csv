@@ -1,0 +1,82 @@
+JobSORCode,JobSORDescription,TradeCode,TradeDescription,JobPriorityCode,JobPriorityDescription,JobType,JobStatusCode
+PCPLUMB,Plumbing repair,PLUM,Plumber,E,24 Hour Emergency,Responsive,Open
+PCPLUMB,Plumbing repair,PLUM,Plumber,E1,1 Hour Emergency,Responsive,Open
+PCPLUMB,Plumbing repair,PLUM,Plumber,E2,2 Hour Emergency,Responsive,Open
+PCPLUMB,Plumbing repair,PLUM,Plumber,EG,2 Hour Gas Emergency,Responsive,Open
+PCPLUMB,Plumbing repair,PLUM,Plumber,U1,48 Hour Urgent,Responsive,Open
+PCPLUMB,Plumbing repair,PLUM,Plumber,UEL,24 Hour Urgent,Responsive,Open
+PCPLUMB,Plumbing repair,PLUM,Plumber,Q,Routine 28-Day,Responsive,Open
+PCPLUMB,Plumbing repair,PLUM,Plumber,QEL,Routine 14-Day,Responsive,Open
+PCPLUMB,Plumbing repair,PLUM,Plumber,NG,Routine 14-Day Gas,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,E,24 Hour Emergency,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,E1,1 Hour Emergency,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,E2,2 Hour Emergency,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,EG,2 Hour Gas Emergency,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,U1,48 Hour Urgent,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,UEL,24 Hour Urgent,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,Q,Routine 28-Day,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,QEL,Routine 14-Day,Responsive,Open
+PCCARP,Carpentry repair,CARP,Carpenter,NG,Routine 14-Day Gas,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,E,24 Hour Emergency,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,E1,1 Hour Emergency,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,E2,2 Hour Emergency,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,EG,2 Hour Gas Emergency,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,U1,48 Hour Urgent,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,UEL,24 Hour Urgent,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,Q,Routine 28-Day,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,QEL,Routine 14-Day,Responsive,Open
+PCPLAST,Plastering repair,PLAS,Plasterer,NG,Routine 14-Day Gas,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,E,24 Hour Emergency,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,E1,1 Hour Emergency,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,E2,2 Hour Emergency,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,EG,2 Hour Gas Emergency,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,U1,48 Hour Urgent,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,UEL,24 Hour Urgent,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,Q,Routine 28-Day,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,QEL,Routine 14-Day,Responsive,Open
+PCTILE,Tiling repair,MULT,Multi-Trade,NG,Routine 14-Day Gas,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,E,24 Hour Emergency,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,E1,1 Hour Emergency,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,E2,2 Hour Emergency,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,EG,2 Hour Gas Emergency,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,U1,48 Hour Urgent,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,UEL,24 Hour Urgent,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,Q,Routine 28-Day,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,QEL,Routine 14-Day,Responsive,Open
+PCBRICK,Brickwork repair,MULT,Multi-Trade,NG,Routine 14-Day Gas,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,E,24 Hour Emergency,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,E1,1 Hour Emergency,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,E2,2 Hour Emergency,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,EG,2 Hour Gas Emergency,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,U1,48 Hour Urgent,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,UEL,24 Hour Urgent,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,Q,Routine 28-Day,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,QEL,Routine 14-Day,Responsive,Open
+PCFENCE,Fencing repair,MULT,Multi-Trade,NG,Routine 14-Day Gas,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,E,24 Hour Emergency,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,E1,1 Hour Emergency,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,E2,2 Hour Emergency,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,EG,2 Hour Gas Emergency,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,U1,48 Hour Urgent,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,UEL,24 Hour Urgent,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,Q,Routine 28-Day,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,QEL,Routine 14-Day,Responsive,Open
+PCVINYL,Vinyl flooring repair,CARP,Carpenter,NG,Routine 14-Day Gas,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,E,24 Hour Emergency,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,E1,1 Hour Emergency,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,E2,2 Hour Emergency,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,EG,2 Hour Gas Emergency,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,U1,48 Hour Urgent,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,UEL,24 Hour Urgent,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,Q,Routine 28-Day,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,QEL,Routine 14-Day,Responsive,Open
+PCELEC,Electrical repair,ELEC,Electrician,NG,Routine 14-Day Gas,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,E,24 Hour Emergency,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,E1,1 Hour Emergency,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,E2,2 Hour Emergency,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,EG,2 Hour Gas Emergency,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,U1,48 Hour Urgent,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,UEL,24 Hour Urgent,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,Q,Routine 28-Day,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,QEL,Routine 14-Day,Responsive,Open
+PCGROUND,Groundworks repair,MULT,Multi-Trade,NG,Routine 14-Day Gas,Responsive,Open
