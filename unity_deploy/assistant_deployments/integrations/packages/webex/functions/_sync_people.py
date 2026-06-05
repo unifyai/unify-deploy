@@ -102,7 +102,7 @@ async def sync_webex_people(
                 "status": p.get("status"),
                 "last_activity": p.get("lastActivity"),
                 "created_at": p.get("created"),
-            }
+            },
         )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

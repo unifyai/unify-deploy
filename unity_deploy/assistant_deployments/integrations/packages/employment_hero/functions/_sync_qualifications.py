@@ -56,7 +56,6 @@ async def sync_employmenthero_qualifications(
 
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._client import (
         eh_paginate,
-        eh_get,
         org_path,
         _org_id_or_error,
     )
@@ -89,7 +88,7 @@ async def sync_employmenthero_qualifications(
                 "is_mandatory_for_role": q.get("is_mandatory_for_role"),
                 "created_at": q.get("created_at"),
                 "updated_at": q.get("updated_at"),
-            }
+            },
         )
         if q.get("id"):
             qual_name_by_id[q["id"]] = q.get("name")
@@ -127,7 +126,7 @@ async def sync_employmenthero_qualifications(
                 "days_to_expiry": days_to_expiry,
                 "evidence_url": r.get("evidence_url"),
                 "updated_at": r.get("updated_at"),
-            }
+            },
         )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

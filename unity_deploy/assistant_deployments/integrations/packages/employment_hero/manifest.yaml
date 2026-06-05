@@ -32,48 +32,48 @@ secrets:
   # URI registered on that app must match the Console callback URL
   # documented in guidance/employmenthero_setup.md.
 
-  - name: EMPLOYMENTHERO_OAUTH_CLIENT_ID
-    description: >
-      Client ID from the customer's Employment Hero developer-portal app.
-      Required for the OAuth Connect flow.  Add this BEFORE clicking
-      Connect in the Integrations modal.  Not sensitive — client_id is
-      a public identifier per the OAuth spec.
-    required: true
-    sensitive: false
+- name: EMPLOYMENTHERO_OAUTH_CLIENT_ID
+  description: >
+    Client ID from the customer's Employment Hero developer-portal app.
+    Required for the OAuth Connect flow.  Add this BEFORE clicking
+    Connect in the Integrations modal.  Not sensitive — client_id is
+    a public identifier per the OAuth spec.
+  required: true
+  sensitive: false
 
-  - name: EMPLOYMENTHERO_OAUTH_CLIENT_SECRET
-    description: >
-      Client Secret from the customer's Employment Hero developer-portal
-      app.  Required for the OAuth Connect flow.  Add alongside
-      EMPLOYMENTHERO_OAUTH_CLIENT_ID.
-    required: true
-    sensitive: true
+- name: EMPLOYMENTHERO_OAUTH_CLIENT_SECRET
+  description: >
+    Client Secret from the customer's Employment Hero developer-portal
+    app.  Required for the OAuth Connect flow.  Add alongside
+    EMPLOYMENTHERO_OAUTH_CLIENT_ID.
+  required: true
+  sensitive: true
 
   # ----- OAuth-managed secrets (set by the Console Connect flow) -------
   # Written automatically by the Console OAuth callback after the user
   # grants consent on Employment Hero.  Do not edit manually.
 
-  - name: EMPLOYMENTHERO_REFRESH_TOKEN
-    description: >
-      Long-lived OAuth refresh token, written automatically by the
-      Console Connect flow after the user grants consent on Employment
-      Hero.  The package uses this with the customer's CLIENT_ID and
-      CLIENT_SECRET to mint short-lived access tokens at runtime.  Do
-      not edit manually.
-    required: false
-    sensitive: true
+- name: EMPLOYMENTHERO_REFRESH_TOKEN
+  description: >
+    Long-lived OAuth refresh token, written automatically by the
+    Console Connect flow after the user grants consent on Employment
+    Hero.  The package uses this with the customer's CLIENT_ID and
+    CLIENT_SECRET to mint short-lived access tokens at runtime.  Do
+    not edit manually.
+  required: false
+  sensitive: true
 
-  - name: EMPLOYMENTHERO_ORGANISATION_ID
-    description: >
-      Active organisation id.  Auto-pinned by the Console Connect flow
-      from ``/api/v1/organisations`` when exactly one named organisation
-      is found.  When the token has access to multiple named
-      organisations, Connect pins the lexicographically-first one and
-      surfaces a notice so the operator can override here via
-      Console -> Settings -> Secrets.  Pinned per-assistant so
-      org-scoped calls target a single EH organisation.
-    required: false
-    sensitive: false
+- name: EMPLOYMENTHERO_ORGANISATION_ID
+  description: >
+    Active organisation id.  Auto-pinned by the Console Connect flow
+    from ``/api/v1/organisations`` when exactly one named organisation
+    is found.  When the token has access to multiple named
+    organisations, Connect pins the lexicographically-first one and
+    surfaces a notice so the operator can override here via
+    Console -> Settings -> Secrets.  Pinned per-assistant so
+    org-scoped calls target a single EH organisation.
+  required: false
+  sensitive: false
 
 capabilities:
   # ----- Live API access -------------------------------------------------
@@ -84,75 +84,52 @@ capabilities:
   # ``employmenthero_high_stakes_writes`` before issuing destructive
   # verbs.  Sensitive reads (banking, tax, medical, payslips) require
   # confirmation per ``employmenthero_sensitive_data``.
-  - id: employmenthero_live
-    name: Live API access
-    description: >
-      One tool covering the entire Employment Hero REST surface
-      (workforce, leave, timesheets, expenses, policies, documents,
-      custom fields, onboarding, qualifications, performance,
-      recognition, surveys, learning, recruitment, pay, banking, tax,
-      medical, payslips).  First-page only — bulk pulls go through the
-      sync orchestrator.
-    functions: [employmenthero_request]
-    guidance: [
-      employmenthero_overview, employmenthero_setup,
-      employmenthero_high_stakes_writes, employmenthero_sensitive_data,
-      employmenthero_tier_gating,
-    ]
+- id: employmenthero_live
+  name: Live API access
+  description: >
+    One tool covering the entire Employment Hero REST surface
+    (workforce, leave, timesheets, expenses, policies, documents,
+    custom fields, onboarding, qualifications, performance,
+    recognition, surveys, learning, recruitment, pay, banking, tax,
+    medical, payslips).  First-page only — bulk pulls go through the
+    sync orchestrator.
+  functions: [employmenthero_request]
+  guidance: [employmenthero_overview, employmenthero_setup, employmenthero_high_stakes_writes, employmenthero_sensitive_data, employmenthero_tier_gating]
 
   # ----- Account / org pinning ------------------------------------------
   # Kept as typed helpers because every other call needs the active
   # org id, and the pin-aware fallback in
   # ``get_employmenthero_active_organisation`` saves the actor a few
   # turns of figuring it out.
-  - id: employmenthero_account
-    name: Account
-    description: Verify token; identify and pin the active organisation.
-    functions: [
-      get_employmenthero_account_info,
-      list_employmenthero_organisations,
-      get_employmenthero_active_organisation,
-    ]
-    guidance: [employmenthero_overview, employmenthero_setup]
+- id: employmenthero_account
+  name: Account
+  description: Verify token; identify and pin the active organisation.
+  functions: [get_employmenthero_account_info, list_employmenthero_organisations, get_employmenthero_active_organisation]
+  guidance: [employmenthero_overview, employmenthero_setup]
 
   # ----- Sync orchestration ---------------------------------------------
-  - id: employmenthero_incremental_sync
-    name: Incremental sync
-    description: >
-      Single-tick orchestration across workforce, leave, timesheets,
-      expenses, policies, documents, custom fields, onboarding,
-      qualifications, performance, recognition, surveys, learning,
-      recruitment, and pay (rate-banded).  Runs the internal
-      ``sync_employmenthero_*`` snapshot writers and aggregates their
-      output into the canonical DataManager envelope.
-    functions: [
-      run_employmenthero_sync_tick, get_employmenthero_sync_state,
-      probe_employmenthero_tier,
-    ]
-    guidance: [employmenthero_sync_runbook, employmenthero_local_vs_live]
+- id: employmenthero_incremental_sync
+  name: Incremental sync
+  description: >
+    Single-tick orchestration across workforce, leave, timesheets,
+    expenses, policies, documents, custom fields, onboarding,
+    qualifications, performance, recognition, surveys, learning,
+    recruitment, and pay (rate-banded).  Runs the internal
+    ``sync_employmenthero_*`` snapshot writers and aggregates their
+    output into the canonical DataManager envelope.
+  functions: [run_employmenthero_sync_tick, get_employmenthero_sync_state, probe_employmenthero_tier]
+  guidance: [employmenthero_sync_runbook, employmenthero_local_vs_live]
 
   # ----- Local DataManager query ---------------------------------------
-  - id: employmenthero_local_query
-    name: Local DataManager query
-    description: >
-      Query the synced EH copy in DataManager (preferred over live for
-      analytics).  Sensitive surfaces (banking, tax, medical, payslips)
-      are intentionally not synced — those are live-only via
-      ``employmenthero_request`` with explicit user confirmation.
-    functions: [
-      query_local_employmenthero_employees, query_local_employmenthero_teams,
-      query_local_employmenthero_locations,
-      query_local_employmenthero_leave_requests,
-      query_local_employmenthero_leave_balances,
-      query_local_employmenthero_timesheets,
-      query_local_employmenthero_expenses,
-      query_local_employmenthero_qualifications,
-      query_local_employmenthero_expiring_qualifications,
-      query_local_employmenthero_onboarding_status,
-      query_local_employmenthero_documents,
-      query_local_employmenthero_goals, query_local_employmenthero_reviews,
-    ]
-    guidance: [employmenthero_local_vs_live, employmenthero_overview]
+- id: employmenthero_local_query
+  name: Local DataManager query
+  description: >
+    Query the synced EH copy in DataManager (preferred over live for
+    analytics).  Sensitive surfaces (banking, tax, medical, payslips)
+    are intentionally not synced — those are live-only via
+    ``employmenthero_request`` with explicit user confirmation.
+  functions: [query_local_employmenthero_employees, query_local_employmenthero_teams, query_local_employmenthero_locations, query_local_employmenthero_leave_requests, query_local_employmenthero_leave_balances, query_local_employmenthero_timesheets, query_local_employmenthero_expenses, query_local_employmenthero_qualifications, query_local_employmenthero_expiring_qualifications, query_local_employmenthero_onboarding_status, query_local_employmenthero_documents, query_local_employmenthero_goals, query_local_employmenthero_reviews]
+  guidance: [employmenthero_local_vs_live, employmenthero_overview]
 
 requirements: [httpx]
 tags: [employment-hero, hris, hr, payroll-adjacent, compliance, qualifications, leave, timesheets, sync, datamanager]

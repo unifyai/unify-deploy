@@ -87,7 +87,7 @@ async def query_local_employmenthero_teams(
                     "id": "team-mock-1",
                     "name": "Property Management",
                     "location_id": "loc-mock-1",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -119,7 +119,7 @@ async def query_local_employmenthero_locations(mock: bool = True) -> dict:
                     "city": "London",
                     "postcode": "SW11",
                     "country": "GB",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -158,7 +158,7 @@ async def query_local_employmenthero_leave_requests(
                     "start_date": "2026-05-12",
                     "end_date": "2026-05-16",
                     "total_hours": 32.0,
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -202,7 +202,7 @@ async def query_local_employmenthero_leave_balances(
                     "category_id": "lc-1",
                     "balance_hours": 168.0,
                     "accrued_hours": 224.0,
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -246,7 +246,7 @@ async def query_local_employmenthero_timesheets(
                     "date": "2026-04-29",
                     "hours": 8.5,
                     "status": "submitted",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -299,7 +299,7 @@ async def query_local_employmenthero_expenses(
                     "currency": "GBP",
                     "date": "2026-04-28",
                     "status": "submitted",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -346,7 +346,7 @@ async def query_local_employmenthero_qualifications(
                     "qualification_name": "Gas Safe Registration",
                     "expires_at": "2026-06-01",
                     "status": "active",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -419,7 +419,6 @@ async def query_local_employmenthero_expiring_qualifications(
     from unity.manager_registry import ManagerRegistry
     from unity_deploy.assistant_deployments.integrations.packages.employment_hero.functions._local_helpers import (
         freshness,
-        safe_filter,
     )
 
     dm = ManagerRegistry.get_data_manager()
@@ -497,7 +496,7 @@ async def query_local_employmenthero_onboarding_status(
                     "employee_id": "emp-mock-2",
                     "task_id": "obt-2",
                     "status": "outstanding",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -541,7 +540,7 @@ async def query_local_employmenthero_documents(
                     "employee_id": "emp-mock-1",
                     "name": "Right To Work — Passport.pdf",
                     "type": "right_to_work",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -587,7 +586,7 @@ async def query_local_employmenthero_goals(
                     "current_value": 88.5,
                     "target_value": 92.0,
                     "status": "in_progress",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -632,7 +631,7 @@ async def query_local_employmenthero_reviews(
                     "period": "2026Q1",
                     "rating": 4,
                     "_note": "Free-text fields are redacted in the synced copy.",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},

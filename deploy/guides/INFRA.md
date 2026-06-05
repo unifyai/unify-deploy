@@ -23,11 +23,11 @@ The Unity system is a comprehensive multi-channel communication platform that dy
 
 ## 🏛️ System Architecture
 
-The system consists of three main repositories:
+The hosted system is split across three main code areas:
 
 1. **Orchestra** (`@https://github.com/unifyai/orchestra`) - Main orchestration service with database containing assistants
-2. **Communications** (`@https://github.com/unifyai/communication`) - Contains a web app for low-level comms and adapters that capture inbound and perform various tasks
-3. **Unity** (current repo) - The container deployed on GKE (each job on GKE is a separate container)
+2. **Hosted infrastructure** (`@https://github.com/unifyai/unity-deploy`) - Contains deploy overlays plus the hosted comms app and adapters
+3. **Unity** (`@https://github.com/unifyai/unity`) - The container deployed on GKE (each job on GKE is a separate container)
 
 ### External Services
 
@@ -307,7 +307,7 @@ In the worst case (e.g., GKE node provisioning required), this delay can be 30-6
 - Frontend listens to this topic for real-time updates
 
 ### Other Outbound (SMS, Email, Calls)
-- Goes through the `communication/` web app in the communication repo
+- Goes through the `communication/` web app in this hosted repo
 - Endpoints available:
 
 | Type | Endpoint | Description |
@@ -740,7 +740,7 @@ DNS is already cross-project: VM A records are created in `<gcp-project-dns>`'s 
 
 #### Configuration
 
-The project separation is controlled by two config files in the communication repo:
+The project separation is controlled by two config files in the hosted communication package:
 
 - `communication/infra/vm_config.py` — `VM_PROJECT_ID`, `WINDOWS_VM_IMAGE_PROJECT`, `UBUNTU_VM_IMAGE_PROJECT`
 - `communication/infra/tunnel_config.py` — `TUNNEL_PROJECT_ID`

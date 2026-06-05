@@ -40,7 +40,7 @@ async def query_local_salesforce_accounts(
                 "name": "Acme Corp",
                 "industry": "Technology",
                 "annual_revenue": 5_000_000,
-            }
+            },
         ],
     )
 
@@ -68,7 +68,7 @@ async def query_local_salesforce_contacts(
                 "name": "Alex Example",
                 "email": "alex@example.test",
                 "account_id": "001000000000001",
-            }
+            },
         ],
     )
 
@@ -97,7 +97,7 @@ async def query_local_salesforce_leads(
                 "email": "pat@prospect.test",
                 "company": "Prospect Co",
                 "status": "Working - Contacted",
-            }
+            },
         ],
     )
 
@@ -133,7 +133,7 @@ async def query_local_salesforce_opportunities(
                 "amount": 120_000.0,
                 "stage_name": "Proposal/Price Quote",
                 "is_closed": False,
-            }
+            },
         ],
     )
 
@@ -169,6 +169,6 @@ async def query_local_salesforce_cases(
                 "status": "Working",
                 "priority": "High",
                 "account_id": "001000000000001",
-            }
+            },
         ],
     )

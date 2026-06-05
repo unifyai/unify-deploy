@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_recruitment(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     """Snapshot jobs, applicants, offers, interview stages.
 
@@ -44,7 +45,7 @@ async def sync_employmenthero_recruitment(
                         "closes_at": "2026-05-15",
                         "location_id": "loc-mock-2",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "applicants": [
                     {
@@ -58,7 +59,7 @@ async def sync_employmenthero_recruitment(
                         "last_name_hash": "2222bbbb",
                         "email_domain": "example.test",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "offers": [
                     {
@@ -68,7 +69,7 @@ async def sync_employmenthero_recruitment(
                         "status": "extended",
                         "extended_at": "2026-04-26",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "interview_stages": [
                     {
@@ -76,7 +77,7 @@ async def sync_employmenthero_recruitment(
                         "name": "Phone Screen",
                         "order": 1,
                         "updated_at": started,
-                    }
+                    },
                 ],
             },
             "metadata": {
@@ -164,7 +165,7 @@ async def sync_employmenthero_recruitment(
                     "last_name_length": ln["length"],
                     "last_name_hash": ln["hash"],
                     "email_domain": (a.get("email") or "").split("@")[-1] or None,
-                }
+                },
             )
         else:
             row["first_name"] = a.get("first_name")

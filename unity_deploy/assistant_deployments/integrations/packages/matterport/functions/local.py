@@ -83,7 +83,7 @@ async def query_local_matterport_models(
     if address_query:
         safe = address_query.replace("'", "''")
         filters.append(
-            f"(`address_line1` LIKE '%{safe}%' OR `city` LIKE '%{safe}%' OR `postal_code` LIKE '%{safe}%')"
+            f"(`address_line1` LIKE '%{safe}%' OR `city` LIKE '%{safe}%' OR `postal_code` LIKE '%{safe}%')",
         )
     rows = await safe_filter(
         dm,

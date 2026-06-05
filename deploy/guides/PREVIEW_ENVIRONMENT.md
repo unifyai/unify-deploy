@@ -61,7 +61,7 @@ Triggered on push to the `preview` branch of the unity repo. Steps:
 
 ### 2. Adapters (`cloudbuild/adapters-preview.yaml`)
 
-Triggered on push to the `preview` branch of the communication repo. Steps:
+Triggered on push to the `preview` branch of `unity-deploy`. Steps:
 
 1. Build and push `unity-adapters-preview` image
 2. Deploy to Cloud Run with `DEPLOY_ENV=preview`
@@ -69,14 +69,14 @@ Triggered on push to the `preview` branch of the communication repo. Steps:
 
 ### 3. Comms App (`cloudbuild/unity-comms-app-preview.yaml`)
 
-Triggered on push to the `preview` branch of the communication repo. Steps:
+Triggered on push to the `preview` branch of `unity-deploy`. Steps:
 
 1. Build and push `unity-comms-app-preview` image
 2. Update the existing Cloud Run service with `DEPLOY_ENV=preview`
 
 ## Branching Model
 
-Both the `unity` and `communication` repos follow the same branch layout:
+Both the `unity` and `unity-deploy` repos follow the same branch layout:
 
 ```
 main ──── staging ──── preview
@@ -159,11 +159,11 @@ The adapters preview build automatically creates Cloud Scheduler jobs (with upda
 
 ### Feature Branches
 
-Preview carries features not yet on staging — for example, the K8s Lease-based atomic container assignment and pending-startup queue in the communication repo, and the K8s annotation polling startup flow in unity. These replace the older Pub/Sub competing-consumer startup mechanism.
+Preview carries features not yet on staging — for example, the K8s Lease-based atomic container assignment and pending-startup queue in the hosted communication package, and the K8s annotation polling startup flow in unity. These replace the older Pub/Sub competing-consumer startup mechanism.
 
 ### Environment Configuration
 
-The communication repo's `preview` branch uses the `DEPLOY_ENV` / `ENV_SUFFIX` pattern directly (module-level constants), while the `staging` branch on the communication repo was refactored to use a centralized `Settings` class (`common/settings.py`). Both approaches produce equivalent behaviour — the difference is structural.
+The hosted communication `preview` branch uses the `DEPLOY_ENV` / `ENV_SUFFIX` pattern directly (module-level constants), while `staging` was refactored to use a centralized `Settings` class (`common/settings.py`). Both approaches produce equivalent behaviour — the difference is structural.
 
 **Important caveat**: `common/settings.py` still exists on the preview branch and is imported by some modules (e.g., `communication/dependencies.py`). The `Settings` class determines staging/production via a `STAGING` env var (`os.environ.get("STAGING", "false")`), **not** `DEPLOY_ENV`. When `STAGING` is absent (as it is on preview — only `DEPLOY_ENV=preview` is set), `_is_staging()` returns `False` and URLs resolve to **production** defaults. Any code path still using `SETTINGS.orchestra_url` or `SETTINGS.comms_url` will get production URLs unless `ORCHESTRA_URL` / `UNITY_COMMS_URL` are explicitly set as env vars (which they are on the Cloud Run services). Modules that were migrated to the `DEPLOY_ENV` pattern import URLs directly and are unaffected.
 

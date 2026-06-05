@@ -203,7 +203,9 @@ class TestRegistryRowFromCapabilities:
             secrets=[
                 SecretSchema(name="DEMO_API_KEY", description="API key", required=True),
                 SecretSchema(
-                    name="DEMO_OPTIONAL", description="Optional", required=False
+                    name="DEMO_OPTIONAL",
+                    description="Optional",
+                    required=False,
                 ),
             ],
             capabilities=[

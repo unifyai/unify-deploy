@@ -4,7 +4,15 @@ __pycache__/
 dist/
 build/
 .venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+cover/
 .env
+.env.old
+.env.temp
 *.secrets.json
 *.csv
 *.xlsx
@@ -12,3 +20,7 @@ logs/*
 deploy/logs/
 .DS_Store
 *Zone.Identifier
+comm-sa.json
+cert-manager-dns-key.json
+CLAUDE.md
+__pypackages__/

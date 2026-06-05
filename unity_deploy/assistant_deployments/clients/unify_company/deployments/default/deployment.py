@@ -9,6 +9,8 @@ from unity.secret_manager.types import Secret
 from unity_deploy.assistant_deployments.configs.types.actor_config import ActorConfig
 from unity_deploy.assistant_deployments.deployment_types import DeploymentSpec
 
+_DIR = Path(__file__).resolve().parent
+
 
 def get_deployment() -> DeploymentSpec:
     return DeploymentSpec(
@@ -87,5 +89,6 @@ def get_deployment() -> DeploymentSpec:
                 ],
             },
         },
-        function_dir=Path(__file__).parent / "functions",
+        function_dir=_DIR / "functions",
+        data_dir=_DIR / "data",
     )

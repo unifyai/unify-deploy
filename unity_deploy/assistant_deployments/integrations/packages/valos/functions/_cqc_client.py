@@ -70,10 +70,7 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     p2 = math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlmb = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dphi / 2) ** 2
-        + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
-    )
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
     return 2 * _EARTH_RADIUS_KM * math.asin(math.sqrt(a))
 
 
@@ -343,7 +340,10 @@ async def find_care_homes_near(
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         authorities = await _authorities_touching_catchment(
-            client, lat, lon, radius_km,
+            client,
+            lat,
+            lon,
+            radius_km,
         )
         if not authorities:
             return {
@@ -380,7 +380,8 @@ async def find_care_homes_near(
         candidates = list(by_id.values())
 
         coords = await _bulk_geocode_postcodes(
-            client, [h.get("postcode") for h in candidates],
+            client,
+            [h.get("postcode") for h in candidates],
         )
 
         in_radius: list[dict] = []
@@ -441,9 +442,7 @@ async def find_care_homes_near(
         details = await asyncio.gather(
             *[cqc_location_detail(client, h["cqc_location_id"]) for h in targets],
         )
-        detail_by_id = {
-            d["location_id"]: d for d in details if not d.get("error")
-        }
+        detail_by_id = {d["location_id"]: d for d in details if not d.get("error")}
         for home in in_radius:
             d = detail_by_id.get(home["cqc_location_id"])
             if not d:
@@ -455,7 +454,8 @@ async def find_care_homes_near(
                 home["lat"] = d["lat"]
                 home["lon"] = d["lon"]
                 home["distance_km"] = round(
-                    haversine_km(lat, lon, d["lat"], d["lon"]), 3,
+                    haversine_km(lat, lon, d["lat"], d["lon"]),
+                    3,
                 )
         # Propagate enriched rating/beds into the match payloads.
         if names:

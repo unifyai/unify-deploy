@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_leave(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     """Snapshot leave categories, balances, and requests."""
     import datetime as _dt
@@ -27,7 +28,7 @@ async def sync_employmenthero_leave(
                         "name": "Annual Leave",
                         "is_paid": True,
                         "country": "GB",
-                    }
+                    },
                 ],
                 "leave_balances": [
                     {
@@ -36,7 +37,7 @@ async def sync_employmenthero_leave(
                         "balance_key": "emp-mock-1:lc-1",
                         "balance_hours": 168.0,
                         "accrued_hours": 224.0,
-                    }
+                    },
                 ],
                 "leave_requests": [
                     {
@@ -48,7 +49,7 @@ async def sync_employmenthero_leave(
                         "status": "approved",
                         "total_hours": 32.0,
                         "updated_at": started,
-                    }
+                    },
                 ],
             },
             "metadata": {

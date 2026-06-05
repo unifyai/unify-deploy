@@ -47,6 +47,8 @@ from unity_deploy.assistant_deployments.configs.types.actor_config import ActorC
 from unity_deploy.assistant_deployments.deployment_types import DeploymentSpec
 from unity_deploy.assistant_deployments.scenarios.types import ScenarioActivation
 
+_DIR = Path(__file__).resolve().parent
+
 
 def _scenario_activations() -> list[ScenarioActivation]:
     """Return the brain_jobs scenario activations for this deployment.
@@ -203,5 +205,6 @@ def get_deployment() -> DeploymentSpec:
                 ],
             },
         },
-        function_dir=Path(__file__).parent / "functions",
+        function_dir=_DIR / "functions",
+        data_dir=_DIR / "data",
     )

@@ -29,7 +29,8 @@ def _run_evergreen(tick_name: str, params: dict[str, Any]) -> dict[str, Any]:
     from brain.outbound.evergreen import runner as runner_mod
 
     campaign_slug = params.pop("campaign_slug", None) or params.pop(
-        "campaignSlug", None
+        "campaignSlug",
+        None,
     )
     if not campaign_slug:
         return {

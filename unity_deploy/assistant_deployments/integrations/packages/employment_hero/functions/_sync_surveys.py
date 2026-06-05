@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_surveys(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     import datetime as _dt
     import hashlib
@@ -39,7 +40,7 @@ async def sync_employmenthero_surveys(
                         "closes_at": "2026-03-29",
                         "respondent_count": 87,
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "survey_aggregates": [
                     {
@@ -49,7 +50,7 @@ async def sync_employmenthero_surveys(
                         "value": 4.1,
                         "n": 87,
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "survey_responses": [],
             },
@@ -102,7 +103,7 @@ async def sync_employmenthero_surveys(
                 "questions_json": str(s.get("questions") or []),
                 "created_at": s.get("created_at"),
                 "updated_at": s.get("updated_at"),
-            }
+            },
         )
 
         resp_body = await eh_get(org_path(f"/surveys/{sid}/responses"))
@@ -130,7 +131,7 @@ async def sync_employmenthero_surveys(
                         "value": b["n"],
                         "n": b["n"],
                         "updated_at": started,
-                    }
+                    },
                 )
                 if b["vals"]:
                     mean = sum(b["vals"]) / len(b["vals"])
@@ -142,7 +143,7 @@ async def sync_employmenthero_surveys(
                             "value": mean,
                             "n": len(b["vals"]),
                             "updated_at": started,
-                        }
+                        },
                     )
         else:
             # Attributed responses with redacted free-text.
@@ -166,7 +167,7 @@ async def sync_employmenthero_surveys(
                                 "answer_text_length": red["length"],
                                 "answer_text_hash": red["hash"],
                                 "answer_numeric": None,
-                            }
+                            },
                         )
                     elif isinstance(val, (int, float)):
                         responses.append(
@@ -176,7 +177,7 @@ async def sync_employmenthero_surveys(
                                 "answer_text_length": None,
                                 "answer_text_hash": None,
                                 "answer_numeric": val,
-                            }
+                            },
                         )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

@@ -1,6 +1,6 @@
 # Unity cluster secrets (GCP Secret Manager → GKE)
 
-Unity Job pods read API keys from the Kubernetes Secret `unity-secrets` via `secretKeyRef` (see `communication/communication/infra/helpers.py`). **GCP Secret Manager is the only place to rotate values.** The cluster must mirror `versions/latest`; never `kubectl apply` a hand-built secret YAML with key material.
+Unity Job pods read API keys from the Kubernetes Secret `unity-secrets` via `secretKeyRef` (see `communication/infra/helpers.py`). **GCP Secret Manager is the only place to rotate values.** The cluster must mirror `versions/latest`; never `kubectl apply` a hand-built secret YAML with key material.
 
 ## Architecture
 

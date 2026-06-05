@@ -141,7 +141,7 @@ Returns Prometheus text exposition format. Also includes `ProcessCollector` (pro
 
 ## 2. Comms App — Custom Metrics
 
-Source: `communication/common/metrics.py`, `communication/communication/main.py`
+Source: `common/metrics.py`, `communication/main.py`
 
 ### 2.1 HTTP Request Duration
 

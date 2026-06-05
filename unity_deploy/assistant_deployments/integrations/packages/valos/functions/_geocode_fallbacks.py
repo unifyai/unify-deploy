@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 
-
 _USER_AGENT = "unify-valos/0.3 (https://unify.ai)"
 
 

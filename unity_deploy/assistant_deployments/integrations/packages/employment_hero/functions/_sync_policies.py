@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_policies(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     import datetime as _dt
 
@@ -27,14 +28,14 @@ async def sync_employmenthero_policies(
                         "version": "3",
                         "effective_from": "2025-01-01",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "policy_acknowledgements": [
                     {
                         "policy_id": "pol-1",
                         "employee_id": "emp-mock-1",
                         "acknowledged_at": "2025-04-12T10:00:00Z",
-                    }
+                    },
                 ],
             },
             "metadata": {

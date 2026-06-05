@@ -113,30 +113,38 @@ async def valos_geocode(query: str, max_results: int = 5) -> dict:
             return normalised
         chain.append({"source": "postcodes_io", **payload})
 
-    skip_os = os.environ.get("VALOS_GEOCODE_SKIP_OS", "").lower() in {"1", "true", "yes"}
+    skip_os = os.environ.get("VALOS_GEOCODE_SKIP_OS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
     if not skip_os:
         places = await os_places_find(query, max_results=max_results)
-        if (
-            isinstance(places, dict)
-            and not places.get("error")
-        ):
+        if isinstance(places, dict) and not places.get("error"):
             return _normalise_os_response(places, source="os_places")
-        chain.append({"source": "os_places", **(places if isinstance(places, dict) else {"raw": places})})
+        chain.append(
+            {
+                "source": "os_places",
+                **(places if isinstance(places, dict) else {"raw": places}),
+            },
+        )
         # Fall through on product_not_enabled (401 with resource scope, or 403)
         # and also on transient errors — Nominatim is the safety net.
-        places_should_fallback = (
-            isinstance(places, dict)
-            and (
-                places.get("product_not_enabled")
-                or places.get("status_code") in (401, 403, 404)
-            )
+        places_should_fallback = isinstance(places, dict) and (
+            places.get("product_not_enabled")
+            or places.get("status_code") in (401, 403, 404)
         )
         if places_should_fallback:
             names = await os_names_find(query, max_results=max_results)
             if isinstance(names, dict) and not names.get("error"):
                 return _normalise_os_response(names, source="os_names")
-            chain.append({"source": "os_names", **(names if isinstance(names, dict) else {"raw": names})})
+            chain.append(
+                {
+                    "source": "os_names",
+                    **(names if isinstance(names, dict) else {"raw": names}),
+                },
+            )
 
     nominatim_payload = await nominatim_search(query, max_results=max_results)
     nominatim_normalised = _normalise_nominatim_response(nominatim_payload)

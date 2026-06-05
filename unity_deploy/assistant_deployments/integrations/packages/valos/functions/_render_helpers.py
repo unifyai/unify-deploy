@@ -319,12 +319,16 @@ def _draw_pins_on_image(
             and bbox_in_crs["min_y"] <= y_crs <= bbox_in_crs["max_y"]
         ):
             continue
-        px = (x_crs - bbox_in_crs["min_x"]) / (
-            bbox_in_crs["max_x"] - bbox_in_crs["min_x"]
-        ) * width
-        py = (bbox_in_crs["max_y"] - y_crs) / (
-            bbox_in_crs["max_y"] - bbox_in_crs["min_y"]
-        ) * height
+        px = (
+            (x_crs - bbox_in_crs["min_x"])
+            / (bbox_in_crs["max_x"] - bbox_in_crs["min_x"])
+            * width
+        )
+        py = (
+            (bbox_in_crs["max_y"] - y_crs)
+            / (bbox_in_crs["max_y"] - bbox_in_crs["min_y"])
+            * height
+        )
         radius = 12
         draw.ellipse(
             [(px - radius, py - radius), (px + radius, py + radius)],
@@ -376,9 +380,14 @@ def _add_decorations(
             length_px = int(target_metres / resolution)
             x0 = 20
             y0 = img.height - 30
-            draw.rectangle([(x0, y0), (x0 + length_px, y0 + 8)], outline="black", width=2)
             draw.rectangle(
-                [(x0, y0), (x0 + length_px // 2, y0 + 8)], fill="black",
+                [(x0, y0), (x0 + length_px, y0 + 8)],
+                outline="black",
+                width=2,
+            )
+            draw.rectangle(
+                [(x0, y0), (x0 + length_px // 2, y0 + 8)],
+                fill="black",
             )
             if font is not None:
                 label = (

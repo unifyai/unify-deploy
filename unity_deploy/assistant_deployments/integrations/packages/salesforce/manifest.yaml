@@ -29,76 +29,76 @@ secrets:
   # callback URL registered on that app must match the Console callback
   # URL documented in guidance/salesforce_setup.md.
 
-  - name: SALESFORCE_CLIENT_ID
-    description: >
-      Consumer Key from the customer's Salesforce Connected App.
-      Required for the OAuth Connect flow.  Add this BEFORE clicking
-      Connect in the Integrations modal.  Not sensitive — client_id is a
-      public identifier per the OAuth spec.
-    required: true
-    sensitive: false
+- name: SALESFORCE_CLIENT_ID
+  description: >
+    Consumer Key from the customer's Salesforce Connected App.
+    Required for the OAuth Connect flow.  Add this BEFORE clicking
+    Connect in the Integrations modal.  Not sensitive — client_id is a
+    public identifier per the OAuth spec.
+  required: true
+  sensitive: false
 
-  - name: SALESFORCE_CLIENT_SECRET
-    description: >
-      Consumer Secret from the customer's Salesforce Connected App.
-      Required for the OAuth Connect flow.  Add alongside
-      SALESFORCE_CLIENT_ID.
-    required: true
-    sensitive: true
+- name: SALESFORCE_CLIENT_SECRET
+  description: >
+    Consumer Secret from the customer's Salesforce Connected App.
+    Required for the OAuth Connect flow.  Add alongside
+    SALESFORCE_CLIENT_ID.
+  required: true
+  sensitive: true
 
   # ----- OAuth-managed secrets (set by the Console Connect flow) ----
   # Written automatically by the Console OAuth callback after the user
   # grants consent on Salesforce.  Do not edit manually.
 
-  - name: SALESFORCE_REFRESH_TOKEN
-    description: >
-      Long-lived OAuth refresh token, written automatically by the
-      Console Connect flow after the user grants consent on Salesforce.
-      The package uses this with the customer's CLIENT_ID and
-      CLIENT_SECRET to mint short-lived access tokens at runtime via
-      ``POST /services/oauth2/token``.  Refresh tokens do not expire by
-      default but can be revoked by the org admin or invalidated by
-      policy.  When invalid the user clicks Reconnect.  Do not edit
-      manually.
-    required: false
-    sensitive: true
+- name: SALESFORCE_REFRESH_TOKEN
+  description: >
+    Long-lived OAuth refresh token, written automatically by the
+    Console Connect flow after the user grants consent on Salesforce.
+    The package uses this with the customer's CLIENT_ID and
+    CLIENT_SECRET to mint short-lived access tokens at runtime via
+    ``POST /services/oauth2/token``.  Refresh tokens do not expire by
+    default but can be revoked by the org admin or invalidated by
+    policy.  When invalid the user clicks Reconnect.  Do not edit
+    manually.
+  required: false
+  sensitive: true
 
-  - name: SALESFORCE_INSTANCE_URL
-    description: >
-      Per-org API host returned by Salesforce in the OAuth token
-      response (e.g. ``https://acme.my.salesforce.com``).  All REST
-      calls other than token exchange/refresh use this as the base URL,
-      not ``login.salesforce.com``.  Written automatically by the
-      Console Connect flow.  Do not edit manually.
-    required: false
-    sensitive: false
+- name: SALESFORCE_INSTANCE_URL
+  description: >
+    Per-org API host returned by Salesforce in the OAuth token
+    response (e.g. ``https://acme.my.salesforce.com``).  All REST
+    calls other than token exchange/refresh use this as the base URL,
+    not ``login.salesforce.com``.  Written automatically by the
+    Console Connect flow.  Do not edit manually.
+  required: false
+  sensitive: false
 
   # ----- Optional overrides ------------------------------------------
 
-  - name: SALESFORCE_API_VERSION
-    description: >
-      REST API version to target.  Defaults to ``v60.0``.  Bump when
-      adopting newer fields; Salesforce supports each version for ~3
-      years.
-    required: false
-    sensitive: false
+- name: SALESFORCE_API_VERSION
+  description: >
+    REST API version to target.  Defaults to ``v60.0``.  Bump when
+    adopting newer fields; Salesforce supports each version for ~3
+    years.
+  required: false
+  sensitive: false
 
-  - name: SALESFORCE_SYNC_OBJECTS
-    description: >
-      Comma-separated list of object keys to include on a sync tick.
-      Defaults to ``accounts,contacts,leads,opportunities,cases``.
-      Operators trim this to disable per-object syncs without touching
-      code.
-    required: false
-    sensitive: false
+- name: SALESFORCE_SYNC_OBJECTS
+  description: >
+    Comma-separated list of object keys to include on a sync tick.
+    Defaults to ``accounts,contacts,leads,opportunities,cases``.
+    Operators trim this to disable per-object syncs without touching
+    code.
+  required: false
+  sensitive: false
 
-  - name: SALESFORCE_SYNC_OBJECT_INTERVALS
-    description: >
-      Per-object cadence overrides as ``key:seconds,key:seconds``.
-      Missing keys fall back to package defaults (accounts/contacts:
-      30min, leads/opportunities/cases: 15min).
-    required: false
-    sensitive: false
+- name: SALESFORCE_SYNC_OBJECT_INTERVALS
+  description: >
+    Per-object cadence overrides as ``key:seconds,key:seconds``.
+    Missing keys fall back to package defaults (accounts/contacts:
+    30min, leads/opportunities/cases: 15min).
+  required: false
+  sensitive: false
 
 capabilities:
   # ----- Live API access ---------------------------------------------
@@ -106,59 +106,55 @@ capabilities:
   # using Salesforce's API docs and the structured 4xx error envelopes
   # the helper returns when something's malformed.  For SOQL queries,
   # prefer the typed SOQL helpers below.
-  - id: salesforce_live
-    name: Live API access
-    description: >
-      One tool covering the entire Salesforce REST surface (sObject CRUD
-      across all standard + custom objects, composite, tooling, metadata,
-      bulk).  First-page only — bulk pulls go through the sync
-      orchestrator.  Writes are not gated in code; the actor surfaces
-      what's about to change to the user before issuing a destructive
-      verb.
-    functions: [salesforce_request]
-    guidance: [salesforce_overview, salesforce_setup]
+- id: salesforce_live
+  name: Live API access
+  description: >
+    One tool covering the entire Salesforce REST surface (sObject CRUD
+    across all standard + custom objects, composite, tooling, metadata,
+    bulk).  First-page only — bulk pulls go through the sync
+    orchestrator.  Writes are not gated in code; the actor surfaces
+    what's about to change to the user before issuing a destructive
+    verb.
+  functions: [salesforce_request]
+  guidance: [salesforce_overview, salesforce_setup]
 
   # ----- SOQL escape hatch -------------------------------------------
   # SOQL is the canonical Salesforce query language; cursor-following
   # via ``nextRecordsUrl`` and the WHERE-clause shape make a typed
   # wrapper meaningfully cheaper than constructing each query from
   # scratch.
-  - id: salesforce_soql
-    name: SOQL & describe
-    description: >
-      Run arbitrary SOQL and describe any sObject — covers custom
-      objects, custom fields, and ad-hoc queries.  The helper handles
-      cursor-following automatically.
-    functions: [run_salesforce_soql, describe_salesforce_object]
-    guidance: [salesforce_soql]
+- id: salesforce_soql
+  name: SOQL & describe
+  description: >
+    Run arbitrary SOQL and describe any sObject — covers custom
+    objects, custom fields, and ad-hoc queries.  The helper handles
+    cursor-following automatically.
+  functions: [run_salesforce_soql, describe_salesforce_object]
+  guidance: [salesforce_soql]
 
   # ----- Account / token check ---------------------------------------
-  - id: salesforce_account
-    name: Account
-    description: Verify token; identify the connected Salesforce user.
-    functions: [get_salesforce_me]
-    guidance: [salesforce_overview, salesforce_setup]
+- id: salesforce_account
+  name: Account
+  description: Verify token; identify the connected Salesforce user.
+  functions: [get_salesforce_me]
+  guidance: [salesforce_overview, salesforce_setup]
 
   # ----- Sync orchestration ------------------------------------------
-  - id: salesforce_incremental_sync
-    name: Incremental sync
-    description: >
-      Single-tick orchestration across enabled object types.  Runs the
-      internal ``sync_salesforce_*`` snapshot writers and aggregates
-      their output into the canonical DataManager envelope.
-    functions: [run_salesforce_sync_tick, get_salesforce_sync_state]
-    guidance: [salesforce_sync]
+- id: salesforce_incremental_sync
+  name: Incremental sync
+  description: >
+    Single-tick orchestration across enabled object types.  Runs the
+    internal ``sync_salesforce_*`` snapshot writers and aggregates
+    their output into the canonical DataManager envelope.
+  functions: [run_salesforce_sync_tick, get_salesforce_sync_state]
+  guidance: [salesforce_sync]
 
   # ----- Local DataManager query -------------------------------------
-  - id: salesforce_local_query
-    name: Local DataManager query
-    description: Query the synced Salesforce copy in DataManager (preferred for analytics).
-    functions: [
-      query_local_salesforce_accounts, query_local_salesforce_contacts,
-      query_local_salesforce_leads, query_local_salesforce_opportunities,
-      query_local_salesforce_cases,
-    ]
-    guidance: [salesforce_overview]
+- id: salesforce_local_query
+  name: Local DataManager query
+  description: Query the synced Salesforce copy in DataManager (preferred for analytics).
+  functions: [query_local_salesforce_accounts, query_local_salesforce_contacts, query_local_salesforce_leads, query_local_salesforce_opportunities, query_local_salesforce_cases]
+  guidance: [salesforce_overview]
 
 requirements: [httpx]
 tags: [salesforce, crm, sales, accounts, contacts, opportunities, sync, datamanager, soql]

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_learning(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     import datetime as _dt
 
@@ -28,7 +29,7 @@ async def sync_employmenthero_learning(
                         "is_mandatory": True,
                         "category": "compliance",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "course_assignments": [
                     {
@@ -39,7 +40,7 @@ async def sync_employmenthero_learning(
                         "due_date": "2026-04-30",
                         "status": "in_progress",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "course_completions": [
                     {
@@ -49,7 +50,7 @@ async def sync_employmenthero_learning(
                         "completed_at": "2026-04-08T11:30:00Z",
                         "score": 92,
                         "updated_at": started,
-                    }
+                    },
                 ],
             },
             "metadata": {
@@ -78,7 +79,9 @@ async def sync_employmenthero_learning(
     max_pages = cfg["max_pages_per_sync"]
 
     courses_raw = await eh_paginate(
-        org_path("/courses"), page_size=page_size, max_pages=max_pages
+        org_path("/courses"),
+        page_size=page_size,
+        max_pages=max_pages,
     )
     courses = [
         {

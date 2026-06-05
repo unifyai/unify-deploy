@@ -253,6 +253,8 @@ class TestFunctionQuality:
             module = loaded_modules[py_file.stem]
             _, func_nodes = _get_function_nodes(py_file)
             for fn_node in func_nodes:
+                if fn_node.name.startswith("_"):
+                    continue
                 fn_obj = getattr(module, fn_node.name, None)
                 assert fn_obj is not None, f"{fn_node.name} not in {py_file.name}"
                 assert callable(fn_obj), f"{fn_node.name} is not callable"

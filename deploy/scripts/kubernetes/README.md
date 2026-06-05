@@ -18,7 +18,7 @@ avoid drift confusion.
 
 The canonical Unity Job manifest builder is:
 
-* [`communication/communication/infra/helpers.py:create_unity_job`](https://github.com/unifyai/communication/blob/main/communication/infra/helpers.py)
+* [`communication/infra/helpers.py:create_unity_job`](../../../communication/infra/helpers.py)
   -- the **single source of truth** for the `batch/v1` Job manifest used by
   the production idle pool, the AssistantSession controller (override path),
   offline tasks, and dashboard actions.

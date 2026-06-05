@@ -76,7 +76,7 @@ async def lookup_matterport_model_for_unit(
                     "unit_id": str(unit_id),
                     "source": "internal_label",
                     "confidence": 1.0,
-                }
+                },
             ],
         }
 
@@ -206,7 +206,7 @@ async def correlate_matterport_views_to_hubspot_leads(
                 "last_viewed_at": slot["last_viewed_at"],
                 "hubspot_contact_id": contact.get("hubspot_id") if contact else None,
                 "lifecyclestage": contact.get("lifecyclestage") if contact else None,
-            }
+            },
         )
     matches.sort(key=lambda r: r["view_count"], reverse=True)
     return {"model_id": model_id, "matches": matches[:limit]}

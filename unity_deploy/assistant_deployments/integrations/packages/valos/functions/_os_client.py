@@ -103,10 +103,7 @@ async def os_get_json(
             # The chain in ``lookups.py`` keys off
             # ``product_not_enabled`` to decide whether to fall through;
             # surface it as a structured flag, not just a hint.
-            if (
-                resp.status_code == 401
-                and "for given resource" in body_text.lower()
-            ):
+            if resp.status_code == 401 and "for given resource" in body_text.lower():
                 last_err["product_not_enabled"] = True
                 last_err["hint"] = (
                     "OS_MAPS_API_KEY is valid but the OS Data Hub project does "

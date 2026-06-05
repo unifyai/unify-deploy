@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import re
 
-
 # UK postcode pattern (case-insensitive, flexible whitespace).  Matches
 # every form Royal Mail issues today: ``M2 2JT``, ``CB24 9EY``,
 # ``EC1A 1BB``, ``SW1A 1AA``, ``B1 1AA``, ``GIR 0AA`` (Girobank), etc.

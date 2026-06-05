@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_timesheets(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     """Snapshot timesheet entries (incremental by ``since`` watermark)."""
     import datetime as _dt
@@ -33,7 +34,7 @@ async def sync_employmenthero_timesheets(
                         "status": "submitted",
                         "updated_at": started,
                     },
-                ]
+                ],
             },
             "metadata": {
                 "integration": "employment_hero",

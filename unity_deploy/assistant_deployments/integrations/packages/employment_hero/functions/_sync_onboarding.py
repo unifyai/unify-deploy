@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_onboarding(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     import datetime as _dt
 
@@ -27,7 +28,7 @@ async def sync_employmenthero_onboarding(
                         "version": "2",
                         "is_active": True,
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "onboarding_tasks": [
                     {
@@ -37,7 +38,7 @@ async def sync_employmenthero_onboarding(
                         "is_required": True,
                         "order": 1,
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "employee_onboarding_status": [
                     {
