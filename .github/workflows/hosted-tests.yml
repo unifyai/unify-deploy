@@ -116,11 +116,11 @@ jobs:
 
     - name: Set up Environment
       run: |
-        pip install -e ".[comms,adapters]"
-        pip install pytest pytest-asyncio pytest-env
+        pip install uv
+        uv sync --all-groups --all-extras
 
     - name: Run deploy tests
-      run: pytest -vs tests/deployment_reconcile tests/assistant_deployments
+      run: .venv/bin/python -m pytest -vs tests/deployment_reconcile tests/assistant_deployments
 
   adapter_tests:
     runs-on: ubuntu-latest
@@ -147,11 +147,11 @@ jobs:
 
     - name: Set up Environment
       run: |
-        pip install -e ".[adapters]"
-        pip install pytest pytest-asyncio pytest-env
+        pip install uv
+        uv sync --all-groups --all-extras
 
     - name: Run adapter tests
-      run: pytest -vs tests/communication/adapters/ -m "not live"
+      run: .venv/bin/python -m pytest -vs tests/communication/adapters/ -m "not live"
       env:
         GCP_SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON || secrets.GCP_SA_KEY }}
         TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
@@ -167,7 +167,7 @@ jobs:
         GCP_PROJECT_ID: gcp-project-runtime
 
     - name: Run unify attachment tests
-      run: pytest -vs tests/communication/unify/
+      run: .venv/bin/python -m pytest -vs tests/communication/unify/
       env:
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
         GCP_PROJECT_ID: gcp-project-runtime
@@ -197,11 +197,11 @@ jobs:
 
     - name: Set up Environment
       run: |
-        pip install -e ".[adapters]"
-        pip install pytest pytest-asyncio pytest-env
+        pip install uv
+        uv sync --all-groups --all-extras
 
     - name: Run live adapter endpoint tests
-      run: pytest -vs tests/communication/adapters/test_endpoints.py
+      run: .venv/bin/python -m pytest -vs tests/communication/adapters/test_endpoints.py
       env:
         GCP_SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON || secrets.GCP_SA_KEY }}
         TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
