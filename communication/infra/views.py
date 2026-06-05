@@ -9,6 +9,7 @@ from google.cloud import compute_v1, pubsub_v1, storage
 from google.protobuf import duration_pb2
 import json
 import logging
+import os
 import time
 from typing import Any
 import uuid
@@ -576,6 +577,12 @@ def _ensure_subscription(
             )
             subscriber.create_subscription(request=request)
             return
+
+    # The Pub/Sub emulator does not implement subscription field masks the
+    # same way as production GCS Pub/Sub. Subscriptions are already created
+    # above; skip the production-only expiration-policy refresh locally.
+    if os.environ.get("PUBSUB_EMULATOR_HOST"):
+        return
 
     subscription = pubsub_v1.types.Subscription(
         name=subscription_path,

@@ -26,6 +26,10 @@ _cloud_tasks_client = None
 def service_account_credentials() -> Credentials:
     """Build GCP service-account credentials from the configured env payload."""
 
+    if os.getenv("PUBSUB_EMULATOR_HOST"):
+        raise RuntimeError(
+            "service_account_credentials() must not be used with PUBSUB_EMULATOR_HOST",
+        )
     creds_json = os.getenv("GCP_SA_KEY")
     if not creds_json:
         raise RuntimeError("GCP_SA_KEY must be set for GCP-backed infra endpoints")
@@ -40,9 +44,14 @@ def get_pubsub_clients() -> (
     global _pubsub_publisher, _pubsub_subscriber
 
     if _pubsub_publisher is None or _pubsub_subscriber is None:
-        creds = service_account_credentials()
-        _pubsub_publisher = pubsub_v1.PublisherClient(credentials=creds)
-        _pubsub_subscriber = pubsub_v1.SubscriberClient(credentials=creds)
+        if os.getenv("PUBSUB_EMULATOR_HOST"):
+            # The emulator is selected via PUBSUB_EMULATOR_HOST; no SA key needed.
+            _pubsub_publisher = pubsub_v1.PublisherClient()
+            _pubsub_subscriber = pubsub_v1.SubscriberClient()
+        else:
+            creds = service_account_credentials()
+            _pubsub_publisher = pubsub_v1.PublisherClient(credentials=creds)
+            _pubsub_subscriber = pubsub_v1.SubscriberClient(credentials=creds)
     return _pubsub_publisher, _pubsub_subscriber
 
 
