@@ -104,6 +104,7 @@ include = ["unity_deploy*", "communication*", "adapters*", "common*"]
 
 [tool.setuptools.package-data]
 "unity_deploy" = ["**/*.json", "**/*.md", "**/*.py", "**/*.yaml", "**/*.yml"]
+"*" = ["*.json", "*.md", "*.yaml", "*.yml", "data/*.json", "data/*.md", "data/*.yaml", "data/*.yml"]
 "communication" = ["**/*.md", "**/*.ps1", "**/*.sh", "**/*.html", "**/*.conf", "**/*.hcl"]
 
 [tool.pytest.ini_options]
