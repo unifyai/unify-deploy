@@ -12,6 +12,10 @@ import base64
 from google.cloud import pubsub_v1
 import json
 
+import pytest
+
+pytestmark = pytest.mark.live
+
 subscriber = pubsub_v1.SubscriberClient()
 subscription_path = subscriber.subscription_path(
     os.getenv("GCP_PROJECT_ID"),

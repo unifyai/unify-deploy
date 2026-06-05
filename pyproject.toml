@@ -101,6 +101,9 @@ include-package-data = true
 unillm = { git = "https://github.com/unifyai/unillm.git", branch = "staging" }
 
 [tool.pytest.ini_options]
+markers = [
+    "live: tests that require deployed cloud resources or provider credentials",
+]
 env = [
     "GRPC_ENABLE_FORK_SUPPORT=0",
     "GRPC_VERBOSITY=ERROR",
