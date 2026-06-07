@@ -52,7 +52,7 @@ class _AsyncClient:
 
 
 @pytest.mark.asyncio
-async def test_discord_start_job_encodes_space_ids_for_form(monkeypatch):
+async def test_discord_start_job_encodes_team_ids_for_form(monkeypatch):
     """Discord wakeups forward membership ids through the start-job form."""
 
     _AsyncClient.instances = []
@@ -82,10 +82,10 @@ async def test_discord_start_job_encodes_space_ids_for_form(monkeypatch):
             "voice_provider": "elevenlabs",
             "voice_id": "voice-123",
             "desktop_mode": "ubuntu",
-            "space_ids": [8, 9],
-            "space_summaries": [
+            "team_ids": [8, 9],
+            "team_summaries": [
                 {
-                    "space_id": 8,
+                    "team_id": 8,
                     "name": "Discord Ops",
                     "description": "Discord workspace for support escalations.",
                 },
@@ -97,14 +97,13 @@ async def test_discord_start_job_encodes_space_ids_for_form(monkeypatch):
 
     post = _AsyncClient.instances[0].posts[0]
     assert post["url"] == "http://comms.test/infra/job/start"
-    assert json.loads(post["data"]["space_ids"]) == [8, 9]
-    assert json.loads(post["data"]["space_summaries"]) == [
+    assert json.loads(post["data"]["team_ids"]) == [8, 9]
+    assert json.loads(post["data"]["team_summaries"]) == [
         {
-            "space_id": 8,
+            "team_id": 8,
             "name": "Discord Ops",
             "description": "Discord workspace for support escalations.",
         },
     ]
-    assert json.loads(post["data"]["team_ids"]) == []
     assert post["data"]["self_contact_id"] == "42"
     assert post["data"]["boss_contact_id"] == "43"

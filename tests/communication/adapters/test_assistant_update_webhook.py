@@ -31,8 +31,8 @@ class _Publisher:
 
 
 def _assistant(
-    space_ids=None,
-    space_summaries=None,
+    team_ids=None,
+    team_summaries=None,
     *,
     is_coordinator: bool = False,
     org_id=None,
@@ -52,8 +52,8 @@ def _assistant(
         "is_coordinator": is_coordinator,
         "org_id": org_id,
         "is_local": False,
-        "space_ids": space_ids or [],
-        "space_summaries": space_summaries or [],
+        "team_ids": team_ids or [],
+        "team_summaries": team_summaries or [],
     }
 
 
@@ -93,20 +93,20 @@ def _post_assistant_update(*, data: dict, assistant_data: dict, publisher: _Publ
     return response, mock_submit
 
 
-def test_membership_update_publishes_space_ids_inside_event():
+def test_membership_update_publishes_team_ids_inside_event():
     """Membership updates use source-fetched memberships over caller overrides."""
 
     publisher = _Publisher()
     source_summaries = [
         {
-            "space_id": 9,
+            "team_id": 9,
             "name": "Source of Truth",
             "description": "Fetched assistant membership payload.",
         },
     ]
     summaries = [
         {
-            "space_id": 3,
+            "team_id": 3,
             "name": "Ops",
             "description": "Operations workspace for customer support.",
         },
@@ -114,11 +114,11 @@ def test_membership_update_publishes_space_ids_inside_event():
     response, mock_submit = _post_assistant_update(
         data={
             "assistant_id": "assistant-123",
-            "space_ids": "[3, 4]",
-            "space_summaries": json.dumps(summaries),
+            "team_ids": "[3, 4]",
+            "team_summaries": json.dumps(summaries),
             "update_kind": "membership",
         },
-        assistant_data=_assistant(space_ids=[9], space_summaries=source_summaries),
+        assistant_data=_assistant(team_ids=[9], team_summaries=source_summaries),
         publisher=publisher,
     )
 
@@ -127,8 +127,8 @@ def test_membership_update_publishes_space_ids_inside_event():
     published = _published_payload(publisher)
     assert published["thread"] == "assistant_update"
     assert published["event"]["assistant_id"] == "assistant-123"
-    assert published["event"]["space_ids"] == [9]
-    assert published["event"]["space_summaries"] == source_summaries
+    assert published["event"]["team_ids"] == [9]
+    assert published["event"]["team_summaries"] == source_summaries
     assert published["event"]["update_kind"] == "membership"
 
 
@@ -138,22 +138,22 @@ def test_general_update_invokes_ensure_job():
     publisher = _Publisher()
     summaries = [
         {
-            "space_id": 5,
+            "team_id": 5,
             "name": "Support",
             "description": "Support workspace for customer issues.",
         },
     ]
     response, mock_submit = _post_assistant_update(
         data={"assistant_id": "assistant-123"},
-        assistant_data=_assistant(space_ids=[5, 6], space_summaries=summaries),
+        assistant_data=_assistant(team_ids=[5, 6], team_summaries=summaries),
         publisher=publisher,
     )
 
     assert response.status_code == 200
     mock_submit.assert_called_once()
     published = _published_payload(publisher)
-    assert published["event"]["space_ids"] == [5, 6]
-    assert published["event"]["space_summaries"] == summaries
+    assert published["event"]["team_ids"] == [5, 6]
+    assert published["event"]["team_summaries"] == summaries
     assert published["event"]["update_kind"] == "general"
 
 
@@ -187,33 +187,33 @@ def test_invalid_update_kind_returns_400():
     assert response.json()["detail"] == "update_kind must be 'general' or 'membership'"
 
 
-def test_invalid_space_ids_are_ignored():
+def test_invalid_team_ids_are_ignored():
     """Malformed caller membership overrides are ignored, not validated."""
 
     publisher = _Publisher()
     response, mock_submit = _post_assistant_update(
         data={
             "assistant_id": "assistant-123",
-            "space_ids": '[1, "bad"]',
+            "team_ids": '[1, "bad"]',
             "update_kind": "membership",
         },
-        assistant_data=_assistant(space_ids=[17]),
+        assistant_data=_assistant(team_ids=[17]),
         publisher=publisher,
     )
 
     assert response.status_code == 200
     mock_submit.assert_not_called()
     published = _published_payload(publisher)
-    assert published["event"]["space_ids"] == [17]
+    assert published["event"]["team_ids"] == [17]
 
 
-def test_invalid_space_summaries_are_ignored():
+def test_invalid_team_summaries_are_ignored():
     """Malformed caller summary overrides are ignored, not validated."""
 
     publisher = _Publisher()
     source_summaries = [
         {
-            "space_id": 22,
+            "team_id": 22,
             "name": "Ops",
             "description": "Source summary",
         },
@@ -221,14 +221,14 @@ def test_invalid_space_summaries_are_ignored():
     response, mock_submit = _post_assistant_update(
         data={
             "assistant_id": "assistant-123",
-            "space_summaries": '[{"space_id": "bad", "name": "Ops", "description": "Bad"}]',
+            "team_summaries": '[{"team_id": "bad", "name": "Ops", "description": "Bad"}]',
             "update_kind": "membership",
         },
-        assistant_data=_assistant(space_ids=[22], space_summaries=source_summaries),
+        assistant_data=_assistant(team_ids=[22], team_summaries=source_summaries),
         publisher=publisher,
     )
 
     assert response.status_code == 200
     mock_submit.assert_not_called()
     published = _published_payload(publisher)
-    assert published["event"]["space_summaries"] == source_summaries
+    assert published["event"]["team_summaries"] == source_summaries

@@ -277,10 +277,10 @@ def _create_mock_assistant_data(demo_id=None, desktop_mode="none"):
         "is_coordinator": False,
         "demo_id": demo_id,
         "is_local": False,
-        "space_ids": [11, 22],
-        "space_summaries": [
+        "team_ids": [11, 22],
+        "team_summaries": [
             {
-                "space_id": 11,
+                "team_id": 11,
                 "name": "Ops",
                 "description": "Operations workspace for customer support.",
             },
@@ -490,7 +490,7 @@ def test_dispatch_unity_start_intent_includes_wake_reasons(mock_post):
 
 @patch("adapters.helpers.requests.post")
 @patch.dict("os.environ", {"ORCHESTRA_ADMIN_KEY": "test-key"})
-def test_dispatch_unity_start_intent_encodes_space_ids_for_form(mock_post):
+def test_dispatch_unity_start_intent_encodes_team_ids_for_form(mock_post):
     """Start-intent form payloads carry memberships as JSON strings."""
 
     mock_response = MagicMock()
@@ -502,10 +502,10 @@ def test_dispatch_unity_start_intent_encodes_space_ids_for_form(mock_post):
 
     assert response is mock_response
     data = mock_post.call_args.kwargs["data"]
-    assert json.loads(data["space_ids"]) == [11, 22]
-    assert json.loads(data["space_summaries"]) == [
+    assert json.loads(data["team_ids"]) == [11, 22]
+    assert json.loads(data["team_summaries"]) == [
         {
-            "space_id": 11,
+            "team_id": 11,
             "name": "Ops",
             "description": "Operations workspace for customer support.",
         },
@@ -529,7 +529,7 @@ def test_dispatch_unity_start_intent_returns_none_without_api_key(mock_post):
 
 
 @patch("adapters.helpers.requests.get")
-def test_get_assistant_preserves_space_ids(mock_get):
+def test_get_assistant_preserves_team_ids(mock_get):
     """Assistant lookups preserve live membership ids from Orchestra."""
 
     mock_get.return_value = MagicMock(
@@ -567,11 +567,10 @@ def test_get_assistant_preserves_space_ids(mock_get):
                         "user_desktop_url": None,
                         "demo_id": None,
                         "is_local": False,
-                        "team_ids": [7],
-                        "space_ids": [3, 4],
-                        "space_summaries": [
+                        "team_ids": [3, 4],
+                        "team_summaries": [
                             {
-                                "space_id": 3,
+                                "team_id": 3,
                                 "name": "Support",
                                 "description": "Support workspace for customer issues.",
                             },
@@ -587,15 +586,14 @@ def test_get_assistant_preserves_space_ids(mock_get):
 
     assistant = get_assistant(assistant_id="assistant-123")
 
-    assert assistant["space_ids"] == [3, 4]
-    assert assistant["space_summaries"] == [
+    assert assistant["team_ids"] == [3, 4]
+    assert assistant["team_summaries"] == [
         {
-            "space_id": 3,
+            "team_id": 3,
             "name": "Support",
             "description": "Support workspace for customer issues.",
         },
     ]
-    assert assistant["team_ids"] == [7]
     assert assistant["self_contact_id"] == 42
     assert assistant["boss_contact_id"] == 43
 

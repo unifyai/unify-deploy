@@ -40,8 +40,7 @@ from msgraph.generated.users.item.messages.item.message_item_request_builder imp
     MessageItemRequestBuilder,
 )
 
-from common.int_list_codec import encode_int_list_for_form
-from common.space_summaries_codec import encode_space_summaries_for_form
+from common.team_summaries_codec import encode_team_summaries_for_form
 from common.settings import SETTINGS
 
 LOCAL_ASSISTANT_SELF_CONTACT_ID = 0
@@ -901,13 +900,9 @@ def _build_start_job_request_data(
         "demo_id": str(demo_id) if demo_id else "",
         "is_coordinator": ("true" if is_coordinator else "false"),
         "team_ids": json.dumps(assistant.get("team_ids", [])),
-        "space_ids": encode_int_list_for_form(
-            assistant.get("space_ids") or [],
-            field_name="space_ids",
-        ),
-        "space_summaries": encode_space_summaries_for_form(
-            assistant.get("space_summaries") or [],
-            field_name="space_summaries",
+        "team_summaries": encode_team_summaries_for_form(
+            assistant.get("team_summaries") or [],
+            field_name="team_summaries",
         ),
         "self_contact_id": str(_required_contact_id(assistant, "self_contact_id")),
         "boss_contact_id": str(_required_contact_id(assistant, "boss_contact_id")),

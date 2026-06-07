@@ -118,7 +118,7 @@ from common.livekit import (
 
 from common.oauth import OAuthStateError, verify_oauth_state
 from common.int_list_codec import normalize_int_list
-from common.space_summaries_codec import normalize_space_summaries
+from common.team_summaries_codec import normalize_team_summaries
 from common.settings import SETTINGS
 from common.task_destination import assistant_has_task_destination
 
@@ -2570,9 +2570,9 @@ async def assistant_update_webhook(request: Request):
                 status_code=400,
                 detail="update_kind must be 'general' or 'membership'",
             )
-        raw_space_ids = form_data.get("space_ids")
-        raw_space_summaries = form_data.get("space_summaries")
-        if raw_space_ids not in (None, "") or raw_space_summaries not in (None, ""):
+        raw_team_ids = form_data.get("team_ids")
+        raw_team_summaries = form_data.get("team_summaries")
+        if raw_team_ids not in (None, "") or raw_team_summaries not in (None, ""):
             logger.info(
                 "Ignoring caller-provided assistant update membership payload; "
                 "using source-fetched assistant memberships only.",
@@ -2590,18 +2590,18 @@ async def assistant_update_webhook(request: Request):
             ensure_job=update_kind != "membership",
         )
         assistant_data = context["assistant"]
-        space_ids = normalize_int_list(
-            assistant_data.get("space_ids") or [],
-            field_name="space_ids",
+        team_ids = normalize_int_list(
+            assistant_data.get("team_ids") or [],
+            field_name="team_ids",
         )
-        space_summaries = normalize_space_summaries(
-            assistant_data.get("space_summaries") or [],
-            field_name="space_summaries",
+        team_summaries = normalize_team_summaries(
+            assistant_data.get("team_summaries") or [],
+            field_name="team_summaries",
         )
         assistant_event = {
             **assistant_data,
-            "space_ids": space_ids,
-            "space_summaries": space_summaries,
+            "team_ids": team_ids,
+            "team_summaries": team_summaries,
             "update_kind": update_kind,
         }
         logger.info(
