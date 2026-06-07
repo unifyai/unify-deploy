@@ -253,7 +253,7 @@ def test_upsert_scheduled_task_activation_threads_destination(
             "/infra/task-activation/upsert",
             json={
                 "assistant_id": "assistant-123",
-                "destination": "space:7",
+                "destination": "team:7",
                 "task_id": 101,
                 "source_task_log_id": 555,
                 "activation_revision": "rev-123",
@@ -263,7 +263,7 @@ def test_upsert_scheduled_task_activation_threads_destination(
 
     assert response.status_code == 200
     _, task = fake_client.created_tasks[0]
-    assert b'"destination": "space:7"' in task.http_request.body
+    assert b'"destination": "team:7"' in task.http_request.body
 
 
 def test_upsert_scheduled_task_activation_deletes_previous_materialization(

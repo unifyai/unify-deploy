@@ -8,7 +8,7 @@ from communication.infra.dashboard_actions import (
 )
 
 
-def test_dashboard_action_env_carries_space_ids_as_csv():
+def test_dashboard_action_env_carries_team_ids_as_csv():
     """Dashboard action runs use the same membership env bridge as tasks."""
 
     request = DashboardActionDispatchRequest(
@@ -23,10 +23,10 @@ def test_dashboard_action_env_carries_space_ids_as_csv():
         assistant_data={
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
-            "space_ids": [3, 4],
-            "space_summaries": [
+            "team_ids": [3, 4],
+            "team_summaries": [
                 {
-                    "space_id": 3,
+                    "team_id": 3,
                     "name": "Ops",
                     "description": "Operations workspace for dashboard actions.",
                 },
@@ -38,10 +38,10 @@ def test_dashboard_action_env_carries_space_ids_as_csv():
         job_name="unity-dashboard-action-abc",
     )
 
-    assert env["SPACE_IDS"] == "3,4"
-    assert json.loads(env["SPACE_SUMMARIES"]) == [
+    assert env["TEAM_IDS"] == "3,4"
+    assert json.loads(env["TEAM_SUMMARIES"]) == [
         {
-            "space_id": 3,
+            "team_id": 3,
             "name": "Ops",
             "description": "Operations workspace for dashboard actions.",
         },
@@ -50,7 +50,7 @@ def test_dashboard_action_env_carries_space_ids_as_csv():
     assert env["BOSS_CONTACT_ID"] == "43"
 
 
-def test_dashboard_action_env_uses_empty_space_ids_for_solo_assistant():
+def test_dashboard_action_env_uses_empty_team_ids_for_solo_assistant():
     """Solo dashboard action runs keep the env value present but empty."""
 
     request = DashboardActionDispatchRequest(
@@ -65,7 +65,7 @@ def test_dashboard_action_env_uses_empty_space_ids_for_solo_assistant():
         assistant_data={
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
-            "space_ids": [],
+            "team_ids": [],
             "self_contact_id": 42,
             "boss_contact_id": 43,
         },
@@ -73,5 +73,5 @@ def test_dashboard_action_env_uses_empty_space_ids_for_solo_assistant():
         job_name="unity-dashboard-action-abc",
     )
 
-    assert env["SPACE_IDS"] == ""
-    assert env["SPACE_SUMMARIES"] == ""
+    assert env["TEAM_IDS"] == ""
+    assert env["TEAM_SUMMARIES"] == ""

@@ -28,7 +28,7 @@ from kubernetes.client.rest import ApiException
 
 from common.assistant_lookup import get_assistant
 from common.int_list_codec import encode_int_list_for_env
-from common.space_summaries_codec import encode_space_summaries_for_env
+from common.team_summaries_codec import encode_team_summaries_for_env
 from common.settings import SETTINGS
 from common.task_destination import assistant_has_task_destination
 
@@ -887,8 +887,7 @@ def _build_offline_runner_env(
 
     entrypoint = activation.get("entrypoint") or request.entrypoint
     team_ids = assistant_data.get("team_ids") or []
-    space_ids = assistant_data.get("space_ids") or []
-    space_summaries = assistant_data.get("space_summaries") or []
+    team_summaries = assistant_data.get("team_summaries") or []
     self_contact_id = _required_contact_id(assistant_data, "self_contact_id")
     boss_contact_id = _required_contact_id(assistant_data, "boss_contact_id")
     # Layer 1 — shared task-specific env (single source of truth in Unity).
@@ -955,11 +954,10 @@ def _build_offline_runner_env(
             ),
             "VOICE_ID": str(assistant_data.get("voice_id") or ""),
             "VOICE_MODE": "tts",
-            "TEAM_IDS": ",".join(str(team_id) for team_id in team_ids),
-            "SPACE_IDS": encode_int_list_for_env(space_ids, field_name="space_ids"),
-            "SPACE_SUMMARIES": encode_space_summaries_for_env(
-                space_summaries,
-                field_name="space_summaries",
+            "TEAM_IDS": encode_int_list_for_env(team_ids, field_name="team_ids"),
+            "TEAM_SUMMARIES": encode_team_summaries_for_env(
+                team_summaries,
+                field_name="team_summaries",
             ),
             "ORG_ID": (
                 str(assistant_data.get("org_id"))

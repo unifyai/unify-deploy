@@ -41,7 +41,7 @@ def _activation(**overrides):
 def _assistant_data(**overrides):
     assistant_data = {
         "assistant_id": "assistant-123",
-        "space_ids": [],
+        "team_ids": [],
         "self_contact_id": 42,
         "boss_contact_id": 43,
     }
@@ -618,11 +618,11 @@ def test_offline_dispatch_persists_authorized_destination_on_run_create():
     with (
         patch(
             "communication.infra.task_activation._lookup_current_task_activation",
-            return_value=_activation(destination="space:7"),
+            return_value=_activation(destination="team:7"),
         ) as mock_lookup,
         patch(
             "communication.infra.task_activation._get_assistant_data",
-            return_value=_assistant_data(space_ids=[7]),
+            return_value=_assistant_data(team_ids=[7]),
         ),
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
@@ -640,19 +640,19 @@ def test_offline_dispatch_persists_authorized_destination_on_run_create():
     ):
         response = client.post(
             "/infra/task-activation/offline-dispatch",
-            json=_payload(destination="space:7"),
+            json=_payload(destination="team:7"),
         )
 
     assert response.status_code == 200
     create_payload = mock_create_run.call_args.args[0]
-    assert create_payload["destination"] == "space:7"
+    assert create_payload["destination"] == "team:7"
     assert create_payload["run_key"].startswith(
-        "offline:scheduled:assistant-123:space-7:101:",
+        "offline:scheduled:assistant-123:team-7:101:",
     )
-    assert mock_lookup.call_args.kwargs["destination"] == "space:7"
+    assert mock_lookup.call_args.kwargs["destination"] == "team:7"
 
 
-def test_offline_dispatch_skips_revoked_space_destination():
+def test_offline_dispatch_skips_revoked_team_destination():
     """Offline dispatch should ack shared activations after membership revocation."""
 
     client = _client()
@@ -660,11 +660,11 @@ def test_offline_dispatch_skips_revoked_space_destination():
     with (
         patch(
             "communication.infra.task_activation._lookup_current_task_activation",
-            return_value=_activation(destination="space:7"),
+            return_value=_activation(destination="team:7"),
         ),
         patch(
             "communication.infra.task_activation._get_assistant_data",
-            return_value=_assistant_data(space_ids=[8]),
+            return_value=_assistant_data(team_ids=[8]),
         ),
         patch(
             "communication.infra.task_activation._create_or_adopt_task_run",
@@ -675,7 +675,7 @@ def test_offline_dispatch_skips_revoked_space_destination():
     ):
         response = client.post(
             "/infra/task-activation/offline-dispatch",
-            json=_payload(destination="space:7"),
+            json=_payload(destination="team:7"),
         )
 
     assert response.status_code == 200
@@ -729,14 +729,14 @@ def test_offline_run_key_uses_canonical_trigger_provenance_shape():
         f"contact-77-sms-message-{source_ref_digest}"
     )
 
-    request.destination = "space:7"
+    request.destination = "team:7"
     assert task_activation._build_offline_run_key(request) == (
-        f"offline:triggered:assistant-123:space-7:101:{revision_digest}:"
+        f"offline:triggered:assistant-123:team-7:101:{revision_digest}:"
         f"contact-77-sms-message-{source_ref_digest}"
     )
 
 
-def test_offline_runner_env_carries_space_ids_as_csv():
+def test_offline_runner_env_carries_team_ids_as_csv():
     """Headless task runs receive membership ids through the env bridge."""
 
     from communication.infra import task_activation
@@ -749,10 +749,10 @@ def test_offline_runner_env_carries_space_ids_as_csv():
         assistant_data={
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
-            "space_ids": [1, 2],
-            "space_summaries": [
+            "team_ids": [1, 2],
+            "team_summaries": [
                 {
-                    "space_id": 1,
+                    "team_id": 1,
                     "name": "Ops",
                     "description": "Operations workspace for customer support.",
                 },
@@ -764,10 +764,10 @@ def test_offline_runner_env_carries_space_ids_as_csv():
         job_name="unity-offline-abc",
     )
 
-    assert env["SPACE_IDS"] == "1,2"
-    assert json.loads(env["SPACE_SUMMARIES"]) == [
+    assert env["TEAM_IDS"] == "1,2"
+    assert json.loads(env["TEAM_SUMMARIES"]) == [
         {
-            "space_id": 1,
+            "team_id": 1,
             "name": "Ops",
             "description": "Operations workspace for customer support.",
         },
@@ -783,16 +783,16 @@ def test_offline_runner_env_carries_task_destination():
     from communication.infra import task_activation
 
     request = task_activation.OfflineTaskDispatchRequest(
-        **_payload(destination="space:7"),
+        **_payload(destination="team:7"),
     )
 
     env = task_activation._build_offline_runner_env(
         request=request,
-        activation=_activation(destination="space:7"),
+        activation=_activation(destination="team:7"),
         assistant_data={
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
-            "space_ids": [7],
+            "team_ids": [7],
             "self_contact_id": 42,
             "boss_contact_id": 43,
         },
@@ -800,10 +800,10 @@ def test_offline_runner_env_carries_task_destination():
         job_name="unity-offline-abc",
     )
 
-    assert env["TASK_DESTINATION"] == "space:7"
+    assert env["TASK_DESTINATION"] == "team:7"
 
 
-def test_offline_runner_env_uses_empty_space_ids_for_solo_assistant():
+def test_offline_runner_env_uses_empty_team_ids_for_solo_assistant():
     """Solo assistants keep the env value present but empty."""
 
     from communication.infra import task_activation
@@ -816,7 +816,7 @@ def test_offline_runner_env_uses_empty_space_ids_for_solo_assistant():
         assistant_data={
             "assistant_id": "assistant-123",
             "api_key": "test-api-key",
-            "space_ids": [],
+            "team_ids": [],
             "self_contact_id": 42,
             "boss_contact_id": 43,
         },
@@ -824,8 +824,8 @@ def test_offline_runner_env_uses_empty_space_ids_for_solo_assistant():
         job_name="unity-offline-abc",
     )
 
-    assert env["SPACE_IDS"] == ""
-    assert env["SPACE_SUMMARIES"] == ""
+    assert env["TEAM_IDS"] == ""
+    assert env["TEAM_SUMMARIES"] == ""
 
 
 def test_offline_runner_env_requires_resolved_contact_ids():
