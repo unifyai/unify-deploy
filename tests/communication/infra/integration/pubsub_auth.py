@@ -137,12 +137,29 @@ def resolve_pubsub_credentials() -> ResolvedPubSubCredentials:
     """Resolve explicit Pub/Sub credentials for integration tests.
 
     Resolution order:
-    1. ``TEST_GCP_SA_KEY``
-    2. ``GCP_SA_KEY``
-    3. ``TEST_GOOGLE_APPLICATION_CREDENTIALS``
-    4. ``GOOGLE_APPLICATION_CREDENTIALS``
-    5. Ambient ADC via ``google.auth.default()``
+    1. ``PUBSUB_EMULATOR_HOST`` (anonymous credentials; emulator ignores auth)
+    2. ``TEST_GCP_SA_KEY``
+    3. ``GCP_SA_KEY``
+    4. ``TEST_GOOGLE_APPLICATION_CREDENTIALS``
+    5. ``GOOGLE_APPLICATION_CREDENTIALS``
+    6. Ambient ADC via ``google.auth.default()``
     """
+
+    if os.getenv("PUBSUB_EMULATOR_HOST"):
+        from google.auth import credentials as auth_credentials
+
+        project_id = (
+            os.getenv("TEST_GCP_PROJECT_ID")
+            or os.getenv("GCP_PROJECT_ID")
+            or "local-test-project"
+        )
+        return ResolvedPubSubCredentials(
+            credentials=auth_credentials.AnonymousCredentials(),
+            source="PUBSUB_EMULATOR_HOST",
+            principal=None,
+            project_id=project_id,
+            credential_type="anonymous",
+        )
 
     for env_name in PUBSUB_INLINE_CREDENTIAL_ENV_VARS:
         raw_json = os.getenv(env_name)
@@ -151,8 +168,13 @@ def resolve_pubsub_credentials() -> ResolvedPubSubCredentials:
 
     for env_name in PUBSUB_FILE_CREDENTIAL_ENV_VARS:
         raw_path = os.getenv(env_name)
-        if raw_path:
-            return _resolved_from_service_account_file(env_name, raw_path)
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser()
+        if not path.is_file():
+            if os.getenv("PUBSUB_EMULATOR_HOST"):
+                continue
+        return _resolved_from_service_account_file(env_name, raw_path)
 
     credentials, project_id = google_auth_default(scopes=PUBSUB_CREDENTIAL_SCOPES)
     return ResolvedPubSubCredentials(

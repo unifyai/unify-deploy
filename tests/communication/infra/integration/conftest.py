@@ -5,7 +5,7 @@ These tests run against real deployed K8s and GCE infrastructure.
 Every test creates its own resources and cleans up in finally blocks.
 
 Configuration:
-    Copy tests/communication/infra/integration/.env.example to .env and fill in your
+    Copy tests/infra/integration/.env.example to .env and fill in your
     credentials. The .env file is gitignored. See README.md for details.
 """
 
@@ -26,7 +26,7 @@ import pytest
 import requests
 from dotenv import load_dotenv
 
-from tests.communication.infra.integration.pubsub_auth import (
+from tests.infra.integration.pubsub_auth import (
     build_pubsub_publisher_client,
     build_pubsub_subscriber_client,
     client_credential_context,
@@ -37,7 +37,7 @@ _CURRENT_RUNTIME_IDENTITY_TRACKER = None
 _INTEGRATION_LOG_STARTED_AT_MONOTONIC = time.monotonic()
 
 # Load env vars from (in priority order):
-# 1. tests/communication/infra/integration/.env (local test config, gitignored)
+# 1. tests/infra/integration/.env (local test config, gitignored)
 # 2. The unity repo's .env (fallback for shared keys)
 # 3. Shell environment (highest priority, overrides everything)
 _test_env = Path(__file__).parent / ".env"
@@ -129,6 +129,334 @@ ORCHESTRA_URL = os.getenv(
 
 TEST_ASSISTANT_ID = os.getenv("TEST_ASSISTANT_ID", "")
 
+LOCAL_COMMUNICATION_CONFIG = Path(
+    os.getenv(
+        "TEST_COMMUNICATION_LOCAL_CONFIG",
+        "/tmp/communication-local.config",
+    ),
+)
+DEFAULT_LOCAL_ORCHESTRA_URL = "http://localhost:8000/v0"
+DEFAULT_LOCAL_ADAPTERS_URL = "http://127.0.0.1:8081"
+DEFAULT_LOCAL_COMMS_URL = "http://127.0.0.1:8082"
+DEFAULT_LOCAL_PUBSUB_HOST = "localhost:8085"
+DEFAULT_LOCAL_GCP_PROJECT_ID = "local-test-project"
+DEFAULT_LOCAL_ADMIN_KEY = "local-admin-key"
+LOCAL_STACK_START_TIMEOUT_SECONDS = 600
+LOCAL_STACK_WAIT_TIMEOUT_SECONDS = 300
+SELF_HOST_BOOTSTRAP_PATH = Path("/tmp/self-host-bootstrap.json")
+SELF_HOST_CREDENTIALS_PATH = Path(
+    os.getenv(
+        "SELF_HOST_CREDENTIALS_FILE",
+        str(Path.home() / ".unity" / "self-host-credentials.json"),
+    ),
+)
+
+
+@dataclass(frozen=True)
+class LocalStackUrls:
+    """Resolved service URLs for the local self-host / stack.sh environment."""
+
+    orchestra_url: str
+    adapters_url: str
+    comms_url: str
+    pubsub_emulator_host: str
+    gcp_project_id: str
+    pubsub_suffix: str
+
+
+def _parse_communication_local_config(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def _local_stack_service_reachable(url: str, *, api_key: str) -> bool:
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+    for path in ("", "/health", "/healthz"):
+        try:
+            response = requests.get(
+                f"{url.rstrip('/')}{path}",
+                headers=headers,
+                timeout=3,
+            )
+            if response.status_code < 500:
+                return True
+        except requests.RequestException:
+            continue
+    return False
+
+
+def _orchestra_reachable(orchestra_url: str, *, api_key: str) -> bool:
+    try:
+        response = requests.get(
+            f"{orchestra_url.rstrip('/')}/user/basic-info",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=5,
+        )
+        return response.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+def _resolve_unify_root() -> Path:
+    configured = os.getenv("UNIFY_STACK_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "Unify"
+
+
+def _resolve_sibling_repo(name: str) -> Path:
+    env_key = f"{name.upper()}_REPO_PATH"
+    configured = os.getenv(env_key, "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    unify_root = _resolve_unify_root()
+    for candidate in (f"{name}-teams-unify", name):
+        path = unify_root / candidate
+        if path.is_dir():
+            return path
+    return unify_root / name
+
+
+def _resolve_stack_script() -> tuple[Path, Path]:
+    """Return (unity_repo_path, stack.sh path)."""
+
+    unity_repo = _resolve_sibling_repo("unity")
+    stack_script = unity_repo / "scripts" / "stack.sh"
+    if not stack_script.is_file():
+        raise FileNotFoundError(f"stack.sh not found at {stack_script}")
+    return unity_repo, stack_script
+
+
+def _load_self_host_bootstrap_credentials() -> dict[str, Any]:
+    for path in (SELF_HOST_CREDENTIALS_PATH, SELF_HOST_BOOTSTRAP_PATH):
+        if path.is_file():
+            return json.loads(path.read_text(encoding="utf-8"))
+    return {}
+
+
+def _apply_local_stack_credentials(*, unify_key: str, admin_key: str) -> None:
+    """Publish local stack credentials to env and module-level constants."""
+
+    global ADMIN_KEY, UNIFY_KEY
+
+    os.environ["UNIFY_KEY"] = unify_key
+    os.environ["ORCHESTRA_ADMIN_KEY"] = admin_key
+    UNIFY_KEY = unify_key
+    ADMIN_KEY = admin_key
+
+
+def _resolve_local_stack_credentials() -> tuple[str, str]:
+    bootstrap = _load_self_host_bootstrap_credentials()
+    unify_key = os.getenv("UNIFY_KEY", bootstrap.get("api_key", "")).strip()
+    admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", DEFAULT_LOCAL_ADMIN_KEY).strip()
+    return unify_key, admin_key
+
+
+def _local_stack_is_ready(
+    urls: LocalStackUrls,
+    *,
+    unify_key: str,
+    admin_key: str,
+) -> bool:
+    if not unify_key or not admin_key:
+        return False
+    if not _orchestra_reachable(urls.orchestra_url, api_key=unify_key):
+        return False
+    if not _local_stack_service_reachable(urls.adapters_url, api_key=admin_key):
+        return False
+    if not _local_stack_service_reachable(urls.comms_url, api_key=admin_key):
+        return False
+    return True
+
+
+def _wait_for_local_stack(
+    urls: LocalStackUrls,
+    *,
+    unify_key: str,
+    admin_key: str,
+    timeout_seconds: int = LOCAL_STACK_WAIT_TIMEOUT_SECONDS,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if _local_stack_is_ready(
+            urls,
+            unify_key=unify_key,
+            admin_key=admin_key,
+        ):
+            return
+        time.sleep(2)
+    raise TimeoutError(
+        "Timed out waiting for local stack at "
+        f"Orchestra={urls.orchestra_url}, Adapters={urls.adapters_url}, "
+        f"Comms={urls.comms_url}",
+    )
+
+
+def _local_stack_auto_manage_enabled() -> bool:
+    return os.getenv("LOCAL_STACK_NO_AUTO", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _stack_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("ORCHESTRA_REPO_PATH", str(_resolve_sibling_repo("orchestra")))
+    env.setdefault(
+        "COMMUNICATION_REPO_PATH",
+        str(_resolve_sibling_repo("communication")),
+    )
+    env.setdefault("UNITY_REPO_PATH", str(_resolve_sibling_repo("unity")))
+    env.setdefault("CONSOLE_REPO_PATH", str(_resolve_sibling_repo("console")))
+    env.setdefault("UNIFY_STACK_ROOT", str(_resolve_unify_root()))
+    # Keep Orchestra alive for the full pytest session; local.sh defaults to 600s.
+    env.setdefault("ORCHESTRA_INACTIVITY_TIMEOUT_SECONDS", "0")
+    return env
+
+
+@dataclass
+class ManagedLocalStack:
+    """Tracks whether this pytest session started the local self-host stack."""
+
+    started_by_session: bool
+    urls: LocalStackUrls
+
+
+def _seed_local_orchestra_rbac() -> None:
+    """Seed system permissions and roles required for org creation on a fresh DB."""
+
+    orchestra_repo = _resolve_sibling_repo("orchestra")
+    seed_path = orchestra_repo / "orchestra" / "tests" / "seeding.sql"
+    if not seed_path.is_file():
+        raise FileNotFoundError(f"Orchestra RBAC seed file not found at {seed_path}")
+
+    content = seed_path.read_text(encoding="utf-8")
+    marker = "-- RBAC: Permissions"
+    if marker not in content:
+        raise RuntimeError(f"RBAC seed marker not found in {seed_path}")
+    rbac_sql = content[content.index(marker) :]
+
+    db_container = os.getenv("ORCHESTRA_DB_CONTAINER", "orchestra-local-db")
+    print(f"Seeding local Orchestra RBAC via {seed_path.name}...")
+    completed = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "-i",
+            db_container,
+            "psql",
+            "-U",
+            "orchestra",
+            "-d",
+            "orchestra",
+        ],
+        input=rbac_sql,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Failed to seed local Orchestra RBAC: "
+            f"{completed.stderr or completed.stdout}",
+        )
+
+
+def _purge_local_orchestra() -> None:
+    """Destroy the local Orchestra container and database volume."""
+
+    orchestra_repo = _resolve_sibling_repo("orchestra")
+    local_script = orchestra_repo / "scripts" / "local.sh"
+    if not local_script.is_file():
+        raise FileNotFoundError(f"Orchestra local.sh not found at {local_script}")
+
+    print(f"Purging local Orchestra via {local_script} purge...")
+    subprocess.run(
+        ["bash", str(local_script), "purge"],
+        cwd=orchestra_repo,
+        env=_stack_subprocess_env(),
+        check=True,
+        timeout=120,
+    )
+
+
+def _bootstrap_self_host(urls: LocalStackUrls) -> None:
+    """Provision the self-host owner and coordinator on a fresh local Orchestra DB."""
+
+    orchestra_repo = _resolve_sibling_repo("orchestra")
+    bootstrap_script = orchestra_repo / "scripts" / "bootstrap_self_host.sh"
+    if not bootstrap_script.is_file():
+        raise FileNotFoundError(
+            f"Self-host bootstrap script not found at {bootstrap_script}",
+        )
+
+    env = _stack_subprocess_env()
+    env["SELF_HOST"] = "1"
+    env["PUBSUB_EMULATOR_HOST"] = urls.pubsub_emulator_host
+    env.setdefault("GCP_PROJECT_ID", urls.gcp_project_id)
+    print(f"Bootstrapping self-host owner via {bootstrap_script}...")
+    subprocess.run(
+        ["bash", str(bootstrap_script)],
+        cwd=orchestra_repo,
+        env=env,
+        check=True,
+        timeout=120,
+    )
+
+
+def _reset_and_start_local_stack(urls: LocalStackUrls) -> None:
+    """Tear down, purge Orchestra, and bring up a fresh local self-host stack."""
+
+    unity_repo, stack_script = _resolve_stack_script()
+    print(f"Stopping local stack via {stack_script} down...")
+    subprocess.run(
+        ["bash", str(stack_script), "down"],
+        cwd=unity_repo,
+        env=_stack_subprocess_env(),
+        check=False,
+        timeout=120,
+    )
+    _purge_local_orchestra()
+    print(
+        "Starting local self-host stack via "
+        f"{stack_script} (this can take several minutes)...",
+    )
+    completed = subprocess.run(
+        ["bash", str(stack_script), "up"],
+        cwd=unity_repo,
+        env=_stack_subprocess_env(),
+        check=False,
+        timeout=LOCAL_STACK_START_TIMEOUT_SECONDS,
+    )
+    if completed.returncode != 0:
+        print(
+            f"stack.sh up exited {completed.returncode}. "
+            "Unity/Console startup may have failed; continuing if Orchestra, "
+            "Adapters, and Comms are reachable.",
+        )
+    _seed_local_orchestra_rbac()
+    _bootstrap_self_host(urls)
+
+
+def _stop_local_stack() -> None:
+    unity_repo, stack_script = _resolve_stack_script()
+    print("Stopping local self-host stack...")
+    subprocess.run(
+        ["bash", str(stack_script), "down"],
+        cwd=unity_repo,
+        env=_stack_subprocess_env(),
+        check=False,
+        timeout=120,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Markers
@@ -139,6 +467,10 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "integration: tests that run against real deployed infrastructure",
+    )
+    config.addinivalue_line(
+        "markers",
+        "local_stack: tests that require the local self-host stack (stack.sh up)",
     )
     config.addinivalue_line(
         "markers",
@@ -1075,6 +1407,156 @@ def adapters(admin_headers):
     return AdaptersClient()
 
 
+@pytest.fixture(scope="session")
+def local_stack_urls() -> LocalStackUrls:
+    """Resolve local stack URLs from env vars and communication-local.config."""
+
+    config_values = _parse_communication_local_config(LOCAL_COMMUNICATION_CONFIG)
+    orchestra_url = os.getenv("TEST_ORCHESTRA_URL", DEFAULT_LOCAL_ORCHESTRA_URL).rstrip(
+        "/",
+    )
+    adapters_url = os.getenv(
+        "TEST_ADAPTERS_URL",
+        config_values.get("UNITY_ADAPTERS_URL", DEFAULT_LOCAL_ADAPTERS_URL),
+    ).rstrip("/")
+    comms_url = os.getenv(
+        "TEST_COMMS_APP_URL",
+        config_values.get("UNITY_COMMS_URL", DEFAULT_LOCAL_COMMS_URL),
+    ).rstrip("/")
+    pubsub_emulator_host = os.getenv(
+        "PUBSUB_EMULATOR_HOST",
+        config_values.get("PUBSUB_EMULATOR_HOST", DEFAULT_LOCAL_PUBSUB_HOST),
+    )
+    gcp_project_id = os.getenv(
+        "TEST_GCP_PROJECT_ID",
+        config_values.get("GCP_PROJECT_ID", DEFAULT_LOCAL_GCP_PROJECT_ID),
+    )
+    pubsub_suffix = os.getenv(
+        "TEST_PUBSUB_SUFFIX",
+        "-staging" if NAMESPACE != "production" else "",
+    )
+    return LocalStackUrls(
+        orchestra_url=orchestra_url,
+        adapters_url=adapters_url,
+        comms_url=comms_url,
+        pubsub_emulator_host=pubsub_emulator_host,
+        gcp_project_id=gcp_project_id,
+        pubsub_suffix=pubsub_suffix,
+    )
+
+
+@pytest.fixture(scope="session")
+def managed_local_stack(local_stack_urls) -> ManagedLocalStack:
+    """Ensure a fresh local self-host stack for ``local_stack`` tests.
+
+    When ``LOCAL_STACK_NO_AUTO`` is unset, runs ``stack down``, ``orchestra
+    local.sh purge``, ``stack up``, and self-host bootstrap so credentials and
+    DB state always match. Runs ``stack down`` on session teardown unless
+    ``LOCAL_STACK_LEAVE_RUNNING=1``.
+    """
+
+    if not _local_stack_auto_manage_enabled():
+        yield ManagedLocalStack(started_by_session=False, urls=local_stack_urls)
+        return
+
+    started_by_session = False
+    try:
+        _reset_and_start_local_stack(local_stack_urls)
+        started_by_session = True
+        bootstrap = _load_self_host_bootstrap_credentials()
+        unify_key = os.getenv("UNIFY_KEY", bootstrap.get("api_key", "")).strip()
+        admin_key = os.getenv("ORCHESTRA_ADMIN_KEY", DEFAULT_LOCAL_ADMIN_KEY).strip()
+        if not unify_key:
+            raise RuntimeError(
+                "Fresh local stack has no UNIFY_KEY in env or bootstrap output "
+                f"({SELF_HOST_BOOTSTRAP_PATH}, {SELF_HOST_CREDENTIALS_PATH})",
+            )
+        _apply_local_stack_credentials(unify_key=unify_key, admin_key=admin_key)
+        _wait_for_local_stack(
+            local_stack_urls,
+            unify_key=unify_key,
+            admin_key=admin_key,
+        )
+        yield ManagedLocalStack(
+            started_by_session=True,
+            urls=local_stack_urls,
+        )
+    finally:
+        if started_by_session and os.getenv(
+            "LOCAL_STACK_LEAVE_RUNNING",
+            "",
+        ).strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+        }:
+            _stop_local_stack()
+
+
+@pytest.fixture(scope="session")
+def require_local_stack(managed_local_stack, local_stack_urls) -> LocalStackUrls:
+    """Require a reachable local self-host stack and resolved credentials."""
+
+    unify_key, admin_key = _resolve_local_stack_credentials()
+    if not unify_key:
+        pytest.skip(
+            "UNIFY_KEY required for local stack integration tests "
+            "(set explicitly or start stack to populate bootstrap credentials)",
+        )
+    if not admin_key:
+        pytest.skip("ORCHESTRA_ADMIN_KEY required for local stack integration tests")
+    _apply_local_stack_credentials(unify_key=unify_key, admin_key=admin_key)
+
+    if not _local_stack_is_ready(
+        local_stack_urls,
+        unify_key=unify_key,
+        admin_key=admin_key,
+    ):
+        if _local_stack_auto_manage_enabled():
+            pytest.fail(
+                "Local stack auto-start did not produce a reachable stack at "
+                f"Orchestra={local_stack_urls.orchestra_url}, "
+                f"Adapters={local_stack_urls.adapters_url}, "
+                f"Comms={local_stack_urls.comms_url}.",
+            )
+        pytest.skip(
+            "Local self-host stack is not reachable. Run with auto-manage enabled "
+            "(default) or start the stack manually and set LOCAL_STACK_NO_AUTO=1.",
+        )
+
+    os.environ.setdefault("PUBSUB_EMULATOR_HOST", local_stack_urls.pubsub_emulator_host)
+    return local_stack_urls
+
+
+@pytest.fixture
+def local_stack_adapters(require_local_stack, admin_headers) -> AdaptersClient:
+    """Adapters client pointed at the local stack."""
+
+    return AdaptersClient(
+        base_url=require_local_stack.adapters_url,
+        headers=admin_headers,
+    )
+
+
+@pytest.fixture
+def local_stack_comms(require_local_stack, admin_headers) -> CommsClient:
+    """Comms App client pointed at the local stack."""
+
+    return CommsClient(base_url=require_local_stack.comms_url, headers=admin_headers)
+
+
+@pytest.fixture
+def local_stack_pubsub_subscriber(require_local_stack):
+    """Pub/Sub subscriber client configured for the local emulator."""
+
+    credentials = resolve_pubsub_credentials()
+    client = build_pubsub_subscriber_client(credentials)
+    try:
+        yield client
+    finally:
+        client.transport.close()
+
+
 # ---------------------------------------------------------------------------
 # K8s Job helpers
 # ---------------------------------------------------------------------------
@@ -1515,14 +1997,18 @@ def job_tracker(batch_api):
 
 
 @pytest.fixture(autouse=True)
-def ensure_pool_capacity(request, k8s_clients):
+def ensure_pool_capacity(request):
     """Before each test, ensure the idle pool has at least 1 container.
 
     If a previous test consumed containers and replenishment hasn't finished,
     wait up to 90s for the pool to refill. This prevents cascading failures
     from pool exhaustion.
     """
-    batch_api = k8s_clients[0]
+    if request.node.get_closest_marker("local_stack"):
+        yield
+        return
+
+    batch_api = request.getfixturevalue("k8s_clients")[0]
     idle = count_idle_jobs(batch_api)
     if idle < 1:
         print(f"\n[Pool] Only {idle} idle containers, triggering replenishment...")
@@ -1905,7 +2391,7 @@ def _admin_record_to_data(a: dict) -> dict:
         "is_coordinator": str(a.get("is_coordinator", False)).lower(),
         "demo_id": "",
         "team_ids": json.dumps(a.get("team_ids", [])),
-        "space_ids": json.dumps(a.get("space_ids", [])),
+        "team_summaries": json.dumps(a.get("team_summaries", [])),
         "self_contact_id": str(a["self_contact_id"]),
         "boss_contact_id": str(a["boss_contact_id"]),
         "org_id": (
@@ -3005,7 +3491,7 @@ def invariant_baseline(k8s_clients, gce_client):
 
 
 @pytest.fixture(autouse=True)
-def check_invariants_after_test(request, k8s_clients, gce_client, invariant_baseline):
+def check_invariants_after_test(request):
     """After each test, check for NEW invariant violations.
 
     Reports violations as warnings rather than failing the test, because
@@ -3014,6 +3500,13 @@ def check_invariants_after_test(request, k8s_clients, gce_client, invariant_base
     The invariant checker test (test_invariant_checker.py) is the authoritative
     place for invariant assertions.
     """
+    if request.node.get_closest_marker("local_stack"):
+        yield
+        return
+
+    invariant_baseline = request.getfixturevalue("invariant_baseline")
+    k8s_clients = request.getfixturevalue("k8s_clients")
+    gce_client = request.getfixturevalue("gce_client")
     yield
     batch_api = k8s_clients[0]
     core_api = k8s_clients[1]
