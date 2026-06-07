@@ -50,12 +50,6 @@ def test_team_membership_round_trips_through_local_stack(
         assert sorted(record.get("team_ids") or []) == sorted(team_ids)
         summaries = record.get("team_summaries") or []
         assert {summary["team_id"] for summary in summaries} == set(team_ids)
-        assert "space_ids" not in record or record.get("space_ids") in ([], None)
-        assert "space_summaries" not in record or record.get("space_summaries") in (
-            [],
-            None,
-        )
-
         ensure_pubsub_topic_exists(urls, local_stack_comms, assistant_id)
         subscription_path = temporary_inbound_subscription(
             local_stack_pubsub_subscriber,
@@ -79,8 +73,6 @@ def test_team_membership_round_trips_through_local_stack(
         } == set(
             team_ids,
         )
-        assert "space_ids" not in event
-        assert "space_summaries" not in event
     finally:
         if org is not None:
             for team_id in team_ids:

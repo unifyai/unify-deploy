@@ -1,4 +1,4 @@
-"""Tests for shared-space summary boundary encoding."""
+"""Tests for shared-team summary boundary encoding."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from common.team_summaries_codec import (
 
 
 def test_team_summaries_round_trip_form_and_env() -> None:
-    """Shared-space summaries keep their object shape across text boundaries."""
+    """Shared-team summaries keep their object shape across text boundaries."""
 
     summaries = [
         {
