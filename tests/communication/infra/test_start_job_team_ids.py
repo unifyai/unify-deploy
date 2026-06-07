@@ -53,9 +53,8 @@ def _start_job_payload(**overrides) -> dict[str, str]:
         "user_desktop_filesys_sync": "false",
         "user_desktop_url": "",
         "demo_id": "",
-        "team_ids": "[]",
-        "space_ids": "",
-        "space_summaries": "",
+        "team_ids": "",
+        "team_summaries": "",
         "self_contact_id": "42",
         "boss_contact_id": "43",
         "org_id": "",
@@ -150,19 +149,19 @@ def _bootstrap_payload(bootstrap: MagicMock) -> dict:
 def test_form_json_string_parsed_to_list(client):
     response, bootstrap = _post_start_job(
         client,
-        space_ids="[1, 2, 3]",
-        space_summaries=(
-            '[{"space_id": 1, "name": "Ops", '
+        team_ids="[1, 2, 3]",
+        team_summaries=(
+            '[{"team_id": 1, "name": "Ops", '
             '"description": "Operations workspace for customer support."}]'
         ),
     )
 
     assert response.status_code == 200
     payload = _bootstrap_payload(bootstrap)
-    assert payload["space_ids"] == [1, 2, 3]
-    assert payload["space_summaries"] == [
+    assert payload["team_ids"] == [1, 2, 3]
+    assert payload["team_summaries"] == [
         {
-            "space_id": 1,
+            "team_id": 1,
             "name": "Ops",
             "description": "Operations workspace for customer support.",
         },
@@ -170,12 +169,12 @@ def test_form_json_string_parsed_to_list(client):
 
 
 def test_empty_form_means_empty_list(client):
-    response, bootstrap = _post_start_job(client, space_ids="")
+    response, bootstrap = _post_start_job(client, team_ids="")
 
     assert response.status_code == 200
     payload = _bootstrap_payload(bootstrap)
-    assert payload["space_ids"] == []
-    assert payload["space_summaries"] == []
+    assert payload["team_ids"] == []
+    assert payload["team_summaries"] == []
 
 
 def test_contact_ids_required_in_bootstrap_payload(client):
@@ -210,19 +209,19 @@ def test_missing_contact_ids_returns_422(client):
 
 
 def test_invalid_form_returns_400(client):
-    response, bootstrap = _post_start_job(client, space_ids='[1, "foo", 3]')
+    response, bootstrap = _post_start_job(client, team_ids='[1, "foo", 3]')
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "space_ids must be a list of integers"
+    assert response.json()["detail"] == "team_ids must be a list of integers"
     bootstrap.assert_not_called()
 
 
-def test_invalid_space_summaries_form_returns_400(client):
+def test_invalid_team_summaries_form_returns_400(client):
     response, bootstrap = _post_start_job(
         client,
-        space_summaries='[{"space_id": "not-int", "name": "Ops", "description": "Bad"}]',
+        team_summaries='[{"team_id": "not-int", "name": "Ops", "description": "Bad"}]',
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "space_summaries.space_id must be an integer"
+    assert response.json()["detail"] == "team_summaries.team_id must be an integer"
     bootstrap.assert_not_called()
