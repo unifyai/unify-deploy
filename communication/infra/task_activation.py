@@ -825,7 +825,7 @@ def _build_offline_run_key(request: OfflineTaskDispatchRequest) -> str:
     Orchestra's create-or-adopt path would fail to deduplicate
     concurrent attempts across topologies.
 
-    Shared-space tasks insert a normalised destination segment between
+    Shared-team tasks insert a normalised destination segment between
     the assistant id and task id so concurrent attempts for different
     destinations never collide.
     """
