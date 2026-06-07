@@ -449,31 +449,31 @@ def _find_assistant_by_name(
     return None
 
 
-def _list_spaces(api_key: str) -> list[dict[str, Any]]:
+def _list_teams(api_key: str) -> list[dict[str, Any]]:
     response = requests.get(
-        f"{ORCHESTRA_URL}/spaces",
+        f"{ORCHESTRA_URL}/teams",
         headers=_auth_headers(api_key),
         timeout=30,
     )
     assert (
         response.status_code == 200
-    ), f"Space list failed: {response.status_code} {response.text}"
+    ), f"Team list failed: {response.status_code} {response.text}"
     payload = response.json()
-    assert isinstance(payload, list), f"Expected space list, got: {payload}"
+    assert isinstance(payload, list), f"Expected team list, got: {payload}"
     return payload
 
 
-def _find_space_by_name(
+def _find_team_by_name(
     api_key: str,
     name: str,
 ) -> dict[str, Any] | None:
-    for space in _list_spaces(api_key):
-        if _read_field(space, "name") == name:
-            return space
+    for team in _list_teams(api_key):
+        if _read_field(team, "name") == name:
+            return team
     return None
 
 
-def _create_org_space(
+def _create_org_team(
     api_key: str,
     *,
     organization_id: str,
@@ -481,7 +481,7 @@ def _create_org_space(
     description: str,
 ) -> dict[str, Any]:
     response = requests.post(
-        f"{ORCHESTRA_URL}/spaces",
+        f"{ORCHESTRA_URL}/teams",
         json={
             "name": name,
             "description": description,
@@ -492,20 +492,20 @@ def _create_org_space(
     )
     assert (
         response.status_code == 201
-    ), f"Space create failed: {response.status_code} {response.text}"
+    ), f"Team create failed: {response.status_code} {response.text}"
     payload = response.json()
-    assert isinstance(payload, dict), f"Expected created space payload, got: {payload}"
+    assert isinstance(payload, dict), f"Expected created team payload, got: {payload}"
     return payload
 
 
-def _add_space_member(
+def _add_team_member(
     api_key: str,
     *,
-    space_id: str,
+    team_id: str,
     assistant_id: str,
 ) -> None:
     response = requests.post(
-        f"{ORCHESTRA_URL}/spaces/{space_id}/members",
+        f"{ORCHESTRA_URL}/teams/{team_id}/members",
         json={"assistant_id": int(assistant_id)},
         headers=_auth_headers(api_key),
         timeout=30,
@@ -516,45 +516,45 @@ def _add_space_member(
     }, f"Add member failed: {response.status_code} {response.text}"
 
 
-def _list_space_members(api_key: str, space_id: str) -> list[dict[str, Any]]:
+def _list_team_members(api_key: str, team_id: str) -> list[dict[str, Any]]:
     response = requests.get(
-        f"{ORCHESTRA_URL}/spaces/{space_id}/members",
+        f"{ORCHESTRA_URL}/teams/{team_id}/members",
         headers=_auth_headers(api_key),
         timeout=30,
     )
     assert (
         response.status_code == 200
-    ), f"Space member list failed: {response.status_code} {response.text}"
+    ), f"Team member list failed: {response.status_code} {response.text}"
     payload = response.json()
-    assert isinstance(payload, list), f"Expected space member list, got: {payload}"
+    assert isinstance(payload, list), f"Expected team member list, got: {payload}"
     return payload
 
 
-def _list_assistant_spaces(api_key: str, assistant_id: str) -> list[dict[str, Any]]:
+def _list_assistant_teams(api_key: str, assistant_id: str) -> list[dict[str, Any]]:
     response = requests.get(
-        f"{ORCHESTRA_URL}/assistants/{assistant_id}/spaces",
+        f"{ORCHESTRA_URL}/assistants/{assistant_id}/teams",
         headers=_auth_headers(api_key),
         timeout=30,
     )
     assert (
         response.status_code == 200
-    ), f"Assistant space list failed: {response.status_code} {response.text}"
+    ), f"Assistant team list failed: {response.status_code} {response.text}"
     payload = response.json()
-    assert isinstance(payload, list), f"Expected assistant space list, got: {payload}"
+    assert isinstance(payload, list), f"Expected assistant team list, got: {payload}"
     return payload
 
 
-def _space_has_member(api_key: str, space_id: str, assistant_id: str) -> bool:
+def _team_has_member(api_key: str, team_id: str, assistant_id: str) -> bool:
     return any(
         str(_read_field(member, "assistant_id", "assistantId")) == assistant_id
-        for member in _list_space_members(api_key, space_id)
+        for member in _list_team_members(api_key, team_id)
     )
 
 
-def _assistant_has_space(api_key: str, assistant_id: str, space_id: str) -> bool:
+def _assistant_has_team(api_key: str, assistant_id: str, team_id: str) -> bool:
     return any(
-        str(_read_field(space, "space_id", "spaceId")) == space_id
-        for space in _list_assistant_spaces(api_key, assistant_id)
+        str(_read_field(team, "team_id", "teamId")) == team_id
+        for team in _list_assistant_teams(api_key, assistant_id)
     )
 
 
@@ -585,13 +585,13 @@ def _list_context_logs(
     return logs
 
 
-def _find_space_guidance_log_with_token(
+def _find_team_guidance_log_with_token(
     api_key: str,
     *,
-    space_id: str,
+    team_id: str,
     token: str,
 ) -> dict[str, Any] | None:
-    context = f"Spaces/{space_id}/Guidance"
+    context = f"Teams/{team_id}/Guidance"
     for log_row in _list_context_logs(api_key, context=context, limit=50):
         entries = log_row.get("entries") or {}
         if token not in json.dumps(entries, sort_keys=True):
@@ -802,12 +802,12 @@ def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber)
     reason="TEST_RUN_COORDINATOR_E2E not set",
 )
 @pytest.mark.timeout(1800)
-def test_coordinator_builds_colleague_and_space_end_to_end(
+def test_coordinator_builds_colleague_and_team_end_to_end(
     batch_api,
     core_api,
     pubsub_subscriber,
 ):
-    """Ask the live Coordinator to persist a colleague, space, and membership."""
+    """Ask the live Coordinator to persist a colleague, team, and membership."""
 
     _require_preview_routing()
 
@@ -867,17 +867,17 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
             coordinator_id,
         )
 
-        implicit_org_named_spaces = [
-            space
-            for space in _list_assistant_spaces(organization_api_key, coordinator_id)
+        implicit_org_named_teams = [
+            team
+            for team in _list_assistant_teams(organization_api_key, coordinator_id)
             if (
-                str(_read_field(space, "organization_id", "organizationId"))
+                str(_read_field(team, "organization_id", "organizationId"))
                 == organization_id
-                and _read_field(space, "name") == organization["name"]
+                and _read_field(team, "name") == organization["name"]
             )
         ]
-        assert not implicit_org_named_spaces, (
-            "Coordinator should not auto-join an implicit org-wide space. "
+        assert not implicit_org_named_teams, (
+            "Coordinator should not auto-join an implicit org-wide team. "
             f"coordinator_id={coordinator_id} org_id={organization_id}"
         )
 
@@ -885,8 +885,8 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         colleague_first_name = f"Scenario{token}"
         colleague_surname = "Colleague"
         colleague_full_name = f"{colleague_first_name} {colleague_surname}"
-        space_name = f"Scenario Space {token}"
-        space_description = (
+        team_name = f"Scenario Team {token}"
+        team_description = (
             f"Shared coordination workspace for preview scenario {token}."
         )
 
@@ -923,61 +923,57 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         if colleague_org_id is not None:
             assert str(colleague_org_id) == organization_id
 
-        space = _send_and_poll_for_side_effect(
+        team = _send_and_poll_for_side_effect(
             assistant=assistant,
             pubsub_subscriber=pubsub_subscriber,
             coordinator_id=coordinator_id,
             prompt=(
                 "Call your list_accessible_organizations tool, resolve the target org "
-                f"id as {organization_id}, and then call create_space with that "
-                f"organization_id. Use name {space_name} and description "
-                f"{space_description}. No extra confirmation is needed."
+                f"id as {organization_id}, and then call create_team with that "
+                f"organization_id. Use name {team_name} and description "
+                f"{team_description}. No extra confirmation is needed."
             ),
             nudge_prompt=(
-                f"Call create_space now with organization_id {organization_id}, "
-                f"name {space_name}, and description {space_description}."
+                f"Call create_team now with organization_id {organization_id}, "
+                f"name {team_name}, and description {team_description}."
             ),
-            condition=lambda: _find_space_by_name(
+            condition=lambda: _find_team_by_name(
                 organization_api_key,
-                space_name,
+                team_name,
             ),
-            description=f"persisted team space {space_name}",
+            description=f"persisted team {team_name}",
         )
-        space_id = str(_read_field(space, "space_id", "spaceId"))
-        assert space_id, f"Created space omitted space_id: {space}"
-        space_org_id = _read_field(space, "organization_id", "organizationId")
-        assert (
-            space_org_id is not None
-        ), f"Created space omitted organization_id: {space}"
-        assert str(space_org_id) == organization_id
-        space_membership_api_key = organization_api_key
-        if "kind" in space:
-            assert space["kind"] == "team"
+        team_id = str(_read_field(team, "team_id", "teamId"))
+        assert team_id, f"Created team omitted team_id: {team}"
+        team_org_id = _read_field(team, "organization_id", "organizationId")
+        assert team_org_id is not None, f"Created team omitted organization_id: {team}"
+        assert str(team_org_id) == organization_id
+        team_membership_api_key = organization_api_key
+        if "kind" in team:
+            assert team["kind"] == "team"
 
         _send_and_poll_for_side_effect(
             assistant=assistant,
             pubsub_subscriber=pubsub_subscriber,
             coordinator_id=coordinator_id,
             prompt=(
-                "Call your add_space_member tool now to add colleague "
+                "Call your add_team_member tool now to add colleague "
                 f"{colleague_full_name} with assistant_id {colleague_id} to the "
-                f"team workspace {space_name} with space_id {space_id}. No extra "
+                f"team {team_name} with team_id {team_id}. No extra "
                 f"confirmation is needed. Include organization_id {organization_id}."
             ),
             nudge_prompt=(
-                f"Call add_space_member now with space_id {space_id} and "
+                f"Call add_team_member now with team_id {team_id} and "
                 f"assistant_id {colleague_id} and organization_id {organization_id}."
             ),
-            condition=lambda: _space_has_member(
-                space_membership_api_key,
-                space_id,
+            condition=lambda: _team_has_member(
+                team_membership_api_key,
+                team_id,
                 colleague_id,
             ),
-            description=(
-                f"membership for colleague {colleague_id} in team space {space_id}"
-            ),
+            description=(f"membership for colleague {colleague_id} in team {team_id}"),
         )
-        assert _assistant_has_space(space_membership_api_key, colleague_id, space_id)
+        assert _assistant_has_team(team_membership_api_key, colleague_id, team_id)
 
         stop_assistant_runtime(
             colleague_id,
@@ -1001,7 +997,7 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
         assert delete_org_response.status_code == 204, (
             "Disposable organization cleanup failed. "
             f"org_id={organization_id} coordinator_id={coordinator_id} "
-            f"colleague_id={colleague_id} space_id={space_id} "
+            f"colleague_id={colleague_id} team_id={team_id} "
             f"status={delete_org_response.status_code} body={delete_org_response.text}"
         )
         organization_deleted = True
@@ -1040,12 +1036,12 @@ def test_coordinator_builds_colleague_and_space_end_to_end(
     reason="TEST_RUN_COORDINATOR_E2E not set",
 )
 @pytest.mark.timeout(1800)
-def test_coordinator_act_writes_to_shared_space_end_to_end(
+def test_coordinator_act_writes_to_shared_team_end_to_end(
     batch_api,
     core_api,
     pubsub_subscriber,
 ):
-    """Ask the live Coordinator to run act and persist output into one shared space."""
+    """Ask the live Coordinator to run act and persist output into one shared team."""
 
     _require_preview_routing()
 
@@ -1105,29 +1101,29 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
             coordinator_id,
         )
 
-        setup_space_name = f"Coordinator Act Space {uuid.uuid4().hex[:8]}"
-        setup_space = _create_org_space(
+        setup_team_name = f"Coordinator Act Team {uuid.uuid4().hex[:8]}"
+        setup_team = _create_org_team(
             organization_api_key,
             organization_id=organization_id,
-            name=setup_space_name,
+            name=setup_team_name,
             description=(
                 "Explicit workspace for Coordinator act integration validation."
             ),
         )
-        space_id = str(_read_field(setup_space, "space_id", "spaceId") or "")
-        assert space_id, f"Created setup space omitted id: {setup_space}"
-        _add_space_member(
+        team_id = str(_read_field(setup_team, "team_id", "teamId") or "")
+        assert team_id, f"Created setup team omitted id: {setup_team}"
+        _add_team_member(
             organization_api_key,
-            space_id=space_id,
+            team_id=team_id,
             assistant_id=coordinator_id,
         )
-        assert _space_has_member(
+        assert _team_has_member(
             organization_api_key,
-            space_id,
+            team_id,
             coordinator_id,
         )
 
-        token = f"coord-act-space-{uuid.uuid4().hex[:12]}"
+        token = f"coord-act-team-{uuid.uuid4().hex[:12]}"
         guidance_log = _send_and_poll_for_side_effect(
             assistant=assistant,
             pubsub_subscriber=pubsub_subscriber,
@@ -1135,34 +1131,34 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
             prompt=(
                 "Call your act tool now. Use a query that writes exactly one "
                 f"Guidance entry containing token {token} to destination "
-                f"space:{space_id}. Include the destination explicitly and do not "
+                f"team:{team_id}. Include the destination explicitly and do not "
                 "write to any colleague-owned context. No extra confirmation is needed."
             ),
             nudge_prompt=(
                 "Call act now and write one Guidance entry containing token "
-                f"{token} to destination space:{space_id}."
+                f"{token} to destination team:{team_id}."
             ),
             condition=lambda: (
-                _find_space_guidance_log_with_token(
+                _find_team_guidance_log_with_token(
                     organization_api_key,
-                    space_id=space_id,
+                    team_id=team_id,
                     token=token,
                 )
-                or _find_space_guidance_log_with_token(
+                or _find_team_guidance_log_with_token(
                     coordinator_owner_api_key,
-                    space_id=space_id,
+                    team_id=team_id,
                     token=token,
                 )
             ),
             description=(
-                f"Guidance log containing token {token} in shared space {space_id}"
+                f"Guidance log containing token {token} in shared team {team_id}"
             ),
         )
         entries = guidance_log.get("entries") or {}
         assert token in json.dumps(entries, sort_keys=True)
         destination = str(entries.get("destination") or "")
         if destination:
-            assert destination == f"space:{space_id}"
+            assert destination == f"team:{team_id}"
         assert str(entries.get("authoring_assistant_id") or "") == coordinator_id
 
         stop_assistant_runtime(
@@ -1170,7 +1166,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
             batch_api=batch_api,
             timeout=300,
             strict=True,
-            context="coordinator-act-space",
+            context="coordinator-act-team",
         )
         coordinator_id = None
         delete_org_response = _delete_organization(
@@ -1180,7 +1176,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
         assert delete_org_response.status_code == 204, (
             "Disposable organization cleanup failed. "
             f"org_id={organization_id} coordinator_id={coordinator_id} "
-            f"space_id={space_id} status={delete_org_response.status_code} "
+            f"team_id={team_id} status={delete_org_response.status_code} "
             f"body={delete_org_response.text}"
         )
         organization_deleted = True
@@ -1190,7 +1186,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
                 coordinator_id,
                 batch_api=batch_api,
                 timeout=180,
-                context="coordinator-act-space-finally",
+                context="coordinator-act-team-finally",
             )
         if organization and not organization_deleted:
             cleanup_response = _delete_organization(
@@ -1199,7 +1195,7 @@ def test_coordinator_act_writes_to_shared_space_end_to_end(
             )
             if cleanup_response.status_code not in (204, 404):
                 print(
-                    "Coordinator act-space cleanup left a disposable organization behind: "
+                    "Coordinator act-team cleanup left a disposable organization behind: "
                     f"org_id={organization['organization_id']} "
                     f"coordinator_id={organization['coordinator_id']} "
                     f"status={cleanup_response.status_code} body={cleanup_response.text}",
