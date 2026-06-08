@@ -382,6 +382,7 @@ def build_unity_job_manifest(
             "ANTHROPIC_API_KEY",
             "CARTESIA_API_KEY",
             "DEEPGRAM_API_KEY",
+            "DEEPSEEK_API_KEY",
             "ELEVEN_API_KEY",
             "LIVEKIT_API_KEY",
             "LIVEKIT_API_SECRET",
