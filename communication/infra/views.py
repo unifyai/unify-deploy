@@ -479,9 +479,7 @@ def _build_startup_payload(
     voice_id: str,
     desktop_mode: str,
     desktop_url: str,
-    user_desktop_mode: str,
-    user_desktop_filesys_sync: str,
-    user_desktop_url: str,
+    user_desktops: str,
     is_coordinator: str,
     demo_id: str,
     team_ids: str,
@@ -524,9 +522,7 @@ def _build_startup_payload(
         "voice_id": voice_id,
         "desktop_mode": desktop_mode,
         "desktop_url": desktop_url if desktop_url else None,
-        "user_desktop_mode": user_desktop_mode if user_desktop_mode else None,
-        "user_desktop_filesys_sync": user_desktop_filesys_sync.lower() == "true",
-        "user_desktop_url": user_desktop_url if user_desktop_url else None,
+        "user_desktops": json.loads(user_desktops) if user_desktops else [],
         "is_coordinator": is_coordinator.lower() == "true",
         "demo_id": int(demo_id) if demo_id else None,
         "team_ids": _decode_team_ids_form(team_ids),
@@ -956,9 +952,7 @@ async def start_job(
     voice_id: str = Form(""),
     desktop_mode: str = Form("none"),
     desktop_url: str = Form(""),
-    user_desktop_mode: str = Form(""),
-    user_desktop_filesys_sync: str = Form("false"),
-    user_desktop_url: str = Form(""),
+    user_desktops: str = Form(""),
     is_coordinator: str = Form("false"),
     demo_id: str = Form(""),
     team_ids: str = Form(""),
@@ -999,9 +993,8 @@ async def start_job(
         voice_id: Voice ID (optional, defaults to empty string)
         desktop_mode: Desktop mode - ubuntu/windows/macos/none (optional, defaults to "none")
         desktop_url: URL to access the VM desktop (optional, defaults to empty string)
-        user_desktop_mode: User's own desktop mode - ubuntu/windows/macos (optional)
-        user_desktop_filesys_sync: Whether to sync user desktop filesystem (optional, defaults to "false")
-        user_desktop_url: URL to user's own desktop (optional)
+        user_desktops: JSON-encoded list of per-user desktop links, each
+            {owner_user_id, url, os, filesys_sync} (optional, defaults to empty)
         is_coordinator: Whether this assistant is the Coordinator (optional, defaults to "false")
         demo_id: Demo assistant metadata ID (optional, empty string if not a demo)
         team_ids: JSON-encoded list of shared team IDs the assistant belongs to (optional, defaults to empty)
@@ -1059,9 +1052,7 @@ async def start_job(
             voice_id=voice_id,
             desktop_mode=desktop_mode,
             desktop_url=desktop_url,
-            user_desktop_mode=user_desktop_mode,
-            user_desktop_filesys_sync=user_desktop_filesys_sync,
-            user_desktop_url=user_desktop_url,
+            user_desktops=user_desktops,
             is_coordinator=is_coordinator,
             demo_id=demo_id,
             team_ids=team_ids,

@@ -68,12 +68,12 @@ def _start_job_payload() -> dict[str, str]:
         "voice_id": "voice-123",
         "desktop_mode": "ubuntu",
         "desktop_url": "",
-        "user_desktop_mode": "",
-        "user_desktop_filesys_sync": "false",
-        "user_desktop_url": "",
+        "user_desktops": "[]",
         "is_coordinator": "false",
         "demo_id": "",
         "team_ids": "[]",
+        "self_contact_id": "101",
+        "boss_contact_id": "202",
         "org_id": "",
     }
 

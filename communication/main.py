@@ -123,11 +123,7 @@ class CommunicationInfraRuntimeActivator:
             "voice_id": assistant.get("voice_id") or "",
             "desktop_mode": assistant.get("desktop_mode") or "none",
             "desktop_url": assistant.get("desktop_url") or "",
-            "user_desktop_mode": assistant.get("user_desktop_mode") or "",
-            "user_desktop_filesys_sync": str(
-                assistant.get("user_desktop_filesys_sync") or False,
-            ).lower(),
-            "user_desktop_url": assistant.get("user_desktop_url") or "",
+            "user_desktops": json.dumps(assistant.get("user_desktops") or []),
             "is_coordinator": str(assistant.get("is_coordinator") or False).lower(),
             "demo_id": assistant.get("demo_id") or "",
             "team_ids": ",".join(str(v) for v in assistant.get("team_ids") or []),

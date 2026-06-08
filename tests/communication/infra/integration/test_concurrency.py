@@ -13,6 +13,7 @@ extend that to concurrent scenarios that arise at scale.
 Invariants covered: INV-1, INV-5, INV-8
 """
 
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -91,11 +92,7 @@ def _fetch_user_assistants(max_count: int = 5) -> list[dict]:
                 "voice_provider": a["voice_provider"],
                 "voice_id": a["voice_id"],
                 "desktop_mode": a.get("desktop_mode", "ubuntu"),
-                "user_desktop_mode": a.get("user_desktop_mode") or "",
-                "user_desktop_filesys_sync": str(
-                    a.get("user_desktop_filesys_sync", False),
-                ).lower(),
-                "user_desktop_url": a.get("user_desktop_url") or "",
+                "user_desktops": json.dumps(a.get("user_desktops", [])),
                 "demo_id": "",
                 "team_ids": "[]",
                 "org_id": (

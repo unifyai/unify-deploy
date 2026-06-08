@@ -850,9 +850,7 @@ def _build_start_job_request_data(
     api_key = assistant["api_key"]
     assistant_id = assistant["assistant_id"]
     desktop_mode = _resolve_desktop_mode(assistant)
-    user_desktop_mode = assistant.get("user_desktop_mode", None)
-    user_desktop_filesys_sync = assistant.get("user_desktop_filesys_sync", False)
-    user_desktop_url = assistant.get("user_desktop_url", None)
+    user_desktops = assistant.get("user_desktops", [])
     is_coordinator = assistant.get("is_coordinator", False)
     demo_id = assistant.get("demo_id", None)
     data = {
@@ -893,9 +891,7 @@ def _build_start_job_request_data(
         "voice_provider": assistant["voice_provider"],
         "voice_id": assistant["voice_id"],
         "desktop_mode": desktop_mode,
-        "user_desktop_mode": user_desktop_mode or "",
-        "user_desktop_filesys_sync": ("true" if user_desktop_filesys_sync else "false"),
-        "user_desktop_url": user_desktop_url or "",
+        "user_desktops": json.dumps(user_desktops),
         # Pass demo_id directly; Unity derives demo_mode from demo_id presence.
         "demo_id": str(demo_id) if demo_id else "",
         "is_coordinator": ("true" if is_coordinator else "false"),

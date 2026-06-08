@@ -937,9 +937,9 @@ def _build_offline_runner_env(
             ),
             "SELF_CONTACT_ID": str(self_contact_id),
             "ASSISTANT_DESKTOP_MODE": "none",
-            "ASSISTANT_USER_DESKTOP_MODE": "",
-            "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
-            "ASSISTANT_USER_DESKTOP_URL": "",
+            "ASSISTANT_USER_DESKTOPS": json.dumps(
+                assistant_data.get("user_desktops") or [],
+            ),
             "USER_ID": str(assistant_data.get("user_id") or ""),
             "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
             "USER_SURNAME": str(assistant_data.get("user_surname") or ""),

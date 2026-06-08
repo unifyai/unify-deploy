@@ -9,6 +9,7 @@ activation revision, no scheduler dedup).
 
 from __future__ import annotations
 
+import json
 import asyncio
 import hashlib
 import uuid
@@ -158,9 +159,9 @@ def _build_dashboard_action_env(
         ),
         "SELF_CONTACT_ID": str(self_contact_id),
         "ASSISTANT_DESKTOP_MODE": "none",
-        "ASSISTANT_USER_DESKTOP_MODE": "",
-        "ASSISTANT_USER_DESKTOP_FILESYS_SYNC": "False",
-        "ASSISTANT_USER_DESKTOP_URL": "",
+        "ASSISTANT_USER_DESKTOPS": json.dumps(
+            assistant_data.get("user_desktops") or [],
+        ),
         "ASSISTANT_IS_COORDINATOR": "False",
         "USER_ID": str(assistant_data.get("user_id") or ""),
         "USER_FIRST_NAME": str(assistant_data.get("user_first_name") or ""),
