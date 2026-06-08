@@ -240,7 +240,7 @@ ensure_comms_unity_deps() {
 
   if ! unity_repo="$(resolve_unity_repo_path)"; then
     log_error "Comms App imports unity.task_scheduler.offline_runner_contract but unity is unavailable"
-    log_info "Clone unity as a sibling of communication (../unity) or set UNITY_REPO_PATH"
+    log_info "Clone unity as a sibling of unity-deploy (../unity) or set UNITY_REPO_PATH"
     return 1
   fi
 
@@ -273,11 +273,52 @@ ensure_comms_unity_deps() {
 
   if ! can_import_comms_unity_contract "$python_cmd"; then
     log_error "unity is installed but Comms App still cannot import offline_runner_contract"
-    log_info "Ensure unify and unillm siblings exist under the same parent as communication"
+    log_info "Ensure unify and unillm siblings exist under the same parent as unity-deploy"
     return 1
   fi
 
   log_success "unity runtime ready for Comms App"
+  return 0
+}
+
+can_import_adapters_app() {
+  local python_cmd="$1"
+  "$python_cmd" -c "import adapters.main" &>/dev/null
+}
+
+can_import_comms_app() {
+  local python_cmd="$1"
+  "$python_cmd" -c "import communication.main" &>/dev/null
+}
+
+ensure_comms_runtime_deps() {
+  local python_cmd
+  python_cmd="$(get_python)"
+
+  if can_import_adapters_app "$python_cmd" && can_import_comms_app "$python_cmd"; then
+    ensure_comms_unity_deps || return 1
+    return 0
+  fi
+
+  log_info "Installing unity-deploy runtime for Adapters/Comms..."
+  local req_file="$COMMS_REPO_PATH/scripts/requirements-local-runtime.txt"
+  if [[ -f "$req_file" ]]; then
+    pip_install_for_comms "$python_cmd" -r "$req_file" || {
+      log_error "Failed to install unity-deploy runtime requirements"
+      return 1
+    }
+    pip_install_for_comms "$python_cmd" --no-deps -e "$COMMS_REPO_PATH" || {
+      log_error "Failed to install unity-deploy package from $COMMS_REPO_PATH"
+      return 1
+    }
+  else
+    pip_install_for_comms "$python_cmd" -e "$COMMS_REPO_PATH" || {
+      log_error "Failed to install unity-deploy from $COMMS_REPO_PATH"
+      return 1
+    }
+  fi
+
+  ensure_comms_unity_deps || return 1
   return 0
 }
 
@@ -547,7 +588,7 @@ start_comms_service() {
     return 0
   fi
 
-  if ! ensure_comms_unity_deps; then
+  if ! ensure_comms_runtime_deps; then
     return 1
   fi
 
@@ -686,6 +727,11 @@ cmd_start() {
   fi
 
   # Start Adapters service
+  if ! ensure_comms_runtime_deps; then
+    log_error "Failed to prepare Adapters/Comms runtime"
+    return 1
+  fi
+
   if ! start_adapters_service; then
     log_error "Failed to start Adapters service"
     return 1
