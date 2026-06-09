@@ -147,6 +147,7 @@ from .helpers import (
     get_assistant,
     get_contacts,
     get_outlook_thread_id,
+    get_phone_call_session,
     get_pubsub_client,
     get_thread_id,
     get_twilio_wa_client,
@@ -156,11 +157,14 @@ from .helpers import (
     publish_gmail_thread_id,
     publish_outlook_thread_id,
     resolve_email_route,
+    resolve_phone_route,
     resolve_slack_inbound,
     slack_message_already_seen,
     resolve_whatsapp_route,
     start_unity_job,
     update_whatsapp_call_session,
+    update_phone_call_session,
+    upsert_phone_call_session,
     upsert_whatsapp_call_session,
     uses_local_unity_runtime,
     verify_slack_signature,
@@ -328,12 +332,33 @@ async def twilio_call_webhook(request: Request):
         f"Received call from {_redact_phone(caller_number)} to {_redact_phone(twilio_number)}",
     )
 
-    # shared context
+    provider_call_sid = form_data.get("CallSid") or f"missing-{uuid.uuid4()}"
+    resolve_data = await asyncio.to_thread(
+        resolve_phone_route,
+        twilio_number,
+        caller_number,
+    )
+    action = resolve_data.get("action") if resolve_data else None
+    if action in ("auto_reply", "reject_cold", "reject_ambiguous"):
+        resp_user = VoiceResponse()
+        resp_user.say(
+            "This number is not accepting calls from this caller right now.",
+        )
+        resp_user.hangup()
+        return Response(content=str(resp_user), media_type="text/xml")
+
+    is_shared_phone_route = bool(resolve_data and "assistant_id" in resolve_data)
+    resolved_assistant_id = (
+        str(resolve_data["assistant_id"]) if is_shared_phone_route else None
+    )
+
     context = await asyncio.to_thread(
         build_webhook_context,
         "phone",
         to_number,
         from_number,
+        assistant_id=resolved_assistant_id,
+        validate_contact=not is_shared_phone_route,
     )
     assistant_id = context["assistant"]["assistant_id"]
     contacts = context["contacts"]
@@ -353,13 +378,62 @@ async def twilio_call_webhook(request: Request):
 
     # conference name and SIP URI
     date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
-    room_name = make_room_name(assistant_id, "phone")
-    sip_uri = make_sip_uri(twilio_number)
+    sip_dispatch_rule_id = None
+    if is_shared_phone_route:
+        call_id = provider_call_sid.replace(":", "-")
+        conference_name = f"unity_phone_conf_{call_id}"
+        room_name = f"unity_phone_room_{assistant_id}_{call_id}"
+        sip_uri, sip_target = make_call_scoped_sip_uri(
+            twilio_number,
+            call_id,
+            headers={
+                "X-Unity-Call-Session": call_id,
+                "X-Unity-Provider-Call-Sid": provider_call_sid,
+                "X-Unity-Room": room_name,
+            },
+        )
+        sip_dispatch_rule_id = await ensure_call_scoped_dispatch_rule(
+            base_phone_number=twilio_number,
+            sip_target=sip_target,
+            room_name=room_name,
+            call_id=call_id,
+            assistant_id=str(assistant_id),
+        )
+        if not sip_dispatch_rule_id:
+            resp_user = VoiceResponse()
+            resp_user.say(
+                "This number cannot accept calls right now. Please try again later."
+            )
+            resp_user.hangup()
+            return Response(content=str(resp_user), media_type="text/xml")
+        await asyncio.to_thread(
+            upsert_phone_call_session,
+            {
+                "provider": "twilio",
+                "provider_call_sid": provider_call_sid,
+                "channel": "phone_call",
+                "assistant_id": int(assistant_id),
+                "from_number": caller_number,
+                "to_number": twilio_number,
+                "pool_number": twilio_number,
+                "conference_name": conference_name,
+                "livekit_room": room_name,
+                "status": "created",
+                "metadata": {
+                    "sip_uri": sip_uri,
+                    "sip_target": sip_target,
+                    "sip_dispatch_rule_id": sip_dispatch_rule_id,
+                },
+            },
+        )
+    else:
+        conference_name = f"Unity_{twilio_number[1:]}_{date_time}"
+        room_name = make_room_name(assistant_id, "phone")
+        sip_uri = make_sip_uri(twilio_number)
+        await ensure_phone_dispatch_rule(twilio_number, room_name)
+
     logger.info(f"Setting up conference {conference_name}")
     logger.info(f"LiveKit room will be: {room_name}")
-
-    await ensure_phone_dispatch_rule(twilio_number, room_name)
 
     # publish to Pub/Sub
     pubsub_client = get_pubsub_client()
@@ -373,6 +447,8 @@ async def twilio_call_webhook(request: Request):
             "event": {
                 "contacts": contacts,
                 "conference_name": conference_name,
+                "call_session_id": provider_call_sid if is_shared_phone_route else "",
+                "provider_call_sid": provider_call_sid if is_shared_phone_route else "",
                 "caller_number": caller_number,
                 "sip_uri": sip_uri,
                 "livekit_room": room_name,  # Include LiveKit room name
@@ -384,6 +460,7 @@ async def twilio_call_webhook(request: Request):
                     "call_type": "inbound",
                     "room_created": True,  # Confirms room was created
                     "bridge_established": True,  # Confirms SIP bridge is ready
+                    "sip_dispatch_rule_id": sip_dispatch_rule_id,
                 },
             },
         }
@@ -430,7 +507,14 @@ async def twilio_call_webhook(request: Request):
     # Start LiveKit Egress recording on the room (fire-and-forget).
     try:
         user_id = context["assistant"]["user_id"]
-        await start_room_egress(room_name, assistant_id, user_id)
+        await start_room_egress(
+            room_name,
+            assistant_id,
+            user_id,
+            call_session_id=provider_call_sid if is_shared_phone_route else "",
+            provider_call_sid=provider_call_sid if is_shared_phone_route else "",
+            conference_name=conference_name,
+        )
     except Exception as e:
         logger.error(f"[Egress] Non-fatal: failed to start egress for call: {e}")
 
@@ -445,6 +529,7 @@ async def twilio_call_status_webhook(request: Request):
     call_status = form_data.get("CallStatus")
     assistant_number = form_data.get("From")
     user_number = form_data.get("To")
+    provider_call_sid = form_data.get("ParentCallSid") or form_data.get("CallSid") or ""
     logger.info(f"twilio_call_status_webhook function started: {call_status}")
     logger.info(
         f"User {_redact_phone(user_number)} called by {_redact_phone(assistant_number)}",
@@ -452,12 +537,27 @@ async def twilio_call_status_webhook(request: Request):
 
     # Handle call answered (in-progress) or not answered (no-answer, busy, canceled, failed)
     if call_status in ("in-progress", "no-answer", "busy", "canceled", "failed"):
+        call_session = (
+            await asyncio.to_thread(get_phone_call_session, provider_call_sid)
+            if provider_call_sid
+            else None
+        )
+        if call_session:
+            await asyncio.to_thread(
+                update_phone_call_session,
+                {
+                    "provider": "twilio",
+                    "provider_call_sid": provider_call_sid,
+                    "status": call_status,
+                },
+            )
         # get assistant data
         context = await asyncio.to_thread(
             build_webhook_context,
             "phone",
-            assistant_number,
-            user_number,
+            call_session["to_number"] if call_session else assistant_number,
+            call_session["from_number"] if call_session else user_number,
+            assistant_id=str(call_session["assistant_id"]) if call_session else None,
             validate_contact=False,
         )
         assistant_id = context["assistant"]["assistant_id"]
@@ -583,19 +683,25 @@ async def livekit_recording_complete(request: Request):
     )
 
     if provider_call_sid:
-        await asyncio.to_thread(
-            update_whatsapp_call_session,
-            {
-                "provider": "twilio",
-                "provider_call_sid": provider_call_sid,
-                "status": "recording_ready",
-                "recording_url": recording_url,
-                "metadata": {
-                    "egress_id": egress_info.egress_id,
-                    "recording_room_name": room_name,
-                },
+        call_session_update = {
+            "provider": "twilio",
+            "provider_call_sid": provider_call_sid,
+            "status": "recording_ready",
+            "recording_url": recording_url,
+            "metadata": {
+                "egress_id": egress_info.egress_id,
+                "recording_room_name": room_name,
             },
+        }
+        updated_phone_session = await asyncio.to_thread(
+            update_phone_call_session,
+            call_session_update,
         )
+        if updated_phone_session is None:
+            await asyncio.to_thread(
+                update_whatsapp_call_session,
+                call_session_update,
+            )
 
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
@@ -649,12 +755,32 @@ async def twilio_sms_webhook(request: Request):
         f"Received SMS from {_redact_phone(from_number)} to {_redact_phone(to_number)}",
     )
 
-    # shared context
+    resolve_data = await asyncio.to_thread(resolve_phone_route, to_number, from_number)
+    action = resolve_data.get("action") if resolve_data else None
+    if resolve_data is not None and action == "auto_reply":
+        resp_user = MessagingResponse()
+        resp_user.message(
+            "This number is no longer active. Please visit "
+            "console.unify.ai to view your assistant details.",
+        )
+        return Response(content=str(resp_user), media_type="text/xml")
+    if action in ("reject_cold", "reject_ambiguous"):
+        resp_user = MessagingResponse()
+        resp_user.message("This number is not accepting new messages.")
+        return Response(content=str(resp_user), media_type="text/xml")
+
+    is_shared_phone_route = bool(resolve_data and "assistant_id" in resolve_data)
+    resolved_assistant_id = (
+        str(resolve_data["assistant_id"]) if is_shared_phone_route else None
+    )
+
     context = await asyncio.to_thread(
         build_webhook_context,
         "msg",
         to_number,
         from_number,
+        assistant_id=resolved_assistant_id,
+        validate_contact=not is_shared_phone_route,
     )
     assistant_data = context["assistant"]
     assistant_id = assistant_data["assistant_id"]
@@ -693,6 +819,11 @@ async def twilio_sms_webhook(request: Request):
                         "to_number": to_number,
                         "from_number": from_number,
                         "body": body,
+                        "role": (
+                            resolve_data.get("role", "contact")
+                            if resolve_data
+                            else "contact"
+                        ),
                     },
                 },
             ).encode("utf-8"),

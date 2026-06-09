@@ -159,7 +159,7 @@ def _resolve_shared_pool_route(platform: str, pool_id: str, sender: str) -> dict
       - {"action": "reject_cold"}          — unknown sender on shared pool
       - None                               — no route at all (404)
     """
-    param_name = "pool_number" if platform == "whatsapp" else "bot_id"
+    param_name = "bot_id" if platform == "discord" else "pool_number"
     resp = requests.get(
         f"{SETTINGS.orchestra_url}/admin/{platform}/resolve",
         params={param_name: pool_id, "sender": sender},
@@ -179,6 +179,11 @@ def _resolve_shared_pool_route(platform: str, pool_id: str, sender: str) -> dict
 def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
     """Resolve an inbound WhatsApp message to an assistant via Orchestra."""
     return _resolve_shared_pool_route("whatsapp", pool_number, sender)
+
+
+def resolve_phone_route(pool_number: str, sender: str) -> dict | None:
+    """Resolve an inbound SMS or PSTN call to an assistant via Orchestra."""
+    return _resolve_shared_pool_route("phone", pool_number, sender)
 
 
 def is_unity_coordinator_email_address(email_address: str | None) -> bool:
@@ -218,6 +223,60 @@ def upsert_whatsapp_call_session(payload: dict) -> dict:
             f"WhatsApp call-session upsert failed: {resp.status_code} {resp.text}",
         )
         raise RuntimeError(f"WhatsApp call-session upsert error: {resp.status_code}")
+    return resp.json()
+
+
+def upsert_phone_call_session(payload: dict) -> dict:
+    """Persist the original routing state for a PSTN provider call."""
+    resp = requests.post(
+        f"{SETTINGS.orchestra_url}/admin/phone/call-session",
+        json=payload,
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code >= 400:
+        logger.error(
+            f"Phone call-session upsert failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"Phone call-session upsert error: {resp.status_code}")
+    return resp.json()
+
+
+def get_phone_call_session(
+    provider_call_sid: str, provider: str = "twilio"
+) -> dict | None:
+    """Fetch persisted PSTN call routing state by provider CallSid."""
+    resp = requests.get(
+        f"{SETTINGS.orchestra_url}/admin/phone/call-session/{provider_call_sid}",
+        params={"provider": provider},
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"Phone call-session lookup failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"Phone call-session lookup error: {resp.status_code}")
+    return resp.json()
+
+
+def update_phone_call_session(payload: dict) -> dict | None:
+    """Update status or recording metadata for a PSTN provider call."""
+    resp = requests.patch(
+        f"{SETTINGS.orchestra_url}/admin/phone/call-session",
+        json=payload,
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"Phone call-session update failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"Phone call-session update error: {resp.status_code}")
     return resp.json()
 
 
