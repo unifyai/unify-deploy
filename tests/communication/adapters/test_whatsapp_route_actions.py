@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
 from adapters import main
+from common.livekit import make_call_scoped_sip_uri
 
 
 def test_twilio_whatsapp_reject_ambiguous_returns_closed_response(monkeypatch):
@@ -180,3 +183,129 @@ def test_twilio_whatsapp_status_uses_call_session(monkeypatch):
     assert response.status_code == 200
     assert updated[0]["provider_call_sid"] == "CA111"
     assert len(published.published) == 1
+
+
+def test_call_scoped_sip_uri_uses_unique_target_and_headers(monkeypatch):
+    monkeypatch.setenv("LIVEKIT_SIP_URI", "tenant.sip.livekit.cloud")
+
+    uri, sip_target = make_call_scoped_sip_uri(
+        "+15550800000",
+        "CA:111",
+        headers={
+            "Unity-Call-Session": "CA-111",
+            "X-Unity-Room": "unity_wa_room_101_CA-111",
+        },
+    )
+
+    assert sip_target == "15550800000-CA-111"
+    assert uri.startswith("sip:15550800000-CA-111@tenant.sip.livekit.cloud?")
+    assert "X-Unity-Call-Session=CA-111" in uri
+    assert "X-Unity-Room=unity_wa_room_101_CA-111" in uri
+
+
+def test_twilio_whatsapp_completed_status_cleans_rule_without_publish(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "get_whatsapp_call_session",
+        lambda provider_call_sid: {
+            "provider_call_sid": provider_call_sid,
+            "assistant_id": 101,
+            "from_number": "+15550000001",
+            "to_number": "+15550800000",
+            "conference_name": "unity_wa_conf_CA111",
+            "livekit_room": "unity_wa_room_101_CA111",
+            "metadata": {"sip_dispatch_rule_id": "rule-CA111"},
+        },
+    )
+    updated = []
+    monkeypatch.setattr(
+        main,
+        "update_whatsapp_call_session",
+        lambda payload: updated.append(payload) or payload,
+    )
+    delete_rule = AsyncMock()
+    monkeypatch.setattr(main, "delete_sip_dispatch_rule", delete_rule)
+    published = _FakePubSub()
+    monkeypatch.setattr(main, "get_pubsub_client", lambda: published)
+    monkeypatch.setattr(
+        main,
+        "build_webhook_context",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed status should not publish"),
+        ),
+    )
+    main.app.dependency_overrides[main.validate_twilio_wa_signature] = lambda: None
+    try:
+        with TestClient(main.app) as client:
+            response = client.post(
+                "/twilio/whatsapp-call-status",
+                data={"CallSid": "CA111", "CallStatus": "completed"},
+            )
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert updated == [
+        {
+            "provider": "twilio",
+            "provider_call_sid": "CA111",
+            "status": "completed",
+        },
+    ]
+    delete_rule.assert_awaited_once_with("rule-CA111")
+    assert published.published == []
+
+
+def test_recording_complete_updates_session_and_publishes_session_fields(monkeypatch):
+    file_result = SimpleNamespace(filename="recordings/call.mp3", size=1234)
+    egress_info = SimpleNamespace(
+        egress_id="egress-1",
+        room_name="unity_wa_room_101_CA111",
+        status="EGRESS_COMPLETE",
+        file_results=[file_result],
+    )
+    event = SimpleNamespace(event="egress_ended", egress_info=egress_info)
+    monkeypatch.setattr(main, "verify_livekit_webhook", lambda _body, _auth: event)
+    monkeypatch.setattr(
+        main,
+        "build_webhook_context",
+        lambda *_args, **_kwargs: {
+            "assistant": {"assistant_id": "101"},
+            "contacts": [],
+            "is_job_running": False,
+        },
+    )
+    updated = []
+    monkeypatch.setattr(
+        main,
+        "update_whatsapp_call_session",
+        lambda payload: updated.append(payload) or payload,
+    )
+    published = _FakePubSub()
+    monkeypatch.setattr(main, "get_pubsub_client", lambda: published)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/livekit/recording-complete"
+            "?assistant_id=101"
+            "&user_id=user-101"
+            "&room_name=unity_wa_room_101_CA111"
+            "&call_session_id=CA111"
+            "&provider_call_sid=CA111"
+            "&conference_name=unity_wa_conf_CA111",
+            content="{}",
+            headers={"Authorization": "Bearer test"},
+        )
+
+    assert response.status_code == 200
+    assert updated[0]["provider_call_sid"] == "CA111"
+    assert updated[0]["status"] == "recording_ready"
+    assert updated[0]["metadata"]["recording_room_name"] == "unity_wa_room_101_CA111"
+    assert len(published.published) == 1
+    payload = json.loads(published.published[0][1].decode("utf-8"))
+    assert payload["thread"] == "recording_ready"
+    assert payload["event"]["call_session_id"] == "CA111"
+    assert payload["event"]["provider_call_sid"] == "CA111"
+    assert payload["event"]["conference_name"] == "unity_wa_conf_CA111"
+    assert payload["event"]["room_name"] == "unity_wa_room_101_CA111"
+    assert payload["event"]["livekit_room"] == "unity_wa_room_101_CA111"
