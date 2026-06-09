@@ -3,7 +3,7 @@
 import json
 import os
 from datetime import datetime, timezone
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from common.settings import SETTINGS
 
@@ -92,7 +92,15 @@ async def create_room_and_dispatch_agent(
         await livekit_api.aclose()
 
 
-async def start_room_egress(room_name: str, assistant_id: str, user_id: str = ""):
+async def start_room_egress(
+    room_name: str,
+    assistant_id: str,
+    user_id: str = "",
+    *,
+    call_session_id: str = "",
+    provider_call_sid: str = "",
+    conference_name: str = "",
+):
     """Start an audio-only Room Composite Egress on an existing room.
 
     Use this when the room was created externally (e.g. by a SIP trunk)
@@ -100,7 +108,15 @@ async def start_room_egress(room_name: str, assistant_id: str, user_id: str = ""
     """
     livekit_api = get_livekit_api()
     try:
-        await _start_room_egress(livekit_api, room_name, assistant_id, user_id)
+        await _start_room_egress(
+            livekit_api,
+            room_name,
+            assistant_id,
+            user_id,
+            call_session_id=call_session_id,
+            provider_call_sid=provider_call_sid,
+            conference_name=conference_name,
+        )
     except Exception as e:
         print(f"[Egress] Failed to start egress for room '{room_name}': {e}")
     finally:
@@ -112,6 +128,10 @@ async def _start_room_egress(
     room_name: str,
     assistant_id: str,
     user_id: str,
+    *,
+    call_session_id: str = "",
+    provider_call_sid: str = "",
+    conference_name: str = "",
 ):
     """Start an audio-only Room Composite Egress that writes MP3 to GCS."""
     gcs_credentials = os.getenv("GCP_SA_KEY", "")
@@ -128,6 +148,12 @@ async def _start_room_egress(
         f"&user_id={quote_plus(user_id)}"
         f"&room_name={quote_plus(room_name)}"
     )
+    if call_session_id:
+        webhook_url += f"&call_session_id={quote_plus(call_session_id)}"
+    if provider_call_sid:
+        webhook_url += f"&provider_call_sid={quote_plus(provider_call_sid)}"
+    if conference_name:
+        webhook_url += f"&conference_name={quote_plus(conference_name)}"
 
     egress_request = RoomCompositeEgressRequest(
         room_name=room_name,
@@ -164,6 +190,32 @@ def make_sip_uri(phone_number: str) -> str:
     sip_domain = os.getenv("LIVEKIT_SIP_URI", "")
     normalized = phone_number if phone_number.startswith("+") else f"+{phone_number}"
     return f"sip:{normalized}@{sip_domain}"
+
+
+def make_call_scoped_sip_uri(
+    phone_number: str,
+    call_id: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Return a unique SIP URI target for one provider call.
+
+    Twilio can pass X-* SIP headers by appending query parameters to the SIP
+    URI. The unique user part lets a per-call LiveKit dispatch rule match only
+    this SIP leg instead of mutating the shared number-level rule.
+    """
+    sip_domain = os.getenv("LIVEKIT_SIP_URI", "")
+    normalized = phone_number if phone_number.startswith("+") else f"+{phone_number}"
+    safe_call_id = "".join(ch if ch.isalnum() else "-" for ch in call_id).strip("-")
+    sip_user = f"{normalized[1:]}-{safe_call_id}"
+    uri = f"sip:{sip_user}@{sip_domain}"
+    if headers:
+        sip_headers = {
+            key if key.lower().startswith("x-") else f"X-{key}": value
+            for key, value in headers.items()
+        }
+        uri = f"{uri}?{urlencode(sip_headers)}"
+    return uri, sip_user
 
 
 async def ensure_phone_dispatch_rule(
@@ -230,6 +282,81 @@ async def ensure_phone_dispatch_rule(
         print(f"[SIP] Created dispatch rule: {normalized} -> {room_name}")
     except Exception as e:
         print(f"[SIP] Failed to ensure dispatch rule for {phone_number}: {e}")
+    finally:
+        await livekit_api.aclose()
+
+
+async def ensure_call_scoped_dispatch_rule(
+    *,
+    base_phone_number: str,
+    sip_target: str,
+    room_name: str,
+    call_id: str,
+    assistant_id: str,
+) -> str | None:
+    """Create a direct dispatch rule for one Twilio-created SIP leg."""
+    livekit_api = get_livekit_api()
+    try:
+        normalized = (
+            base_phone_number
+            if base_phone_number.startswith("+")
+            else f"+{base_phone_number}"
+        )
+        trunks = await livekit_api.sip.list_sip_inbound_trunk(
+            ListSIPInboundTrunkRequest(),
+        )
+        trunk_id = None
+        for trunk in trunks.items:
+            if normalized in list(trunk.numbers):
+                trunk_id = trunk.sip_trunk_id
+                break
+        if trunk_id is None:
+            print(
+                f"[SIP] No inbound trunk for {normalized}, "
+                "skipping call-scoped dispatch rule creation",
+            )
+            return None
+
+        name = f"Unity_call_{call_id}"
+        dispatch = await livekit_api.sip.create_sip_dispatch_rule(
+            CreateSIPDispatchRuleRequest(
+                dispatch_rule=SIPDispatchRuleInfo(
+                    rule=SIPDispatchRule(
+                        dispatch_rule_direct=SIPDispatchRuleDirect(
+                            room_name=room_name,
+                        ),
+                    ),
+                    name=name,
+                    trunk_ids=[trunk_id],
+                    numbers=[sip_target],
+                    attributes={
+                        "call.id": call_id,
+                        "assistant.id": str(assistant_id),
+                    },
+                ),
+            ),
+        )
+        print(
+            f"[SIP] Created call-scoped dispatch rule: " f"{sip_target} -> {room_name}",
+        )
+        return dispatch.sip_dispatch_rule_id
+    except Exception as e:
+        print(f"[SIP] Failed to ensure call-scoped dispatch rule for {call_id}: {e}")
+        return None
+    finally:
+        await livekit_api.aclose()
+
+
+async def delete_sip_dispatch_rule(dispatch_rule_id: str | None) -> None:
+    """Delete a LiveKit SIP dispatch rule if it exists."""
+    if not dispatch_rule_id:
+        return
+    livekit_api = get_livekit_api()
+    try:
+        await livekit_api.sip.delete_sip_dispatch_rule(dispatch_rule_id)
+        print(f"[SIP] Deleted dispatch rule {dispatch_rule_id}")
+    except Exception as e:
+        print(f"[SIP] Failed to delete dispatch rule {dispatch_rule_id}: {e}")
     finally:
         await livekit_api.aclose()
 

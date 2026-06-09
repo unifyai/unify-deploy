@@ -181,6 +181,60 @@ def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
     return _resolve_shared_pool_route("whatsapp", pool_number, sender)
 
 
+def upsert_whatsapp_call_session(payload: dict) -> dict:
+    """Persist the original routing state for a WhatsApp provider call."""
+    resp = requests.post(
+        f"{SETTINGS.orchestra_url}/admin/whatsapp/call-session",
+        json=payload,
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code >= 400:
+        logger.error(
+            f"WhatsApp call-session upsert failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"WhatsApp call-session upsert error: {resp.status_code}")
+    return resp.json()
+
+
+def get_whatsapp_call_session(
+    provider_call_sid: str, provider: str = "twilio"
+) -> dict | None:
+    """Fetch persisted WhatsApp call routing state by provider CallSid."""
+    resp = requests.get(
+        f"{SETTINGS.orchestra_url}/admin/whatsapp/call-session/{provider_call_sid}",
+        params={"provider": provider},
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"WhatsApp call-session lookup failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"WhatsApp call-session lookup error: {resp.status_code}")
+    return resp.json()
+
+
+def update_whatsapp_call_session(payload: dict) -> dict | None:
+    """Update status or recording metadata for a WhatsApp provider call."""
+    resp = requests.patch(
+        f"{SETTINGS.orchestra_url}/admin/whatsapp/call-session",
+        json=payload,
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"WhatsApp call-session update failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"WhatsApp call-session update error: {resp.status_code}")
+    return resp.json()
+
+
 def resolve_discord_route(bot_id: str, sender: str) -> dict | None:
     """Resolve an inbound Discord DM to an assistant via Orchestra."""
     return _resolve_shared_pool_route("discord", bot_id, sender)

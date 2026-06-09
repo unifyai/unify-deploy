@@ -109,7 +109,10 @@ def _store_refreshed_oauth_secrets(
 from common.metrics import setup_metrics
 
 from common.livekit import (
+    delete_sip_dispatch_rule,
     ensure_phone_dispatch_rule,
+    ensure_call_scoped_dispatch_rule,
+    make_call_scoped_sip_uri,
     make_room_name,
     make_sip_uri,
     start_room_egress,
@@ -146,6 +149,7 @@ from .helpers import (
     get_pubsub_client,
     get_thread_id,
     get_twilio_wa_client,
+    get_whatsapp_call_session,
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
@@ -153,6 +157,8 @@ from .helpers import (
     slack_message_already_seen,
     resolve_whatsapp_route,
     start_unity_job,
+    update_whatsapp_call_session,
+    upsert_whatsapp_call_session,
     uses_local_unity_runtime,
     verify_slack_signature,
 )
@@ -532,6 +538,9 @@ async def livekit_recording_complete(request: Request):
     assistant_id = request.query_params.get("assistant_id", "")
     user_id = request.query_params.get("user_id", "")
     room_name = request.query_params.get("room_name", egress_info.room_name)
+    call_session_id = request.query_params.get("call_session_id", "")
+    provider_call_sid = request.query_params.get("provider_call_sid", call_session_id)
+    conference_name = request.query_params.get("conference_name", "")
     logger.info(f"Assistant ID: {assistant_id}")
     logger.info(f"User ID: {user_id}")
     logger.info(f"Room Name: {room_name}")
@@ -570,6 +579,21 @@ async def livekit_recording_complete(request: Request):
         f"https://storage.googleapis.com/{gcs_bucket}/{file_result.filename}"
     )
 
+    if provider_call_sid:
+        await asyncio.to_thread(
+            update_whatsapp_call_session,
+            {
+                "provider": "twilio",
+                "provider_call_sid": provider_call_sid,
+                "status": "recording_ready",
+                "recording_url": recording_url,
+                "metadata": {
+                    "egress_id": egress_info.egress_id,
+                    "recording_room_name": room_name,
+                },
+            },
+        )
+
     pubsub_client = get_pubsub_client()
     topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
@@ -584,7 +608,11 @@ async def livekit_recording_complete(request: Request):
                     "event": {
                         "assistant_id": str(assistant_id),
                         "user_id": str(user_id),
-                        "conference_name": room_name,
+                        "call_session_id": call_session_id,
+                        "provider_call_sid": provider_call_sid,
+                        "conference_name": conference_name or room_name,
+                        "room_name": room_name,
+                        "livekit_room": room_name,
                         "recording_url": recording_url,
                     },
                 },
@@ -984,6 +1012,7 @@ async def twilio_whatsapp_call_webhook(request: Request):
 
     to_raw = form_data.get("To", "") or ""
     from_raw = form_data.get("From", "") or ""
+    provider_call_sid = form_data.get("CallSid") or f"missing-{uuid.uuid4()}"
     pool_number = to_raw.replace("whatsapp:", "").strip()
     caller_number = from_raw.replace("whatsapp:", "").strip()
     logger.info(
@@ -1024,15 +1053,54 @@ async def twilio_whatsapp_call_webhook(request: Request):
     assistant_id = assistant_data["assistant_id"]
     contacts = context["contacts"]
 
-    # Conference + LiveKit room
-    date_time = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    conference_name = f"Unity_WA_{pool_number[1:]}_{date_time}"
-    room_name = make_room_name(assistant_id, "whatsapp_call")
-    sip_uri = make_sip_uri(pool_number)
+    call_id = provider_call_sid.replace(":", "-")
+    conference_name = f"unity_wa_conf_{call_id}"
+    room_name = f"unity_wa_room_{assistant_id}_{call_id}"
+    sip_uri, sip_target = make_call_scoped_sip_uri(
+        pool_number,
+        call_id,
+        headers={
+            "X-Unity-Call-Session": call_id,
+            "X-Unity-Provider-Call-Sid": provider_call_sid,
+            "X-Unity-Room": room_name,
+        },
+    )
     logger.info(f"Setting up WhatsApp call conference {conference_name}")
     logger.info(f"LiveKit room: {room_name}")
 
-    await ensure_phone_dispatch_rule(pool_number, room_name)
+    sip_dispatch_rule_id = await ensure_call_scoped_dispatch_rule(
+        base_phone_number=pool_number,
+        sip_target=sip_target,
+        room_name=room_name,
+        call_id=call_id,
+        assistant_id=str(assistant_id),
+    )
+    if not sip_dispatch_rule_id:
+        resp = VoiceResponse()
+        resp.say("This number cannot accept calls right now. Please try again later.")
+        resp.hangup()
+        return Response(content=str(resp), media_type="text/xml")
+
+    await asyncio.to_thread(
+        upsert_whatsapp_call_session,
+        {
+            "provider": "twilio",
+            "provider_call_sid": provider_call_sid,
+            "channel": "whatsapp_call",
+            "assistant_id": int(assistant_id),
+            "from_number": caller_number,
+            "to_number": pool_number,
+            "pool_number": pool_number,
+            "conference_name": conference_name,
+            "livekit_room": room_name,
+            "status": "created",
+            "metadata": {
+                "sip_uri": sip_uri,
+                "sip_target": sip_target,
+                "sip_dispatch_rule_id": sip_dispatch_rule_id,
+            },
+        },
+    )
 
     # Publish to Pub/Sub
     pubsub_client = get_pubsub_client()
@@ -1046,6 +1114,8 @@ async def twilio_whatsapp_call_webhook(request: Request):
             "event": {
                 "contacts": contacts,
                 "conference_name": conference_name,
+                "call_session_id": provider_call_sid,
+                "provider_call_sid": provider_call_sid,
                 "caller_number": caller_number,
                 "sip_uri": sip_uri,
                 "livekit_room": room_name,
@@ -1057,6 +1127,7 @@ async def twilio_whatsapp_call_webhook(request: Request):
                     "call_type": "inbound",
                     "room_created": True,
                     "bridge_established": True,
+                    "sip_dispatch_rule_id": sip_dispatch_rule_id,
                 },
             },
         }
@@ -1094,7 +1165,14 @@ async def twilio_whatsapp_call_webhook(request: Request):
     # Recording via LiveKit Egress (fire-and-forget)
     try:
         user_id = assistant_data["user_id"]
-        await start_room_egress(room_name, assistant_id, user_id)
+        await start_room_egress(
+            room_name,
+            assistant_id,
+            user_id,
+            call_session_id=provider_call_sid,
+            provider_call_sid=provider_call_sid,
+            conference_name=conference_name,
+        )
     except Exception as e:
         logger.error(
             f"[Egress] Non-fatal: failed to start egress for WhatsApp call: {e}",
@@ -1116,13 +1194,10 @@ async def twilio_whatsapp_call_status_webhook(request: Request):
     """
     form_data = await request.form()
     call_status = form_data.get("CallStatus")
-    from_raw = form_data.get("From", "") or ""
-    to_raw = form_data.get("To", "") or ""
-    pool_number = from_raw.replace("whatsapp:", "").strip()
-    user_number = to_raw.replace("whatsapp:", "").strip()
+    provider_call_sid = form_data.get("CallSid") or ""
     logger.info(
         f"twilio_whatsapp_call_status_webhook: {call_status} "
-        f"from {_redact_phone(pool_number)} to {_redact_phone(user_number)}",
+        f"call_sid={provider_call_sid}",
     )
 
     if call_status not in (
@@ -1131,24 +1206,46 @@ async def twilio_whatsapp_call_status_webhook(request: Request):
         "busy",
         "canceled",
         "failed",
+        "completed",
     ):
         return Response(status_code=200)
 
-    resolve_data = await asyncio.to_thread(
-        resolve_whatsapp_route,
-        pool_number,
-        user_number,
-    )
-    if not resolve_data or "assistant_id" not in resolve_data:
-        logger.warning("Could not resolve assistant for WhatsApp call status")
+    if not provider_call_sid:
+        logger.warning("WhatsApp call status missing CallSid")
         return Response(status_code=200)
 
-    resolved_id = str(resolve_data["assistant_id"])
+    call_session = await asyncio.to_thread(
+        get_whatsapp_call_session,
+        provider_call_sid,
+    )
+    if not call_session:
+        logger.warning("Could not find call session for WhatsApp call status")
+        return Response(status_code=200)
+
+    await asyncio.to_thread(
+        update_whatsapp_call_session,
+        {
+            "provider": "twilio",
+            "provider_call_sid": provider_call_sid,
+            "status": call_status,
+        },
+    )
+
+    metadata = call_session.get("metadata") or {}
+    if call_status in ("no-answer", "busy", "canceled", "failed", "completed"):
+        await delete_sip_dispatch_rule(metadata.get("sip_dispatch_rule_id"))
+
+    if call_status == "completed":
+        return Response(status_code=200)
+
+    resolved_id = str(call_session["assistant_id"])
+    pool_number = call_session["to_number"]
+    user_number = call_session["from_number"]
     context = await asyncio.to_thread(
         build_webhook_context,
         "whatsapp_call",
-        from_raw,
-        to_raw,
+        f"whatsapp:{pool_number}",
+        f"whatsapp:{user_number}",
         assistant_id=resolved_id,
         validate_contact=False,
     )
@@ -1178,6 +1275,10 @@ async def twilio_whatsapp_call_status_webhook(request: Request):
                         "user_number": user_number,
                         "assistant_number": pool_number,
                         "call_status": call_status,
+                        "call_session_id": provider_call_sid,
+                        "provider_call_sid": provider_call_sid,
+                        "conference_name": call_session["conference_name"],
+                        "livekit_room": call_session["livekit_room"],
                         "timestamp": int(time.time() * 1000),
                     },
                 },
