@@ -817,7 +817,9 @@ cmd_stop() {
 
   stop_adapters_service
   stop_comms_service
-  stop_pubsub_emulator
+  if [[ "${COMMS_STOP_PUBSUB:-1}" != "0" ]]; then
+    stop_pubsub_emulator
+  fi
 
   rm -f "$CONFIG_FILE"
 
