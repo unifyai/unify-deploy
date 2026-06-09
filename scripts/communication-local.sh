@@ -407,8 +407,9 @@ create_pubsub_topics() {
   log_info "Creating Pub/Sub topics for test assistant: $TEST_ASSISTANT_ID"
 
   # Topics to create (unity-startup is deprecated; assignment uses Lease + CAS now)
+  local assistant_topic="unity-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
   local topics=(
-    "unity-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
+    "$assistant_topic"
     "unity-pending-startups${TOPIC_SUFFIX}"
   )
 
@@ -423,18 +424,28 @@ create_pubsub_topics() {
       log_warn "Topic may already exist: $topic"
     fi
 
-    # Create subscription
-    local sub_body="{\"topic\": \"${topic_path}\"}"
-    if curl -s -X PUT "${base_url}/${sub_path}" -H "Content-Type: application/json" -d "$sub_body" &>/dev/null; then
-      log_success "Created subscription: ${topic}-sub"
-    else
-      log_warn "Subscription may already exist: ${topic}-sub"
+    # Create subscription (assistant CM sub is inbound-filtered below)
+    if [[ "$topic" != "$assistant_topic" ]]; then
+      local sub_body="{\"topic\": \"${topic_path}\"}"
+      if curl -s -X PUT "${base_url}/${sub_path}" -H "Content-Type: application/json" -d "$sub_body" &>/dev/null; then
+        log_success "Created subscription: ${topic}-sub"
+      else
+        log_warn "Subscription may already exist: ${topic}-sub"
+      fi
     fi
   done
 
   # Create additional filtered subscriptions for the test assistant topic
-  local assistant_topic="unity-${TEST_ASSISTANT_ID}${TOPIC_SUFFIX}"
   local assistant_topic_path="projects/${GCP_PROJECT_ID}/topics/${assistant_topic}"
+
+  local inbound_sub_path="projects/${GCP_PROJECT_ID}/subscriptions/${assistant_topic}-sub"
+  local inbound_body="{\"topic\": \"${assistant_topic_path}\", \"filter\": \"attributes.thread = \\\"inbound\\\"\"}"
+  curl -s -o /dev/null -X DELETE "${base_url}/${inbound_sub_path}" 2>/dev/null || true
+  if curl -s -X PUT "${base_url}/${inbound_sub_path}" -H "Content-Type: application/json" -d "$inbound_body" &>/dev/null; then
+    log_success "Created subscription: ${assistant_topic}-sub"
+  else
+    log_warn "Subscription may already exist: ${assistant_topic}-sub"
+  fi
 
   # Outbound subscription (chat messages)
   local outbound_sub_path="projects/${GCP_PROJECT_ID}/subscriptions/${assistant_topic}-outbound-sub"
