@@ -899,7 +899,7 @@ async def twilio_whatsapp_webhook(request: Request):
         )
         return Response(content=str(resp_user), media_type="text/xml")
 
-    if action == "reject_cold":
+    if action in ("reject_cold", "reject_ambiguous"):
         resp_user = MessagingResponse()
         resp_user.message("This number is not accepting new messages.")
         return Response(content=str(resp_user), media_type="text/xml")
@@ -1000,6 +1000,7 @@ async def twilio_whatsapp_call_webhook(request: Request):
     if resolve_data is None or resolve_data.get("action") in (
         "auto_reply",
         "reject_cold",
+        "reject_ambiguous",
     ):
         resp = VoiceResponse()
         resp.say(
