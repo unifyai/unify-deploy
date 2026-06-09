@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import base64
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,6 +11,18 @@ from fastapi.testclient import TestClient
 
 from adapters import main
 from common.livekit import make_call_scoped_sip_uri
+
+
+def _gmail_envelope(email_address="marty@unify.ai", history_id="hist-1"):
+    data = base64.b64encode(
+        json.dumps(
+            {
+                "emailAddress": email_address,
+                "historyId": history_id,
+            },
+        ).encode("utf-8"),
+    ).decode("ascii")
+    return {"message": {"data": data}}
 
 
 def test_twilio_whatsapp_reject_ambiguous_returns_closed_response(monkeypatch):
@@ -35,6 +48,101 @@ def test_twilio_whatsapp_reject_ambiguous_returns_closed_response(monkeypatch):
     assert response.status_code == 200
     assert "text/xml" in response.headers["content-type"]
     assert "This number is not accepting new messages." in response.text
+
+
+def _install_shared_gmail_stubs(monkeypatch, *, route):
+    published = []
+    contexts = []
+    monkeypatch.setenv("GCP_SA_KEY", "{}")
+    monkeypatch.setattr(
+        main.Credentials,
+        "from_service_account_info",
+        staticmethod(lambda *_args, **_kwargs: object()),
+    )
+    monkeypatch.setattr(main, "build", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        main,
+        "get_assistant",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("legacy lookup")),
+    )
+    monkeypatch.setattr(main, "resolve_email_route", lambda *_args: route)
+    monkeypatch.setattr(
+        main,
+        "get_thread_id",
+        lambda *_args: (
+            "thread-1",
+            "email-1",
+            {
+                "sender": "Owner <owner@example.com>",
+                "to": "marty@unify.ai",
+                "cc": "",
+                "bcc": "",
+                "subject": "Hello",
+                "content": "Body",
+            },
+            "gmail-message-1",
+        ),
+    )
+
+    def fake_context(channel, destination, sender, *, assistant_id, validate_contact):
+        contexts.append(
+            {
+                "channel": channel,
+                "destination": destination,
+                "sender": sender,
+                "assistant_id": assistant_id,
+                "validate_contact": validate_contact,
+            },
+        )
+        return {
+            "assistant": {"assistant_id": assistant_id, "user_id": "user-1"},
+            "contacts": [{"contact_id": 1, "email": sender}],
+            "is_valid_contact": True,
+            "is_job_running": False,
+        }
+
+    monkeypatch.setattr(main, "build_webhook_context", fake_context)
+    monkeypatch.setattr(
+        main,
+        "publish_gmail_thread_id",
+        lambda *args, **kwargs: published.append((args, kwargs)),
+    )
+    return published, contexts
+
+
+def test_shared_gmail_notification_resolves_owner_and_publishes(monkeypatch):
+    published, contexts = _install_shared_gmail_stubs(
+        monkeypatch,
+        route={"assistant_id": 101, "role": "owner"},
+    )
+
+    response = main.gmail_notification_processor(_gmail_envelope())
+
+    assert response.status_code == 200
+    assert contexts == [
+        {
+            "channel": "email",
+            "destination": "marty@unify.ai",
+            "sender": "owner@example.com",
+            "assistant_id": "101",
+            "validate_contact": False,
+        },
+    ]
+    assert published[0][0][0] == "101"
+    assert published[0][1]["shared_mailbox"] == "marty@unify.ai"
+
+
+def test_shared_gmail_notification_reject_action_does_not_publish(monkeypatch):
+    published, contexts = _install_shared_gmail_stubs(
+        monkeypatch,
+        route={"action": "reject_ambiguous"},
+    )
+
+    response = main.gmail_notification_processor(_gmail_envelope())
+
+    assert response.status_code == 200
+    assert contexts == []
+    assert published == []
 
 
 class _FakePublishFuture:
@@ -309,3 +417,56 @@ def test_recording_complete_updates_session_and_publishes_session_fields(monkeyp
     assert payload["event"]["conference_name"] == "unity_wa_conf_CA111"
     assert payload["event"]["room_name"] == "unity_wa_room_101_CA111"
     assert payload["event"]["livekit_room"] == "unity_wa_room_101_CA111"
+
+
+def test_scheduled_email_watches_renews_shared_mailbox_once(monkeypatch):
+    posted = []
+
+    class FakeGetResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "info": [
+                    {
+                        "email": "marty@unify.ai",
+                        "email_provider": "google_workspace",
+                        "secrets": {},
+                    },
+                    {
+                        "email": "marty@unify.ai",
+                        "email_provider": "google_workspace",
+                        "secrets": {},
+                    },
+                    {
+                        "email": "alice@example.com",
+                        "email_provider": "google_workspace",
+                        "secrets": {},
+                    },
+                ],
+            }
+
+    class FakePostResponse:
+        def json(self):
+            return {"success": True}
+
+    monkeypatch.setattr(main.SETTINGS, "orchestra_admin_key", "admin")
+    monkeypatch.setattr(
+        main.requests,
+        "get",
+        lambda *_args, **_kwargs: FakeGetResponse(),
+    )
+
+    def fake_post(_url, *, json, **_kwargs):
+        posted.append(json)
+        return FakePostResponse()
+
+    monkeypatch.setattr(main.requests, "post", fake_post)
+
+    result = main.scheduled_email_watches(main.ScheduledPayload(test=False))
+
+    primary_emails = [payload["primary_email"] for payload in posted]
+    assert primary_emails.count("marty@unify.ai") == 1
+    assert "alice@example.com" in primary_emails
+    assert result["gmail"][0]["email"] == "alice@example.com"
+    assert any(row["email"] == "marty@unify.ai" for row in result["gmail"])

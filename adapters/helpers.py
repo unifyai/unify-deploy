@@ -181,6 +181,30 @@ def resolve_whatsapp_route(pool_number: str, sender: str) -> dict | None:
     return _resolve_shared_pool_route("whatsapp", pool_number, sender)
 
 
+def is_unity_coordinator_email_address(email_address: str | None) -> bool:
+    if not email_address:
+        return False
+    return email_address.strip().lower() == SETTINGS.unity_coordinator_email_address
+
+
+def resolve_email_route(mailbox: str, sender: str) -> dict | None:
+    """Resolve an inbound shared-mailbox email to an assistant via Orchestra."""
+    resp = requests.get(
+        f"{SETTINGS.orchestra_url}/admin/email/resolve",
+        params={"mailbox": mailbox, "sender": sender},
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"email resolve failed: {resp.status_code} {resp.text}",
+        )
+        raise RuntimeError(f"email resolve error: {resp.status_code}")
+    return resp.json()
+
+
 def upsert_whatsapp_call_session(payload: dict) -> dict:
     """Persist the original routing state for a WhatsApp provider call."""
     resp = requests.post(
@@ -1998,6 +2022,7 @@ def publish_gmail_thread_id(
     last_message,
     contacts,
     gmail_message_id=None,
+    shared_mailbox=None,
 ):
     """Publish the thread_id and user_id to a different pub/sub topic."""
     try:
@@ -2022,6 +2047,8 @@ def publish_gmail_thread_id(
                 "body": last_message["content"],
             },
         }
+        if shared_mailbox:
+            message_dict["event"]["shared_mailbox"] = shared_mailbox
         data = json.dumps(message_dict).encode("utf-8")
 
         # Publish asynchronously

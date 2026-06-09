@@ -10,6 +10,7 @@ import os
 import requests
 import httpx
 from datetime import datetime, timedelta, timezone
+from email.utils import parseaddr
 from urllib.parse import quote
 from typing import Any, Optional
 from fastapi import (
@@ -150,9 +151,11 @@ from .helpers import (
     get_thread_id,
     get_twilio_wa_client,
     get_whatsapp_call_session,
+    is_unity_coordinator_email_address,
     parse_teams_resource_id,
     publish_gmail_thread_id,
     publish_outlook_thread_id,
+    resolve_email_route,
     resolve_slack_inbound,
     slack_message_already_seen,
     resolve_whatsapp_route,
@@ -2785,15 +2788,22 @@ def gmail_notification_processor(envelope: dict = Body(...)):
         logger.info("Received Gmail notification")
 
         # extract Gmail notification details (mailbox address being watched)
-        assistant_email_address = notification["emailAddress"]
+        assistant_email_address = notification["emailAddress"].strip().lower()
         history_id = notification["historyId"]
+        is_shared_coordinator_email = is_unity_coordinator_email_address(
+            assistant_email_address,
+        )
 
         # Build Gmail API client.  BYOD accounts have a GOOGLE_ACCESS_TOKEN
         # secret; platform-managed accounts use service-account delegation.
-        assistant_data_prefetch = get_assistant(email_address=assistant_email_address)
-        google_token = (assistant_data_prefetch.get("secrets") or {}).get(
-            "GOOGLE_ACCESS_TOKEN",
-        )
+        google_token = None
+        if not is_shared_coordinator_email:
+            assistant_data_prefetch = get_assistant(
+                email_address=assistant_email_address
+            )
+            google_token = (assistant_data_prefetch.get("secrets") or {}).get(
+                "GOOGLE_ACCESS_TOKEN",
+            )
         if google_token:
             from google.oauth2.credentials import (
                 Credentials as OAuthCredentials,
@@ -2832,11 +2842,32 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             )
             return Response(content="No new conversations", status_code=200)
 
-        from_email = last_message["sender"].split("<")[1].split(">")[0]
+        from_email = parseaddr(last_message["sender"])[1]
+        from_email = from_email.strip().lower()
         logger.info(f"from_email: {_redact_email(from_email)}")
 
         # shared context
-        context = build_webhook_context("email", assistant_email_address, from_email)
+        if is_shared_coordinator_email:
+            route = resolve_email_route(assistant_email_address, from_email)
+            if not route or route.get("action"):
+                logger.info(
+                    "Shared coordinator email route action for %s from %s: %s",
+                    _redact_email(assistant_email_address),
+                    _redact_email(from_email),
+                    (route or {}).get("action") or "not_found",
+                )
+                return Response(content="OK", status_code=200)
+            context = build_webhook_context(
+                "email",
+                assistant_email_address,
+                from_email,
+                assistant_id=str(route["assistant_id"]),
+                validate_contact=False,
+            )
+        else:
+            context = build_webhook_context(
+                "email", assistant_email_address, from_email
+            )
         assistant_data = context["assistant"]
         assistant_id = assistant_data["assistant_id"]
         user_id = assistant_data["user_id"]
@@ -2865,6 +2896,9 @@ def gmail_notification_processor(envelope: dict = Body(...)):
             last_message,
             contacts,
             gmail_message_id,
+            shared_mailbox=(
+                assistant_email_address if is_shared_coordinator_email else None
+            ),
         )
         return Response(content="OK", status_code=200)
 
@@ -4667,6 +4701,8 @@ def scheduled_email_watches(payload: ScheduledPayload):
         email = assistant.get("email")
         if not email:
             continue
+        if is_unity_coordinator_email_address(email):
+            continue
 
         # Determine provider from the assistant record.  Fall back to
         # token-sniffing for assistants that predate the email_provider field.
@@ -4729,6 +4765,28 @@ def scheduled_email_watches(payload: ScheduledPayload):
             results[provider].append(
                 {"email": email, "success": False, "error": error_msg},
             )
+
+    # Renew shared coordinator mailbox (Gmail-based, skip only in test mode)
+    if not payload.test:
+        try:
+            response = requests.post(
+                f"{SETTINGS.comms_url}/gmail/watch",
+                json={
+                    "primary_email": SETTINGS.unity_coordinator_email_address,
+                    "topic_name": SETTINGS.unity_coordinator_email_watch_topic,
+                },
+                headers={"Authorization": f"Bearer {admin_key}"},
+                timeout=30,
+            ).json()
+            results["gmail"].append(
+                {
+                    "email": SETTINGS.unity_coordinator_email_address,
+                    **response,
+                },
+            )
+            logger.info(f"Renewed shared coordinator mailbox: {response}")
+        except Exception as e:
+            logger.error(f"Error renewing shared coordinator mailbox: {e}")
 
     # Renew policy assistant (Gmail-based, skip only in test mode)
     if not payload.test:

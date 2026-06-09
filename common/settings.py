@@ -212,6 +212,19 @@ class Settings:
         # Derived names used across the codebase
         self.unity_image_name: str = f"unity{self.env_suffix}"
         self.gmail_topic: str = f"gmail-notifications{self.env_suffix}"
+        self.unity_coordinator_email_address: str = (
+            (
+                os.environ.get("UNITY_COORDINATOR_EMAIL_ADDRESS")
+                or os.environ.get("ORCHESTRA_UNITY_COORDINATOR_EMAIL_ADDRESS")
+                or "marty@unify.ai"
+            )
+            .strip()
+            .lower()
+        )
+        self.unity_coordinator_email_watch_topic: str = os.environ.get(
+            "UNITY_COORDINATOR_EMAIL_WATCH_TOPIC",
+            self.gmail_topic,
+        )
         self.image_hash_blob: str = _image_hash_blob_name(
             deploy_env=self.deploy_env,
             env_suffix=self.env_suffix,
