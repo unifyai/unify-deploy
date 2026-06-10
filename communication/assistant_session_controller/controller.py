@@ -214,7 +214,7 @@ def _binding_owned_job_image(job) -> str | None:
     return image or None
 
 
-def _preview_override_job_is_current(
+def _image_override_job_is_current(
     job,
     *,
     image_override: str | None,
@@ -631,18 +631,17 @@ def _spawn_fresh_job_for_binding(
 ):
     """Create a Unity Job pinned to ``image`` and pre-claimed for this binding.
 
-    Used when an AssistantSession carries ``spec.imageOverride`` (preview-
-    environment revisions): the staging idle pool is built from the canonical
-    Unity image and would silently overwrite a feature branch's container,
-    so the controller bypasses the pool and synthesizes a fresh Job whose
-    metadata mirrors a newly-claimed idle Job.
+    Used when an AssistantSession carries ``spec.imageOverride``: the idle
+    pool is built from the canonical Unity image and would silently override
+    the pinned container, so the controller bypasses the pool and synthesizes
+    a fresh Job whose metadata mirrors a newly-claimed idle Job.
     """
 
     assert _batch_api is not None
     current_binding_id = binding_id_from_status(binding)
     sanitized_assistant_id = _sanitize_for_k8s(assistant_id)
     job_name = (
-        f"unity-preview-{sanitized_assistant_id[:32]}"
+        f"unity-override-{sanitized_assistant_id[:32]}"
         f"-{uuid.uuid4().hex[:6]}{SETTINGS.env_suffix}"
     )
     extra_labels = {
@@ -737,7 +736,7 @@ def _claim_idle_job_for_binding(
 
     existing_job = _job_for_binding(session_name, binding)
     if existing_job is not None:
-        if _preview_override_job_is_current(
+        if _image_override_job_is_current(
             existing_job,
             image_override=image_override,
         ):
@@ -971,7 +970,7 @@ def _claim_and_bind_pending_job(
         job_before_name = (
             str(job_before.metadata.name or "")
             if job_before is not None
-            and _preview_override_job_is_current(
+            and _image_override_job_is_current(
                 job_before,
                 image_override=image_override,
             )

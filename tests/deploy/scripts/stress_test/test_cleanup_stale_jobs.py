@@ -45,7 +45,7 @@ def test_cleanup_jobs_requests_binding_scoped_release(monkeypatch):
     monkeypatch.setattr(module.requests, "post", fake_post)
     monkeypatch.setattr(module, "comms_url", "https://comms.test")
     monkeypatch.setattr(module, "admin_key", "secret")
-    monkeypatch.setattr(module, "namespace", "preview")
+    monkeypatch.setattr(module, "namespace", "staging")
 
     module.cleanup_jobs(
         [
@@ -82,7 +82,7 @@ def test_cleanup_jobs_skips_release_without_binding_id(monkeypatch):
     monkeypatch.setattr(module.requests, "post", fake_post)
     monkeypatch.setattr(module, "comms_url", "https://comms.test")
     monkeypatch.setattr(module, "admin_key", "secret")
-    monkeypatch.setattr(module, "namespace", "preview")
+    monkeypatch.setattr(module, "namespace", "staging")
 
     module.cleanup_jobs(
         [

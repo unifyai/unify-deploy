@@ -41,7 +41,7 @@ COORDINATOR_RUNTIME_READY_REPLY_TIMEOUT_SECONDS = 90
 ASSISTANTS_PROJECT_NAME = "Assistants"
 
 
-def _require_preview_routing() -> None:
+def _require_explicit_routing() -> None:
     """Ensure the opt-in run is pointed at one explicit deployment set."""
 
     missing_routes = [name for name in REQUIRED_ROUTE_ENV if not os.getenv(name)]
@@ -49,30 +49,8 @@ def _require_preview_routing() -> None:
         "Coordinator e2e requires explicit service URLs so it does not "
         f"accidentally hit default staging routes. Missing: {', '.join(missing_routes)}"
     )
-    route_slugs = {name: _preview_slug(os.environ[name]) for name in REQUIRED_ROUTE_ENV}
-    missing_slugs = [name for name, slug in route_slugs.items() if not slug]
-    assert not missing_slugs, (
-        "Coordinator e2e must target preview-tagged service URLs. "
-        f"Non-preview routes: {', '.join(missing_slugs)}"
-    )
-    unique_slugs = {slug for slug in route_slugs.values() if slug}
-    assert len(unique_slugs) == 1, (
-        "Coordinator e2e service URLs must share one preview slug. "
-        f"Resolved slugs: {route_slugs}"
-    )
     assert UNIFY_KEY, "UNIFY_KEY is required to create the disposable organization"
     assert ADMIN_KEY, "ORCHESTRA_ADMIN_KEY is required for admin assistant lookup"
-
-
-def _preview_slug(url: str) -> str | None:
-    """Return the preview slug encoded in a tagged service URL."""
-
-    host = urlparse(url).hostname or ""
-    if "---" in host:
-        return host.split("---", 1)[0] or None
-    if host.endswith("internal.example.com"):
-        return host.split(".", 1)[0] or None
-    return None
 
 
 def _auth_headers(api_key: str) -> dict[str, str]:
@@ -80,7 +58,7 @@ def _auth_headers(api_key: str) -> dict[str, str]:
 
 
 def _fallback_admin_orchestra_url() -> str | None:
-    """Return one admin-route fallback when preview Orchestra admin endpoints fail."""
+    """Return one admin-route fallback when tagged Orchestra admin endpoints fail."""
 
     override = os.getenv("TEST_ORCHESTRA_ADMIN_URL")
     if override:
@@ -400,7 +378,7 @@ def _ensure_coordinator_tools_ready(
 
     token = f"coord-ready-{uuid.uuid4().hex[:12]}"
     prompt = (
-        "Please reply with this exact preview readiness token when your coordinator "
+        "Please reply with this exact readiness token when your coordinator "
         f"tools are ready: {token}"
     )
     for attempt in range(1, COORDINATOR_RUNTIME_READY_ATTEMPTS + 1):
@@ -673,7 +651,7 @@ def _send_and_poll_for_side_effect(
 def test_coordinator_contract_end_to_end(batch_api, core_api, pubsub_subscriber):
     """Exercise the deployed Coordinator contract through the public services."""
 
-    _require_preview_routing()
+    _require_explicit_routing()
 
     organization: dict[str, Any] | None = None
     coordinator_id: str | None = None
@@ -809,7 +787,7 @@ def test_coordinator_builds_colleague_and_team_end_to_end(
 ):
     """Ask the live Coordinator to persist a colleague, team, and membership."""
 
-    _require_preview_routing()
+    _require_explicit_routing()
 
     organization: dict[str, Any] | None = None
     coordinator_id: str | None = None
@@ -887,7 +865,7 @@ def test_coordinator_builds_colleague_and_team_end_to_end(
         colleague_full_name = f"{colleague_first_name} {colleague_surname}"
         team_name = f"Scenario Team {token}"
         team_description = (
-            f"Shared coordination workspace for preview scenario {token}."
+            f"Shared coordination workspace for e2e scenario {token}."
         )
 
         colleague = _send_and_poll_for_side_effect(
@@ -901,7 +879,7 @@ def test_coordinator_builds_colleague_and_team_end_to_end(
                 f"{colleague_first_name} and surname {colleague_surname}. Use config "
                 "values age 30, nationality United States, timezone "
                 "America/New_York, job_title Preview E2E Colleague, and about "
-                "'Created by the Coordinator preview scenario test.' No extra "
+                "'Created by the Coordinator e2e scenario test.' No extra "
                 "confirmation is needed."
             ),
             nudge_prompt=(
@@ -1043,7 +1021,7 @@ def test_coordinator_act_writes_to_shared_team_end_to_end(
 ):
     """Ask the live Coordinator to run act and persist output into one shared team."""
 
-    _require_preview_routing()
+    _require_explicit_routing()
 
     organization: dict[str, Any] | None = None
     coordinator_id: str | None = None

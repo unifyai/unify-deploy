@@ -16,7 +16,7 @@
 #
 # GCP Metadata Keys (set at pool creation):
 #   hostname, github-token, orchestra-url, comms-url, unity-environment,
-#   staging, preview,
+#   staging,
 #   tls-fullchain, tls-privkey, pool-watcher-script
 #
 # GCP Metadata Keys (set at assignment, handled by pool watcher):
@@ -67,7 +67,6 @@ function Get-RemoteCommitHash {
 function Get-DeployEnv {
     $envName = Get-GCPMetadata -Key "unity-environment"
     if ($envName) { return $envName }
-    if (Get-GCPMetadata -Key "preview") { return "preview" }
     if (Get-GCPMetadata -Key "staging") { return "staging" }
     return "production"
 }
@@ -249,7 +248,6 @@ $unityUrl = if ($gcpGithubToken) {
     "https://github.com/unifyai/unity.git"
 }
 $unityBranch = switch ($gcpDeployEnv) {
-    "preview" { "preview" }
     "staging" { "staging" }
     default { "main" }
 }

@@ -8,7 +8,6 @@ hourly Cloud Scheduler cron with an event-driven trigger.
 Usage:
     python scripts/dev/idle_job_refresh.py                       # staging (default, lists jobs)
     python scripts/dev/idle_job_refresh.py --env production    # production
-    python scripts/dev/idle_job_refresh.py --env preview       # preview
     python scripts/dev/idle_job_refresh.py --no-list-jobs  # skip job listing
     python scripts/dev/idle_job_refresh.py --delay 45
 """
@@ -26,12 +25,10 @@ load_dotenv()
 ADAPTERS_URLS = {
     "production": "https://unity-adapters-000000000000.us-central1.run.app",
     "staging": "https://service.a.run.app",
-    "preview": "https://service.a.run.app",
 }
 COMMS_URLS = {
     "production": "https://unity-comms-app-000000000000.us-central1.run.app",
     "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
-    "preview": "https://unity-comms-app-preview-000000000000.us-central1.run.app",
 }
 
 
@@ -108,7 +105,7 @@ def main():
     )
     parser.add_argument(
         "--env",
-        choices=["production", "staging", "preview"],
+        choices=["production", "staging"],
         default="staging",
         help="Target deploy environment (default: staging)",
     )

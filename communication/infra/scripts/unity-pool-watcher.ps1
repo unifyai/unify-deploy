@@ -37,7 +37,6 @@ function Get-Metadata($key) {
 function Get-DeployEnv {
     $envName = Get-Metadata "unity-environment"
     if ($envName) { return $envName }
-    if (Get-Metadata "preview") { return "preview" }
     if (Get-Metadata "staging") { return "staging" }
     return "production"
 }
@@ -400,7 +399,6 @@ function Invoke-Update {
         $unityUrl = "https://github.com/unifyai/unity.git"
     }
     $unityBranch = switch ($deployEnv) {
-        "preview" { "preview" }
         "staging" { "staging" }
         default { "main" }
     }

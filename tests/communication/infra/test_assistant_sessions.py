@@ -37,7 +37,6 @@ from communication.infra.assistant_sessions import (
     merge_conditions,
     patch_assistant_session_status,
     persist_binding_vm_assignment_result,
-    preview_image_override,
     record_released_binding,
     record_assistant_session_signal,
     released_binding,
@@ -115,9 +114,9 @@ def test_build_assistant_session_spec_carries_image_override():
         desktop_mode="ubuntu",
         startup_secret_ref="session-bootstrap-42",
         activation_id="act-1",
-        image_override="registry/unity-staging:preview-myslug-deadbeef",
+        image_override="registry/unity-staging:override-myslug-deadbeef",
     )
-    assert spec["imageOverride"] == ("registry/unity-staging:preview-myslug-deadbeef")
+    assert spec["imageOverride"] == ("registry/unity-staging:override-myslug-deadbeef")
 
 
 def test_build_assistant_session_spec_carries_runtime_service_urls():
@@ -165,41 +164,9 @@ def test_session_image_override_normalizes_missing_or_blank_values():
     assert session_image_override({"spec": {"imageOverride": "   "}}) is None
     assert (
         session_image_override(
-            {"spec": {"imageOverride": "registry/unity-staging:preview-x"}},
+            {"spec": {"imageOverride": "registry/unity-staging:override-x"}},
         )
-        == "registry/unity-staging:preview-x"
-    )
-
-
-def test_preview_image_override_returns_none_without_branch_tag(monkeypatch):
-    monkeypatch.setattr(assistant_sessions_module.SETTINGS, "branch_tag", "")
-
-    def _fail():
-        raise AssertionError("should not call GCS without a branch tag")
-
-    monkeypatch.setattr(
-        assistant_sessions_module,
-        "get_latest_unity_image",
-        _fail,
-    )
-
-    assert preview_image_override() is None
-
-
-def test_preview_image_override_resolves_image_when_branch_tag_set(monkeypatch):
-    monkeypatch.setattr(
-        assistant_sessions_module.SETTINGS,
-        "branch_tag",
-        "myslug",
-    )
-    monkeypatch.setattr(
-        assistant_sessions_module,
-        "get_latest_unity_image",
-        lambda: "registry/unity-staging:preview-myslug-deadbeef",
-    )
-
-    assert preview_image_override() == (
-        "registry/unity-staging:preview-myslug-deadbeef"
+        == "registry/unity-staging:override-x"
     )
 
 
@@ -882,7 +849,7 @@ def test_patch_assistant_session_status_replaces_binding_atomically(monkeypatch)
 
 def test_crd_status_schema_covers_all_persisted_status_fields():
     crd_path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[3]
         / "k8s"
         / "assistant-session-controller"
         / "crd.yaml"

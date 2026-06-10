@@ -316,10 +316,10 @@ def build_unity_job_manifest(
             ``UNITY_CONVERSATION_JOB_NAME``).
         namespace: Target Kubernetes namespace.
         image: Container image. ``:latest`` tags get
-            ``imagePullPolicy: Always``; any other tag (a SHA, a
-            preview slug, etc.) gets ``IfNotPresent``.
+            ``imagePullPolicy: Always``; any other tag (e.g. a SHA)
+            gets ``IfNotPresent``.
         deploy_env: ``production`` | ``staging``. Drives env vars
-            (``STAGING``, the gateway transports, ``UNITY_STARTUP_TIMING``,
+            (``DEPLOY_ENV``, the gateway transports, ``UNITY_STARTUP_TIMING``,
             the pipeline artifact bucket name).
         ttl_seconds_after_finished: If set, applied to
             ``spec.ttlSecondsAfterFinished`` so finished Jobs garbage
@@ -440,16 +440,13 @@ def build_unity_job_manifest(
     env_vars.extend(unity_config_env)
     env_vars.extend(unity_secret_env)
     if deploy_env == "staging":
-        env_vars += [{"name": "STAGING", "value": "true"}]
         # Activate the new unity.gateway transports on staging Jobs
-        # so the extracted Ingress + Outbound code paths (Unity
-        # commits 2aad1b895 through fab4c5298) get exercised
-        # against real Pub/Sub traffic before any production
-        # cutover. Production Jobs (this branch is staging-only)
-        # continue using the legacy inline subscribe_to_topic and
-        # inline publisher.publish paths until those paths are
-        # explicitly retired. See unity/gateway/PHASES.md (Phase
-        # A.bis).
+        # so the extracted Ingress + Outbound code paths get exercised
+        # against real Pub/Sub traffic before any production cutover.
+        # Production Jobs continue using the legacy inline
+        # subscribe_to_topic and inline publisher.publish paths until
+        # those paths are explicitly retired. See unity/gateway/PHASES.md
+        # (Phase A.bis).
         env_vars += [
             {"name": "UNITY_CONVERSATION_INGRESS_TRANSPORT", "value": "pubsub"},
             {"name": "UNITY_CONVERSATION_OUTBOUND_TRANSPORT", "value": "pubsub"},

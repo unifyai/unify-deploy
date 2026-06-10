@@ -560,7 +560,7 @@ All infrastructure can be removed via the `DELETE /assistant` endpoint in Orches
 
 ## 🔗 Webhook System
 
-### Adapters (Communication Repo)
+### Adapters (this repo)
 
 Located in the `adapters/` folder, these handle incoming webhooks:
 
@@ -598,7 +598,7 @@ External Service → Adapter Webhook → Check/Start Job → Pub/Sub Topic → G
 | `cloudbuild.yaml` | Production environment deployment |
 | `cloudbuild-staging.yaml` | Staging environment deployment |
 
-### Communications Repository
+### Hosted Comms / Adapters (this repo)
 
 | File/Directory | Purpose |
 |----------------|---------|

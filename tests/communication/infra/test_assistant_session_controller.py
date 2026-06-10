@@ -438,7 +438,7 @@ def test_claim_idle_job_skips_hash_filter_when_gcs_unavailable(monkeypatch):
 
 
 def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
-    """A preview-environment session bypasses the staging idle pool entirely."""
+    """A session with an image override bypasses the staging idle pool entirely."""
 
     binding = _binding("binding-1")
     batch_api = MagicMock()
@@ -446,10 +446,10 @@ def test_claim_idle_job_with_image_override_spawns_fresh_job(monkeypatch):
 
     monkeypatch.setattr(controller, "_batch_api", batch_api)
 
-    fresh_job = _job(name="unity-preview-1207-abc123-staging")
+    fresh_job = _job(name="unity-override-1207-abc123-staging")
     create_unity_job_mock = MagicMock(return_value=fresh_job)
     monkeypatch.setattr(controller, "create_unity_job", create_unity_job_mock)
-    image_uri = "registry/unity-staging:preview-myslug-deadbeef"
+    image_uri = "registry/unity-staging:override-myslug-deadbeef"
     runtime_service_env = {
         "ORCHESTRA_URL": "https://internal.example.com/v0",
         "UNITY_COMMS_URL": "https://myslug---unity-comms-app-staging.run.app",
@@ -488,9 +488,9 @@ def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkey
     """If the binding already owns a Job on the override image, reuse it."""
 
     binding = _binding("binding-1")
-    image_uri = "registry/unity-staging:preview-myslug-deadbeef"
+    image_uri = "registry/unity-staging:override-myslug-deadbeef"
     existing_job = _job(
-        name="unity-preview-existing",
+        name="unity-override-existing",
         container_ready=False,
         image=image_uri,
     )
@@ -513,11 +513,11 @@ def test_claim_idle_job_with_image_override_skips_when_jobref_already_set(monkey
 
 
 def test_binding_owned_job_image_reads_container_image():
-    job = _simple_job(image="registry/unity-staging:preview-slug-deadbeef")
+    job = _simple_job(image="registry/unity-staging:override-slug-deadbeef")
 
     assert (
         controller._binding_owned_job_image(job)
-        == "registry/unity-staging:preview-slug-deadbeef"
+        == "registry/unity-staging:override-slug-deadbeef"
     )
 
 
@@ -535,41 +535,41 @@ def test_binding_owned_job_image_returns_none_without_containers():
     ("image", "override", "terminal", "expected"),
     [
         (
-            "registry/unity-staging:preview-a",
-            "registry/unity-staging:preview-a",
+            "registry/unity-staging:override-a",
+            "registry/unity-staging:override-a",
             False,
             True,
         ),
         (
-            "registry/unity-staging:preview-a",
-            "registry/unity-staging:preview-b",
+            "registry/unity-staging:override-a",
+            "registry/unity-staging:override-b",
             False,
             False,
         ),
         (
-            "registry/unity-staging:preview-a",
-            "registry/unity-staging:preview-b",
+            "registry/unity-staging:override-a",
+            "registry/unity-staging:override-b",
             True,
             False,
         ),
-        ("", "registry/unity-staging:preview-b", False, False),
-        ("registry/unity-staging:preview-a", None, False, True),
+        ("", "registry/unity-staging:override-b", False, False),
+        ("registry/unity-staging:override-a", None, False, True),
     ],
 )
-def test_preview_override_job_is_current(image, override, terminal, expected):
+def test_image_override_job_is_current(image, override, terminal, expected):
     job = _simple_job(image=image, terminal=terminal)
 
     assert (
-        controller._preview_override_job_is_current(job, image_override=override)
+        controller._image_override_job_is_current(job, image_override=override)
         is expected
     )
 
 
-def test_claim_and_bind_pending_job_threads_preview_runtime_spec_through(monkeypatch):
-    """The reconciler propagates preview runtime spec to the spawn helper."""
+def test_claim_and_bind_pending_job_threads_override_runtime_spec_through(monkeypatch):
+    """The reconciler propagates override runtime spec to the spawn helper."""
 
     body = _base_session()
-    body["spec"]["imageOverride"] = "registry/unity-staging:preview-myslug-deadbeef"
+    body["spec"]["imageOverride"] = "registry/unity-staging:override-myslug-deadbeef"
     body["spec"]["serviceUrls"] = {
         "orchestra": "https://internal.example.com/v0",
         "comms": "https://myslug---unity-comms-app-staging.run.app",
@@ -577,7 +577,7 @@ def test_claim_and_bind_pending_job_threads_preview_runtime_spec_through(monkeyp
     }
     body["status"]["phase"] = "PendingJob"
     body["status"]["binding"] = _binding("binding-1")
-    fresh_job = _job(name="unity-preview-1207-abc123-staging")
+    fresh_job = _job(name="unity-override-1207-abc123-staging")
     patch_status = MagicMock()
     batch_api = MagicMock()
     batch_api.list_namespaced_job.return_value.items = []
@@ -605,7 +605,7 @@ def test_claim_and_bind_pending_job_threads_preview_runtime_spec_through(monkeyp
     controller._update_status_for_session(deepcopy(body))
 
     assert captured["image_override"] == (
-        "registry/unity-staging:preview-myslug-deadbeef"
+        "registry/unity-staging:override-myslug-deadbeef"
     )
     assert captured["runtime_service_env"] == {
         "ORCHESTRA_URL": "https://internal.example.com/v0",

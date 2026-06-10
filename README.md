@@ -47,8 +47,7 @@ unity-deploy/
 ├── deploy/
 │   ├── Dockerfile                    # Thin enterprise overlay image
 │   ├── cloudbuild-staging.yaml       # Overlay build trigger for staging
-│   ├── cloudbuild.yaml               # Overlay build trigger for production
-│   └── cloudbuild-preview.yaml       # Overlay build trigger for preview
+│   └── cloudbuild.yaml               # Overlay build trigger for production
 └── unity_deploy/
     ├── hook.py                       # Entry point: startup_hook()
     └── assistant_deployments/
@@ -96,7 +95,6 @@ Cloud Build triggers fire on branch pushes:
 | --------- | -------------------------- | ----------------- | ----------- |
 | `staging` | `unity-deploy-staging`     | `unity-staging`   | Staging     |
 | `main`    | `unity-deploy-production`  | `unity`           | Production  |
-| `preview` | `unity-deploy-preview`     | `unity-preview`   | Preview     |
 
 Each build clones Unity (matching branch), installs this package on top, pushes the image to Artifact Registry, updates the GCS image hash, and refreshes the GKE idle job pool. The communication adapters consume these images without any awareness of the overlay -- the image names and hash mechanism are unchanged.
 
@@ -106,4 +104,3 @@ Mirrors Unity:
 
 - **`staging`** -- development and testing
 - **`main`** -- production
-- **`preview`** -- isolated preview environment

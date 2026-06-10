@@ -6,7 +6,6 @@ Usage:
     python scripts/dev/suspend_job.py                                           # auto-detect latest running staging job
     python scripts/dev/suspend_job.py unity-2026-02-25-12-00-00                 # explicit job, staging (default)
     python scripts/dev/suspend_job.py --env production                          # auto-detect latest running production job
-    python scripts/dev/suspend_job.py --env preview                             # auto-detect latest running preview job
     python scripts/dev/suspend_job.py unity-2026-02-25-12-00-00 --namespace my-ns
 """
 
@@ -38,7 +37,6 @@ from job_utils import resolve_latest_job
 COMMS_URLS = {
     "production": "https://unity-comms-app-000000000000.us-central1.run.app",
     "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
-    "preview": "https://unity-comms-app-preview-000000000000.us-central1.run.app",
 }
 
 
@@ -77,7 +75,6 @@ def main():
             "Examples:\n"
             "  python scripts/dev/suspend_job.py                          # latest running staging job\n"
             "  python scripts/dev/suspend_job.py --env production         # latest running production job\n"
-            "  python scripts/dev/suspend_job.py --env preview            # latest running preview job\n"
             "  python scripts/dev/suspend_job.py unity-2026-02-25-12-00-00-staging"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -90,7 +87,7 @@ def main():
     )
     parser.add_argument(
         "--env",
-        choices=["production", "staging", "preview"],
+        choices=["production", "staging"],
         default="staging",
         help="Target deploy environment (default: staging)",
     )

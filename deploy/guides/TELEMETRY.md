@@ -70,7 +70,7 @@ Deployment manifests: `unity/scripts/grafana/`
 
 Both Cloud Run services run the
 `us-docker.pkg.dev/cloud-ops-agents-artifacts/cloud-run-gmp-sidecar/cloud-run-gmp-sidecar:1.2.0`
-sidecar container. Setup script: `communication/scripts/setup_gmp_sidecar.py`
+sidecar container. Setup script: `scripts/setup_gmp_sidecar.py`
 
 ---
 
@@ -370,7 +370,7 @@ unity_session_duration_seconds
 
 ## 6. File Inventory
 
-### Communication Repository
+### Hosted Comms / Adapters (this repo)
 
 | File | Role |
 |---|---|

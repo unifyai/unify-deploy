@@ -377,7 +377,7 @@ def _upsert_scheduled_activation_task(
     if request.execution_mode == "live" and not SETTINGS.adapters_url:
         raise RuntimeError("UNITY_ADAPTERS_URL must be configured")
     if request.execution_mode == "offline" and not SETTINGS.comms_url:
-        raise RuntimeError("COMMUNICATION_URL must be configured")
+        raise RuntimeError("UNITY_COMMS_URL must be configured")
 
     from google.cloud import tasks_v2
 

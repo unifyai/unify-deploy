@@ -18,7 +18,7 @@ from communication.infra.helpers import (
     create_unity_job,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 # ---------------------------------------------------------------------------
@@ -116,13 +116,13 @@ def test_unity_startup_timing_is_literal_not_configmap_sourced() -> None:
 
 
 def test_extra_env_overrides_default_service_urls_without_duplication() -> None:
-    """Preview slugs pass per-deploy ORCHESTRA_URL / UNITY_COMMS_URL /
-    UNITY_ADAPTERS_URL via ``extra_env``. The override must replace
-    the default (not duplicate it) so the container sees exactly one
-    value per env name.
+    """Per-deploy ORCHESTRA_URL / UNITY_COMMS_URL / UNITY_ADAPTERS_URL
+    overrides arrive via ``extra_env``. The override must replace the
+    default (not duplicate it) so the container sees exactly one value
+    per env name.
     """
     manifest = build_unity_job_manifest(
-        job_name="unity-preview-1207-staging",
+        job_name="unity-override-1207-staging",
         namespace="staging",
         deploy_env="staging",
         extra_env={
@@ -229,14 +229,14 @@ def test_production_deploy_env_does_not_activate_gateway_transports() -> None:
     assert "UNITY_CONVERSATION_OUTBOUND_TRANSPORT" not in env_names
 
 
-def test_staging_deploy_env_sets_staging_flag() -> None:
-    manifest = build_unity_job_manifest(job_name="x", deploy_env="staging")
-    assert _env_by_name(manifest)["STAGING"]["value"] == "true"
-
-
-def test_production_deploy_env_omits_staging_flag() -> None:
-    manifest = build_unity_job_manifest(job_name="x", deploy_env="production")
-    assert "STAGING" not in _env_names(manifest)
+def test_no_legacy_staging_flag_in_any_environment() -> None:
+    """DEPLOY_ENV is the single environment signal; the legacy STAGING
+    boolean must never be injected into job manifests.
+    """
+    for deploy_env in ("staging", "production"):
+        manifest = build_unity_job_manifest(job_name="x", deploy_env=deploy_env)
+        assert "STAGING" not in _env_names(manifest)
+        assert _env_by_name(manifest)["DEPLOY_ENV"]["value"] == deploy_env
 
 
 # ---------------------------------------------------------------------------
@@ -452,29 +452,6 @@ def test_create_unity_job_returns_none_on_other_api_exceptions() -> None:
 # involved, but lives alongside manifest tests because the values flow
 # directly into the manifest env vars)
 # ---------------------------------------------------------------------------
-
-
-def test_comms_preview_deploy_sets_all_runtime_service_urls() -> None:
-    text = (ROOT / "cloudbuild/unity-comms-app-preview.yaml").read_text()
-
-    assert 'ORCHESTRA_URL="https://$${SLUG}.${_PEER_ORCHESTRA_HOST}/v0"' in text
-    assert 'COMMS_URL="https://$${SLUG}---${_PEER_COMMS_HOST}"' in text
-    assert 'ADAPTERS_URL="https://$${SLUG}---${_PEER_ADAPTERS_HOST}"' in text
-    assert "UNITY_COMMS_URL=$${COMMS_URL}" in text
-    assert "UNITY_ADAPTERS_URL=$${ADAPTERS_URL}" in text
-
-
-def test_comms_preview_restore_resets_all_runtime_service_urls() -> None:
-    text = (ROOT / "cloudbuild/unity-comms-app-preview.yaml").read_text()
-
-    canonical_runtime_env = (
-        "--update-env-vars=DEPLOY_ENV=staging,"
-        "ORCHESTRA_URL=${_CANONICAL_ORCHESTRA_URL},"
-        "UNITY_COMMS_URL=https://${_PEER_COMMS_HOST},"
-        "UNITY_ADAPTERS_URL=https://${_PEER_ADAPTERS_HOST}"
-    )
-
-    assert text.count(canonical_runtime_env) == 3
 
 
 def test_comms_staging_deploy_resets_runtime_service_urls() -> None:

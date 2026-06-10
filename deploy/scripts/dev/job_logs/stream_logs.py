@@ -6,7 +6,6 @@ Usage:
     python stream_logs.py                       # auto-detect latest staging job
     python stream_logs.py --job <job_name>      # explicit job, staging namespace
     python stream_logs.py --env production      # auto-detect latest production job
-    python stream_logs.py --env preview         # auto-detect latest preview job
 
 Behaviour:
     1. If --job is omitted, resolves the caller's email from UNIFY_KEY and finds
@@ -592,7 +591,6 @@ def main():
             "Examples:\n"
             "  python stream_logs.py                          # latest staging job\n"
             "  python stream_logs.py --env production         # latest production job\n"
-            "  python stream_logs.py --env preview            # latest preview job\n"
             "  python stream_logs.py --job unity-2026-02-10-17-30-53-staging"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -604,7 +602,7 @@ def main():
     )
     parser.add_argument(
         "--env",
-        choices=["production", "staging", "preview"],
+        choices=["production", "staging"],
         default="staging",
         help="Target deploy environment (default: staging)",
     )

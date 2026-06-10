@@ -304,59 +304,6 @@ def test_start_job_personal_coordinator_sets_null_org_id_in_bootstrap_payload(cl
     assert payload["org_id"] is None
 
 
-def test_start_job_stamps_preview_runtime_urls_on_image_override(client):
-    core_api = MagicMock()
-    custom_api = MagicMock()
-    existing_session = _existing_session()
-    preview_image = "registry/unity-staging:preview-myslug-deadbeef"
-
-    def _updated_session(_custom_api, _namespace, _assistant_id, spec):
-        return {
-            "metadata": existing_session["metadata"],
-            "spec": spec,
-            "status": existing_session["status"],
-        }
-
-    with (
-        patch(
-            "communication.infra.views._get_k8s_clients",
-            new_callable=AsyncMock,
-            return_value=(MagicMock(), core_api, MagicMock(), MagicMock()),
-        ),
-        _control_plane_ready_patch(),
-        patch(
-            "communication.infra.views.get_custom_objects_api",
-            return_value=custom_api,
-        ),
-        patch(
-            "communication.infra.views.get_assistant_session",
-            return_value=existing_session,
-        ),
-        patch(
-            "communication.infra.views.create_or_update_bootstrap_secret",
-            return_value=existing_session["spec"]["startupSecretRef"],
-        ),
-        patch(
-            "communication.infra.views.create_or_update_assistant_session",
-            side_effect=_updated_session,
-        ) as mock_create_or_update_assistant_session,
-        patch(
-            "communication.infra.views.preview_image_override",
-            return_value=preview_image,
-        ),
-    ):
-        response = client.post("/infra/job/start", data=_start_job_payload())
-
-    assert response.status_code == 200
-    refreshed_spec = mock_create_or_update_assistant_session.call_args.args[3]
-    assert refreshed_spec["imageOverride"] == preview_image
-    assert refreshed_spec["serviceUrls"] == {
-        "orchestra": SETTINGS.orchestra_url,
-        "comms": SETTINGS.comms_url,
-        "adapters": SETTINGS.adapters_url,
-    }
-
-
 def test_start_job_decodes_coordinator_flag_into_bootstrap_payload(client):
     """The start-job form field should become a native bool in the bootstrap payload."""
 

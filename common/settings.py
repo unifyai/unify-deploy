@@ -41,16 +41,12 @@ _SERVICE_URLS: dict[str, dict[str, str]] = {
 def _get_deploy_env() -> str:
     """Resolve the deployment environment.
 
-    Checks ``DEPLOY_ENV`` first (set by Cloud Run env vars on all
-    deployments), then falls back to ``STAGING=true`` (legacy).
+    ``DEPLOY_ENV`` is the single canonical setting, pinned explicitly on
+    every deployment (Cloud Run env vars, job manifests, k8s configs).
     Returns ``"production"`` or ``"staging"``.
     """
     deploy_env = (os.environ.get("DEPLOY_ENV") or "").strip().lower()
-    if deploy_env == "staging":
-        return deploy_env
-    if os.environ.get("STAGING", "false").lower() == "true":
-        return "staging"
-    return "production"
+    return "staging" if deploy_env == "staging" else "production"
 
 
 def _service_url(env_var: str, service: str) -> str:
@@ -59,26 +55,15 @@ def _service_url(env_var: str, service: str) -> str:
     return os.environ.get(env_var, urls.get(_get_deploy_env(), urls["production"]))
 
 
-def _image_hash_blob_name(
-    *,
-    deploy_env: str,
-    env_suffix: str,
-    branch_tag: str,
-) -> str:
+def _image_hash_blob_name(*, deploy_env: str) -> str:
     """Resolve the GCS blob name that holds the active Unity image hash.
 
     Production reads ``image_hash.txt``; staging reads
-    ``image_hash_staging.txt``.  When ``branch_tag`` is set, a
-    preview-environment revision instead reads
-    ``image_hash_{env}_{branch_tag}.txt`` so the assistant jobs it spawns
-    pull a feature-branch Unity image while shared staging traffic keeps
-    using the canonical image.
+    ``image_hash_staging.txt``.
     """
-    base = "image_hash.txt" if not env_suffix else f"image_hash_{deploy_env}.txt"
-    if not branch_tag:
-        return base
-    stem, _, ext = base.rpartition(".")
-    return f"{stem}_{branch_tag}.{ext}"
+    if deploy_env == "production":
+        return "image_hash.txt"
+    return f"image_hash_{deploy_env}.txt"
 
 
 class Settings:
@@ -94,17 +79,6 @@ class Settings:
         self.env_suffix: str = (
             f"-{self.deploy_env}" if self.deploy_env != "production" else ""
         )
-
-        # Backward compatibility: True for any non-production environment.
-        # Prefer checking deploy_env directly for environment-specific logic.
-        self.staging: bool = self.deploy_env != "production"
-
-        # Optional per-feature-branch isolation tag.  When a Cloud Run
-        # revision is deployed with ``--tag=<slug> --no-traffic`` for
-        # preview-environment work, ``BRANCH_TAG=<slug>`` is set on the
-        # revision so the running service can pick up a per-branch
-        # Unity image without disturbing live staging traffic.
-        self.branch_tag: str = (os.environ.get("BRANCH_TAG") or "").strip().lower()
 
         # GCP identifiers
         self.gcp_project_id: str = os.environ.get(
@@ -225,11 +199,7 @@ class Settings:
             "UNITY_COORDINATOR_EMAIL_WATCH_TOPIC",
             self.gmail_topic,
         )
-        self.image_hash_blob: str = _image_hash_blob_name(
-            deploy_env=self.deploy_env,
-            env_suffix=self.env_suffix,
-            branch_tag=self.branch_tag,
-        )
+        self.image_hash_blob: str = _image_hash_blob_name(deploy_env=self.deploy_env)
 
         # Container image registry (Artifact Registry)
         self.image_registry: str = (

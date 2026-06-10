@@ -178,7 +178,7 @@ def _trigger_personal_coordinator_provision(user_id: str) -> None:
             "Coordinator-aware Orchestra host to run this contract check.",
         )
     if response.status_code >= 500:
-        # Some preview revisions have returned 500 while still materializing
+        # Some freshly-deployed revisions have returned 500 while still materializing
         # the coordinator row. Continue and verify via admin readback.
         print(
             "[Setup] Personal Coordinator provision request returned "

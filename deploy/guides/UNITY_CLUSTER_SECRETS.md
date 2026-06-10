@@ -78,10 +78,6 @@ python deploy/scripts/kubernetes/setup_k8s_config.py --namespace staging --updat
 
 Requires local `gcloud` auth with `secretmanager.versions.access` and GKE admin.
 
-## Preview namespace
-
-After ESO is installed on the cluster, add an `ExternalSecret` for `preview` (same shape as staging). Until then, copy `unity-secrets` from staging or use `setup_k8s_config.py --update --namespace preview` after copying `comm-sa` (see `deploy/guides/PREVIEW_ENVIRONMENT.md`).
-
 ## What not to do
 
 - Do not store API keys in git or paste them into `last-applied-configuration` manifests.

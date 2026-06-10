@@ -39,7 +39,7 @@ in sync):
 
 | Tool | Purpose |
 |------|---------|
-| [`scripts/dev/idle_job_refresh.py`](../dev/idle_job_refresh.py) | Refresh the idle Job pool for staging / production / preview. |
+| [`scripts/dev/idle_job_refresh.py`](../dev/idle_job_refresh.py) | Refresh the idle Job pool for staging / production. |
 | [`scripts/dev/job_utils.py`](../dev/job_utils.py) | List / read / patch labels on existing Unity Jobs via `/infra/jobs`. |
 | [`scripts/dev/suspend_job.py`](../dev/suspend_job.py) | Stop a running Job via `/infra/job/stop`. |
 | [`scripts/dev/wake_and_watch.py`](../dev/wake_and_watch.py) | Spawn-and-watch flow for end-to-end tests. |

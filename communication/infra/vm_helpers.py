@@ -4093,7 +4093,7 @@ def reconcile_orphaned_disks(
     errors: list[Dict[str, str]] = []
     deleted_details: list[Dict[str, str]] = []
 
-    env_suffix = SETTINGS.env_suffix  # e.g. "" / "-staging" / "-preview"
+    env_suffix = SETTINGS.env_suffix  # e.g. "" / "-staging"
 
     def _delete(disk_name: str, reason: str, bucket: list[str]) -> None:
         try:

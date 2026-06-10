@@ -68,7 +68,6 @@ from .assistant_sessions import (
     get_custom_objects_api,
     patch_assistant_session_spec,
     patch_assistant_session_status,
-    preview_image_override,
     read_bootstrap_secret,
     record_assistant_session_signal,
     released_binding,
@@ -1025,7 +1024,6 @@ async def start_job(
     try:
         batch_api, core_api, _, coord_api = await _get_k8s_clients()
         custom_api = await asyncio.to_thread(get_custom_objects_api)
-        preview_image = await asyncio.to_thread(preview_image_override)
         startup_payload = _build_startup_payload(
             api_key=api_key,
             medium=medium,
@@ -1193,7 +1191,6 @@ async def start_job(
             desktop_mode=desktop_mode,
             startup_secret_ref=secret_name,
             activation_id=activation_id,
-            image_override=preview_image,
         )
         try:
             session = await asyncio.to_thread(
@@ -1255,7 +1252,6 @@ async def start_job(
                 desktop_mode=desktop_mode,
                 startup_secret_ref=secret_name,
                 activation_id=activation_id,
-                image_override=preview_image,
             )
             try:
                 session = await asyncio.to_thread(
@@ -1292,7 +1288,7 @@ async def start_job(
         )
         status = session.get("status", {})
         binding = session_binding(session)
-        if not reused_active_session and not preview_image:
+        if not reused_active_session:
             idle_pool_replenish_scheduled = schedule_idle_job_pool_replenishment(
                 extra_demand=1,
                 source="views.job_start",
