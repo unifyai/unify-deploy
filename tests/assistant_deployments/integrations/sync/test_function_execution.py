@@ -81,6 +81,18 @@ _FM_CONTEXTS = (
     "Functions/Meta",
 )
 
+_UNITY_DEPLOY_TEST_VENV = """
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unity-deploy-native-integration-test"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+""".strip()
+
 _INTEGRATION_VENVS: Dict[str, str] = {
     "github": """
 [build-system]
@@ -134,6 +146,17 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = []
 """.strip(),
+    # These native packages import helpers from unity_deploy inside their
+    # registered functions. FunctionManager correctly treats that as an
+    # external import boundary for registration, even though the integration
+    # suite only checks add_functions here and does not execute these callables.
+    "employment_hero": _UNITY_DEPLOY_TEST_VENV,
+    "hubspot": _UNITY_DEPLOY_TEST_VENV,
+    "matterport": _UNITY_DEPLOY_TEST_VENV,
+    "salesforce": _UNITY_DEPLOY_TEST_VENV,
+    "salto_ks": _UNITY_DEPLOY_TEST_VENV,
+    "valos": _UNITY_DEPLOY_TEST_VENV,
+    "webex": _UNITY_DEPLOY_TEST_VENV,
 }
 
 

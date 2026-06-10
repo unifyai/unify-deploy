@@ -188,8 +188,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 # Parse arguments using shared helper
 # Returns: 0=success, 1=help requested, 2=error
-parse_test_args "$@"
-_parse_result=$?
+_parse_result=0
+parse_test_args "$@" || _parse_result=$?
 if (( _parse_result == 1 )); then
   # Help requested
   HELP_SCRIPT_NAME="parallel_run.sh"
