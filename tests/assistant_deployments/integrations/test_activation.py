@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from unity_deploy.assistant_deployments.clients import (
@@ -55,6 +56,71 @@ def test_expand_fetch_mcp_integration_adds_mcp_config():
     assert expanded.guidance
     assert len(expanded.mcp_configs) == 1
     assert expanded.mcp_configs[0].command == "npx"
+
+
+def test_native_package_expansion_survives_provider_backed_sync_model():
+    """Native packages still expand through unity-deploy assets, not provider rows."""
+
+    resolved = _empty_resolved(
+        integrations=["github", "fetch_mcp", "client_alpha_repairs_mock"],
+    )
+
+    expanded = expand_integrations(resolved, include_mock_packages=True)
+
+    registry_by_slug = {row["slug"]: row for row in expanded.integration_registry}
+    assert sorted(registry_by_slug) == [
+        "fetch_mcp",
+        "github",
+        "client_alpha_repairs_mock",
+    ]
+    assert any(
+        path.name == "functions" and path.parent.name == "github"
+        for path in expanded.function_dirs
+    )
+    assert any(
+        path.name == "functions" and path.parent.name == "client_alpha_repairs_mock"
+        for path in expanded.function_dirs
+    )
+    assert len(expanded.mcp_configs) == 1
+    assert expanded.mcp_configs[0].command == "npx"
+    assert "@modelcontextprotocol/server-fetch" in expanded.mcp_configs[0].args
+    assert expanded.scenarios
+    assert {guidance.title for guidance in expanded.guidance} >= {
+        "Repo Lookup",
+        "Pilot Usage",
+    }
+
+
+def test_native_api_browser_tier_package_metadata_survives_provider_backed_sync_model():
+    """Native packages can still ship API/browser-tier functions and guidance."""
+
+    resolved = _empty_resolved(integrations=["matterport"])
+
+    expanded = expand_integrations(resolved)
+
+    assert any(
+        path.name == "functions" and path.parent.name == "matterport"
+        for path in expanded.function_dirs
+    )
+    guidance_titles = {guidance.title for guidance in expanded.guidance}
+    assert {
+        "Matterport Overview",
+        "Matterport Setup",
+        "Matterport Sync Runbook",
+        "Matterport Unit Linking",
+    }.issubset(guidance_titles)
+
+    registry = {row["slug"]: row for row in expanded.integration_registry}
+    matterport = registry["matterport"]
+    function_names = set(json.loads(matterport["function_names_json"]))
+    guidance_names = set(json.loads(matterport["guidance_titles_json"]))
+    assert {
+        "matterport_graphql_query",
+        "generate_matterport_embed_url",
+        "run_matterport_sync_tick",
+    }.issubset(function_names)
+    assert {"Matterport Overview", "Matterport Tier Gating"}.issubset(guidance_names)
+    assert matterport["tier"] == "api"
 
 
 def test_seed_layer_integrations_merge_with_spec_integrations():

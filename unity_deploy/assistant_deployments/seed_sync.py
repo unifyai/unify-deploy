@@ -20,6 +20,9 @@ import unify
 from unity.common.hierarchical_logger import ICONS
 from unity.guidance_manager.types.guidance import Guidance
 from unity.secret_manager.types import Secret
+from unity_deploy.assistant_deployments.integrations.catalog_projection import (
+    sync_integrations,
+)
 from unity_deploy.timing import log_startup_timing
 
 if TYPE_CHECKING:
@@ -758,5 +761,15 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
             )
         except Exception:
             logger.exception("Failed to sync integration registry")
+        try:
+            sync_start = perf_counter()
+            sync_integrations(resolved.integration_registry)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] seed_sync.native_integration_catalog total=%.2fs",
+                perf_counter() - sync_start,
+            )
+        except Exception:
+            logger.exception("Failed to publish native integration app catalog")
 
     return changed
