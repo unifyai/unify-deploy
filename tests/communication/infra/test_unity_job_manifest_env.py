@@ -468,3 +468,17 @@ def test_comms_staging_deploy_resets_runtime_service_urls() -> None:
     assert "_ORCHESTRA_URL: 'https://internal.example.com/v0'" in text
     assert "_COMMS_HOST: 'service.a.run.app'" in text
     assert "_ADAPTERS_HOST: 'service.a.run.app'" in text
+
+
+def test_adapters_deploys_do_not_retype_secret_backed_urls() -> None:
+    """Adapter services keep their public URL env vars secret-backed in Cloud Run.
+
+    Setting those names as literals in the deploy command makes Cloud Run reject
+    the revision because the env var already exists with a different type.
+    """
+    staging_text = (ROOT / "cloudbuild/adapters-staging.yaml").read_text()
+    production_text = (ROOT / "cloudbuild/adapters.yaml").read_text()
+
+    assert "UNITY_ADAPTERS_URL=https://" not in staging_text
+    assert "UNITY_ADAPTERS_URL=https://" not in production_text
+    assert "UNITY_COMMS_URL=https://" not in production_text
