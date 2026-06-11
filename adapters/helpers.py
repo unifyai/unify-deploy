@@ -1537,6 +1537,8 @@ def build_webhook_context(
         else sender
     ).strip()
 
+    requested_assistant_id = assistant_id
+
     # get assistant data (skip if pre-fetched)
     if assistant_data is None:
         if assistant_id:
@@ -1551,7 +1553,8 @@ def build_webhook_context(
                 else get_assistant(phone_number=destination)
             )
     api_key = assistant_data["api_key"]
-    assistant_id = assistant_data["assistant_id"]
+    assistant_id = assistant_data["assistant_id"] or requested_assistant_id or ""
+    assistant_data["assistant_id"] = assistant_id
     user_id = assistant_data["user_id"]
     user_number = assistant_data["user_number"]
     user_whatsapp_number = assistant_data["user_whatsapp_number"]

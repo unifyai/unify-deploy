@@ -276,9 +276,15 @@ def test_unify_meet_webhook(test_client):
     """Test successful unify_meet webhook processing."""
     endpoint = "/unify/meet"
     room_name = "unity_default-test-assistant_meet"
+    opening_config = {
+        "mode": "simulated",
+        "simulated_utterance": "Hello from the coordinator.",
+        "source": "coordinator_onboarding_intro",
+    }
     json_payload = {
         "room_name": room_name,
         "assistant_id": "default-test-assistant",
+        "opening_config": opening_config,
     }
 
     headers = {"Authorization": f"Bearer {os.getenv('ORCHESTRA_ADMIN_KEY')}"}
@@ -309,8 +315,10 @@ def test_unify_meet_webhook(test_client):
         assert data["event"]["assistant_id"] == "default-test-assistant"
         assert data["event"]["livekit_room"] == room_name
         assert data["event"]["livekit_agent_name"] == room_name
+        assert data["event"]["opening_config"] == opening_config
     except AssertionError as e:
         print(e)
+        raise
     subscriber.acknowledge(subscription=subscription_path, ack_ids=[ack_id])
 
 

@@ -2047,6 +2047,26 @@ async def unify_meet_webhook(request: Request):
         logger.info("assistant_id is required")
         return Response(status_code=400)
 
+    raw_opening_config = payload.get("opening_config")
+    opening_config = None
+    if raw_opening_config not in (None, ""):
+        if isinstance(raw_opening_config, str):
+            try:
+                raw_opening_config = json.loads(raw_opening_config)
+            except json.JSONDecodeError:
+                logger.info("opening_config must be a JSON object")
+                return Response(
+                    content="opening_config must be a JSON object",
+                    status_code=400,
+                )
+        if not isinstance(raw_opening_config, dict):
+            logger.info("opening_config must be a JSON object")
+            return Response(
+                content="opening_config must be a JSON object",
+                status_code=400,
+            )
+        opening_config = raw_opening_config
+
     logger.info(
         f"Received unify_meet for assistant_id={assistant_id_input} room={room_name} livekit_agent_name={livekit_agent_name}",
     )
@@ -2073,6 +2093,15 @@ async def unify_meet_webhook(request: Request):
     topic_name = SETTINGS.assistant_topic(assistant_id)
     topic_path = pubsub_client.topic_path(SETTINGS.gcp_project_id, topic_name)
     logger.info(f"Publishing unify_meet to Pub/Sub at path: {topic_path}")
+    event_payload = {
+        "contacts": contacts,
+        "assistant_id": assistant_id,
+        "livekit_room": room_name,
+        "livekit_agent_name": livekit_agent_name,
+        "timestamp": int(time.time() * 1000),
+    }
+    if opening_config is not None:
+        event_payload["opening_config"] = opening_config
     try:
         publish_future = pubsub_client.publish(
             topic_path,
@@ -2080,13 +2109,7 @@ async def unify_meet_webhook(request: Request):
                 {
                     "thread": "unify_meet",
                     "publish_timestamp": time.time(),
-                    "event": {
-                        "contacts": contacts,
-                        "assistant_id": assistant_id,
-                        "livekit_room": room_name,
-                        "livekit_agent_name": livekit_agent_name,
-                        "timestamp": int(time.time() * 1000),
-                    },
+                    "event": event_payload,
                 },
             ).encode("utf-8"),
             thread="inbound",
