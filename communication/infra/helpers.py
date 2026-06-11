@@ -421,7 +421,7 @@ def build_unity_job_manifest(
         {"name": "ORCHESTRA_URL", "value": SETTINGS.orchestra_url},
         {
             "name": "UNITY_STARTUP_TIMING",
-            "value": "1" if deploy_env == "staging" else "0",
+            "value": "0",
         },
         # Pipeline worker dispatch: route attachment ingestion through the
         # GKE parse/ingest workers via Pub/Sub (topic names are derived

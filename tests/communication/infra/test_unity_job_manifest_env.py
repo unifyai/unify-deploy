@@ -95,18 +95,15 @@ def test_runtime_reconcile_mode_is_optional_unity_config_key() -> None:
         assert ref.get("optional") is not True
 
 
-def test_unity_startup_timing_is_literal_not_configmap_sourced() -> None:
-    """Startup timing is decided per-deploy_env at manifest-build
-    time, not via ConfigMap. Pins the explicit branch so a refactor
-    can't accidentally move it back into ``unity-config``.
-    """
+def test_unity_startup_timing_is_disabled_literal_not_configmap_sourced() -> None:
+    """Startup timing remains a manifest literal, not a ConfigMap key."""
     staging = build_unity_job_manifest(job_name="x", deploy_env="staging")
     production = build_unity_job_manifest(job_name="x", deploy_env="production")
 
     staging_entry = _env_by_name(staging)["UNITY_STARTUP_TIMING"]
     production_entry = _env_by_name(production)["UNITY_STARTUP_TIMING"]
 
-    assert staging_entry == {"name": "UNITY_STARTUP_TIMING", "value": "1"}
+    assert staging_entry == {"name": "UNITY_STARTUP_TIMING", "value": "0"}
     assert production_entry == {"name": "UNITY_STARTUP_TIMING", "value": "0"}
 
 
