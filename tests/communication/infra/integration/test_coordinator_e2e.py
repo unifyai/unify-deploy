@@ -864,9 +864,7 @@ def test_coordinator_builds_colleague_and_team_end_to_end(
         colleague_surname = "Colleague"
         colleague_full_name = f"{colleague_first_name} {colleague_surname}"
         team_name = f"Scenario Team {token}"
-        team_description = (
-            f"Shared coordination workspace for e2e scenario {token}."
-        )
+        team_description = f"Shared coordination workspace for e2e scenario {token}."
 
         colleague = _send_and_poll_for_side_effect(
             assistant=assistant,
