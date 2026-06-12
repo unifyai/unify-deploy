@@ -14,6 +14,28 @@ run the private bridge flow:
 | **staging** | `unity-staging` (inline, fires on `unity@staging` push) | `unity-base-staging-private` (reads `unity-deploy/base/cloudbuild-staging.yaml`) | `unity-deploy-staging` |
 | **production** | `unity-production-private-bridge` (inline, fires on `unity@main` push) | `unity-base-production-private` (reads `unity-deploy/base/cloudbuild.yaml`) | `unity-deploy` |
 
+## Comms App Bridge
+
+The hosted comms Cloud Run service (`unity-comms-app{,-staging}`) bundles
+`unity.gateway` -- it clones `unity` inside `Dockerfile-comms` and composes on
+top of `unity.gateway.app.create_app()`. The base/overlay chain above only
+rebuilds the assistant Job image, so a `unity` change to the gateway code would
+otherwise not reach the comms service until the next `unity-deploy` push. A
+second, path-scoped bridge closes that gap:
+
+| Environment | Comms bridge trigger | Fires on | Path filter | Runs |
+|-------------|----------------------|----------|-------------|------|
+| **staging** | `unity-comms-bridge-staging` (inline, from `unity-comms-staging-bridge.yaml`) | `unity@staging` push | `unity/gateway/**`, `requirements-gateway.txt` | `unity-comms-app-staging-unity-deploy` |
+| **production** | `unity-comms-bridge-production` (inline, from `unity-comms-production-bridge.yaml`) | `unity@main` push | `unity/gateway/**`, `requirements-gateway.txt` | `unity-comms-app-unity-deploy` |
+
+The path filter (`includedFiles`) keeps the comms service from rebuilding on
+every `unity` push -- only communication-relevant changes fan out. The comms
+build self-resolves the latest `unity@{staging,main}` head via `git ls-remote`
+at build start (the `UNITY_SHA` cache-buster in `cloudbuild/unity-comms-app*.yaml`),
+so the bridge only needs to *run* the comms trigger -- no SHA threading. The
+adapters service (`unity-adapters{,-staging}`) does **not** bundle `unity` and
+is deliberately excluded.
+
 The original `unity` trigger (which used to build directly from
 `unity/deploy/cloudbuild.yaml` on the public repo) has been retired -- its
 branch filter was set to `^__disabled_cutover_20260416__$` in April 2026 so
