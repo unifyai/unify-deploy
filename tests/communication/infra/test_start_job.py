@@ -304,6 +304,18 @@ def test_start_job_personal_coordinator_sets_null_org_id_in_bootstrap_payload(cl
     assert payload["org_id"] is None
 
 
+def test_start_job_accepts_empty_assistant_about(client):
+    """Empty about must not 422 when adapters posts assistant_about=."""
+
+    response, payload = _post_start_job_and_capture_bootstrap_payload(
+        client,
+        _start_job_payload(assistant_about=""),
+    )
+
+    assert response.status_code == 200
+    assert payload["assistant_about"] == ""
+
+
 def test_start_job_decodes_coordinator_flag_into_bootstrap_payload(client):
     """The start-job form field should become a native bool in the bootstrap payload."""
 
