@@ -401,6 +401,71 @@ def slack_message_already_seen(message_key: str) -> bool:
     return False
 
 
+SLACK_API_BASE = "https://slack.com/api"
+
+
+def _post_slack_dispatch(dispatch_body: dict) -> dict | None:
+    """POST to Orchestra's Slack dispatch; ``None`` on 404 / transport error."""
+    resp = requests.post(
+        f"{SETTINGS.orchestra_url}/admin/slack/dispatch",
+        json=dispatch_body,
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        return None
+    if resp.status_code >= 400:
+        logger.error(
+            f"slack dispatch failed: {resp.status_code} {resp.text}",
+        )
+        return None
+    return resp.json()
+
+
+def _resolve_slack_bot_token(team_id: str) -> str | None:
+    """Fetch the workspace bot token from Orchestra (admin auth)."""
+    resp = requests.get(
+        f"{SETTINGS.orchestra_url}/admin/slack/install",
+        params={"slack_team_id": team_id, "include_token": True},
+        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
+        timeout=10,
+    )
+    if resp.status_code >= 400:
+        return None
+    return resp.json().get("bot_access_token") or None
+
+
+def fetch_slack_user_profile(team_id: str, slack_user_id: str) -> dict:
+    """Resolve a Slack sender's profile via ``users.info`` (best-effort).
+
+    Returns ``{email, real_name, display_name}`` with ``None`` values when
+    the lookup fails or the bot lacks the ``users:read[.email]`` scope. The
+    caller re-dispatches regardless, so a missing profile simply degrades
+    to the provisional org-Coordinator route.
+    """
+    empty = {"email": None, "real_name": None, "display_name": None}
+    bot_token = _resolve_slack_bot_token(team_id)
+    if not bot_token:
+        return empty
+    resp = requests.get(
+        f"{SLACK_API_BASE}/users.info",
+        params={"user": slack_user_id},
+        headers={"Authorization": f"Bearer {bot_token}"},
+        timeout=10,
+    )
+    payload = resp.json()
+    if not payload.get("ok"):
+        logger.warning(f"slack users.info failed: {payload.get('error')}")
+        return empty
+    user = payload.get("user") or {}
+    profile = user.get("profile") or {}
+    return {
+        "email": profile.get("email") or None,
+        "real_name": user.get("real_name") or profile.get("real_name") or None,
+        "display_name": profile.get("display_name") or None,
+    }
+
+
 def resolve_slack_inbound(payload: dict) -> dict | None:
     """Route a Slack Events API ``event_callback`` via Orchestra.
 
@@ -410,6 +475,13 @@ def resolve_slack_inbound(payload: dict) -> dict | None:
     ``event.text``, ``event.user``) to consult per-workspace installs,
     per-channel bindings, persistent thread/DM routes, and the
     ``<@app> <token>`` addressing convention.
+
+    Coordinator routing in an org workspace is *personal to the sender*:
+    each member owns their own workspace Coordinator. When the first pass
+    returns ``needs_sender_identity``, we resolve the sender's profile via
+    ``users.info`` and re-dispatch so the message pins to the sender's own
+    Coordinator. The first-pass route is already valid, so any failure
+    resolving identity degrades to that provisional route.
 
     Returns one of:
 
@@ -428,34 +500,39 @@ def resolve_slack_inbound(payload: dict) -> dict | None:
     channel_type = event.get("channel_type") or (
         "im" if channel_id.startswith("D") else "channel"
     )
+    team_id = payload.get("team_id", "") or event.get("team", "")
+    sender_slack_user_id = event.get("user", "") or ""
     dispatch_body = {
-        "slack_team_id": payload.get("team_id", "") or event.get("team", ""),
+        "slack_team_id": team_id,
         "channel_id": channel_id,
         "channel_type": channel_type,
-        "sender_slack_user_id": event.get("user", "") or "",
+        "sender_slack_user_id": sender_slack_user_id,
         "text": event.get("text", "") or "",
         "event_ts": event.get("event_ts", "") or event.get("ts", ""),
         "thread_ts": event.get("thread_ts"),
     }
-    resp = requests.post(
-        f"{SETTINGS.orchestra_url}/admin/slack/dispatch",
-        json=dispatch_body,
-        headers={"Authorization": f"Bearer {SETTINGS.orchestra_admin_key}"},
-        timeout=10,
-    )
-    if resp.status_code == 404:
+    data = _post_slack_dispatch(dispatch_body)
+    if data is None:
         return None
-    if resp.status_code >= 400:
-        logger.error(
-            f"slack dispatch failed: {resp.status_code} {resp.text}",
+
+    if data.get("needs_sender_identity") and team_id and sender_slack_user_id:
+        profile = fetch_slack_user_profile(team_id, sender_slack_user_id)
+        second = _post_slack_dispatch(
+            {
+                **dispatch_body,
+                "sender_email": profile.get("email"),
+                "sender_real_name": profile.get("real_name"),
+                "sender_display_name": profile.get("display_name"),
+                "sender_identity_provided": True,
+            },
         )
-        return None
+        if second is not None:
+            data = second
 
     # Translate Orchestra's ``DispatchResponse`` into the adapter's
     # routing dict. ``handled=False`` (no install / bot echo / unbound
     # channel) becomes a drop. ``is_channel`` isn't carried by Orchestra,
     # so derive it from the channel type we sent.
-    data = resp.json()
     if not data.get("handled"):
         return {"drop": True}
     return {
