@@ -1,0 +1,31 @@
+# Runtime dependencies for local Adapters + Comms (from pyproject.toml [project.dependencies]).
+# Installed by communication-local.sh ensure_comms_runtime_deps; full uv sync also works.
+acme>=5.0.0
+aiohttp>=3.9.0
+azure-identity>=1.14.0
+cryptography>=42.0.0
+fastapi>=0.104.0
+google-api-python-client>=2.70.0
+google-auth>=2.17.0
+google-cloud-compute>=1.14.0
+google-cloud-dns>=0.35.0
+google-cloud-pubsub>=2.18.0
+google-cloud-secret-manager>=2.16.0
+google-cloud-storage>=2.10.0
+google-cloud-tasks>=2.22.0
+httpx
+josepy>=2.0.0
+kubernetes>=35.0.0,<36.0.0
+livekit>=0.11.0
+livekit-api>=0.4.0
+msgraph-sdk>=1.0.0
+pillow
+prometheus_client>=0.20.0
+pyproj
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.6
+requests>=2.31.0
+shapely
+twilio>=8.0.0
+uvicorn[standard]>=0.24.0

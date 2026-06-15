@@ -20,6 +20,9 @@ import unify
 from unity.common.hierarchical_logger import ICONS
 from unity.guidance_manager.types.guidance import Guidance
 from unity.secret_manager.types import Secret
+from unity_deploy.assistant_deployments.integrations.catalog_projection import (
+    sync_integrations,
+)
 from unity_deploy.timing import log_startup_timing
 
 if TYPE_CHECKING:
@@ -477,7 +480,7 @@ def _sync_knowledge(tables: dict[str, dict], meta: SeedMetaStore) -> bool:
                 "description": "Known companies",
                 "columns": {"company_name": "str", "industry": "str"},
                 "seed_key": "company_name",
-                "rows": [{"company_name": "ClientDelta", "industry": "Real Estate"}],
+                "rows": [{"company_name": "Example Co", "industry": "Real Estate"}],
             },
         }
     """
@@ -623,7 +626,8 @@ def _sync_integration_registry(rows: list[dict], meta: SeedMetaStore) -> bool:
 
     def create(rec: dict) -> Any:
         unify.log(
-            context=ctx, **{k: v for k, v in rec.items() if not k.startswith("_")}
+            context=ctx,
+            **{k: v for k, v in rec.items() if not k.startswith("_")},
         )
         return None
 
@@ -757,5 +761,15 @@ def sync_all_seed_data(resolved: ResolvedAssistantDeployment) -> bool:
             )
         except Exception:
             logger.exception("Failed to sync integration registry")
+        try:
+            sync_start = perf_counter()
+            sync_integrations(resolved.integration_registry)
+            log_startup_timing(
+                logger,
+                "⏱️ [StartupTiming] seed_sync.native_integration_catalog total=%.2fs",
+                perf_counter() - sync_start,
+            )
+        except Exception:
+            logger.exception("Failed to publish native integration app catalog")
 
     return changed

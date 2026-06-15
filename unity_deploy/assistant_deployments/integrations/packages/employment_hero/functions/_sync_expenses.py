@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_expenses(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     """Snapshot expense claims and categories."""
     import datetime as _dt
@@ -27,7 +28,7 @@ async def sync_employmenthero_expenses(
                         "name": "Travel - Mileage",
                         "is_taxable": False,
                         "default_currency": "GBP",
-                    }
+                    },
                 ],
                 "expense_claims": [
                     {
@@ -39,7 +40,7 @@ async def sync_employmenthero_expenses(
                         "date": "2026-04-28",
                         "status": "submitted",
                         "updated_at": started,
-                    }
+                    },
                 ],
             },
             "metadata": {

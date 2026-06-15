@@ -154,7 +154,7 @@ async def sync_employmenthero_workforce(
                 "location_id": e.get("location_id"),
                 "country": e.get("country"),
                 "updated_at": e.get("updated_at"),
-            }
+            },
         )
 
     teams_raw = await eh_paginate(
@@ -175,7 +175,7 @@ async def sync_employmenthero_workforce(
                 "parent_team_id": t.get("parent_team_id"),
                 "created_at": t.get("created_at"),
                 "updated_at": t.get("updated_at"),
-            }
+            },
         )
         # Members per team — best-effort; tier-gated 403 returns empty.
         members_body = await eh_get(org_path(f"/teams/{t.get('id')}/members"))
@@ -187,7 +187,7 @@ async def sync_employmenthero_workforce(
                         "team_id": t.get("id"),
                         "employee_id": m.get("employee_id") or m.get("id"),
                         "role": m.get("role"),
-                    }
+                    },
                 )
 
     locations_raw = await eh_paginate(
@@ -229,7 +229,7 @@ async def sync_employmenthero_workforce(
                         "start_date": empl.get("start_date"),
                         "end_date": empl.get("end_date"),
                         "is_current": empl.get("is_current"),
-                    }
+                    },
                 )
         pos_body = await eh_get(org_path(f"/employees/{emp_id}/positions"))
         if "error" not in pos_body:
@@ -242,7 +242,7 @@ async def sync_employmenthero_workforce(
                         "start_date": p.get("start_date"),
                         "end_date": p.get("end_date"),
                         "is_current": p.get("is_current"),
-                    }
+                    },
                 )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

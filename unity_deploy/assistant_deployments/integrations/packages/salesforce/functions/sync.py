@@ -96,7 +96,7 @@ async def run_salesforce_sync_tick(
                         k: len(v)
                         for k, v in tables.items()
                         if k not in ("sync_state", "sync_runs")
-                    }
+                    },
                 ),
                 "errors_json": "[]",
                 "config_snapshot_json": str(
@@ -104,10 +104,10 @@ async def run_salesforce_sync_tick(
                         "sync_min_interval_seconds": cfg["sync_min_interval_seconds"],
                         "api_page_size": cfg["api_page_size"],
                         "api_version": cfg["api_version"],
-                    }
+                    },
                 ),
                 "mode": "mock",
-            }
+            },
         ]
         return {
             "schema_version": schema_version,
@@ -142,14 +142,14 @@ async def run_salesforce_sync_tick(
                     "reason": "cadence_not_due",
                     "gap_seconds": gap,
                     "min_gap_seconds": min_gap,
-                }
+                },
             )
             return
         module_stem, fn_name = object_to_sync_fn[object_key]
         try:
             module = importlib.import_module(
                 f"unity_deploy.assistant_deployments.integrations.packages."
-                f"salesforce.functions.{module_stem}"
+                f"salesforce.functions.{module_stem}",
             )
         except ImportError as e:
             errors.append({"object_type": object_key, "error": f"import: {e}"})
@@ -160,7 +160,7 @@ async def run_salesforce_sync_tick(
                 {
                     "object_type": object_key,
                     "error": f"missing function {fn_name} in module {module_stem}",
-                }
+                },
             )
             return
         kwargs: dict = {"mock": False}
@@ -211,10 +211,10 @@ async def run_salesforce_sync_tick(
                         "api_page_size",
                         "api_version",
                     )
-                }
+                },
             ),
             "mode": "live",
-        }
+        },
     ]
 
     return {

@@ -33,6 +33,8 @@ timeout="600s"
 template="deploy/k8s/deployment-reconcile/deployment-reconcile-job.yaml"
 client=""
 assistant_id=""
+brain_operator_assistant_id=""
+brain_operator_tasks_enabled=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -47,6 +49,8 @@ while [[ $# -gt 0 ]]; do
     --template) template="${2:-}"; shift 2 ;;
     --client) client="${2:-}"; shift 2 ;;
     --assistant-id) assistant_id="${2:-}"; shift 2 ;;
+    --brain-operator-assistant-id) brain_operator_assistant_id="${2:-}"; shift 2 ;;
+    --brain-operator-tasks-enabled) brain_operator_tasks_enabled="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -125,6 +129,8 @@ render_manifest() {
     -e "s/__CONCURRENCY__/$(escape_sed_replacement "$concurrency")/g" \
     -e "s/__CLIENT__/$(escape_sed_replacement "$client")/g" \
     -e "s/__ASSISTANT_ID__/$(escape_sed_replacement "$assistant_id")/g" \
+    -e "s/__BRAIN_OPERATOR_ASSISTANT_ID__/$(escape_sed_replacement "$brain_operator_assistant_id")/g" \
+    -e "s/__BRAIN_OPERATOR_TASKS_ENABLED__/$(escape_sed_replacement "$brain_operator_tasks_enabled")/g" \
     "$template"
 }
 

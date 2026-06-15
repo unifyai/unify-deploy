@@ -194,7 +194,7 @@ async def _resolve_access_token() -> tuple[str | None, dict | None]:
         logging.getLogger(__name__).warning(
             "Webex rotated the OAuth refresh_token.  In-process cache "
             "uses the new value; persistent storage still has the old "
-            "one.  User reconnect within 90 days will resync."
+            "one.  User reconnect within 90 days will resync.",
         )
         new_key = (client_id, new_refresh)
         _TOKEN_CACHE[new_key] = _TOKEN_CACHE.pop(cache_key)

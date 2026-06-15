@@ -50,7 +50,7 @@ async def sync_employmenthero_performance(
                         "improvement_areas_length": 64,
                         "improvement_areas_hash": "cccc3333",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "goals": [
                     {
@@ -63,7 +63,7 @@ async def sync_employmenthero_performance(
                         "status": "in_progress",
                         "due_date": "2026-06-30",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "one_on_ones": [
                     {
@@ -76,7 +76,7 @@ async def sync_employmenthero_performance(
                         "discussion_notes_length": 48,
                         "discussion_notes_hash": "dddd4444",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "feedback": [
                     {
@@ -89,7 +89,7 @@ async def sync_employmenthero_performance(
                         "body_hash": "eeee5555",
                         "created_at": "2026-04-12T10:00:00Z",
                         "updated_at": started,
-                    }
+                    },
                 ],
             },
             "metadata": {

@@ -25,7 +25,6 @@ Create fresh idle K8s jobs and clean up stale ones. Designed to run after a Unit
 ```bash
 python scripts/dev/idle_job_refresh.py                       # staging (default)
 python scripts/dev/idle_job_refresh.py --env production      # production
-python scripts/dev/idle_job_refresh.py --env preview         # preview
 python scripts/dev/idle_job_refresh.py --no-list-jobs        # skip job listing
 python scripts/dev/idle_job_refresh.py --delay 45            # custom wait
 ```
@@ -66,7 +65,6 @@ Keep a deployed Unity pod alive by sending periodic keepalive pings to its Pub/S
 ```bash
 ./scripts/dev/keep_pod_alive.sh 25                        # staging (default), ping every 30s
 ./scripts/dev/keep_pod_alive.sh 25 --env production       # production
-./scripts/dev/keep_pod_alive.sh 25 --env preview          # preview
 ./scripts/dev/keep_pod_alive.sh 25 --interval 60          # custom interval
 ```
 

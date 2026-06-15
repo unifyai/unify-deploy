@@ -12,7 +12,6 @@ after a cloud build completes (~10 minutes):
 Usage:
     python scripts/wake_and_watch.py                        # staging (default)
     python scripts/wake_and_watch.py --env production      # production
-    python scripts/wake_and_watch.py --env preview         # preview
     python scripts/wake_and_watch.py --assistant-id 464    # explicit assistant
     python scripts/wake_and_watch.py --skip-refresh        # skip idle container refresh
 
@@ -31,13 +30,11 @@ import time
 ORCHESTRA_URLS = {
     "production": "https://api.unify.ai/v0",
     "staging": "https://internal.example.com/v0",
-    "preview": "https://internal.example.com/v0",
 }
 
 ADAPTERS_URLS = {
     "production": "https://unity-adapters-000000000000.us-central1.run.app",
     "staging": "https://service.a.run.app",
-    "preview": "https://service.a.run.app",
 }
 
 # ─── Early env setup (before imports that read ORCHESTRA_URL) ─────────────────
@@ -265,7 +262,7 @@ def main():
     )
     parser.add_argument(
         "--env",
-        choices=["production", "staging", "preview"],
+        choices=["production", "staging"],
         default="staging",
         help="Target deploy environment (default: staging)",
     )

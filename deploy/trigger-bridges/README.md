@@ -14,18 +14,36 @@ run the private bridge flow:
 | **staging** | `unity-staging` (inline, fires on `unity@staging` push) | `unity-base-staging-private` (reads `unity-deploy/base/cloudbuild-staging.yaml`) | `unity-deploy-staging` |
 | **production** | `unity-production-private-bridge` (inline, fires on `unity@main` push) | `unity-base-production-private` (reads `unity-deploy/base/cloudbuild.yaml`) | `unity-deploy` |
 
+## Comms App Bridge
+
+The hosted comms Cloud Run service (`unity-comms-app{,-staging}`) bundles
+`unity.gateway` -- it clones `unity` inside `Dockerfile-comms` and composes on
+top of `unity.gateway.app.create_app()`. The base/overlay chain above only
+rebuilds the assistant Job image, so a `unity` change to the gateway code would
+otherwise not reach the comms service until the next `unity-deploy` push. A
+second, path-scoped bridge closes that gap:
+
+| Environment | Comms bridge trigger | Fires on | Path filter | Runs |
+|-------------|----------------------|----------|-------------|------|
+| **staging** | `unity-comms-bridge-staging` (inline, from `unity-comms-staging-bridge.yaml`) | `unity@staging` push | `unity/gateway/**`, `requirements-gateway.txt` | `unity-comms-app-staging-unity-deploy` |
+| **production** | `unity-comms-bridge-production` (inline, from `unity-comms-production-bridge.yaml`) | `unity@main` push | `unity/gateway/**`, `requirements-gateway.txt` | `unity-comms-app-unity-deploy` |
+
+The path filter (`includedFiles`) keeps the comms service from rebuilding on
+every `unity` push -- only communication-relevant changes fan out. The comms
+build self-resolves the latest `unity@{staging,main}` head via `git ls-remote`
+at build start (the `UNITY_SHA` cache-buster in `cloudbuild/unity-comms-app*.yaml`),
+so the bridge only needs to *run* the comms trigger -- no SHA threading. The
+adapters service (`unity-adapters{,-staging}`) does **not** bundle `unity` and
+is deliberately excluded.
+
 The original `unity` trigger (which used to build directly from
 `unity/deploy/cloudbuild.yaml` on the public repo) has been retired -- its
 branch filter was set to `^__disabled_cutover_20260416__$` in April 2026 so
 that it could not fire on any real branch, and was deleted in May 2026.
 
-**Preview is intentionally not bridged.** The `unity-preview` trigger still
-fires on `unity` repo `^feature/.+$` push events and runs
-`unity/deploy/cloudbuild-preview.yaml` directly. Preview environments share
-the staging image repo (`unity-base-staging:preview-<slug>-<sha>` tag), reuse
-staging's job-watcher, and skip the customer-overlay control-plane reconcile,
-so they don't need the bridge round-trip. If preview ever grows to need a
-customer overlay or its own base build, mirror the staging/production pattern.
+The preview deployment workflow has been retired entirely: the
+`unity-preview` trigger and `cloudbuild-preview.yaml` configs were
+deleted along with the rest of the preview tooling.
 
 ## Production Cutover Validation (completed)
 
@@ -50,19 +68,3 @@ End-to-end chain (push to running Unity Job image) verified clean.
   config for production / staging image builds.** They remain in the open-source
   `unity` repo as a reference implementation (OSS users self-deploying Unity
   can use them as a starting point), but the SaaS triggers ignore them.
-- **`unity/deploy/cloudbuild-preview.yaml` is still live** for the
-  `unity-preview` trigger. Don't touch it without coordinating the preview
-  flow.
-
-## When to extend the bridge pattern to preview
-
-Add a `unity-preview-private-bridge` + `unity-base-preview-private` only if:
-
-- Preview environments need access to the customer-overlay seeds /
-  integrations from `unity-deploy/unity_deploy/customization/`, or
-- Preview needs to diverge from staging's job-watcher / pipeline workers, or
-- You want preview base builds to read `unity-deploy/base/` rather than
-  `unity/deploy/`.
-
-Today none of these apply -- preview is deliberately a "staging base image
-with a different tag" workflow.

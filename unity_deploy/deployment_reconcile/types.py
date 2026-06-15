@@ -18,6 +18,7 @@ class DeploymentTargetPlan:
     deployment: str
     assistant_id: str
     resolved: Any
+    missing_ok: bool = False
     control_plane_operations: tuple[Any, ...] = ()
     runtime_revision: str = ""
     control_plane_revision: str = ""
@@ -54,7 +55,13 @@ class DeploymentWorkResult:
     """Result for one deploy-time work item."""
 
     item: DeploymentWorkItem
-    status: Literal["planned", "applied", "skipped-current", "failed"]
+    status: Literal[
+        "planned",
+        "applied",
+        "skipped-current",
+        "skipped-missing",
+        "failed",
+    ]
     message: str = ""
     error: str = ""
 

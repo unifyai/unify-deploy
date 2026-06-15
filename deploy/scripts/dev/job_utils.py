@@ -8,13 +8,11 @@ import requests
 ORCHESTRA_URLS = {
     "production": "https://api.unify.ai/v0",
     "staging": "https://internal.example.com/v0",
-    "preview": "https://internal.example.com/v0",
 }
 
 COMMS_URLS = {
     "production": "https://unity-comms-app-000000000000.us-central1.run.app",
     "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
-    "preview": "https://unity-comms-app-preview-000000000000.us-central1.run.app",
 }
 
 RED = "\033[0;31m"
@@ -161,7 +159,7 @@ def _find_latest_job_entry(
         limit=20,
     )
 
-    _NON_PROD_SUFFIXES = ("-staging", "-preview")
+    _NON_PROD_SUFFIXES = ("-staging",)
 
     for log in logs:
         job_name = log.entries.get("job_name")
@@ -230,7 +228,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--env",
-        choices=["production", "staging", "preview"],
+        choices=["production", "staging"],
         default="staging",
         help="Target deploy environment (default: staging)",
     )

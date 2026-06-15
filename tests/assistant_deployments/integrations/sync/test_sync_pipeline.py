@@ -8,6 +8,7 @@ context, actual manager instances) rather than mocks.
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import yaml
@@ -176,10 +177,19 @@ class TestSecretSync:
     @_handle_project
     def test_secret_round_trip(self):
         sm = SecretManager()
+        suffix = uuid4().hex
 
         secret_entries = [
-            Secret(name="SYNC_TEST_KEY_1", value="val1", description="First test key"),
-            Secret(name="SYNC_TEST_KEY_2", value="val2", description="Second test key"),
+            Secret(
+                name=f"SYNC_TEST_KEY_1_{suffix}",
+                value="val1",
+                description="First test key",
+            ),
+            Secret(
+                name=f"SYNC_TEST_KEY_2_{suffix}",
+                value="val2",
+                description="Second test key",
+            ),
         ]
 
         for s in secret_entries:
@@ -200,15 +210,17 @@ class TestSecretSync:
     def test_integration_secrets_sync_to_manager(self, github_integration):
         manifest, root = github_integration
         loaded = load_integration(manifest, root)
+        suffix = uuid4().hex
 
         sm = SecretManager()
         for s in loaded.secret_entries:
             sm._create_secret(
-                name=s.name,
+                name=f"{s.name}_{suffix}",
                 value=s.value or "placeholder",
                 description=s.description,
             )
 
         for s in loaded.secret_entries:
-            rows = sm._filter_secrets(filter=f"name == '{s.name}'")
-            assert rows and rows[0].name == s.name
+            name = f"{s.name}_{suffix}"
+            rows = sm._filter_secrets(filter=f"name == '{name}'")
+            assert rows and rows[0].name == name

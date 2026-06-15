@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_documents(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     import datetime as _dt
 
@@ -29,7 +30,7 @@ async def sync_employmenthero_documents(
                         "signed_at": "2023-09-01",
                         "size_bytes": 245_000,
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "document_templates": [
                     {
@@ -38,7 +39,7 @@ async def sync_employmenthero_documents(
                         "type": "contract",
                         "country": "GB",
                         "updated_at": started,
-                    }
+                    },
                 ],
             },
             "metadata": {

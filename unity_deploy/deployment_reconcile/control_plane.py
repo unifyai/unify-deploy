@@ -11,8 +11,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from typing import Any, Mapping, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from unity_deploy.assistant_deployments.clients import ClientDeploymentEntry
@@ -34,6 +37,7 @@ class ReconcileOperation:
     payload: dict[str, Any]
     service: str = "orchestra"
     method: str = "patch"
+    missing_ok: bool = False
 
 
 def _load_registry() -> Mapping[str, "ClientDeploymentEntry"]:
@@ -81,6 +85,7 @@ def build_control_plane_plan(
                         assistant_id=target_assistant_id,
                     ),
                     payload={"console_config": console_config},
+                    missing_ok=target.missing_ok,
                 ),
             )
             operations.extend(
@@ -90,6 +95,7 @@ def build_control_plane_plan(
                     spec=spec,
                     assistant_id=target_assistant_id,
                     deployment=target.deployment,
+                    missing_ok=target.missing_ok,
                 ),
             )
 
@@ -103,6 +109,7 @@ def _build_scenario_schedule_operations(
     spec: Any,
     assistant_id: str,
     deployment: str,
+    missing_ok: bool,
 ) -> list[ReconcileOperation]:
     """Project private scenario schedules into generic task activation operations."""
 
@@ -143,13 +150,25 @@ def _build_scenario_schedule_operations(
                     ),
                     service="communication",
                     method="post",
+                    missing_ok=missing_ok,
                 ),
             )
     return operations
 
 
 def _scenario_task_activation_action(task: Any) -> str:
-    """Return whether a scenario-backed task can be materialized now."""
+    """Return whether a scenario-backed task can be materialized now.
+
+    The control plane runs at deploy time, *before* the assistant wakes.  The
+    authoritative seeder is the runtime plane
+    (:func:`unity_deploy.runtime_reconcile.materialize.materialize_runtime_state`),
+    which runs in the woken assistant's own identity/context and calls
+    ``sync_all_seed_data`` (seeds the scenario's TaskScheduler tasks) plus
+    ``FunctionManager.sync_custom`` (registers the entrypoint functions).  Until
+    that has happened the activation ids do not exist yet, so a brand-new
+    activation is ``"deferred"`` rather than a hard failure: the control plane
+    leaves it to the runtime plane and converges on a later reconcile.
+    """
 
     activation = task.activation
     if (
@@ -157,7 +176,7 @@ def _scenario_task_activation_action(task: Any) -> str:
         or activation.source_task_log_id is None
         or activation.scheduled_for is None
     ):
-        return "unresolved"
+        return "deferred"
     return "upsert"
 
 
@@ -227,7 +246,7 @@ def _scenario_task_activation_payload(
             "requested_at": datetime.now(timezone.utc).isoformat(),
         },
     }
-    if _scenario_task_activation_action(task) == "unresolved":
+    if _scenario_task_activation_action(task) == "deferred":
         missing = []
         if activation.task_id is None:
             missing.append("activation.task_id")
@@ -235,31 +254,90 @@ def _scenario_task_activation_payload(
             missing.append("activation.source_task_log_id")
         if activation.scheduled_for is None:
             missing.append("activation.scheduled_for")
-        base["unresolved_reason"] = (
-            "Scenario schedule is private to unity-deploy, but generic task "
-            "activation materialization needs FunctionManager/TaskScheduler "
-            f"seeded ids first: {', '.join(missing)}"
+        base["deferred_reason"] = (
+            "Scenario schedule is private to unity-deploy and its activation "
+            "ids are not seeded yet; the runtime plane "
+            "(materialize_runtime_state) seeds them in the woken assistant's "
+            "own context. Deferring control-plane materialization until then: "
+            f"missing {', '.join(missing)}"
         )
     return base
 
 
 def apply_operations(operations: list[ReconcileOperation]) -> list[dict[str, Any]]:
     """Apply planned operations to Orchestra and return parsed responses."""
-    from unity_deploy.utils.orchestra_client import patch_json
+    import httpx
+
+    from unity_deploy.utils.orchestra_client import OrchestraClientError, patch_json
 
     responses: list[dict[str, Any]] = []
+    missing_optional_assistants: set[str] = set()
+
+    def skip_missing(operation: ReconcileOperation, reason: str) -> None:
+        logger.warning(
+            "Skipping optional control-plane %s for assistant %s: %s",
+            operation.field,
+            operation.assistant_id,
+            reason,
+        )
+        responses.append(
+            {
+                "status": "skipped-missing",
+                "assistant_id": operation.assistant_id,
+                "field": operation.field,
+                "reason": reason,
+            },
+        )
+
     for operation in operations:
+        if (
+            operation.missing_ok
+            and operation.assistant_id in missing_optional_assistants
+        ):
+            skip_missing(operation, "assistant target is missing")
+            continue
+        if operation.action == "deferred":
+            reason = operation.payload.get("deferred_reason", operation.field)
+            logger.info(
+                "Deferring control-plane %s for assistant %s to the runtime "
+                "plane: %s",
+                operation.field,
+                operation.assistant_id,
+                reason,
+            )
+            responses.append(
+                {
+                    "status": "deferred",
+                    "assistant_id": operation.assistant_id,
+                    "field": operation.field,
+                    "reason": reason,
+                },
+            )
+            continue
         if operation.action == "unresolved":
             raise RuntimeError(
                 "Cannot apply unresolved control-plane operation: "
                 f"{operation.payload.get('unresolved_reason', operation.field)}",
             )
-        if operation.service == "communication":
-            responses.append(
-                _post_communication_json(operation.path, operation.payload),
-            )
-        else:
-            responses.append(patch_json(operation.path, operation.payload))
+        try:
+            if operation.service == "communication":
+                responses.append(
+                    _post_communication_json(operation.path, operation.payload),
+                )
+            else:
+                responses.append(patch_json(operation.path, operation.payload))
+        except OrchestraClientError as exc:
+            if not (operation.missing_ok and exc.status_code == 404):
+                raise
+            reason = f"assistant target {operation.assistant_id} not found"
+            missing_optional_assistants.add(operation.assistant_id)
+            skip_missing(operation, reason)
+        except httpx.HTTPStatusError as exc:
+            if not (operation.missing_ok and exc.response.status_code == 404):
+                raise
+            reason = f"assistant target {operation.assistant_id} not found"
+            missing_optional_assistants.add(operation.assistant_id)
+            skip_missing(operation, reason)
     return responses
 
 

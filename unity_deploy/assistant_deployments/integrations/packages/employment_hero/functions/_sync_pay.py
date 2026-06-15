@@ -38,7 +38,7 @@ async def sync_employmenthero_pay(mock: bool = False, since: str | None = None) 
                         "currency": "GBP",
                         "finalised_at": "2026-04-29T16:00:00Z",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "pay_categories": [
                     {
@@ -47,7 +47,7 @@ async def sync_employmenthero_pay(mock: bool = False, since: str | None = None) 
                         "is_taxable": True,
                         "is_pensionable": True,
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "employment_terms": [
                     {
@@ -59,7 +59,7 @@ async def sync_employmenthero_pay(mock: bool = False, since: str | None = None) 
                         "annualised_band": "<45,000 GBP",
                         "currency": "GBP",
                         "updated_at": started,
-                    }
+                    },
                 ],
             },
             "metadata": {

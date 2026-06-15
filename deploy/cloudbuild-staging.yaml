@@ -10,11 +10,15 @@ steps:
   - |
     echo "Base image: ${_BASE_IMAGE}"
     echo "Unity SHA:  ${_UNITY_SHA}"
+    echo "Brain ref:  ${_BRAIN_REF}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
+      --build-arg BRAIN_REF=${_BRAIN_REF} \
+      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:latest .
+  secretEnv: ['GITHUB_TOKEN']
 
   # Fail the deployment before pushing if the worker image does not include
   # the maintenance CLI commands referenced by the Kubernetes CronJobs.
@@ -67,6 +71,21 @@ steps:
     echo ${_UNITY_SHA} | gsutil cp - gs://bucket/image_hash_staging.txt
   waitFor: ['push-latest-tag']
 
+  # One-time cluster bootstrap: deploy/scripts/kubernetes/install_external_secrets_operator.sh
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'apply-unity-external-secrets'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -eu
+    gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
+    kubectl apply -f deploy/k8s/secrets/unity-secrets-external-secret_staging.yaml
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['push-sha-tag']
+
   # Reconcile deploy-time control-plane state before any deploy step wakes Unity
   # containers. Runtime seed/function sync runs per assistant after wake with
   # that assistant's UNIFY_KEY.
@@ -87,11 +106,13 @@ steps:
       --unity-comms-url "${_UNITY_COMMS_URL}" \
       --planes control-plane \
       --concurrency 8 \
-      --timeout 600s
+      --timeout 600s \
+      --brain-operator-assistant-id "${_BRAIN_OPERATOR_ASSISTANT_ID}" \
+      --brain-operator-tasks-enabled "${_BRAIN_OPERATOR_TASKS_ENABLED}"
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['push-sha-tag', 'upload-sha']
+  waitFor: ['apply-unity-external-secrets', 'upload-sha']
 
   # Refresh idle containers so they pick up the new image
 - name: 'gcr.io/cloud-builders/curl'
@@ -303,10 +324,27 @@ substitutions:
   _UNITY_SHA: '${SHORT_SHA}'
   _ORCHESTRA_URL: 'https://internal.example.com/v0'
   _UNITY_COMMS_URL: 'https://unity-comms-app-staging-000000000000.us-central1.run.app'
+  # Brain commit / branch installed into the image.  Staging defaults
+  # to ``main`` so the latest brain code lands automatically;
+  # production triggers pin a SHA.
+  _BRAIN_REF: 'main'
+  # brain_operator activation (read at reconcile time by
+  # brain_operator/deployment.py). 2108 = the org-scoped "Brain Operator
+  # Staging" assistant in the Unify org on staging; tasks_enabled=true ships
+  # the brain_jobs scenario rows enabled.
+  #
+  # The brain_operator assistant target is optional: if this staging id is
+  # missing, deploy-time reconcile skips it with a warning. If the assistant
+  # exists but has not seeded its scenario rows yet, control-plane task
+  # activation defers to the runtime plane and converges after wake.
+  _BRAIN_OPERATOR_ASSISTANT_ID: '2108'
+  _BRAIN_OPERATOR_TASKS_ENABLED: 'true'
 
 availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
     env: 'ORCHESTRA_ADMIN_KEY'
+  - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
+    env: 'GITHUB_TOKEN'
 
 timeout: '1800s'

@@ -76,11 +76,11 @@ async def run_matterport_sync_tick(
                         k: len(v)
                         for k, v in tables.items()
                         if k not in ("sync_state", "sync_runs")
-                    }
+                    },
                 ),
                 "errors_json": "[]",
                 "mode": "mock",
-            }
+            },
         ]
         return {
             "schema_version": schema_version,
@@ -115,14 +115,14 @@ async def run_matterport_sync_tick(
                     "reason": "cadence_not_due",
                     "gap_seconds": gap,
                     "min_gap_seconds": min_gap,
-                }
+                },
             )
             return
         module_stem, fn_name = object_to_sync_fn[object_key]
         try:
             module = importlib.import_module(
                 f"unity_deploy.assistant_deployments.integrations.packages."
-                f"matterport.functions.{module_stem}"
+                f"matterport.functions.{module_stem}",
             )
         except ImportError as e:
             errors.append({"object_type": object_key, "error": f"import: {e}"})
@@ -130,7 +130,7 @@ async def run_matterport_sync_tick(
         fn = getattr(module, fn_name, None)
         if fn is None:
             errors.append(
-                {"object_type": object_key, "error": f"missing function {fn_name}"}
+                {"object_type": object_key, "error": f"missing function {fn_name}"},
             )
             return
         kwargs: dict = {"mock": False}
@@ -182,10 +182,10 @@ async def run_matterport_sync_tick(
                         "view_stats_lookback_days",
                         "sync_view_events",
                     )
-                }
+                },
             ),
             "mode": "live",
-        }
+        },
     ]
     return {
         "schema_version": schema_version,

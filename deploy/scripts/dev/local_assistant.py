@@ -4,8 +4,7 @@ Create or fetch a local assistant and print the env vars needed to run
 unity locally.
 
 A "local assistant" is stored in Orchestra with `is_local=True` and runs
-unity on your machine instead of on GKE. Preview assistants are stored in
-staging Orchestra but use preview communication/adapters at runtime.
+staging Orchestra.
 
 Usage:
     # Create a new local assistant (or fetch existing by name):
@@ -17,8 +16,6 @@ Usage:
     # Target production:
     python scripts/dev/local_assistant.py --name "Dev" --env production
 
-    # Target preview:
-    python scripts/dev/local_assistant.py --name "Dev" --env preview
 
     # Source directly into your shell:
     source <(python scripts/dev/local_assistant.py --name "Dev")
@@ -41,12 +38,10 @@ load_dotenv()
 ORCHESTRA_URLS = {
     "production": "https://api.unify.ai/v0",
     "staging": "https://internal.example.com/v0",
-    "preview": "https://internal.example.com/v0",
 }
 COMMS_URLS = {
     "production": "https://unity-comms-app-000000000000.us-central1.run.app",
     "staging": "https://unity-comms-app-staging-000000000000.us-central1.run.app",
-    "preview": "https://unity-comms-app-preview-000000000000.us-central1.run.app",
 }
 
 
@@ -97,8 +92,6 @@ def _create(
         "voice_provider": voice_provider,
         "is_local": True,
     }
-    if deploy_env == "preview":
-        payload["deploy_env"] = "preview"
     resp = requests.post(
         f"{orchestra_url}/assistant",
         json=payload,
@@ -186,7 +179,7 @@ def main():
     group.add_argument("--id", type=int, help="Existing assistant agent_id")
     parser.add_argument(
         "--env",
-        choices=["production", "staging", "preview"],
+        choices=["production", "staging"],
         default="staging",
         help="Target deploy environment (default: staging)",
     )

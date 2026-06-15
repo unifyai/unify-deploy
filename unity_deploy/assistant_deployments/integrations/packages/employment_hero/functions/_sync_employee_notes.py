@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_employee_notes(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     """Snapshot employee notes — body redacted to length + hash."""
     import datetime as _dt
@@ -41,8 +42,8 @@ async def sync_employmenthero_employee_notes(
                         "body_redacted_hash": "9876fedc",
                         "created_at": "2026-04-12T10:00:00Z",
                         "updated_at": started,
-                    }
-                ]
+                    },
+                ],
             },
             "metadata": {
                 "integration": "employment_hero",
@@ -91,7 +92,7 @@ async def sync_employmenthero_employee_notes(
                 "body_redacted_hash": body_red["hash"],
                 "created_at": n.get("created_at"),
                 "updated_at": n.get("updated_at"),
-            }
+            },
         )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

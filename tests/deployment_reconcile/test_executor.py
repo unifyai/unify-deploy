@@ -55,6 +55,30 @@ def _registry() -> dict[str, ClientDeploymentEntry]:
     }
 
 
+def _optional_registry() -> dict[str, ClientDeploymentEntry]:
+    return {
+        "unify_company": ClientDeploymentEntry(
+            mapping=DeploymentMapping(
+                targets=[
+                    DeploymentTarget(
+                        scope="assistant",
+                        scope_id="2098",
+                        deployment="brain_operator",
+                        missing_ok=True,
+                    ),
+                ],
+            ),
+            specs={
+                "brain_operator": _spec(
+                    "brain_operator",
+                    console_config={"version": "1"},
+                ),
+            },
+            environment="staging",
+        ),
+    }
+
+
 def test_build_deployment_target_plans_only_uses_assistant_targets():
     plans = deployment_reconcile.build_deployment_target_plans(
         environment="staging",
@@ -66,6 +90,17 @@ def test_build_deployment_target_plans_only_uses_assistant_targets():
     assert plans[0].runtime_summary["guidance"] == 1
     assert plans[0].control_plane_revision
     assert plans[0].runtime_revision
+
+
+def test_build_deployment_target_plans_carries_optional_target_flag():
+    plans = deployment_reconcile.build_deployment_target_plans(
+        environment="staging",
+        registry=_optional_registry(),
+    )
+
+    assert len(plans) == 1
+    assert plans[0].missing_ok is True
+    assert plans[0].control_plane_operations[0].missing_ok is True
 
 
 def test_build_deployment_work_items_splits_planes():
@@ -109,6 +144,52 @@ def test_runtime_apply_fails_when_assistant_identity_cannot_be_resolved(monkeypa
 
     assert result.status == "failed"
     assert "missing assistant" in result.error
+
+
+def test_runtime_apply_skips_missing_optional_assistant(monkeypatch):
+    items = deployment_reconcile.build_deployment_work_items(
+        environment="staging",
+        planes=("runtime",),
+        registry=_optional_registry(),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_fetch_assistant_info",
+        lambda assistant_id: (_ for _ in ()).throw(
+            executor.AssistantNotFoundError("missing assistant"),
+        ),
+    )
+
+    result = deployment_reconcile.apply_work_item(items[0])
+
+    assert result.status == "skipped-missing"
+    assert "missing assistant" in result.message
+
+
+def test_control_plane_apply_reports_missing_optional_assistant(monkeypatch):
+    items = deployment_reconcile.build_deployment_work_items(
+        environment="staging",
+        planes=("control-plane",),
+        registry=_optional_registry(),
+    )
+    from unity_deploy.deployment_reconcile import control_plane
+
+    monkeypatch.setattr(
+        control_plane,
+        "apply_operations",
+        lambda operations: [
+            {
+                "status": "skipped-missing",
+                "assistant_id": "2098",
+                "field": "console_config",
+            },
+        ],
+    )
+
+    result = deployment_reconcile.apply_work_item(items[0])
+
+    assert result.status == "skipped-missing"
+    assert result.message == "assistant target is missing"
 
 
 def test_runtime_apply_requires_user_id_and_api_key(monkeypatch):

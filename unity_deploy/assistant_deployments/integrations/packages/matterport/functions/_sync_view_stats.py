@@ -106,7 +106,7 @@ async def sync_matterport_view_stats(
             errors.append({"model_id": model_id, "error": body.get("error")})
             continue
         breakdown = ((body.get("model") or {}).get("stats") or {}).get(
-            "breakdown"
+            "breakdown",
         ) or []
         for raw in breakdown:
             daily_rows.append(normalize_view_stats_day(raw, model_id))

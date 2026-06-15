@@ -26,6 +26,7 @@ async def run_hubspot_sync_tick(full: bool = False, mock: bool = True) -> dict:
         Return a tiny synthetic envelope without touching the API.
     """
     import datetime as _dt
+    import importlib
 
     from unity_deploy.assistant_deployments.integrations.packages.hubspot.functions._config import (
         get_hubspot_config,
@@ -138,9 +139,8 @@ async def run_hubspot_sync_tick(full: bool = False, mock: bool = True) -> dict:
             return
         module_stem, fn_name = registry[object_key]
         try:
-            module = __import__(
+            module = importlib.import_module(
                 f"unity_deploy.assistant_deployments.integrations.packages.hubspot.functions.{module_stem}",
-                fromlist=[fn_name],
             )
         except ImportError as e:
             errors.append({"object_type": object_key, "error": f"import failed: {e}"})

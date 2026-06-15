@@ -131,7 +131,7 @@ async def sync_employmenthero_employee_personal(
                             "name_redacted_hash": name_red["hash"],
                             "phone_redacted_length": phone_red["length"],
                             "phone_redacted_hash": phone_red["hash"],
-                        }
+                        },
                     )
                 else:
                     row["name"] = ec.get("name")
@@ -147,7 +147,7 @@ async def sync_employmenthero_employee_personal(
                     "employee_id": eid,
                     "count": count,
                     "updated_at": started,
-                }
+                },
             )
 
         # Visa
@@ -162,7 +162,7 @@ async def sync_employmenthero_employee_personal(
                     "visa_type": v.get("visa_type"),
                     "visa_expires_at": v.get("expires_at") or v.get("visa_expires_at"),
                     "updated_at": v.get("updated_at"),
-                }
+                },
             )
 
         # Probation
@@ -176,7 +176,7 @@ async def sync_employmenthero_employee_personal(
                     "probation_end_date": p.get("probation_end_date"),
                     "review_outcome": p.get("review_outcome"),
                     "updated_at": p.get("updated_at"),
-                }
+                },
             )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

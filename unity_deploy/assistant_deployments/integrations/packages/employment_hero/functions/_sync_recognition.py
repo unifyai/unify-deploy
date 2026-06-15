@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_recognition(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     import datetime as _dt
 
@@ -28,7 +29,7 @@ async def sync_employmenthero_recognition(
                         "value": "Above and beyond",
                         "created_at": "2026-04-15T10:00:00Z",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "hi_fives": [
                     {
@@ -37,7 +38,7 @@ async def sync_employmenthero_recognition(
                         "to_employee_id": "emp-mock-1",
                         "created_at": "2026-04-20T14:00:00Z",
                         "updated_at": started,
-                    }
+                    },
                 ],
                 "awards": [
                     {
@@ -46,7 +47,7 @@ async def sync_employmenthero_recognition(
                         "recipient_employee_id": "emp-mock-1",
                         "awarded_at": "2026-04-01",
                         "updated_at": started,
-                    }
+                    },
                 ],
             },
             "metadata": {
@@ -81,7 +82,10 @@ async def sync_employmenthero_recognition(
         hparams["updated_since"] = since
 
     cheers_raw = await eh_paginate(
-        org_path("/cheers"), params=cparams, page_size=page_size, max_pages=max_pages
+        org_path("/cheers"),
+        params=cparams,
+        page_size=page_size,
+        max_pages=max_pages,
     )
     cheers = [
         {
@@ -97,7 +101,10 @@ async def sync_employmenthero_recognition(
     ]
 
     hi5_raw = await eh_paginate(
-        org_path("/hi_fives"), params=hparams, page_size=page_size, max_pages=max_pages
+        org_path("/hi_fives"),
+        params=hparams,
+        page_size=page_size,
+        max_pages=max_pages,
     )
     hi_fives = [
         {
@@ -112,7 +119,9 @@ async def sync_employmenthero_recognition(
     ]
 
     aw_raw = await eh_paginate(
-        org_path("/recognition_awards"), page_size=page_size, max_pages=max_pages
+        org_path("/recognition_awards"),
+        page_size=page_size,
+        max_pages=max_pages,
     )
     awards = [
         {

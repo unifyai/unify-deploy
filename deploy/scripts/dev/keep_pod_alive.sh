@@ -10,7 +10,6 @@
 #   ./scripts/dev/keep_pod_alive.sh                                 # auto-detect latest staging pod
 #   ./scripts/dev/keep_pod_alive.sh <assistant_id>                  # explicit assistant, staging
 #   ./scripts/dev/keep_pod_alive.sh --env production                # auto-detect latest production pod
-#   ./scripts/dev/keep_pod_alive.sh --env preview                   # auto-detect latest preview pod
 #   ./scripts/dev/keep_pod_alive.sh <assistant_id> --env production # explicit assistant, production
 #   ./scripts/dev/keep_pod_alive.sh <assistant_id> --interval 60    # custom interval
 #
@@ -37,7 +36,7 @@ usage() {
     echo "                        your latest running pod when omitted)"
     echo
     echo "Options:"
-    echo "  --env ENV             Target environment: production, staging, or preview (default: staging)"
+    echo "  --env ENV             Target environment: production or staging (default: staging)"
     echo "  --interval SECONDS    Ping interval in seconds (default: ${DEFAULT_INTERVAL})"
     echo "  -h, --help            Show this help message"
     exit 1
@@ -54,7 +53,7 @@ while [[ $# -gt 0 ]]; do
         --env)
             DEPLOY_ENV="$2"
             case "$DEPLOY_ENV" in
-                production|staging|preview) ;;
+                production|staging) ;;
                 *) echo "Invalid --env value: $DEPLOY_ENV" >&2; usage ;;
             esac
             shift 2

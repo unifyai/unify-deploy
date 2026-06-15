@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import time
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
@@ -109,7 +108,9 @@ class _FakeAsyncClient:
 
 
 def _patch_httpx(
-    monkeypatch: pytest.MonkeyPatch, *, queued: list[_FakeResponse]
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    queued: list[_FakeResponse],
 ) -> _FakeAsyncClient:
     fake = _FakeAsyncClient(queued=queued)
 
@@ -204,7 +205,8 @@ async def test_oauth_refresh_expired_cache_re_resolves(_clean_env, monkeypatch):
         monkeypatch,
         queued=[
             _FakeResponse(
-                200, json_body={"access_token": "fresh-tok", "expires_in": 3600}
+                200,
+                json_body={"access_token": "fresh-tok", "expires_in": 3600},
             ),
         ],
     )
@@ -304,7 +306,8 @@ async def test_oauth_refresh_token_rotation_re_keys_cache(_clean_env, monkeypatc
 
 @pytest.mark.asyncio
 async def test_oauth_response_missing_access_token_returns_error(
-    _clean_env, monkeypatch
+    _clean_env,
+    monkeypatch,
 ):
     _clean_env.setenv("EMPLOYMENTHERO_OAUTH_CLIENT_ID", "cid")
     _clean_env.setenv("EMPLOYMENTHERO_OAUTH_CLIENT_SECRET", "csec")
@@ -313,7 +316,7 @@ async def test_oauth_response_missing_access_token_returns_error(
     _patch_httpx(
         monkeypatch,
         queued=[
-            _FakeResponse(200, json_body={"expires_in": 3600})
+            _FakeResponse(200, json_body={"expires_in": 3600}),
         ],  # missing access_token
     )
 

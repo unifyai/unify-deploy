@@ -61,7 +61,7 @@ async def sync_webex_recordings(
         params["from"] = since
     else:
         lookback = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(
-            days=cfg["meeting_lookback_days"]
+            days=cfg["meeting_lookback_days"],
         )
         # Webex rejects ``+00:00``; needs the ``Z`` UTC suffix.
         params["from"] = lookback.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -87,7 +87,7 @@ async def sync_webex_recordings(
                 "meeting_id": r.get("meetingId"),
                 "service_type": r.get("serviceType"),
                 "site_url": r.get("siteUrl"),
-            }
+            },
         )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 
 async def sync_employmenthero_custom_fields(
-    mock: bool = False, since: str | None = None
+    mock: bool = False,
+    since: str | None = None,
 ) -> dict:
     """Snapshot custom-field definitions and per-employee values (long format)."""
     import datetime as _dt
@@ -107,7 +108,7 @@ async def sync_employmenthero_custom_fields(
                 "field_id": v.get("field_id"),
                 "value": value_str,
                 "updated_at": v.get("updated_at"),
-            }
+            },
         )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

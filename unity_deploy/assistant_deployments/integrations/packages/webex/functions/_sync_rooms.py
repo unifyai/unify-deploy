@@ -66,7 +66,7 @@ async def sync_webex_rooms(
                 "last_activity": r.get("lastActivity"),
                 "created_at": r.get("created"),
                 "creator_id": r.get("creatorId"),
-            }
+            },
         )
         memb_body = await webex_get(
             "/v1/memberships",
@@ -83,7 +83,7 @@ async def sync_webex_rooms(
                         "person_display_name": m.get("personDisplayName"),
                         "is_moderator": m.get("isModerator"),
                         "created_at": m.get("created"),
-                    }
+                    },
                 )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

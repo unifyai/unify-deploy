@@ -6,6 +6,21 @@ slugs into the existing Unity manager sync surfaces: guidance, secrets,
 FunctionManager function directories, optional virtual environments, URL
 mappings, and MCP configuration metadata.
 
+Provider-backed apps from Composio, Pipedream, or another hosted integration
+backend do not need a package here for every supported SaaS app. See
+[`PROVIDER_BACKED_INTEGRATIONS.md`](PROVIDER_BACKED_INTEGRATIONS.md) for the
+boundary: Orchestra owns dynamic provider app catalogs, connection state, and
+tool execution; Unity surfaces those tools as
+`primitives.integrations.<app>.<tool>` virtual FunctionManager records;
+`unity-deploy` remains the Level 3 full-package path for custom runtime code.
+
+Native package manifests are also projected into Orchestra's global integration
+app catalog as `source_type="native"` app records. That projection exists for
+actor discovery only: it lets `primitives.integrations.search_integrations`
+return `Native` and `Third-party` apps in one result set. Native package
+functions are not copied into provider tool catalog rows; they continue to
+materialize through the existing FunctionManager package sync path.
+
 ## Flow
 
 ```
@@ -24,6 +39,8 @@ expand_integrations()
     +-- venv_dirs -> FunctionManager sync path
     +-- url_mappings -> deployment hook runtime mappings
     +-- mcp_configs -> loaded for future MCP runtime registration
+    +-- integration_registry -> Integrations/Manifests telemetry
+    +-- native catalog projection -> Orchestra app catalog (`Native`)
 ```
 
 The direction is intentionally simple: `unity-deploy` imports stable Unity
@@ -114,6 +131,59 @@ register_layer(
 
 Layer-level integrations are merged after deployment-level integrations. Order
 is preserved and duplicate slugs are removed.
+
+`DeploymentSpec.integrations` and `SeedLayer(integrations=[...])` accept only
+disk package slugs discovered under `packages/`, `client_packages/`, opt-in
+`mock_packages/`, entry points, or explicit search paths. Do not add
+`composio`, `pipedream`, `hubspot`, `salesforce`, or other provider-backed app
+names here unless a real Level 3 package with that slug exists in this repo.
+Dynamic provider-backed connection state lives in Orchestra, not in
+`Integrations/Manifests`.
+
+## Provider Backend Operations
+
+For staging and production, provider credentials are deployment env vars on
+Orchestra. Backend API calls should only toggle status or operational knobs; do
+not send provider API keys, provider base URLs, Pipedream project IDs, or env-var
+names in backend payloads.
+
+Typical staging enablement is:
+
+```http
+PATCH /v0/admin/integrations/backends/composio
+{"status":"enabled"}
+
+PATCH /v0/admin/integrations/backends/pipedream
+{"status":"enabled"}
+```
+
+Partial sync is explicit and bounded:
+
+```http
+POST /v0/admin/integrations/sync
+{"backend_id":"composio","app_slugs":["GMAIL","SLACK","HUBSPOT"],"tool_limit_per_app":50,"include_all_managed_apps":false,"create_auth_configs":true}
+
+POST /v0/admin/integrations/sync
+{"backend_id":"pipedream","app_slugs":["slack","github","hubspot"],"component_limit_per_app":50,"include_all_apps":false}
+```
+
+Full sync opts into all apps with empty `app_slugs` plus `include_all_*: true`.
+See [`PROVIDER_BACKED_INTEGRATIONS.md`](PROVIDER_BACKED_INTEGRATIONS.md) for the
+full environment variable and Postman-ready request details.
+
+## Native vs Third-party App Discovery
+
+The actor sees a unified app discovery surface but the runtime ownership stays
+source-specific:
+
+| Source label | Source of support | Activation signal | Execution discovery |
+|--------------|-------------------|-------------------|---------------------|
+| `Native` | `manifest.yaml` in this repo, projected to Orchestra as an app-only catalog row | Deployment enablement plus required secrets in `Integrations/Manifests` / SecretManager | FunctionManager search over synced package functions |
+| `Third-party` | Orchestra provider catalog synced from Composio, Pipedream, or another backend | Provider connection state and backend policy in Orchestra | FunctionManager search over materialized provider tool rows |
+
+This separation avoids duplicating native functions as provider tools while
+still letting the actor answer "is this app supported, active, connected, or
+still syncing?" before it searches for executable functions.
 
 ## Connector Tiers
 

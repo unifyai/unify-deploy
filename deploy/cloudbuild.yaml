@@ -9,11 +9,15 @@ steps:
   - '-c'
   - |
     echo "Base image: ${_BASE_IMAGE}"
+    echo "Brain ref:  ${_BRAIN_REF}"
     DOCKER_BUILDKIT=1 docker build \
       --build-arg BASE_IMAGE=${_BASE_IMAGE} \
+      --build-arg BRAIN_REF=${_BRAIN_REF} \
+      --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
       -f deploy/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:latest .
+  secretEnv: ['GITHUB_TOKEN']
 
   # Fail the deployment before pushing if the worker image does not include
   # the maintenance CLI commands referenced by the Kubernetes CronJobs.
@@ -66,6 +70,21 @@ steps:
     echo ${SHORT_SHA} | gsutil cp - gs://bucket/image_hash.txt
   waitFor: ['push-latest-tag']
 
+  # One-time cluster bootstrap: deploy/scripts/kubernetes/install_external_secrets_operator.sh
+- name: 'gcr.io/cloud-builders/kubectl'
+  id: 'apply-unity-external-secrets'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -eu
+    gcloud container clusters get-credentials "${_CLUSTER}" --region "${_REGION}"
+    kubectl apply -f deploy/k8s/secrets/unity-secrets-external-secret_production.yaml
+  env:
+  - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
+  waitFor: ['push-sha-tag']
+
   # Reconcile deploy-time control-plane state before any deploy step wakes Unity
   # containers. Runtime seed/function sync runs per assistant after wake with
   # that assistant's UNIFY_KEY.
@@ -90,7 +109,7 @@ steps:
   env:
   - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
   - 'CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER}'
-  waitFor: ['push-sha-tag', 'upload-sha']
+  waitFor: ['apply-unity-external-secrets', 'upload-sha']
 
   # Refresh idle containers so they pick up the new image
 - name: 'gcr.io/cloud-builders/curl'
@@ -301,10 +320,15 @@ substitutions:
   _BASE_IMAGE: '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-base:latest'
   _ORCHESTRA_URL: 'https://api.unify.ai/v0'
   _UNITY_COMMS_URL: 'https://unity-comms-app-000000000000.us-central1.run.app'
+  # Brain commit / branch installed into the image.  Pin to a SHA in
+  # production triggers; staging may track the ``main`` branch.
+  _BRAIN_REF: 'main'
 
 availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
     env: 'ORCHESTRA_ADMIN_KEY'
+  - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
+    env: 'GITHUB_TOKEN'
 
 timeout: '1800s'

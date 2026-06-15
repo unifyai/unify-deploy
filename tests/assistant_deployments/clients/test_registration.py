@@ -8,6 +8,7 @@ mapping-based routing, and shared seed-data layers.
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import pytest
@@ -585,6 +586,56 @@ class TestEnvironmentGuardrail:
         monkeypatch.setenv("ORCHESTRA_URL", "https://internal.example.com/v0")
         result = resolve_from_deployments(org_id=10)
         assert result is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestUnifyCompanyRouting — default deployment is org-scoped
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestUnifyCompanyRouting:
+
+    @staticmethod
+    def _reload_unify_company(monkeypatch, orchestra_url: str):
+        monkeypatch.setenv("ORCHESTRA_URL", orchestra_url)
+        import unity_deploy.assistant_deployments.clients.unify_company as uc
+
+        return importlib.reload(uc)
+
+    def test_production_default_deployment_is_unify_org_only(self, monkeypatch):
+        self._reload_unify_company(monkeypatch, "https://api.unify.ai/v0")
+
+        matched = resolve_from_deployments(org_id=1)
+        assert matched is not None
+        assert {g.title for g in matched.guidance} >= {
+            "CRM stage hygiene",
+            "CRM email sending policy",
+        }
+
+        assert resolve_from_deployments(org_id=2) is None
+        assert resolve_from_deployments(user_id="cli3t38uc0000s60k5zmgj8ez") is None
+
+    def test_staging_default_deployment_is_unify_org_only(self, monkeypatch):
+        self._reload_unify_company(
+            monkeypatch,
+            "https://internal.example.com/v0",
+        )
+
+        matched = resolve_from_deployments(org_id=5)
+        assert matched is not None
+        assert {g.title for g in matched.guidance} >= {
+            "CRM stage hygiene",
+            "CRM email sending policy",
+        }
+
+        assert resolve_from_deployments(org_id=1) is None
+
+    def test_org_id_override(self, monkeypatch):
+        monkeypatch.setenv("UNIFY_COMPANY_ORG_ID", "123")
+        self._reload_unify_company(monkeypatch, "http://127.0.0.1:8000/v0")
+
+        assert resolve_from_deployments(org_id=123) is not None
+        assert resolve_from_deployments(org_id=5) is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

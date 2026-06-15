@@ -20,14 +20,14 @@ class Environment(BaseModel):
         ge=UNASSIGNED,
     )
     name: str = Field(
-        description="Human-readable name for the environment (e.g. 'clientdelta').",
+        description="Human-readable name for the environment (e.g. 'client_portal').",
         min_length=1,
         max_length=200,
     )
     env: str = Field(
         description=(
             "Module-attribute path to the BaseEnvironment instance, "
-            "using the 'module:attribute' pattern (e.g. 'clientdelta_env:clientdelta_env')."
+            "using the 'module:attribute' pattern (e.g. 'portal_env:portal_env')."
         ),
         min_length=3,
     )

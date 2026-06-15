@@ -6,6 +6,7 @@ structural validation. Each root is asserted separately so future packages
 can be added in the right location without touching tests in the other roots.
 """
 
+import ast
 import pytest
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from unity_deploy.assistant_deployments.integrations.discovery import (
     _BUILTIN_DIR,
     _CLIENT_DIR,
     _MOCK_DIR,
+    discover_from_directory,
     _load_manifest,
 )
 from unity_deploy.assistant_deployments.integrations.types import (
@@ -26,6 +28,38 @@ from unity_deploy.assistant_deployments.integrations.validation import (
 GENERIC_SLUGS = ["github", "fetch_mcp"]
 CLIENT_SLUGS = ["clientepsilon_homes_compliance", "client_alpha_repairs"]
 MOCK_SLUGS = ["clientepsilon_homes_compliance_mock", "client_alpha_repairs_mock"]
+INTEGRATIONS_ROOT = _BUILTIN_DIR.parent
+DEPLOYMENTS_ROOT = INTEGRATIONS_ROOT.parent
+
+
+def _available_package_slugs() -> set[str]:
+    slugs: set[str] = set()
+    for root in [_BUILTIN_DIR, _CLIENT_DIR, _MOCK_DIR]:
+        slugs.update(manifest.slug for manifest in discover_from_directory(root))
+    return slugs
+
+
+def _declared_deployment_integration_slugs() -> set[str]:
+    slugs: set[str] = set()
+    for py_file in DEPLOYMENTS_ROOT.rglob("*.py"):
+        if INTEGRATIONS_ROOT in py_file.parents:
+            continue
+        tree = ast.parse(py_file.read_text(), filename=str(py_file))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "integrations":
+                    continue
+                try:
+                    value = ast.literal_eval(keyword.value)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(value, str):
+                    slugs.add(value)
+                else:
+                    slugs.update(str(item) for item in value)
+    return slugs
 
 
 @pytest.fixture(params=GENERIC_SLUGS)
@@ -76,6 +110,57 @@ class TestBuiltinIntegrations:
         manifest = _load_manifest(root / "manifest.yaml")
         errors = validate_integration(manifest, root)
         assert errors == [], f"Validation errors for {slug}: {errors}"
+
+
+class TestProviderBackedBoundary:
+    """Guardrails that keep dynamic provider apps out of Level 3 packages."""
+
+    def test_boundary_doc_is_linked_from_readme(self):
+        readme = (INTEGRATIONS_ROOT / "README.md").read_text()
+        normalized_readme = " ".join(readme.split())
+        assert "PROVIDER_BACKED_INTEGRATIONS.md" in readme
+        assert "DeploymentSpec.integrations" in normalized_readme
+        assert "disk package slugs" in normalized_readme
+
+    def test_every_discovered_level_three_manifest_validates(self):
+        roots = [_BUILTIN_DIR, _CLIENT_DIR, _MOCK_DIR]
+        for root in roots:
+            for manifest in discover_from_directory(root):
+                package_root = root / manifest.slug
+                errors = validate_integration(manifest, package_root)
+                assert errors == [], f"Validation errors for {manifest.slug}: {errors}"
+
+    def test_deployment_integration_slugs_resolve_to_package_roots(self):
+        available = _available_package_slugs()
+        declared = _declared_deployment_integration_slugs()
+
+        missing = sorted(declared - available)
+        assert missing == [], (
+            "DeploymentSpec.integrations and SeedLayer(integrations=[...]) "
+            f"must reference discovered Level 3 package slugs, got missing: {missing}"
+        )
+
+    def test_provider_backends_are_not_placeholder_packages(self):
+        for backend_slug in ["composio", "pipedream"]:
+            assert backend_slug not in _available_package_slugs(), (
+                f"{backend_slug} is a provider backend owned by Orchestra; "
+                "do not add a placeholder unity-deploy package for it."
+            )
+
+    def test_common_provider_apps_are_not_placeholder_packages(self):
+        provider_app_slugs = {
+            "airtable",
+            "gmail",
+            "google_drive",
+            "linear",
+            "notion",
+            "slack",
+        }
+
+        assert provider_app_slugs.isdisjoint(_available_package_slugs()), (
+            "Dynamic provider app catalogs belong in Orchestra. Add a Level 3 "
+            "package only when the app needs custom unity-deploy runtime code."
+        )
 
 
 class TestClientIntegrations:

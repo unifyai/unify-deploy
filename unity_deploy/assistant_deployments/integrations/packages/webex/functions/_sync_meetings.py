@@ -77,7 +77,7 @@ async def sync_webex_meetings(
         params["from"] = since
     else:
         lookback = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(
-            days=cfg["meeting_lookback_days"]
+            days=cfg["meeting_lookback_days"],
         )
         # Webex rejects ``+00:00``; needs the ``Z`` UTC suffix.
         params["from"] = lookback.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -109,7 +109,7 @@ async def sync_webex_meetings(
                 "scheduled_type": m.get("scheduledType"),
                 "is_recurring": m.get("isRecurring"),
                 "updated_at": started,
-            }
+            },
         )
         inv_body = await webex_get(
             "/v1/meetingInvitees",
@@ -125,7 +125,7 @@ async def sync_webex_meetings(
                         "display_name": inv.get("displayName"),
                         "co_host": inv.get("coHost"),
                         "panelist": inv.get("panelist"),
-                    }
+                    },
                 )
 
     finished = _dt.datetime.now(tz=_dt.timezone.utc).isoformat()

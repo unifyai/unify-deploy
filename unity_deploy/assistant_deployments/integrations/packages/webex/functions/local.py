@@ -34,7 +34,7 @@ async def query_local_webex_meetings(
                     "end": "2026-05-06T11:00:00Z",
                     "host_email": "alex@example.test",
                     "state": "scheduled",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True, "threshold_seconds": 1800},
@@ -94,7 +94,7 @@ async def query_local_webex_recordings(
                     "duration_seconds": 1810,
                     "host_email": "alex@example.test",
                     "meeting_id": "Y2lzY29zcGFyazovL3VzL01FRVRJTkcvbW9jay0y",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -158,7 +158,7 @@ async def query_local_webex_transcripts(
                         "maintenance crew weekly. Sam Sample: Three open "
                         "work orders at Battersea this week, all routine."
                     ),
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -219,7 +219,7 @@ async def query_local_webex_rooms(
                     "title": "Battersea Portfolio — Ops",
                     "type": "group",
                     "last_activity": "2026-05-04T15:00:00.000Z",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -263,7 +263,7 @@ async def query_local_webex_people(
                     "email": "alex@example.test",
                     "display_name": "Alex Example",
                     "type": "person",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"is_fresh": True},
@@ -330,7 +330,7 @@ async def query_local_webex_meetings_with_hubspot_contacts(
                     "hubspot_first_name": "Alex",
                     "hubspot_last_name": "Example",
                     "hubspot_company": "Acme Property",
-                }
+                },
             ],
             "count": 1,
             "freshness": {"meetings": {"is_fresh": True}},
