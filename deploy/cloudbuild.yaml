@@ -61,7 +61,7 @@ steps:
 - name: 'gcr.io/cloud-builders/docker'
   id: 'seed-builtins-catalog'
   entrypoint: 'bash'
-  secretEnv: ['ORCHESTRA_ADMIN_KEY', 'ORCHESTRA_API_KEY']
+  secretEnv: ['ORCHESTRA_ADMIN_KEY', 'SHARED_UNIFY_KEY']
   args:
   - '-c'
   - |
@@ -69,7 +69,7 @@ steps:
     docker run --rm \
       -e ORCHESTRA_URL="${_ORCHESTRA_URL}" \
       -e ORCHESTRA_ADMIN_KEY="$$ORCHESTRA_ADMIN_KEY" \
-      -e UNIFY_KEY="$$ORCHESTRA_API_KEY" \
+      -e UNIFY_KEY="$$SHARED_UNIFY_KEY" \
       -v /workspace/integration-manifests:/workspace/integration-manifests:ro \
       ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
       python3 scripts/seed_builtins_catalog.py \
@@ -364,8 +364,8 @@ availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
     env: 'ORCHESTRA_ADMIN_KEY'
-  - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_API_KEY/versions/latest
-    env: 'ORCHESTRA_API_KEY'
+  - versionName: projects/${PROJECT_ID}/secrets/SHARED_UNIFY_KEY/versions/latest
+    env: 'SHARED_UNIFY_KEY'
   - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
     env: 'GITHUB_TOKEN'
 
