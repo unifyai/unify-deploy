@@ -24,8 +24,14 @@
 #     --image-family=ubuntu-2404-lts-amd64 --image-project=ubuntu-os-cloud \
 #     --machine-type=e2-small --zone=us-central1-a \
 #     --tags=unity-tunnel-server,https-server,http-server,allow-tunnel \
+#     --labels=environment=production,owner=platform,project=unity,dataclassification=confidential,application=tunnel-server \
 #     --metadata-from-file=startup-script=tunnel-server-startup.sh \
 #     --metadata=dns-project=gcp-project-dns,gcs-bucket=unity-tunnel-config,tunnel-domain=tunnel.unify.ai
+#
+# The --labels flag carries the governance labels required by the Vanta GCE
+# required-labels test; every instance must be created with them. For the
+# staging server (unity-tunnel-server-staging) set environment=staging and
+# keep the other four label values identical.
 # =============================================================================
 
 set -e
