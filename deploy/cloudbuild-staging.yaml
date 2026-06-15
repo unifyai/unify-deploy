@@ -42,6 +42,22 @@ steps:
       python -m unity_deploy.infra.cli.pipeline_control worker-refresh-check --help >/dev/null
   waitFor: ['build-image']
 
+  # Fetch public Unity integration manifests for the seed step.
+- name: 'gcr.io/cloud-builders/git'
+  id: 'fetch-unity-integration-manifests'
+  entrypoint: 'bash'
+  secretEnv: ['GITHUB_TOKEN']
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    git clone --depth 1 --branch staging https://$$GITHUB_TOKEN@github.com/unifyai/unity.git /workspace/unity-manifest-src
+    if [ -n "${_UNITY_SHA}" ] && git -C /workspace/unity-manifest-src fetch --depth 1 origin "${_UNITY_SHA}"; then
+      git -C /workspace/unity-manifest-src checkout --detach FETCH_HEAD
+    fi
+    cp -R /workspace/unity-manifest-src/deploy/integrations /workspace/integration-manifests
+  waitFor: ['-']
+
   # Seed global Builtins from the image that will be deployed.
 - name: 'gcr.io/cloud-builders/docker'
   id: 'seed-builtins-catalog'
@@ -55,10 +71,11 @@ steps:
       -e ORCHESTRA_URL="${_ORCHESTRA_URL}" \
       -e ORCHESTRA_ADMIN_KEY="$$ORCHESTRA_ADMIN_KEY" \
       -e UNIFY_KEY="$$ORCHESTRA_API_KEY" \
+      -v /workspace/integration-manifests:/workspace/integration-manifests:ro \
       ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity-staging:${_UNITY_SHA} \
       python3 scripts/seed_builtins_catalog.py \
-        --integration-bootstrap-manifest deploy/integrations/bootstrap.staging.toml
-  waitFor: ['smoke-pipeline-cli']
+        --integration-bootstrap-manifest /workspace/integration-manifests/bootstrap.staging.toml
+  waitFor: ['smoke-pipeline-cli', 'fetch-unity-integration-manifests']
 
   # Push Docker Image (SHA and latest tags in parallel)
 - name: 'gcr.io/cloud-builders/docker'
