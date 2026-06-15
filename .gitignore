@@ -24,3 +24,7 @@ comm-sa.json
 cert-manager-dns-key.json
 CLAUDE.md
 __pypackages__/
+
+# Cursor local scratch files
+/.cursor/projects/
+/.cursor/plans/
