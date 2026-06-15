@@ -41,6 +41,24 @@ steps:
       python -m unity_deploy.infra.cli.pipeline_control worker-refresh-check --help >/dev/null
   waitFor: ['build-image']
 
+  # Seed global Builtins from the image that will be deployed.
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'seed-builtins-catalog'
+  entrypoint: 'bash'
+  secretEnv: ['ORCHESTRA_ADMIN_KEY']
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    docker run --rm \
+      -e ORCHESTRA_URL="${_ORCHESTRA_URL}" \
+      -e ORCHESTRA_ADMIN_KEY="$$ORCHESTRA_ADMIN_KEY" \
+      -e UNIFY_KEY="$$ORCHESTRA_ADMIN_KEY" \
+      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
+      python3 scripts/seed_builtins_catalog.py \
+        --integration-bootstrap-manifest deploy/integrations/bootstrap.production.toml
+  waitFor: ['smoke-pipeline-cli']
+
   # Push Docker Image (SHA and latest tags in parallel)
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-sha-tag'
@@ -49,7 +67,7 @@ steps:
   - '-c'
   - |
     docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}
-  waitFor: ['smoke-pipeline-cli']
+  waitFor: ['seed-builtins-catalog']
 
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-latest-tag'
@@ -58,7 +76,7 @@ steps:
   - '-c'
   - |
     docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:latest
-  waitFor: ['smoke-pipeline-cli']
+  waitFor: ['seed-builtins-catalog']
 
   # Upload SHA to Cloud Storage
 - name: 'gcr.io/cloud-builders/gsutil'
@@ -331,4 +349,4 @@ availableSecrets:
   - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
     env: 'GITHUB_TOKEN'
 
-timeout: '1800s'
+timeout: '3600s'
