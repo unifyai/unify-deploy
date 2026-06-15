@@ -1,4 +1,4 @@
-"""Project native Unity-deploy integrations into the global app catalog.
+"""Project native Unity-deploy integrations into the Builtins app catalog.
 
 Unity-deploy native packages and provider-backed integrations have different
 runtime owners:
@@ -12,9 +12,9 @@ runtime owners:
 
 The actor should not need to know those storage details when answering
 "do we support Salesforce?" This module projects native package manifests into
-Orchestra as app catalog records only. It intentionally does not create provider
-tool rows for native functions; executable native functions remain discoverable
-through normal FunctionManager search.
+the public-read Builtins app catalog only. It intentionally does not create
+provider tool rows for native functions; executable native functions remain
+discoverable through normal FunctionManager search.
 """
 
 from __future__ import annotations
@@ -39,12 +39,12 @@ def _json_list(value: Any) -> list[Any]:
 
 
 def native_catalog_app_from_registry_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Convert one ``Integrations/Manifests`` row into an Orchestra app record.
+    """Convert one ``Integrations/Manifests`` row into a Builtins app record.
 
-    The projection uses the same normalized app-sync payload shape that
-    provider backends use, with ``source_type='native'`` and native-only details
-    in metadata. This gives Orchestra enough text to semantically search native
-    apps while leaving deployment activation and execution to Unity.
+    The projection uses the same normalized app payload shape that provider
+    backends use, with ``source_type='native'`` and native-only details in
+    metadata. This gives Builtins enough text to semantically search native apps
+    while leaving deployment activation and execution to Unity.
     """
 
     slug = str(row.get("slug") or "").strip()
@@ -56,6 +56,7 @@ def native_catalog_app_from_registry_row(row: dict[str, Any]) -> dict[str, Any]:
     guidance_titles = _json_list(row.get("guidance_titles_json"))
     tags = _json_list(row.get("tags_json"))
     return {
+        "backend_id": NATIVE_INTEGRATION_BACKEND_ID,
         "provider_app_id": slug,
         "canonical_app_slug": slug,
         "display_name": label,
@@ -122,23 +123,31 @@ def native_catalog_apps_from_registry(
 
 
 def sync_integrations(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Best-effort publish of deployment integration records into Orchestra.
+    """Best-effort publish of deployment integration records into Builtins.
 
     The existing DataManager registry sync remains the deployment telemetry
-    source. This publish step feeds the global app search index so native apps
-    and provider-backed apps can appear in one `search_integrations` result set.
+    source. This publish step feeds the global public-read app search index so
+    native apps and provider-backed apps can appear in one `search_integrations`
+    result set.
     """
 
     apps = native_catalog_apps_from_registry(rows)
     if not apps:
         return None
 
-    import unify
+    from unity.integrations.builtins_catalog import seed_builtin_integrations
 
-    return unify.sync_integrations(
-        backend_id=NATIVE_INTEGRATION_BACKEND_ID,
-        source_type="native",
-        cache_version=NATIVE_INTEGRATION_CACHE_VERSION,
+    changed = seed_builtin_integrations(
         apps=apps,
-        tools=[],
+        backend_id=NATIVE_INTEGRATION_BACKEND_ID,
+        app_slugs=[str(app["canonical_app_slug"]) for app in apps],
+        prune_unlisted_apps=True,
     )
+    return {
+        "status": "synced" if changed else "unchanged",
+        "backend_id": NATIVE_INTEGRATION_BACKEND_ID,
+        "source_type": "native",
+        "cache_version": NATIVE_INTEGRATION_CACHE_VERSION,
+        "apps_upserted": len(apps) if changed else 0,
+        "tools_upserted": 0,
+    }
