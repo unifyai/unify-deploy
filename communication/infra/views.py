@@ -597,6 +597,132 @@ def _ensure_subscription(
     )
 
 
+async def _ensure_topic_and_subscriptions(topic_name: str) -> dict[str, str]:
+    """Create the assistant topic and its four subscriptions. Idempotent.
+
+    Returns a mapping of the resource paths that were ensured. Safe to call
+    repeatedly: topic creation swallows "already exists" and each
+    subscription is upserted via ``_ensure_subscription``.
+    """
+    publisher, subscriber = await asyncio.to_thread(_get_pubsub_clients)
+
+    topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
+    subscription_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        f"{topic_name}-sub",
+    )
+    outbound_subscription_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        f"{topic_name}-outbound-sub",
+    )
+    actions_subscription_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        f"{topic_name}-actions-sub",
+    )
+    system_error_subscription_path = subscriber.subscription_path(
+        SETTINGS.gcp_project_id,
+        f"{topic_name}-system-error-sub",
+    )
+
+    # Create topic (idempotent)
+    try:
+        await asyncio.to_thread(
+            publisher.create_topic,
+            request={"name": topic_path},
+        )
+    except Exception as e:
+        if "already exists" not in str(e).lower():
+            raise
+
+    # Create/update all subscriptions in parallel
+    await asyncio.gather(
+        asyncio.to_thread(
+            _ensure_subscription,
+            subscriber,
+            topic_path,
+            subscription_path,
+            'attributes.thread = "inbound"',
+        ),
+        asyncio.to_thread(
+            _ensure_subscription,
+            subscriber,
+            topic_path,
+            outbound_subscription_path,
+            'attributes.thread = "unify_message_outbound"',
+        ),
+        asyncio.to_thread(
+            _ensure_subscription,
+            subscriber,
+            topic_path,
+            actions_subscription_path,
+            'attributes.thread = "action_event"',
+            enable_message_ordering=True,
+            message_retention_seconds=1800,
+        ),
+        asyncio.to_thread(
+            _ensure_subscription,
+            subscriber,
+            topic_path,
+            system_error_subscription_path,
+            'attributes.thread = "system_error"',
+        ),
+    )
+
+    return {
+        "topic_path": topic_path,
+        "subscription_path": subscription_path,
+        "actions_subscription_path": actions_subscription_path,
+        "system_error_subscription_path": system_error_subscription_path,
+    }
+
+
+async def _ensure_assistant_topic_on_wake(assistant_id: str) -> None:
+    """Best-effort guard guaranteeing the assistant topic exists at wake time.
+
+    A missing topic permanently dead-ends a wake: the ``vm_ready`` handshake
+    cannot publish ``assistant_desktop_ready`` and the assistant cannot
+    receive any inbound messages (its subscriptions are gone). The topic is
+    only otherwise provisioned at assistant-creation time, so re-wakes of an
+    assistant whose topic was deleted would never recover.
+
+    A single ``get_topic`` keeps the steady-state cost to one RPC; the full
+    create+subscriptions path only runs when the topic is actually missing.
+    Failures are logged and surfaced via observability but never block the
+    wake, mirroring the best-effort topic provisioning at creation time.
+    """
+    topic_name = SETTINGS.assistant_topic(assistant_id)
+    try:
+        publisher, _ = await asyncio.to_thread(_get_pubsub_clients)
+        topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
+        try:
+            await asyncio.to_thread(
+                publisher.get_topic,
+                request={"topic": topic_path},
+            )
+            return
+        except GcpNotFound:
+            pass
+        await _ensure_topic_and_subscriptions(topic_name)
+        emit_observability_event(
+            "infra.job_start.topic_recreated",
+            assistant_id=assistant_id,
+            topic_name=topic_name,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to ensure pubsub topic %s on wake for assistant %s: %s",
+            topic_name,
+            assistant_id,
+            e,
+        )
+        emit_observability_event(
+            "infra.job_start.topic_ensure_failed",
+            assistant_id=assistant_id,
+            topic_name=topic_name,
+            error=str(e),
+        )
+
+
 # create pubsub topic
 @router.post("/pubsub/topic")
 async def create_pubsub_topic(topic_name: str = Form(...)):
@@ -605,77 +731,17 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
     the name.
     """
     try:
-        publisher, subscriber = await asyncio.to_thread(_get_pubsub_clients)
-
-        topic_path = publisher.topic_path(SETTINGS.gcp_project_id, topic_name)
-        subscription_path = subscriber.subscription_path(
-            SETTINGS.gcp_project_id,
-            f"{topic_name}-sub",
-        )
-        outbound_subscription_path = subscriber.subscription_path(
-            SETTINGS.gcp_project_id,
-            f"{topic_name}-outbound-sub",
-        )
-        actions_subscription_path = subscriber.subscription_path(
-            SETTINGS.gcp_project_id,
-            f"{topic_name}-actions-sub",
-        )
-        system_error_subscription_path = subscriber.subscription_path(
-            SETTINGS.gcp_project_id,
-            f"{topic_name}-system-error-sub",
-        )
-
-        # Create topic (idempotent)
-        try:
-            await asyncio.to_thread(
-                publisher.create_topic,
-                request={"name": topic_path},
-            )
-        except Exception as e:
-            if "already exists" not in str(e).lower():
-                raise
-
-        # Create/update all subscriptions in parallel
-        await asyncio.gather(
-            asyncio.to_thread(
-                _ensure_subscription,
-                subscriber,
-                topic_path,
-                subscription_path,
-                'attributes.thread = "inbound"',
-            ),
-            asyncio.to_thread(
-                _ensure_subscription,
-                subscriber,
-                topic_path,
-                outbound_subscription_path,
-                'attributes.thread = "unify_message_outbound"',
-            ),
-            asyncio.to_thread(
-                _ensure_subscription,
-                subscriber,
-                topic_path,
-                actions_subscription_path,
-                'attributes.thread = "action_event"',
-                enable_message_ordering=True,
-                message_retention_seconds=1800,
-            ),
-            asyncio.to_thread(
-                _ensure_subscription,
-                subscriber,
-                topic_path,
-                system_error_subscription_path,
-                'attributes.thread = "system_error"',
-            ),
-        )
+        ensured = await _ensure_topic_and_subscriptions(topic_name)
 
         return {
             "success": True,
             "message": "Topic and subscriptions ensured with no expiration",
-            "topic_name": topic_path,
-            "subscription_name": subscription_path,
-            "actions_subscription_name": actions_subscription_path,
-            "system_error_subscription_name": system_error_subscription_path,
+            "topic_name": ensured["topic_path"],
+            "subscription_name": ensured["subscription_path"],
+            "actions_subscription_name": ensured["actions_subscription_path"],
+            "system_error_subscription_name": ensured[
+                "system_error_subscription_path"
+            ],
             "project_id": SETTINGS.gcp_project_id,
         }
     except Exception as e:
@@ -1076,6 +1142,7 @@ async def start_job(
                 session_name=session_name,
                 wait_ms=start_lease_wait_ms,
             )
+        await _ensure_assistant_topic_on_wake(assistant_id)
         control_plane_ready, control_plane_reason = (
             await _assistant_session_control_plane_ready(
                 batch_api,
