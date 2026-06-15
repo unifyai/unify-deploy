@@ -739,9 +739,7 @@ async def create_pubsub_topic(topic_name: str = Form(...)):
             "topic_name": ensured["topic_path"],
             "subscription_name": ensured["subscription_path"],
             "actions_subscription_name": ensured["actions_subscription_path"],
-            "system_error_subscription_name": ensured[
-                "system_error_subscription_path"
-            ],
+            "system_error_subscription_name": ensured["system_error_subscription_path"],
             "project_id": SETTINGS.gcp_project_id,
         }
     except Exception as e:

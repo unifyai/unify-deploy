@@ -669,12 +669,15 @@ class TestEnsureAssistantTopicOnWake:
         )
         publisher.get_topic.return_value = MagicMock()
 
-        with patch(
-            "communication.infra.views._get_pubsub_clients",
-            return_value=(publisher, MagicMock()),
-        ), patch(
-            "communication.infra.views._ensure_topic_and_subscriptions",
-        ) as mock_ensure:
+        with (
+            patch(
+                "communication.infra.views._get_pubsub_clients",
+                return_value=(publisher, MagicMock()),
+            ),
+            patch(
+                "communication.infra.views._ensure_topic_and_subscriptions",
+            ) as mock_ensure,
+        ):
             await _views_mod._ensure_assistant_topic_on_wake("2105")
 
         publisher.get_topic.assert_called_once()
@@ -692,13 +695,16 @@ class TestEnsureAssistantTopicOnWake:
 
         expected_topic = SETTINGS.assistant_topic("2105")
 
-        with patch(
-            "communication.infra.views._get_pubsub_clients",
-            return_value=(publisher, MagicMock()),
-        ), patch(
-            "communication.infra.views._ensure_topic_and_subscriptions",
-            new=AsyncMock(return_value={}),
-        ) as mock_ensure:
+        with (
+            patch(
+                "communication.infra.views._get_pubsub_clients",
+                return_value=(publisher, MagicMock()),
+            ),
+            patch(
+                "communication.infra.views._ensure_topic_and_subscriptions",
+                new=AsyncMock(return_value={}),
+            ) as mock_ensure,
+        ):
             await _views_mod._ensure_assistant_topic_on_wake("2105")
 
         mock_ensure.assert_awaited_once_with(expected_topic)
@@ -713,12 +719,15 @@ class TestEnsureAssistantTopicOnWake:
         )
         publisher.get_topic.side_effect = GcpNotFound("Topic not found")
 
-        with patch(
-            "communication.infra.views._get_pubsub_clients",
-            return_value=(publisher, MagicMock()),
-        ), patch(
-            "communication.infra.views._ensure_topic_and_subscriptions",
-            new=AsyncMock(side_effect=RuntimeError("pubsub admin unavailable")),
+        with (
+            patch(
+                "communication.infra.views._get_pubsub_clients",
+                return_value=(publisher, MagicMock()),
+            ),
+            patch(
+                "communication.infra.views._ensure_topic_and_subscriptions",
+                new=AsyncMock(side_effect=RuntimeError("pubsub admin unavailable")),
+            ),
         ):
             # Must not raise.
             await _views_mod._ensure_assistant_topic_on_wake("2105")
