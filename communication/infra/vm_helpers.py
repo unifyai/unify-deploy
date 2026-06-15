@@ -68,6 +68,7 @@ from .vm_config import (
     POOL_ASSISTANT_DISK_ARCHIVE_FRESHNESS_SKEW_SECONDS,
     POOL_UBUNTU_VM_IMAGE_FAMILY,
     POOL_WINDOWS_VM_IMAGE_FAMILY,
+    POOL_GOVERNANCE_LABELS,
 )
 
 logger = logging.getLogger(__name__)
@@ -1385,6 +1386,8 @@ def provision_pool_vm(vm_type: str, n: int) -> Dict[str, Any]:
         POOL_TRANSITION_EPOCH_LABEL: _pool_transition_epoch_value(),
         POOL_PROGRESS_PHASE_LABEL: "provisioning",
         POOL_PROGRESS_EPOCH_LABEL: _pool_progress_epoch_value(),
+        **POOL_GOVERNANCE_LABELS,
+        "environment": "staging" if SETTINGS.deploy_env == "staging" else "production",
     }
 
     instance_kwargs = dict(

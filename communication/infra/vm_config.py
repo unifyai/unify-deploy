@@ -127,3 +127,16 @@ POOL_ASSISTANT_DISK_ARCHIVE_FRESHNESS_SKEW_SECONDS = 300
 # Pool image families (separate from legacy to avoid affecting existing VMs)
 POOL_UBUNTU_VM_IMAGE_FAMILY = "unity-pool-ubuntu-vm"
 POOL_WINDOWS_VM_IMAGE_FAMILY = "unity-pool-windows-vm"
+
+# Governance labels required by the Vanta "GCE instances have required labels"
+# test. Applied to every pool VM at creation so new VMs are born compliant.
+# dataclassification is confidential because pool VMs run live customer
+# assistant sessions — a system takes the highest classification of data it
+# can process. The environment label is resolved at runtime from the deploy
+# env and is therefore not part of this static set.
+POOL_GOVERNANCE_LABELS = {
+    "owner": "platform",
+    "project": "unity",
+    "dataclassification": "confidential",
+    "application": "assistant-desktop",
+}
