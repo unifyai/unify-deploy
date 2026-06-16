@@ -380,8 +380,9 @@ availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/ORCHESTRA_ADMIN_KEY/versions/latest
     env: 'ORCHESTRA_ADMIN_KEY'
-  - versionName: projects/${PROJECT_ID}/secrets/GLOBAL_UNIFY_KEY/versions/latest
-    env: 'GLOBAL_UNIFY_KEY'
+  # Temporarily disabling GLOBAL_UNIFY_KEY while seed-builtins-catalog is disabled.
+  # - versionName: projects/${PROJECT_ID}/secrets/GLOBAL_UNIFY_KEY/versions/latest
+  #   env: 'GLOBAL_UNIFY_KEY'
   - versionName: projects/${PROJECT_ID}/secrets/DEVBOT_GITHUB_TOKEN/versions/latest
     env: 'GITHUB_TOKEN'
 
