@@ -5,12 +5,22 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import sys
-import tomllib
 import uuid
 from pathlib import Path
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python < 3.11.
+    try:
+        tomllib = importlib.import_module("tomli")
+    except ModuleNotFoundError as exc:  # pragma: no cover - configuration error.
+        raise ModuleNotFoundError(
+            "TOML manifest parsing requires Python 3.11+ or the 'tomli' package.",
+        ) from exc
 
 SEED_OWNER = "public-builtins"
 SYNC_PASSTHROUGH_FIELDS = (
@@ -29,12 +39,10 @@ def _json_dumps(value: Any) -> str:
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:
+    if path.suffix == ".json":
+        return json.loads(path.read_text(encoding="utf-8"))
     with path.open("rb") as file:
-        return (
-            json.loads(file.read().decode("utf-8"))
-            if path.suffix == ".json"
-            else tomllib.load(file)
-        )
+        return tomllib.load(file)
 
 
 def build_request(

@@ -121,6 +121,16 @@ the API path.
 
 ## Rollout Gates
 
+Before submitting a real Cloud Build, run the local contract check:
+
+```bash
+bash deploy/scripts/check_cloudbuild_locally.sh
+```
+
+This validates the staging and production Cloud Build seed-step wiring, then
+dry-runs `run_seed_builtins_artifacts_job.sh` for both environments with local
+fixture manifests. It does not call GCP.
+
 Run staging first with the same code path production will use:
 
 ```bash

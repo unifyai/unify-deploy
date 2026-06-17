@@ -1,5 +1,7 @@
-from pathlib import Path
 import importlib.util
+import json
+import subprocess
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -61,10 +63,56 @@ def test_request_builder_creates_stable_non_secret_payload() -> None:
     assert "SECRET" not in serialized.upper()
 
 
+def test_request_builder_loads_toml_manifest() -> None:
+    module = _request_builder_module()
+    manifest = module._load_manifest(
+        ROOT / "tests/deploy/fixtures/bootstrap.staging.toml",
+    )
+
+    payload = module.build_request(
+        manifest,
+        environment="staging",
+        workers=4,
+        batch_size=25,
+    )
+
+    assert payload["backend_id"] == "composio"
+    assert payload["app_slugs"] == ["GMAIL", "SLACK", "HUBSPOT"]
+    assert payload["sync_payload"]["create_auth_configs"] is True
+    assert payload["sync_payload"]["include_all_managed_apps"] is False
+    assert payload["desired_hash"]
+
+
+def test_local_cloudbuild_check_dry_runs_staging_and_production() -> None:
+    result = subprocess.run(
+        ["bash", "deploy/scripts/check_cloudbuild_locally.sh"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "Dry-running start-builtins-artifacts-seed for staging" in result.stdout
+    assert "Dry-running start-builtins-artifacts-seed for production" in result.stdout
+    assert "Local Cloud Build checks passed." in result.stdout
+    dry_run_payloads = [
+        json.loads(line)
+        for line in result.stdout.splitlines()
+        if line.startswith('{"api_timeout_seconds"')
+    ]
+    assert [payload["environment"] for payload in dry_run_payloads] == [
+        "staging",
+        "production",
+    ]
+
+
 def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
     script = _read("deploy/scripts/run_seed_builtins_artifacts_job.sh")
 
     assert "run jobs execute" in script
+    assert "import tomllib" in script
+    assert "import tomli" in script
+    assert "python3 -m pip install --user tomli" in script
     assert "--async" in script
     assert "--unity-image" in script
     assert "unity-seed-builtins-staging" in script

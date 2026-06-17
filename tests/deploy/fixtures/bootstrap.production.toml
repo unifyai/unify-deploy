@@ -1,0 +1,17 @@
+schema_version = 1
+
+[providers.composio]
+status = "enabled"
+kind = "composio"
+display_name = "Composio"
+default_priority = 100
+allowed_orgs_or_tenants = []
+config_json = { timeout_seconds = 60, max_pages = 10 }
+
+[providers.composio.sync]
+mode = "full"
+app_slugs = []
+tool_limit_per_app = 0
+include_all_managed_apps = true
+create_auth_configs = true
+prune_unlisted_apps = false

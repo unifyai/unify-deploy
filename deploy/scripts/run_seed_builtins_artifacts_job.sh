@@ -97,6 +97,23 @@ if [[ -z "$unity_project" ]]; then
   exit 2
 fi
 
+ensure_toml_parser() {
+  if python3 - <<'PY' >/dev/null 2>&1
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli
+PY
+  then
+    return 0
+  fi
+
+  echo "Installing tomli for Python TOML manifest parsing..."
+  python3 -m pip install --user tomli >/dev/null
+}
+
+ensure_toml_parser
+
 tmp_dir="$(mktemp -d)"
 cleanup() {
   rm -rf "$tmp_dir"
