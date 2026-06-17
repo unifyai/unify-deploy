@@ -36,13 +36,13 @@ Console and Orchestra own the dynamic provider lifecycle:
   compatibility projections only; connection, auth, policy, approval, and audit
   rows remain active Orchestra operational state.
 - Hosted Cloud bootstrap executes one generic Builtins seed Cloud Run Job per
-  environment. The Unity job seeds Builtins functions/guidance and then requests
-  Orchestra-side provider catalog materialization for integrations. Integration
-  artifacts write keyed app/tool upserts close to the log tables and store
-  per-batch checkpoints in `Integrations/Meta`.
+  environment. The Unity job seeds Builtins functions/guidance and provider
+  integration catalog artifacts directly into Builtins logging contexts.
+  Integration artifacts write keyed app/tool log rows and store per-batch
+  checkpoints in `Integrations/Meta`.
 - Console presents the gallery, permission review, one-click connect, API key
   entry, reconnect, and disconnect flows.
-- Unity reads Orchestra's dynamic catalog and exposes searchable virtual tools
+- Unity reads Builtins catalog artifacts and exposes searchable virtual tools
   under `primitives.integrations.<app>.<tool>`.
 - `unity-deploy` contributes a package only when Unify needs local code,
   deploy-time guidance/secrets, a custom scenario, or deterministic tests that
@@ -50,7 +50,7 @@ Console and Orchestra own the dynamic provider lifecycle:
 
 ## Unified App Catalog
 
-Orchestra's app catalog contains two source types:
+The Builtins app catalog contains two source types:
 
 - `source_type="native"` / `Native`: Unity-deploy package manifests projected
   as app-only catalog records. These rows make native packages searchable beside
@@ -178,8 +178,8 @@ Rollback and retry options:
   checkpoints.
 - Disable the Cloud Build integration sync step only as an intentional rollback
   action. Do not route hosted failures to the inline API path.
-- Keep legacy DB projection routes active until Console and SDK readers are
-  fully migrated to Builtins contexts.
+- Console and SDK catalog readers should use Builtins logging contexts through
+  the logging API; legacy Orchestra catalog projection routes are removed.
 
 Then enable or disable backend rows with status-only PATCH calls:
 

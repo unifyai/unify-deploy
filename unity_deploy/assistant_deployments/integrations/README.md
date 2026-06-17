@@ -9,17 +9,17 @@ mappings, and MCP configuration metadata.
 Provider-backed apps from Composio, Pipedream, or another hosted integration
 backend do not need a package here for every supported SaaS app. See
 [`PROVIDER_BACKED_INTEGRATIONS.md`](PROVIDER_BACKED_INTEGRATIONS.md) for the
-boundary: Orchestra owns dynamic provider app catalogs, connection state, and
-tool execution; Unity surfaces those tools as
+boundary: Builtins owns provider app/tool catalog artifacts, Orchestra owns
+connection state and tool execution; Unity surfaces those tools as
 `primitives.integrations.<app>.<tool>` virtual FunctionManager records;
 `unity-deploy` remains the Level 3 full-package path for custom runtime code.
 
-Native package manifests are also projected into Orchestra's global integration
-app catalog as `source_type="native"` app records. That projection exists for
-actor discovery only: it lets `primitives.integrations.search_integrations`
-return `Native` and `Third-party` apps in one result set. Native package
-functions are not copied into provider tool catalog rows; they continue to
-materialize through the existing FunctionManager package sync path.
+Native package manifests are also projected into Builtins `Integrations/Apps`
+as `source_type="native"` app records. Those rows exist for actor discovery
+only: they let `primitives.integrations.search_integrations` return `Native`
+and `Third-party` apps in one result set. Native package functions are not
+copied into provider tool rows; they continue to materialize through the
+existing FunctionManager package sync path.
 
 ## Flow
 
@@ -40,7 +40,7 @@ expand_integrations()
     +-- url_mappings -> deployment hook runtime mappings
     +-- mcp_configs -> loaded for future MCP runtime registration
     +-- integration_registry -> Integrations/Manifests telemetry
-    +-- native catalog projection -> Orchestra app catalog (`Native`)
+    +-- native catalog projection -> Builtins Integrations/Apps (`Native`)
 ```
 
 The direction is intentionally simple: `unity-deploy` imports stable Unity
@@ -178,8 +178,8 @@ source-specific:
 
 | Source label | Source of support | Activation signal | Execution discovery |
 |--------------|-------------------|-------------------|---------------------|
-| `Native` | `manifest.yaml` in this repo, projected to Orchestra as an app-only catalog row | Deployment enablement plus required secrets in `Integrations/Manifests` / SecretManager | FunctionManager search over synced package functions |
-| `Third-party` | Orchestra provider catalog synced from Composio, Pipedream, or another backend | Provider connection state and backend policy in Orchestra | FunctionManager search over materialized provider tool rows |
+| `Native` | `manifest.yaml` in this repo, projected to Builtins `Integrations/Apps` as an app-only catalog row | Deployment enablement plus required secrets in `Integrations/Manifests` / SecretManager | FunctionManager search over synced package functions |
+| `Third-party` | Builtins `Integrations/Apps` and `Integrations/Tools` log rows seeded from provider artifacts | Provider connection state and backend policy in Orchestra | FunctionManager search over materialized provider tool rows |
 
 This separation avoids duplicating native functions as provider tools while
 still letting the actor answer "is this app supported, active, connected, or
