@@ -30,6 +30,17 @@ Console and Orchestra own the dynamic provider lifecycle:
 - Provider backend status, catalog sync, OAuth/connect sessions, and
   connected-account IDs live in Orchestra. Provider credentials and endpoint
   overrides live in deployment environment variables, not admin API payloads.
+- Builtins project contexts are the durable app/tool catalog:
+  `Builtins/Integrations/Apps`, `Builtins/Integrations/Tools`, and
+  `Builtins/Integrations/Meta`. The Orchestra DB app/tool catalog tables are
+  compatibility projections only; connection, auth, policy, approval, and audit
+  rows remain active Orchestra operational state.
+- Hosted Cloud bootstrap executes generic `seed-builtins-artifacts-*` Cloud Run
+  Jobs. Core artifacts seed Builtins functions/guidance from the Unity image;
+  integration artifacts fetch providers inside Orchestra, write keyed app/tool
+  upserts close to the log tables, and store per-batch checkpoints in
+  `Integrations/Meta`. The artifact jobs do not fall back to the inline API
+  endpoint.
 - Console presents the gallery, permission review, one-click connect, API key
   entry, reconnect, and disconnect flows.
 - Unity reads Orchestra's dynamic catalog and exposes searchable virtual tools
@@ -79,6 +90,87 @@ PIPEDREAM_PROJECT_ID=...
 PIPEDREAM_ENVIRONMENT=production
 PIPEDREAM_ACCESS_TOKEN=...
 ```
+
+Hosted staging and production use the Builtins artifacts job path owned by Cloud Build:
+
+- Core staging job: `seed-builtins-artifacts-core-staging`
+- Core production job: `seed-builtins-artifacts-core-production`
+- Integration staging job: `seed-builtins-artifacts-integrations-staging`
+- Integration production job: `seed-builtins-artifacts-integrations-production`
+- `deploy/scripts/run_seed_builtins_artifacts_job.sh` starts both jobs with
+  `--async`. It derives Orchestra project, region, source service, bucket, and
+  integration job image from the environment/source service defaults.
+- Request JSON for the integration artifact is uploaded to the configured
+  Builtins artifacts request bucket.
+- Integration artifact jobs write `IntegrationBootstrapState` as `running`,
+  `success`, or `failed`.
+- The main Cloud Build starts artifact seeding and does not wait for artifact
+  completion.
+- `deploy/scripts/wait_builtins_artifacts.sh` is the separate validation gate
+  that polls bootstrap state for the integration artifact desired hash.
+
+Self-host deployments use the direct worker executor:
+
+```bash
+poetry run python scripts/run_builtins_artifacts_seed_self_host.py \
+  --manifest deploy/integrations/bootstrap.selfhost.toml \
+  --backend-id composio \
+  --workers 4 \
+  --batch-size 25
+```
+
+The inline API endpoint is for explicit local/small self-host operation only.
+Do not automatically reroute a failed Cloud Run Job or failed direct worker into
+the API path.
+
+## Rollout Gates
+
+Run staging first with the same code path production will use:
+
+```bash
+gcloud builds submit . \
+  --config deploy/cloudbuild-staging.yaml
+```
+
+After the staging build starts the async job, run the wait gate with the
+`desired_hash` printed by the launcher:
+
+```bash
+ORCHESTRA_ADMIN_KEY=... \
+bash deploy/scripts/wait_builtins_artifacts.sh \
+  --orchestra-url https://internal.example.com/v0 \
+  --admin-key-env ORCHESTRA_ADMIN_KEY \
+  --environment staging \
+  --artifact-kind integrations \
+  --backend-id composio \
+  --desired-hash <desired_hash>
+```
+
+Then rerun the same request JSON through
+`deploy/scripts/run_seed_builtins_artifacts_job.sh --request-file` and confirm:
+
+- Cloud Build completes under the deployment timeout.
+- The Cloud Run Job exits successfully with final JSON status.
+- `IntegrationBootstrapState.last_status == "success"`.
+- `Builtins/Integrations/Meta` contains job, unit hash, and batch checkpoint rows.
+- A same-hash rerun reports skipped tool batches before provider fetch.
+- Console gallery/search/connect flows still work.
+
+Only after staging passes the rerun gate, run production:
+
+```bash
+gcloud builds submit . \
+  --config deploy/cloudbuild.yaml
+```
+
+Rollback and retry options:
+
+- Re-run the same request JSON with the same manifest hash to resume from
+  checkpoints.
+- Disable the Cloud Build integration sync step only as an intentional rollback
+  action. Do not route hosted failures to the inline API path.
+- Keep legacy DB projection routes active until Console and SDK readers are
+  fully migrated to Builtins contexts.
 
 Then enable or disable backend rows with status-only PATCH calls:
 
