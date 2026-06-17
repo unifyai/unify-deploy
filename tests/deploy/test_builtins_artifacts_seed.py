@@ -66,13 +66,14 @@ def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
 
     assert "run jobs execute" in script
     assert "--async" in script
-    assert "storage cp" in script
-    assert "--request-gcs-uri" in script
     assert "--unity-image" in script
-    assert "seed-builtins-artifacts-core-staging" in script
-    assert "seed-builtins-artifacts-integrations-staging" in script
-    assert "run services describe" in script
-    assert "orchestra.workers.builtins_artifacts_seed_job" in script
+    assert "unity-seed-builtins-staging" in script
+    assert "unity-seed-builtins" in script
+    assert "--integration-bootstrap-manifest" in script
+    assert "UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api" in script
+    assert "storage cp" not in script
+    assert "--request-gcs-uri" not in script
+    assert "orchestra.workers.builtins_artifacts_seed_job" not in script
     assert "ORCHESTRA_BUILTINS_SYNC_REQUEST_GCS_URI" not in script
     assert "_BUILTINS_SYNC_ENV_VARS" not in script
     assert "_BUILTINS_SYNC_SECRETS" not in script
@@ -80,16 +81,11 @@ def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
     assert "/v0/logs" not in script
 
 
-def test_builtins_artifacts_infra_and_wait_scripts_exist() -> None:
-    infra = _read("deploy/scripts/ensure_builtins_artifacts_infra.sh")
+def test_builtins_artifacts_wait_script_exists() -> None:
     waiter = _read("deploy/scripts/wait_builtins_artifacts.sh")
 
-    assert "storage buckets create" in infra
-    assert "add-iam-policy-binding" in infra
-    assert "run services describe" in infra
     assert "bootstrap-state" in waiter
     assert "desired_hash" in waiter
-    assert "/v0/logs" not in infra
     assert "/v0/logs" not in waiter
 
 
@@ -125,6 +121,7 @@ def test_cloudbuild_staging_starts_builtins_artifacts_seed() -> None:
     assert "_BUILTINS_SYNC_CLOUD_SQL_INSTANCES" not in config
     assert "_BUILTINS_SYNC_ENV_VARS" not in config
     assert "_BUILTINS_SYNC_SECRETS" not in config
+    assert "GLOBAL_UNIFY_KEY" not in config
     assert "/admin/integrations/builtins-sync/start" not in config
     assert "/v0/logs" not in config
 
@@ -161,5 +158,6 @@ def test_cloudbuild_production_starts_builtins_artifacts_seed() -> None:
     assert "_BUILTINS_SYNC_CLOUD_SQL_INSTANCES" not in config
     assert "_BUILTINS_SYNC_ENV_VARS" not in config
     assert "_BUILTINS_SYNC_SECRETS" not in config
+    assert "GLOBAL_UNIFY_KEY" not in config
     assert "/admin/integrations/builtins-sync/start" not in config
     assert "/v0/logs" not in config

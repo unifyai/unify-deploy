@@ -35,12 +35,11 @@ Console and Orchestra own the dynamic provider lifecycle:
   `Builtins/Integrations/Meta`. The Orchestra DB app/tool catalog tables are
   compatibility projections only; connection, auth, policy, approval, and audit
   rows remain active Orchestra operational state.
-- Hosted Cloud bootstrap executes generic `seed-builtins-artifacts-*` Cloud Run
-  Jobs. Core artifacts seed Builtins functions/guidance from the Unity image;
-  integration artifacts fetch providers inside Orchestra, write keyed app/tool
-  upserts close to the log tables, and store per-batch checkpoints in
-  `Integrations/Meta`. The artifact jobs do not fall back to the inline API
-  endpoint.
+- Hosted Cloud bootstrap executes one generic Builtins seed Cloud Run Job per
+  environment. The Unity job seeds Builtins functions/guidance and then requests
+  Orchestra-side provider catalog materialization for integrations. Integration
+  artifacts write keyed app/tool upserts close to the log tables and store
+  per-batch checkpoints in `Integrations/Meta`.
 - Console presents the gallery, permission review, one-click connect, API key
   entry, reconnect, and disconnect flows.
 - Unity reads Orchestra's dynamic catalog and exposes searchable virtual tools
@@ -93,16 +92,13 @@ PIPEDREAM_ACCESS_TOKEN=...
 
 Hosted staging and production use the Builtins artifacts job path owned by Cloud Build:
 
-- Core staging job: `seed-builtins-artifacts-core-staging`
-- Core production job: `seed-builtins-artifacts-core-production`
-- Integration staging job: `seed-builtins-artifacts-integrations-staging`
-- Integration production job: `seed-builtins-artifacts-integrations-production`
-- `deploy/scripts/run_seed_builtins_artifacts_job.sh` starts both jobs with
-  `--async`. It derives Orchestra project, region, source service, bucket, and
-  integration job image from the environment/source service defaults.
-- Request JSON for the integration artifact is uploaded to the configured
-  Builtins artifacts request bucket.
-- Integration artifact jobs write `IntegrationBootstrapState` as `running`,
+- Staging job: `unity-seed-builtins-staging`
+- Production job: `unity-seed-builtins`
+- `deploy/scripts/run_seed_builtins_artifacts_job.sh` creates/updates the job
+  and starts it with `--async`.
+- The job runs `scripts/seed_builtins_catalog.py` with the hosted integration
+  manifest and `UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api`.
+- Integration artifact materialization writes `IntegrationBootstrapState` as `running`,
   `success`, or `failed`.
 - The main Cloud Build starts artifact seeding and does not wait for artifact
   completion.
