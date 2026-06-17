@@ -41,7 +41,7 @@ steps:
       python -m unity_deploy.infra.cli.pipeline_control worker-refresh-check --help >/dev/null
   waitFor: ['build-image']
 
-  # Fetch public Unity integration manifests for the seed step.
+  # Fetch public Unity integration manifests for the integrations artifact job.
 - name: 'gcr.io/cloud-builders/git'
   id: 'fetch-unity-integration-manifests'
   entrypoint: 'bash'
@@ -57,25 +57,6 @@ steps:
     cp -R /workspace/unity-manifest-src/deploy/integrations /workspace/integration-manifests
   waitFor: ['-']
 
-  # Seed the shared Builtins catalogue before publishing the image.
-- name: 'gcr.io/cloud-builders/docker'
-  id: 'seed-builtins-catalog'
-  entrypoint: 'bash'
-  secretEnv: ['ORCHESTRA_ADMIN_KEY', 'GLOBAL_UNIFY_KEY']
-  args:
-  - '-c'
-  - |
-    set -euo pipefail
-    docker run --rm \
-      -e ORCHESTRA_URL="${_ORCHESTRA_URL}" \
-      -e ORCHESTRA_ADMIN_KEY="$$ORCHESTRA_ADMIN_KEY" \
-      -e UNIFY_KEY="$$GLOBAL_UNIFY_KEY" \
-      -v /workspace/integration-manifests:/workspace/integration-manifests:ro \
-      ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA} \
-      python3 scripts/seed_builtins_catalog.py \
-        --integration-bootstrap-manifest /workspace/integration-manifests/bootstrap.production.toml
-  waitFor: ['smoke-pipeline-cli', 'fetch-unity-integration-manifests']
-
   # Push Docker Image (SHA and latest tags in parallel)
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-sha-tag'
@@ -84,7 +65,24 @@ steps:
   - '-c'
   - |
     docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}
-  waitFor: ['seed-builtins-catalog']
+  waitFor: ['smoke-pipeline-cli']
+
+  # Start all Builtins artifact seeding asynchronously. Core artifacts
+  # (functions/guidance) run from the Unity image; provider integration artifacts
+  # run from the Orchestra service image and materialize into Builtins contexts.
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: 'start-builtins-artifacts-seed'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    bash deploy/scripts/run_seed_builtins_artifacts_job.sh \
+      --environment production \
+      --manifest /workspace/integration-manifests/bootstrap.production.toml \
+      --unity-image "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:${SHORT_SHA}" \
+      --async
+  waitFor: ['fetch-unity-integration-manifests', 'push-sha-tag']
 
 - name: 'gcr.io/cloud-builders/docker'
   id: 'push-latest-tag'
@@ -93,7 +91,7 @@ steps:
   - '-c'
   - |
     docker push ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/unity:latest
-  waitFor: ['seed-builtins-catalog']
+  waitFor: ['smoke-pipeline-cli']
 
   # Upload SHA to Cloud Storage
 - name: 'gcr.io/cloud-builders/gsutil'
