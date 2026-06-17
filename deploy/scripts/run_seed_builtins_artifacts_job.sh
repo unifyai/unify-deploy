@@ -193,11 +193,10 @@ fi
 
 unity_project_number="$(gcloud projects describe "$unity_project" --format='value(projectNumber)')"
 job_service_account="${unity_project_number}-compute@developer.gserviceaccount.com"
-for secret_name in ORCHESTRA_ADMIN_KEY GLOBAL_UNIFY_KEY; do
-  gcloud --project "$unity_project" secrets add-iam-policy-binding "$secret_name" \
-    --member "serviceAccount:${job_service_account}" \
-    --role roles/secretmanager.secretAccessor >/dev/null
-done
+# Secret access for this service account is a one-time environment prerequisite.
+# Cloud Build should not mutate Secret Manager IAM on every deploy: the build
+# service account may deploy jobs without being allowed to read or update secret
+# IAM policies.
 
 job_flags=(
   "--region=${unity_region}"

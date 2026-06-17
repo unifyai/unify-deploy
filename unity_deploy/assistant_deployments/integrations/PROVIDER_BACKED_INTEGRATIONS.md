@@ -96,6 +96,9 @@ Hosted staging and production use the Builtins artifacts job path owned by Cloud
 - Production job: `unity-seed-builtins`
 - `deploy/scripts/run_seed_builtins_artifacts_job.sh` creates/updates the job
   and starts it with `--async`.
+- The Cloud Run Job service account must already have Secret Manager accessor
+  permission for `ORCHESTRA_ADMIN_KEY` and `GLOBAL_UNIFY_KEY`. Cloud Build does
+  not grant or mutate secret IAM during deploy.
 - The job runs `scripts/seed_builtins_catalog.py` with the hosted integration
   manifest and `UNITY_INTEGRATION_BOOTSTRAP_EXECUTOR=api`.
 - Integration artifact materialization writes `IntegrationBootstrapState` as `running`,

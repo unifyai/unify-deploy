@@ -100,6 +100,14 @@ def test_local_cloudbuild_check_dry_runs_staging_and_production() -> None:
         "Dry-running start-builtins-artifacts-seed for production with TOML bootstrap"
         in result.stdout
     )
+    assert (
+        "Setup-only checking start-builtins-artifacts-seed for staging with fake gcloud"
+        in result.stdout
+    )
+    assert (
+        "Setup-only checking start-builtins-artifacts-seed for production with fake gcloud"
+        in result.stdout
+    )
     assert "Local Cloud Build checks passed." in result.stdout
     dry_run_payloads = [
         json.loads(line)
@@ -107,6 +115,8 @@ def test_local_cloudbuild_check_dry_runs_staging_and_production() -> None:
         if line.startswith('{"api_timeout_seconds"')
     ]
     assert [payload["environment"] for payload in dry_run_payloads] == [
+        "staging",
+        "production",
         "staging",
         "production",
     ]
@@ -121,6 +131,7 @@ def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
     assert "pypi.org/pypi/tomli/json" in script
     assert "ZipFile" in script
     assert "python3 -m pip" not in script
+    assert "secrets add-iam-policy-binding" not in script
     assert "--async" in script
     assert "--unity-image" in script
     assert "unity-seed-builtins-staging" in script
