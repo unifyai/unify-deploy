@@ -308,7 +308,7 @@ def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
     update_guidance = _manager_api(gm, "update_guidance")
     delete_guidance = _manager_api(gm, "delete_guidance")
     source_dicts = [r.model_dump() for r in records]
-    readonly_fields = {"authoring_assistant_id"}
+    readonly_fields = {"authoring_assistant_id", "is_builtin"}
 
     def writable_fields(rec: dict) -> dict:
         return {
@@ -320,7 +320,8 @@ def _sync_guidance(records: list[Guidance], meta: SeedMetaStore) -> bool:
 
     def get_existing() -> list[dict]:
         entries = filter_guidance(limit=1000)
-        return [g.model_dump() if hasattr(g, "model_dump") else g for g in entries]
+        existing = [g.model_dump() if hasattr(g, "model_dump") else g for g in entries]
+        return [entry for entry in existing if not entry.get("is_builtin")]
 
     def create(rec: dict) -> Any:
         return add_guidance(**writable_fields(rec))
