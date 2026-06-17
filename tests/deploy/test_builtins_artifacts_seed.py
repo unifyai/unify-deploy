@@ -92,8 +92,14 @@ def test_local_cloudbuild_check_dry_runs_staging_and_production() -> None:
         text=True,
     )
 
-    assert "Dry-running start-builtins-artifacts-seed for staging" in result.stdout
-    assert "Dry-running start-builtins-artifacts-seed for production" in result.stdout
+    assert (
+        "Dry-running start-builtins-artifacts-seed for staging with TOML bootstrap"
+        in result.stdout
+    )
+    assert (
+        "Dry-running start-builtins-artifacts-seed for production with TOML bootstrap"
+        in result.stdout
+    )
     assert "Local Cloud Build checks passed." in result.stdout
     dry_run_payloads = [
         json.loads(line)
@@ -112,7 +118,9 @@ def test_builtins_artifacts_launcher_has_no_inline_api_fallback() -> None:
     assert "run jobs execute" in script
     assert "import tomllib" in script
     assert "import tomli" in script
-    assert "python3 -m pip install --user tomli" in script
+    assert "pypi.org/pypi/tomli/json" in script
+    assert "ZipFile" in script
+    assert "python3 -m pip" not in script
     assert "--async" in script
     assert "--unity-image" in script
     assert "unity-seed-builtins-staging" in script

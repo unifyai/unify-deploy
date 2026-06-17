@@ -40,10 +40,10 @@ run_seed_dry_run() {
   local manifest="$2"
   local image="$3"
 
-  echo "Dry-running start-builtins-artifacts-seed for ${environment}..."
+  echo "Dry-running start-builtins-artifacts-seed for ${environment} with TOML bootstrap..."
   local output
   output="$(
-    bash deploy/scripts/run_seed_builtins_artifacts_job.sh \
+    UNITY_FORCE_TOMLI_BOOTSTRAP=true bash deploy/scripts/run_seed_builtins_artifacts_job.sh \
       --environment "$environment" \
       --manifest "$manifest" \
       --unity-image "$image" \
@@ -56,7 +56,10 @@ import json
 import sys
 
 environment = sys.argv[1]
-payload = json.loads(sys.argv[2])
+json_line = next(
+    line for line in reversed(sys.argv[2].splitlines()) if line.startswith("{")
+)
+payload = json.loads(json_line)
 expected_job = "unity-seed-builtins-staging" if environment == "staging" else "unity-seed-builtins"
 assert payload["status"] == "dry_run", payload
 assert payload["environment"] == environment, payload

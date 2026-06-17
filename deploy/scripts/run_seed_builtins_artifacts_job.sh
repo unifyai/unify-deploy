@@ -97,8 +97,14 @@ if [[ -z "$unity_project" ]]; then
   exit 2
 fi
 
+tmp_dir="$(mktemp -d)"
+cleanup() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
 ensure_toml_parser() {
-  if python3 - <<'PY' >/dev/null 2>&1
+  if [[ "${UNITY_FORCE_TOMLI_BOOTSTRAP:-false}" != "true" ]] && python3 - <<'PY' >/dev/null 2>&1
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -108,17 +114,41 @@ PY
     return 0
   fi
 
+  tomli_target="${tmp_dir}/python-deps"
   echo "Installing tomli for Python TOML manifest parsing..."
-  python3 -m pip install --user tomli >/dev/null
+  python3 - "$tomli_target" <<'PY'
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+from urllib.request import urlopen
+from zipfile import ZipFile
+
+target = Path(sys.argv[1])
+target.mkdir(parents=True, exist_ok=True)
+
+with urlopen("https://pypi.org/pypi/tomli/json", timeout=30) as response:
+    metadata = json.load(response)
+
+wheel = next(
+    file
+    for file in metadata["urls"]
+    if file["packagetype"] == "bdist_wheel" and file["python_version"] == "py3"
+)
+wheel_path = target / "tomli.whl"
+with urlopen(wheel["url"], timeout=30) as response:
+    wheel_path.write_bytes(response.read())
+
+with ZipFile(wheel_path) as archive:
+    for member in archive.namelist():
+        if member.startswith("tomli/"):
+            archive.extract(member, target)
+PY
+  export PYTHONPATH="${tomli_target}${PYTHONPATH:+:${PYTHONPATH}}"
 }
 
 ensure_toml_parser
-
-tmp_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_dir"
-}
-trap cleanup EXIT
 
 request_json="$tmp_dir/integrations-request.json"
 request_builder_args=(
