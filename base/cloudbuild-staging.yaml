@@ -57,6 +57,7 @@ steps:
   - '-c'
   - |
     set -euo pipefail
+    DROID_REF="${_DROID_REF:-${_UNITY_REF:-staging}}"
     DROID_SHA=$$(cat /workspace/droid_sha.txt)
     DEP_SHA=$$(cat /workspace/dep_repos_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
@@ -97,10 +98,11 @@ steps:
   - '-c'
   - |
     set -euo pipefail
+    DROID_REF="${_DROID_REF:-${_UNITY_REF:-staging}}"
     DROID_SHA=$$(cat /workspace/droid_sha.txt)
     DOCKER_BUILDKIT=1 docker build \
       --build-arg GITHUB_TOKEN=$$GITHUB_TOKEN \
-      --build-arg BRANCH=${_DROID_REF} \
+      --build-arg BRANCH=$${DROID_REF} \
       -f /workspace/droid-src/deploy/scripts/job-watcher/Dockerfile \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:$${DROID_SHA} \
       -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:latest \
@@ -122,7 +124,7 @@ steps:
   - |
     set -euo pipefail
     DROID_SHA=$$(cat /workspace/droid_sha.txt)
-    gcloud container clusters get-credentials droid --region ${_REGION} --project ${PROJECT_ID}
+    gcloud container clusters get-credentials ${_CLUSTER} --region ${_REGION} --project ${PROJECT_ID}
     sed "s|image:.*job-watcher.*|image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/job-watcher-staging:$${DROID_SHA}|" \
       /workspace/droid-src/deploy/scripts/job-watcher/deployment_staging.yaml | kubectl apply -f -
   waitFor: ['push-job-watcher']
@@ -150,6 +152,7 @@ options:
 substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'droid'
+  _CLUSTER: 'unity'
   _DROID_REF: 'staging'
   _DROID_SHA: ''
 
