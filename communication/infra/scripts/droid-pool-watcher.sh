@@ -267,7 +267,7 @@ do_update() {
     # ── Magnitude ──
     local mag_saved mag_remote
     mag_saved=$(get_saved_commit_hash /magnitude)
-    mag_remote=$(get_remote_commit_hash "$magnitude_url" "droid-modifications")
+    mag_remote=$(get_remote_commit_hash "$magnitude_url" "unity-modifications")
 
     if [[ -n "$mag_saved" && -n "$mag_remote" && "$mag_saved" == "$mag_remote" ]]; then
         log "Magnitude up-to-date ($mag_saved)"
@@ -286,8 +286,8 @@ do_update() {
         if [[ -d "/magnitude/.git" ]]; then
             cd /magnitude
             [[ -n "$github_token" ]] && git remote set-url origin "$magnitude_url" 2>/dev/null || true
-            git fetch --depth 1 origin droid-modifications 2>&1 || true
-            git reset --hard origin/droid-modifications 2>&1 || true
+            git fetch --depth 1 origin unity-modifications 2>&1 || true
+            git reset --hard origin/unity-modifications 2>&1 || true
             local commit
             commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo "unknown")
             save_commit_hash /magnitude "$commit"

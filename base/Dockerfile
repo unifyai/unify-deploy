@@ -56,7 +56,7 @@ RUN echo "dep_repos_sha=${DEP_REPOS_SHA}" && \
 # --ignore-scripts skips the root postinstall (turbo run build) which requires bun.
 # The committed lockfile only resolves platform-specific optional deps (sharp, baml, etc.)
 # for the OS it was generated on, so we delete it and let npm resolve for the target platform.
-RUN git clone --depth 1 --branch droid-modifications https://github.com/unifyai/magnitude.git /opt/magnitude
+RUN git clone --depth 1 --branch unity-modifications https://github.com/unifyai/magnitude.git /opt/magnitude
 WORKDIR /opt/magnitude
 RUN rm -f package-lock.json && npm install --ignore-scripts
 RUN cd packages/magnitude-extract && npx tsup
